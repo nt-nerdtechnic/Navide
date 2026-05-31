@@ -1,6 +1,8 @@
 # Agent-Team
 
-> **把 Claude Code、Codex、Gemini CLI 同時跑起來，讓它們照 SDLC 流程分工、協作、自動推進。**
+> **Run Claude Code, Codex, and Gemini CLI simultaneously — orchestrated across an SDLC pipeline with automated handoffs and multi-agent coordination.**
+
+[English](README.md) | [繁體中文](README.zh-TW.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -10,221 +12,222 @@
 
 ---
 
-## 為什麼需要 Agent-Team？
+## Why Agent-Team?
 
-單一 AI coding agent 有它的極限——複雜任務需要等待、上下文有限、角色單一。  
-**Agent-Team 讓你同時開多個 agent、各司其職、輸出互相傳遞，像一支真正的工程團隊。**
+A single AI coding agent has its limits — complex tasks require waiting, context is finite, and a single role can only cover so much.
+**Agent-Team lets you run multiple agents in parallel, each with a dedicated role, passing outputs to one another like a real engineering team.**
 
-| 痛點 | Agent-Team 的解法 |
+| Pain point | Agent-Team's solution |
 |---|---|
-| 一個 agent 做完需求再做設計、再做實作，排隊等待 | 多 agent **並行**跑同一 Stage，完成後自動推進下一 Stage |
-| 不同任務需要不同思維（PM、Backend、QA）| 每個 pane 自動注入對應 **Role System Prompt** |
-| Agent 輸出很長，下一步不知道從哪繼續 | Stage 完成後**自動截取上下文**注入給下一 Stage |
-| 不知道 agent 是在思考還是已經卡住 | Local LLM (Ollama) **即時判讀 agent 意圖**，三訊號存活偵測 |
-| 每次都要手動貼任務描述、設定角色 | 一鍵 **▶ Run pipeline**，4 個 SDLC Stage 全自動跑完 |
+| One agent must finish requirements before design, then implementation — lots of waiting | Multiple agents run **in parallel** within a Stage; the next Stage starts automatically when all complete |
+| Different tasks need different mindsets (PM, Backend, QA) | Each pane automatically injects the matching **Role System Prompt** |
+| Agent output is long; hard to know where to pick up | After a Stage completes, **context is automatically extracted** and injected into the next Stage |
+| Can't tell if an agent is thinking or stuck | Local LLM (Ollama) **interprets agent intent in real time** with a three-signal liveness probe |
+| Manually pasting task descriptions and setting roles every time | One-click **▶ Run pipeline** — all 4 SDLC stages run automatically |
 
 ---
 
-## 核心功能
+## Features
 
-### 🚀 4-Stage SDLC Pipeline（全自動）
+### 🚀 4-Stage SDLC Pipeline (Fully Automated)
 
-給一段任務描述，Agent-Team 自動依序跑完需求分析 → 設計 → 實作 → 測試，每個 Stage 用對的 agent + 對的角色。
+Give it a task description and Agent-Team automatically runs Requirements → Design → Implementation → Testing, using the right agent and role at each stage.
 
 ```
-▶ Run pipeline  →  Stage 01 需求分析  →  Stage 02 設計規劃  →  Stage 03 實作  →  Stage 04 測試驗收
-                        Claude · PM          Claude · PM              Codex · Backend       Gemini · QA
-                                             Claude · Frontend        Claude · Frontend
+▶ Run pipeline  →  Stage 01 Requirements  →  Stage 02 Design       →  Stage 03 Implementation  →  Stage 04 QA
+                       Claude · PM              Claude · PM             Codex · Backend               Gemini · QA
+                                                Claude · Frontend       Claude · Frontend
 ```
 
-### 🤝 Manager 協調模式（Multi-Agent 指揮）
+### 🤝 Manager Coordination Mode (Multi-Agent Direction)
 
-當 Stage 有多個並行 Agent 時，可指定一個 **Manager** 統籌協調：
-- Manager 完成自己的工作後進入控場模式
-- Worker 可透過 `---ASK-START---` 向 Manager 提問
-- Manager 透過 `---DISPATCH-START---` 分配指令
-- Manager 決定何時用 `---STAGE-DONE---` 結束整個 Stage
+When a Stage has multiple parallel agents, designate one as **Manager** to coordinate:
+- The Manager finishes its own work, then enters coordination mode
+- Workers can ask the Manager questions via `---ASK-START---`
+- The Manager dispatches instructions via `---DISPATCH-START---`
+- The Manager decides when to end the Stage with `---STAGE-DONE---`
 
-### 🧠 Local LLM Analyzer（Ollama 驅動）
+### 🧠 Local LLM Analyzer (Ollama-powered)
 
-不只看 sentinel 字串，還用本地 LLM 即時判讀每個 agent 的意圖：
+Goes beyond sentinel strings — uses a local LLM to interpret each agent's intent in real time:
 
-| 判讀結果 | 觸發動作 |
+| Result | Action |
 |---|---|
-| `question` | 彈出問題視窗讓使用者回答（或 Full auto 模式自動回答）|
-| `completion` | 確認此 Slot 完成，計入推進條件 |
-| `in_progress` | 延展存活視窗，繼續等待 |
+| `question` | Opens a dialog for the user to answer (or Full Auto answers automatically) |
+| `completion` | Marks the Slot as done, counts toward Stage advancement |
+| `in_progress` | Extends the liveness window, keeps waiting |
 
-### 📊 Token 用量即時追蹤
+### 📊 Live Token Usage Tracking
 
-從 CLI log files 直接解析三個廠商的 token 用量，按 Stage / Run 分類，不需要任何 API key 或額外設定。
+Parses token usage directly from CLI log files for all three providers, categorized by Stage and Run — no API keys or extra configuration needed.
 
-### 📚 Context7 文件注入
+### 📚 Context7 Doc Injection
 
-每個 Stage 啟動前，自動偵測 task 中的技術棧（Next.js、Laravel、Flutter…），從 Context7 取得最新框架文件並注入 kickoff prompt，讓 agent 從一開始就有正確的 API 知識。
+Before each Stage starts, Agent-Team detects the tech stack in the task (Next.js, Laravel, Flutter…), fetches the latest framework docs from Context7, and injects them into the kickoff prompt so agents start with accurate API knowledge.
 
 ### 🔄 Pipeline Resume
 
-中途關閉 App 或中斷執行？  
-`.agent-team/project.json` 記錄每個 Stage 的狀態，重新開啟後可從任意未完成的 Stage 繼續。
+Closed the app mid-run or interrupted execution?
+`.agent-team/project.json` records each Stage's state so you can resume from any incomplete Stage when you reopen.
 
-### 📂 Workspace-First 入口
+### 📂 Workspace-First Entry
 
-打開 App 先看到 **Welcome 入口**（VS Code "Open Folder" 風格），而不是空白主畫面：
-- **Recent 清單** — 最近開過的 workspace，含上次任務與狀態，可 **★ 釘選**（釘的排前面、不被淘汰），失效資料夾自動標灰
-- **Browse…** — 開資料夾 dialog 選擇或新建
-- 選定後依專案狀態自動切換 **Pipeline / Spawn / Completed** 模式，介面重點隨之調整
+The app opens to a **Welcome screen** (VS Code "Open Folder"-style) rather than a blank canvas:
+- **Recent list** — recently opened workspaces with last task and status; supports **★ pinning** (pinned items stay at the top and are never evicted); stale folders are automatically grayed out
+- **Browse…** — folder dialog to select or create a workspace
+- Automatically switches to **Pipeline / Spawn / Completed** mode based on project state
 
 ### 🕓 History Timeline
 
-右側面板可在 **Token 用量** 與 **History** 間切換：
-- 每次 run 的所有事件（spawn / inject / sentinel / question / analyzer / handoff / error）結構化落地到 `.agent-team/runs/{run-id}/history.jsonl`
-- Timeline UI 支援**類型/Stage 篩選、搜尋、點擊展開細節、匯出 .jsonl**
-- **自動滾動黏底**跟進最新事件，往上捲看歷史時自動暫停
+The right panel toggles between **Token Usage** and **History**:
+- All events per run (spawn / inject / sentinel / question / analyzer / handoff / error) are persisted to `.agent-team/runs/{run-id}/history.jsonl`
+- The Timeline UI supports **type/stage filtering, search, click-to-expand details, and .jsonl export**
+- **Auto-scroll to bottom** follows new events; scrolling up automatically pauses it
 
 ---
 
 ## Demo
 
 ```
-任務：「為連鎖門市建立內部簽核系統，紙本流程數位化，支援 iOS + Android」
+Task: "Build an internal approval system for a retail chain — digitize paper workflows, support iOS + Android"
 
-Stage 01  Claude  (PM)           → 輸出 PRD、使用者故事、UAT 情境
-Stage 02  Claude  (PM)           → 系統架構、API 設計、ERD
-          Claude  (Frontend)     → 線框稿、元件規格、設計系統
-Stage 03  Codex   (Backend)      → 實作 API、資料庫 migration、驗證邏輯
-          Claude  (Frontend)     → 實作 React Native 頁面、串接 API
-Stage 04  Gemini  (QA/Test)      → Happy/Unhappy path、E2E 腳本、UAT 清單
+Stage 01  Claude  (PM)           → PRD, user stories, UAT scenarios
+Stage 02  Claude  (PM)           → System architecture, API design, ERD
+          Claude  (Frontend)     → Wireframes, component specs, design system
+Stage 03  Codex   (Backend)      → API implementation, database migrations, validation logic
+          Claude  (Frontend)     → React Native pages, API integration
+Stage 04  Gemini  (QA/Test)      → Happy/Unhappy paths, E2E scripts, UAT checklist
 ```
 
-所有輸出互相傳遞。上一 Stage 的 Claude 設計文件自動成為下一 Stage Codex 的 context。
+All outputs are passed between stages. Claude's Stage 02 design docs automatically become Codex's context in Stage 03.
 
 ---
 
-## 快速開始
+## Quick Start
 
-### 前置需求
+### Prerequisites
 
-| 工具 | 版本 |
+| Tool | Version |
 |---|---|
 | Node.js | 22+ |
 | pnpm | 10+ |
 | Python / uv | 3.12 / 0.11+ |
 | macOS | 13+ |
 
-**Agent CLI（可選，有裝才能真正執行）：**
+**Agent CLIs (optional — required to actually run agents):**
 - `claude` — [Claude Code](https://code.claude.ai)
 - `codex` — [Codex CLI](https://github.com/openai/codex)
 - `gemini` — [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
-**Local LLM Analyzer（可選，建議裝）：**
+**Local LLM Analyzer (optional, recommended):**
 ```bash
-# 安裝 Ollama + 推薦模型（用於意圖判讀）
 brew install ollama
 ollama pull qwen2.5-coder
 ```
 
-### 安裝
+### Install
 
 ```bash
-git clone https://github.com/your-org/agent-team
+git clone https://github.com/nt-nerdtechnic/agent-team
 cd agent-team
 
 pnpm install
 uv --project backend sync
 ```
 
-### 啟動
+### Run
 
 ```bash
 pnpm dev
 ```
 
-這一個指令會同時啟動 Vite dev server、Electron 主視窗、Python backend（動態 port），視窗開啟即可使用。
+This single command starts the Vite dev server, Electron main window, and Python backend (dynamic port) together.
 
 ---
 
-## 使用方式
+## Usage
 
-### Pipeline 模式（推薦）
+### Pipeline Mode (Recommended)
 
-1. **Open Workspace** — 在 Welcome 入口從 Recent 清單選一個，或 Browse 選/新建專案資料夾
-2. **Task description** — 描述你要做什麼（中文英文皆可）
-3. 點 **▶ Run pipeline** — 系統自動 spawn Stage 01 的 agent、注入 Role Prompt、送出 Kickoff Prompt
-4. Agent 完成後自動偵測（sentinel / analyzer / turn_complete）→ 推進到下一 Stage
-5. 重複到 Stage 04 結束，彈出完成彈窗
+1. **Open Workspace** — pick from the Recent list on the Welcome screen, or Browse to select/create a project folder
+2. **Task description** — describe what you want to build (any language)
+3. Click **▶ Run pipeline** — the system automatically spawns Stage 01 agents, injects Role Prompts, and sends the Kickoff Prompt
+4. Completion is detected automatically (sentinel / analyzer / turn_complete) → advances to the next Stage
+5. Repeats through Stage 04; a completion dialog appears when done
 
-> 進行中可隨時開右側 **History** 分頁看完整事件時間軸，或在 Header 切換 / 關閉 workspace（pipeline 執行中會警告）。
+> Open the **History** tab in the right panel at any time to see the full event timeline, or switch/close workspaces from the Header (a warning appears if a pipeline is running).
 
-**進階選項：**
+**Advanced options:**
 
-| 設定 | 說明 |
+| Setting | Description |
 |---|---|
-| **YOLO Mode** | 自動帶入 `--dangerously-skip-permissions` 等略過確認的 flags |
-| **Continuous Mode** | Sentinel 偵測到或 Analyzer 判定完成時自動推進，不需手動按 Next |
-| **Strict Mode** | Idle/Cap timeout 時彈確認視窗，不自動推進 |
-| **Full Auto** | LLM 自動回答 agent 提出的問題，免人工干預 |
-| **Local Analyzer** | Ollama 即時判讀 agent 意圖，取代純 sentinel 偵測 |
+| **YOLO Mode** | Automatically passes `--dangerously-skip-permissions` and similar flags to skip confirmations |
+| **Continuous Mode** | Auto-advances when a sentinel is detected or the Analyzer judges completion — no manual "Next" needed |
+| **Strict Mode** | Shows a confirmation dialog on Idle/Cap timeout instead of auto-advancing |
+| **Full Auto** | LLM automatically answers agent questions — zero human intervention |
+| **Local Analyzer** | Ollama interprets agent intent in real time, replacing pure sentinel detection |
 
-### Manual Spawn（單次手動）
+### Manual Spawn (Single Run)
 
-1. 展開 **Manual spawn** 區塊
-2. 選 CLI、Role、Stage
-3. 點 **+ Add to grid**
+1. Expand the **Manual spawn** section
+2. Select CLI, Role, and Stage
+3. Click **+ Add to grid**
 
-每個 pane 都可以獨立 `⌃C`（中斷）、`Re-inject`（重送 Role Prompt）、`Remove`（關閉）。
+Each pane supports independent `⌃C` (interrupt), `Re-inject` (resend Role Prompt), and `Remove` (close).
 
-### Stage / Role 自訂
+### Stage / Role Customization
 
-工具列齒輪 → Settings 可開啟：
-- **Role Manager**：編輯各角色的 system prompt，或新增自訂角色
-- **Stage Editor**：調整每個 Stage 的 slot 組合、kickoff body、sentinel 字串
+Toolbar gear → Settings:
+- **Role Manager** — edit system prompts for each role, or add custom roles
+- **Stage Editor** — adjust the slot configuration, kickoff body, and sentinel string for each Stage
 
-所有設定儲存在本機 `~/Library/Application Support/Agent-Team/`，不進版本庫。
-
----
-
-## 完成偵測機制
-
-一個 Slot 被判定「完成」需滿足以下任一條件（按優先順序）：
-
-```
-1. Sentinel        — agent 輸出指定字串（如 ---SPEC-DONE---）於獨立一行
-2. turn_complete   — Claude Hooks / log reader 偵測到 agent 回合結束 + 5s 安靜
-3. Analyzer        — Ollama LLM 判讀 intent = "completion"
-4. Idle timeout    — 10 分鐘無 cleaned-text 活動，通過多訊號存活探測後
-5. Hard cap        — 15 分鐘絕對上限（防止永久卡住）
-```
-
-所有 Slot 完成後才推進 Stage（Strict Mode 下 Idle/Cap 需使用者確認）。
+All settings are stored locally in `~/Library/Application Support/Agent-Team/` and are not committed to the repository.
 
 ---
 
-## 架構
+## Completion Detection
+
+A Slot is considered "complete" when any of the following conditions is met (in priority order):
+
+```
+1. Sentinel       — agent outputs a designated string (e.g. ---SPEC-DONE---) on its own line
+2. turn_complete  — Claude Hooks / log reader detects agent turn end + 5s of silence
+3. Analyzer       — Ollama LLM judges intent = "completion"
+4. Idle timeout   — 10 min of no cleaned-text activity, after passing multi-signal liveness probes
+5. Hard cap       — 15-minute absolute limit (prevents permanent hangs)
+```
+
+All Slots must complete before the Stage advances (in Strict Mode, Idle/Cap requires user confirmation).
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                   Electron Main Process                   │
-│  多視窗管理 (Main / Roles / Stages) · IPC handlers      │
-│  backend.ts — 動態 port · 子進程督管 · 健康檢查          │
+│  Multi-window management (Main / Roles / Stages)         │
+│  IPC handlers                                            │
+│  backend.ts — dynamic port · child process supervisor    │
+│              · health check                              │
 └───────────────────────┬─────────────────────────────────┘
                         │ uv run python -m agent_team_backend
                         ▼
 ┌─────────────────────────────────────────────────────────┐
 │              Python FastAPI Backend                       │
 │                                                          │
-│  WebSocket /ws ── 所有訊息路由（concurrent tasks）       │
+│  WebSocket /ws ── all message routing (concurrent tasks) │
 │  REST /health · /hooks/claude · /mcp/...                 │
 │                                                          │
-│  terminals.py    PTY 進程管理（pty + asyncio）           │
-│  projects.py     Pipeline 狀態 + per-run event log       │
-│  analyzer.py     Ollama / llama-cli 本地 LLM 推論        │
-│  log_readers/    Claude · Codex · Gemini log 解析        │
-│  tokens_store.py Token 用量追蹤 + dedup                  │
-│  mcp_manager.py  MCP server 連線（Context7 等）          │
-│  doc_injector.py Context7 文件 → kickoff prefix         │
-│  claude_hooks.py ~/.claude/settings.json hook 安裝      │
-│  roles_store.py / stages_store.py  設定持久化            │
+│  terminals.py    PTY process management (pty + asyncio)  │
+│  projects.py     Pipeline state + per-run event log      │
+│  analyzer.py     Ollama / llama-cli local LLM inference  │
+│  log_readers/    Claude · Codex · Gemini log parsing     │
+│  tokens_store.py Token usage tracking + dedup            │
+│  mcp_manager.py  MCP server connections (Context7, etc.) │
+│  doc_injector.py Context7 docs → kickoff prefix          │
+│  claude_hooks.py ~/.claude/settings.json hook installer  │
+│  roles_store.py / stages_store.py  settings persistence  │
 └───────────────────────┬─────────────────────────────────┘
                         │ WebSocket ws://127.0.0.1:{port}/ws
                         ▼
@@ -238,87 +241,87 @@ pnpm dev
 │  ├─ Question alert + auto-answer                         │
 │  └─ Cross-slot handoff                                   │
 │                                                          │
-│  ControlPane.vue   左側控制面板                          │
+│  ControlPane.vue   Left control panel                    │
 │  TerminalPane.vue  xterm.js · displayStatus · PTY wire   │
-│  TokenStatsPanel   即時 token 統計                       │
-│  SettingsModal     MCP server 設定                       │
+│  TokenStatsPanel   Live token statistics                 │
+│  SettingsModal     MCP server settings                   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 技術棧
+### Tech Stack
 
-| 層 | 技術 |
+| Layer | Technology |
 |---|---|
 | Desktop shell | Electron 33 |
 | Frontend | Vue 3 + TypeScript + Vite (electron-vite) |
-| Terminal 模擬 | xterm.js 6 + FitAddon |
+| Terminal emulation | xterm.js 6 + FitAddon |
 | Backend | Python 3.12 + FastAPI + uvicorn |
 | PTY | Python stdlib `pty` + asyncio |
-| Local LLM | Ollama / llama-cli (GGUF，Metal 加速) |
+| Local LLM | Ollama / llama-cli (GGUF, Metal-accelerated) |
 | MCP Client | `mcp` Python SDK |
-| Package 管理 | pnpm (Node) · uv (Python) |
+| Package management | pnpm (Node) · uv (Python) |
 
 ---
 
-## 專案結構
+## Project Structure
 
 ```
 agent-team/
 ├── src/
 │   ├── main/
-│   │   ├── index.ts          Electron 主進程、IPC、多視窗
-│   │   └── backend.ts        Python 子進程管理、健康檢查
+│   │   ├── index.ts          Electron main process, IPC, multi-window
+│   │   └── backend.ts        Python child process management, health check
 │   ├── preload/
-│   │   └── index.ts          contextBridge API 暴露
+│   │   └── index.ts          contextBridge API exposure
 │   └── renderer/src/
-│       ├── App.vue           Pipeline Orchestrator（主邏輯）
+│       ├── App.vue           Pipeline Orchestrator (main logic)
 │       ├── RolesManagerApp.vue
 │       ├── StagesEditorApp.vue
 │       ├── components/
-│       │   ├── ControlPane.vue      左側控制面板
+│       │   ├── ControlPane.vue      Left control panel
 │       │   ├── TerminalPane.vue     xterm.js pane
-│       │   ├── QuestionAlert.vue    agent 問題彈窗
-│       │   ├── CompletionModal.vue  Pipeline 完成彈窗
-│       │   ├── TokenStatsPanel.vue  token 統計面板
-│       │   └── SettingsModal.vue    MCP 設定
+│       │   ├── QuestionAlert.vue    Agent question dialog
+│       │   ├── CompletionModal.vue  Pipeline completion modal
+│       │   ├── TokenStatsPanel.vue  Token stats panel
+│       │   └── SettingsModal.vue    MCP settings
 │       ├── composables/
-│       │   ├── useBackend.ts        WebSocket 連線 + 訊息路由
+│       │   ├── useBackend.ts        WebSocket connection + message routing
 │       │   ├── useTerminal.ts       xterm + PTY wire-up
 │       │   ├── useRoles.ts / useStages.ts
 │       │   ├── useAnalyzer.ts       Ollama API
-│       │   └── useTokens.ts         Token 用量 reactive state
+│       │   └── useTokens.ts         Token usage reactive state
 │       ├── data/
-│       │   └── stages.ts            Stage/Slot 型別 + kickoff 渲染
+│       │   └── stages.ts            Stage/Slot types + kickoff rendering
 │       └── lib/
 │           └── buffer.ts            ANSI strip · sentinel · question block parser
 └── backend/agent_team_backend/
     ├── app.py               FastAPI + WebSocket dispatcher
-    ├── terminals.py         PTY 進程管理
-    ├── projects.py          Pipeline 持久化
+    ├── terminals.py         PTY process management
+    ├── projects.py          Pipeline persistence
     ├── analyzer.py          Local LLM (Ollama)
-    ├── log_readers/         Claude / Codex / Gemini log 解析
-    ├── tokens_store.py      Token 追蹤 + dedup
-    ├── mcp_manager.py       MCP server 連線管理
-    ├── doc_injector.py      Context7 文件注入
-    ├── claude_hooks.py      Claude lifecycle hook 安裝
+    ├── log_readers/         Claude / Codex / Gemini log parsing
+    ├── tokens_store.py      Token tracking + dedup
+    ├── mcp_manager.py       MCP server connection management
+    ├── doc_injector.py      Context7 doc injection
+    ├── claude_hooks.py      Claude lifecycle hook installer
     ├── roles_store.py
     └── stages_store.py
 ```
 
 ---
 
-## 本機資料與隱私
+## Local Data & Privacy
 
-Agent-Team 是本機開發者工具，所有運算和資料都留在你自己的機器上。
+Agent-Team is a local developer tool. All computation and data stay on your machine.
 
-- **沒有外部服務依賴**（除了你主動啟動的 Claude / Codex / Gemini CLI 本身）
-- **沒有遙測、沒有帳號**，不需要任何 API key
-- Runtime 設定存於 `~/Library/Application Support/Agent-Team/`（不進版本庫）
-- Workspace 狀態寫入 `<workspace>/.agent-team/`（`project.json`、pipeline log、pane 對話記錄）
+- **No external service dependencies** (beyond the Claude / Codex / Gemini CLIs you choose to run)
+- **No telemetry, no accounts** — no API keys required
+- Runtime settings stored in `~/Library/Application Support/Agent-Team/` (not committed)
+- Workspace state written to `<workspace>/.agent-team/` (`project.json`, pipeline log, pane conversation history)
 
-### YOLO Mode 注意事項
+### YOLO Mode Notice
 
-開啟 YOLO Mode 會自動帶入以下 flags：
+Enabling YOLO Mode automatically passes the following flags:
 
 | CLI | Flag |
 |---|---|
@@ -326,20 +329,20 @@ Agent-Team 是本機開發者工具，所有運算和資料都留在你自己的
 | Codex | `--dangerously-bypass-approvals-and-sandbox` |
 | Gemini | `--yolo --skip-trust` |
 
-這些 flags 讓 agent 跳過互動式確認，適合全自動執行，但 **agent 有完整的檔案系統讀寫權限**，請在你信任的 workspace 下使用。
+These flags let agents skip interactive confirmations. **Agents have unrestricted filesystem read/write access.** Only use this in workspaces you trust.
 
 ### Claude Code Hooks
 
-首次啟動時，Agent-Team 會在 `~/.claude/settings.json` 新增三個 lifecycle hooks（`PreToolUse` / `Stop` / `Notification`），讓 backend 接收更精確的 agent 活動訊號。安裝是 merge-safe（不覆蓋你的現有設定），且原始 settings.json 會備份為 `.pre-agent-team.bak`。
+On first launch, Agent-Team adds three lifecycle hooks (`PreToolUse` / `Stop` / `Notification`) to `~/.claude/settings.json` so the backend receives precise agent activity signals. Installation is merge-safe (does not overwrite existing settings), and the original `settings.json` is backed up as `.pre-agent-team.bak`.
 
-### 尚未實作的安全功能
+### Unimplemented Security Features
 
-- 跨 Agent 傳遞前的 secret 自動抹除（planned）
-- Workspace 沙盒隔離（Agent 目前有完整 user 權限）
+- Automatic secret scrubbing before cross-agent context handoff (planned)
+- Workspace sandboxing — agents currently run with full user-level permissions
 
 ---
 
-## 執行測試
+## Running Tests
 
 ```bash
 cd backend
@@ -348,45 +351,43 @@ uv run pytest
 
 ---
 
-## 開發指令
+## Dev Commands
 
 ```bash
-pnpm dev            # 啟動 Electron + Vite + Python backend（全部）
-pnpm build          # 打包 Electron app
-pnpm typecheck      # TypeScript 型別檢查（Node + Web）
-pnpm backend:dev    # 單獨啟動 Python backend（debug 用）
+pnpm dev            # Start Electron + Vite + Python backend (all together)
+pnpm build          # Package the Electron app
+pnpm typecheck      # TypeScript type check (Node + Web)
+pnpm backend:dev    # Start Python backend only (for debugging)
 ```
 
 ---
 
-## 規劃中功能
+## Roadmap
 
-- [ ] Workspace-first entry + mode-aware UI（必須先選資料夾才能開）
-- [ ] Team pre-config + Manager pattern（pipeline 啟動同時 spawn 全隊、Manager 指揮）
-- [ ] Right-panel History tab（事件 timeline + 落地 JSONL）
-- [ ] Git preflight（自動建 task branch、snapshot）
-- [ ] Cross-agent route engine（agent 對 agent 的 routed message bus）
-- [ ] Frontend tests（Vitest + Playwright）
-- [ ] Windows / Linux 支援
-- [ ] 更多 Agent CLI 支援（Aider、OpenCode 等）
+- [ ] Git preflight (auto-create task branch, snapshot)
+- [ ] Cross-agent route engine (routed message bus between agents)
+- [ ] Frontend tests (Vitest + Playwright)
+- [ ] Windows / Linux support
+- [ ] More Agent CLI support (Aider, OpenCode, etc.)
 
-> 完整 roadmap 與設計細節見 [`docs/spec.md`](docs/spec.md)。
+> Full roadmap and design details in [`docs/spec.md`](docs/spec.md).
 
 ---
 
 ## Security
 
-Agent-Team runs entirely on your local machine. It does not phone home, collect telemetry, or require any accounts.
-
-**Reporting vulnerabilities** — please open a [GitHub Issue](../../issues) labelled `security`. For sensitive disclosures, email the maintainer directly (address in the commit history).
+See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 
 **Safe-use reminders:**
-
 - YOLO Mode grants agents unrestricted filesystem access. Only use it in workspaces you trust.
 - The Claude Code hooks installed by Agent-Team are merge-safe; your original `~/.claude/settings.json` is backed up before any changes.
 - Agent-Team never stores API keys. All CLI credentials remain in the respective tool's own config (`~/.claude/`, `~/.codex/`, etc.).
 
-安全性聲明 — Agent-Team 完全在本機執行，不傳送遙測資料、不需要帳號。漏洞請開 Issue 標記 `security`。YOLO 模式下 agent 擁有完整檔案系統讀寫權，僅在信任的 workspace 下使用。
+---
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request.
 
 ---
 
