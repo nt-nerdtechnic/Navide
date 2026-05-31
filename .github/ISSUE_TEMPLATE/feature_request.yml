@@ -1,0 +1,38 @@
+name: Feature Request
+description: Suggest a new feature or enhancement / 建議新功能或改進
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement!
+        感謝你的功能建議！
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation / 問題描述
+      description: What problem does this solve? / 這個功能要解決什麼問題？
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution / 建議解法
+      description: Describe the feature you'd like. / 描述你希望的功能。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered / 其他考慮過的方案
+      description: Any alternative approaches you've thought of? / 你考慮過哪些其他方案？
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context / 補充資訊
+      description: Any other context, mockups, or references. / 其他補充說明、草圖或參考資料。

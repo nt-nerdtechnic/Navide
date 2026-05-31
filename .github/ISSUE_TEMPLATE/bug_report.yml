@@ -1,0 +1,63 @@
+name: Bug Report
+description: File a bug report / 回報一個 Bug
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+        感謝你花時間填寫這份 Bug 回報！
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened? / 發生了什麼？
+      description: A clear description of the bug. / 清楚描述這個 Bug。
+      placeholder: Describe what you see...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 重現步驟
+      description: How do we reproduce this? / 如何重現這個問題？
+      placeholder: |
+        1. Open workspace at '...'
+        2. Click '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 預期行為
+      description: What did you expect to happen? / 你預期應該發生什麼？
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Agent-Team version / 版本
+      placeholder: e.g. v0.1.8
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: macOS version
+      options:
+        - macOS 15 (Sequoia)
+        - macOS 14 (Sonoma)
+        - macOS 13 (Ventura)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots / 相關 log 或截圖
+      description: Paste any relevant logs or attach screenshots. / 貼上相關 log 或附上截圖。
