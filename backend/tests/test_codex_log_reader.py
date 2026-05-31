@@ -1,0 +1,154 @@
+"""CodexLogReader: cumulative-delta parsing + session_meta cwd."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from agent_team_backend.log_readers.codex import CodexLogReader
+
+
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
+@pytest.fixture
+def fake_codex_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    return fake_home / ".codex" / "sessions" / "2026" / "05" / "27" / "rollout-test.jsonl"
+
+
+def _token_count_event(input_t: int, cached_in: int, output_t: int, reasoning_out: int) -> dict:
+    return {
+        "timestamp": "2026-05-27T13:18:03.369Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": input_t,
+                    "cached_input_tokens": cached_in,
+                    "output_tokens": output_t,
+                    "reasoning_output_tokens": reasoning_out,
+                    "total_tokens": input_t + cached_in + output_t + reasoning_out,
+                },
+                "model_context_window": 258400,
+            },
+        },
+    }
+
+
+def test_first_event_emits_full_total(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/Users/me/proj"}},
+        _token_count_event(100, 20, 50, 10),
+    ])
+    events = reader.parse_session_file(fake_codex_session, set())
+    assert len(events) == 1
+    ev = events[0]
+    # input = 100 (input_tokens) + 20 (cached_input_tokens) = 120
+    assert ev.input_tokens == 120
+    # output = 50 (output_tokens) + 10 (reasoning_output_tokens) = 60
+    assert ev.output_tokens == 60
+    assert ev.cwd == "/Users/me/proj"
+    assert ev.vendor == "codex"
+
+
+def test_subsequent_event_emits_delta(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    seen: set[str] = set()
+
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x"}},
+        _token_count_event(100, 0, 50, 0),
+    ])
+    events1 = reader.parse_session_file(fake_codex_session, seen)
+    assert events1[0].input_tokens == 100
+    assert events1[0].output_tokens == 50
+
+    # Append more
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x"}},
+        _token_count_event(100, 0, 50, 0),
+        _token_count_event(150, 0, 75, 0),
+    ])
+    events2 = reader.parse_session_file(fake_codex_session, seen)
+    assert len(events2) == 1
+    assert events2[0].input_tokens == 50   # delta 150-100
+    assert events2[0].output_tokens == 25  # delta 75-50
+
+
+def test_no_increase_emits_nothing(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    _write_jsonl(fake_codex_session, [
+        _token_count_event(100, 0, 50, 0),
+    ])
+    reader.parse_session_file(fake_codex_session, seen)
+    # Same file, same content → no new events
+    events2 = reader.parse_session_file(fake_codex_session, seen)
+    assert events2 == []
+
+
+def test_decreasing_totals_treated_as_session_rotation(fake_codex_session: Path) -> None:
+    """If totals shrink (Codex CLI restarted), reset baseline silently."""
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    _write_jsonl(fake_codex_session, [_token_count_event(500, 0, 200, 0)])
+    reader.parse_session_file(fake_codex_session, seen)
+    # File rewritten with smaller totals (treat as fresh session)
+    _write_jsonl(fake_codex_session, [_token_count_event(50, 0, 30, 0)])
+    events = reader.parse_session_file(fake_codex_session, seen)
+    # Reset only, no negative delta emitted
+    assert events == []
+    # Next event grows from new baseline
+    _write_jsonl(fake_codex_session, [
+        _token_count_event(50, 0, 30, 0),
+        _token_count_event(80, 0, 40, 0),
+    ])
+    events = reader.parse_session_file(fake_codex_session, seen)
+    assert len(events) == 1
+    assert events[0].input_tokens == 30
+    assert events[0].output_tokens == 10
+
+
+def test_session_meta_cwd_picked_up(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "other"},
+        {"type": "session_meta", "payload": {"cwd": "/home/x/work"}},
+        _token_count_event(10, 0, 5, 0),
+    ])
+    events = reader.parse_session_file(fake_codex_session, set())
+    assert events[0].cwd == "/home/x/work"
+
+
+def test_malformed_lines_do_not_abort(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    fake_codex_session.parent.mkdir(parents=True, exist_ok=True)
+    fake_codex_session.write_text(
+        '{not valid json\n'
+        + json.dumps(_token_count_event(50, 0, 25, 0)) + "\n"
+        + "another garbage line\n",
+        encoding="utf-8",
+    )
+    events = reader.parse_session_file(fake_codex_session, set())
+    assert len(events) == 1
+
+
+def test_missing_payload_info_skipped(fake_codex_session: Path) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "event_msg", "payload": {"type": "token_count", "info": None}},
+        {"type": "event_msg", "payload": {"type": "token_count"}},  # no info at all
+    ])
+    events = reader.parse_session_file(fake_codex_session, set())
+    assert events == []

@@ -1,0 +1,82 @@
+import { computed, onScopeDispose, ref, shallowRef } from 'vue'
+import type { useBackend } from './useBackend'
+import { stageDefToFrontend, type Stage } from '../data/stages'
+
+/**
+ * Per-window stages cache. Loads from backend on mount and refreshes whenever
+ * the backend broadcasts a `stages.changed` event (triggered by any window's
+ * upsert / delete / reset / reorder). Reconnect-safe.
+ */
+export function useStages(backend: ReturnType<typeof useBackend>) {
+  const stages = ref<Stage[]>([])
+  const stagesPath = shallowRef<string>('')
+  const isLoaded = ref<boolean>(false)
+  const loading = ref<boolean>(false)
+  const error = ref<string>('')
+
+  let unsubChanged: (() => void) | null = null
+  let unsubBackend: (() => void) | null = null
+
+  async function refresh(): Promise<void> {
+    loading.value = true
+    error.value = ''
+    try {
+      const resp = await backend.send<{ stages: Record<string, unknown>[]; path: string }>(
+        'stages.list',
+        {}
+      )
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'failed to load stages'
+        return
+      }
+      stages.value = resp.payload.stages.map(stageDefToFrontend)
+      stagesPath.value = resp.payload.path
+      isLoaded.value = true
+    } catch (err) {
+      error.value = String((err as Error).message ?? err)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // Subscribe to backend broadcasts so the cache stays in sync across windows.
+  unsubChanged = backend.on('stages.changed', (raw) => {
+    const payload = raw as { stages: Record<string, unknown>[] }
+    if (payload?.stages) {
+      stages.value = payload.stages.map(stageDefToFrontend)
+    }
+  })
+
+  // Initial load — wait until backend is connected then fetch. Also re-fetch on reconnect.
+  let lastStatus = backend.status.value
+  function maybeLoad(): void {
+    if (backend.status.value === 'connected') void refresh()
+  }
+  maybeLoad()
+  unsubBackend = (() => {
+    const id = window.setInterval(() => {
+      if (backend.status.value !== lastStatus) {
+        lastStatus = backend.status.value
+        maybeLoad()
+      }
+    }, 500)
+    return () => window.clearInterval(id)
+  })()
+
+  onScopeDispose(() => {
+    unsubChanged?.()
+    unsubBackend?.()
+  })
+
+  const stageById = computed(() =>
+    stages.value.reduce(
+      (acc, s) => {
+        acc[s.id] = s
+        return acc
+      },
+      {} as Record<string, Stage>
+    )
+  )
+
+  return { stages, stageById, stagesPath, isLoaded, loading, error, refresh }
+}

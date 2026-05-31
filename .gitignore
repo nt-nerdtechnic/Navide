@@ -1,0 +1,50 @@
+# ─── Node / Electron ────────────────────────────────────────────────────────
+node_modules/
+out/
+dist/
+release/
+.vite/
+
+# TypeScript incremental build info (generated, not source)
+*.tsbuildinfo
+
+# ─── Logs ───────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# ─── Environment / Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Python backend ─────────────────────────────────────────────────────────
+backend/.venv/
+**/__pycache__/
+*.pyc
+backend/dist/
+backend/*.egg-info/
+backend/.mypy_cache/
+backend/.ruff_cache/
+# Note: backend/.python-version is intentionally tracked (uv uses it to pin Python)
+
+# ─── macOS ──────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ─── IDE / Editor ───────────────────────────────────────────────────────────
+.idea/
+.vscode/
+
+# Cursor editor config (ignore contents), but keep plans/ for plan-driven workflow
+.cursor/
+
+# ─── Claude Code ────────────────────────────────────────────────────────────
+.claude/
+
+# ─── Agent-Team runtime data (per-workspace pipeline state) ────────────────
+.agent-team/
+
+# ─── Test artifacts ────────────────────────────────────────────────────────
+test-results/
+playwright-report/
+.pytest_cache/

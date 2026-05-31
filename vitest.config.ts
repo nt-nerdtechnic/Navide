@@ -1,0 +1,20 @@
+import { defineConfig } from 'vitest/config'
+import vue from '@vitejs/plugin-vue'
+
+// Renderer-only unit/component tests. Pure functions (lib/, data/) run in the
+// default `node` environment; composable tests opt into happy-dom per-file via
+// `// @vitest-environment happy-dom`. We mirror the renderer's build-time global
+// (`__APP_BUILD__`) so importing modules that reference it doesn't throw.
+export default defineConfig({
+  plugins: [vue()],
+  define: {
+    __APP_BUILD__: JSON.stringify('test')
+  },
+  test: {
+    environment: 'node',
+    include: ['src/renderer/src/**/*.{test,spec}.ts'],
+    // Playwright E2E lives in e2e/ and is run by `test:e2e`, not Vitest.
+    exclude: ['e2e/**', 'node_modules/**'],
+    globals: false
+  }
+})

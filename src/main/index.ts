@@ -1,0 +1,259 @@
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { join } from 'node:path'
+import { startBackend, type BackendHandle } from './backend'
+
+// Give the Electron process a distinct name so it can be targeted precisely
+// with `pkill -f agent-team-electron` without affecting other Electron apps.
+process.title = 'agent-team-electron'
+
+let backend: BackendHandle | null = null
+let mainWindow: BrowserWindow | null = null
+let rolesWindow: BrowserWindow | null = null
+let stagesWindow: BrowserWindow | null = null
+
+function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
+  const qs = new URLSearchParams(params).toString()
+  if (process.env['ELECTRON_RENDERER_URL']) {
+    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}${qs ? '?' + qs : ''}`)
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { search: qs ? '?' + qs : '' })
+  }
+}
+
+async function createWindow(): Promise<void> {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    title: 'Agent-Team',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  mainWindow = win
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null
+  })
+
+  loadWindow(win, { window: 'main' })
+}
+
+function openRolesWindow(): void {
+  if (rolesWindow && !rolesWindow.isDestroyed()) {
+    rolesWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 900,
+    height: 720,
+    title: 'Agent-Team · Role Manager',
+    parent: mainWindow ?? undefined,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  rolesWindow = win
+  win.on('closed', () => {
+    if (rolesWindow === win) rolesWindow = null
+  })
+  loadWindow(win, { window: 'roles' })
+}
+
+ipcMain.handle('backend:info', () => {
+  if (!backend) return { status: 'starting' as const }
+  return {
+    status: 'ready' as const,
+    host: backend.host,
+    port: backend.port,
+    httpUrl: `http://${backend.host}:${backend.port}`,
+    wsUrl: `ws://${backend.host}:${backend.port}/ws`
+  }
+})
+
+ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
+  const opts: Electron.OpenDialogOptions = {
+    title: 'Pick workspace folder',
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Use this folder'
+  }
+  if (defaultPath && typeof defaultPath === 'string') opts.defaultPath = defaultPath
+
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, opts)
+    : await dialog.showOpenDialog(opts)
+
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+function openStagesWindow(): void {
+  if (stagesWindow && !stagesWindow.isDestroyed()) {
+    stagesWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    title: 'Agent-Team · Stage Manager',
+    parent: mainWindow ?? undefined,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  stagesWindow = win
+  win.on('closed', () => {
+    if (stagesWindow === win) stagesWindow = null
+  })
+  loadWindow(win, { window: 'stages' })
+}
+
+ipcMain.handle('window:openRoles', () => {
+  openRolesWindow()
+  return { ok: true }
+})
+
+ipcMain.handle('window:openStages', () => {
+  openStagesWindow()
+  return { ok: true }
+})
+
+ipcMain.handle(
+  'dialog:saveJson',
+  async (
+    _event,
+    args: { defaultName?: string; content: string; title?: string }
+  ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => {
+    const opts: Electron.SaveDialogOptions = {
+      title: args?.title ?? 'Export JSON',
+      defaultPath: args?.defaultName ?? 'export.json',
+      filters: [
+        { name: 'JSON', extensions: ['json'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showSaveDialog(win, opts)
+      : await dialog.showSaveDialog(opts)
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true }
+    try {
+      const fs = await import('node:fs/promises')
+      await fs.writeFile(result.filePath, args.content, 'utf-8')
+      return { ok: true, path: result.filePath }
+    } catch (err) {
+      return { ok: false, error: String((err as Error).message ?? err) }
+    }
+  }
+)
+
+ipcMain.handle(
+  'dialog:openJson',
+  async (
+    _event,
+    args?: { title?: string }
+  ): Promise<{ ok: boolean; path?: string; content?: string; canceled?: boolean; error?: string }> => {
+    const opts: Electron.OpenDialogOptions = {
+      title: args?.title ?? 'Import JSON',
+      properties: ['openFile'],
+      filters: [
+        { name: 'JSON', extensions: ['json'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts)
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true }
+    try {
+      const fs = await import('node:fs/promises')
+      const content = await fs.readFile(result.filePaths[0], 'utf-8')
+      return { ok: true, path: result.filePaths[0], content }
+    } catch (err) {
+      return { ok: false, error: String((err as Error).message ?? err) }
+    }
+  }
+)
+
+ipcMain.handle('shell:openPath', async (_event, target: string) => {
+  if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
+  // shell.openPath returns an empty string on success, or an error message.
+  const err = await shell.openPath(target)
+  if (err) {
+    // If openPath failed (e.g. file doesn't exist), try revealing the parent
+    // directory in Finder so the user can navigate from there.
+    try {
+      shell.showItemInFolder(target)
+      return { ok: true, revealed: true }
+    } catch {
+      return { ok: false, error: err }
+    }
+  }
+  return { ok: true }
+})
+
+// Read bytes from a file starting at a given offset. Used by the stage watcher
+// to scan the outputLogFile for sentinel strings — more reliable than cleanBuffer
+// which can be truncated or have scanFrom issues from Q&A injections.
+ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number) => {
+  if (!filePath || typeof filePath !== 'string') return { ok: false, content: '' }
+  try {
+    const fs = await import('node:fs/promises')
+    const stat = await fs.stat(filePath)
+    if (stat.size <= fromByte) return { ok: true, content: '', newOffset: fromByte }
+    const fh = await fs.open(filePath, 'r')
+    const buf = Buffer.alloc(stat.size - fromByte)
+    await fh.read(buf, 0, buf.length, fromByte)
+    await fh.close()
+    return { ok: true, content: buf.toString('utf-8'), newOffset: stat.size }
+  } catch {
+    return { ok: false, content: '', newOffset: fromByte }
+  }
+})
+
+// Disable hardware-accelerated rendering entirely.
+// --disable-gpu eliminates the GPU subprocess without running GPU code in-process.
+// Previously we used --in-process-gpu to prevent a separate GPU process from
+// crashing (SIGTERM/exit_code=15), but on macOS 26.5 + Electron 33 the
+// Chrome_InProcGpuThread crashes on shutdown inside fontations_ffi teardown
+// (SIGSEGV at 0x18).  --disable-gpu avoids both problems.
+// WebSocket stability is now handled by the 50ms batch + 64KB cap in terminals.py.
+app.disableHardwareAcceleration()
+app.commandLine.appendSwitch('disable-gpu')
+
+app.whenReady().then(async () => {
+  try {
+    backend = await startBackend()
+    console.log(`[main] backend ready at ${backend.host}:${backend.port}`)
+  } catch (err) {
+    console.error('[main] backend failed to start', err)
+  }
+
+  await createWindow()
+
+  app.on('activate', async () => {
+    if (BrowserWindow.getAllWindows().length === 0) await createWindow()
+  })
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', async (e) => {
+  if (backend) {
+    e.preventDefault()
+    const b = backend
+    backend = null
+    await b.stop()
+    app.quit()
+  }
+})

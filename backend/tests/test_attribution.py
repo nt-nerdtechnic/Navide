@@ -1,0 +1,403 @@
+"""Attribution layer: workspace-folder association + pane lookup.
+
+After Design B switch:
+  - Workspace must be registered first; events outside any registered
+    workspace return workspace_path=None (sink drops them).
+  - Pane lookup is best-effort for current-run "By Pane" attribution.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+import pytest
+
+from agent_team_backend.log_readers.attribution import Attribution
+from agent_team_backend.log_readers.base import LogReader, TokenUsage
+
+
+class FakeReader(LogReader):
+    def __init__(self, vendor: str, root: Path) -> None:
+        self.vendor = vendor
+        self.root = root
+
+    def project_dirs(self) -> list[Path]:
+        return [self.root] if self.root.is_dir() else []
+
+    def session_files(self) -> list[Path]:
+        if not self.root.is_dir():
+            return []
+        return sorted(self.root.rglob("*.jsonl"))
+
+    def parse_session_file(self, path: Path, seen_keys: set[str]) -> list[TokenUsage]:
+        return []
+
+
+def _make_usage(vendor: str, *, session_id: str, file_path: str,
+                cwd: str = "", input_t: int = 10, output_t: int = 5) -> TokenUsage:
+    return TokenUsage(
+        vendor=vendor, input_tokens=input_t, output_tokens=output_t,
+        cwd=cwd, session_id=session_id, file_path=file_path,
+        dedup_key=f"{session_id}::{file_path}",
+    )
+
+
+@pytest.fixture
+def claude_attr(tmp_path: Path) -> tuple[Attribution, Path]:
+    root = tmp_path / "claude_projects"
+    root.mkdir()
+    reader = FakeReader("claude", root)
+    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
+    return attr, root
+
+
+# ─────────────────────────── workspace gating ───────────────────────────────
+
+def test_unregistered_workspace_returns_none(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    proj_dir = root / "-Users-me-proj"; proj_dir.mkdir()
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    usage = _make_usage("claude", session_id="s", file_path=str(f))
+    result = attr.attribute(usage)
+    # No workspace registered yet → external.
+    assert result.workspace_path is None
+    assert result.pane_id is None
+
+
+def test_register_workspace_then_attribute_succeeds(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/Users/me/proj"
+    attr.register_workspace(cwd)
+    proj_dir = root / "-Users-me-proj"; proj_dir.mkdir()
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    usage = _make_usage("claude", session_id="s", file_path=str(f))
+    result = attr.attribute(usage)
+    assert result.workspace_path == cwd
+
+
+def test_workspace_persists_across_restarts(tmp_path: Path) -> None:
+    """workspace-associations.json round-trip."""
+    root = tmp_path / "claude_projects"; root.mkdir()
+    ws_path = "/Users/me/proj"
+
+    # Run 1: register
+    attr1 = Attribution([FakeReader("claude", root)], workspaces_path=tmp_path / "ws.json")
+    attr1.register_workspace(ws_path)
+    assert ws_path in attr1.known_workspaces()
+    assert (tmp_path / "ws.json").exists()
+
+    # Run 2: load from disk
+    attr2 = Attribution([FakeReader("claude", root)], workspaces_path=tmp_path / "ws.json")
+    assert ws_path in attr2.known_workspaces()
+    # Attribute also works without re-registering
+    proj_dir = root / "-Users-me-proj"; proj_dir.mkdir()
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    result = attr2.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.workspace_path == ws_path
+
+
+def test_workspace_only_matches_files_under_its_folder(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    attr.register_workspace("/Users/me/proj-A")
+    # File belongs to a DIFFERENT workspace
+    other = root / "-Users-me-proj-B"; other.mkdir()
+    f = other / "s.jsonl"; f.write_text("")
+    result = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.workspace_path is None
+
+
+def test_register_workspace_is_idempotent(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, _ = claude_attr
+    attr.register_workspace("/x")
+    attr.register_workspace("/x")
+    attr.register_workspace("/x")
+    assert attr.known_workspaces() == ["/x"]
+
+
+# ─────────────────────────── codex via session_meta cwd ──────────────────────
+
+def test_codex_workspace_via_cwd(tmp_path: Path) -> None:
+    codex_root = tmp_path / "codex"; codex_root.mkdir()
+    attr = Attribution(
+        [FakeReader("codex", codex_root)], workspaces_path=tmp_path / "ws.json",
+    )
+    cwd = "/Users/me/code"
+    attr.register_workspace(cwd)
+    usage = _make_usage("codex", session_id="s", file_path=str(codex_root / "any.jsonl"), cwd=cwd)
+    result = attr.attribute(usage)
+    assert result.workspace_path == cwd
+
+
+def test_codex_different_cwd_not_attributed(tmp_path: Path) -> None:
+    codex_root = tmp_path / "codex"; codex_root.mkdir()
+    attr = Attribution(
+        [FakeReader("codex", codex_root)], workspaces_path=tmp_path / "ws.json",
+    )
+    attr.register_workspace("/A")
+    usage = _make_usage("codex", session_id="s",
+                        file_path=str(codex_root / "x.jsonl"), cwd="/B")
+    assert attr.attribute(usage).workspace_path is None
+
+
+# ─────────────────────────── pane lookup within current run ──────────────────
+
+def test_pane_attribution_within_run(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj_dir = root / "-x"; proj_dir.mkdir()
+    # register_pane also implicitly registers the workspace
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd,
+                       workspace_path=cwd, stage_id="01")
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    result = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.workspace_path == cwd
+    assert result.pane_id == "pane-1"
+    assert result.stage_id == "01"
+
+
+def test_two_panes_same_workspace_get_different_files(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj = root / "-x"; proj.mkdir()
+    attr.register_pane("p1", vendor="claude", cwd=cwd, workspace_path=cwd)
+    time.sleep(0.01)
+    attr.register_pane("p2", vendor="claude", cwd=cwd, workspace_path=cwd)
+    f1 = proj / "s1.jsonl"; f1.write_text("")
+    f2 = proj / "s2.jsonl"; f2.write_text("")
+    r1 = attr.attribute(_make_usage("claude", session_id="s1", file_path=str(f1)))
+    r2 = attr.attribute(_make_usage("claude", session_id="s2", file_path=str(f2)))
+    # Both belong to the workspace; the two new files map to two distinct panes.
+    assert r1.workspace_path == r2.workspace_path == cwd
+    assert {r1.pane_id, r2.pane_id} == {"p1", "p2"}
+
+
+def test_event_without_matching_pane_still_attributed_to_workspace(claude_attr: tuple[Attribution, Path]) -> None:
+    """User opens Claude Code directly in the workspace — no Agent-Team pane,
+    but the workspace is registered → event still counts toward workspace."""
+    attr, root = claude_attr
+    cwd = "/x"
+    attr.register_workspace(cwd)
+    proj = root / "-x"; proj.mkdir()
+    f = proj / "external.jsonl"; f.write_text("")
+    r = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert r.workspace_path == cwd
+    assert r.pane_id is None    # no live pane to claim — counts globally but no pane
+
+
+def test_unregister_pane_keeps_workspace(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj = root / "-x"; proj.mkdir()
+    attr.register_pane("p", vendor="claude", cwd=cwd, workspace_path=cwd)
+    f = proj / "s.jsonl"; f.write_text("")
+    attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    attr.unregister_pane("p")
+    # New event for same session after pane removed: still workspace-attributed
+    r = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert r.workspace_path == cwd
+    assert r.pane_id is None
+
+
+def test_cross_vendor_isolation(tmp_path: Path) -> None:
+    claude_root = tmp_path / "claude"; claude_root.mkdir()
+    codex_root = tmp_path / "codex"; codex_root.mkdir()
+    attr = Attribution(
+        [FakeReader("claude", claude_root), FakeReader("codex", codex_root)],
+        workspaces_path=tmp_path / "ws.json",
+    )
+    cwd = "/x"
+    attr.register_workspace(cwd)
+    # Claude session under the registered workspace
+    proj = claude_root / "-x"; proj.mkdir()
+    f = proj / "s.jsonl"; f.write_text("")
+    r = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert r.workspace_path == cwd
+    # Codex session with mismatched cwd
+    r2 = attr.attribute(_make_usage("codex", session_id="s2",
+                                    file_path=str(codex_root / "x.jsonl"), cwd="/elsewhere"))
+    assert r2.workspace_path is None
+
+
+def test_register_pane_with_unknown_vendor_is_safe(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, _ = claude_attr
+    # No reader for "mystery" — should not raise.
+    attr.register_pane("p", vendor="mystery", cwd="/x", workspace_path="/x")
+    # Workspace gets registered as a side-effect; but the usage's vendor has
+    # no folder mapping, so unless cwd matches workspace via codex/gemini rules
+    # we return None for unknown vendor.
+    r = attr.attribute(_make_usage("mystery", session_id="s", file_path="/whatever"))
+    assert r.workspace_path is None
+
+
+# ─────────────────── explicit_session_id (pane mis-attribution fix) ──────────
+
+def test_explicit_session_id_routes_to_correct_pane(claude_attr: tuple[Attribution, Path]) -> None:
+    """Two panes share one workspace; each has a pinned --session-id.
+    Events must be routed to the correct pane without mis-attribution
+    (regression: pre-fix, first-come claim could assign both to pane-1)."""
+    attr, root = claude_attr
+    cwd = "/ws"
+    proj = root / "-ws"; proj.mkdir()
+    f1 = proj / "sess-a.jsonl"; f1.write_text("")
+    f2 = proj / "sess-b.jsonl"; f2.write_text("")
+
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="sess-a")
+    attr.register_pane("pane-2", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="sess-b")
+
+    r1 = attr.attribute(_make_usage("claude", session_id="sess-a", file_path=str(f1)))
+    r2 = attr.attribute(_make_usage("claude", session_id="sess-b", file_path=str(f2)))
+
+    assert r1.pane_id == "pane-1", f"sess-a should map to pane-1, got {r1.pane_id}"
+    assert r2.pane_id == "pane-2", f"sess-b should map to pane-2, got {r2.pane_id}"
+
+
+def test_pane_for_session_returns_correct_pane_after_explicit_register(
+    claude_attr: tuple[Attribution, Path],
+) -> None:
+    """pane_for_session() (used by stop-hook path) must resolve the exact pane
+    after explicit_session_id registration — this is the stop-hook pane_id
+    look-up that was always returning '' before the fix."""
+    attr, root = claude_attr
+    cwd = "/ws2"
+    attr.register_pane("pane-x", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="my-session")
+
+    pane_id, ws, _ = attr.pane_for_session("my-session")
+    assert pane_id == "pane-x"
+    assert ws == cwd
+
+
+def test_pane_for_session_race_returns_none(claude_attr: tuple[Attribution, Path]) -> None:
+    """Stop hook arriving before JSONL claims the session → (None, None, None).
+    The caller should fall back gracefully, not crash."""
+    attr, _ = claude_attr
+    pane_id, ws, stage = attr.pane_for_session("not-yet-known")
+    assert pane_id is None
+    assert ws is None
+    assert stage is None
+
+
+def test_explicit_session_id_takes_priority_over_file_claim(
+    claude_attr: tuple[Attribution, Path],
+) -> None:
+    """If a session is pinned to pane-A via explicit_session_id, a later
+    file-path claim attempt from pane-B must NOT override it."""
+    attr, root = claude_attr
+    cwd = "/shared"
+    proj = root / "-shared"; proj.mkdir()
+    f = proj / "shared-sess.jsonl"; f.write_text("")
+
+    attr.register_pane("pane-A", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="shared-sess")
+    # pane-B registered AFTER — without explicit id, so it would normally claim
+    # the next unclaimed session via the file-path heuristic.
+    attr.register_pane("pane-B", vendor="claude", cwd=cwd, workspace_path=cwd)
+
+    r = attr.attribute(_make_usage("claude", session_id="shared-sess", file_path=str(f)))
+    assert r.pane_id == "pane-A", (
+        f"pinned session must stay on pane-A even after pane-B registered; got {r.pane_id}"
+    )
+
+
+# ─────────────────── session_marker (Codex/Gemini resume capture) ────────────
+
+@pytest.fixture
+def codex_attr(tmp_path: Path) -> tuple[Attribution, Path]:
+    root = tmp_path / "codex"; root.mkdir()
+    attr = Attribution([FakeReader("codex", root)], workspaces_path=tmp_path / "ws.json")
+    return attr, root
+
+
+def _codex_file(root: Path, name: str, *, marker: str, meta_id: str) -> Path:
+    """A minimal Codex rollout: session_meta (carries the real resume id) + a
+    user message containing the kickoff marker."""
+    f = root / name
+    f.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": meta_id, "cwd": "/ws"}}) + "\n" +
+        json.dumps({"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": f"hi <!-- agent-team-session: {marker} -->"}],
+        }}) + "\n"
+    )
+    return f
+
+
+def test_marker_binds_two_codex_panes_and_returns_resume_id(codex_attr: tuple[Attribution, Path]) -> None:
+    """Two Codex panes in one workspace spawn near-simultaneously; the marker in
+    each session file resolves the right pane (the case the racy heuristic fails),
+    and the returned resume id is session_meta.id — NOT the filename stem."""
+    attr, root = codex_attr
+    cwd = "/ws"
+    attr.register_pane("p1", vendor="codex", cwd=cwd, workspace_path=cwd, session_marker="at-pane:p1")
+    attr.register_pane("p2", vendor="codex", cwd=cwd, workspace_path=cwd, session_marker="at-pane:p2")
+    f1 = _codex_file(root, "rollout-T1-uuid1.jsonl", marker="at-pane:p1", meta_id="uuid-1")
+    f2 = _codex_file(root, "rollout-T2-uuid2.jsonl", marker="at-pane:p2", meta_id="uuid-2")
+
+    # session_id passed in is the stem (what the reader emits); resume id comes from session_meta.
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="rollout-T2-uuid2", file_path=str(f2), cwd=cwd)) == ("p2", "uuid-2")
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="rollout-T1-uuid1", file_path=str(f1), cwd=cwd)) == ("p1", "uuid-1")
+    # attribution still routes by the reader's session_id (for tokens).
+    assert attr.pane_for_session("rollout-T1-uuid1")[0] == "p1"
+    assert attr.pane_for_session("rollout-T2-uuid2")[0] == "p2"
+
+
+def test_gemini_marker_returns_top_level_session_id(tmp_path: Path) -> None:
+    root = tmp_path / "gemini"; root.mkdir()
+    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane("g1", vendor="gemini", cwd="/ws", workspace_path="/ws", session_marker="at-pane:g1")
+    f = root / "session-x.json"
+    f.write_text(json.dumps({
+        "sessionId": "real-gemini-uuid",
+        "messages": [{"type": "user", "content": [{"text": "go <!-- agent-team-session: at-pane:g1 -->"}]}],
+    }))
+    assert attr.maybe_bind_by_marker(_make_usage("gemini", session_id="session-x", file_path=str(f))) == ("g1", "real-gemini-uuid")
+
+
+def test_gemini_marker_old_jsonl_header_session_id(tmp_path: Path) -> None:
+    """Older Gemini .jsonl: sessionId is on the header line, body is $set ops."""
+    root = tmp_path / "gemini"; root.mkdir()
+    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane("g1", vendor="gemini", cwd="/ws", workspace_path="/ws", session_marker="at-pane:g1")
+    f = root / "session-y.jsonl"
+    f.write_text(
+        json.dumps({"sessionId": "legacy-uuid", "kind": "main"}) + "\n" +
+        json.dumps({"$set": {"messages": [{"type": "user",
+                   "content": [{"text": "hi <!-- agent-team-session: at-pane:g1 -->"}]}]}}) + "\n"
+    )
+    assert attr.maybe_bind_by_marker(_make_usage("gemini", session_id="session-y", file_path=str(f))) == ("g1", "legacy-uuid")
+
+
+def test_marker_returns_none_when_absent(codex_attr: tuple[Attribution, Path]) -> None:
+    attr, root = codex_attr
+    attr.register_pane("p1", vendor="codex", cwd="/ws", workspace_path="/ws", session_marker="at-pane:p1")
+    f = root / "rollout.jsonl"; f.write_text('{"type":"session_meta","payload":{"id":"x"}}')
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="s", file_path=str(f))) is None
+
+
+def test_marker_binds_only_once(codex_attr: tuple[Attribution, Path]) -> None:
+    attr, root = codex_attr
+    attr.register_pane("p1", vendor="codex", cwd="/ws", workspace_path="/ws", session_marker="at-pane:p1")
+    f = _codex_file(root, "rollout.jsonl", marker="at-pane:p1", meta_id="uuid-1")
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="s", file_path=str(f))) == ("p1", "uuid-1")
+    # Second event for the same (now-bound) session → no re-announce.
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="s", file_path=str(f))) is None
+
+
+def test_marker_ignored_for_claude(claude_attr: tuple[Attribution, Path]) -> None:
+    """Claude uses --session-id, never markers — maybe_bind_by_marker is a no-op."""
+    attr, root = claude_attr
+    f = root / "s.jsonl"; f.write_text("at-pane:whatever")
+    assert attr.maybe_bind_by_marker(_make_usage("claude", session_id="s", file_path=str(f))) is None
+
+
+def test_marker_unregistered_after_pane_killed(codex_attr: tuple[Attribution, Path]) -> None:
+    attr, root = codex_attr
+    attr.register_pane("p1", vendor="codex", cwd="/ws", workspace_path="/ws", session_marker="at-pane:p1")
+    attr.unregister_pane("p1")
+    f = _codex_file(root, "rollout.jsonl", marker="at-pane:p1", meta_id="uuid-1")
+    # Marker gone with the pane → nothing to bind.
+    assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="s", file_path=str(f))) is None

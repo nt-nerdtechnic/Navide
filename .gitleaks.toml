@@ -1,0 +1,19 @@
+title = "Agent-Team gitleaks config"
+
+# Extend the default ruleset (inherits all built-in rules)
+[extend]
+  useDefault = true
+
+[allowlist]
+  description = "Project-level false-positive allowlist"
+
+  # MIT copyright line in LICENSE — intentional, not a secret
+  regexes = [
+    '''Copyright \(c\) 20\d{2} NT IT''',
+    '''Copyright \(c\) 20\d{2} 恩梯科技''',
+  ]
+
+  # Paths that only contain fixture / example data
+  paths = [
+    '''backend/tests/''',
+  ]

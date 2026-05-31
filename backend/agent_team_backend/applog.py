@@ -1,0 +1,57 @@
+"""Backend logging: rotating file handler under the macOS app-data dir."""
+
+from __future__ import annotations
+
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+
+def app_data_dir() -> Path:
+    """Cross-platform-ish app data dir. V1 targets macOS."""
+    if os.name == "posix" and os.uname().sysname == "Darwin":
+        return Path(os.path.expanduser("~/Library/Application Support/Agent-Team"))
+    # Fallback for non-macOS dev: XDG_DATA_HOME or ~/.local/share.
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return Path(base) / "Agent-Team"
+
+
+def log_dir() -> Path:
+    d = app_data_dir() / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def backend_log_path() -> Path:
+    return log_dir() / "backend.log"
+
+
+def backend_port_file() -> Path:
+    """Path to the small text file holding the currently-running backend port.
+
+    Used by Claude Code hooks installed in ~/.claude/settings.json so each
+    hook fire can resolve the current port without us baking it into config.
+    """
+    return app_data_dir() / "backend-port"
+
+
+def setup_file_logging(level: str = "info") -> Path:
+    """Attach a rotating file handler to the agent_team_backend logger tree.
+
+    Returns the active log file path so callers (e.g. the entrypoint) can print
+    it to stdout — the renderer reads stdout to surface the path in the UI.
+    """
+    path = backend_log_path()
+    handler = RotatingFileHandler(
+        path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    handler.setLevel(level.upper())
+    handler.setFormatter(
+        logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s")
+    )
+    root = logging.getLogger("agent_team_backend")
+    # Avoid duplicate handlers if called twice.
+    if not any(isinstance(h, RotatingFileHandler) and Path(h.baseFilename) == path for h in root.handlers):
+        root.addHandler(handler)
+    return path
