@@ -917,13 +917,14 @@ async function onReinject(paneId: string): Promise<void> {
   syncViews()
 }
 
-async function onKill(paneId: string): Promise<void> {
+async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRemoved: true }): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
     window.clearTimeout(pane.injectionTimer)
   }
+  let stageIndex = -1
   if (pane) {
-    const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
+    stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
     if (stageIndex >= 0) cancelWatcher(paneId)
   }
   if (activeQuestion.value?.paneId === paneId) activeQuestion.value = null
@@ -934,6 +935,13 @@ async function onKill(paneId: string): Promise<void> {
     } catch {
       /* ignore */
     }
+  }
+  if (opts.markRemoved !== false && pane?.origin === 'pipeline' && pane.slotLabel && stageIndex >= 0) {
+    await sendQuiet<ProjectPayload>('pipeline.slot_unspawn', {
+      workspace_path: pipeline.workspacePath,
+      stage_index: stageIndex,
+      slot_label: pane.slotLabel,
+    })
   }
   panes.value = panes.value.filter((p) => p.id !== paneId)
   delete paneRefs[paneId]
@@ -951,7 +959,7 @@ async function onInterrupt(paneId: string): Promise<void> {
 }
 
 async function onKillAll(): Promise<void> {
-  for (const p of [...panes.value]) await onKill(p.id)
+  for (const p of [...panes.value]) await onKill(p.id, { markRemoved: false })
 }
 
 // ────────────────────────── Pipeline ──────────────────────────
@@ -1020,7 +1028,7 @@ interface ProjectSlot {
   agent: string
   role: string
   pane_id?: string | null
-  spawn_status: string   // 'pending' | 'spawned'
+  spawn_status: string   // 'pending' | 'spawned' | 'removed'
   kickoff_status: string // 'none' | 'sent' | 'failed'
   session_id?: string    // CLI session id for resume-on-restart ('' if unknown)
 }
@@ -1210,7 +1218,7 @@ async function onPipelineRestart(payload: { task: string; workspacePath: string 
   activeQuestion.value = null
   // Kill any pipeline-origin panes still hanging around so we get a clean grid.
   for (const p of [...panes.value]) {
-    if (p.origin === 'pipeline') await onKill(p.id)
+    if (p.origin === 'pipeline') await onKill(p.id, { markRemoved: false })
   }
   pipelineLog('↺ Start over — wiping previous stages and re-running from 01')
   await onPipelineStart(payload)

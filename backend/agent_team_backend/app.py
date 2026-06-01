@@ -604,6 +604,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
+        elif msg_type == "pipeline.slot_unspawn":
+            project = project_store.record_slot_unspawn(
+                payload["workspace_path"],
+                stage_index=int(payload["stage_index"]),
+                slot_label=payload["slot_label"],
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
         elif msg_type == "pipeline.slot_kickoff":
             project = project_store.update_slot_kickoff(
                 payload["workspace_path"],

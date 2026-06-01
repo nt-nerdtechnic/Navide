@@ -76,3 +76,25 @@ def test_record_slot_session_unknown_slot_is_noop(store_with_stage: tuple[Projec
     store, ws = store_with_stage
     # Should not raise on a slot that doesn't exist.
     store.record_slot_session(ws, stage_index=0, slot_label="Nope", session_id="x")
+
+
+def test_record_slot_unspawn_marks_removed_but_preserves_session(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    store, ws = store_with_stage
+    store.record_slot_spawn(
+        ws,
+        stage_index=0,
+        slot_label="Build",
+        pane_id="pane-1",
+        agent="codex",
+        session_id="sess-123",
+    )
+
+    store.record_slot_unspawn(ws, stage_index=0, slot_label="Build")
+
+    slot = store.peek(ws).stages[0].slots[0]
+    assert slot.spawn_status == "removed"
+    assert slot.pane_id is None
+    assert slot.kickoff_status == "none"
+    assert slot.session_id == "sess-123"

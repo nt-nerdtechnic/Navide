@@ -54,7 +54,7 @@ class SlotRecord:
     agent: str = ""
     role: str = ""
     pane_id: str | None = None
-    spawn_status: str = "pending"   # pending / spawned
+    spawn_status: str = "pending"   # pending / spawned / removed
     kickoff_status: str = "none"    # none / sent / failed
     # CLI session id used to resume this slot's conversation on App restart.
     # Claude: the --session-id we pinned at spawn (known immediately).
@@ -365,6 +365,41 @@ class ProjectStore:
             return project
         slot.session_id = session_id
         self.save(project)
+        return project
+
+    def record_slot_unspawn(
+        self,
+        workspace_path: str,
+        *,
+        stage_index: int,
+        slot_label: str,
+    ) -> Project:
+        """Mark a pipeline slot as manually removed so it is not auto-restored.
+
+        The session_id is intentionally preserved. If the slot is spawned again
+        later, record_slot_spawn can reuse/update it as appropriate.
+        """
+        project = self.load_or_create(workspace_path)
+        if stage_index < 0 or stage_index >= len(project.stages):
+            raise IndexError(f"stage_index {stage_index} out of range")
+        stage = project.stages[stage_index]
+        slot = next((s for s in stage.slots if s.label == slot_label), None)
+        if slot is None:
+            return project
+        slot.pane_id = None
+        slot.spawn_status = "removed"
+        slot.kickoff_status = "none"
+        self.save(project)
+        self.append_event(
+            workspace_path,
+            {
+                "event": "slot_unspawn",
+                "stage_index": stage_index,
+                "stage_id": stage.stage_id,
+                "slot_label": slot_label,
+            },
+            log_file_name=project.log_file_name,
+        )
         return project
 
     def update_slot_kickoff(
