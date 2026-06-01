@@ -176,7 +176,8 @@ const workspacePath = ref<string>('')
 watch(
   () => props.workspace,
   (v) => {
-    if (v && v !== workspacePath.value) workspacePath.value = v
+    const next = v ?? ''
+    if (next !== workspacePath.value) workspacePath.value = next
   },
   { immediate: true }
 )
