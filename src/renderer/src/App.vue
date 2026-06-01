@@ -82,6 +82,7 @@ function onWorkspaceSelected(path: string): void {
 }
 
 function roleLabel(key: string): string {
+  if (!key) return 'No role'
   return rolesApi.find(key)?.label ?? key
 }
 
@@ -622,6 +623,12 @@ function scheduleInjection(pane: ActivePane): void {
 
     // 3. Inject role system prompt — unless this is a pre-spawn pane that
     //    will receive role + kickoff together at activation time.
+    if (!pane.roleKey) {
+      pane.injectionStatus = 'skipped'
+      syncViews()
+      pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
+      return
+    }
     if (pane.skipRoleInjection) {
       pane.injectionStatus = 'skipped'
       syncViews()
@@ -899,7 +906,7 @@ async function onReinject(paneId: string): Promise<void> {
   }
   const role = rolesApi.find(pane.roleKey)
   if (!role) {
-    pane.injectionStatus = 'failed'
+    pane.injectionStatus = pane.roleKey ? 'failed' : 'skipped'
     syncViews()
     return
   }

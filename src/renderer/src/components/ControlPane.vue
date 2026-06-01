@@ -315,7 +315,7 @@ async function openPath(p: string): Promise<void> {
 }
 const stageId = ref<StageId>('')
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
-const pickedRole = ref<RoleKey>('backend')
+const pickedRole = ref<RoleKey>('')
 const commandOverride = ref<string>('')
 const previewOpen = ref<boolean>(false)
 const manualSpawnOpen = ref<boolean>(false)
@@ -354,9 +354,7 @@ watch(
   () => props.roles,
   (rs) => {
     if (rs.length === 0) return
-    if (!rs.find((r) => r.key === pickedRole.value)) {
-      pickedRole.value = rs[0].key
-    }
+    if (pickedRole.value && !rs.find((r) => r.key === pickedRole.value)) pickedRole.value = ''
   },
   { immediate: true }
 )
@@ -366,7 +364,7 @@ watch(stageId, (id) => {
   if (!stage) return
   const available = props.roles.map((r) => r.key)
   const preferred = stage.recommendedRoles.find((rk) => available.includes(rk))
-  if (preferred && !stage.recommendedRoles.includes(pickedRole.value)) {
+  if (pickedRole.value && preferred && !stage.recommendedRoles.includes(pickedRole.value)) {
     pickedRole.value = preferred
   }
 })
@@ -741,6 +739,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             </option>
           </select>
           <select v-model="pickedRole">
+            <option value="">Select role…</option>
             <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
           </select>
         </div>
@@ -769,8 +768,10 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
         </div>
         <div v-else class="prompt-block warn-block">
-          <p class="warn">No roles available. Open the manager to add one.</p>
-          <div class="row tight">
+          <p class="warn">
+            {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+          </p>
+          <div v-if="roles.length === 0" class="row tight">
             <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
           </div>
         </div>
@@ -806,7 +807,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
               Interrupt
             </button>
-            <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running'">
+            <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
               Reapply role
             </button>
             <button class="danger" @click="emit('kill', p.id)">Remove</button>
