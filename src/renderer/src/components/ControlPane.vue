@@ -128,7 +128,6 @@ const emit = defineEmits<{
   (e: 'kill-all'): void
   (e: 'interrupt', paneId: string): void
   (e: 'reinject', paneId: string): void
-  (e: 'analyze-now', paneId: string): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; globalManager: { stageId: string; slotLabel: string } | null }): void
   (e: 'pipeline-next'): void
   (e: 'pipeline-abort'): void
@@ -807,15 +806,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">⌃C</button>
             <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running'">
               Re-inject
-            </button>
-            <button
-              v-if="p.origin === 'pipeline' && analyzerStatus.available"
-              class="ghost"
-              @click="emit('analyze-now', p.id)"
-              :disabled="p.status !== 'running'"
-              title="Ask the local model right now whether the agent is asking a question / done"
-            >
-              🧠
             </button>
             <button class="danger" @click="emit('kill', p.id)">Remove</button>
           </div>

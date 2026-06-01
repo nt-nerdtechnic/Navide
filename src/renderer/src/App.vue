@@ -3316,7 +3316,6 @@ function paneIsManager(p: ActivePane): boolean {
       @interrupt="onInterrupt"
       @kill-all="onKillAll"
       @reinject="onReinject"
-      @analyze-now="onAnalyzeNow"
       @pipeline-start="onPipelineStart"
       @pipeline-next="onPipelineNext"
       @pipeline-abort="onPipelineAbort"
