@@ -1,10 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
 import { startBackend, type BackendHandle } from './backend'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
 process.title = 'agent-team-electron'
+
+if (process.platform === 'darwin') {
+  app.dock.setIcon(nativeImage.createFromPath(join(__dirname, '../../resources/icon.png')))
+}
 
 let backend: BackendHandle | null = null
 let mainWindow: BrowserWindow | null = null
