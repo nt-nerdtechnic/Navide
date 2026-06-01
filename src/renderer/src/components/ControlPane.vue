@@ -606,7 +606,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             All {{ existingProject.totalStages }} stages done · {{ existingProject.updatedAt }}
           </span>
         </div>
-        <button class="danger" @click="confirmingRestart = true">↺ Start over</button>
       </div>
 
       <textarea
