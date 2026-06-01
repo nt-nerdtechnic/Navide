@@ -698,6 +698,47 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </template>
     </section>
 
+    <section class="block">
+      <div class="row between">
+        <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
+        <button v-if="panes.length > 0" class="link" @click="emit('kill-all')">Kill all</button>
+      </div>
+      <div v-if="panes.length === 0" class="empty">No agents running.</div>
+      <ul v-else class="agent-list">
+        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isManager }">
+          <div class="agent-line">
+            <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
+            <span class="badge">{{ p.agentLabel }}</span>
+            <span class="badge role">{{ p.roleLabel }}</span>
+            <span class="state" :data-state="p.status">{{ p.status }}</span>
+          </div>
+          <div v-if="p.isManager" class="manager-row">
+            <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+          </div>
+          <div v-if="p.origin === 'pipeline'" class="stage-line">
+            stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+          </div>
+          <div v-else class="stage-line">
+            manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+          </div>
+          <div class="agent-cmd"><code>{{ p.command }}</code></div>
+          <div v-if="p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
+            🔖 session: <code>{{ p.sessionId }}</code>
+          </div>
+          <div v-if="p.error" class="err">{{ p.error }}</div>
+          <div class="row tight">
+            <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
+              Interrupt
+            </button>
+            <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
+              Reapply role
+            </button>
+            <button class="danger" @click="emit('kill', p.id)">Remove</button>
+          </div>
+        </li>
+      </ul>
+    </section>
+
     <section class="block" :class="{ 'manual-spawn': manualSpawnOpen }">
       <button class="lbl collapsible-header" @click="manualSpawnOpen = !manualSpawnOpen">
         {{ manualSpawnOpen ? '▾' : '▸' }} Manual spawn
@@ -747,47 +788,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           </div>
         </div>
       </template>
-    </section>
-
-    <section class="block">
-      <div class="row between">
-        <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
-        <button v-if="panes.length > 0" class="link" @click="emit('kill-all')">Kill all</button>
-      </div>
-      <div v-if="panes.length === 0" class="empty">No agents running.</div>
-      <ul v-else class="agent-list">
-        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isManager }">
-          <div class="agent-line">
-            <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
-            <span class="badge">{{ p.agentLabel }}</span>
-            <span class="badge role">{{ p.roleLabel }}</span>
-            <span class="state" :data-state="p.status">{{ p.status }}</span>
-          </div>
-          <div v-if="p.isManager" class="manager-row">
-            <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
-          </div>
-          <div v-if="p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-          </div>
-          <div v-else class="stage-line">
-            manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-          </div>
-          <div class="agent-cmd"><code>{{ p.command }}</code></div>
-          <div v-if="p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
-            🔖 session: <code>{{ p.sessionId }}</code>
-          </div>
-          <div v-if="p.error" class="err">{{ p.error }}</div>
-          <div class="row tight">
-            <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
-              Interrupt
-            </button>
-            <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
-              Reapply role
-            </button>
-            <button class="danger" @click="emit('kill', p.id)">Remove</button>
-          </div>
-        </li>
-      </ul>
     </section>
 
     <Teleport to="body">
