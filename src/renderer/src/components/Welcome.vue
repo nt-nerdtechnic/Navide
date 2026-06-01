@@ -85,7 +85,6 @@ async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
           <button class="primary" :disabled="picking" @click="browse">
             {{ picking ? '…' : 'Browse…' }}
           </button>
-          <button class="ghost" :disabled="picking" @click="browse">New folder…</button>
         </div>
       </section>
 
@@ -127,8 +126,7 @@ async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
         </ul>
 
         <p v-else-if="loaded" class="w-empty">
-          No recent workspaces yet. Click <strong>Browse…</strong> to open a project folder, or
-          <strong>New folder…</strong> to start fresh.
+          No recent workspaces yet. Click <strong>Browse…</strong> to open a project folder.
         </p>
       </section>
 
