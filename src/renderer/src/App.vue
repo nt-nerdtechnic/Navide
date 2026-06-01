@@ -1869,6 +1869,7 @@ async function doCloseWorkspace(): Promise<void> {
 // from the Welcome screen: reset all state first, then let the workspace-check
 // debounce fire naturally once currentWorkspace drives the prop update.
 async function onWorkspaceBrowse(path: string): Promise<void> {
+  if (path === currentWorkspace.value) return
   if (pipeline.state === 'running') await onPipelineAbort()
   pipeline.workspacePath = ''
   await onPipelineReset()
