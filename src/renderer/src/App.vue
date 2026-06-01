@@ -651,16 +651,6 @@ function scheduleInjection(pane: ActivePane): void {
     // 3. Inject role system prompt — unless this is a pre-spawn pane that
     //    will receive role + kickoff together at activation time.
     if (!pane.roleKey) {
-      if (pane.sessionMarker) {
-        const marker = sessionMarkerLine(pane.sessionMarker).trim()
-        pipelineLog(`${tag} ➜ injecting session marker (${marker.length} chars)`)
-        await acquireInjectionSlot()
-        try {
-          await injectPane(pane.id, marker, 'session-marker', true)
-        } finally {
-          releaseInjectionSlot()
-        }
-      }
       pane.injectionStatus = 'skipped'
       syncViews()
       pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
