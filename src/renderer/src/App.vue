@@ -1069,6 +1069,7 @@ const controlPaneRef = ref<InstanceType<typeof ControlPane> | null>(null)
 //   running or has task→ pipeline  (configured pipeline workspace)
 //   otherwise         → spawn
 const currentMode = ref<WorkspaceMode>('spawn')
+let workspaceCheckSeq = 0
 
 function detectMode(payload: ProjectPayload | null): WorkspaceMode {
   const proj = payload?.project
@@ -1111,12 +1112,16 @@ function buildExistingProjectInfo(payload: ProjectPayload | null): ExistingProje
 }
 
 async function onWorkspaceCheck(path: string): Promise<void> {
+  const seq = ++workspaceCheckSeq
   if (!path) {
     existingProject.value = null
     currentMode.value = 'spawn'
+    pipeline.workspacePath = ''
     return
   }
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
+  if (seq !== workspaceCheckSeq) return
+  if (pipeline.state !== 'running') pipeline.workspacePath = path
   existingProject.value = resp ? buildExistingProjectInfo(resp) : null
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)

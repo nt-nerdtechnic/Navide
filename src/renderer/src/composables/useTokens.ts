@@ -63,15 +63,18 @@ export function useTokens(
   const snapshot = ref<TokensSnapshot | null>(null)
   const loading = ref<boolean>(false)
   const lastError = ref<string>('')
+  let refreshSeq = 0
 
   async function refresh(): Promise<void> {
     if (backend.status.value !== 'connected') return
+    const seq = ++refreshSeq
     loading.value = true
     lastError.value = ''
     try {
       const resp = await backend.send<TokensSnapshot>('tokens.snapshot', {
         workspace_path: workspacePath.value || undefined
       })
+      if (seq !== refreshSeq) return
       if (resp.ok && resp.payload) {
         snapshot.value = resp.payload
       } else {
@@ -116,7 +119,11 @@ export function useTokens(
   // both inputs trigger one common handler.
   watch(
     () => [backend.status.value, workspacePath.value] as const,
-    ([s], _prev) => {
+    ([s, path], prev) => {
+      if (!prev || path !== prev[1]) {
+        snapshot.value = null
+        refreshSeq++
+      }
       if (s === 'connected') void refresh()
     },
     { immediate: true }
