@@ -803,9 +803,11 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           </div>
           <div v-if="p.error" class="err">{{ p.error }}</div>
           <div class="row tight">
-            <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">⌃C</button>
+            <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
+              Interrupt
+            </button>
             <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running'">
-              Re-inject
+              Reapply role
             </button>
             <button class="danger" @click="emit('kill', p.id)">Remove</button>
           </div>
