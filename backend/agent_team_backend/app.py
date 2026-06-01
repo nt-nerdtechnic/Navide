@@ -386,6 +386,23 @@ def _project_payload(project) -> dict[str, Any]:
     }
 
 
+def _claude_session_file(workspace_path: str, session_id: str) -> Path:
+    project_dir = workspace_path.replace("/", "-")
+    return Path.home() / ".claude" / "projects" / project_dir / f"{session_id}.jsonl"
+
+
+def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
+    agent = agent.strip().lower()
+    session_id = session_id.strip()
+    if not session_id:
+        return False
+    if agent == "claude":
+        return _claude_session_file(workspace_path, session_id).is_file()
+    # Codex/Gemini ids are detected from their session files. Keep trusting
+    # persisted ids until vendor-specific preflight checks are added.
+    return True
+
+
 def _record_analyzer_tokens(result: dict[str, Any], payload: dict[str, Any]) -> None:
     """Push an analyzer call's real token count into the store + broadcast.
 
@@ -539,6 +556,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 await session.websocket.send_json(
                     make_response(msg_id, msg_type, {"project": None, "paths": None})
                 )
+        elif msg_type == "agent.session_exists":
+            exists = _session_exists(
+                str(payload.get("agent", "")),
+                str(payload.get("workspace_path", "")),
+                str(payload.get("session_id", "")),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"exists": exists})
+            )
         elif msg_type == "pipeline.resume":
             project, resume_index = project_store.resume_pipeline(payload["workspace_path"])
             resp = _project_payload(project)
@@ -609,6 +635,36 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload["workspace_path"],
                 stage_index=int(payload["stage_index"]),
                 slot_label=payload["slot_label"],
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "manual_pane.spawn":
+            project = project_store.record_manual_pane_spawn(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+                previous_pane_id=payload.get("previous_pane_id", ""),
+                agent=payload.get("agent", ""),
+                role=payload.get("role", ""),
+                command=payload.get("command", ""),
+                session_id=payload.get("session_id", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "manual_pane.unspawn":
+            project = project_store.record_manual_pane_unspawn(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "manual_pane.session":
+            project = project_store.record_manual_pane_session(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+                session_id=payload.get("session_id", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))

@@ -98,3 +98,65 @@ def test_record_slot_unspawn_marks_removed_but_preserves_session(
     assert slot.pane_id is None
     assert slot.kickoff_status == "none"
     assert slot.session_id == "sess-123"
+
+
+def test_manual_pane_spawn_round_trips_and_can_be_rekeyed(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    store, ws = store_with_stage
+
+    store.record_manual_pane_spawn(
+        ws,
+        pane_id="pane-old",
+        agent="claude",
+        role="",
+        command="claude",
+        session_id="sess-1",
+    )
+    store.record_manual_pane_spawn(
+        ws,
+        pane_id="pane-new",
+        previous_pane_id="pane-old",
+        agent="claude",
+        role="",
+        command="claude --resume sess-1",
+        session_id="sess-1",
+    )
+
+    project = store.peek(ws)
+    assert project is not None
+    assert len(project.manual_panes) == 1
+    pane = project.manual_panes[0]
+    assert pane.pane_id == "pane-new"
+    assert pane.spawn_status == "spawned"
+    assert pane.session_id == "sess-1"
+
+
+def test_manual_pane_unspawn_marks_removed(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="codex")
+
+    store.record_manual_pane_unspawn(ws, pane_id="pane-1")
+
+    pane = store.peek(ws).manual_panes[0]
+    assert pane.spawn_status == "removed"
+
+
+def test_manual_pane_session_fills_in_later(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="gemini")
+
+    store.record_manual_pane_session(ws, pane_id="pane-1", session_id="gemini-sess")
+
+    pane = store.peek(ws).manual_panes[0]
+    assert pane.session_id == "gemini-sess"
+
+
+def test_manual_pane_session_can_be_cleared(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="claude", session_id="bad-sess")
+
+    store.record_manual_pane_session(ws, pane_id="pane-1", session_id="")
+
+    pane = store.peek(ws).manual_panes[0]
+    assert pane.session_id == ""

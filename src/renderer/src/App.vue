@@ -206,6 +206,7 @@ interface ActivePane {
    *  Empty string for single-agent stages or manually-spawned panes. */
   slotLabel: string
   command: string
+  workspacePath: string
   origin: 'manual' | 'pipeline'
   injectionStatus: InjectionStatus
   injectionTimer: number | null
@@ -230,6 +231,7 @@ interface ActivePane {
 
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
+const persistedPaneSessions = new Set<string>()
 
 function setPaneRef(id: string, el: unknown): void {
   paneRefs[id] = (el as InstanceType<typeof TerminalPane> | null) ?? null
@@ -593,6 +595,31 @@ function releaseInjectionSlot(): void {
   _injectionQueue.shift()?.()
 }
 
+async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<void> {
+  const id = sessionId.trim()
+  if (!id) return
+  const key = `${pane.id}:${id}`
+  if (persistedPaneSessions.has(key)) return
+  let saved: unknown = null
+  if (pane.origin === 'manual') {
+    saved = await sendQuiet('manual_pane.session', {
+      workspace_path: pane.workspacePath,
+      pane_id: pane.id,
+      session_id: id,
+    })
+  } else if (pane.slotLabel && pane.origin === 'pipeline') {
+    const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
+    if (stageIndex < 0) return
+    saved = await sendQuiet('pipeline.slot_session', {
+      workspace_path: pane.workspacePath,
+      stage_index: stageIndex,
+      slot_label: pane.slotLabel,
+      session_id: id,
+    })
+  }
+  if (saved) persistedPaneSessions.add(key)
+}
+
 function scheduleInjection(pane: ActivePane): void {
   pane.injectionStatus = 'scheduled'
   syncViews()
@@ -624,6 +651,16 @@ function scheduleInjection(pane: ActivePane): void {
     // 3. Inject role system prompt — unless this is a pre-spawn pane that
     //    will receive role + kickoff together at activation time.
     if (!pane.roleKey) {
+      if (pane.sessionMarker) {
+        const marker = sessionMarkerLine(pane.sessionMarker).trim()
+        pipelineLog(`${tag} ➜ injecting session marker (${marker.length} chars)`)
+        await acquireInjectionSlot()
+        try {
+          await injectPane(pane.id, marker, 'session-marker', true)
+        } finally {
+          releaseInjectionSlot()
+        }
+      }
       pane.injectionStatus = 'skipped'
       syncViews()
       pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
@@ -660,6 +697,9 @@ function scheduleInjection(pane: ActivePane): void {
     }
     pane.injectionStatus = ok ? 'sent' : 'failed'
     syncViews()
+    if (ok && pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
+      void persistPaneSession(pane, pane.pinnedSessionId)
+    }
     if (!ok) {
       // Honest record: role injection didn't land (e.g. truncated mid-text).
       // Continue to the kickoff anyway — the agent may still recover, and the
@@ -765,12 +805,11 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     command = `${command} --session-id ${explicitSessionId}`
   }
   // Codex/Gemini can't pin a session id at launch, so we embed a unique marker
-  // in their kickoff and the backend matches the resulting session file back to
-  // this pane by that marker. Pipeline panes only; skipped on resume (the id is
-  // already known) and for manual panes (not persisted for resume).
+  // in the first injected text and the backend matches the resulting session
+  // file back to this pane by that marker. Skipped on resume because the id is
+  // already known.
   const sessionMarker =
     !opts.isResume &&
-    opts.origin === 'pipeline' &&
     (opts.agentKey === 'codex' || opts.agentKey === 'gemini')
       ? `at-pane:${id}`
       : ''
@@ -782,6 +821,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     stageId: opts.stageId,
     slotLabel: opts.slotLabel ?? '',
     command,
+    workspacePath: opts.workspacePath,
     origin: opts.origin,
     injectionStatus: 'pending',
     injectionTimer: null,
@@ -843,7 +883,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
 }
 
 async function onManualSpawn(payload: SpawnPayload): Promise<void> {
-  await spawnPane({
+  const paneId = await spawnPane({
     agentKey: payload.agentKey,
     roleKey: payload.roleKey,
     stageId: payload.stageId,
@@ -851,6 +891,19 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     workspacePath: payload.workspacePath,
     origin: 'manual'
   })
+  if (paneId) {
+    await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+      workspace_path: payload.workspacePath,
+      pane_id: paneId,
+      agent: payload.agentKey,
+      role: payload.roleKey,
+      command: payload.commandOverride,
+      session_id:
+        payload.agentKey === 'claude'
+          ? ''
+          : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+    })
+  }
 }
 
 /**
@@ -945,9 +998,15 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
   }
   if (opts.markRemoved !== false && pane?.origin === 'pipeline' && pane.slotLabel && stageIndex >= 0) {
     await sendQuiet<ProjectPayload>('pipeline.slot_unspawn', {
-      workspace_path: pipeline.workspacePath,
+      workspace_path: pane.workspacePath,
       stage_index: stageIndex,
       slot_label: pane.slotLabel,
+    })
+  }
+  if (opts.markRemoved !== false && pane?.origin === 'manual') {
+    await sendQuiet<ProjectPayload>('manual_pane.unspawn', {
+      workspace_path: pane.workspacePath,
+      pane_id: pane.id,
     })
   }
   panes.value = panes.value.filter((p) => p.id !== paneId)
@@ -1047,6 +1106,15 @@ interface ProjectStage {
   slots?: ProjectSlot[]
 }
 
+interface ProjectManualPane {
+  pane_id: string
+  agent: string
+  role: string
+  command: string
+  spawn_status: string
+  session_id?: string
+}
+
 interface ProjectPayload {
   project: {
     id: string
@@ -1057,10 +1125,36 @@ interface ProjectPayload {
     total_stages?: number
     task_description?: string
     stages?: ProjectStage[]
+    manual_panes?: ProjectManualPane[]
     updated_at?: string
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
+}
+
+interface SessionExistsPayload {
+  exists: boolean
+}
+
+function looksLikeResumeCommand(agentKey: string, command: string): boolean {
+  const cmd = command.trim()
+  if (!cmd) return false
+  if (agentKey === 'codex') return /^codex\s+resume\s+\S+/.test(cmd)
+  return new RegExp(`^${agentKey}\\s+--resume\\s+\\S+`).test(cmd)
+}
+
+async function canResumeSession(
+  agentKey: string,
+  workspacePath: string,
+  sessionId: string
+): Promise<boolean> {
+  if (!sessionId.trim()) return false
+  const resp = await sendQuiet<SessionExistsPayload>('agent.session_exists', {
+    agent: agentKey,
+    workspace_path: workspacePath,
+    session_id: sessionId,
+  })
+  return resp?.exists === true
 }
 
 function applyProjectPaths(p: ProjectPayload | undefined): void {
@@ -1163,9 +1257,15 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       .filter((sl) => sl.spawn_status === 'spawned')
       .map((sl) => ({ stageIndex: i, stageId: stage.stage_id, slot: sl }))
   )
-  if (spawned.length === 0) return
+  const manualPanes = (payload.project?.manual_panes ?? []).filter(
+    (p) => p.spawn_status === 'spawned'
+  )
+  if (spawned.length === 0 && manualPanes.length === 0) return
   const resumable = spawned.filter((s) => (s.slot.session_id ?? '').trim()).length
-  pipelineLog(`↩ Restoring ${spawned.length} slot pane(s) — ${resumable} with memory`)
+  const resumableManual = manualPanes.filter((p) => (p.session_id ?? '').trim()).length
+  pipelineLog(
+    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s) — ${resumable + resumableManual} with memory`
+  )
   pipeline.workspacePath = workspacePath
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
     const sessionId = (slot.session_id ?? '').trim()
@@ -1196,6 +1296,43 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         role: slot.role,
         session_id: sessionId, // preserve the id across the new pane id
       })
+    }
+  }))
+  await Promise.all(manualPanes.map(async (saved) => {
+    const sessionId = (saved.session_id ?? '').trim()
+    const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
+    const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+    const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
+    const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+    const isResume = !!resumeCmd
+    const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
+    const paneId = await spawnPane({
+      agentKey: saved.agent as AgentKey,
+      roleKey: saved.role,
+      stageId: '',
+      commandOverride: resumeCmd || fallbackCommand || '',
+      workspacePath,
+      origin: 'manual',
+      isResume,
+      skipRoleInjection: isResume,
+    })
+    if (paneId) {
+      await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+        workspace_path: workspacePath,
+        pane_id: paneId,
+        previous_pane_id: saved.pane_id,
+        agent: saved.agent,
+        role: saved.role,
+        command: fallbackCommand,
+        session_id: canResume ? sessionId : '',
+      })
+      if (sessionId && !canResume) {
+        await sendQuiet('manual_pane.session', {
+          workspace_path: workspacePath,
+          pane_id: paneId,
+          session_id: '',
+        })
+      }
     }
   }))
 }
@@ -1983,12 +2120,20 @@ const paneArmedAt = new Map<string, number>()
 // is working; turn_complete = its turn ended. We timestamp both per pane; the
 // completion logic reads these instead of guessing from the TUI buffer.
 backend.on('agent.activity', (raw) => {
-  const ev = raw as { event_type?: string; pane_id?: string }
+  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string }
   if (!ev?.pane_id) return
   if (ev.event_type === 'turn_complete') {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
+  }
+  if (ev.vendor === 'claude' && ev.session_id) {
+    const pane = panes.value.find((p) => p.id === ev.pane_id)
+    if (pane?.origin === 'manual') {
+      pane.pinnedSessionId = ev.session_id
+      syncViews()
+      void persistPaneSession(pane, ev.session_id)
+    }
   }
 })
 
@@ -2000,18 +2145,19 @@ backend.on('session.detected', (raw) => {
   const ev = raw as { pane_id?: string; session_id?: string }
   if (!ev?.pane_id || !ev.session_id) return
   const pane = panes.value.find((p) => p.id === ev.pane_id)
-  if (!pane || !pane.slotLabel || pane.origin !== 'pipeline') return
+  if (!pane) return
   pane.pinnedSessionId = ev.session_id
   syncViews()  // surface the freshly-captured id in the active-agents list
+  if (pane.origin === 'manual') {
+    pipelineLog(`Manual ${pane.agentKey} 🔖 session 已綁定`)
+    void persistPaneSession(pane, ev.session_id)
+    return
+  }
+  if (!pane.slotLabel || pane.origin !== 'pipeline') return
   const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
   if (stageIndex < 0) return
   pipelineLog(`Stage ${pane.stageId}/${pane.slotLabel} 🔖 session 已綁定 (${pane.agentKey})`)
-  sendQuiet('pipeline.slot_session', {
-    workspace_path: pipeline.workspacePath,
-    stage_index: stageIndex,
-    slot_label: pane.slotLabel,
-    session_id: ev.session_id,
-  })
+  void persistPaneSession(pane, ev.session_id)
 })
 
 // ── Exception tracking → supervision log ────────────────────────────────────

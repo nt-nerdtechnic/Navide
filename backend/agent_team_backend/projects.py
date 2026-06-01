@@ -63,6 +63,16 @@ class SlotRecord:
 
 
 @dataclass
+class ManualPaneRecord:
+    pane_id: str
+    agent: str = ""
+    role: str = ""
+    command: str = ""
+    spawn_status: str = "spawned"  # spawned / removed
+    session_id: str = ""
+
+
+@dataclass
 class StageRecord:
     stage_id: str
     title: str = ""
@@ -87,6 +97,7 @@ class Project:
     current_stage_index: int = -1
     total_stages: int = 5
     stages: list[StageRecord] = field(default_factory=list)
+    manual_panes: list[ManualPaneRecord] = field(default_factory=list)
     agents_spawned: int = 0
     backend_version: str = ""
     log_file_name: str = ""  # set by start_pipeline(); e.g. "pipeline-20260527-183000-建立登入頁面.log"
@@ -107,7 +118,12 @@ class Project:
             return StageRecord(**{k: v for k, v in s.items() if k in known}, slots=slots)
 
         stages = [_stage(s) for s in d.get("stages", [])]
-        d2 = {**d, "stages": stages}
+        manual_panes = [
+            ManualPaneRecord(**{k: v for k, v in p.items() if k in ManualPaneRecord.__dataclass_fields__})
+            for p in d.get("manual_panes", [])
+            if isinstance(p, dict)
+        ]
+        d2 = {**d, "stages": stages, "manual_panes": manual_panes}
         known = {f for f in cls.__dataclass_fields__}
         d2 = {k: v for k, v in d2.items() if k in known}
         return cls(**d2)
@@ -400,6 +416,82 @@ class ProjectStore:
             },
             log_file_name=project.log_file_name,
         )
+        return project
+
+    def record_manual_pane_spawn(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        previous_pane_id: str = "",
+        agent: str = "",
+        role: str = "",
+        command: str = "",
+        session_id: str = "",
+    ) -> Project:
+        project = self.load_or_create(workspace_path)
+        pane = next(
+            (
+                p for p in project.manual_panes
+                if p.pane_id == pane_id or (previous_pane_id and p.pane_id == previous_pane_id)
+            ),
+            None,
+        )
+        if pane is None:
+            pane = ManualPaneRecord(pane_id=pane_id)
+            project.manual_panes.append(pane)
+        pane.pane_id = pane_id
+        pane.agent = agent
+        pane.role = role
+        pane.command = command
+        pane.spawn_status = "spawned"
+        if session_id:
+            pane.session_id = session_id
+        self.save(project)
+        self.append_event(
+            workspace_path,
+            {
+                "event": "manual_pane_spawn",
+                "pane_id": pane_id,
+                "agent": agent,
+                "role": role,
+            },
+            log_file_name=project.log_file_name,
+        )
+        return project
+
+    def record_manual_pane_unspawn(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+    ) -> Project:
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.manual_panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.spawn_status = "removed"
+        self.save(project)
+        self.append_event(
+            workspace_path,
+            {"event": "manual_pane_unspawn", "pane_id": pane_id},
+            log_file_name=project.log_file_name,
+        )
+        return project
+
+    def record_manual_pane_session(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        session_id: str,
+    ) -> Project:
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.manual_panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.session_id = session_id
+        self.save(project)
         return project
 
     def update_slot_kickoff(
