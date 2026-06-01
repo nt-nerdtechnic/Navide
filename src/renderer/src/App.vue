@@ -3279,9 +3279,11 @@ const latestPipelineLog = computed<string>(() => {
 })
 
 function paneSubtitle(p: ActivePane): string {
+  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual`
   const stage = stagesApi.stageById.value[p.stageId] ?? { shortTitle: p.stageId }
   const prefix = p.origin === 'pipeline' ? `P${p.stageId} · ` : ''
-  return `${prefix}${roleLabel(p.roleKey)} · ${stage.shortTitle}`
+  const stageLabel = stage.shortTitle || 'manual'
+  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel}`
 }
 
 /** The effective Manager slot for a stage, or null. Manager mode only applies

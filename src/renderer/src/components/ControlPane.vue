@@ -313,7 +313,6 @@ async function openPath(p: string): Promise<void> {
   }
   await window.agentTeam.openPath(p)
 }
-const stageId = ref<StageId>('')
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
 const commandOverride = ref<string>('')
@@ -331,20 +330,6 @@ watch(
   { immediate: true }
 )
 
-// Initialize stageId to the first available stage once stages load
-watch(
-  () => props.stages,
-  (ss) => {
-    if (ss.length > 0 && !ss.find((s) => s.id === stageId.value)) {
-      stageId.value = ss[0].id
-    }
-  },
-  { immediate: true }
-)
-
-const currentStage = computed<Stage | undefined>(() =>
-  props.stages.find((s) => s.id === stageId.value)
-)
 const currentRole = computed<Role | undefined>(() =>
   props.roles.find((r) => r.key === pickedRole.value)
 )
@@ -358,16 +343,6 @@ watch(
   },
   { immediate: true }
 )
-
-watch(stageId, (id) => {
-  const stage = props.stages.find((s) => s.id === id)
-  if (!stage) return
-  const available = props.roles.map((r) => r.key)
-  const preferred = stage.recommendedRoles.find((rk) => available.includes(rk))
-  if (pickedRole.value && preferred && !stage.recommendedRoles.includes(pickedRole.value)) {
-    pickedRole.value = preferred
-  }
-})
 
 async function openRolesWindow(): Promise<void> {
   if (!window.agentTeam?.openRolesWindow) return
@@ -396,7 +371,7 @@ function spawn(): void {
   emit('spawn', {
     agentKey: pickedAgent.value,
     roleKey: pickedRole.value,
-    stageId: stageId.value,
+    stageId: '',
     commandOverride: commandOverride.value.trim(),
     workspacePath: workspacePath.value.trim()
   })
@@ -728,10 +703,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         {{ manualSpawnOpen ? '▾' : '▸' }} Manual spawn
       </button>
       <template v-if="manualSpawnOpen">
-        <select v-model="stageId">
-          <option v-for="s in stages" :key="s.id" :value="s.id">{{ s.title }}</option>
-        </select>
-        <p v-if="currentStage" class="hint">{{ currentStage.question }} — {{ currentStage.description }}</p>
         <div class="row two-col">
           <select v-model="pickedAgent">
             <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
@@ -795,8 +766,11 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           <div v-if="p.isManager" class="manager-row">
             <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
           </div>
-          <div class="stage-line">
+          <div v-if="p.origin === 'pipeline'" class="stage-line">
             stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+          </div>
+          <div v-else class="stage-line">
+            manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div class="agent-cmd"><code>{{ p.command }}</code></div>
           <div v-if="p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">

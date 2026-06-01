@@ -144,7 +144,7 @@ const paneRows = computed(() => {
     // Prefer stable key (stageId:slotLabel) so data survives frontend restarts.
     // Fall back to UUID for manual panes that have no stage/slot.
     const stableKey = p.stageId && p.slotLabel ? `${p.stageId}:${p.slotLabel}`
-                    : p.stageId ?? ''
+                    : p.stageId || p.id
     return {
       id: p.id,
       label: p.agentLabel,
