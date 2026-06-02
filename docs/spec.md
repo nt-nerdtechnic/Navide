@@ -231,11 +231,9 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 
 ### F4 · Git preflight + task branch
 - Pipeline 開跑前自動 git status check + 建 task branch + pre-task snapshot
-- See [[git-control.md]]
 
 ### F5 · Cross-agent route engine
 - Agent 對 agent 的 routed message bus（取代 manager 模式 OR 與其互補）
-- See [[route-engine.md]]
 
 ---
 
@@ -256,17 +254,8 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 - `frontend-tests_9c4ad7e2` (shipped as M14)
 
 ### Design docs (`docs/`)
-- `product-spec.md` — V1 product spec
-- `technical-design.md` — overall technical design
-- `sdd-agent-team.md` — SDD specification
-- `development-workflow.md` — phased plan
-- `ipc-contract.md` — WS message envelope
-- `terminal-pty-contract.md` — PTY behaviour contract
-- `cli-agent-adapter.md` — CLI agent abstraction
-- `cli-log-formats.md` — Claude/Codex/Gemini JSONL formats (M4 reference)
-- `route-engine.md` — F5 spec
-- `sqlite-schema.md` — F3 spec
-- `git-control.md` — F4 spec
+
+`spec.md` is the only doc file. All v1 draft docs were deleted after their content was absorbed into §3–§6.
 
 ---
 
