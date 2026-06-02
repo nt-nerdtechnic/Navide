@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import type { BackendStatus } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
@@ -35,6 +36,8 @@ export interface ActivePaneView {
   /** Human-readable slot label (e.g. "Architecture"). Empty for single-agent
    *  stages or manually-spawned panes. Used as stable by_pane key. */
   slotLabel?: string
+  /** True when the pane is minimized to the sidebar (hidden in grid, PTY alive). */
+  isMinimized?: boolean
 }
 
 export interface SpawnPayload {
@@ -45,10 +48,17 @@ export interface SpawnPayload {
   workspacePath: string
 }
 
+export interface MaintenanceSpawnPayload {
+  task: string
+  agentKey: string
+  roleKey: RoleKey
+  workspacePath: string
+}
+
 export type PipelineState = 'idle' | 'running' | 'completed' | 'aborted'
 
 /** Entry mode detected from the opened workspace (see App.detectMode). */
-export type WorkspaceMode = 'pipeline' | 'spawn' | 'completed'
+export type WorkspaceMode = 'pipeline' | 'spawn' | 'completed' | 'maintenance'
 
 export interface PipelineStatusView {
   state: PipelineState
@@ -113,6 +123,8 @@ interface Props {
   workspace?: string
   /** Entry mode; drives which sections lead (spawn → manual spawn open). */
   mode?: WorkspaceMode
+  /** Current layout mode for the terminal grid; passed through to ViewPanel. */
+  layoutMode?: LayoutMode
 }
 
 const props = defineProps<Props>()
@@ -128,6 +140,8 @@ const emit = defineEmits<{
   (e: 'kill-all'): void
   (e: 'interrupt', paneId: string): void
   (e: 'reinject', paneId: string): void
+  (e: 'restore', paneId: string): void
+  (e: 'maintenance-spawn', payload: MaintenanceSpawnPayload): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; globalManager: { stageId: string; slotLabel: string } | null }): void
   (e: 'pipeline-next'): void
   (e: 'pipeline-abort'): void
@@ -140,9 +154,12 @@ const emit = defineEmits<{
   (e: 'pipeline-resume'): void
   (e: 'pipeline-load-task', task: string): void
   (e: 'pipeline-restart', payload: { task: string; workspacePath: string }): void
+  (e: 'focus-pane', paneId: string): void
   (e: 'open-settings'): void
+  (e: 'open-history'): void
   (e: 'switch-workspace'): void
   (e: 'workspace-browse', path: string): void
+  (e: 'update:layoutMode', v: LayoutMode): void
 }>()
 
 const yoloLocal = computed<boolean>({
@@ -316,6 +333,23 @@ async function openPath(p: string): Promise<void> {
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
 const commandOverride = ref<string>('')
+const maintenanceTask = ref<string>('')
+const maintenanceAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
+const maintenanceRole = ref<RoleKey>('')
+const maintenanceBusy = ref<boolean>(false)
+
+function onMaintenanceLaunch(): void {
+  if (!maintenanceTask.value.trim() || maintenanceBusy.value) return
+  maintenanceBusy.value = true
+  emit('maintenance-spawn', {
+    task: maintenanceTask.value.trim(),
+    agentKey: maintenanceAgent.value,
+    roleKey: maintenanceRole.value,
+    workspacePath: workspacePath.value
+  })
+  maintenanceTask.value = ''
+  maintenanceBusy.value = false
+}
 const previewOpen = ref<boolean>(false)
 const manualSpawnOpen = ref<boolean>(false)
 const pipelineOpen = ref<boolean>(true)
@@ -326,6 +360,7 @@ watch(
   () => props.mode,
   (m) => {
     if (m) manualSpawnOpen.value = m === 'spawn'
+    if (m === 'maintenance') pipelineOpen.value = false
   },
   { immediate: true }
 )
@@ -518,6 +553,38 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </label>
     </section>
 
+    <!-- ── Maintenance Mode section ──────────────────────────────────────── -->
+    <section v-if="mode === 'maintenance'" class="block maintenance-section">
+      <label class="lbl maintenance-header">🔧 維護任務</label>
+      <p class="hint ok" style="margin-bottom:8px">Pipeline 已完成。描述這次要修什麼或加什麼功能。</p>
+      <textarea
+        v-model="maintenanceTask"
+        placeholder="e.g. 修 login 頁面 validation 錯誤提示、加深色模式 toggle…"
+        rows="3"
+        spellcheck="false"
+        class="maintenance-textarea"
+      ></textarea>
+      <div class="row two-col" style="margin-top:6px">
+        <select v-model="maintenanceAgent">
+          <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+            {{ spec.label }}
+          </option>
+        </select>
+        <select v-model="maintenanceRole">
+          <option value="">Select role…</option>
+          <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
+        </select>
+      </div>
+      <button
+        class="primary wide"
+        style="margin-top:8px"
+        :disabled="!maintenanceTask.trim() || maintenanceBusy"
+        @click="onMaintenanceLaunch"
+      >
+        ▶ 派出去
+      </button>
+    </section>
+
     <section class="block" :class="{ pipeline: pipelineOpen }">
       <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
         {{ pipelineOpen ? '▾' : '▸' }} Pipeline · {{ stages.length }}-stage SDLC
@@ -701,39 +768,52 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
     <section class="block">
       <div class="row between">
         <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
-        <button v-if="panes.length > 0" class="link" @click="emit('kill-all')">Kill all</button>
+        <div class="agent-header-actions">
+          <ViewPanel
+            :model-value="layoutMode ?? 'auto'"
+            @update:model-value="emit('update:layoutMode', $event)"
+          />
+          <button class="history-btn" @click="emit('open-history')">📋 History</button>
+        </div>
       </div>
       <div v-if="panes.length === 0" class="empty">No agents running.</div>
       <ul v-else class="agent-list">
-        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isManager }">
-          <div class="agent-line">
+        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isManager, minimized: p.isMinimized }">
+          <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
             <span class="badge role">{{ p.roleLabel }}</span>
-            <span class="state" :data-state="p.status">{{ p.status }}</span>
+            <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
+            <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="p.isManager" class="manager-row">
+          <div v-if="p.isManager && !p.isMinimized" class="manager-row">
             <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
           </div>
-          <div v-if="p.origin === 'pipeline'" class="stage-line">
+          <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
             stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
-          <div v-else class="stage-line">
+          <div v-else-if="!p.isMinimized" class="stage-line">
             manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
-          <div class="agent-cmd"><code>{{ p.command }}</code></div>
-          <div v-if="p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
+          <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
+          <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
             🔖 session: <code>{{ p.sessionId }}</code>
           </div>
           <div v-if="p.error" class="err">{{ p.error }}</div>
           <div class="row tight">
-            <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
-              Interrupt
-            </button>
-            <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
-              Reapply role
-            </button>
-            <button class="danger" @click="emit('kill', p.id)">Remove</button>
+            <template v-if="p.isMinimized">
+              <button class="ghost" @click="emit('restore', p.id)">↑ 還原</button>
+              <button class="danger" @click="emit('kill', p.id)">Remove</button>
+            </template>
+            <template v-else>
+              <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
+                Interrupt
+              </button>
+              <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
+                Reapply role
+              </button>
+              <button class="danger" @click="emit('kill', p.id)">Remove</button>
+            </template>
           </div>
         </li>
       </ul>
@@ -1077,6 +1157,45 @@ button.link {
   padding: 2px 4px;
   text-align: left;
 }
+.agent-header-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+button.history-btn {
+  background: transparent;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button.history-btn:hover {
+  color: #e6edf3;
+  border-color: #58a6ff;
+  background: #161b22;
+}
+button.icon-btn {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0.5;
+}
+button.icon-btn:hover {
+  opacity: 1;
+  background: #21262d;
+}
+button.icon-btn.muted {
+  opacity: 0.3;
+}
+button.icon-btn.muted:hover {
+  opacity: 0.8;
+}
 .hint {
   color: #8b949e;
   font-size: 10px;
@@ -1088,6 +1207,29 @@ button.link {
 }
 .hint.ok {
   color: #3fb950;
+}
+.maintenance-section {
+  border-top: 1px solid #1f6feb55;
+  background: #0d1a2a;
+}
+.maintenance-header {
+  color: #79c0ff;
+}
+.maintenance-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #010409;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #e6edf3;
+  font-size: 12px;
+  padding: 6px 8px;
+  resize: vertical;
+  font-family: inherit;
+}
+.maintenance-textarea:focus {
+  outline: none;
+  border-color: #1f6feb;
 }
 .hint code,
 .agent-cmd code {
@@ -1330,6 +1472,13 @@ button.link {
   gap: 6px;
   margin-bottom: 4px;
   flex-wrap: wrap;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin-left: -4px;
+}
+.agent-line:hover {
+  background: #161b22;
 }
 .stage-line {
   color: #8b949e;
@@ -1390,6 +1539,22 @@ button.link {
 }
 .state[data-state='exited'] {
   background: #3a3a3a;
+}
+/* Override ViewPanel's absolute positioning when used inline in the sidebar */
+.agent-header-actions :deep(.view-panel) {
+  position: static;
+}
+.agent-item.minimized {
+  opacity: 0.7;
+}
+.minimized-tag {
+  margin-left: auto;
+  font-size: 10px;
+  color: #58a6ff;
+  background: #1a2d4a;
+  border: 1px solid #1f6feb55;
+  border-radius: 999px;
+  padding: 2px 8px;
 }
 .agent-cmd {
   margin-bottom: 4px;

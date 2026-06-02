@@ -8,10 +8,15 @@ interface Props {
   title: string
   subtitle?: string
   isManager?: boolean
+  isFocus?: boolean
   backend: ReturnType<typeof useBackend>
 }
 
 const props = defineProps<Props>()
+const emit = defineEmits<{
+  (e: 'set-focus'): void
+  (e: 'minimize'): void
+}>()
 const containerRef = ref<HTMLElement | null>(null)
 
 const terminal = useTerminal(props.paneId, props.backend)
@@ -61,8 +66,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="pane">
-    <header class="pane-header">
+  <div :class="['pane', { 'pane-focus': isFocus }]">
+    <button class="minimize-btn" @click.stop="emit('minimize')" title="最小化到 sidebar">⊟</button>
+    <header class="pane-header" @click="emit('set-focus')">
       <span class="title">{{ title }}</span>
       <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>
       <span
@@ -88,16 +94,48 @@ onMounted(() => {
   border: 1px solid #21262d;
   border-radius: 4px;
   overflow: hidden;
+  position: relative;
 }
 .pane:focus-within {
   border-color: #1f6feb;
   box-shadow: 0 0 0 1px #1f6feb33;
 }
+.pane.pane-focus {
+  border-color: #388bfd;
+  box-shadow: 0 0 0 2px #388bfd44;
+}
+.pane.pane-focus .pane-header {
+  background: #1a2332;
+}
+.minimize-btn {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  z-index: 10;
+  background: none;
+  border: none;
+  color: #484f58;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 3px;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.pane:hover .minimize-btn {
+  opacity: 1;
+}
+.minimize-btn:hover {
+  color: #c9d1d9;
+  background: #21262d;
+  opacity: 1;
+}
 .pane-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
+  padding: 6px 32px 6px 12px;
   background: #161b22;
   border-bottom: 1px solid #21262d;
   font-size: 12px;

@@ -163,9 +163,18 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 
 ---
 
+### M15 · Pane Layout Modes + Minimize + Maintenance Mode
+**Status**: ✅ Done · plan: `.cursor/plans/maintenance-mode_f9a3c2d1.plan.md`
+
+- **Layout Modes** (`ViewPanel.vue`): 4 modes (Auto✦ / Grid⊞ / Spotlight◎ / Sidebar▣), floating top-right of terminal area. Auto mode polls `lastRawActivityAt` every 500ms, always focuses most-active pane. Spotlight = 1fr+180px, Sidebar = 2fr+240px, both use `grid-row: 1/-1` for focus pane.
+- **Minimize to Sidebar**: every TerminalPane has `↓` button → hides pane with `v-show` (PTY session stays alive), shows compact "▪ sidebar" card + "↑ 還原" in ControlPane agent list.
+- **Maintenance Mode** (`WorkspaceMode = 'maintenance'`): pipeline `completed` → auto-switches to maintenance. New ControlPane section with task textarea + agent/role picker + "▶ 派出去". `onMaintenanceSpawn` spawns pane, waits for role injection, then injects task text as kickoff.
+
+---
+
 ## 4 · Currently in-flight (working tree)
 
-**None** — M7–M13 are merged into `workspaces` / `main`; working tree is clean. No active dev goal; remaining items are optional (F1 remnant + F4-F6 future, see §6).
+**None** — working tree clean after M15.
 
 ---
 

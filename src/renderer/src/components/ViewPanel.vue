@@ -1,0 +1,64 @@
+<script setup lang="ts">
+export type LayoutMode = 'auto' | 'grid' | 'spotlight' | 'fullscreen'
+
+defineProps<{ modelValue: LayoutMode }>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: LayoutMode): void }>()
+
+const modes: [LayoutMode, string, string][] = [
+  ['auto',       '✦', '自動（動態調整）'],
+  ['grid',       '⊞', '方格'],
+  ['spotlight',  '◎', '聚光燈'],
+  ['fullscreen', '⧉', '全螢幕 + 浮動視窗'],
+]
+</script>
+
+<template>
+  <div class="view-panel" role="toolbar" aria-label="檢視畫面">
+    <button
+      v-for="[mode, icon, label] in modes"
+      :key="mode"
+      :class="['mode-btn', { active: modelValue === mode }]"
+      :title="label"
+      :aria-pressed="modelValue === mode"
+      @click="emit('update:modelValue', mode)"
+    >{{ icon }}</button>
+  </div>
+</template>
+
+<style scoped>
+.view-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 2px;
+  background: #161b22cc;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 3px;
+  backdrop-filter: blur(4px);
+}
+.mode-btn {
+  width: 28px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b949e;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, color 0.1s;
+}
+.mode-btn:hover {
+  background: #21262d;
+  color: #c9d1d9;
+}
+.mode-btn.active {
+  background: #1f6feb33;
+  color: #79c0ff;
+}
+</style>

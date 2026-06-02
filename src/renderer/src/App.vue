@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
+import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import ControlPane, {
   type AgentSpec,
   type ActivePaneView,
   type SpawnPayload,
+  type MaintenanceSpawnPayload,
   type PipelineState,
   type PipelineStatusView,
   type ExistingProjectInfo,
@@ -145,7 +147,54 @@ const autoAnswerEnabled = makeStickyBool('agentTeam.autoAnswer', false)
 const tokenPanelExpanded = ref<boolean>(
   (() => { try { return localStorage.getItem('agentTeam.tokenPanel.expanded') === '1' } catch { return false } })()
 )
-const tokenPanelWidth = computed(() => (tokenPanelExpanded.value ? '300px' : '36px'))
+const rightPanelWidth = ref<number>(
+  (() => { try { return parseInt(localStorage.getItem('agentTeam.rightWidth') ?? '300') || 300 } catch { return 300 } })()
+)
+watch(rightPanelWidth, (v) => { try { localStorage.setItem('agentTeam.rightWidth', String(v)) } catch {} })
+const tokenPanelWidth = computed(() => (tokenPanelExpanded.value ? `${rightPanelWidth.value}px` : '36px'))
+
+const leftPanelWidth = ref<number>(
+  (() => { try { return parseInt(localStorage.getItem('agentTeam.leftWidth') ?? '360') || 360 } catch { return 360 } })()
+)
+watch(leftPanelWidth, (v) => { try { localStorage.setItem('agentTeam.leftWidth', String(v)) } catch {} })
+
+type DragTarget = 'left' | 'right'
+let _dragTarget: DragTarget | null = null
+let _dragStartX = 0
+let _dragStartW = 0
+const isDragging = ref(false)
+
+function onResizeStart(e: MouseEvent, target: DragTarget): void {
+  if (target === 'right' && !tokenPanelExpanded.value) return
+  _dragTarget = target
+  _dragStartX = e.clientX
+  _dragStartW = target === 'left' ? leftPanelWidth.value : rightPanelWidth.value
+  isDragging.value = true
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', onResizeEnd)
+  e.preventDefault()
+}
+
+function onResizeMove(e: MouseEvent): void {
+  if (!_dragTarget) return
+  const dx = e.clientX - _dragStartX
+  if (_dragTarget === 'left') {
+    leftPanelWidth.value = Math.max(240, Math.min(560, _dragStartW + dx))
+  } else {
+    rightPanelWidth.value = Math.max(180, Math.min(520, _dragStartW - dx))
+  }
+}
+
+function onResizeEnd(): void {
+  _dragTarget = null
+  isDragging.value = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+}
 
 function makeStickyStr(key: string, fallback: string) {
   const r = ref<string>(
@@ -229,9 +278,25 @@ interface ActivePane {
   sessionMarker?: string
 }
 
+interface SpawnHistoryEntry {
+  paneId: string
+  agentKey: string
+  agentLabel: string
+  roleKey: RoleKey
+  roleLabel: string
+  command: string
+  sessionId?: string
+  origin: 'manual' | 'pipeline'
+  stageId: StageId
+  workspacePath: string
+  spawnedAt: string
+  removedAt?: string
+}
+
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
 const persistedPaneSessions = new Set<string>()
+const spawnHistory = ref<SpawnHistoryEntry[]>([])
 
 function setPaneRef(id: string, el: unknown): void {
   paneRefs[id] = (el as InstanceType<typeof TerminalPane> | null) ?? null
@@ -257,7 +322,8 @@ function syncViews(): void {
       origin: p.origin,
       isManager: paneIsManager(p),
       sessionId: p.pinnedSessionId,
-      slotLabel: p.slotLabel
+      slotLabel: p.slotLabel,
+      isMinimized: minimizedPanes.value.has(p.id)
     }
   })
 }
@@ -654,6 +720,9 @@ function scheduleInjection(pane: ActivePane): void {
       pane.injectionStatus = 'skipped'
       syncViews()
       pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
+      if (pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
+        void persistPaneSession(pane, pane.pinnedSessionId)
+      }
       return
     }
     if (pane.skipRoleInjection) {
@@ -827,6 +896,19 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     pane.kickoffPrompt += sessionMarkerLine(sessionMarker)
   }
   panes.value.push(pane)
+  spawnHistory.value.push({
+    paneId: id,
+    agentKey: pane.agentKey,
+    agentLabel: pane.agentLabel,
+    roleKey: pane.roleKey,
+    roleLabel: roleLabel(pane.roleKey),
+    command: pane.command,
+    sessionId: pane.pinnedSessionId,
+    origin: pane.origin,
+    stageId: pane.stageId,
+    workspacePath: pane.workspacePath,
+    spawnedAt: new Date().toISOString(),
+  })
   await nextTick()
   const ref = paneRefs[id]
   if (!ref) return id
@@ -893,6 +975,29 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
           ? ''
           : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
     })
+  }
+}
+
+async function onMaintenanceSpawn(payload: MaintenanceSpawnPayload): Promise<void> {
+  const paneId = await spawnPane({
+    agentKey: payload.agentKey,
+    roleKey: payload.roleKey,
+    stageId: '',
+    commandOverride: '',
+    workspacePath: payload.workspacePath,
+    origin: 'manual'
+  })
+  if (!paneId) return
+  // Wait for role injection to finish, then inject the task as kickoff
+  const ROLE_WAIT_MS = 60_000
+  const t0 = Date.now()
+  const pane = panes.value.find((p) => p.id === paneId)
+  while (pane && (pane.injectionStatus === 'pending' || pane.injectionStatus === 'scheduled') && Date.now() - t0 < ROLE_WAIT_MS) {
+    await sleep(500)
+  }
+  if (!paneAlive(paneId)) return
+  if (payload.task) {
+    await injectPane(paneId, payload.task, 'maintenance-task', false)
   }
 }
 
@@ -999,6 +1104,11 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
       pane_id: pane.id,
     })
   }
+  const histEntry = spawnHistory.value.find((e) => e.paneId === paneId)
+  if (histEntry && !histEntry.removedAt) {
+    histEntry.sessionId = pane?.pinnedSessionId ?? histEntry.sessionId
+    histEntry.removedAt = new Date().toISOString()
+  }
   panes.value = panes.value.filter((p) => p.id !== paneId)
   delete paneRefs[paneId]
   syncViews()
@@ -1060,6 +1170,27 @@ const pipeline = reactive<PipelineRun>({
 
 const showCompletionModal = ref(false)
 const showSettings = ref(false)
+const showHistory = ref(false)
+const confirmKillAll = ref(false)
+
+function onFocusPane(paneId: string): void {
+  focusPaneId.value = paneId
+  nextTick(() => {
+    const el = document.querySelector(`[data-pane-id="${paneId}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
+}
+
+function onReviveAgent(entry: SpawnHistoryEntry): void {
+  void onManualSpawn({
+    agentKey: entry.agentKey,
+    roleKey: entry.roleKey,
+    stageId: '',
+    commandOverride: '',
+    workspacePath: entry.workspacePath || currentWorkspace.value,
+  })
+  showHistory.value = false
+}
 watch(() => pipeline.state, (newState, oldState) => {
   if (newState === 'completed' && oldState === 'running') {
     showCompletionModal.value = true
@@ -1173,7 +1304,7 @@ let workspaceCheckSeq = 0
 function detectMode(payload: ProjectPayload | null): WorkspaceMode {
   const proj = payload?.project
   if (!proj) return 'spawn'
-  if (proj.state === 'completed') return 'completed'
+  if (proj.state === 'completed') return 'maintenance'
   if (proj.state === 'running' || (proj.task_description ?? '').trim()) return 'pipeline'
   return 'spawn'
 }
@@ -1325,6 +1456,69 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       }
     }
   }))
+
+  // Backfill removed manual panes into spawnHistory so Agent History shows past sessions.
+  // Spawned panes are already added via spawnPane() above; this covers the removed ones.
+  const removedManual = (payload.project?.manual_panes ?? []).filter(
+    (p) => p.spawn_status === 'removed'
+  )
+  const existingPaneIds = new Set(spawnHistory.value.map((e) => e.paneId))
+  const fallbackTs = payload.project?.updated_at ?? new Date().toISOString()
+  const backfilledIds = new Set<string>()
+  for (const saved of removedManual) {
+    if (existingPaneIds.has(saved.pane_id)) continue
+    const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
+    spawnHistory.value.push({
+      paneId: saved.pane_id,
+      agentKey: saved.agent,
+      agentLabel: spec?.label ?? saved.agent,
+      roleKey: saved.role as RoleKey,
+      roleLabel: roleLabel(saved.role),
+      command: saved.command ?? '',
+      sessionId: (saved.session_id ?? '').trim() || undefined,
+      origin: 'manual',
+      stageId: '' as StageId,
+      workspacePath,
+      spawnedAt: fallbackTs,
+      removedAt: fallbackTs,
+    })
+    backfilledIds.add(saved.pane_id)
+  }
+
+  // Enrich backfilled entries with real timestamps from history.jsonl.
+  // history.snapshot logs every pane event as "[pane <id-prefix>] ..." in summary;
+  // we take the first/last ts per prefix to get accurate spawnedAt / removedAt.
+  if (backfilledIds.size > 0) {
+    try {
+      type HistSnap = { events: Array<{ ts: string; summary: string }> }
+      const histResp = await sendQuiet<HistSnap>('history.snapshot', { workspace_path: workspacePath })
+      const events = histResp?.events
+      if (Array.isArray(events)) {
+        const paneRe = /\[pane ([a-f0-9]{8})\]/
+        const paneTs = new Map<string, { first: string; last: string }>()
+        for (const ev of events) {
+          const m = paneRe.exec(ev.summary ?? '')
+          if (!m) continue
+          const prefix = m[1]
+          const cur = paneTs.get(prefix)
+          if (!cur) paneTs.set(prefix, { first: ev.ts, last: ev.ts })
+          else {
+            if (ev.ts < cur.first) cur.first = ev.ts
+            if (ev.ts > cur.last) cur.last = ev.ts
+          }
+        }
+        for (const entry of spawnHistory.value) {
+          if (!backfilledIds.has(entry.paneId)) continue
+          const ts = paneTs.get(entry.paneId.slice(0, 8))
+          if (!ts) continue
+          entry.spawnedAt = ts.first
+          entry.removedAt = ts.last
+        }
+      }
+    } catch {
+      // non-fatal — fallback timestamps remain
+    }
+  }
 }
 
 function onPipelineLoadTask(task: string): void {
@@ -1924,6 +2118,7 @@ async function onPipelineNext(): Promise<void> {
     await waitForStagePanesSettled(currentIndex)
     stopGlobalManagerRouter()
     pipeline.state = 'completed'
+    currentMode.value = 'maintenance'
     pipelineLog('🎉 Pipeline completed all stages')
     const resp = await sendQuiet<ProjectPayload>('pipeline.complete', {
       workspace_path: pipeline.workspacePath
@@ -2123,6 +2318,8 @@ backend.on('agent.activity', (raw) => {
       pane.pinnedSessionId = ev.session_id
       syncViews()
       void persistPaneSession(pane, ev.session_id)
+      const h = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
+      if (h) h.sessionId = ev.session_id
     }
   }
 })
@@ -2137,7 +2334,9 @@ backend.on('session.detected', (raw) => {
   const pane = panes.value.find((p) => p.id === ev.pane_id)
   if (!pane) return
   pane.pinnedSessionId = ev.session_id
-  syncViews()  // surface the freshly-captured id in the active-agents list
+  syncViews()
+  const histSd = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
+  if (histSd) histSd.sessionId = ev.session_id
   if (pane.origin === 'manual') {
     pipelineLog(`Manual ${pane.agentKey} 🔖 session 已綁定`)
     void persistPaneSession(pane, ev.session_id)
@@ -3390,6 +3589,126 @@ const gridCols = computed(() => {
   return 'repeat(3, 1fr)'
 })
 
+// ── Layout mode (F-A) + Minimize to sidebar (F-B) ────────────────────────────
+const layoutMode = ref<LayoutMode>('auto')
+const focusPaneId = ref<string | null>(null)
+const minimizedPanes = ref(new Set<string>())
+
+function minimizePane(id: string): void {
+  minimizedPanes.value = new Set([...minimizedPanes.value, id])
+  if (focusPaneId.value === id) {
+    focusPaneId.value = panes.value.find((p) => p.id !== id && !minimizedPanes.value.has(p.id))?.id ?? null
+  }
+  syncViews()
+}
+
+function restorePane(id: string): void {
+  const next = new Set(minimizedPanes.value)
+  next.delete(id)
+  minimizedPanes.value = next
+  if (layoutMode.value !== 'grid') focusPaneId.value = id
+  syncViews()
+}
+
+// Keep focusPaneId valid as panes are added/removed
+watch(panes, (newPanes, oldPanes) => {
+  const ids = new Set(newPanes.map((p) => p.id))
+  if (focusPaneId.value && !ids.has(focusPaneId.value)) {
+    focusPaneId.value = newPanes[0]?.id ?? null
+  }
+  if (layoutMode.value === 'auto' && newPanes.length > (oldPanes?.length ?? 0)) {
+    focusPaneId.value = newPanes[newPanes.length - 1].id
+  }
+})
+
+// Auto-focus: poll lastRawActivityAt every 500ms to follow the most active pane.
+// Two guards prevent jarring focus oscillation during pipeline execution:
+//   1. Manual grace period: user click → no auto-override for 3s
+//   2. Dwell time: current focus pane must be quiet for 2.5s before auto-switch
+let _autoFocusInterval: ReturnType<typeof setInterval> | null = null
+let _lastManualFocusAt = 0
+const MANUAL_FOCUS_GRACE_MS = 3000
+const AUTO_FOCUS_DWELL_MS = 2500  // current pane must be idle 2.5s before switching
+
+function onSetFocus(paneId: string): void {
+  _lastManualFocusAt = Date.now()
+  focusPaneId.value = paneId
+}
+
+watch(layoutMode, (mode) => {
+  if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
+  if (mode === 'auto') {
+    _autoFocusInterval = setInterval(() => {
+      // Guard 1: don't override a recent manual click
+      if (Date.now() - _lastManualFocusAt < MANUAL_FOCUS_GRACE_MS) return
+      let newest = 0, newestId: string | null = null
+      let currentFocusLastActive = 0
+      for (const id of Object.keys(paneRefs)) {
+        if (minimizedPanes.value.has(id)) continue
+        const r = paneRefs[id]
+        if (!r) continue
+        const ts = (r.lastRawActivityAt as unknown as number) ?? 0
+        if (ts > newest) { newest = ts; newestId = id }
+        if (id === focusPaneId.value) currentFocusLastActive = ts
+      }
+      if (newestId && newestId !== focusPaneId.value) {
+        // Guard 2: only switch if the current focus pane has been quiet long enough
+        const currentPaneIdleMs = Date.now() - currentFocusLastActive
+        if (currentPaneIdleMs > AUTO_FOCUS_DWELL_MS) {
+          focusPaneId.value = newestId
+        }
+      }
+    }, 500)
+  }
+}, { immediate: true })
+
+const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'fullscreen'>(() => {
+  if (panes.value.length <= 1) return 'grid'
+  const m = layoutMode.value
+  // auto → spotlight layout (most active pane large + others in bottom strip)
+  if (m === 'auto' || m === 'spotlight') return 'spotlight'
+  // fullscreen → focus pane 100%, others as floating overlays
+  if (m === 'fullscreen') return 'fullscreen'
+  return 'grid'
+})
+
+// Inline style for non-focus panes in fullscreen mode → floating windows
+function floatPaneStyle(paneId: string): Record<string, string> {
+  if (effectiveLayoutMode.value !== 'fullscreen') return {}
+  if (paneId === effectiveFocusPaneId.value) return {}
+  const nonFocusList = panes.value.filter(
+    (p) => p.id !== effectiveFocusPaneId.value && !minimizedPanes.value.has(p.id)
+  )
+  const idx = nonFocusList.findIndex((p) => p.id === paneId)
+  if (idx < 0) return {}
+  const right = 16 + idx * 296  // 280px wide + 16px gap
+  return {
+    position: 'absolute',
+    bottom: '16px',
+    right: `${right}px`,
+    width: '280px',
+    height: '180px',
+    zIndex: '10'
+  }
+}
+
+// Number of non-focus visible panes — drives explicit grid-template-rows so
+// that grid-row: 1 / -1 works correctly on the focus pane.
+const sidebarRowCount = computed(() => {
+  const visible = panes.value.filter((p) => !minimizedPanes.value.has(p.id)).length
+  return Math.max(1, visible - 1)
+})
+
+// Resolved focus pane: skips minimized panes, falls back to first visible
+const effectiveFocusPaneId = computed(() => {
+  if (focusPaneId.value
+    && panes.value.find((p) => p.id === focusPaneId.value)
+    && !minimizedPanes.value.has(focusPaneId.value)) {
+    return focusPaneId.value
+  }
+  return panes.value.find((p) => !minimizedPanes.value.has(p.id))?.id ?? null
+})
+
 const backendUrl = computed(() => backend.httpUrl.value)
 
 const analyzerStatus = computed<AnalyzerStatusView>(() => ({
@@ -3447,7 +3766,7 @@ function paneIsManager(p: ActivePane): boolean {
 </script>
 
 <template>
-  <div class="app" :style="{ '--token-panel-width': tokenPanelWidth }">
+  <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <ControlPane
       ref="controlPaneRef"
       :backend-status="backend.status.value"
@@ -3460,6 +3779,7 @@ function paneIsManager(p: ActivePane): boolean {
       :existing-project="existingProject"
       :workspace="currentWorkspace"
       :mode="currentMode"
+      :layout-mode="layoutMode"
       :analyzer-status="analyzerStatus"
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
@@ -3469,6 +3789,9 @@ function paneIsManager(p: ActivePane): boolean {
       @interrupt="onInterrupt"
       @kill-all="onKillAll"
       @reinject="onReinject"
+      @restore="restorePane"
+      @update:layout-mode="layoutMode = $event"
+      @maintenance-spawn="onMaintenanceSpawn"
       @pipeline-start="onPipelineStart"
       @pipeline-next="onPipelineNext"
       @pipeline-abort="onPipelineAbort"
@@ -3478,7 +3801,9 @@ function paneIsManager(p: ActivePane): boolean {
       @pipeline-load-task="onPipelineLoadTask"
       @pipeline-restart="onPipelineRestart"
       @refresh-analyzer="onRefreshAnalyzer"
+      @focus-pane="onFocusPane"
       @open-settings="showSettings = true"
+      @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"
       @workspace-browse="onWorkspaceBrowse"
     />
@@ -3538,7 +3863,73 @@ function paneIsManager(p: ActivePane): boolean {
       :analyzer-api="analyzerApi"
       @close="showSettings = false"
     />
-    <main class="stage" :style="{ '--cols': gridCols }">
+    <Teleport v-if="showHistory" to="body">
+      <div class="history-overlay" @click.self="showHistory = false">
+        <div class="history-modal">
+          <div class="history-modal-header">
+            <div class="history-header-left">
+              <span>Agent History</span>
+              <button
+                v-if="panes.length > 0"
+                class="history-killall"
+                @click="confirmKillAll = true"
+                title="Kill all agents"
+              >🗑 Kill all</button>
+            </div>
+            <button class="history-close" @click="showHistory = false">✕</button>
+          </div>
+          <div class="agent-history-list">
+            <div v-if="spawnHistory.length === 0" class="agent-history-empty">尚無 agent 紀錄</div>
+            <div
+              v-for="entry in [...spawnHistory].reverse()"
+              :key="entry.paneId"
+              class="agent-history-row"
+              :class="{ active: !entry.removedAt }"
+            >
+              <div class="agent-history-main">
+                <span class="ah-badge">{{ entry.agentLabel }}</span>
+                <span class="ah-badge ah-role">{{ entry.roleLabel }}</span>
+                <span class="ah-origin">{{ entry.origin }}</span>
+                <span class="ah-status" :class="entry.removedAt ? 'removed' : 'active'">
+                  {{ entry.removedAt ? 'removed' : 'active' }}
+                </span>
+              </div>
+              <div class="agent-history-meta">
+                <span class="ah-time">{{ new Date(entry.spawnedAt).toLocaleTimeString() }}</span>
+                <span v-if="entry.sessionId" class="ah-session" :title="entry.sessionId">
+                  🔖 {{ entry.sessionId.slice(0, 8) }}…
+                </span>
+              </div>
+              <div v-if="entry.removedAt" class="agent-history-actions">
+                <button class="ah-revive" @click="onReviveAgent(entry)">↺ Re-spawn</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    <Teleport v-if="confirmKillAll" to="body">
+      <div class="history-overlay" @click.self="confirmKillAll = false">
+        <div class="history-modal" style="height: auto; max-width: 400px;">
+          <div class="history-modal-header">
+            <span>🗑 Kill all agents?</span>
+            <button class="history-close" @click="confirmKillAll = false">✕</button>
+          </div>
+          <div style="padding: 16px 14px; font-size: 13px; color: #c9d1d9;">
+            這將強制終止 <strong>{{ panes.length }} 個 agent</strong>，所有進行中的工作將遺失。
+          </div>
+          <div style="display: flex; gap: 8px; padding: 0 14px 14px; justify-content: flex-end;">
+            <button class="history-close" style="border: 1px solid #30363d; padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">Cancel</button>
+            <button class="danger" style="padding: 4px 14px; border-radius: 6px; font-size: 12px;" @click="() => { onKillAll(); confirmKillAll = false }">Kill all</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+    <main
+      class="stage"
+      :style="{ '--cols': gridCols, '--sidebar-rows': sidebarRowCount }"
+      :data-layout="effectiveLayoutMode"
+    >
       <div v-if="panes.length === 0" class="empty">
         <!-- Pipeline is starting but the first pane hasn't appeared yet.
              The orchestrator typically takes 10-30s for the first stage:
@@ -3568,12 +3959,18 @@ function paneIsManager(p: ActivePane): boolean {
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
+          v-show="!minimizedPanes.has(p.id)"
+          :style="floatPaneStyle(p.id)"
           :ref="(el) => setPaneRef(p.id, el)"
+          :data-pane-id="p.id"
           :pane-id="p.id"
           :title="p.agentLabel"
           :subtitle="paneSubtitle(p)"
           :is-manager="paneIsManager(p)"
+          :is-focus="p.id === effectiveFocusPaneId"
           :backend="backend"
+          @set-focus="onSetFocus(p.id)"
+          @minimize="minimizePane(p.id)"
         />
       </div>
     </main>
@@ -3610,6 +4007,8 @@ function paneIsManager(p: ActivePane): boolean {
         </div>
       </div>
     </Teleport>
+    <div class="resize-handle resize-handle-left" @mousedown="onResizeStart($event, 'left')" />
+    <div v-if="tokenPanelExpanded" class="resize-handle resize-handle-right" @mousedown="onResizeStart($event, 'right')" />
   </div>
 </template>
 
@@ -3617,13 +4016,43 @@ function paneIsManager(p: ActivePane): boolean {
 .app {
   display: grid;
   /* Three columns: controls · terminal grid · token stats panel
-     Token panel width is driven by --token-panel-width set inline below. */
-  grid-template-columns: 360px 1fr var(--token-panel-width, 36px);
+     Both left and token-panel widths are driven by CSS vars set inline. */
+  grid-template-columns: var(--left-width, 360px) 1fr var(--token-panel-width, 36px);
+  position: relative;
   height: 100vh;
   background: #010409;
   color: #e6edf3;
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   overflow: hidden;
+}
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 50;
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.resize-handle:hover::after {
+  background: #388bfd44;
+}
+.is-resizing .resize-handle::after {
+  background: #388bfd66;
+}
+.resize-handle-left {
+  left: var(--left-width, 360px);
+  transform: translateX(-50%);
+}
+.resize-handle-right {
+  right: var(--token-panel-width, 36px);
+  transform: translateX(50%);
 }
 .stage {
   position: relative;
@@ -3638,6 +4067,36 @@ function paneIsManager(p: ActivePane): boolean {
   grid-auto-rows: 1fr;
   gap: 8px;
   height: 100%;
+  position: relative;
+}
+/* Spotlight: focus pane takes top area, others shrink into bottom strip */
+.stage[data-layout="spotlight"] .grid {
+  grid-template-columns: repeat(var(--sidebar-rows, 1), 1fr);
+  grid-template-rows: 1fr 130px;
+  grid-auto-rows: unset;
+}
+.stage[data-layout="spotlight"] .grid :deep(.pane-focus) {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.stage[data-layout="spotlight"] .grid :deep(.pane:not(.pane-focus)) {
+  grid-row: 2;
+}
+/* Fullscreen: focus pane 100%, non-focus panes become floating windows via inline style */
+.stage[data-layout="fullscreen"] .grid {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+  grid-auto-rows: unset;
+}
+.stage[data-layout="fullscreen"] .grid :deep(.pane-focus) {
+  grid-column: 1;
+  grid-row: 1;
+}
+/* Floating panes positioned via floatPaneStyle() inline style */
+.stage[data-layout="fullscreen"] .grid :deep(.pane:not(.pane-focus)) {
+  border-color: #388bfd88;
+  box-shadow: 0 4px 20px #00000088;
+  border-radius: 6px;
 }
 .empty {
   display: flex;
@@ -3708,6 +4167,152 @@ function paneIsManager(p: ActivePane): boolean {
 }
 
 /* ── Stage-stall confirmation modal ──────────────────────────────────────── */
+.history-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+.history-modal {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  width: min(680px, 92vw);
+  height: min(560px, 85vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+}
+.history-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid #21262d;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+}
+.history-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.history-killall {
+  background: transparent;
+  border: 1px solid #6e363666;
+  color: #f85149;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.history-killall:hover {
+  background: #6e363622;
+  border-color: #f85149;
+  opacity: 1;
+}
+.history-close {
+  background: transparent;
+  border: none;
+  color: #8b949e;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.history-close:hover {
+  color: #e6edf3;
+  background: #21262d;
+}
+.agent-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+.agent-history-empty {
+  color: #8b949e;
+  font-size: 12px;
+  text-align: center;
+  padding: 24px;
+}
+.agent-history-row {
+  padding: 8px 14px;
+  border-bottom: 1px solid #161b22;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.agent-history-row.active {
+  border-left: 3px solid #3fb950;
+  padding-left: 11px;
+}
+.agent-history-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ah-badge {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #e6edf3;
+}
+.ah-badge.ah-role {
+  color: #79c0ff;
+  border-color: #388bfd55;
+}
+.ah-origin {
+  font-size: 10px;
+  color: #8b949e;
+}
+.ah-status {
+  font-size: 10px;
+  font-weight: 600;
+}
+.ah-status.active { color: #3fb950; }
+.ah-status.removed { color: #6e7681; }
+.agent-history-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: #6e7681;
+}
+.ah-session {
+  font-family: monospace;
+}
+.agent-history-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.ah-revive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid #388bfd66;
+  background: #388bfd14;
+  color: #79c0ff;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.ah-revive:hover {
+  background: #388bfd28;
+  border-color: #79c0ff;
+  color: #cae8ff;
+}
 .stall-overlay {
   position: fixed;
   inset: 0;

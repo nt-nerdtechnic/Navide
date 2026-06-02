@@ -48,3 +48,4 @@ backend/.ruff_cache/
 test-results/
 playwright-report/
 .pytest_cache/
+.playwright-mcp/
