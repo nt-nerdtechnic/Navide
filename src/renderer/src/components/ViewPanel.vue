@@ -5,8 +5,8 @@ defineProps<{ modelValue: LayoutMode }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: LayoutMode): void }>()
 
 const modes: [LayoutMode, string, string][] = [
-  ['auto',       '✦', '自動（動態調整）'],
   ['grid',       '⊞', '方格'],
+  ['auto',       '✦', '自動（動態調整）'],
   ['spotlight',  '◎', '聚光燈'],
   ['fullscreen', '⧉', '全螢幕 + 浮動視窗'],
 ]

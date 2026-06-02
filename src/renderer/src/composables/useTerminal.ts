@@ -208,6 +208,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     await backend.send('terminal.kill', { terminal_session_id: sessionId.value })
   }
 
+  function fitTerminal(): void {
+    if (!mounted) return
+    try { fit.fit() } catch { /* ignore transient errors */ }
+  }
+
   function cleanupSession(): void {
     inputDisposer?.dispose()
     inputDisposer = null
@@ -241,6 +246,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     interrupt,
     kill,
     focus,
+    fitTerminal,
     status,
     sessionId,
     error,

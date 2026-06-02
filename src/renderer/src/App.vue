@@ -3582,15 +3582,8 @@ function truncate(s: string, n: number): string {
   return oneline.length > n ? oneline.slice(0, n - 1) + '…' : oneline
 }
 
-const gridCols = computed(() => {
-  const n = panes.value.length
-  if (n <= 1) return '1fr'
-  if (n <= 4) return 'repeat(2, 1fr)'
-  return 'repeat(3, 1fr)'
-})
-
 // ── Layout mode (F-A) + Minimize to sidebar (F-B) ────────────────────────────
-const layoutMode = ref<LayoutMode>('auto')
+const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
 
@@ -3662,14 +3655,29 @@ watch(layoutMode, (mode) => {
   }
 }, { immediate: true })
 
-const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'fullscreen'>(() => {
+const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'sidebar' | 'fullscreen'>(() => {
   if (panes.value.length <= 1) return 'grid'
   const m = layoutMode.value
-  // auto → spotlight layout (most active pane large + others in bottom strip)
-  if (m === 'auto' || m === 'spotlight') return 'spotlight'
+  // auto → sidebar layout (focus pane left, others stacked in right column)
+  if (m === 'auto') return 'sidebar'
+  // spotlight → focus pane top, others in bottom strip
+  if (m === 'spotlight') return 'spotlight'
   // fullscreen → focus pane 100%, others as floating overlays
   if (m === 'fullscreen') return 'fullscreen'
   return 'grid'
+})
+
+// After any layout mode change, refit all terminals once the browser has
+// finished laying out the new grid — ResizeObserver alone is unreliable when
+// panes transition from display:none (sidebar) to visible (spotlight/grid).
+watch(effectiveLayoutMode, () => {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      for (const ref of Object.values(paneRefs)) {
+        (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
+      }
+    })
+  })
 })
 
 // Inline style for non-focus panes in fullscreen mode → floating windows
@@ -3698,6 +3706,147 @@ const sidebarRowCount = computed(() => {
   const visible = panes.value.filter((p) => !minimizedPanes.value.has(p.id)).length
   return Math.max(1, visible - 1)
 })
+
+// ── Grid pane splitters ───────────────────────────────────────────────────────
+const gridRef = ref<HTMLElement | null>(null)
+const colWidths = ref<number[]>([1])
+const rowHeights = ref<number[]>([1])
+// Sidebar left column width in pixels (0 = default: fill remaining space)
+const sidebarLeftPx = ref<number>(0)
+
+const numCols = computed(() => {
+  const n = panes.value.length
+  if (n <= 1) return 1
+  if (n <= 4) return 2
+  return 3
+})
+const numRows = computed(() => Math.max(1, Math.ceil(panes.value.length / numCols.value)))
+
+watch(numCols, (n) => { colWidths.value = Array(n).fill(1) }, { immediate: true })
+watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true })
+
+const gridTemplateColumns = computed(() => {
+  switch (effectiveLayoutMode.value) {
+    case 'spotlight': return `repeat(${sidebarRowCount.value}, 1fr)`
+    case 'sidebar':   return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 220px` : '1fr 220px'
+    case 'fullscreen': return '1fr'
+    default: {
+      const ws = colWidths.value.length === numCols.value ? colWidths.value : Array(numCols.value).fill(1)
+      return ws.map(w => `${w}fr`).join(' ')
+    }
+  }
+})
+
+const gridTemplateRows = computed(() => {
+  switch (effectiveLayoutMode.value) {
+    case 'spotlight': return '1fr 130px'
+    case 'sidebar':   return '1fr'
+    case 'fullscreen': return '1fr'
+    default: {
+      const hs = rowHeights.value.length === numRows.value ? rowHeights.value : Array(numRows.value).fill(1)
+      return hs.map(h => `${h}fr`).join(' ')
+    }
+  }
+})
+
+const gridStyle = computed(() => ({
+  gridTemplateColumns: gridTemplateColumns.value,
+  gridTemplateRows: gridTemplateRows.value,
+}))
+
+// Handle positions as percentage strings (grid mode: between columns/rows)
+const colHandlePositions = computed<string[]>(() => {
+  if (effectiveLayoutMode.value !== 'grid') return []
+  const ws = colWidths.value.length === numCols.value ? colWidths.value : Array(numCols.value).fill(1)
+  if (ws.length <= 1) return []
+  const total = ws.reduce((a, b) => a + b, 0)
+  let cum = 0
+  return ws.slice(0, -1).map(w => { cum += w; return `${(cum / total) * 100}%` })
+})
+
+const rowHandlePositions = computed<string[]>(() => {
+  if (effectiveLayoutMode.value !== 'grid') return []
+  const hs = rowHeights.value.length === numRows.value ? rowHeights.value : Array(numRows.value).fill(1)
+  if (hs.length <= 1) return []
+  const total = hs.reduce((a, b) => a + b, 0)
+  let cum = 0
+  return hs.slice(0, -1).map(h => { cum += h; return `${(cum / total) * 100}%` })
+})
+
+// Sidebar handle: percentage of grid width where the vertical divider sits
+const sidebarHandlePos = computed(() => {
+  const gw = gridRef.value?.clientWidth ?? 800
+  const leftPx = sidebarLeftPx.value > 0 ? sidebarLeftPx.value : gw - 220
+  return `${(leftPx / gw) * 100}%`
+})
+
+type GridHandleAxis = 'col' | 'row' | 'sidebar'
+let _gAxis: GridHandleAxis | null = null
+let _gIdx = 0
+let _gStartX = 0
+let _gStartY = 0
+let _gA = 0
+let _gB = 0
+let _gSize = 0
+
+function onGridHandleStart(e: MouseEvent, axis: GridHandleAxis, index: number): void {
+  _gAxis = axis
+  _gIdx = index
+  _gStartX = e.clientX
+  _gStartY = e.clientY
+  const el = gridRef.value
+  if (axis === 'col') {
+    _gA = colWidths.value[index] ?? 1
+    _gB = colWidths.value[index + 1] ?? 1
+    _gSize = el?.clientWidth ?? 800
+  } else if (axis === 'row') {
+    _gA = rowHeights.value[index] ?? 1
+    _gB = rowHeights.value[index + 1] ?? 1
+    _gSize = el?.clientHeight ?? 600
+  } else {
+    _gA = sidebarLeftPx.value > 0 ? sidebarLeftPx.value : (el?.clientWidth ?? 800) - 220
+    _gSize = el?.clientWidth ?? 800
+  }
+  isDragging.value = true
+  document.body.style.cursor = axis === 'row' ? 'row-resize' : 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onGridHandleMove)
+  document.addEventListener('mouseup', onGridHandleEnd)
+  e.preventDefault()
+}
+
+function onGridHandleMove(e: MouseEvent): void {
+  if (!_gAxis) return
+  if (_gAxis === 'col') {
+    const dx = e.clientX - _gStartX
+    const sum = _gA + _gB
+    const newA = Math.max(0.1, Math.min(sum - 0.1, _gA + dx * sum / _gSize))
+    const next = [...colWidths.value]
+    next[_gIdx] = newA
+    next[_gIdx + 1] = sum - newA
+    colWidths.value = next
+  } else if (_gAxis === 'row') {
+    const dy = e.clientY - _gStartY
+    const sum = _gA + _gB
+    const newA = Math.max(0.1, Math.min(sum - 0.1, _gA + dy * sum / _gSize))
+    const next = [...rowHeights.value]
+    next[_gIdx] = newA
+    next[_gIdx + 1] = sum - newA
+    rowHeights.value = next
+  } else {
+    const dx = e.clientX - _gStartX
+    sidebarLeftPx.value = Math.max(200, Math.min(_gSize - 100, _gA + dx))
+  }
+}
+
+function onGridHandleEnd(): void {
+  _gAxis = null
+  isDragging.value = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  document.removeEventListener('mousemove', onGridHandleMove)
+  document.removeEventListener('mouseup', onGridHandleEnd)
+}
 
 // Resolved focus pane: skips minimized panes, falls back to first visible
 const effectiveFocusPaneId = computed(() => {
@@ -3927,7 +4076,6 @@ function paneIsManager(p: ActivePane): boolean {
     </Teleport>
     <main
       class="stage"
-      :style="{ '--cols': gridCols, '--sidebar-rows': sidebarRowCount }"
       :data-layout="effectiveLayoutMode"
     >
       <div v-if="panes.length === 0" class="empty">
@@ -3955,11 +4103,34 @@ function paneIsManager(p: ActivePane): boolean {
           <p class="muted">Set workspace + (for pipeline) task description on the left first.</p>
         </div>
       </div>
-      <div v-else class="grid">
+      <div v-else class="grid" ref="gridRef" :style="gridStyle">
+        <!-- Column splitter handles (grid mode only) -->
+        <div
+          v-for="(pos, i) in colHandlePositions"
+          :key="`ch-${i}`"
+          class="grid-handle grid-handle-v"
+          :style="{ left: pos }"
+          @mousedown.prevent="onGridHandleStart($event, 'col', i)"
+        />
+        <!-- Row splitter handles (grid mode only) -->
+        <div
+          v-for="(pos, i) in rowHandlePositions"
+          :key="`rh-${i}`"
+          class="grid-handle grid-handle-h"
+          :style="{ top: pos }"
+          @mousedown.prevent="onGridHandleStart($event, 'row', i)"
+        />
+        <!-- Sidebar/auto mode vertical handle -->
+        <div
+          v-if="effectiveLayoutMode === 'sidebar'"
+          class="grid-handle grid-handle-v"
+          :style="{ left: sidebarHandlePos }"
+          @mousedown.prevent="onGridHandleStart($event, 'sidebar', 0)"
+        />
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
-          v-show="!minimizedPanes.has(p.id)"
+          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId)"
           :style="floatPaneStyle(p.id)"
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
@@ -3972,6 +4143,25 @@ function paneIsManager(p: ActivePane): boolean {
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
         />
+        <!-- Auto/sidebar mode: meeting-style agent list on the right -->
+        <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list">
+          <div
+            v-for="p in paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId)"
+            :key="p.id"
+            class="meeting-item"
+            @click="onSetFocus(p.id)"
+          >
+            <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
+            <div class="meeting-info">
+              <span class="meeting-name">{{ p.agentLabel }}</span>
+              <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
+            </div>
+            <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
+          </div>
+          <div v-if="paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length === 0" class="meeting-empty">
+            只有一個 agent
+          </div>
+        </div>
       </div>
     </main>
     <TokenStatsPanel
@@ -4063,18 +4253,47 @@ function paneIsManager(p: ActivePane): boolean {
 }
 .grid {
   display: grid;
-  grid-template-columns: var(--cols);
-  grid-auto-rows: 1fr;
+  /* grid-template-columns/rows are driven by gridStyle computed (JS) */
   gap: 8px;
   height: 100%;
   position: relative;
 }
-/* Spotlight: focus pane takes top area, others shrink into bottom strip */
-.stage[data-layout="spotlight"] .grid {
-  grid-template-columns: repeat(var(--sidebar-rows, 1), 1fr);
-  grid-template-rows: 1fr 130px;
-  grid-auto-rows: unset;
+/* Grid pane splitter handles */
+.grid-handle {
+  position: absolute;
+  z-index: 20;
 }
+.grid-handle::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background 0.15s;
+}
+.grid-handle:hover::after,
+.is-resizing .grid-handle::after {
+  background: #388bfd55;
+}
+.grid-handle-v {
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  transform: translateX(-50%);
+}
+.grid-handle-v::after {
+  inset: 0 3px;
+}
+.grid-handle-h {
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: row-resize;
+  transform: translateY(-50%);
+}
+.grid-handle-h::after {
+  inset: 3px 0;
+}
+/* Spotlight: focus pane takes top area, others shrink into bottom strip */
 .stage[data-layout="spotlight"] .grid :deep(.pane-focus) {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -4082,12 +4301,92 @@ function paneIsManager(p: ActivePane): boolean {
 .stage[data-layout="spotlight"] .grid :deep(.pane:not(.pane-focus)) {
   grid-row: 2;
 }
-/* Fullscreen: focus pane 100%, non-focus panes become floating windows via inline style */
-.stage[data-layout="fullscreen"] .grid {
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-  grid-auto-rows: unset;
+/* Sidebar (Auto): focus pane fills left column; meeting list in right column */
+.stage[data-layout="sidebar"] .grid :deep(.pane-focus) {
+  grid-column: 1;
+  grid-row: 1;
 }
+/* Meeting-style agent list */
+.auto-meeting-list {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding: 8px 6px;
+  background: #0d1117;
+}
+.meeting-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #21262d;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+  min-width: 0;
+}
+.meeting-item:hover {
+  background: #161b22;
+  border-color: #388bfd66;
+}
+.meeting-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #1a2332;
+  border: 1px solid #30363d;
+  color: #58a6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.meeting-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.meeting-name {
+  font-size: 12px;
+  color: #e6edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.meeting-sub {
+  font-size: 10px;
+  color: #8b949e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meeting-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.meeting-badge[data-status="running"]  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+.meeting-badge[data-status="idle"]     { background: #2d2100; color: #e3b341; border: 1px solid #9e6a03; }
+.meeting-badge[data-status="stopped"]  { background: #3d0d0d; color: #f85149; border: 1px solid #da3633; }
+.meeting-badge[data-status="starting"] { background: #0d1a2d; color: #58a6ff; border: 1px solid #1f6feb; }
+.meeting-badge[data-status="error"]    { background: #3d0d0d; color: #ffa198; border: 1px solid #da3633; }
+.meeting-empty {
+  color: #484f58;
+  font-size: 11px;
+  text-align: center;
+  padding: 16px 8px;
+}
+/* Fullscreen: focus pane 100%, non-focus panes become floating windows via inline style */
 .stage[data-layout="fullscreen"] .grid :deep(.pane-focus) {
   grid-column: 1;
   grid-row: 1;

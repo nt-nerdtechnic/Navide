@@ -57,7 +57,8 @@ defineExpose({
   lastActivityAt: terminal.lastActivityAt,
   lastRawActivityAt: terminal.lastRawActivityAt,
   markBufferPosition: terminal.markBufferPosition,
-  recleanBuffer: terminal.recleanBuffer
+  recleanBuffer: terminal.recleanBuffer,
+  fitTerminal: terminal.fitTerminal
 })
 
 onMounted(() => {
