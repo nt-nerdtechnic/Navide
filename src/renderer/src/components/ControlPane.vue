@@ -1167,9 +1167,12 @@ button.history-btn {
   border: 1px solid #30363d;
   color: #8b949e;
   font-size: 12px;
-  padding: 2px 8px;
+  padding: 0 8px;
+  height: 32px;
   border-radius: 4px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
 }
 button.history-btn:hover {
   color: #e6edf3;
