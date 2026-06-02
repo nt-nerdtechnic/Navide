@@ -669,6 +669,16 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
+        elif msg_type == "project.set_layout_mode":
+            ws_raw = payload.get("workspace_path", "") or ""
+            mode = payload.get("layout_mode", "grid")
+            if mode not in ("auto", "grid", "spotlight", "fullscreen"):
+                mode = "grid"
+            project = project_store.peek(ws_raw)
+            if project:
+                project.layout_mode = mode
+                project_store.save(project)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "pipeline.slot_kickoff":
             project = project_store.update_slot_kickoff(
                 payload["workspace_path"],

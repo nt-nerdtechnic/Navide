@@ -1248,6 +1248,7 @@ interface ProjectPayload {
     stages?: ProjectStage[]
     manual_panes?: ProjectManualPane[]
     updated_at?: string
+    layout_mode?: string
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
@@ -1356,6 +1357,12 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
+    const savedMode = resp.project.layout_mode
+    if (savedMode === 'auto' || savedMode === 'grid' || savedMode === 'spotlight' || savedMode === 'fullscreen') {
+      layoutMode.value = savedMode
+    } else {
+      layoutMode.value = 'grid'
+    }
     await restoreWorkspacePanes(resp, path)
   }
 }
@@ -3629,6 +3636,10 @@ function onSetFocus(paneId: string): void {
 }
 
 watch(layoutMode, (mode) => {
+  const wp = pipeline.workspacePath
+  if (wp) {
+    backend.send('project.set_layout_mode', { workspace_path: wp, layout_mode: mode })
+  }
   if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
   if (mode === 'auto') {
     _autoFocusInterval = setInterval(() => {
@@ -3755,7 +3766,7 @@ watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true
 
 const gridTemplateColumns = computed(() => {
   switch (effectiveLayoutMode.value) {
-    case 'spotlight': return `repeat(${sidebarRowCount.value}, 1fr)`
+    case 'spotlight': return '1fr'
     case 'sidebar':   return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 220px` : '1fr 220px'
     case 'fullscreen': return '1fr'
     default: {
@@ -3767,7 +3778,7 @@ const gridTemplateColumns = computed(() => {
 
 const gridTemplateRows = computed(() => {
   switch (effectiveLayoutMode.value) {
-    case 'spotlight': return '1fr 130px'
+    case 'spotlight': return '1fr'
     case 'sidebar':   return '1fr'
     case 'fullscreen': return '1fr'
     default: {
@@ -4158,13 +4169,14 @@ function paneIsManager(p: ActivePane): boolean {
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
-          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId)"
+          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId)"
           :style="floatPaneStyle(p.id)"
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
           :pane-id="p.id"
           :title="p.agentLabel"
           :subtitle="paneSubtitle(p)"
+          :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-manager="paneIsManager(p)"
           :is-focus="p.id === effectiveFocusPaneId"
           :backend="backend"
@@ -4174,21 +4186,47 @@ function paneIsManager(p: ActivePane): boolean {
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list">
           <div
-            v-for="p in paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId)"
+            v-for="p in paneViews.filter(v => !v.isMinimized)"
             :key="p.id"
             class="meeting-item"
+            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
             @click="onSetFocus(p.id)"
           >
             <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
             <div class="meeting-info">
-              <span class="meeting-name">{{ p.agentLabel }}</span>
+              <div class="meeting-name-row">
+                <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
+                <span class="meeting-name">{{ p.agentLabel }}</span>
+              </div>
               <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
             </div>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length === 0" class="meeting-empty">
+          <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="meeting-empty">
             只有一個 agent
           </div>
+        </div>
+      </div>
+      <!-- Spotlight mode: horizontal scrollable bottom strip -->
+      <div v-if="effectiveLayoutMode === 'spotlight'" class="spotlight-strip">
+        <div
+          v-for="p in paneViews.filter(v => !v.isMinimized)"
+          :key="p.id"
+          class="spotlight-thumb"
+          :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId }"
+          @click="onSetFocus(p.id)"
+        >
+          <div class="spotlight-thumb-info">
+            <div class="spotlight-thumb-name-row">
+              <span v-if="p.origin === 'pipeline' && p.stageId" class="spotlight-thumb-pipe-tag">P{{ p.stageId }}</span>
+              <span class="spotlight-thumb-name">{{ p.agentLabel }}</span>
+            </div>
+            <span v-if="p.roleLabel" class="spotlight-thumb-role">{{ p.roleLabel }}</span>
+          </div>
+          <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
+        </div>
+        <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="spotlight-strip-empty">
+          只有一個 agent
         </div>
       </div>
       <!-- Fullscreen mode: collapsible PiP agent list (draggable) -->
@@ -4199,7 +4237,7 @@ function paneIsManager(p: ActivePane): boolean {
       >
         <div class="float-pip-header" @mousedown.prevent="onPipDragStart">
           <span class="float-pip-title">
-            Agents ({{ paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length }})
+            Agents ({{ paneViews.filter(v => !v.isMinimized).length }})
           </span>
           <button class="float-pip-toggle" @mousedown.stop @click="floatPipExpanded = !floatPipExpanded">
             {{ floatPipExpanded ? '▾' : '▸' }}
@@ -4207,19 +4245,23 @@ function paneIsManager(p: ActivePane): boolean {
         </div>
         <div v-if="floatPipExpanded" class="float-pip-list">
           <div
-            v-for="p in paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId)"
+            v-for="p in paneViews.filter(v => !v.isMinimized)"
             :key="p.id"
             class="meeting-item"
+            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
             @click="onSetFocus(p.id)"
           >
             <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
             <div class="meeting-info">
-              <span class="meeting-name">{{ p.agentLabel }}</span>
+              <div class="meeting-name-row">
+                <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
+                <span class="meeting-name">{{ p.agentLabel }}</span>
+              </div>
               <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
             </div>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length === 0" class="meeting-empty">
+          <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="meeting-empty">
             只有一個 agent
           </div>
         </div>
@@ -4354,13 +4396,114 @@ function paneIsManager(p: ActivePane): boolean {
 .grid-handle-h::after {
   inset: 3px 0;
 }
-/* Spotlight: focus pane takes top area, others shrink into bottom strip */
-.stage[data-layout="spotlight"] .grid :deep(.pane-focus) {
-  grid-column: 1 / -1;
-  grid-row: 1;
+/* Spotlight: stage as flex column — grid on top, scroll strip on bottom */
+.stage[data-layout="spotlight"] {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
-.stage[data-layout="spotlight"] .grid :deep(.pane:not(.pane-focus)) {
-  grid-row: 2;
+.stage[data-layout="spotlight"] .grid {
+  flex: 1;
+  min-height: 0;
+  margin: 8px 8px 0;
+}
+/* Spotlight horizontal scrollable bottom strip */
+.spotlight-strip {
+  flex-shrink: 0;
+  height: 104px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 8px 10px;
+  background: #0d1117;
+  border-top: 1px solid #21262d;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+.spotlight-strip::-webkit-scrollbar { height: 4px; }
+.spotlight-strip::-webkit-scrollbar-track { background: transparent; }
+.spotlight-strip::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.spotlight-thumb {
+  flex-shrink: 0;
+  width: 160px;
+  height: 84px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  overflow: hidden;
+}
+.spotlight-thumb:hover {
+  border-color: #388bfd66;
+  box-shadow: 0 2px 12px rgba(56, 139, 253, 0.15);
+  background: #1a2332;
+}
+.spotlight-thumb--active {
+  border-color: #388bfd;
+  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.25);
+  background: #1a2332;
+}
+.spotlight-thumb-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.spotlight-thumb-name-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.spotlight-thumb-pipe-tag {
+  font-size: 8px;
+  font-weight: 700;
+  background: #1f3a5f;
+  color: #79c0ff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.spotlight-thumb-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e6edf3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spotlight-thumb-role {
+  font-size: 9px;
+  color: #8b949e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spotlight-thumb-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  align-self: flex-start;
+  margin-top: auto;
+}
+.spotlight-thumb-badge[data-status="running"]  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
+.spotlight-thumb-badge[data-status="idle"]     { background: #2d2100; color: #e3b341; border: 1px solid #9e6a03; }
+.spotlight-thumb-badge[data-status="starting"] { background: #0d1a2d; color: #58a6ff; border: 1px solid #1f6feb; }
+.spotlight-thumb-badge[data-status="error"],
+.spotlight-thumb-badge[data-status="stopped"]  { background: #3d0d0d; color: #f85149; border: 1px solid #da3633; }
+.spotlight-strip-empty {
+  color: #484f58;
+  font-size: 11px;
+  padding: 0 8px;
 }
 /* Sidebar (Auto): focus pane fills left column; meeting list in right column */
 .stage[data-layout="sidebar"] .grid :deep(.pane-focus) {
@@ -4393,6 +4536,11 @@ function paneIsManager(p: ActivePane): boolean {
   background: #161b22;
   border-color: #388bfd66;
 }
+.meeting-item--active {
+  border-color: #388bfd;
+  background: #1a2332;
+  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
+}
 .meeting-avatar {
   width: 28px;
   height: 28px;
@@ -4413,6 +4561,21 @@ function paneIsManager(p: ActivePane): boolean {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+.meeting-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.meeting-pipe-tag {
+  font-size: 9px;
+  font-weight: 700;
+  background: #1f3a5f;
+  color: #79c0ff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 .meeting-name {
   font-size: 12px;

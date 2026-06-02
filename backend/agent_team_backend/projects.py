@@ -101,6 +101,7 @@ class Project:
     agents_spawned: int = 0
     backend_version: str = ""
     log_file_name: str = ""  # set by start_pipeline(); e.g. "pipeline-20260527-183000-建立登入頁面.log"
+    layout_mode: str = "grid"
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

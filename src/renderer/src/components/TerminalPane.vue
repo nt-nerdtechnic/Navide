@@ -7,6 +7,7 @@ interface Props {
   paneId: string
   title: string
   subtitle?: string
+  pipeTag?: string
   isManager?: boolean
   isFocus?: boolean
   backend: ReturnType<typeof useBackend>
@@ -70,6 +71,7 @@ onMounted(() => {
   <div :class="['pane', { 'pane-focus': isFocus }]">
     <button class="minimize-btn" @click.stop="emit('minimize')" title="最小化到 sidebar">⊟</button>
     <header class="pane-header" @click="emit('set-focus')">
+      <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
       <span class="title">{{ title }}</span>
       <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>
       <span
@@ -96,6 +98,15 @@ onMounted(() => {
   border-radius: 4px;
   overflow: hidden;
   position: relative;
+}
+.pipe-tag {
+  font-size: 9px;
+  font-weight: 700;
+  background: #1f3a5f;
+  color: #79c0ff;
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 .pane:focus-within {
   border-color: #1f6feb;
