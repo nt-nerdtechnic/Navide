@@ -3680,24 +3680,52 @@ watch(effectiveLayoutMode, () => {
   })
 })
 
-// Inline style for non-focus panes in fullscreen mode → floating windows
+// In fullscreen mode non-focus panes are hidden (alive but not rendered);
+// they appear in the collapsible PiP list instead.
 function floatPaneStyle(paneId: string): Record<string, string> {
   if (effectiveLayoutMode.value !== 'fullscreen') return {}
   if (paneId === effectiveFocusPaneId.value) return {}
-  const nonFocusList = panes.value.filter(
-    (p) => p.id !== effectiveFocusPaneId.value && !minimizedPanes.value.has(p.id)
-  )
-  const idx = nonFocusList.findIndex((p) => p.id === paneId)
-  if (idx < 0) return {}
-  const right = 16 + idx * 296  // 280px wide + 16px gap
-  return {
-    position: 'absolute',
-    bottom: '16px',
-    right: `${right}px`,
-    width: '280px',
-    height: '180px',
-    zIndex: '10'
+  return { display: 'none' }
+}
+
+// ── Fullscreen PiP floating list ──────────────────────────────────────────────
+const floatPipExpanded = ref(true)
+const floatPipPos = ref({ right: 16, bottom: 16 })
+
+watch(effectiveLayoutMode, (mode) => {
+  if (mode === 'fullscreen') {
+    floatPipPos.value = { right: 16, bottom: 16 }
+    floatPipExpanded.value = true
   }
+})
+
+let _pipStartX = 0, _pipStartY = 0, _pipStartR = 0, _pipStartB = 0
+
+function onPipDragStart(e: MouseEvent): void {
+  _pipStartX = e.clientX
+  _pipStartY = e.clientY
+  _pipStartR = floatPipPos.value.right
+  _pipStartB = floatPipPos.value.bottom
+  document.addEventListener('mousemove', onPipDragMove)
+  document.addEventListener('mouseup', onPipDragEnd)
+  e.preventDefault()
+}
+
+function onPipDragMove(e: MouseEvent): void {
+  const dx = e.clientX - _pipStartX
+  const dy = e.clientY - _pipStartY
+  const stage = document.querySelector('.stage') as HTMLElement
+  const sw = stage?.clientWidth ?? 800
+  const sh = stage?.clientHeight ?? 600
+  floatPipPos.value = {
+    right: Math.max(8, Math.min(sw - 120, _pipStartR - dx)),
+    bottom: Math.max(8, Math.min(sh - 32, _pipStartB - dy))
+  }
+}
+
+function onPipDragEnd(): void {
+  document.removeEventListener('mousemove', onPipDragMove)
+  document.removeEventListener('mouseup', onPipDragEnd)
 }
 
 // Number of non-focus visible panes — drives explicit grid-template-rows so
@@ -4163,6 +4191,39 @@ function paneIsManager(p: ActivePane): boolean {
           </div>
         </div>
       </div>
+      <!-- Fullscreen mode: collapsible PiP agent list (draggable) -->
+      <div
+        v-if="effectiveLayoutMode === 'fullscreen'"
+        class="float-pip"
+        :style="{ right: floatPipPos.right + 'px', bottom: floatPipPos.bottom + 'px' }"
+      >
+        <div class="float-pip-header" @mousedown.prevent="onPipDragStart">
+          <span class="float-pip-title">
+            Agents ({{ paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length }})
+          </span>
+          <button class="float-pip-toggle" @mousedown.stop @click="floatPipExpanded = !floatPipExpanded">
+            {{ floatPipExpanded ? '▾' : '▸' }}
+          </button>
+        </div>
+        <div v-if="floatPipExpanded" class="float-pip-list">
+          <div
+            v-for="p in paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId)"
+            :key="p.id"
+            class="meeting-item"
+            @click="onSetFocus(p.id)"
+          >
+            <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
+            <div class="meeting-info">
+              <span class="meeting-name">{{ p.agentLabel }}</span>
+              <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
+            </div>
+            <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
+          </div>
+          <div v-if="paneViews.filter(v => !v.isMinimized && v.id !== effectiveFocusPaneId).length === 0" class="meeting-empty">
+            只有一個 agent
+          </div>
+        </div>
+      </div>
     </main>
     <TokenStatsPanel
       :backend="backend"
@@ -4386,16 +4447,55 @@ function paneIsManager(p: ActivePane): boolean {
   text-align: center;
   padding: 16px 8px;
 }
-/* Fullscreen: focus pane 100%, non-focus panes become floating windows via inline style */
+/* Fullscreen: focus pane fills entire grid */
 .stage[data-layout="fullscreen"] .grid :deep(.pane-focus) {
   grid-column: 1;
   grid-row: 1;
 }
-/* Floating panes positioned via floatPaneStyle() inline style */
-.stage[data-layout="fullscreen"] .grid :deep(.pane:not(.pane-focus)) {
-  border-color: #388bfd88;
-  box-shadow: 0 4px 20px #00000088;
-  border-radius: 6px;
+/* Fullscreen PiP collapsible list */
+.float-pip {
+  position: absolute;
+  z-index: 30;
+  width: 220px;
+  background: #0d1117ee;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+}
+.float-pip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  cursor: move;
+  background: #161b22;
+  border-bottom: 1px solid #21262d;
+  user-select: none;
+}
+.float-pip-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b949e;
+}
+.float-pip-toggle {
+  background: none;
+  border: none;
+  color: #8b949e;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.float-pip-toggle:hover { color: #e6edf3; }
+.float-pip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 .empty {
   display: flex;
