@@ -3701,22 +3701,51 @@ function floatPaneStyle(paneId: string): Record<string, string> {
 
 // ── Fullscreen PiP floating list ──────────────────────────────────────────────
 const floatPipExpanded = ref(true)
-const floatPipPos = ref({ right: 16, bottom: 16 })
+const floatPipPos = ref({ top: 0, left: 0 })
+const floatPipWidth = ref(220)
+const floatPipListMaxHeight = ref(320)
+
+function _pipStageSize(): { sw: number; sh: number } {
+  const el = document.querySelector('.stage') as HTMLElement
+  return { sw: el?.clientWidth ?? 800, sh: el?.clientHeight ?? 600 }
+}
+
+function clampPipPos(): void {
+  nextTick(() => {
+    const pip = document.querySelector('.float-pip') as HTMLElement
+    if (!pip) return
+    const { sw, sh } = _pipStageSize()
+    floatPipPos.value = {
+      left: Math.max(8, Math.min(sw - floatPipWidth.value - 8, floatPipPos.value.left)),
+      top: Math.max(0, Math.min(sh - 32, floatPipPos.value.top)),
+    }
+  })
+}
 
 watch(effectiveLayoutMode, (mode) => {
   if (mode === 'fullscreen') {
-    floatPipPos.value = { right: 16, bottom: 16 }
+    floatPipWidth.value = 220
+    floatPipListMaxHeight.value = 320
     floatPipExpanded.value = true
+    nextTick(() => {
+      const pip = document.querySelector('.float-pip') as HTMLElement
+      const { sw, sh } = _pipStageSize()
+      const pipH = pip?.offsetHeight ?? 360
+      floatPipPos.value = {
+        left: sw - floatPipWidth.value - 16,
+        top: Math.max(0, sh - pipH - 16),
+      }
+    })
   }
 })
 
-let _pipStartX = 0, _pipStartY = 0, _pipStartR = 0, _pipStartB = 0
+let _pipStartX = 0, _pipStartY = 0, _pipStartL = 0, _pipStartT = 0
 
 function onPipDragStart(e: MouseEvent): void {
   _pipStartX = e.clientX
   _pipStartY = e.clientY
-  _pipStartR = floatPipPos.value.right
-  _pipStartB = floatPipPos.value.bottom
+  _pipStartL = floatPipPos.value.left
+  _pipStartT = floatPipPos.value.top
   document.addEventListener('mousemove', onPipDragMove)
   document.addEventListener('mouseup', onPipDragEnd)
   e.preventDefault()
@@ -3725,18 +3754,42 @@ function onPipDragStart(e: MouseEvent): void {
 function onPipDragMove(e: MouseEvent): void {
   const dx = e.clientX - _pipStartX
   const dy = e.clientY - _pipStartY
-  const stage = document.querySelector('.stage') as HTMLElement
-  const sw = stage?.clientWidth ?? 800
-  const sh = stage?.clientHeight ?? 600
+  const { sw, sh } = _pipStageSize()
   floatPipPos.value = {
-    right: Math.max(8, Math.min(sw - 120, _pipStartR - dx)),
-    bottom: Math.max(8, Math.min(sh - 32, _pipStartB - dy))
+    left: Math.max(8, Math.min(sw - floatPipWidth.value - 8, _pipStartL + dx)),
+    top: Math.max(0, Math.min(sh - 32, _pipStartT + dy)),
   }
 }
 
 function onPipDragEnd(): void {
   document.removeEventListener('mousemove', onPipDragMove)
   document.removeEventListener('mouseup', onPipDragEnd)
+}
+
+let _resStartX = 0, _resStartY = 0, _resStartW = 0, _resStartH = 0
+
+function onPipResizeStart(e: MouseEvent): void {
+  _resStartX = e.clientX
+  _resStartY = e.clientY
+  _resStartW = floatPipWidth.value
+  _resStartH = floatPipListMaxHeight.value
+  document.addEventListener('mousemove', onPipResizeMove)
+  document.addEventListener('mouseup', onPipResizeEnd)
+  e.preventDefault()
+  e.stopPropagation()
+}
+
+function onPipResizeMove(e: MouseEvent): void {
+  const dx = e.clientX - _resStartX
+  const dy = e.clientY - _resStartY
+  const { sw } = _pipStageSize()
+  floatPipWidth.value = Math.max(160, Math.min(sw - 32, _resStartW + dx))
+  floatPipListMaxHeight.value = Math.max(80, Math.min(600, _resStartH + dy))
+}
+
+function onPipResizeEnd(): void {
+  document.removeEventListener('mousemove', onPipResizeMove)
+  document.removeEventListener('mouseup', onPipResizeEnd)
 }
 
 // Number of non-focus visible panes — drives explicit grid-template-rows so
@@ -4233,17 +4286,17 @@ function paneIsManager(p: ActivePane): boolean {
       <div
         v-if="effectiveLayoutMode === 'fullscreen'"
         class="float-pip"
-        :style="{ right: floatPipPos.right + 'px', bottom: floatPipPos.bottom + 'px' }"
+        :style="{ top: floatPipPos.top + 'px', left: floatPipPos.left + 'px', width: floatPipWidth + 'px' }"
       >
         <div class="float-pip-header" @mousedown.prevent="onPipDragStart">
           <span class="float-pip-title">
             Agents ({{ paneViews.filter(v => !v.isMinimized).length }})
           </span>
-          <button class="float-pip-toggle" @mousedown.stop @click="floatPipExpanded = !floatPipExpanded">
+          <button class="float-pip-toggle" @mousedown.stop @click="floatPipExpanded = !floatPipExpanded; clampPipPos()">
             {{ floatPipExpanded ? '▾' : '▸' }}
           </button>
         </div>
-        <div v-if="floatPipExpanded" class="float-pip-list">
+        <div v-if="floatPipExpanded" class="float-pip-list" :style="{ maxHeight: floatPipListMaxHeight + 'px' }">
           <div
             v-for="p in paneViews.filter(v => !v.isMinimized)"
             :key="p.id"
@@ -4265,6 +4318,7 @@ function paneIsManager(p: ActivePane): boolean {
             只有一個 agent
           </div>
         </div>
+        <div v-if="floatPipExpanded" class="float-pip-resize" @mousedown="onPipResizeStart" />
       </div>
     </main>
     <TokenStatsPanel
@@ -4619,13 +4673,25 @@ function paneIsManager(p: ActivePane): boolean {
 .float-pip {
   position: absolute;
   z-index: 30;
-  width: 220px;
+  min-width: 160px;
   background: #0d1117ee;
   border: 1px solid #30363d;
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(8px);
+}
+.float-pip-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 40%, #444d56 40%, #444d56 60%, transparent 60%),
+              linear-gradient(135deg, transparent 60%, #444d56 60%, #444d56 80%, transparent 80%);
+  opacity: 0.5;
+  border-radius: 0 0 8px 0;
 }
 .float-pip-header {
   display: flex;
