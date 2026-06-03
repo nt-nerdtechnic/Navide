@@ -103,6 +103,7 @@ class Project:
     log_file_name: str = ""  # set by start_pipeline(); e.g. "pipeline-20260527-183000-建立登入頁面.log"
     layout_mode: str = "grid"
     pipeline_id: str = ""  # which pipeline template was used for this run
+    run_count: int = 0     # incremented on each successful pipeline completion
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -567,10 +568,11 @@ class ProjectStore:
                 cur.status = "completed"
                 cur.ended_at = _now_iso()
         project.state = "completed"
+        project.run_count += 1
         self.save(project)
         self.append_event(
             workspace_path,
-            {"event": "pipeline_complete", "project_id": project.id},
+            {"event": "pipeline_complete", "project_id": project.id, "run_count": project.run_count},
             log_file_name=project.log_file_name,
         )
         return project

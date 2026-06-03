@@ -84,6 +84,8 @@ export interface ExistingProjectInfo {
   nextStageIndex: number // -1 if all done
   updatedAt: string
   projectFile: string
+  pipelineId: string
+  runCount: number
 }
 
 export interface AnalyzerModelOption {
@@ -559,7 +561,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
     <!-- ── Pipeline list (list view only) ───────────────────────────────── -->
     <section v-if="sidebarView === 'list'" class="block panel-section">
       <label class="lbl">Pipelines</label>
-      <ul v-if="pipelines && pipelines.length && pipeline.state === 'idle'" class="pipeline-list">
+      <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
           v-for="p in pagedPipelines"
           :key="p.id"
@@ -569,13 +571,22 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         >
           <span class="pipeline-item-name">{{ p.name }}</span>
           <span class="pipeline-item-meta">{{ p.stage_count }} 階段</span>
-          <span class="pipeline-item-badge" :class="isPipelineRunning(p.id) ? 'running' : 'idle'">
-            {{ isPipelineRunning(p.id) ? '● running' : '○ idle' }}
+          <span
+            class="pipeline-item-badge"
+            :class="isPipelineRunning(p.id) ? 'running'
+              : p.id === activePipelineId && pipeline.state === 'completed' ? 'done'
+              : existingProject?.pipelineId === p.id && existingProject?.nextStageIndex < 0 ? 'done'
+              : 'idle'"
+          >
+            {{ isPipelineRunning(p.id) ? '● running'
+              : p.id === activePipelineId && pipeline.state === 'completed' ? `✓ ${existingProject?.runCount ?? 1} done`
+              : existingProject?.pipelineId === p.id && existingProject?.nextStageIndex < 0 ? `✓ ${existingProject.runCount} done`
+              : '○ idle' }}
           </span>
         </li>
       </ul>
-      <p v-else-if="pipeline.state === 'idle'" class="hint">尚未載入 pipelines…</p>
-      <div v-if="pipelinePageCount > 1 && pipeline.state === 'idle'" class="pipeline-pagination">
+      <p v-else-if="pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="hint">尚未載入 pipelines…</p>
+      <div v-if="pipelinePageCount > 1 && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-pagination">
         <button class="ghost pg-btn" :disabled="pipelinePage === 0" @click="pipelinePage--">‹</button>
         <span class="pg-info">{{ pipelinePage + 1 }} / {{ pipelinePageCount }}</span>
         <button class="ghost pg-btn" :disabled="pipelinePage >= pipelinePageCount - 1" @click="pipelinePage++">›</button>
@@ -614,7 +625,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </template>
 
       <!-- ── Running widget inline ── -->
-      <template v-if="pipeline.state !== 'idle'">
+      <template v-if="pipeline.state === 'running' || pipeline.state === 'aborted'">
         <div class="pipeline-running-divider"></div>
         <div class="pipeline-running-name">
           <div class="prn-title">
@@ -641,9 +652,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             <button class="danger" @click="emit('pipeline-abort')">Abort</button>
           </div>
         </div>
-        <p v-else-if="pipeline.state === 'completed'" class="hint ok">
-          ✓ Pipeline completed all stages. Review each pane on the right.
-        </p>
         <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
           Pipeline aborted. Agents are kept — Resume to continue, or Reset to clear.
         </p>
@@ -706,7 +714,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         </div>
       </div>
       <div
-        v-else-if="existingProject && existingProject.nextStageIndex < 0"
+        v-else-if="existingProject && existingProject.nextStageIndex < 0 && openedPipelineId === activePipelineId"
         class="resume-card done"
       >
         <div class="done-header">
@@ -796,7 +804,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
         Provide task description + workspace, then start.
       </p>
-      <div v-if="pipeline.projectId" class="paths">
+      <div v-if="pipeline.projectId && openedPipelineId === activePipelineId" class="paths">
         <div class="paths-line">
           <span class="paths-key">project</span>
           <code :title="pipeline.projectFile">{{ shortPath(pipeline.projectFile) }}</code>
@@ -821,7 +829,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           </button>
         </div>
       </div>
-      <div v-if="pipeline.log.length > 0" ref="pipelineLogRef" class="pipeline-log">
+      <div v-if="pipeline.log.length > 0 && openedPipelineId === activePipelineId" ref="pipelineLogRef" class="pipeline-log">
         <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
       </div>
       </template>
@@ -1339,6 +1347,9 @@ button.icon-btn.muted:hover {
 }
 .pipeline-item-badge.idle {
   color: #6e7681;
+}
+.pipeline-item-badge.done {
+  color: #58a6ff;
 }
 .new-pipeline-row {
   margin-top: 6px;

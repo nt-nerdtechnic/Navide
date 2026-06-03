@@ -1229,6 +1229,7 @@ interface ProjectPayload {
     updated_at?: string
     layout_mode?: string
     pipeline_id?: string
+    run_count?: number
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
@@ -1318,7 +1319,9 @@ function buildExistingProjectInfo(payload: ProjectPayload | null): ExistingProje
     stagesCompleted: completed,
     nextStageIndex: nextIdx,
     updatedAt: proj.updated_at ?? '',
-    projectFile: payload.paths.project_file
+    projectFile: payload.paths.project_file,
+    pipelineId: (proj.pipeline_id as string | undefined) ?? '',
+    runCount: (proj.run_count as number | undefined) ?? 0
   }
 }
 
@@ -3725,8 +3728,14 @@ function floatPaneStyle(paneId: string): Record<string, string> {
 
 // ── Fullscreen PiP floating list ──────────────────────────────────────────────
 const floatPipExpanded = ref(true)
-const floatPipPos = ref({ top: 0, left: 0 })
-const floatPipWidth = ref(220)
+const floatPipPos = ref<{ top: number; left: number }>(
+  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.floatPipPos') ?? ''); if (typeof v?.top === 'number') return v as { top: number; left: number } } catch {} return { top: 0, left: 0 } })()
+)
+const floatPipWidth = ref<number>(
+  (() => { try { return parseInt(localStorage.getItem('agentTeam.floatPipWidth') ?? '220') || 220 } catch { return 220 } })()
+)
+watch(floatPipPos, (v) => { try { localStorage.setItem('agentTeam.floatPipPos', JSON.stringify(v)) } catch {} }, { deep: true })
+watch(floatPipWidth, (v) => { try { localStorage.setItem('agentTeam.floatPipWidth', String(v)) } catch {} })
 const floatPipListMaxHeight = ref(320)
 
 function _pipStageSize(): { sw: number; sh: number } {
@@ -3825,11 +3834,23 @@ const sidebarRowCount = computed(() => {
 
 // ── Grid pane splitters ───────────────────────────────────────────────────────
 const gridRef = ref<HTMLElement | null>(null)
-const colWidths = ref<number[]>([1])
-const rowHeights = ref<number[]>([1])
+const colWidths = ref<number[]>(
+  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.colWidths') ?? ''); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
+)
+const rowHeights = ref<number[]>(
+  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.rowHeights') ?? ''); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
+)
 // Sidebar left column width in pixels (0 = default: fill remaining space)
-const sidebarLeftPx = ref<number>(0)
-const dualFocusSplitPx = ref<number>(0)
+const sidebarLeftPx = ref<number>(
+  (() => { try { return parseInt(localStorage.getItem('agentTeam.sidebarLeftPx') ?? '0') || 0 } catch { return 0 } })()
+)
+const dualFocusSplitPx = ref<number>(
+  (() => { try { return parseInt(localStorage.getItem('agentTeam.dualFocusSplitPx') ?? '0') || 0 } catch { return 0 } })()
+)
+watch(colWidths, (v) => { try { localStorage.setItem('agentTeam.colWidths', JSON.stringify(v)) } catch {} }, { deep: true })
+watch(rowHeights, (v) => { try { localStorage.setItem('agentTeam.rowHeights', JSON.stringify(v)) } catch {} }, { deep: true })
+watch(sidebarLeftPx, (v) => { try { localStorage.setItem('agentTeam.sidebarLeftPx', String(v)) } catch {} })
+watch(dualFocusSplitPx, (v) => { try { localStorage.setItem('agentTeam.dualFocusSplitPx', String(v)) } catch {} })
 
 const numCols = computed(() => {
   const n = panes.value.length
@@ -3857,7 +3878,7 @@ const gridTemplateColumns = computed(() => {
         const l = dualFocusSplitPx.value > 0 ? `${dualFocusSplitPx.value}px` : '1fr'
         return `${l} 1fr 220px`
       }
-      return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 220px` : '1fr 220px'
+      return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 1fr` : '1fr 220px'
     }
     default: {
       const ws = colWidths.value.length === numCols.value ? colWidths.value : Array(numCols.value).fill(1)
@@ -3902,11 +3923,9 @@ const rowHandlePositions = computed<string[]>(() => {
   return hs.slice(0, -1).map(h => { cum += h; return `${(cum / total) * 100}%` })
 })
 
-// Sidebar handle: percentage of grid width where the vertical divider sits
+// Sidebar handle: matches the grid template split exactly — no clientWidth needed.
 const sidebarHandlePos = computed(() => {
-  const gw = gridRef.value?.clientWidth ?? 800
-  const leftPx = sidebarLeftPx.value > 0 ? sidebarLeftPx.value : gw - 220
-  return `${(leftPx / gw) * 100}%`
+  return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px` : 'calc(100% - 220px)'
 })
 
 type GridHandleAxis = 'col' | 'row' | 'sidebar' | 'dual-focus'
@@ -3969,7 +3988,7 @@ function onGridHandleMove(e: MouseEvent): void {
     rowHeights.value = next
   } else if (_gAxis === 'sidebar') {
     const dx = e.clientX - _gStartX
-    sidebarLeftPx.value = Math.max(200, Math.min(_gSize - 100, _gA + dx))
+    sidebarLeftPx.value = Math.max(200, Math.min(_gSize - 140, _gA + dx))
   } else if (_gAxis === 'dual-focus') {
     const dx = e.clientX - _gStartX
     dualFocusSplitPx.value = Math.max(150, Math.min(_gSize - 150, _gA + dx))
@@ -4027,11 +4046,9 @@ const dualFocusSecondaryId = computed<string | null>(
   () => (dualFocusActive.value ? runningPaneIds.value[1] : null)
 )
 const dualFocusHandlePos = computed(() => {
-  const gw = gridRef.value?.clientWidth ?? 800
+  if (dualFocusSplitPx.value > 0) return `${dualFocusSplitPx.value}px`
   const meetingW = effectiveLayoutMode.value === 'sidebar' ? 220 : 0
-  const focusW = gw - meetingW
-  const leftPx = dualFocusSplitPx.value > 0 ? dualFocusSplitPx.value : focusW / 2
-  return `${(leftPx / gw) * 100}%`
+  return meetingW > 0 ? `calc((100% - ${meetingW}px) / 2)` : '50%'
 })
 watch(dualFocusActive, (active) => { if (!active) dualFocusSplitPx.value = 0 })
 
@@ -4671,6 +4688,7 @@ function paneIsCommander(p: ActivePane): boolean {
   overflow-y: auto;
   padding: 8px 6px;
   background: #0d1117;
+  min-width: 140px;
 }
 .meeting-item {
   display: flex;
