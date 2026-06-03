@@ -8,7 +8,7 @@ interface Props {
   title: string
   subtitle?: string
   pipeTag?: string
-  isManager?: boolean
+  isCommander?: boolean
   isFocus?: boolean
   backend: ReturnType<typeof useBackend>
 }
@@ -80,8 +80,8 @@ onMounted(() => {
         :title="displayStatus === 'idle' ? '處理程序仍存活，但 agent 已完成上一輪、停在互動 prompt' : ''"
       >{{ displayStatus }}</span>
     </header>
-    <div v-if="isManager" class="manager-row">
-      <span class="manager-tag" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+    <div v-if="isCommander" class="manager-row">
+      <span class="manager-tag" title="全域指揮官 — 跨階段協調、決定 ---STAGE-DONE---">🎯 指揮官</span>
     </div>
     <div ref="containerRef" class="xterm-host"></div>
   </div>

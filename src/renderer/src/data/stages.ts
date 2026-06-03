@@ -7,7 +7,7 @@ export type AgentKey = 'claude' | 'codex' | 'gemini'
 /**
  * One participant in a multi-agent parallel stage.
  * Each slot is spawned as a separate pane. Either all slots emit the stage
- * sentinel, OR one designated `isManager` slot prints ---STAGE-DONE--- to
+ * sentinel, OR one designated `isCommander` slot prints ---STAGE-DONE--- to
  * advance the pipeline.
  */
 export interface StageSlot {
@@ -17,13 +17,10 @@ export interface StageSlot {
   /** Stage-specific body, without the INTERACTION_PROTOCOL prefix.
    *  Use {{task}} as a placeholder for the pipeline task description. */
   kickoffBody: string
-  /** When true, this slot is the stage's Manager:
-   *  1. First completes its own kickoff_body work
-   *  2. Emits ---MANAGER-READY--- to enter coordination mode
-   *  3. Routes ASK/REPORT from other slots, DISPATCHes back
-   *  4. Emits ---STAGE-DONE--- to advance the pipeline
-   *  At most one Manager per stage (backend enforces; UI also limits). */
-  isManager?: boolean
+  /** When true, this slot is the global Commander for the entire pipeline.
+   *  Configured in the stage editor; frontend derives pipeline.globalManager from it.
+   *  At most one Commander across all stages. */
+  isCommander?: boolean
 }
 
 export interface Stage {
@@ -173,7 +170,7 @@ export function stageDefToFrontend(raw: Record<string, unknown>): Stage {
     roleKey: s.role_key as string,
     label: s.label as string,
     kickoffBody: s.kickoff_body as string,
-    isManager: (s.is_manager ?? false) as boolean,
+    isCommander: (s.is_commander ?? false) as boolean,
   }))
 
   // Backward compat: old format had default_agent + kickoff_prompt instead of slots
@@ -183,7 +180,7 @@ export function stageDefToFrontend(raw: Record<string, unknown>): Stage {
       roleKey: (raw.default_role as string) ?? '',
       label: (raw.short_title as string) ?? 'Agent',
       kickoffBody: (raw.kickoff_prompt as string) ?? '',
-      isManager: false,
+      isCommander: false,
     }]
   }
 
@@ -218,7 +215,7 @@ export function stageToBackend(s: Stage): Record<string, unknown> {
       role_key: slot.roleKey,
       label: slot.label,
       kickoff_body: slot.kickoffBody,
-      is_manager: slot.isManager ?? false,
+      is_commander: slot.isCommander ?? false,
     })),
   }
 }
@@ -237,9 +234,9 @@ export function renderSlotKickoff(
   task: string,
   opts: {
     allowQuestions?: boolean
-    isManager?: boolean
-    hasManager?: boolean
-    managerLabel?: string
+    isCommander?: boolean
+    hasCommander?: boolean
+    commanderLabel?: string
     slotRoster?: { label: string; agentLabel: string; roleLabel: string }[]
   } = {},
 ): string {
@@ -248,10 +245,10 @@ export function renderSlotKickoff(
     task.trim() || '(no task description provided)'
   )
   let protocol: string
-  if (opts.isManager) {
+  if (opts.isCommander) {
     protocol = renderManagerProtocol(opts.slotRoster ?? [])
-  } else if (opts.hasManager && opts.managerLabel) {
-    protocol = renderWorkerProtocol(opts.managerLabel)
+  } else if (opts.hasCommander && opts.commanderLabel) {
+    protocol = renderWorkerProtocol(opts.commanderLabel)
   } else if (opts.allowQuestions) {
     protocol = INTERACTION_PROTOCOL
   } else {

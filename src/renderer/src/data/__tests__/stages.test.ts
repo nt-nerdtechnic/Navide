@@ -51,8 +51,8 @@ describe('stage payload round-trip', () => {
     allowQuestions: false,
     docQuery: 'fastapi',
     slots: [
-      { agentKey: 'codex', roleKey: 'backend', label: 'Backend', kickoffBody: 'do {{task}}', isManager: true },
-      { agentKey: 'claude', roleKey: 'frontend', label: 'Frontend', kickoffBody: 'ui', isManager: false }
+      { agentKey: 'codex', roleKey: 'backend', label: 'Backend', kickoffBody: 'do {{task}}', isCommander: true },
+      { agentKey: 'claude', roleKey: 'frontend', label: 'Frontend', kickoffBody: 'ui', isCommander: false }
     ]
   }
 
@@ -66,7 +66,7 @@ describe('stage payload round-trip', () => {
     expect(backend.short_title).toBe('Build')
     expect(backend.allow_questions).toBe(false)
     expect(backend.doc_query).toBe('fastapi')
-    expect((backend.slots as Record<string, unknown>[])[0].is_manager).toBe(true)
+    expect((backend.slots as Record<string, unknown>[])[0].is_commander).toBe(true)
   })
 
   it('back-compat: a legacy default_agent payload becomes a single slot', () => {
@@ -105,14 +105,14 @@ describe('renderSlotKickoff', () => {
     expect(out).toContain('(no task description provided)')
   })
 
-  it('selects the Manager protocol when isManager', () => {
-    const out = renderSlotKickoff({ ...slot, isManager: true }, 't', { isManager: true })
+  it('selects the Manager protocol when isCommander', () => {
+    const out = renderSlotKickoff({ ...slot, isCommander: true }, 't', { isCommander: true })
     expect(out).toContain('Manager 模式')
     expect(out).toContain(MANAGER_READY_SENTINEL)
   })
 
-  it('selects the Worker protocol when a manager exists', () => {
-    const out = renderSlotKickoff(slot, 't', { hasManager: true, managerLabel: 'Boss' })
+  it('selects the Worker protocol when a commander exists', () => {
+    const out = renderSlotKickoff(slot, 't', { hasCommander: true, commanderLabel: 'Boss' })
     expect(out).toContain('Worker 模式')
     expect(out).toContain('Boss')
   })

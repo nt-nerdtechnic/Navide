@@ -210,7 +210,7 @@ const sSummary = ref('')
 const sExportBusy = ref(false)
 const sImporting = ref(false)
 const sAddingSlot = ref(false)
-const sSlotDraft = ref<StageSlot>({ agentKey: 'claude', roleKey: '', label: '', kickoffBody: '', isManager: false })
+const sSlotDraft = ref<StageSlot>({ agentKey: 'claude', roleKey: '', label: '', kickoffBody: '', isCommander: false })
 
 const sIsDirty = computed(() => {
   if (!sDraft.value) return false
@@ -289,7 +289,7 @@ const sEditingSlotIndex = ref<number | null>(null)
 function sStartAddSlot() {
   sAddingSlot.value = true
   sEditingSlotIndex.value = null
-  sSlotDraft.value = { agentKey: 'claude', roleKey: '', label: '', kickoffBody: '', isManager: false }
+  sSlotDraft.value = { agentKey: 'claude', roleKey: '', label: '', kickoffBody: '', isCommander: false }
 }
 function sCancelAddSlot() { sAddingSlot.value = false; sEditingSlotIndex.value = null }
 async function sConfirmAddSlot() {
@@ -556,7 +556,7 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                   </div>
                   <div class="item-label">
                     {{ s.shortTitle }}
-                    <span v-if="s.slots.some(sl => sl.isManager)" class="manager-badge" :title="`Manager: ${s.slots.find(sl => sl.isManager)?.label}`">🎯</span>
+                    <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`指揮官: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
                   </div>
                   <div class="item-sub">
                     {{ s.slots.length === 1
@@ -601,7 +601,7 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                     <div class="row-g spread">
                       <span class="item-label">
                         {{ slot.label }}
-                        <span v-if="slot.isManager" class="manager-badge">🎯 Manager</span>
+                        <span v-if="slot.isCommander" class="manager-badge">🎯 指揮官</span>
                       </span>
                       <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="最後一個 slot 無法刪除">✕</button>
                     </div>
@@ -624,8 +624,8 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                       </select>
                     </div>
                     <label class="check-row manager-toggle">
-                      <input type="checkbox" v-model="sSlotDraft.isManager" />
-                      <span><strong>🎯 指定為本階段 Manager</strong> — 此 slot 先完成自己的工作後印 <code>---MANAGER-READY---</code>，再開始控場（接收其他 slot 的 ASK/REPORT、發 DISPATCH，最後印 <code>---STAGE-DONE---</code> 收尾）。一階段最多一個 Manager；若多選，後端保留第一個。</span>
+                      <input type="checkbox" v-model="sSlotDraft.isCommander" />
+                      <span><strong>🎯 指定為全域指揮官</strong> — 此 slot 先完成自己的工作後印 <code>---MANAGER-READY---</code>，再跨階段協調（接收所有 slot 的 ASK/REPORT、發 DISPATCH，最後印 <code>---STAGE-DONE---</code> 收尾）。整個 pipeline 只能有一個指揮官。</span>
                     </label>
                     <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                     <div class="row-g gap">
@@ -650,8 +650,8 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                     </select>
                   </div>
                   <label class="check-row manager-toggle">
-                    <input type="checkbox" v-model="sSlotDraft.isManager" />
-                    <span><strong>🎯 指定為本階段 Manager</strong> — 一階段最多一個。</span>
+                    <input type="checkbox" v-model="sSlotDraft.isCommander" />
+                    <span><strong>🎯 指定為全域指揮官</strong> — 整個 pipeline 只能有一個。</span>
                   </label>
                   <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                   <div class="row-g gap">

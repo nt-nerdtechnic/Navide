@@ -27,13 +27,10 @@ class SlotDef:
     role_key: str
     label: str
     kickoff_body: str
-    # When true, this slot acts as the stage's Manager:
-    #   1. First completes its own kickoff_body work
-    #   2. Prints ---MANAGER-READY--- to enter coordination mode
-    #   3. Routes ASK/REPORT from other slots, DISPATCHes back
-    #   4. Prints ---STAGE-DONE--- to advance the pipeline
-    # At most one Manager per stage is supported (extras ignored).
-    is_manager: bool = False
+    # When true, this slot is the global Commander for the entire pipeline.
+    # Configured in the stage editor; derived by the frontend on pipeline start.
+    # At most one Commander across all stages is supported.
+    is_commander: bool = False
 
 
 @dataclass
@@ -68,7 +65,7 @@ def default_stages() -> list[dict[str, Any]]:
                     agent_key="claude",
                     role_key="pm",
                     label="Requirements",
-                    is_manager=True,
+                    is_commander=True,
                     kickoff_body="""[Stage 01 · Requirement Analysis]
 任務：{{task}}
 
@@ -385,8 +382,7 @@ class StagesStore:
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
-    """Strip legacy fields and ensure slots-based format + is_manager defaults."""
-    # Old stage-level Manager fields from the previous (ticker-based) design.
+    """Strip legacy fields and migrate to is_commander format."""
     _LEGACY_STAGE_MANAGER = (
         "manager_enabled", "manager_agent_key", "manager_role_key",
         "manager_tick_seconds", "manager_max_ticks", "manager_prompt_body",
@@ -401,23 +397,14 @@ def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
             "role_key": raw.get("default_role", ""),
             "label": raw.get("short_title", "Agent"),
             "kickoff_body": raw.get("kickoff_prompt", ""),
-            "is_manager": False,
+            "is_commander": False,
         }]
         log.info("Migrated stage '%s' from legacy format to slots", raw.get("id"))
     else:
-        # Backfill is_manager on each slot (defaults to False).
         for s in cleaned.get("slots") or []:
-            s.setdefault("is_manager", False)
-    # Enforce at most one Manager per stage: keep the first, demote the rest.
-    seen_manager = False
-    for s in cleaned.get("slots") or []:
-        if s.get("is_manager"):
-            if seen_manager:
-                log.warning(
-                    "Stage '%s' has multiple is_manager slots — demoting '%s'",
-                    raw.get("id"), s.get("label")
-                )
-                s["is_manager"] = False
+            # Migrate old is_manager → is_commander
+            if "is_manager" in s:
+                s.setdefault("is_commander", s.pop("is_manager"))
             else:
-                seen_manager = True
+                s.setdefault("is_commander", False)
     return cleaned

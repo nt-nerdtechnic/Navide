@@ -26,10 +26,10 @@ export interface ActivePaneView {
   injectionStatus: 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
   kickoffStatus?: 'none' | 'pending' | 'sent' | 'failed'
   origin: 'manual' | 'pipeline'
-  /** True when this pane corresponds to a slot marked is_manager=true in
-   *  the stage config — shown as 🎯 Manager badge in the active-agents list
+  /** True when this pane corresponds to a slot marked is_commander=true in
+   *  the stage config — shown as 🎯 指揮官 badge in the active-agents list
    *  and the pane header. */
-  isManager?: boolean
+  isCommander?: boolean
   /** CLI session id for resume. Claude: pinned at launch; Codex/Gemini: filled
    *  once detected from the session file. Shown so the user can confirm capture. */
   sessionId?: string
@@ -142,7 +142,7 @@ const emit = defineEmits<{
   (e: 'reinject', paneId: string): void
   (e: 'restore', paneId: string): void
   (e: 'maintenance-spawn', payload: MaintenanceSpawnPayload): void
-  (e: 'pipeline-start', payload: { task: string; workspacePath: string; globalManager: { stageId: string; slotLabel: string } | null }): void
+  (e: 'pipeline-start', payload: { task: string; workspacePath: string }): void
   (e: 'pipeline-next'): void
   (e: 'pipeline-abort'): void
   (e: 'pipeline-reset'): void
@@ -413,30 +413,11 @@ function spawn(): void {
   commandOverride.value = ''
 }
 
-// Global Manager selection: "<stageId>/<slotLabel>" or "" for none.
-const selectedManagerKey = ref<string>('')
-
-const managerOptions = computed(() => {
-  const opts: { key: string; label: string }[] = [{ key: '', label: '不指定 Manager' }]
-  for (const s of props.stages) {
-    for (const slot of s.slots ?? []) {
-      opts.push({ key: `${s.id}/${slot.label}`, label: `${s.id} ${s.shortTitle || s.title} · ${slot.label}` })
-    }
-  }
-  return opts
-})
-
 function startPipeline(): void {
   if (!canRunPipeline.value) return
-  let globalManager = null
-  if (selectedManagerKey.value) {
-    const [stageId, ...rest] = selectedManagerKey.value.split('/')
-    globalManager = { stageId, slotLabel: rest.join('/') }
-  }
   emit('pipeline-start', {
     task: taskDescription.value.trim(),
     workspacePath: workspacePath.value.trim(),
-    globalManager
   })
 }
 
@@ -683,14 +664,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           ↻ Retry
         </button>
       </div>
-      <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'">
-        <div class="manager-select-row">
-          <label class="manager-select-label">🎯 全域 Manager</label>
-          <select v-model="selectedManagerKey" class="manager-select">
-            <option v-for="opt in managerOptions" :key="opt.key" :value="opt.key">{{ opt.label }}</option>
-          </select>
-        </div>
-      </div>
       <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
         <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
           ▶ Run pipeline
@@ -778,7 +751,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </div>
       <div v-if="panes.length === 0" class="empty">No agents running.</div>
       <ul v-else class="agent-list">
-        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isManager, minimized: p.isMinimized }">
+        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
           <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
@@ -786,7 +759,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="p.isManager && !p.isMinimized" class="manager-row">
+          <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
             <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
           </div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
@@ -1089,27 +1062,7 @@ textarea:focus {
 .pipeline-row {
   margin-top: 4px;
 }
-.manager-select-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  margin-bottom: 4px;
-}
-.manager-select-label {
-  font-size: 11px;
-  color: #8b949e;
-  white-space: nowrap;
-}
-.manager-select {
-  flex: 1;
-  background: #161b22;
-  border: 1px solid #30363d;
-  color: #c9d1d9;
-  font-size: 11px;
-  padding: 3px 6px;
-  border-radius: 4px;
-}
+
 button {
   border: 1px solid #30363d;
   background: #21262d;

@@ -320,7 +320,7 @@ function syncViews(): void {
       injectionStatus: p.injectionStatus,
       kickoffStatus: p.kickoffStatus,
       origin: p.origin,
-      isManager: paneIsManager(p),
+      isCommander: paneIsCommander(p),
       sessionId: p.pinnedSessionId,
       slotLabel: p.slotLabel,
       isMinimized: minimizedPanes.value.has(p.id)
@@ -1733,7 +1733,7 @@ async function activateStage(index: number): Promise<void> {
   // summaries + file paths for workers, full file roster for the Manager).
   const docPrefix = await fetchDocPrefix(stage.docQuery ?? '')
 
-  const managerSlot: StageSlot | null = stageManagerSlot(stage)
+  const managerSlot: StageSlot | null = stageCommanderSlot(stage)
   const otherSlotsRoster = managerSlot
     ? stage.slots
         .filter((s) => s !== managerSlot)
@@ -1768,9 +1768,9 @@ async function activateStage(index: number): Promise<void> {
         docPrefix + contextHeader +
         renderSlotKickoff(slot, pipeline.task, {
           allowQuestions: stage.allowQuestions,
-          isManager: slot === managerSlot,
-          hasManager: !!managerSlot && slot !== managerSlot,
-          managerLabel: managerSlot?.label,
+          isCommander: slot === managerSlot,
+          hasCommander: !!managerSlot && slot !== managerSlot,
+          commanderLabel: managerSlot?.label,
           slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
         })
       const paneId = await spawnPane({
@@ -1850,9 +1850,9 @@ async function activateStage(index: number): Promise<void> {
       docPrefix + contextHeader +
       renderSlotKickoff(slot, pipeline.task, {
         allowQuestions: stage.allowQuestions,
-        isManager: slot === managerSlot,
-        hasManager: !!managerSlot && slot !== managerSlot,
-        managerLabel: managerSlot?.label,
+        isCommander: slot === managerSlot,
+        hasCommander: !!managerSlot && slot !== managerSlot,
+        commanderLabel: managerSlot?.label,
         slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
       }) +
       sessionMarkerLine(pane.sessionMarker)
@@ -1929,7 +1929,7 @@ async function spawnPipelineStage(index: number): Promise<void> {
   const docPrefix = await fetchDocPrefix(stage.docQuery ?? '')
 
   // Detect Manager designation (at most one per stage; ignored for lone slots).
-  const managerSlot: StageSlot | null = stageManagerSlot(stage)
+  const managerSlot: StageSlot | null = stageCommanderSlot(stage)
   stageCompletions.set(index, { expected: stage.slots.length, done: new Set() })
   pipelineLog(
     `Stage ${stage.id} → ${stage.slots.length} agent(s)` +
@@ -1956,9 +1956,9 @@ async function spawnPipelineStage(index: number): Promise<void> {
       contextHeader +
       renderSlotKickoff(slot, pipeline.task, {
         allowQuestions: stage.allowQuestions,
-        isManager: slot === managerSlot,
-        hasManager: !!managerSlot && slot !== managerSlot,
-        managerLabel: managerSlot?.label,
+        isCommander: slot === managerSlot,
+        hasCommander: !!managerSlot && slot !== managerSlot,
+        commanderLabel: managerSlot?.label,
         slotRoster: slot === managerSlot ? otherSlotsRoster : undefined,
       })
     pipelineLog(
@@ -2004,7 +2004,7 @@ async function spawnPipelineStage(index: number): Promise<void> {
   }
 }
 
-async function onPipelineStart(payload: { task: string; workspacePath: string; globalManager?: GlobalManagerRef | null }): Promise<void> {
+async function onPipelineStart(payload: { task: string; workspacePath: string }): Promise<void> {
   if (!stagesApi.isLoaded.value || stagesApi.stages.value.length === 0) {
     pipelineLog('Pipeline start skipped: stages not loaded yet. Please wait and try again.')
     return
@@ -2013,7 +2013,16 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; g
   pipeline.workspacePath = payload.workspacePath
   pipeline.stageIndex = 0
   pipeline.state = 'running'
-  pipeline.globalManager = payload.globalManager ?? null
+  // Derive global commander from stage config (slot with isCommander=true).
+  let globalManager: GlobalManagerRef | null = null
+  for (const s of stagesApi.stages.value) {
+    const cmdSlot = s.slots.find((sl) => sl.isCommander)
+    if (cmdSlot) {
+      globalManager = { stageId: s.id, slotLabel: cmdSlot.label }
+      break
+    }
+  }
+  pipeline.globalManager = globalManager
   pipeline.log = []
   pipelineLog(`Pipeline started · ${stagesApi.stages.value.length} stages · cwd=${payload.workspacePath}`)
   const stageBlueprint = stagesApi.stages.value.map((s) => ({
@@ -2406,7 +2415,7 @@ function computeStageSlotSignals(stageIndex: number): SlotSignal[] {
 }
 
 // ── Manager-mode router (event-driven, per-stage) ───────────────────────────
-// Set when stage.slots contains an entry with isManager=true. The router
+// Set when stage.slots contains an entry with isCommander=true. The router
 // scans pane buffers for sentinel blocks (ASK/REPORT/DISPATCH/MANAGER-READY/
 // STAGE-DONE) and routes messages between Manager and Worker panes.
 interface PendingMessage {
@@ -3113,7 +3122,7 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
   // Manager mode: when a slot is designated Manager for this stage, sentinel
   // watchers are skipped for ALL panes (Manager + workers). Stage completion
   // is decided by the Manager printing ---STAGE-DONE--- via the router poll.
-  const hasManager = !!stageManagerSlot(stage)
+  const hasManager = !!stageCommanderSlot(stage)
   if (hasManager) {
     const label = panes.value.find((p) => p.id === paneId)?.slotLabel || paneId.slice(0, 8)
     pipelineLog(`Stage ${stage.id} ⏸ slot watcher 跳過 ${label}（Manager 模式）`)
@@ -3982,27 +3991,25 @@ function paneSubtitle(p: ActivePane): string {
   return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel}`
 }
 
-/** The effective Manager slot for a stage, or null. Manager mode only applies
+/** The effective Commander slot for a stage, or null. Commander mode only applies
  *  when a stage has more than one slot — a lone slot has nobody to coordinate,
- *  and entering Manager mode would disable the reliable slot watcher (sentinel
+ *  and entering Commander mode would disable the reliable slot watcher (sentinel
  *  / analyzer / cap), leaving the easily-missed ---STAGE-DONE--- sentinel as
  *  the only way to advance. */
-function stageManagerSlot(stage: { slots: StageSlot[] }): StageSlot | null {
+function stageCommanderSlot(stage: { slots: StageSlot[] }): StageSlot | null {
   if (stage.slots.length <= 1) return null
-  return stage.slots.find((s) => s.isManager) ?? null
+  return stage.slots.find((s) => s.isCommander) ?? null
 }
 
-/** True when this pane is the Manager slot for its stage (renders 🎯 badge).
- *  Uses the raw slot.isManager flag, not stageManagerSlot(), so the badge
- *  shows even for single-slot stages. stageManagerSlot() suppresses the
- *  functional Manager mode for lone slots (watcher would deadlock) but should
- *  not suppress the visual indicator. */
-function paneIsManager(p: ActivePane): boolean {
+/** True when this pane is the Commander slot (renders 🎯 badge).
+ *  Uses the raw slot.isCommander flag, not stageCommanderSlot(), so the badge
+ *  shows even for single-slot stages. */
+function paneIsCommander(p: ActivePane): boolean {
   if (p.origin !== 'pipeline') return false
   const stage = stagesApi.stageById.value[p.stageId]
   if (!stage) return false
   const slot = stage.slots.find((s) => s.label === p.slotLabel)
-  return !!slot?.isManager
+  return !!slot?.isCommander
 }
 </script>
 
@@ -4230,7 +4237,7 @@ function paneIsManager(p: ActivePane): boolean {
           :title="p.agentLabel"
           :subtitle="paneSubtitle(p)"
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
-          :is-manager="paneIsManager(p)"
+          :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
           :backend="backend"
           @set-focus="onSetFocus(p.id)"
