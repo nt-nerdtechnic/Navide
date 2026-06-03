@@ -35,6 +35,11 @@ declare global {
         title?: string
       }) => Promise<{ ok: boolean; path?: string; content?: string; canceled?: boolean; error?: string }>
       readFileFrom: (filePath: string, fromByte: number) => Promise<{ ok: boolean; content: string; newOffset: number }>
+      pickFile: (args?: {
+        title?: string
+        filters?: Array<{ name: string; extensions: string[] }>
+        defaultPath?: string
+      }) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
     }
   }
 }

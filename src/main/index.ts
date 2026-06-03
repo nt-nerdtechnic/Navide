@@ -187,6 +187,27 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle(
+  'dialog:pickFile',
+  async (
+    _event,
+    args?: { title?: string; filters?: Electron.FileFilter[]; defaultPath?: string }
+  ): Promise<{ ok: boolean; path?: string; canceled?: boolean }> => {
+    const opts: Electron.OpenDialogOptions = {
+      title: args?.title ?? 'Select File',
+      properties: ['openFile'],
+      filters: args?.filters ?? [{ name: 'All Files', extensions: ['*'] }],
+    }
+    if (args?.defaultPath) opts.defaultPath = args.defaultPath
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts)
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true }
+    return { ok: true, path: result.filePaths[0] }
+  }
+)
+
 ipcMain.handle('shell:openPath', async (_event, target: string) => {
   if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
   // shell.openPath returns an empty string on success, or an error message.

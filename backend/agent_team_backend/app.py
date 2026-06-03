@@ -959,6 +959,26 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
 
         # -------- analyzer (local LLM / Ollama) --------
+        elif msg_type == "analyzer.detect_llama_cli":
+            import shutil as _shutil
+            candidates = [
+                "llama-completion",
+                "llama-cli",
+                "/opt/homebrew/bin/llama-completion",
+                "/opt/homebrew/bin/llama-cli",
+                "/usr/local/bin/llama-completion",
+                "/usr/local/bin/llama-cli",
+            ]
+            found = []
+            for c in candidates:
+                p = _shutil.which(c) or (c if __import__("os.path", fromlist=["exists"]).exists(c) else None)
+                if p and p not in found:
+                    found.append(p)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {
+                "found": found,
+                "recommended": found[0] if found else None,
+            }))
+
         elif msg_type == "analyzer.settings.get":
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, analyzer_settings_store.get())

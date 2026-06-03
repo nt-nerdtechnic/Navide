@@ -115,6 +115,18 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     }
   }
 
+  async function detectLlamaCli(): Promise<{ found: string[]; recommended: string | null }> {
+    if (backend.status.value !== 'connected') return { found: [], recommended: null }
+    try {
+      const resp = await backend.send<{ found: string[]; recommended: string | null }>(
+        'analyzer.detect_llama_cli', {}
+      )
+      return (resp.ok && resp.payload) ? resp.payload : { found: [], recommended: null }
+    } catch {
+      return { found: [], recommended: null }
+    }
+  }
+
   async function saveSettings(updates: Partial<AnalyzerSettings>): Promise<void> {
     if (backend.status.value !== 'connected') return
     try {
@@ -328,6 +340,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     analyzerSettings,
     refreshSettings,
     saveSettings,
+    detectLlamaCli,
     refreshHealth,
     refreshModels,
     classify,

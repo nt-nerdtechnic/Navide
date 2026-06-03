@@ -29,5 +29,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
   }): Promise<{ ok: boolean; path?: string; content?: string; canceled?: boolean; error?: string }> =>
     ipcRenderer.invoke('dialog:openJson', args),
   readFileFrom: (filePath: string, fromByte: number): Promise<{ ok: boolean; content: string; newOffset: number }> =>
-    ipcRenderer.invoke('fs:readFrom', filePath, fromByte)
+    ipcRenderer.invoke('fs:readFrom', filePath, fromByte),
+  pickFile: (args?: {
+    title?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+    defaultPath?: string
+  }): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
+    ipcRenderer.invoke('dialog:pickFile', args),
 })

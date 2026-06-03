@@ -36,6 +36,34 @@ interface DraftRole {
 // ── Analyzer tab local state ──────────────────────────────────────────────────
 const azPullName = ref('')
 const azRechecking = ref(false)
+const azDetecting = ref(false)
+async function azDetectCli() {
+  azDetecting.value = true
+  const result = await props.analyzerApi.detectLlamaCli()
+  azDetecting.value = false
+  if (result.recommended) {
+    await props.analyzerApi.saveSettings({ llama_cli: result.recommended })
+  }
+}
+async function azPickCli() {
+  const result = await window.agentTeam?.pickFile?.({
+    title: '選擇 llama-cli 執行檔',
+    filters: [{ name: 'Executable', extensions: ['*'] }],
+    defaultPath: '/opt/homebrew/bin',
+  })
+  if (result?.ok && result.path) {
+    await props.analyzerApi.saveSettings({ llama_cli: result.path })
+  }
+}
+async function azPickGguf() {
+  const result = await window.agentTeam?.pickFile?.({
+    title: '選擇 GGUF 模型檔案',
+    filters: [{ name: 'GGUF Model', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
+  })
+  if (result?.ok && result.path) {
+    await props.analyzerApi.saveSettings({ gguf_path: result.path })
+  }
+}
 async function azRecheck() {
   azRechecking.value = true
   await Promise.all([
@@ -783,7 +811,7 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
               <div class="az-subsection">
                 <label class="az-label">llama-cli 執行檔路徑
-                  <span class="az-hint-inline">（留空自動偵測 PATH）</span>
+                  <span class="az-hint-inline">（留空使用 PATH 中的預設值）</span>
                 </label>
                 <div class="az-url-row">
                   <input
@@ -794,11 +822,12 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                     @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
                   />
                   <button
-                    class="az-recheck-btn"
-                    :disabled="azRechecking"
-                    @click="azRecheck"
-                    title="重新偵測"
-                  >{{ azRechecking ? '…' : '↻' }}</button>
+                    class="az-detect-btn"
+                    :disabled="azDetecting"
+                    @click="azDetectCli"
+                    title="自動掃描 PATH 與常見路徑"
+                  >{{ azDetecting ? '…' : '自動偵測' }}</button>
+                  <button class="az-browse-btn" @click="azPickCli" title="瀏覽…">…</button>
                 </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
@@ -813,20 +842,29 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                 <label class="az-label">自訂 GGUF 模型路徑
                   <span class="az-hint-inline">（設定後直接使用此檔案，不透過 Ollama）</span>
                 </label>
-                <input
-                  class="az-input"
-                  type="text"
-                  placeholder="例：/Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
-                  :value="props.analyzerApi.analyzerSettings.value.gguf_path"
-                  @change="props.analyzerApi.saveSettings({ gguf_path: ($event.target as HTMLInputElement).value })"
-                />
+                <div class="az-url-row">
+                  <input
+                    class="az-input"
+                    type="text"
+                    placeholder="例：/Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
+                    :value="props.analyzerApi.analyzerSettings.value.gguf_path"
+                    @change="props.analyzerApi.saveSettings({ gguf_path: ($event.target as HTMLInputElement).value })"
+                  />
+                  <button
+                    class="az-recheck-btn"
+                    :disabled="azRechecking"
+                    @click="azRecheck"
+                    title="重新確認檔案是否存在"
+                  >{{ azRechecking ? '…' : '↻' }}</button>
+                  <button class="az-browse-btn" @click="azPickGguf" title="瀏覽 .gguf 檔案…">…</button>
+                </div>
                 <template v-if="props.analyzerApi.analyzerSettings.value.gguf_path">
-                  <div class="az-status-row" v-if="props.analyzerApi.health.value?.ok">
+                  <div class="az-status-row">
                     <span class="az-status-dot" :class="props.analyzerApi.health.value?.gguf_warning ? 'err' : 'ok'"></span>
-                    <span class="az-version" v-if="!props.analyzerApi.health.value?.gguf_warning">
+                    <span class="az-version" v-if="props.analyzerApi.health.value?.ok && !props.analyzerApi.health.value?.gguf_warning">
                       檔案存在 · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
                     </span>
-                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning }}</span>
+                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? '尚未偵測' }}</span>
                   </div>
                 </template>
                 <div class="az-gguf-hint">
@@ -1466,6 +1504,19 @@ button.ghost:hover:not(:disabled) { background: #21262d; }
 }
 .az-recheck-btn:hover:not(:disabled) { background: #30363d; color: #e6edf3; }
 .az-recheck-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.az-detect-btn {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  font-size: 11px; font-weight: 500; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  flex-shrink: 0; white-space: nowrap; transition: color 0.15s, background 0.15s;
+}
+.az-detect-btn:hover:not(:disabled) { background: #30363d; color: #e6edf3; }
+.az-detect-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.az-browse-btn {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  font-size: 13px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  flex-shrink: 0; transition: color 0.15s, background 0.15s;
+}
+.az-browse-btn:hover { background: #30363d; color: #e6edf3; }
 
 .az-backend-toggle { display: flex; gap: 0; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; width: fit-content; }
 .az-backend-btn {
