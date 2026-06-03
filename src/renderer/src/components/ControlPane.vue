@@ -588,6 +588,48 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         <span class="pg-info">{{ pipelinePage + 1 }} / {{ pipelinePageCount }}</span>
         <button class="ghost pg-btn" :disabled="pipelinePage >= pipelinePageCount - 1" @click="pipelinePage++">›</button>
       </div>
+      <!-- ── Resume card (workspace re-opened with unfinished pipeline) ── -->
+      <template v-if="pipeline.state !== 'running' && existingProject && existingProject.state !== 'idle' && existingProject.nextStageIndex >= 0">
+        <div class="pipeline-running-divider"></div>
+        <div class="resume-card">
+          <div class="resume-head">
+            <strong>↻ Resume existing pipeline</strong>
+            <span class="resume-state" :data-state="existingProject.state">{{ existingProject.state }}</span>
+          </div>
+          <div class="resume-meta">
+            <span>{{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages done</span>
+            <span class="dot">·</span>
+            <span>updated {{ existingProject.updatedAt }}</span>
+          </div>
+          <div v-if="existingProject.taskDescription" class="resume-task">
+            {{ existingProject.taskDescription.length > 200
+              ? existingProject.taskDescription.slice(0, 200) + '…'
+              : existingProject.taskDescription }}
+          </div>
+          <div class="row">
+            <button class="primary wide" @click="emit('pipeline-resume')">
+              ▶ Resume from Stage {{ String(existingProject.nextStageIndex + 1).padStart(2, '0') }}
+            </button>
+            <button
+              class="danger"
+              @click="confirmingRestart = true"
+              title="Discard all stage progress and re-run from Stage 01"
+            >
+              ↺ Start over
+            </button>
+          </div>
+          <div class="row" v-if="existingProject.taskDescription">
+            <button
+              class="ghost wide"
+              @click="emit('pipeline-load-task', existingProject.taskDescription)"
+              title="Copy task into textarea below to edit before a fresh run"
+            >
+              ✎ Load task into editor
+            </button>
+          </div>
+        </div>
+      </template>
+
       <!-- ── Running widget inline ── -->
       <template v-if="pipeline.state !== 'idle'">
         <div class="pipeline-running-divider"></div>

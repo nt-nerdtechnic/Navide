@@ -1365,8 +1365,8 @@ async function onWorkspaceCheck(path: string): Promise<void> {
  *  until the user drives it. Slots without an id fall back to a fresh spawn
  *  (role re-injected), the same as before this feature. */
 async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string): Promise<void> {
-  // Don't restore if a pipeline is already running (user switched workspace mid-run).
-  if (pipeline.state === 'running') return
+  // Don't restore if pipeline is active or paused — panes are already alive.
+  if (pipeline.state === 'running' || pipeline.state === 'aborted') return
   const stages = payload.project?.stages ?? []
   const spawned = stages.flatMap((stage, i) =>
     (stage.slots ?? [])
@@ -2161,6 +2161,9 @@ async function onPipelineAbort(): Promise<void> {
     reason: 'user'
   })
   applyProjectPaths(resp ?? undefined)
+  // Refresh existingProject so the Resume banner appears immediately in the
+  // same session without requiring the user to switch workspaces and back.
+  if (pipeline.workspacePath) await onWorkspaceCheck(pipeline.workspacePath)
 }
 
 async function onPipelineReset(): Promise<void> {
@@ -2282,6 +2285,11 @@ interface StageWatcher {
    *  Lets us scan only new bytes each poll — more reliable than cleanBuffer
    *  which can be truncated or have scanFrom pushed past the sentinel. */
   logFileOffset: number
+  /** Minimum safe scanFrom: set in startStageWatcher by scanning for any
+   *  pre-existing sentinel in the buffer (e.g. old session history replayed
+   *  via `claude resume`). Buffer-cap resets use this instead of 0 to avoid
+   *  re-detecting the sentinel from a previous run. */
+  minScanFrom: number
 }
 
 // Keyed by paneId so multiple parallel agents in the same stage each get
@@ -3137,6 +3145,20 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     ;(pane.recleanBuffer as (() => void) | undefined)?.()
     scanFrom = (pane.markBufferPosition as () => number)()
   }
+
+  // Guard against pre-existing sentinel in the buffer from a previous session
+  // replayed via `claude resume`. Find the last occurrence before scanFrom and
+  // record it as minScanFrom so buffer-cap resets never scan past it backwards.
+  let minScanFrom = 0
+  if (stage.sentinel && scanFrom > 0) {
+    const existingBuf = (pane.cleanBuffer as unknown as string) ?? ''
+    const lastPre = existingBuf.lastIndexOf('\n' + stage.sentinel, scanFrom)
+    if (lastPre >= 0) {
+      minScanFrom = lastPre + 1 + stage.sentinel.length
+      pipelineLog(`Stage ${stage.id} ↩ pre-existing sentinel at ${lastPre} (resume history) — minScanFrom=${minScanFrom}`)
+    }
+  }
+
   const watcher: StageWatcher = {
     paneId,
     stageIndex,
@@ -3150,7 +3172,8 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     analyzerCooldownUntil: 0,
     lastAnalyzedBufferLen: 0,
     lastPollBufLen: 0,
-    logFileOffset: -1  // -1 = not yet initialized; set to current file size on first poll
+    logFileOffset: -1,  // -1 = not yet initialized; set to current file size on first poll
+    minScanFrom
   }
   watchers.set(paneId, watcher)
   paneArmedAt.set(paneId, watcher.armedAt)
@@ -3199,8 +3222,8 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     // practice Stages 01/02 kickoffs are small enough to avoid the cap).
     const CLEAN_BUF_CAP = 128 * 1024  // must match useTerminal.ts BUFFER_CAP
     if (!stage.allowQuestions && buf.length >= CLEAN_BUF_CAP && watcher.scanFrom >= buf.length) {
-      pipelineLog(`Stage ${stage.id} 🔄 buffer-cap trim detected — resetting scanFrom to 0`)
-      watcher.scanFrom = 0
+      pipelineLog(`Stage ${stage.id} 🔄 buffer-cap trim detected — resetting scanFrom to ${watcher.minScanFrom}`)
+      watcher.scanFrom = watcher.minScanFrom
       watcher.lastAnalyzedBufferLen = 0
     }
 
@@ -3700,6 +3723,7 @@ watch(effectiveLayoutMode, () => {
 function floatPaneStyle(paneId: string): Record<string, string> {
   if (effectiveLayoutMode.value !== 'fullscreen') return {}
   if (paneId === effectiveFocusPaneId.value) return {}
+  if (dualFocusActive.value && paneId === dualFocusSecondaryId.value) return {}
   return { display: 'none' }
 }
 
@@ -3809,6 +3833,7 @@ const colWidths = ref<number[]>([1])
 const rowHeights = ref<number[]>([1])
 // Sidebar left column width in pixels (0 = default: fill remaining space)
 const sidebarLeftPx = ref<number>(0)
+const dualFocusSplitPx = ref<number>(0)
 
 const numCols = computed(() => {
   const n = panes.value.length
@@ -3823,9 +3848,21 @@ watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true
 
 const gridTemplateColumns = computed(() => {
   switch (effectiveLayoutMode.value) {
-    case 'spotlight': return '1fr'
-    case 'sidebar':   return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 220px` : '1fr 220px'
-    case 'fullscreen': return '1fr'
+    case 'spotlight':
+    case 'fullscreen': {
+      if (dualFocusActive.value) {
+        const l = dualFocusSplitPx.value > 0 ? `${dualFocusSplitPx.value}px` : '1fr'
+        return `${l} 1fr`
+      }
+      return '1fr'
+    }
+    case 'sidebar': {
+      if (dualFocusActive.value) {
+        const l = dualFocusSplitPx.value > 0 ? `${dualFocusSplitPx.value}px` : '1fr'
+        return `${l} 1fr 220px`
+      }
+      return sidebarLeftPx.value > 0 ? `${sidebarLeftPx.value}px 220px` : '1fr 220px'
+    }
     default: {
       const ws = colWidths.value.length === numCols.value ? colWidths.value : Array(numCols.value).fill(1)
       return ws.map(w => `${w}fr`).join(' ')
@@ -3876,7 +3913,7 @@ const sidebarHandlePos = computed(() => {
   return `${(leftPx / gw) * 100}%`
 })
 
-type GridHandleAxis = 'col' | 'row' | 'sidebar'
+type GridHandleAxis = 'col' | 'row' | 'sidebar' | 'dual-focus'
 let _gAxis: GridHandleAxis | null = null
 let _gIdx = 0
 let _gStartX = 0
@@ -3899,9 +3936,14 @@ function onGridHandleStart(e: MouseEvent, axis: GridHandleAxis, index: number): 
     _gA = rowHeights.value[index] ?? 1
     _gB = rowHeights.value[index + 1] ?? 1
     _gSize = el?.clientHeight ?? 600
-  } else {
+  } else if (axis === 'sidebar') {
     _gA = sidebarLeftPx.value > 0 ? sidebarLeftPx.value : (el?.clientWidth ?? 800) - 220
     _gSize = el?.clientWidth ?? 800
+  } else {
+    const meetingW = effectiveLayoutMode.value === 'sidebar' ? 220 : 0
+    _gSize = (el?.clientWidth ?? 800) - meetingW
+    _gA = dualFocusSplitPx.value > 0 ? dualFocusSplitPx.value : _gSize / 2
+    _gB = 0
   }
   isDragging.value = true
   document.body.style.cursor = axis === 'row' ? 'row-resize' : 'col-resize'
@@ -3929,9 +3971,12 @@ function onGridHandleMove(e: MouseEvent): void {
     next[_gIdx] = newA
     next[_gIdx + 1] = sum - newA
     rowHeights.value = next
-  } else {
+  } else if (_gAxis === 'sidebar') {
     const dx = e.clientX - _gStartX
     sidebarLeftPx.value = Math.max(200, Math.min(_gSize - 100, _gA + dx))
+  } else if (_gAxis === 'dual-focus') {
+    const dx = e.clientX - _gStartX
+    dualFocusSplitPx.value = Math.max(150, Math.min(_gSize - 150, _gA + dx))
   }
 }
 
@@ -3953,6 +3998,51 @@ const effectiveFocusPaneId = computed(() => {
   }
   return panes.value.find((p) => !minimizedPanes.value.has(p.id))?.id ?? null
 })
+
+// ── Dual-focus: show 2 running panes side-by-side in non-grid modes ───────────
+const runningPaneIds = computed(() => {
+  // Only consider pipeline panes that belong to the CURRENT active stage.
+  // Restored panes from completed stages (via claude resume) also show as
+  // 'running' during session replay and must not activate dual-focus.
+  const activeStageId = stagesApi.stages.value[pipeline.stageIndex]?.id ?? ''
+  const running = paneViews.value.filter(
+    (p) =>
+      (p.status === 'running' || p.status === 'starting') &&
+      !minimizedPanes.value.has(p.id) &&
+      p.origin === 'pipeline' &&
+      p.stageId === activeStageId &&
+      pipeline.state === 'running'
+  )
+  if (running.length < 2) return []
+  // Keep focus pane first so it stays in col 1
+  const focusIdx = running.findIndex((p) => p.id === effectiveFocusPaneId.value)
+  if (focusIdx > 0) {
+    const arr = [...running]
+    const [fp] = arr.splice(focusIdx, 1)
+    arr.unshift(fp)
+    return arr.slice(0, 2).map((p) => p.id)
+  }
+  return running.slice(0, 2).map((p) => p.id)
+})
+const dualFocusActive = computed(
+  () => runningPaneIds.value.length >= 2 && effectiveLayoutMode.value !== 'grid'
+)
+const dualFocusSecondaryId = computed<string | null>(
+  () => (dualFocusActive.value ? runningPaneIds.value[1] : null)
+)
+const dualFocusHandlePos = computed(() => {
+  const gw = gridRef.value?.clientWidth ?? 800
+  const meetingW = effectiveLayoutMode.value === 'sidebar' ? 220 : 0
+  const focusW = gw - meetingW
+  const leftPx = dualFocusSplitPx.value > 0 ? dualFocusSplitPx.value : focusW / 2
+  return `${(leftPx / gw) * 100}%`
+})
+watch(dualFocusActive, (active) => { if (!active) dualFocusSplitPx.value = 0 })
+
+function dualFocusStyle(paneId: string): Record<string, string> {
+  if (!dualFocusActive.value || paneId !== dualFocusSecondaryId.value) return {}
+  return { gridColumn: '2', gridRow: '1' }
+}
 
 const backendUrl = computed(() => backend.httpUrl.value)
 
@@ -4224,11 +4314,18 @@ function paneIsCommander(p: ActivePane): boolean {
           :style="{ left: sidebarHandlePos }"
           @mousedown.prevent="onGridHandleStart($event, 'sidebar', 0)"
         />
+        <!-- Dual-focus split handle (non-grid modes, 2 running panes) -->
+        <div
+          v-if="dualFocusActive"
+          class="grid-handle grid-handle-v"
+          :style="{ left: dualFocusHandlePos }"
+          @mousedown.prevent="onGridHandleStart($event, 'dual-focus', 0)"
+        />
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
-          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId)"
-          :style="floatPaneStyle(p.id)"
+          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId)"
+          :style="{ ...floatPaneStyle(p.id), ...dualFocusStyle(p.id) }"
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
           :pane-id="p.id"
@@ -4242,7 +4339,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @minimize="minimizePane(p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
-        <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list">
+        <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
           <div
             v-for="p in paneViews.filter(v => !v.isMinimized)"
             :key="p.id"
