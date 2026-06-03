@@ -357,6 +357,18 @@ function isPipelineRunning(pipelineId: string): boolean {
   return pipelineId === (props.activePipelineId ?? '') && props.pipeline.state === 'running'
 }
 
+// ── Pipeline list pagination ───────────────────────────────────────────────
+const PIPELINE_PAGE_SIZE = 5
+const pipelinePage = ref(0)
+const pipelinePageCount = computed(() =>
+  Math.ceil((props.pipelines?.length ?? 0) / PIPELINE_PAGE_SIZE)
+)
+const pagedPipelines = computed(() => {
+  const start = pipelinePage.value * PIPELINE_PAGE_SIZE
+  return (props.pipelines ?? []).slice(start, start + PIPELINE_PAGE_SIZE)
+})
+watch(() => props.pipelines?.length, () => { pipelinePage.value = 0 })
+
 const previewOpen = ref<boolean>(false)
 const manualSpawnOpen = ref<boolean>(false)
 const pipelineOpen = ref<boolean>(true)
@@ -436,6 +448,7 @@ function startPipeline(): void {
     // Pass the opened pipeline id so App.vue activates it first if it differs from active
     pipelineId: openedPipelineId.value || undefined,
   })
+  backToList()
 }
 
 const statusColor = computed(() => {
@@ -554,9 +567,9 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
     <!-- ── Pipeline list (list view only) ───────────────────────────────── -->
     <section v-if="sidebarView === 'list'" class="block panel-section">
       <label class="lbl">Pipelines</label>
-      <ul v-if="pipelines && pipelines.length" class="pipeline-list">
+      <ul v-if="pipelines && pipelines.length && pipeline.state === 'idle'" class="pipeline-list">
         <li
-          v-for="p in pipelines"
+          v-for="p in pagedPipelines"
           :key="p.id"
           class="pipeline-item"
           :class="{ 'pipeline-active': p.id === activePipelineId }"
@@ -569,7 +582,50 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           </span>
         </li>
       </ul>
-      <p v-else class="hint">尚未載入 pipelines…</p>
+      <p v-else-if="pipeline.state === 'idle'" class="hint">尚未載入 pipelines…</p>
+      <div v-if="pipelinePageCount > 1 && pipeline.state === 'idle'" class="pipeline-pagination">
+        <button class="ghost pg-btn" :disabled="pipelinePage === 0" @click="pipelinePage--">‹</button>
+        <span class="pg-info">{{ pipelinePage + 1 }} / {{ pipelinePageCount }}</span>
+        <button class="ghost pg-btn" :disabled="pipelinePage >= pipelinePageCount - 1" @click="pipelinePage++">›</button>
+      </div>
+      <!-- ── Running widget inline ── -->
+      <template v-if="pipeline.state !== 'idle'">
+        <div class="pipeline-running-divider"></div>
+        <div class="pipeline-running-name">
+          <div class="prn-title">
+            ▶ {{ pipelines?.find(p => p.id === activePipelineId)?.name ?? 'Pipeline' }}
+          </div>
+          <div v-if="pipeline.task" class="prn-task">{{ pipeline.task }}</div>
+          <div class="prn-meta">
+            <span v-if="autoAnswerEnabled" class="prn-auto">🤖 Full auto · {{ analyzerModelLocal }}</span>
+            <span v-else class="prn-manual">手動確認</span>
+          </div>
+        </div>
+        <div v-if="pipeline.state === 'running'" class="pipeline-running">
+          <div class="progress">
+            <div class="bar" :style="{ width: pipelineProgress + '%' }"></div>
+          </div>
+          <div class="pipeline-line">
+            Stage {{ pipeline.stageIndex + 1 }} / {{ pipeline.totalStages }}
+            <span v-if="pipelineCurrentStage" class="muted">· {{ pipelineCurrentStage.shortTitle }}</span>
+          </div>
+          <div class="row pipeline-row">
+            <button class="primary wide" :disabled="!pipelineNextStage" @click="emit('pipeline-next')">
+              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
+            </button>
+            <button class="danger" @click="emit('pipeline-abort')">Abort</button>
+          </div>
+        </div>
+        <p v-else-if="pipeline.state === 'completed'" class="hint ok">
+          ✓ Pipeline completed all stages. Review each pane on the right.
+        </p>
+        <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
+          Pipeline aborted. Agents are kept — Resume to continue, or Reset to clear.
+        </p>
+        <div v-if="pipeline.log.length > 0" ref="pipelineLogRef" class="pipeline-log">
+          <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
+        </div>
+      </template>
     </section>
 
     <!-- ── Pipeline detail header (back + name only) ─────────────────────── -->
@@ -1192,6 +1248,29 @@ button.icon-btn.muted:hover {
   color: #3fb950;
 }
 /* ── Pipeline list styles ──────────────────────────────────────────────────── */
+.pipeline-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pg-btn {
+  padding: 2px 8px;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 28px;
+}
+.pg-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.pg-info {
+  font-size: 11px;
+  color: #8b949e;
+  min-width: 36px;
+  text-align: center;
+}
 .pipeline-list {
   list-style: none;
   margin: 6px 0 0;
@@ -1444,6 +1523,41 @@ button.icon-btn.muted:hover {
   justify-content: flex-end;
   margin-top: 12px;
 }
+.pipeline-running-divider {
+  border-top: 1px solid #21262d;
+  margin: 8px 0;
+}
+.pipeline-running-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.prn-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #3fb950;
+  letter-spacing: 0.02em;
+}
+.prn-task {
+  font-size: 11px;
+  color: #e6edf3;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.prn-meta {
+  font-size: 10px;
+  color: #8b949e;
+}
+.prn-auto {
+  color: #d29922;
+}
+.prn-manual {
+  color: #8b949e;
+}
 .pipeline-running {
   display: flex;
   flex-direction: column;
@@ -1456,9 +1570,36 @@ button.icon-btn.muted:hover {
   overflow: hidden;
 }
 .progress .bar {
+  position: relative;
   height: 100%;
-  background: linear-gradient(90deg, #1f6feb, #3fb950);
-  transition: width 200ms ease;
+  background: linear-gradient(90deg, #1f6feb 0%, #388bfd 40%, #3fb950 100%);
+  background-size: 200% 100%;
+  transition: width 300ms ease;
+  animation: bar-flow 2.5s linear infinite, bar-pulse 2s ease-in-out infinite;
+}
+.progress .bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.25) 50%,
+    transparent 100%
+  );
+  animation: bar-shimmer 1.8s ease-in-out infinite;
+}
+@keyframes bar-flow {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@keyframes bar-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+@keyframes bar-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.82; }
 }
 .pipeline-line {
   font-size: 11px;
