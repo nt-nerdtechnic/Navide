@@ -960,7 +960,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     agentKey: payload.agentKey,
     roleKey: payload.roleKey,
     stageId: payload.stageId,
-    commandOverride: payload.commandOverride,
+    commandOverride: '',
     workspacePath: payload.workspacePath,
     origin: 'manual'
   })
@@ -970,7 +970,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       pane_id: paneId,
       agent: payload.agentKey,
       role: payload.roleKey,
-      command: payload.commandOverride,
+      command: '',
       session_id:
         payload.agentKey === 'claude'
           ? ''

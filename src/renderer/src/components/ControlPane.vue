@@ -44,7 +44,6 @@ export interface SpawnPayload {
   agentKey: string
   roleKey: RoleKey
   stageId: StageId
-  commandOverride: string
   workspacePath: string
 }
 
@@ -330,7 +329,7 @@ async function openPath(p: string): Promise<void> {
 }
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
-const commandOverride = ref<string>('')
+
 // ── Pipeline two-layer navigation ─────────────────────────────────────────────
 const sidebarView = ref<'list' | 'pipeline'>('list')
 const openedPipelineId = ref<string>('')
@@ -429,10 +428,8 @@ function spawn(): void {
     agentKey: pickedAgent.value,
     roleKey: pickedRole.value,
     stageId: '',
-    commandOverride: commandOverride.value.trim(),
     workspacePath: workspacePath.value.trim()
   })
-  commandOverride.value = ''
 }
 
 function startPipeline(): void {
@@ -942,13 +939,6 @@ function onTaskDrop(e: DragEvent): void {
             <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
           </select>
         </div>
-        <input
-          v-model="commandOverride"
-          type="text"
-          :placeholder="`override (default: ${agentSpecs.find((s) => s.agentKey === pickedAgent)?.defaultCommand})`"
-          spellcheck="false"
-          autocorrect="off"
-        />
         <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
         <p v-if="!canSpawn" class="hint warn">
           {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
