@@ -15,9 +15,10 @@ log = logging.getLogger("agent_team_backend.analyzer_settings")
 SETTINGS_FILE = "analyzer_settings.json"
 
 DEFAULTS: dict[str, Any] = {
-    "backend": "llama_cpp",          # "llama_cpp" | "ollama"
+    "backend": "ollama",              # "llama_cpp" | "ollama"
     "ollama_base_url": "http://localhost:11434",
     "llama_cli": "",                  # empty → auto-detect from PATH
+    "gguf_path": "",                  # empty → resolve via Ollama manifest; set to use a local .gguf directly
 }
 
 

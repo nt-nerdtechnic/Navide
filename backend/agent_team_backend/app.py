@@ -83,10 +83,14 @@ def _az_llama_cli() -> str | None:
     v = _az_settings().get("llama_cli", "").strip()
     return v or None
 
+def _az_gguf_path() -> str | None:
+    v = _az_settings().get("gguf_path", "").strip()
+    return v or None
+
 async def analyzer_health() -> dict:
     if _az_is_ollama():
         return await _ollama_health(_az_base_url())
-    return await _llama_health(llama_cli_override=_az_llama_cli())
+    return await _llama_health(llama_cli_override=_az_llama_cli(), gguf_path_override=_az_gguf_path())
 
 async def analyzer_list_models() -> list:
     if _az_is_ollama():
@@ -96,12 +100,16 @@ async def analyzer_list_models() -> list:
 async def analyzer_classify(text: str, model: str) -> dict:
     if _az_is_ollama():
         return await _ollama_classify(text, model=model, base_url=_az_base_url())
-    return await _llama_classify(text, model=model, llama_cli_override=_az_llama_cli())
+    return await _llama_classify(text, model=model,
+                                 llama_cli_override=_az_llama_cli(),
+                                 gguf_path_override=_az_gguf_path())
 
 async def analyzer_auto_answer(questions: list, task: str, stage_title: str, model: str) -> dict:
     if _az_is_ollama():
         return await _ollama_auto_answer(questions, task, stage_title, model=model, base_url=_az_base_url())
-    return await _llama_auto_answer(questions, task, stage_title, model=model, llama_cli_override=_az_llama_cli())
+    return await _llama_auto_answer(questions, task, stage_title, model=model,
+                                    llama_cli_override=_az_llama_cli(),
+                                    gguf_path_override=_az_gguf_path())
 
 async def analyzer_benchmark(progress_cb=None) -> list:
     if _az_is_ollama():
@@ -997,11 +1005,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
 
         elif msg_type == "analyzer.pull":
-            # Stream pull progress via Ollama REST API regardless of inference backend.
+            # Only valid in Ollama mode.
             model_name = payload.get("name", "")
             if not model_name:
                 await session.websocket.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
+                )
+            elif not _az_is_ollama():
+                await session.websocket.send_json(
+                    make_response(msg_id, msg_type, {"ok": False, "error": "pull only available in Ollama mode"})
                 )
             else:
                 async def _pull_bg(name: str = model_name) -> None:
@@ -1021,12 +1033,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 await session.websocket.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
                 )
+            elif not _az_is_ollama():
+                await session.websocket.send_json(
+                    make_response(msg_id, msg_type, {"ok": False, "error": "delete only available in Ollama mode"})
+                )
             else:
                 result = await _ollama_delete_model(model_name, _az_base_url())
                 await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "analyzer.ollama_health":
-            # Health check specifically for Ollama server (used by model management regardless of backend)
             data = await _ollama_health(_az_base_url())
             await session.websocket.send_json(make_response(msg_id, msg_type, data))
 

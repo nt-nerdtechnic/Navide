@@ -523,8 +523,13 @@ async def list_models(base_url: str = "", timeout: float = 5.0) -> list[dict[str
     return models
 
 
-async def health(base_url: str = "", timeout: float = 2.0, llama_cli_override: str | None = None) -> dict[str, Any]:
-    """Check if llama-cli is in PATH and executable."""
+async def health(
+    base_url: str = "",
+    timeout: float = 2.0,
+    llama_cli_override: str | None = None,
+    gguf_path_override: str | None = None,
+) -> dict[str, Any]:
+    """Check if llama-cli is in PATH and executable, and (if set) that the GGUF file exists."""
     cli = llama_cli_override or LLAMA_CLI
     cli_path = shutil.which(cli)
     if not cli_path:
@@ -536,12 +541,21 @@ async def health(base_url: str = "", timeout: float = 2.0, llama_cli_override: s
             stderr=asyncio.subprocess.PIPE,
         )
         stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-        # llama-cli --version writes to stderr on some builds
         raw = (stdout_b or stderr_b).decode("utf-8", errors="replace").strip()
         version = raw.splitlines()[0] if raw else "unknown"
-        return {"ok": True, "version": version, "cli": cli_path}
     except Exception as err:
         return {"ok": False, "error": str(err)}
+
+    result: dict[str, Any] = {"ok": True, "version": version, "cli": cli_path}
+
+    if gguf_path_override:
+        p = Path(gguf_path_override)
+        if not p.exists():
+            result["gguf_warning"] = f"GGUF file not found: {gguf_path_override}"
+        else:
+            result["gguf_size"] = p.stat().st_size
+
+    return result
 
 
 async def classify(
@@ -550,6 +564,7 @@ async def classify(
     base_url: str = "",
     timeout: float = 60.0,
     llama_cli_override: str | None = None,
+    gguf_path_override: str | None = None,
 ) -> dict[str, Any]:
     """Classify the most recent agent output via llama-cli."""
     cleaned = _clean_for_analysis(text)
@@ -560,15 +575,24 @@ async def classify(
         len(snippet), model, snippet,
     )
 
-    # Resolve model name → GGUF path
-    try:
-        gguf_path = _find_gguf_path(model)
-    except FileNotFoundError as err:
-        log.warning("classify: model not found — %s", err)
-        return {
-            "intent": "in_progress", "questions": [], "question": None,
-            "summary": f"(model not found: {err})", "_error": str(err),
-        }
+    # Resolve model name → GGUF path (override takes precedence)
+    if gguf_path_override:
+        gguf_path = Path(gguf_path_override)
+        if not gguf_path.exists():
+            log.warning("classify: gguf_path_override not found — %s", gguf_path_override)
+            return {
+                "intent": "in_progress", "questions": [], "question": None,
+                "summary": f"(GGUF file not found: {gguf_path_override})", "_error": str(gguf_path_override),
+            }
+    else:
+        try:
+            gguf_path = _find_gguf_path(model)
+        except FileNotFoundError as err:
+            log.warning("classify: model not found — %s", err)
+            return {
+                "intent": "in_progress", "questions": [], "question": None,
+                "summary": f"(model not found: {err})", "_error": str(err),
+            }
 
     # Run inference — try GPU first, fall back to CPU if OOM/crash.
     # Multiple Claude Code panes sharing Metal/unified memory can exhaust
@@ -728,6 +752,7 @@ async def auto_answer(
     model: str = DEFAULT_MODEL,
     timeout: float = 60.0,
     llama_cli_override: str | None = None,
+    gguf_path_override: str | None = None,
 ) -> dict[str, Any]:
     """Use LLM to automatically generate answers for agent questions."""
     q_lines: list[str] = []
@@ -744,11 +769,16 @@ async def auto_answer(
         f"問題:\n" + "\n".join(q_lines)
     )
 
-    try:
-        gguf_path = _find_gguf_path(model)
-    except FileNotFoundError as err:
-        log.warning("auto_answer: model not found — %s", err)
-        return {"ok": False, "error": str(err), "answer": "", "answers": []}
+    if gguf_path_override:
+        gguf_path = Path(gguf_path_override)
+        if not gguf_path.exists():
+            return {"ok": False, "error": f"GGUF file not found: {gguf_path_override}", "answer": "", "answers": []}
+    else:
+        try:
+            gguf_path = _find_gguf_path(model)
+        except FileNotFoundError as err:
+            log.warning("auto_answer: model not found — %s", err)
+            return {"ok": False, "error": str(err), "answer": "", "answers": []}
 
     raw: str | None = None
     stats: dict = {"prompt_eval_count": 0, "eval_count": 0, "total_duration_ms": 0}

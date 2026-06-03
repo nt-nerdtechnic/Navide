@@ -16,6 +16,7 @@ export interface AnalyzerSettings {
   backend: AnalyzerBackend
   ollama_base_url: string
   llama_cli: string
+  gguf_path: string
 }
 
 export interface AnalyzerHealth {
@@ -24,6 +25,8 @@ export interface AnalyzerHealth {
   default_model?: string
   backend?: AnalyzerBackend
   error?: string
+  gguf_warning?: string
+  gguf_size?: number
 }
 
 export interface PullProgress {
@@ -99,6 +102,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     backend: 'llama_cpp',
     ollama_base_url: 'http://localhost:11434',
     llama_cli: '',
+    gguf_path: '',
   })
 
   async function refreshSettings(): Promise<void> {
@@ -115,7 +119,13 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     if (backend.status.value !== 'connected') return
     try {
       const resp = await backend.send<AnalyzerSettings>('analyzer.settings.set', updates)
-      if (resp.ok && resp.payload) analyzerSettings.value = resp.payload
+      if (resp.ok && resp.payload) {
+        analyzerSettings.value = resp.payload
+        // Re-check health immediately so the UI reflects the new backend
+        void refreshHealth()
+        void refreshOllamaHealth()
+        void refreshModels()
+      }
     } catch (err) {
       lastError.value = String((err as Error).message ?? err)
     }

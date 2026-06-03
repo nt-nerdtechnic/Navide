@@ -16,9 +16,10 @@ from agent_team_backend.analyzer_settings import AnalyzerSettingsStore, DEFAULTS
 def test_defaults_on_missing_file(tmp_path):
     store = AnalyzerSettingsStore(tmp_path / "settings.json")
     s = store.get()
-    assert s["backend"] == "llama_cpp"
+    assert s["backend"] == "ollama"
     assert s["ollama_base_url"] == "http://localhost:11434"
     assert s["llama_cli"] == ""
+    assert s["gguf_path"] == ""
 
 
 def test_set_backend_ollama(tmp_path):
@@ -52,6 +53,18 @@ def test_unknown_keys_ignored(tmp_path):
     store = AnalyzerSettingsStore(tmp_path / "settings.json")
     result = store.set({"nonexistent_key": "value"})
     assert "nonexistent_key" not in result
+
+
+def test_gguf_path_default_empty(tmp_path):
+    store = AnalyzerSettingsStore(tmp_path / "settings.json")
+    assert store.get()["gguf_path"] == ""
+
+
+def test_gguf_path_set_and_persist(tmp_path):
+    store = AnalyzerSettingsStore(tmp_path / "settings.json")
+    result = store.set({"gguf_path": "/models/qwen2.5.gguf"})
+    assert result["gguf_path"] == "/models/qwen2.5.gguf"
+    assert store.get()["gguf_path"] == "/models/qwen2.5.gguf"
 
 
 def test_atomic_write_creates_file(tmp_path):
@@ -241,3 +254,100 @@ async def test_health_uses_override():
     mock_which.assert_called_with("nonexistent-binary-xyz")
     assert result["ok"] is False
     assert "nonexistent-binary-xyz" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_health_gguf_warning_when_file_missing(tmp_path):
+    """health() should include gguf_warning when custom GGUF file doesn't exist."""
+    from agent_team_backend.analyzer import health
+
+    fake_gguf = str(tmp_path / "nonexistent.gguf")
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"version 9330\n", b""))
+
+    with patch("agent_team_backend.analyzer.shutil.which", return_value="/usr/local/bin/llama-cli"), \
+         patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
+               new_callable=AsyncMock, return_value=mock_proc):
+        result = await health(gguf_path_override=fake_gguf)
+
+    assert result["ok"] is True
+    assert "gguf_warning" in result
+    assert "nonexistent.gguf" in result["gguf_warning"]
+
+
+@pytest.mark.asyncio
+async def test_health_gguf_size_when_file_exists(tmp_path):
+    """health() should include gguf_size when custom GGUF file exists."""
+    from agent_team_backend.analyzer import health
+
+    gguf_file = tmp_path / "model.gguf"
+    gguf_file.write_bytes(b"fake gguf content" * 100)
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"version 9330\n", b""))
+
+    with patch("agent_team_backend.analyzer.shutil.which", return_value="/usr/local/bin/llama-cli"), \
+         patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
+               new_callable=AsyncMock, return_value=mock_proc):
+        result = await health(gguf_path_override=str(gguf_file))
+
+    assert result["ok"] is True
+    assert "gguf_warning" not in result
+    assert result["gguf_size"] > 0
+
+
+@pytest.mark.asyncio
+async def test_classify_uses_gguf_path_override(tmp_path):
+    """classify() should use gguf_path_override directly, skipping _find_gguf_path."""
+    from agent_team_backend.analyzer import classify
+    import asyncio
+
+    gguf_file = tmp_path / "model.gguf"
+    gguf_file.write_bytes(b"x")  # must exist
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(
+        b'{"intent":"completion","questions":[],"summary":"done"}', b""
+    ))
+
+    with patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
+               new_callable=AsyncMock, return_value=mock_proc), \
+         patch("agent_team_backend.analyzer._llama_sem", asyncio.Semaphore(1)), \
+         patch("agent_team_backend.analyzer._find_gguf_path") as mock_find:
+        result = await classify("some text", gguf_path_override=str(gguf_file))
+
+    mock_find.assert_not_called()
+    assert result["intent"] == "completion"
+
+
+@pytest.mark.asyncio
+async def test_classify_gguf_override_missing_file(tmp_path):
+    """classify() should return error when gguf_path_override points to missing file."""
+    from agent_team_backend.analyzer import classify
+
+    missing = str(tmp_path / "missing.gguf")
+    result = await classify("some text", gguf_path_override=missing)
+
+    assert result["intent"] == "in_progress"
+    assert "_error" in result
+    assert "missing.gguf" in result["_error"]
+
+
+@pytest.mark.asyncio
+async def test_routing_passes_gguf_path_to_classify(tmp_path):
+    """app.analyzer_classify should pass gguf_path_override from settings."""
+    store = AnalyzerSettingsStore(tmp_path / "s.json")
+    store.set({"backend": "llama_cpp", "gguf_path": "/custom/model.gguf"})
+
+    from agent_team_backend import app
+    with patch.object(app, "_llama_classify", new_callable=AsyncMock) as mock_llama:
+        mock_llama.return_value = {"intent": "in_progress", "questions": [], "summary": ""}
+        app.analyzer_settings_store = store
+        await app.analyzer_classify("text", "model")
+
+    call_kwargs = mock_llama.call_args.kwargs
+    assert call_kwargs.get("gguf_path_override") == "/custom/model.gguf"

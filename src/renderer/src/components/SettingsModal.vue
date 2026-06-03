@@ -35,6 +35,16 @@ interface DraftRole {
 
 // ── Analyzer tab local state ──────────────────────────────────────────────────
 const azPullName = ref('')
+const azRechecking = ref(false)
+async function azRecheck() {
+  azRechecking.value = true
+  await Promise.all([
+    props.analyzerApi.refreshHealth(),
+    props.analyzerApi.refreshOllamaHealth(),
+    props.analyzerApi.refreshModels(),
+  ])
+  azRechecking.value = false
+}
 async function azDoPull() {
   const name = azPullName.value.trim()
   if (!name) return
@@ -760,13 +770,13 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
             <div class="az-section-title">推論後端</div>
             <div class="az-backend-toggle">
               <button
-                :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp' }]"
-                @click="props.analyzerApi.saveSettings({ backend: 'llama_cpp' })"
-              >llama.cpp</button>
-              <button
                 :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'ollama' }]"
                 @click="props.analyzerApi.saveSettings({ backend: 'ollama' })"
               >Ollama REST</button>
+              <button
+                :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp' }]"
+                @click="props.analyzerApi.saveSettings({ backend: 'llama_cpp' })"
+              >llama.cpp</button>
             </div>
 
             <!-- llama.cpp 特有設定 -->
@@ -775,13 +785,21 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                 <label class="az-label">llama-cli 執行檔路徑
                   <span class="az-hint-inline">（留空自動偵測 PATH）</span>
                 </label>
-                <input
-                  class="az-input"
-                  type="text"
-                  placeholder="例：llama-cli 或 /usr/local/bin/llama-completion"
-                  :value="props.analyzerApi.analyzerSettings.value.llama_cli"
-                  @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
-                />
+                <div class="az-url-row">
+                  <input
+                    class="az-input"
+                    type="text"
+                    placeholder="例：llama-cli 或 /usr/local/bin/llama-completion"
+                    :value="props.analyzerApi.analyzerSettings.value.llama_cli"
+                    @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
+                  />
+                  <button
+                    class="az-recheck-btn"
+                    :disabled="azRechecking"
+                    @click="azRecheck"
+                    title="重新偵測"
+                  >{{ azRechecking ? '…' : '↻' }}</button>
+                </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
@@ -790,59 +808,72 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
                   <span class="az-version offline" v-else>llama-cli 未偵測到</span>
                 </div>
               </div>
+
+              <div class="az-subsection">
+                <label class="az-label">自訂 GGUF 模型路徑
+                  <span class="az-hint-inline">（設定後直接使用此檔案，不透過 Ollama）</span>
+                </label>
+                <input
+                  class="az-input"
+                  type="text"
+                  placeholder="例：/Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
+                  :value="props.analyzerApi.analyzerSettings.value.gguf_path"
+                  @change="props.analyzerApi.saveSettings({ gguf_path: ($event.target as HTMLInputElement).value })"
+                />
+                <template v-if="props.analyzerApi.analyzerSettings.value.gguf_path">
+                  <div class="az-status-row" v-if="props.analyzerApi.health.value?.ok">
+                    <span class="az-status-dot" :class="props.analyzerApi.health.value?.gguf_warning ? 'err' : 'ok'"></span>
+                    <span class="az-version" v-if="!props.analyzerApi.health.value?.gguf_warning">
+                      檔案存在 · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
+                    </span>
+                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning }}</span>
+                  </div>
+                </template>
+                <div class="az-gguf-hint">
+                  從 <a class="az-link" href="https://huggingface.co/models?library=gguf" target="_blank">HuggingFace</a>
+                  下載 <code>.gguf</code> 檔後填入完整路徑。留空則使用模型管理區的 Ollama 模型。
+                </div>
+              </div>
             </template>
 
             <!-- Ollama REST 特有設定 -->
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'">
               <div class="az-subsection">
                 <label class="az-label">推論用 Server URL</label>
-                <input
-                  class="az-input"
-                  type="text"
-                  placeholder="http://localhost:11434"
-                  :value="props.analyzerApi.analyzerSettings.value.ollama_base_url"
-                  @change="props.analyzerApi.saveSettings({ ollama_base_url: ($event.target as HTMLInputElement).value })"
-                />
+                <div class="az-url-row">
+                  <input
+                    class="az-input"
+                    type="text"
+                    placeholder="http://localhost:11434"
+                    :value="props.analyzerApi.analyzerSettings.value.ollama_base_url"
+                    @change="props.analyzerApi.saveSettings({ ollama_base_url: ($event.target as HTMLInputElement).value })"
+                  />
+                  <button
+                    class="az-recheck-btn"
+                    :disabled="azRechecking"
+                    @click="azRecheck"
+                    title="重新偵測連線"
+                  >{{ azRechecking ? '…' : '↻' }}</button>
+                </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
-                    Ollama {{ props.analyzerApi.health.value?.version }}
+                    Ollama {{ props.analyzerApi.health.value?.version }} 已連線
                   </span>
-                  <span class="az-version offline" v-else>Ollama 未連線（推論不可用）</span>
+                  <span class="az-version offline" v-else>
+                    未連線 · 請執行 <code class="az-code">ollama serve</code>
+                  </span>
                 </div>
               </div>
             </template>
           </div>
 
-          <!-- ② 模型管理（兩種模式都顯示，pull/delete 透過 Ollama REST） -->
-          <div class="az-section az-models-section">
+          <!-- ② 模型管理（僅 Ollama 模式顯示） -->
+          <div v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'" class="az-section az-models-section">
             <div class="az-section-header">
               <div class="az-section-title">模型管理</div>
-              <span class="az-section-note">透過 Ollama 下載 · 兩種後端共用</span>
+              <span class="az-section-note">下載 · 刪除本地模型</span>
             </div>
-
-            <!-- llama.cpp 模式時顯示 Ollama 模型管理 URL + 連線狀態 -->
-            <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
-              <div class="az-subsection">
-                <label class="az-label">Ollama Server URL
-                  <span class="az-hint-inline">（僅用於模型下載 / 刪除）</span>
-                </label>
-                <input
-                  class="az-input"
-                  type="text"
-                  placeholder="http://localhost:11434"
-                  :value="props.analyzerApi.analyzerSettings.value.ollama_base_url"
-                  @change="props.analyzerApi.saveSettings({ ollama_base_url: ($event.target as HTMLInputElement).value })"
-                />
-                <div class="az-status-row">
-                  <span class="az-status-dot" :class="props.analyzerApi.ollamaHealth.value?.ok ? 'ok' : 'err'"></span>
-                  <span class="az-version" v-if="props.analyzerApi.ollamaHealth.value?.ok">
-                    Ollama {{ props.analyzerApi.ollamaHealth.value?.version }} 已連線
-                  </span>
-                  <span class="az-version offline" v-else>Ollama 未連線，無法下載 / 刪除模型</span>
-                </div>
-              </div>
-            </template>
 
             <!-- 下載新模型 -->
             <div class="az-pull-row">
@@ -1421,6 +1452,20 @@ button.ghost:hover:not(:disabled) { background: #21262d; }
 .az-status-dot.err { background: #f85149; }
 .az-pct { font-weight: 600; color: #e6edf3; margin-left: 6px; }
 .az-size-info { color: #6e7681; font-size: 11px; margin-left: 4px; }
+.az-gguf-hint { font-size: 11px; color: #6e7681; margin-top: 6px; line-height: 1.5; }
+.az-gguf-hint code { background: #161b22; padding: 1px 4px; border-radius: 3px; color: #e6edf3; }
+.az-link { color: #58a6ff; text-decoration: none; }
+.az-link:hover { text-decoration: underline; }
+.az-code { background: #161b22; padding: 1px 5px; border-radius: 3px; font-size: 11px; color: #e6edf3; font-family: monospace; }
+.az-url-row { display: flex; gap: 6px; align-items: center; }
+.az-url-row .az-input { flex: 1; }
+.az-recheck-btn {
+  background: #21262d; border: 1px solid #30363d; color: #8b949e;
+  font-size: 14px; padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  flex-shrink: 0; transition: color 0.15s, background 0.15s;
+}
+.az-recheck-btn:hover:not(:disabled) { background: #30363d; color: #e6edf3; }
+.az-recheck-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .az-backend-toggle { display: flex; gap: 0; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; width: fit-content; }
 .az-backend-btn {
