@@ -91,18 +91,76 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
-    // macOS terminal keyboard shortcuts xterm.js doesn't handle by default.
-    // !e.shiftKey guard ensures Shift+combos pass through to xterm.js selection.
+    // Anchor for Shift+Arrow keyboard selection
+    let selAnchorX = -1
+    let selAnchorY = -1
+
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
-      // Cmd+Backspace → Ctrl+U (kill to beginning of line)
-      if (e.metaKey && !e.shiftKey && e.key === 'Backspace') { pasteText('\x15'); return false }
-      // Cmd+Left → Ctrl+A (beginning of line)
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft') { pasteText('\x01'); return false }
-      // Cmd+Right → Ctrl+E (end of line)
+      const buf = term.buffer.active
+      const curX = buf.cursorX
+      const curY = buf.baseY + buf.cursorY
+
+      // ── Shift+←/→: extend selection character by character ────────────────
+      if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey &&
+          (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
+        const newX = e.key === 'ArrowLeft' ? Math.max(0, curX - 1) : Math.min(term.cols - 1, curX + 1)
+        const len = Math.abs(selAnchorX - newX)
+        if (len > 0) term.select(Math.min(selAnchorX, newX), selAnchorY, len)
+        else term.clearSelection()
+        pasteText(e.key === 'ArrowLeft' ? '\x1b[D' : '\x1b[C')
+        return false
+      }
+
+      // ── Cmd+Shift+←: select to beginning of line ──────────────────────────
+      if (e.metaKey && e.shiftKey && e.key === 'ArrowLeft') {
+        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
+        if (curX > 0) term.select(0, curY, curX)
+        else term.clearSelection()
+        pasteText('\x01')
+        return false
+      }
+
+      // ── Cmd+Shift+→: select to end of line ────────────────────────────────
+      if (e.metaKey && e.shiftKey && e.key === 'ArrowRight') {
+        if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
+        const line = buf.getLine(curY)
+        const lineEnd = line ? line.translateToString(true).length : term.cols
+        const endX = Math.max(lineEnd, curX)
+        if (endX > curX) term.select(curX, curY, endX - curX)
+        else term.clearSelection()
+        pasteText('\x05')
+        return false
+      }
+
+      // ── Delete/Backspace with active selection: delete the selected region ───
+      if (selAnchorX >= 0 && (e.key === 'Backspace' || e.key === 'Delete') &&
+          !e.metaKey && !e.altKey) {
+        const count = Math.abs(curX - selAnchorX)
+        if (count > 0) {
+          // cursor right of anchor → backspace; cursor left → forward-delete
+          pasteText(curX > selAnchorX ? '\x7f'.repeat(count) : '\x1b[3~'.repeat(count))
+        }
+        selAnchorX = -1; selAnchorY = -1
+        term.clearSelection()
+        return false
+      }
+
+      // ── Clear selection for all other keys (except copy/select-all/etc) ────
+      const keepForCmd = e.metaKey && 'cavz'.includes(e.key.toLowerCase())
+      const isModifierOnly = ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)
+      if (!keepForCmd && !isModifierOnly) {
+        selAnchorX = -1
+        selAnchorY = -1
+        term.clearSelection()
+      }
+
+      // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
+      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { pasteText('\x15'); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { pasteText('\x01'); return false }
       if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { pasteText('\x05'); return false }
-      // Option+Backspace → Ctrl+W (delete word backward)
-      if (e.altKey && !e.shiftKey && e.key === 'Backspace') { pasteText('\x17'); return false }
+      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { pasteText('\x17'); return false }
       return true
     })
     // Make the whole pane click-focusable so the user can type immediately.
