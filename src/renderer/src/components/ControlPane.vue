@@ -506,6 +506,27 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       return '· kickoff: failed'
   }
 }
+
+function dropFilePaths(e: DragEvent): string {
+  return Array.from(e.dataTransfer?.files ?? [])
+    .map(f => (f as File & { path: string }).path)
+    .join(' ')
+}
+
+function onWorkspaceDrop(e: DragEvent): void {
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  if (!files.length) return
+  workspacePath.value = (files[0] as File & { path: string }).path
+}
+
+function onTaskDrop(e: DragEvent): void {
+  const text = dropFilePaths(e)
+  if (!text) return
+  const el = e.target as HTMLTextAreaElement
+  const start = el.selectionStart ?? taskDescription.value.length
+  taskDescription.value =
+    taskDescription.value.slice(0, start) + text + taskDescription.value.slice(start)
+}
 </script>
 
 <template>
@@ -531,6 +552,8 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           placeholder="/absolute/path/to/project"
           spellcheck="false"
           autocorrect="off"
+          @dragover.prevent
+          @drop.prevent="onWorkspaceDrop"
         />
         <button
           class="ghost browse"
@@ -731,6 +754,8 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
         rows="3"
         spellcheck="false"
+        @dragover.prevent
+        @drop.prevent="onTaskDrop"
       ></textarea>
       <label class="checkbox-row">
         <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />

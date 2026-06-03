@@ -65,6 +65,16 @@ function submit(): void {
   emit('answer', buildCombined(), [...answers.value])
 }
 
+function onAnswerDrop(i: number, e: DragEvent): void {
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  if (!files.length) return
+  const paths = files.map(f => (f as File & { path: string }).path).join(' ')
+  const el = e.target as HTMLTextAreaElement
+  const cur = answers.value[i] ?? ''
+  const start = el.selectionStart ?? cur.length
+  setAnswer(i, cur.slice(0, start) + paths + cur.slice(start))
+}
+
 // e.g. "Claude (Architecture)" or just "Claude"
 const headerLabel = computed(() => {
   const base = props.agentLabel || 'Agent'
@@ -141,6 +151,8 @@ const queueBadge = computed(() =>
                 spellcheck="false"
                 @keydown.meta.enter="submit"
                 @keydown.ctrl.enter="submit"
+                @dragover.prevent
+                @drop.prevent="onAnswerDrop(i, $event)"
               ></textarea>
             </template>
           </section>
