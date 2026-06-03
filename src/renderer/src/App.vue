@@ -1516,10 +1516,6 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   }
 }
 
-function onPipelineLoadTask(task: string): void {
-  controlPaneRef.value?.loadTaskIntoTextarea?.(task)
-}
-
 async function onRefreshAnalyzer(): Promise<void> {
   pipelineLog('🧠 refreshing analyzer health + model list')
   const h = await analyzerApi.refreshHealth()
@@ -4132,7 +4128,6 @@ function paneIsCommander(p: ActivePane): boolean {
       @pipeline-reset="onPipelineReset"
       @workspace-check="onWorkspaceCheck"
       @pipeline-resume="onPipelineResume"
-      @pipeline-load-task="onPipelineLoadTask"
       @pipeline-restart="onPipelineRestart"
       @refresh-analyzer="onRefreshAnalyzer"
       @focus-pane="onFocusPane"
