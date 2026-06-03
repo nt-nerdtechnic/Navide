@@ -47,7 +47,7 @@ When a Stage has multiple parallel agents, designate one as **Manager** to coord
 - The Manager dispatches instructions via `---DISPATCH-START---`
 - The Manager decides when to end the Stage with `---STAGE-DONE---`
 
-### 🧠 Local LLM Analyzer (Ollama-powered)
+### 🧠 Local LLM Analyzer
 
 Goes beyond sentinel strings — uses a local LLM to interpret each agent's intent in real time:
 
@@ -56,6 +56,15 @@ Goes beyond sentinel strings — uses a local LLM to interpret each agent's inte
 | `question` | Opens a dialog for the user to answer (or Full Auto answers automatically) |
 | `completion` | Marks the Slot as done, counts toward Stage advancement |
 | `in_progress` | Extends the liveness window, keeps waiting |
+
+Two inference backends are available and can be switched at any time via **Settings → Analyzer**:
+
+| Backend | How it works | When to use |
+|---|---|---|
+| **llama.cpp** (default) | Uses `llama-cli` / `llama-completion` directly against Ollama's GGUF blobs — no daemon required | Lower latency; works without an Ollama server running |
+| **Ollama REST** | Calls `POST /api/generate` on a running Ollama server | Easier setup; Ollama manages GPU memory and concurrency |
+
+Model downloads and deletion are available in **Settings → Analyzer → 模型管理**, regardless of which backend is selected.
 
 ### 📊 Live Token Usage Tracking
 
@@ -120,16 +129,33 @@ All outputs are passed between stages. Claude's Stage 02 design docs automatical
 - `gemini` — [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
 **Local LLM Analyzer (optional, recommended):**
+
+The default backend (`llama.cpp`) requires both Ollama (for model downloads) and the llama.cpp CLI (for inference):
+
+```bash
+brew install ollama llama.cpp   # llama.cpp provides the llama-cli binary
+ollama pull qwen2.5-coder        # downloads the GGUF into ~/.ollama
+```
+
+If your llama.cpp build installs the binary as `llama-cli` instead of `llama-completion`, configure it in **Settings → Analyzer → llama-cli 執行檔路徑** (or set the env var before starting):
+
+```bash
+export LLAMA_CLI=llama-cli
+```
+
+Alternatively, switch to the **Ollama REST** backend in Settings — this only requires a running Ollama server and no llama.cpp installation:
+
 ```bash
 brew install ollama
+ollama serve           # keep running in background
 ollama pull qwen2.5-coder
 ```
 
 ### Install
 
 ```bash
-git clone https://github.com/nt-nerdtechnic/agent-team
-cd agent-team
+git clone https://github.com/nt-nerdtechnic/Agent-Team
+cd Agent-Team
 
 pnpm install
 uv --project backend sync
@@ -165,7 +191,7 @@ This single command starts the Vite dev server, Electron main window, and Python
 | **Continuous Mode** | Auto-advances when a sentinel is detected or the Analyzer judges completion — no manual "Next" needed |
 | **Strict Mode** | Shows a confirmation dialog on Idle/Cap timeout instead of auto-advancing |
 | **Full Auto** | LLM automatically answers agent questions — zero human intervention |
-| **Local Analyzer** | Ollama interprets agent intent in real time, replacing pure sentinel detection |
+| **Local Analyzer** | Local LLM interprets agent intent in real time, replacing pure sentinel detection (configure backend in Settings → Analyzer) |
 
 ### Manual Spawn (Single Run)
 

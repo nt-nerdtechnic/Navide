@@ -10,11 +10,28 @@ export interface AnalyzerModel {
   parameter_size: string
 }
 
+export type AnalyzerBackend = 'llama_cpp' | 'ollama'
+
+export interface AnalyzerSettings {
+  backend: AnalyzerBackend
+  ollama_base_url: string
+  llama_cli: string
+}
+
 export interface AnalyzerHealth {
   ok: boolean
   version?: string
   default_model?: string
+  backend?: AnalyzerBackend
   error?: string
+}
+
+export interface PullProgress {
+  name: string
+  status: string
+  digest?: string
+  total?: number
+  completed?: number
 }
 
 export interface ClassifyQuestion {
@@ -77,11 +94,82 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   const lastError = ref<string>('')
   let lastHealthAt = 0
 
+  // ── Analyzer settings ─────────────────────────────────────────────────────
+  const analyzerSettings = ref<AnalyzerSettings>({
+    backend: 'llama_cpp',
+    ollama_base_url: 'http://localhost:11434',
+    llama_cli: '',
+  })
+
+  async function refreshSettings(): Promise<void> {
+    if (backend.status.value !== 'connected') return
+    try {
+      const resp = await backend.send<AnalyzerSettings>('analyzer.settings.get', {})
+      if (resp.ok && resp.payload) analyzerSettings.value = resp.payload
+    } catch (err) {
+      lastError.value = String((err as Error).message ?? err)
+    }
+  }
+
+  async function saveSettings(updates: Partial<AnalyzerSettings>): Promise<void> {
+    if (backend.status.value !== 'connected') return
+    try {
+      const resp = await backend.send<AnalyzerSettings>('analyzer.settings.set', updates)
+      if (resp.ok && resp.payload) analyzerSettings.value = resp.payload
+    } catch (err) {
+      lastError.value = String((err as Error).message ?? err)
+    }
+  }
+
   // ── Benchmark state (persisted to localStorage) ──────────────────────────
   const _stored = localStorage.getItem(BENCHMARK_STORAGE_KEY)
   const benchmarkResults = ref<BenchmarkModelResult[]>(_stored ? JSON.parse(_stored) : [])
   const benchmarking = ref<boolean>(false)
   const benchmarkProgress = ref<BenchmarkProgress | null>(null)
+
+  // ── Ollama connectivity (for model management, independent of inference backend) ──
+  const ollamaHealth = shallowRef<{ ok: boolean; version?: string; error?: string } | null>(null)
+
+  async function refreshOllamaHealth(): Promise<void> {
+    if (backend.status.value !== 'connected') return
+    try {
+      const resp = await backend.send<{ ok: boolean; version?: string; error?: string }>(
+        'analyzer.ollama_health', {}
+      )
+      if (resp.ok && resp.payload) ollamaHealth.value = resp.payload
+    } catch { /* non-fatal */ }
+  }
+
+  // ── Ollama model management ───────────────────────────────────────────────
+  const pulling = ref<boolean>(false)
+  const pullProgress = ref<PullProgress | null>(null)
+  const pullError = ref<string>('')
+
+  async function pullModel(name: string): Promise<void> {
+    if (backend.status.value !== 'connected') return
+    pulling.value = true
+    pullProgress.value = { name, status: 'starting' }
+    pullError.value = ''
+    try {
+      await backend.send('analyzer.pull', { name }, 10_000)
+    } catch {
+      // progress comes via push events; ignore timeout here
+    }
+  }
+
+  async function deleteModel(name: string): Promise<{ ok: boolean; error?: string }> {
+    if (backend.status.value !== 'connected') return { ok: false, error: 'not connected' }
+    try {
+      const resp = await backend.send<{ ok: boolean; error?: string }>('analyzer.delete', { name })
+      if (resp.ok && resp.payload) {
+        await refreshModels()
+        return resp.payload
+      }
+      return { ok: false, error: resp.error?.message }
+    } catch (err) {
+      return { ok: false, error: String((err as Error).message ?? err) }
+    }
+  }
 
   async function refreshHealth(): Promise<AnalyzerHealth | null> {
     if (backend.status.value !== 'connected') return null
@@ -174,15 +262,31 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     benchmarking.value = false
     benchmarkProgress.value = null
   })
+  backend.on('analyzer.settings_changed', (payload) => {
+    analyzerSettings.value = payload as AnalyzerSettings
+  })
+  backend.on('analyzer.pull_progress', (payload) => {
+    pullProgress.value = payload as PullProgress
+  })
+  backend.on('analyzer.pull_done', (payload) => {
+    const p = payload as { name: string; ok: boolean; error?: string }
+    pulling.value = false
+    pullProgress.value = null
+    if (p.ok) {
+      pullError.value = ''
+      void refreshModels()
+    } else {
+      pullError.value = p.error ?? 'pull failed'
+    }
+  })
 
   async function refreshAll(): Promise<void> {
+    await refreshSettings()
+    await refreshOllamaHealth()
     const h = await refreshHealth()
     if (h?.ok) await refreshModels()
   }
 
-  // Drive a refresh on every WS-connection transition. Also retry every 5s
-  // if we still don't have health (or it's stale) to recover from a backend
-  // restart without a manual page reload.
   watch(
     () => backend.status.value,
     (s) => {
@@ -205,10 +309,15 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
 
   return {
     health,
+    ollamaHealth,
+    refreshOllamaHealth,
     models,
     defaultModel,
     loading,
     lastError,
+    analyzerSettings,
+    refreshSettings,
+    saveSettings,
     refreshHealth,
     refreshModels,
     classify,
@@ -216,5 +325,10 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     benchmarkResults,
     benchmarking,
     benchmarkProgress,
+    pulling,
+    pullProgress,
+    pullError,
+    pullModel,
+    deleteModel,
   }
 }

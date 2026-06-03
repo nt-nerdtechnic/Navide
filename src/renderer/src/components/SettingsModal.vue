@@ -33,6 +33,18 @@ interface DraftRole {
   isNew: boolean; originalKey: string
 }
 
+// ── Analyzer tab local state ──────────────────────────────────────────────────
+const azPullName = ref('')
+async function azDoPull() {
+  const name = azPullName.value.trim()
+  if (!name) return
+  azPullName.value = ''
+  await props.analyzerApi.pullModel(name)
+}
+async function azDoDelete(name: string) {
+  await props.analyzerApi.deleteModel(name)
+}
+
 const rSelectedKey = ref<string | null>(null)
 const rDraft = ref<DraftRole | null>(null)
 const rSaving = ref(false)
@@ -743,90 +755,236 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
         <!-- ── ANALYZER TAB ─────────────────────────────────────────────── -->
         <div v-show="activeTab === 'analyzer'" class="s-body analyzer-body">
 
-          <div class="az-header">
-            <div class="az-info">
-              <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
-                llama-cli {{ props.analyzerApi.health.value?.version }}
-              </span>
-              <span class="az-version offline" v-else>llama-cli 未偵測到</span>
+          <!-- ① 推論後端 -->
+          <div class="az-section">
+            <div class="az-section-title">推論後端</div>
+            <div class="az-backend-toggle">
+              <button
+                :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp' }]"
+                @click="props.analyzerApi.saveSettings({ backend: 'llama_cpp' })"
+              >llama.cpp</button>
+              <button
+                :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'ollama' }]"
+                @click="props.analyzerApi.saveSettings({ backend: 'ollama' })"
+              >Ollama REST</button>
             </div>
-            <button
-              class="az-run-btn"
-              :disabled="props.analyzerApi.benchmarking.value || !props.analyzerApi.health.value?.ok"
-              @click="props.analyzerApi.benchmark()"
-            >
-              {{ props.analyzerApi.benchmarking.value ? '⏳ 偵測中…' : '🧪 執行模型測試' }}
-            </button>
+
+            <!-- llama.cpp 特有設定 -->
+            <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
+              <div class="az-subsection">
+                <label class="az-label">llama-cli 執行檔路徑
+                  <span class="az-hint-inline">（留空自動偵測 PATH）</span>
+                </label>
+                <input
+                  class="az-input"
+                  type="text"
+                  placeholder="例：llama-cli 或 /usr/local/bin/llama-completion"
+                  :value="props.analyzerApi.analyzerSettings.value.llama_cli"
+                  @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
+                />
+                <div class="az-status-row">
+                  <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
+                  <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
+                    llama-cli {{ props.analyzerApi.health.value?.version }}
+                  </span>
+                  <span class="az-version offline" v-else>llama-cli 未偵測到</span>
+                </div>
+              </div>
+            </template>
+
+            <!-- Ollama REST 特有設定 -->
+            <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'">
+              <div class="az-subsection">
+                <label class="az-label">推論用 Server URL</label>
+                <input
+                  class="az-input"
+                  type="text"
+                  placeholder="http://localhost:11434"
+                  :value="props.analyzerApi.analyzerSettings.value.ollama_base_url"
+                  @change="props.analyzerApi.saveSettings({ ollama_base_url: ($event.target as HTMLInputElement).value })"
+                />
+                <div class="az-status-row">
+                  <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
+                  <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
+                    Ollama {{ props.analyzerApi.health.value?.version }}
+                  </span>
+                  <span class="az-version offline" v-else>Ollama 未連線（推論不可用）</span>
+                </div>
+              </div>
+            </template>
           </div>
 
-          <!-- Live progress bar -->
-          <div v-if="props.analyzerApi.benchmarking.value" class="az-progress-wrap">
-            <div v-if="props.analyzerApi.benchmarkProgress.value" class="az-progress-label">
-              <span class="az-spin">⏳</span>
-              測試中：<strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
-              · {{ props.analyzerApi.benchmarkProgress.value.task_id }}
+          <!-- ② 模型管理（兩種模式都顯示，pull/delete 透過 Ollama REST） -->
+          <div class="az-section az-models-section">
+            <div class="az-section-header">
+              <div class="az-section-title">模型管理</div>
+              <span class="az-section-note">透過 Ollama 下載 · 兩種後端共用</span>
             </div>
-            <div v-else class="az-progress-label">準備中…</div>
+
+            <!-- llama.cpp 模式時顯示 Ollama 模型管理 URL + 連線狀態 -->
+            <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
+              <div class="az-subsection">
+                <label class="az-label">Ollama Server URL
+                  <span class="az-hint-inline">（僅用於模型下載 / 刪除）</span>
+                </label>
+                <input
+                  class="az-input"
+                  type="text"
+                  placeholder="http://localhost:11434"
+                  :value="props.analyzerApi.analyzerSettings.value.ollama_base_url"
+                  @change="props.analyzerApi.saveSettings({ ollama_base_url: ($event.target as HTMLInputElement).value })"
+                />
+                <div class="az-status-row">
+                  <span class="az-status-dot" :class="props.analyzerApi.ollamaHealth.value?.ok ? 'ok' : 'err'"></span>
+                  <span class="az-version" v-if="props.analyzerApi.ollamaHealth.value?.ok">
+                    Ollama {{ props.analyzerApi.ollamaHealth.value?.version }} 已連線
+                  </span>
+                  <span class="az-version offline" v-else>Ollama 未連線，無法下載 / 刪除模型</span>
+                </div>
+              </div>
+            </template>
+
+            <!-- 下載新模型 -->
+            <div class="az-pull-row">
+              <input
+                class="az-input az-pull-input"
+                type="text"
+                placeholder="模型名稱，例：qwen2.5-coder、llama3.2、gemma3"
+                v-model="azPullName"
+                @keydown.enter="azDoPull"
+              />
+              <button
+                class="az-run-btn"
+                :disabled="props.analyzerApi.pulling.value || !azPullName.trim()"
+                @click="azDoPull"
+              >
+                {{ props.analyzerApi.pulling.value ? '下載中…' : '⬇ 下載' }}
+              </button>
+            </div>
+
+            <!-- 下載進度 -->
+            <div v-if="props.analyzerApi.pulling.value" class="az-progress-wrap">
+              <div class="az-progress-label">
+                <span class="az-spin">⏳</span>
+                <span>{{ props.analyzerApi.pullProgress.value?.status ?? '連線中…' }}</span>
+                <template v-if="props.analyzerApi.pullProgress.value?.total">
+                  <span class="az-pct">
+                    {{ Math.round((props.analyzerApi.pullProgress.value.completed ?? 0) / props.analyzerApi.pullProgress.value.total * 100) }}%
+                  </span>
+                  <span class="az-size-info">
+                    {{ ((props.analyzerApi.pullProgress.value.completed ?? 0) / 1e9).toFixed(1) }}
+                    / {{ (props.analyzerApi.pullProgress.value.total / 1e9).toFixed(1) }} GB
+                  </span>
+                </template>
+              </div>
+              <div v-if="props.analyzerApi.pullProgress.value?.total" class="az-progress-bar-wrap">
+                <div
+                  class="az-progress-bar"
+                  :style="{ width: Math.round((props.analyzerApi.pullProgress.value.completed ?? 0) / props.analyzerApi.pullProgress.value.total * 100) + '%' }"
+                ></div>
+              </div>
+            </div>
+            <div v-if="props.analyzerApi.pullError.value" class="az-pull-error">
+              ⚠ {{ props.analyzerApi.pullError.value }}
+            </div>
+
+            <!-- 已安裝模型列表 -->
+            <div class="az-model-list">
+              <div v-if="props.analyzerApi.models.value.length === 0" class="az-no-models">
+                尚未偵測到本地模型。請先執行 <code>ollama pull &lt;模型名稱&gt;</code> 或在上方輸入框下載。
+              </div>
+              <div
+                v-for="m in props.analyzerApi.models.value"
+                :key="m.name"
+                class="az-model-row"
+              >
+                <div class="az-model-info">
+                  <span class="az-model-name">{{ m.name }}</span>
+                  <span class="az-model-meta">
+                    {{ m.parameter_size || m.family }}
+                    <template v-if="m.size > 0"> · {{ (m.size / 1e9).toFixed(1) }} GB</template>
+                  </span>
+                </div>
+                <button class="az-del-btn" @click="azDoDelete(m.name)" title="從本地刪除">✕</button>
+              </div>
+            </div>
           </div>
 
-          <!-- Hint when no results yet -->
-          <div v-if="!props.analyzerApi.benchmarking.value && props.analyzerApi.benchmarkResults.value.length === 0" class="az-hint">
-            <p>點擊「執行模型測試」，系統將對所有本地模型跑 4 項標準任務：</p>
-            <ul>
-              <li><strong>T1</strong> 技術棧偵測 — 輸出 JSON <code>{libraries, doc_query}</code></li>
-              <li><strong>T2</strong> 工作區摘要 — 繁體中文一句話摘要</li>
-              <li><strong>T3</strong> 相關性選擇 — 從文件清單挑出最相關項目</li>
-              <li><strong>T4</strong> CLI 意圖解析 — 解析 agent 輸出並提取問題與選項</li>
-            </ul>
-            <p class="az-pass-rule">通過門檻：4 項中至少 3 項 (≥75%)。不合格模型將從 Model 下拉選單隱藏。</p>
-          </div>
-
-          <!-- Results table -->
-          <div v-if="props.analyzerApi.benchmarkResults.value.length > 0" class="az-results">
-            <div class="az-results-summary">
-              通過
-              <strong>{{ props.analyzerApi.benchmarkResults.value.filter(r => r.passed).length }}</strong>
-              /
-              {{ props.analyzerApi.benchmarkResults.value.length }}
-              個模型 · 不合格模型已從 Model 下拉選單移除
+          <!-- ③ 模型測試 (Benchmark) -->
+          <div class="az-section az-benchmark-section">
+            <div class="az-section-header">
+              <div class="az-section-title">模型測試 (Benchmark)</div>
+              <button
+                class="az-run-btn"
+                :disabled="props.analyzerApi.benchmarking.value || !props.analyzerApi.health.value?.ok"
+                @click="props.analyzerApi.benchmark()"
+              >
+                {{ props.analyzerApi.benchmarking.value ? '⏳ 偵測中…' : '🧪 執行測試' }}
+              </button>
             </div>
-            <table class="az-table">
-              <thead>
-                <tr>
-                  <th class="az-th-model">模型</th>
-                  <th v-for="t in ['T1','T2','T3','T4']" :key="t" class="az-th-task">{{ t }}</th>
-                  <th class="az-th-score">總分</th>
-                  <th class="az-th-verdict">判定</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="r in props.analyzerApi.benchmarkResults.value"
-                  :key="r.name"
-                  :class="{ 'az-row-fail': !r.passed }"
-                >
-                  <td class="az-td-model">{{ r.name }}</td>
-                  <td
-                    v-for="tid in ['T1','T2','T3','T4']"
-                    :key="tid"
-                    class="az-td-task"
+
+            <div v-if="props.analyzerApi.benchmarking.value" class="az-progress-wrap">
+              <div v-if="props.analyzerApi.benchmarkProgress.value" class="az-progress-label">
+                <span class="az-spin">⏳</span>
+                測試中：<strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
+                · {{ props.analyzerApi.benchmarkProgress.value.task_id }}
+              </div>
+              <div v-else class="az-progress-label">準備中…</div>
+            </div>
+
+            <div v-if="!props.analyzerApi.benchmarking.value && props.analyzerApi.benchmarkResults.value.length === 0" class="az-hint">
+              <p>對所有本地模型跑 4 項標準任務，判斷哪些模型適合用於 pipeline 意圖判讀：</p>
+              <ul>
+                <li><strong>T1</strong> 技術棧偵測 — 輸出 JSON <code>{libraries, doc_query}</code></li>
+                <li><strong>T2</strong> 工作區摘要 — 繁體中文一句話摘要</li>
+                <li><strong>T3</strong> 相關性選擇 — 從文件清單挑出最相關項目</li>
+                <li><strong>T4</strong> CLI 意圖解析 — 解析 agent 輸出並提取問題與選項</li>
+              </ul>
+              <p class="az-pass-rule">通過門檻：4 項中至少 3 項 (≥75%)。不合格模型將從 Model 下拉選單隱藏。</p>
+            </div>
+
+            <div v-if="props.analyzerApi.benchmarkResults.value.length > 0" class="az-results">
+              <div class="az-results-summary">
+                通過
+                <strong>{{ props.analyzerApi.benchmarkResults.value.filter(r => r.passed).length }}</strong>
+                /
+                {{ props.analyzerApi.benchmarkResults.value.length }}
+                個模型
+              </div>
+              <table class="az-table">
+                <thead>
+                  <tr>
+                    <th class="az-th-model">模型</th>
+                    <th v-for="t in ['T1','T2','T3','T4']" :key="t" class="az-th-task">{{ t }}</th>
+                    <th class="az-th-score">分數</th>
+                    <th class="az-th-verdict">判定</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="r in props.analyzerApi.benchmarkResults.value"
+                    :key="r.name"
+                    :class="{ 'az-row-fail': !r.passed }"
                   >
-                    <template v-if="r.tasks.find(t => t.task_id === tid)">
-                      <span :class="r.tasks.find(t => t.task_id === tid)!.passed ? 'az-pass' : 'az-fail'">
-                        {{ r.tasks.find(t => t.task_id === tid)!.passed ? '✅' : '❌' }}
-                      </span>
-                      <span class="az-elapsed">{{ r.tasks.find(t => t.task_id === tid)!.elapsed_s }}s</span>
-                    </template>
-                    <span v-else class="az-na">—</span>
-                  </td>
-                  <td class="az-td-score">{{ r.score }}/{{ r.tasks.length }}</td>
-                  <td class="az-td-verdict">
-                    <span v-if="r.passed" class="az-badge-pass">合格</span>
-                    <span v-else class="az-badge-fail">排除</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+                    <td class="az-td-model">{{ r.name }}</td>
+                    <td v-for="tid in ['T1','T2','T3','T4']" :key="tid" class="az-td-task">
+                      <template v-if="r.tasks.find(t => t.task_id === tid)">
+                        <span :class="r.tasks.find(t => t.task_id === tid)!.passed ? 'az-pass' : 'az-fail'">
+                          {{ r.tasks.find(t => t.task_id === tid)!.passed ? '✅' : '❌' }}
+                        </span>
+                        <span class="az-elapsed">{{ r.tasks.find(t => t.task_id === tid)!.elapsed_s }}s</span>
+                      </template>
+                      <span v-else class="az-na">—</span>
+                    </td>
+                    <td class="az-td-score">{{ r.score }}/{{ r.tasks.length }}</td>
+                    <td class="az-td-verdict">
+                      <span v-if="r.passed" class="az-badge-pass">合格</span>
+                      <span v-else class="az-badge-fail">排除</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
         </div>
@@ -1248,14 +1406,67 @@ button.ghost:hover:not(:disabled) { background: #21262d; }
 /* ── Analyzer tab ─────────────────────────────────────────────────────────── */
 .analyzer-body { display: flex; flex-direction: column; gap: 0; overflow-y: auto; padding: 0; }
 
-.az-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+.az-section {
   padding: 14px 20px;
   border-bottom: 1px solid #21262d;
   flex-shrink: 0;
 }
+.az-section-title { font-size: 11px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
+.az-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.az-section-header .az-section-title { margin-bottom: 0; }
+.az-section-note { font-size: 10px; color: #6e7681; }
+.az-subsection { margin-top: 12px; }
+.az-status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+.az-status-dot.ok { background: #3fb950; }
+.az-status-dot.err { background: #f85149; }
+.az-pct { font-weight: 600; color: #e6edf3; margin-left: 6px; }
+.az-size-info { color: #6e7681; font-size: 11px; margin-left: 4px; }
+
+.az-backend-toggle { display: flex; gap: 0; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; width: fit-content; }
+.az-backend-btn {
+  background: #161b22; border: none; color: #8b949e; font-size: 12px;
+  padding: 6px 16px; cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.az-backend-btn:hover { background: #21262d; color: #e6edf3; }
+.az-backend-btn.active { background: #1f6feb; color: #fff; font-weight: 600; }
+
+.az-label { display: block; font-size: 11px; color: #8b949e; margin-bottom: 5px; }
+.az-hint-inline { color: #6e7681; font-style: italic; }
+.az-input {
+  width: 100%; box-sizing: border-box;
+  background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+  font-size: 12px; padding: 7px 10px; border-radius: 6px;
+  outline: none; transition: border-color 0.15s;
+}
+.az-input:focus { border-color: #388bfd; }
+.az-status-row { margin-top: 8px; }
+
+.az-pull-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.az-pull-input { flex: 1; margin-bottom: 0; }
+.az-pull-error { font-size: 11px; color: #f85149; margin-top: 6px; }
+
+.az-progress-bar-wrap {
+  height: 4px; background: #21262d; border-radius: 2px; margin-top: 6px; overflow: hidden;
+}
+.az-progress-bar { height: 100%; background: #1f6feb; border-radius: 2px; transition: width 0.3s; }
+
+.az-model-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.az-no-models { font-size: 12px; color: #6e7681; padding: 8px 0; }
+.az-model-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 10px; background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+}
+.az-model-info { display: flex; flex-direction: column; gap: 2px; }
+.az-model-name { font-size: 12px; color: #e6edf3; font-family: monospace; }
+.az-model-meta { font-size: 10px; color: #8b949e; }
+.az-del-btn {
+  background: none; border: none; color: #6e7681; cursor: pointer; font-size: 12px;
+  padding: 2px 6px; border-radius: 4px; transition: color 0.15s, background 0.15s;
+}
+.az-del-btn:hover { color: #f85149; background: #21262d; }
+
+.az-benchmark-section { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0; }
+
 .az-version { font-size: 11px; color: #8b949e; }
 .az-version.offline { color: #f85149; }
 .az-run-btn {

@@ -4,6 +4,10 @@
   "private": true,
   "description": "macOS desktop terminal manager for Claude Code, Codex, and Gemini CLI",
   "main": "out/main/index.js",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

@@ -199,6 +199,7 @@ async def _run_llama_cli(
     temperature: float = 0.1,
     timeout: float = 60.0,
     n_gpu_layers: int | None = None,
+    llama_cli_override: str | None = None,
 ) -> tuple[str, dict]:
     """Spawn llama-cli, return (stdout_text, perf_stats).
 
@@ -213,6 +214,7 @@ async def _run_llama_cli(
     """
     if n_gpu_layers is None:
         n_gpu_layers = N_GPU_LAYERS
+    cli = llama_cli_override or LLAMA_CLI
     async with _llama_sem:
         # Build full ChatML prompt manually — llama-completion's -sys flag does not
         # reliably apply the chat template for all models.
@@ -222,7 +224,7 @@ async def _run_llama_cli(
             f"<|im_start|>assistant\n"
         )
         cmd = [
-            LLAMA_CLI,
+            cli,
             "-m", str(gguf_path),
             "-p", full_prompt,
             "-no-cnv",              # single-shot, no interactive loop
@@ -234,7 +236,7 @@ async def _run_llama_cli(
             # NOTE: do NOT add --log-disable — it suppresses generated text too.
             # Logs go to stderr (we now parse them for token counts).
         ]
-        log.debug("llama-cli spawn: %s -m %s ngl=%d ...", LLAMA_CLI, gguf_path.name, n_gpu_layers)
+        log.debug("llama-cli spawn: %s -m %s ngl=%d ...", cli, gguf_path.name, n_gpu_layers)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.DEVNULL,  # no interactive mode — exit after first response
@@ -521,11 +523,12 @@ async def list_models(base_url: str = "", timeout: float = 5.0) -> list[dict[str
     return models
 
 
-async def health(base_url: str = "", timeout: float = 2.0) -> dict[str, Any]:
+async def health(base_url: str = "", timeout: float = 2.0, llama_cli_override: str | None = None) -> dict[str, Any]:
     """Check if llama-cli is in PATH and executable."""
-    cli_path = shutil.which(LLAMA_CLI)
+    cli = llama_cli_override or LLAMA_CLI
+    cli_path = shutil.which(cli)
     if not cli_path:
-        return {"ok": False, "error": f"'{LLAMA_CLI}' not found in PATH"}
+        return {"ok": False, "error": f"'{cli}' not found in PATH"}
     try:
         proc = await asyncio.create_subprocess_exec(
             cli_path, "--version",
@@ -546,6 +549,7 @@ async def classify(
     model: str = DEFAULT_MODEL,
     base_url: str = "",
     timeout: float = 60.0,
+    llama_cli_override: str | None = None,
 ) -> dict[str, Any]:
     """Classify the most recent agent output via llama-cli."""
     cleaned = _clean_for_analysis(text)
@@ -580,6 +584,7 @@ async def classify(
                 gguf_path=gguf_path,
                 timeout=timeout,
                 n_gpu_layers=attempt_ngl,
+                llama_cli_override=llama_cli_override,
             )
             if attempt_ngl == 0 and N_GPU_LAYERS > 0:
                 log.warning("classify: GPU mode failed, used CPU fallback")
@@ -722,6 +727,7 @@ async def auto_answer(
     stage_title: str,
     model: str = DEFAULT_MODEL,
     timeout: float = 60.0,
+    llama_cli_override: str | None = None,
 ) -> dict[str, Any]:
     """Use LLM to automatically generate answers for agent questions."""
     q_lines: list[str] = []
@@ -756,6 +762,7 @@ async def auto_answer(
                 temperature=0.3,
                 timeout=timeout,
                 n_gpu_layers=attempt_ngl,
+                llama_cli_override=llama_cli_override,
             )
             break
         except Exception as err:

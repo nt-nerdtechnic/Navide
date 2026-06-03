@@ -11,14 +11,24 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from pydantic import ValidationError
 
 from . import __version__
+from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
 from .analyzer import (
-    DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL,
-    classify as analyzer_classify,
-    health as analyzer_health,
-    list_models as analyzer_list_models,
-    auto_answer as analyzer_auto_answer,
-    benchmark as analyzer_benchmark,
+    classify as _llama_classify,
+    health as _llama_health,
+    list_models as _llama_list_models,
+    auto_answer as _llama_auto_answer,
+    benchmark as _llama_benchmark,
 )
+from .analyzer_ollama import (
+    classify as _ollama_classify,
+    health as _ollama_health,
+    list_models as _ollama_list_models,
+    auto_answer as _ollama_auto_answer,
+    benchmark as _ollama_benchmark,
+    pull_model as _ollama_pull_model,
+    delete_model as _ollama_delete_model,
+)
+from .analyzer_settings import AnalyzerSettingsStore
 from .applog import backend_log_path, backend_port_file
 from .claude_hooks import install_hooks as install_claude_hooks
 from .ipc import make_error, make_event, make_response
@@ -56,6 +66,47 @@ tokens_store = TokensStore()
 history_store = HistoryStore()
 mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
+analyzer_settings_store = AnalyzerSettingsStore()
+
+# ─── Analyzer backend routing ────────────────────────────────────────────────
+
+def _az_settings() -> dict:
+    return analyzer_settings_store.get()
+
+def _az_is_ollama() -> bool:
+    return _az_settings().get("backend") == "ollama"
+
+def _az_base_url() -> str:
+    return _az_settings().get("ollama_base_url", "http://localhost:11434")
+
+def _az_llama_cli() -> str | None:
+    v = _az_settings().get("llama_cli", "").strip()
+    return v or None
+
+async def analyzer_health() -> dict:
+    if _az_is_ollama():
+        return await _ollama_health(_az_base_url())
+    return await _llama_health(llama_cli_override=_az_llama_cli())
+
+async def analyzer_list_models() -> list:
+    if _az_is_ollama():
+        return await _ollama_list_models(_az_base_url())
+    return await _llama_list_models()
+
+async def analyzer_classify(text: str, model: str) -> dict:
+    if _az_is_ollama():
+        return await _ollama_classify(text, model=model, base_url=_az_base_url())
+    return await _llama_classify(text, model=model, llama_cli_override=_az_llama_cli())
+
+async def analyzer_auto_answer(questions: list, task: str, stage_title: str, model: str) -> dict:
+    if _az_is_ollama():
+        return await _ollama_auto_answer(questions, task, stage_title, model=model, base_url=_az_base_url())
+    return await _llama_auto_answer(questions, task, stage_title, model=model, llama_cli_override=_az_llama_cli())
+
+async def analyzer_benchmark(progress_cb=None) -> list:
+    if _az_is_ollama():
+        return await _ollama_benchmark(_az_base_url(), progress_cb=progress_cb)
+    return await _llama_benchmark(progress_cb=progress_cb)
 
 # Log readers: one per vendor. Attribution maps log session files to panes.
 _readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader()]
@@ -899,10 +950,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 make_event("stages.changed", {"stages": updated_stages, "reason": "reset"})
             )
 
-        # -------- analyzer (local LLM) --------
+        # -------- analyzer (local LLM / Ollama) --------
+        elif msg_type == "analyzer.settings.get":
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, analyzer_settings_store.get())
+            )
+        elif msg_type == "analyzer.settings.set":
+            updated = analyzer_settings_store.set(payload)
+            await session.websocket.send_json(make_response(msg_id, msg_type, updated))
+            await broadcast(make_event("analyzer.settings_changed", updated))
+
         elif msg_type == "analyzer.health":
             data = await analyzer_health()
             data["default_model"] = ANALYZER_DEFAULT_MODEL
+            data["backend"] = _az_settings().get("backend", "llama_cpp")
             await session.websocket.send_json(make_response(msg_id, msg_type, data))
         elif msg_type == "analyzer.models":
             models = await analyzer_list_models()
@@ -912,24 +973,19 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "analyzer.classify":
             text = payload.get("text", "") or ""
             model = payload.get("model") or ANALYZER_DEFAULT_MODEL
-            result = await analyzer_classify(text, model=model)
+            result = await analyzer_classify(text, model)
             _record_analyzer_tokens(result, payload)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "analyzer.benchmark":
-            # Start benchmark in a background task; stream progress via broadcast.
             async def _benchmark_bg() -> None:
                 async def _on_progress(
                     model: str, task_id: str, passed: bool, elapsed_s: float, score: int
                 ) -> None:
                     await broadcast(make_event("analyzer.benchmark_progress", {
-                        "model": model,
-                        "task_id": task_id,
-                        "passed": passed,
-                        "elapsed_s": elapsed_s,
-                        "score": score,
+                        "model": model, "task_id": task_id,
+                        "passed": passed, "elapsed_s": elapsed_s, "score": score,
                     }))
-
                 try:
                     results = await analyzer_benchmark(progress_cb=_on_progress)
                     await broadcast(make_event("analyzer.benchmark_done", {"results": results}))
@@ -939,6 +995,40 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
             asyncio.create_task(_benchmark_bg())
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
+
+        elif msg_type == "analyzer.pull":
+            # Stream pull progress via Ollama REST API regardless of inference backend.
+            model_name = payload.get("name", "")
+            if not model_name:
+                await session.websocket.send_json(
+                    make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
+                )
+            else:
+                async def _pull_bg(name: str = model_name) -> None:
+                    try:
+                        async for progress in _ollama_pull_model(name, _az_base_url()):
+                            await broadcast(make_event("analyzer.pull_progress", {"name": name, **progress}))
+                        await broadcast(make_event("analyzer.pull_done", {"name": name, "ok": True}))
+                    except Exception as _pull_err:
+                        await broadcast(make_event("analyzer.pull_done", {"name": name, "ok": False, "error": str(_pull_err)}))
+
+                asyncio.create_task(_pull_bg())
+                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
+
+        elif msg_type == "analyzer.delete":
+            model_name = payload.get("name", "")
+            if not model_name:
+                await session.websocket.send_json(
+                    make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
+                )
+            else:
+                result = await _ollama_delete_model(model_name, _az_base_url())
+                await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "analyzer.ollama_health":
+            # Health check specifically for Ollama server (used by model management regardless of backend)
+            data = await _ollama_health(_az_base_url())
+            await session.websocket.send_json(make_response(msg_id, msg_type, data))
 
         # -------- token stats --------
         elif msg_type == "tokens.snapshot":
