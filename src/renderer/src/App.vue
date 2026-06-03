@@ -3620,7 +3620,7 @@ watch(panes, (newPanes, oldPanes) => {
   if (focusPaneId.value && !ids.has(focusPaneId.value)) {
     focusPaneId.value = newPanes[0]?.id ?? null
   }
-  if (layoutMode.value === 'auto' && newPanes.length > (oldPanes?.length ?? 0)) {
+  if (layoutMode.value !== 'grid' && newPanes.length > (oldPanes?.length ?? 0)) {
     focusPaneId.value = newPanes[newPanes.length - 1].id
   }
 })
@@ -3645,7 +3645,7 @@ watch(layoutMode, (mode) => {
     backend.send('project.set_layout_mode', { workspace_path: wp, layout_mode: mode })
   }
   if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
-  if (mode === 'auto') {
+  if (mode !== 'grid') {
     _autoFocusInterval = setInterval(() => {
       // Guard 1: don't override a recent manual click
       if (Date.now() - _lastManualFocusAt < MANUAL_FOCUS_GRACE_MS) return
