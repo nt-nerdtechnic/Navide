@@ -40,6 +40,7 @@ declare global {
         filters?: Array<{ name: string; extensions: string[] }>
         defaultPath?: string
       }) => Promise<{ ok: boolean; path?: string; canceled?: boolean }>
+      getPathForFile: (file: File) => string
     }
   }
 }

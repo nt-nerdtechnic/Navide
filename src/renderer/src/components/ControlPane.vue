@@ -190,6 +190,7 @@ const autoAnswerLocal = computed<boolean>({
 })
 
 const workspacePath = ref<string>('')
+const isTaskDragOver = ref(false)
 // Workspace selected on the Welcome screen flows in here; the user can still
 // edit / re-browse afterwards. Writing it triggers the workspace-check watch
 // below, so picking a workspace auto-detects any existing project.
@@ -507,21 +508,30 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   }
 }
 
-function dropFilePaths(e: DragEvent): string {
-  return Array.from(e.dataTransfer?.files ?? [])
-    .map(f => (f as File & { path: string }).path)
-    .join(' ')
+function extractDropPaths(e: DragEvent): string[] {
+  const dt = e.dataTransfer
+  if (!dt) return []
+  const getPath = window.agentTeam?.getPathForFile
+  if (!getPath) return []
+
+  const sources: File[] = dt.items?.length
+    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
+    : Array.from(dt.files)
+
+  return sources.map(f => getPath(f)).filter(Boolean)
 }
 
 function onWorkspaceDrop(e: DragEvent): void {
-  const files = Array.from(e.dataTransfer?.files ?? [])
-  if (!files.length) return
-  workspacePath.value = (files[0] as File & { path: string }).path
+  const paths = extractDropPaths(e)
+  if (!paths.length) return
+  workspacePath.value = paths[0]
 }
 
 function onTaskDrop(e: DragEvent): void {
-  const text = dropFilePaths(e)
-  if (!text) return
+  isTaskDragOver.value = false
+  const paths = extractDropPaths(e)
+  if (!paths.length) return
+  const text = paths.join(' ')
   const el = e.target as HTMLTextAreaElement
   const start = el.selectionStart ?? taskDescription.value.length
   taskDescription.value =
@@ -751,10 +761,13 @@ function onTaskDrop(e: DragEvent): void {
       <textarea
         v-model="taskDescription"
         :disabled="pipeline.state === 'running'"
+        :class="{ 'drag-over': isTaskDragOver }"
         placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
         rows="3"
         spellcheck="false"
         @dragover.prevent
+        @dragenter.prevent="isTaskDragOver = true"
+        @dragleave="isTaskDragOver = false"
         @drop.prevent="onTaskDrop"
       ></textarea>
       <label class="checkbox-row">
@@ -1107,6 +1120,10 @@ select:focus,
 textarea:focus {
   outline: none;
   border-color: #1f6feb;
+}
+textarea.drag-over {
+  border-color: #388bfd;
+  box-shadow: inset 0 0 0 1px #388bfd, 0 0 0 2px #388bfd44;
 }
 .row {
   display: flex;

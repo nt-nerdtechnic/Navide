@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export interface BackendInfo {
   status: 'starting' | 'ready'
@@ -36,4 +36,5 @@ contextBridge.exposeInMainWorld('agentTeam', {
     defaultPath?: string
   }): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('dialog:pickFile', args),
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 })

@@ -198,6 +198,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
+  function pasteText(text: string): void {
+    if (!sessionId.value) return
+    void backend.send('terminal.input', {
+      terminal_session_id: sessionId.value,
+      data: text
+    })
+  }
+
   async function interrupt(): Promise<void> {
     if (!sessionId.value) return
     await backend.send('terminal.interrupt', { terminal_session_id: sessionId.value })
@@ -247,6 +255,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     kill,
     focus,
     fitTerminal,
+    pasteText,
     status,
     sessionId,
     error,

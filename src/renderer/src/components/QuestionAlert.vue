@@ -65,14 +65,26 @@ function submit(): void {
   emit('answer', buildCombined(), [...answers.value])
 }
 
+function extractDropPaths(e: DragEvent): string[] {
+  const dt = e.dataTransfer
+  if (!dt) return []
+  const getPath = window.agentTeam?.getPathForFile
+  if (!getPath) return []
+
+  const sources: File[] = dt.items?.length
+    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
+    : Array.from(dt.files)
+
+  return sources.map(f => getPath(f)).filter(Boolean)
+}
+
 function onAnswerDrop(i: number, e: DragEvent): void {
-  const files = Array.from(e.dataTransfer?.files ?? [])
-  if (!files.length) return
-  const paths = files.map(f => (f as File & { path: string }).path).join(' ')
+  const paths = extractDropPaths(e)
+  if (!paths.length) return
   const el = e.target as HTMLTextAreaElement
   const cur = answers.value[i] ?? ''
   const start = el.selectionStart ?? cur.length
-  setAnswer(i, cur.slice(0, start) + paths + cur.slice(start))
+  setAnswer(i, cur.slice(0, start) + paths.join(' ') + cur.slice(start))
 }
 
 // e.g. "Claude (Architecture)" or just "Claude"

@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (e: 'minimize'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
+const isDragOver = ref(false)
 
 const terminal = useTerminal(props.paneId, props.backend)
 
@@ -62,6 +63,31 @@ defineExpose({
   fitTerminal: terminal.fitTerminal
 })
 
+function extractDropPaths(e: DragEvent): string[] {
+  const dt = e.dataTransfer
+  if (!dt) return []
+  const getPath = window.agentTeam?.getPathForFile
+  if (!getPath) return []
+
+  // items includes both files and folders; files may be empty for folder drops
+  const sources: File[] = dt.items?.length
+    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
+    : Array.from(dt.files)
+
+  return sources.map(f => getPath(f)).filter(Boolean)
+}
+
+function shellEscape(p: string): string {
+  return `'${p.replace(/'/g, "'\\''")}'`
+}
+
+function onTerminalDrop(e: DragEvent): void {
+  isDragOver.value = false
+  const paths = extractDropPaths(e)
+  if (!paths.length) return
+  terminal.pasteText(paths.map(shellEscape).join(' '))
+}
+
 onMounted(() => {
   if (containerRef.value) terminal.mount(containerRef.value)
 })
@@ -83,7 +109,15 @@ onMounted(() => {
     <div v-if="isCommander" class="manager-row">
       <span class="manager-tag" title="全域指揮官 — 跨階段協調、決定 ---STAGE-DONE---">🎯 指揮官</span>
     </div>
-    <div ref="containerRef" class="xterm-host"></div>
+    <div
+      ref="containerRef"
+      class="xterm-host"
+      :class="{ 'drag-over': isDragOver }"
+      @dragover.prevent
+      @dragenter.prevent="isDragOver = true"
+      @dragleave="isDragOver = false"
+      @drop.prevent="onTerminalDrop"
+    ></div>
   </div>
 </template>
 
@@ -211,5 +245,23 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
   padding: 4px 8px;
+  position: relative;
+  transition: box-shadow 0.1s;
+}
+.xterm-host.drag-over {
+  box-shadow: inset 0 0 0 2px #388bfd;
+}
+.xterm-host.drag-over::after {
+  content: 'Drop to insert path';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(56, 139, 253, 0.12);
+  color: #79c0ff;
+  font-size: 13px;
+  font-family: inherit;
+  pointer-events: none;
 }
 </style>
