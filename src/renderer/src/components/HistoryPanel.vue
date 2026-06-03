@@ -155,7 +155,7 @@ async function openFile(): Promise<void> {
         <span class="ts">{{ fmtTime(e.ts) }}</span>
         <span class="icon">{{ iconFor(e.type) }}</span>
         <span class="summary">{{ e.summary }}</span>
-        <pre v-if="expandedIds.has(e.id)" class="detail">{{ detailJson(e) }}</pre>
+        <pre v-if="expandedIds.has(e.id) && e.detail" class="detail">{{ detailJson(e) }}</pre>
       </div>
     </div>
 

@@ -6,7 +6,7 @@ import { useRecentWorkspaces, type RecentWorkspace } from '../composables/useRec
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 const emit = defineEmits<{ (e: 'select', path: string): void; (e: 'open-settings'): void }>()
 
-const { recent, loaded, error, touch, pin, unpin } = useRecentWorkspaces(props.backend)
+const { recent, loaded, error, touch, pin, unpin, remove } = useRecentWorkspaces(props.backend)
 
 const picking = ref(false)
 
@@ -69,6 +69,11 @@ async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
   if (item.pinned) await unpin(item.path)
   else await pin(item.path)
 }
+
+async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
+  ev.stopPropagation()
+  await remove(item.path)
+}
 </script>
 
 <template>
@@ -122,6 +127,11 @@ async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
               <div class="r-path">{{ item.path }}</div>
               <div v-if="item.last_known_task" class="r-task">"{{ item.last_known_task }}"</div>
             </div>
+            <button
+              class="r-delete"
+              title="Remove from history"
+              @click="removeItem(item, $event)"
+            >✕</button>
           </li>
         </ul>
 
@@ -301,6 +311,24 @@ button:disabled {
   font-size: 12px;
   color: #c9d1d9;
   margin-top: 2px;
+}
+.r-delete {
+  background: transparent;
+  border: none;
+  color: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: center;
+}
+.recent-item:hover .r-delete {
+  color: #6e7681;
+}
+.r-delete:hover {
+  color: #f85149 !important;
+  background: #21262d;
 }
 .w-empty {
   color: #8b949e;

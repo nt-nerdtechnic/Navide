@@ -877,6 +877,16 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 make_event("workspace.recent_changed", {"recent": recent, "reason": "unpin"})
             )
 
+        elif msg_type == "workspace.remove":
+            recent_workspaces_store.remove(payload["path"])
+            recent = recent_workspaces_store.list()
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"recent": recent})
+            )
+            await broadcast(
+                make_event("workspace.recent_changed", {"recent": recent, "reason": "remove"})
+            )
+
         # -------- roles registry --------
         elif msg_type == "roles.list":
             await session.websocket.send_json(

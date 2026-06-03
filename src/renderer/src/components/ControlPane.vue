@@ -155,7 +155,6 @@ const emit = defineEmits<{
   (e: 'refresh-analyzer'): void
   (e: 'workspace-check', path: string): void
   (e: 'pipeline-resume'): void
-  (e: 'pipeline-load-task', task: string): void
   (e: 'pipeline-restart', payload: { task: string; workspacePath: string }): void
   (e: 'focus-pane', paneId: string): void
   (e: 'open-settings'): void
@@ -300,14 +299,7 @@ watch(
   }
 )
 
-// If the parent loaded an existing task description (e.g. on Resume click),
-// reflect it into the local textarea.
-function loadTaskIntoTextarea(t: string): void {
-  if (t && taskDescription.value.trim() === '') {
-    taskDescription.value = t
-  }
-}
-defineExpose({ loadTaskIntoTextarea, openPipelineDetail })
+defineExpose({ openPipelineDetail })
 
 function shortPath(p: string): string {
   if (!p) return ''
@@ -618,15 +610,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
               ↺ Start over
             </button>
           </div>
-          <div class="row" v-if="existingProject.taskDescription">
-            <button
-              class="ghost wide"
-              @click="emit('pipeline-load-task', existingProject.taskDescription)"
-              title="Copy task into textarea below to edit before a fresh run"
-            >
-              ✎ Load task into editor
-            </button>
-          </div>
         </div>
       </template>
 
@@ -719,15 +702,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             title="Discard all stage progress and re-run from Stage 01"
           >
             ↺ Start over
-          </button>
-        </div>
-        <div class="row" v-if="existingProject.taskDescription">
-          <button
-            class="ghost wide"
-            @click="emit('pipeline-load-task', existingProject.taskDescription)"
-            title="Copy task into textarea below to edit before a fresh run"
-          >
-            ✎ Load task into editor
           </button>
         </div>
       </div>

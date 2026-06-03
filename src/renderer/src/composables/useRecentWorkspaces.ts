@@ -84,6 +84,16 @@ export function useRecentWorkspaces(backend: ReturnType<typeof useBackend>) {
     return true
   }
 
+  async function remove(p: string): Promise<boolean> {
+    const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.remove', { path: p })
+    if (!resp.ok || !resp.payload) {
+      error.value = resp.error?.message ?? 'remove failed'
+      return false
+    }
+    recent.value = resp.payload.recent
+    return true
+  }
+
   // Keep the cache in sync across windows.
   unsubChanged = backend.on('workspace.recent_changed', (raw) => {
     const payload = raw as { recent: RecentWorkspace[] }
@@ -111,5 +121,5 @@ export function useRecentWorkspaces(backend: ReturnType<typeof useBackend>) {
     unsubBackend?.()
   })
 
-  return { recent, path, loaded, loading, error, refresh, touch, pin, unpin }
+  return { recent, path, loaded, loading, error, refresh, touch, pin, unpin, remove }
 }
