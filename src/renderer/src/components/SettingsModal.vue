@@ -1093,7 +1093,7 @@ async function plDelete(id: string, name: string) {
           <template v-else>
             <!-- Detail header: back + pipeline name (inline rename) + actions -->
             <div class="pl-detail-header">
-              <button class="ghost" @click="plBackToList">← 返回</button>
+              <button class="pl-back-btn" @click="plBackToList">← 返回</button>
               <!-- Inline rename mode -->
               <template v-if="plRenamingId === plEditingId">
                 <input v-model="plRenameText" class="pl-input pl-rename" autofocus
@@ -1119,7 +1119,7 @@ async function plDelete(id: string, name: string) {
                 </button>
                 <span v-if="plEditingId === pipelinesApi?.activePipelineId.value" class="pl-badge active">預設</span>
                 <button v-if="plEditingId !== pipelinesApi?.activePipelineId.value"
-                  class="ghost tiny" :disabled="plBusy" @click="plSetActive(plEditingId)">
+                  class="pl-set-default-btn" :disabled="plBusy" @click="plSetActive(plEditingId)">
                   ✓ 設為預設
                 </button>
                 <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
@@ -1848,38 +1848,53 @@ button.ghost:hover:not(:disabled) { background: #21262d; }
 .pl-name { font-size: 13px; font-weight: 600; color: #e6edf3; flex: 1; }
 .pl-active .pl-name { color: #79c0ff; }
 .pl-meta { font-size: 11px; color: #6e7681; }
-.pl-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
-.pl-badge.active { background: #1a2e1a; color: #3fb950; border: 1px solid #2ea04355; }
+.pl-badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; letter-spacing: 0.02em; }
+.pl-badge.active { background: rgba(63,185,80,0.12); color: #3fb950; border: 1px solid rgba(46,160,67,0.45); }
 .pl-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pl-summary { font-size: 12px; color: #3fb950; }
 .pl-enter { color: #6e7681; font-size: 14px; }
 .pl-item:hover .pl-enter { color: #e6edf3; }
 .pl-item { cursor: pointer; }
-.pl-run-btn {
+.pl-back-btn {
   display: inline-flex; align-items: center; gap: 4px;
-  background: #1a2e1a; border: 1px solid #2ea04355; border-radius: 5px;
-  color: #3fb950; font-size: 12px; font-weight: 600;
-  padding: 4px 10px; cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  background: transparent; border: 1px solid #30363d; border-radius: 6px;
+  color: #8b949e; font-size: 12px; padding: 4px 10px; cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.pl-run-btn:hover { background: #1f3d1f; border-color: #3fb950; }
+.pl-back-btn:hover { color: #e6edf3; background: #21262d; border-color: #484f58; }
+.pl-set-default-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: transparent; border: 1px solid #30363d; border-radius: 6px;
+  color: #8b949e; font-size: 12px; padding: 4px 10px; cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.pl-set-default-btn:hover:not(:disabled) { color: #3fb950; background: rgba(63,185,80,0.08); border-color: rgba(63,185,80,0.35); }
+.pl-set-default-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pl-run-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(35,134,54,0.9); border: 1px solid #3fb950; border-radius: 6px;
+  color: #fff; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 5px 14px; cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.pl-run-btn:hover { background: #2ea043; border-color: #56d364; box-shadow: 0 0 0 3px rgba(63,185,80,0.18); }
 .pl-delete-icon {
-  background: none; border: none; cursor: pointer;
-  color: #6e7681; font-size: 14px; padding: 2px 4px; border-radius: 3px;
-  opacity: 0.45; transition: opacity 0.1s, color 0.1s;
+  background: none; border: 1px solid transparent; cursor: pointer;
+  color: #6e7681; font-size: 14px; padding: 4px 6px; border-radius: 5px;
+  opacity: 0.55; transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
 }
-.pl-delete-icon:hover:not(:disabled) { opacity: 1; color: #f85149; }
+.pl-delete-icon:hover:not(:disabled) { opacity: 1; color: #f85149; background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.2); }
 .pl-delete-icon:disabled { opacity: 0.2; cursor: not-allowed; }
 .pl-detail-header {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding-bottom: 10px; border-bottom: 1px solid #21262d; margin-bottom: 6px;
+  padding: 4px 0 12px; border-bottom: 1px solid #21262d; margin-bottom: 6px; min-height: 36px;
 }
 .pl-detail-title { font-size: 15px; font-weight: 600; color: #79c0ff; margin: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
 .pl-rename-icon {
-  background: none; border: none; cursor: pointer; color: #6e7681;
-  font-size: 13px; padding: 1px 3px; border-radius: 3px; line-height: 1;
-  opacity: 0.6; transition: opacity 0.1s;
+  background: none; border: none; cursor: pointer; color: #8b949e;
+  font-size: 13px; padding: 2px 5px; border-radius: 4px; line-height: 1;
+  opacity: 0.75; transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
 .pl-rename-icon:hover { opacity: 1; color: #e6edf3; background: #21262d; }
-.pl-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.pl-detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
 </style>
