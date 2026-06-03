@@ -6,7 +6,6 @@ import ControlPane, {
   type AgentSpec,
   type ActivePaneView,
   type SpawnPayload,
-  type MaintenanceSpawnPayload,
   type PipelineState,
   type PipelineStatusView,
   type ExistingProjectInfo,
@@ -21,6 +20,7 @@ import Welcome from './components/Welcome.vue'
 import { useBackend } from './composables/useBackend'
 import { useRoles } from './composables/useRoles'
 import { useStages } from './composables/useStages'
+import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import type { RoleKey } from './data/roles'
 import {
@@ -44,7 +44,8 @@ import { buildResumeCommand } from './lib/resume-command'
 
 const backend = useBackend()
 const rolesApi = useRoles(backend)
-const stagesApi = useStages(backend)
+const pipelinesApi = usePipelines(backend)
+const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
 
 // --- Workspace-first entry gate (phase-4) ------------------------------------
@@ -978,28 +979,6 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
   }
 }
 
-async function onMaintenanceSpawn(payload: MaintenanceSpawnPayload): Promise<void> {
-  const paneId = await spawnPane({
-    agentKey: payload.agentKey,
-    roleKey: payload.roleKey,
-    stageId: '',
-    commandOverride: '',
-    workspacePath: payload.workspacePath,
-    origin: 'manual'
-  })
-  if (!paneId) return
-  // Wait for role injection to finish, then inject the task as kickoff
-  const ROLE_WAIT_MS = 60_000
-  const t0 = Date.now()
-  const pane = panes.value.find((p) => p.id === paneId)
-  while (pane && (pane.injectionStatus === 'pending' || pane.injectionStatus === 'scheduled') && Date.now() - t0 < ROLE_WAIT_MS) {
-    await sleep(500)
-  }
-  if (!paneAlive(paneId)) return
-  if (payload.task) {
-    await injectPane(paneId, payload.task, 'maintenance-task', false)
-  }
-}
 
 /**
  * User-triggered analysis: ignore cooldown / idle / chars-grown requirements
@@ -1249,6 +1228,7 @@ interface ProjectPayload {
     manual_panes?: ProjectManualPane[]
     updated_at?: string
     layout_mode?: string
+    pipeline_id?: string
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
@@ -1305,7 +1285,7 @@ let workspaceCheckSeq = 0
 function detectMode(payload: ProjectPayload | null): WorkspaceMode {
   const proj = payload?.project
   if (!proj) return 'spawn'
-  if (proj.state === 'completed') return 'maintenance'
+  if (proj.state === 'completed') return 'completed'
   if (proj.state === 'running' || (proj.task_description ?? '').trim()) return 'pipeline'
   return 'spawn'
 }
@@ -1362,6 +1342,14 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       layoutMode.value = savedMode
     } else {
       layoutMode.value = 'grid'
+    }
+    // Decision 8: project.pipeline_id takes priority — sync global active pipeline.
+    const savedPipelineId = resp.project.pipeline_id as string | undefined
+    if (savedPipelineId && pipelinesApi.pipelines.value.some((p) => p.id === savedPipelineId)) {
+      if (savedPipelineId !== pipelinesApi.activePipelineId.value) {
+        await pipelinesApi.setActivePipeline(savedPipelineId)
+        await stagesApi.refresh()
+      }
     }
     await restoreWorkspacePanes(resp, path)
   }
@@ -2004,7 +1992,13 @@ async function spawnPipelineStage(index: number): Promise<void> {
   }
 }
 
-async function onPipelineStart(payload: { task: string; workspacePath: string }): Promise<void> {
+async function onPipelineStart(payload: { task: string; workspacePath: string; pipelineId?: string }): Promise<void> {
+  // If a specific pipeline was requested and it's not currently active, switch first.
+  if (payload.pipelineId && payload.pipelineId !== pipelinesApi.activePipelineId.value) {
+    await pipelinesApi.setActivePipeline(payload.pipelineId, payload.workspacePath)
+    // Reload stages for the newly-active pipeline before running.
+    await stagesApi.refresh()
+  }
   if (!stagesApi.isLoaded.value || stagesApi.stages.value.length === 0) {
     pipelineLog('Pipeline start skipped: stages not loaded yet. Please wait and try again.')
     return
@@ -2035,7 +2029,8 @@ async function onPipelineStart(payload: { task: string; workspacePath: string })
     workspace_path: payload.workspacePath,
     task_description: payload.task,
     total_stages: stagesApi.stages.value.length,
-    stage_blueprint: stageBlueprint
+    stage_blueprint: stageBlueprint,
+    pipeline_id: pipelinesApi.activePipelineId.value,
   })
   applyProjectPaths(resp ?? undefined)
   if (resp?.paths) {
@@ -2134,7 +2129,7 @@ async function onPipelineNext(): Promise<void> {
     await waitForStagePanesSettled(currentIndex)
     stopGlobalManagerRouter()
     pipeline.state = 'completed'
-    currentMode.value = 'maintenance'
+    currentMode.value = 'completed'
     pipelineLog('🎉 Pipeline completed all stages')
     const resp = await sendQuiet<ProjectPayload>('pipeline.complete', {
       workspace_path: pipeline.workspacePath
@@ -4029,6 +4024,8 @@ function paneIsCommander(p: ActivePane): boolean {
       :mode="currentMode"
       :layout-mode="layoutMode"
       :analyzer-status="analyzerStatus"
+      :pipelines="pipelinesApi.pipelines.value"
+      :active-pipeline-id="pipelinesApi.activePipelineId.value"
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
       v-model:auto-answer-enabled="autoAnswerEnabled"
@@ -4039,7 +4036,6 @@ function paneIsCommander(p: ActivePane): boolean {
       @reinject="onReinject"
       @restore="restorePane"
       @update:layout-mode="layoutMode = $event"
-      @maintenance-spawn="onMaintenanceSpawn"
       @pipeline-start="onPipelineStart"
       @pipeline-next="onPipelineNext"
       @pipeline-abort="onPipelineAbort"
@@ -4109,7 +4105,9 @@ function paneIsCommander(p: ActivePane): boolean {
       :roles-api="rolesApi"
       :stages-api="stagesApi"
       :analyzer-api="analyzerApi"
+      :pipelines-api="pipelinesApi"
       @close="showSettings = false"
+      @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
     />
     <Teleport v-if="showHistory" to="body">
       <div class="history-overlay" @click.self="showHistory = false">

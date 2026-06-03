@@ -1,8 +1,7 @@
 """Persistent pipeline stage registry.
 
-Stages live in a single JSON file under the macOS app-data dir so users can
-edit them from the Stage Manager window without recompiling the renderer.
-Defaults are seeded on first load.
+Pipelines live in pipelines.json under the macOS app-data dir. Each pipeline
+has a name, a builtin flag, and an embedded list of stages.
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,8 @@ from .applog import app_data_dir
 
 log = logging.getLogger("agent_team_backend.stages")
 
-STAGES_FILE = "stages.json"
+PIPELINES_FILE = "pipelines.json"
+STAGES_FILE = "stages.json"  # legacy — only used for migration detection
 
 
 @dataclass
@@ -27,9 +28,6 @@ class SlotDef:
     role_key: str
     label: str
     kickoff_body: str
-    # When true, this slot is the global Commander for the entire pipeline.
-    # Configured in the stage editor; derived by the frontend on pipeline start.
-    # At most one Commander across all stages is supported.
     is_commander: bool = False
 
 
@@ -47,8 +45,20 @@ class StageDef:
     doc_query: str = ""
 
 
+@dataclass
+class PipelineDef:
+    id: str
+    name: str
+    builtin: bool = False
+    stages: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _stage_to_dict(s: StageDef) -> dict[str, Any]:
+    return asdict(s)
+
+
 def default_stages() -> list[dict[str, Any]]:
-    """Seed set — every stage is slots-based."""
+    """Seed set — the default 5-stage SDLC pipeline."""
     stages = [
         StageDef(
             id="01",
@@ -292,13 +302,102 @@ sentinel 輸出規則：最後一行只有 ---TEST-DONE---
     return [_stage_to_dict(s) for s in stages]
 
 
-def _stage_to_dict(s: StageDef) -> dict[str, Any]:
-    return asdict(s)
+def default_maintenance_stages() -> list[dict[str, Any]]:
+    """Seed set — the 3-stage maintenance pipeline."""
+    stages = [
+        StageDef(
+            id="m01",
+            title="M01 重現 & 定位",
+            short_title="定位",
+            question="問題在哪？",
+            description="確認問題可重現、找到根因（程式碼位置 / 邏輯錯誤 / 設定錯誤）。",
+            recommended_roles=["qa", "backend"],
+            allow_questions=True,
+            doc_query="debugging, root cause analysis, reproduction steps, error logs",
+            sentinel="---LOCATE-DONE---",
+            slots=[
+                SlotDef(
+                    agent_key="claude",
+                    role_key="qa",
+                    label="Locate",
+                    is_commander=True,
+                    kickoff_body="""[維護 M01 · 重現 & 定位]
+任務：{{task}}
+
+你是資深工程師，負責找出此次維護任務的根本原因。請：
+1. 描述問題的可重現步驟（若資訊不足，用 QUESTION 向使用者確認）。
+2. 分析可能的根因（程式碼、邏輯、設定、資料）。
+3. 列出你找到的問題位置（檔案:行號 或模組名稱）。
+4. 提出修復方向（不需實作，只需說明策略）。
+
+sentinel 輸出規則：最後一行只有 ---LOCATE-DONE---
+完成後，最後一行只輸出 ---LOCATE-DONE---。""",
+                ),
+            ],
+        ),
+        StageDef(
+            id="m02",
+            title="M02 修復",
+            short_title="修復",
+            question="怎麼改？",
+            description="依 M01 定位結果，實作最小有效修復，不引入額外副作用。",
+            recommended_roles=["backend", "frontend"],
+            allow_questions=False,
+            doc_query="bug fix, patch, minimal change, regression prevention",
+            sentinel="---FIX-DONE---",
+            slots=[
+                SlotDef(
+                    agent_key="claude",
+                    role_key="backend",
+                    label="Fix",
+                    kickoff_body="""[維護 M02 · 修復]
+任務脈絡：{{task}}
+
+依前一階段（M01）的定位結果（前置階段產出已附在最前面，請先閱讀），實作修復：
+1. 最小有效 diff — 只動必要的程式碼。
+2. 說明每個修改的理由（為什麼這樣改而不是別的方式）。
+3. 列出可能的副作用與已採取的防護措施。
+
+sentinel 輸出規則：最後一行只有 ---FIX-DONE---
+完成後，最後一行只輸出 ---FIX-DONE---。""",
+                ),
+            ],
+        ),
+        StageDef(
+            id="m03",
+            title="M03 測試驗證",
+            short_title="驗證",
+            question="修好了嗎？",
+            description="驗證修復有效、無回歸，輸出測試報告。",
+            recommended_roles=["qa"],
+            allow_questions=False,
+            doc_query="regression testing, verification, unit tests, smoke tests",
+            sentinel="---VERIFY-DONE---",
+            slots=[
+                SlotDef(
+                    agent_key="claude",
+                    role_key="qa",
+                    label="Verify",
+                    kickoff_body="""[維護 M03 · 測試驗證]
+任務脈絡：{{task}}
+
+依前兩階段的定位與修復成果（前置階段產出已附在最前面，請先閱讀），驗證：
+1. 修復有效（問題不再重現的步驟說明）。
+2. 沒有引入新的 regression（需列出已測試的相關功能）。
+3. 輸出簡潔的測試報告（通過 / 失敗 / 待確認）。
+
+sentinel 輸出規則：最後一行只有 ---VERIFY-DONE---
+完成後，最後一行只輸出 ---VERIFY-DONE---。""",
+                ),
+            ],
+        ),
+    ]
+    return [_stage_to_dict(s) for s in stages]
 
 
 class StagesStore:
     def __init__(self, path: Path | None = None) -> None:
-        self._path = path or (app_data_dir() / STAGES_FILE)
+        self._path = path or (app_data_dir() / PIPELINES_FILE)
 
     @property
     def path(self) -> Path:
@@ -307,78 +406,265 @@ class StagesStore:
     def _ensure_dir(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _read(self) -> list[dict[str, Any]]:
+    def _legacy_path(self) -> Path:
+        return self._path.parent / STAGES_FILE
+
+    def _read_doc(self) -> dict[str, Any]:
+        """Read the full pipelines.json document, migrating legacy stages.json if needed."""
         if not self._path.exists():
-            seed = default_stages()
-            self._write(seed)
-            return seed
+            legacy = self._legacy_path()
+            if legacy.exists():
+                return self._migrate_from_legacy(legacy)
+            doc = self._seed_doc()
+            self._write_doc(doc)
+            return doc
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(data, list):
-                raise ValueError("stages.json must contain a JSON array")
-            return [_migrate(s) for s in data]
+            if isinstance(data, list):
+                # File was somehow written as a flat list — wrap it
+                doc = self._seed_doc()
+                if data:
+                    migrated = [_migrate(s) for s in data]
+                    for p in doc["pipelines"]:
+                        if p["id"] == "default":
+                            p["stages"] = migrated
+                            break
+                self._write_doc(doc)
+                return doc
+            if isinstance(data, dict) and data.get("version") == 2:
+                return data
+            raise ValueError("unknown format")
         except Exception as err:  # noqa: BLE001
-            log.warning("stages.json corrupt (%s); regenerating defaults", err)
-            seed = default_stages()
-            self._write(seed)
-            return seed
+            log.warning("pipelines.json corrupt (%s); regenerating defaults", err)
+            doc = self._seed_doc()
+            self._write_doc(doc)
+            return doc
 
-    def _write(self, stages: list[dict[str, Any]]) -> None:
+    def _migrate_from_legacy(self, legacy: Path) -> dict[str, Any]:
+        """Migrate old flat stages.json → new pipelines.json, write .bak."""
+        try:
+            raw = legacy.read_text(encoding="utf-8")
+            old_data = json.loads(raw)
+            bak = legacy.with_suffix(".json.bak")
+            bak.write_text(raw, encoding="utf-8")
+            doc = self._seed_doc()
+            if isinstance(old_data, list) and old_data:
+                migrated = [_migrate(s) for s in old_data]
+                for p in doc["pipelines"]:
+                    if p["id"] == "default":
+                        p["stages"] = migrated
+                        break
+                log.info(
+                    "Migrated %d stages from legacy stages.json into default pipeline",
+                    len(old_data),
+                )
+            self._write_doc(doc)
+            return doc
+        except Exception as err:  # noqa: BLE001
+            log.warning("Legacy migration failed (%s); using defaults", err)
+            doc = self._seed_doc()
+            self._write_doc(doc)
+            return doc
+
+    def _seed_doc(self) -> dict[str, Any]:
+        return {
+            "version": 2,
+            "active_pipeline_id": "default",
+            "pipelines": [
+                {
+                    "id": "default",
+                    "name": "預設流程",
+                    "builtin": True,
+                    "stages": default_stages(),
+                },
+                {
+                    "id": "maintenance",
+                    "name": "維護流程",
+                    "builtin": True,
+                    "stages": default_maintenance_stages(),
+                },
+            ],
+        }
+
+    def _write_doc(self, doc: dict[str, Any]) -> None:
         self._ensure_dir()
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(stages, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, self._path)
 
-    # ---- public API ----
+    def _get_pipeline(
+        self, doc: dict[str, Any], pipeline_id: str | None = None
+    ) -> dict[str, Any]:
+        """Return the pipeline dict for the given id, or the active pipeline."""
+        if not pipeline_id:
+            pipeline_id = doc.get("active_pipeline_id", "default")
+        pipeline = next(
+            (p for p in doc.get("pipelines", []) if p["id"] == pipeline_id), None
+        )
+        if not pipeline:
+            raise KeyError(f"pipeline not found: {pipeline_id}")
+        return pipeline
 
-    def list(self) -> list[dict[str, Any]]:
-        return self._read()
+    # ── Pipeline CRUD ──────────────────────────────────────────────────────────
 
-    def upsert(self, data: dict[str, Any]) -> dict[str, Any]:
-        """Create or update a stage by id. Preserves order for existing, appends for new."""
+    def list_pipelines(self) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        return [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "builtin": p.get("builtin", False),
+                "stage_count": len(p.get("stages", [])),
+            }
+            for p in doc.get("pipelines", [])
+        ]
+
+    def get_active_pipeline_id(self) -> str:
+        doc = self._read_doc()
+        return doc.get("active_pipeline_id", "default")
+
+    def create_pipeline(self, name: str) -> dict[str, Any]:
+        doc = self._read_doc()
+        pid = uuid.uuid4().hex[:8]
+        new_pipeline: dict[str, Any] = {
+            "id": pid,
+            "name": name.strip() or "新流程",
+            "builtin": False,
+            "stages": [],
+        }
+        doc["pipelines"].append(new_pipeline)
+        self._write_doc(doc)
+        return {
+            "id": new_pipeline["id"],
+            "name": new_pipeline["name"],
+            "builtin": new_pipeline["builtin"],
+            "stage_count": 0,
+        }
+
+    def rename_pipeline(self, pipeline_id: str, name: str) -> dict[str, Any]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        pipeline["name"] = name.strip() or pipeline["name"]
+        self._write_doc(doc)
+        return {
+            "id": pipeline["id"],
+            "name": pipeline["name"],
+            "builtin": pipeline.get("builtin", False),
+            "stage_count": len(pipeline.get("stages", [])),
+        }
+
+    def delete_pipeline(self, pipeline_id: str) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        self._get_pipeline(doc, pipeline_id)  # raises KeyError if not found
+        if len(doc.get("pipelines", [])) <= 1:
+            raise ValueError("cannot delete the last remaining pipeline")
+        doc["pipelines"] = [p for p in doc["pipelines"] if p["id"] != pipeline_id]
+        # Fallback active_pipeline_id if the deleted one was active
+        if doc.get("active_pipeline_id") == pipeline_id:
+            fallback = next(
+                (p["id"] for p in doc["pipelines"] if p["id"] == "default"), None
+            )
+            if not fallback and doc["pipelines"]:
+                fallback = doc["pipelines"][0]["id"]
+            doc["active_pipeline_id"] = fallback or "default"
+        self._write_doc(doc)
+        return self.list_pipelines()
+
+    def set_active_pipeline(self, pipeline_id: str) -> str:
+        doc = self._read_doc()
+        if not any(p["id"] == pipeline_id for p in doc.get("pipelines", [])):
+            raise KeyError(f"pipeline not found: {pipeline_id}")
+        doc["active_pipeline_id"] = pipeline_id
+        self._write_doc(doc)
+        return pipeline_id
+
+    def reset_builtin(self, pipeline_id: str) -> dict[str, Any]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        if not pipeline.get("builtin"):
+            raise ValueError(f"pipeline is not builtin: {pipeline_id}")
+        if pipeline_id == "default":
+            pipeline["stages"] = default_stages()
+        elif pipeline_id == "maintenance":
+            pipeline["stages"] = default_maintenance_stages()
+        else:
+            raise ValueError(f"no seed data for builtin pipeline: {pipeline_id}")
+        self._write_doc(doc)
+        return {
+            "id": pipeline["id"],
+            "name": pipeline["name"],
+            "builtin": pipeline.get("builtin", False),
+            "stage_count": len(pipeline.get("stages", [])),
+        }
+
+    # ── Stage CRUD (pipeline-scoped) ──────────────────────────────────────────
+
+    def list(self, pipeline_id: str | None = None) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        return [_migrate(s) for s in pipeline.get("stages", [])]
+
+    def upsert(
+        self, data: dict[str, Any], pipeline_id: str | None = None
+    ) -> dict[str, Any]:
         if not data.get("id"):
             raise ValueError("stage id is required")
         if not data.get("slots"):
             raise ValueError("stage must have at least one slot")
-        stages = self._read()
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        stages: list[dict[str, Any]] = pipeline.setdefault("stages", [])
         idx = next((i for i, s in enumerate(stages) if s.get("id") == data["id"]), -1)
         if idx >= 0:
-            existing = stages[idx]
-            updated = {**existing, **data}
+            updated = {**stages[idx], **data}
             stages[idx] = updated
-            self._write(stages)
+            self._write_doc(doc)
             return updated
-        else:
-            stages.append(data)
-            self._write(stages)
-            return data
+        stages.append(data)
+        self._write_doc(doc)
+        return data
 
-    def reorder(self, ids: list[str]) -> list[dict[str, Any]]:
-        """Reorder stages to match the given id list."""
-        stages = self._read()
+    def reorder(
+        self, ids: list[str], pipeline_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        stages: list[dict[str, Any]] = pipeline.get("stages", [])
         by_id = {s["id"]: s for s in stages}
         reordered = [by_id[sid] for sid in ids if sid in by_id]
         mentioned = set(ids)
         for s in stages:
             if s["id"] not in mentioned:
                 reordered.append(s)
-        self._write(reordered)
+        pipeline["stages"] = reordered
+        self._write_doc(doc)
         return reordered
 
-    def delete(self, id: str) -> list[dict[str, Any]]:
-        stages = self._read()
+    def delete(self, id: str, pipeline_id: str | None = None) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        stages: list[dict[str, Any]] = pipeline.get("stages", [])
         new_stages = [s for s in stages if s.get("id") != id]
         if len(new_stages) == len(stages):
             raise KeyError(f"stage not found: {id}")
         if not new_stages:
             raise ValueError("cannot delete the last remaining stage")
-        self._write(new_stages)
+        pipeline["stages"] = new_stages
+        self._write_doc(doc)
         return new_stages
 
-    def reset(self) -> list[dict[str, Any]]:
-        seed = default_stages()
-        self._write(seed)
-        return seed
+    def reset(self, pipeline_id: str | None = None) -> list[dict[str, Any]]:
+        doc = self._read_doc()
+        pipeline = self._get_pipeline(doc, pipeline_id)
+        pid = pipeline.get("id", "")
+        if pid == "default":
+            pipeline["stages"] = default_stages()
+        elif pid == "maintenance":
+            pipeline["stages"] = default_maintenance_stages()
+        else:
+            pipeline["stages"] = []
+        self._write_doc(doc)
+        return pipeline["stages"]
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:

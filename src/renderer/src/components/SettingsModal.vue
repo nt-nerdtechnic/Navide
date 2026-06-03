@@ -4,7 +4,8 @@ import type { useBackend } from '../composables/useBackend'
 import type { useRoles } from '../composables/useRoles'
 import type { useStages } from '../composables/useStages'
 import type { useAnalyzer } from '../composables/useAnalyzer'
-import { stageToBackend, type Stage, type StageSlot } from '../data/stages'
+import type { usePipelines } from '../composables/usePipelines'
+import { stageToBackend, stageDefToFrontend, type Stage, type StageSlot } from '../data/stages'
 import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCatalog'
 
 const props = defineProps<{
@@ -12,11 +13,15 @@ const props = defineProps<{
   rolesApi: ReturnType<typeof useRoles>
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
+  pipelinesApi?: ReturnType<typeof usePipelines>
 }>()
-const emit = defineEmits<{ (e: 'close'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'open-pipeline', id: string): void
+}>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'stages' | 'mcp' | 'analyzer'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer'
 const activeTab = ref<Tab>('roles')
 
 // Close on ESC
@@ -215,18 +220,20 @@ const sSlotDraft = ref<StageSlot>({ agentKey: 'claude', roleKey: '', label: '', 
 const sIsDirty = computed(() => {
   if (!sDraft.value) return false
   if (sIsNew.value) return true
-  const orig = props.stagesApi.stages.value.find(s => s.id === sDraft.value!.id)
+  const orig = sActiveStages.value.find(s => s.id === sDraft.value!.id)
   if (!orig) return true
   return JSON.stringify(stageToBackend(sDraft.value)) !== JSON.stringify(stageToBackend(orig))
 })
 const sCanSave = computed(() => {
   if (!sDraft.value || !sDraft.value.id.trim() || !sDraft.value.title.trim()) return false
-  if (!sDraft.value.slots || sDraft.value.slots.length === 0) return false  // at least 1 slot required
-  if (sIsNew.value && props.stagesApi.stages.value.find(s => s.id === sDraft.value!.id.trim())) return false
+  if (!sDraft.value.slots || sDraft.value.slots.length === 0) return false
+  if (sIsNew.value && sActiveStages.value.find(s => s.id === sDraft.value!.id.trim())) return false
   return sIsDirty.value
 })
 
+// Only auto-select first stage when in the global stages view (not pipeline detail)
 watch(() => props.stagesApi.stages.value, (ss) => {
+  if (plView.value === 'detail') return
   if (ss.length > 0 && sSelectedId.value === null) sSelectStage(ss[0].id)
   else if (sSelectedId.value && !ss.find(s => s.id === sSelectedId.value)) sSelectStage(ss[0]?.id ?? null)
 }, { deep: false })
@@ -234,7 +241,7 @@ watch(() => props.stagesApi.stages.value, (ss) => {
 function sSelectStage(id: string | null) {
   sSelectedId.value = id; sError.value = ''; sAddingSlot.value = false; sEditingSlotIndex.value = null
   if (!id) { sDraft.value = null; return }
-  const s = props.stagesApi.stages.value.find(s => s.id === id)
+  const s = sActiveStages.value.find(s => s.id === id)
   if (s) { sDraft.value = JSON.parse(JSON.stringify(s)); sIsNew.value = false }
 }
 function sStartNew() {
@@ -244,45 +251,67 @@ function sStartNew() {
     recommendedRoles: [], sentinel: '', allowQuestions: false, docQuery: '', slots: [],
   }
 }
+function sPipelineIdParam() {
+  return plView.value === 'detail' ? { pipeline_id: plEditingId.value } : {}
+}
+
 async function sSave() {
   if (!sDraft.value || !sCanSave.value) return
   sSaving.value = true; sError.value = ''
   try {
     const payload = stageToBackend({ ...sDraft.value, id: sDraft.value.id.trim() })
-    const resp = await props.backend.send<{ stage: Record<string, unknown> }>('stages.upsert', { stage: payload })
+    const resp = await props.backend.send<{ stage: Record<string, unknown> }>(
+      'stages.upsert', { stage: payload, ...sPipelineIdParam() }
+    )
     if (!resp.ok) { sError.value = resp.error?.message ?? 'Save failed'; return }
     sSummary.value = `Saved "${sDraft.value.title}"`
     sSelectedId.value = sDraft.value.id.trim()
     sIsNew.value = false
-    // Do NOT call sSelectStage here — it would reload draft from the stale
-    // stages.value cache (before stages.changed broadcast arrives), overwriting
-    // the values the user just saved.
+    if (plView.value === 'detail') await plReloadStages()
   } finally { sSaving.value = false }
 }
 async function sDoDelete() {
   if (!sDraft.value || sIsNew.value) { sConfirmDelete.value = false; return }
-  const resp = await props.backend.send<{ stages: unknown[] }>('stages.delete', { id: sDraft.value.id })
+  const resp = await props.backend.send<{ stages: unknown[] }>(
+    'stages.delete', { id: sDraft.value.id, ...sPipelineIdParam() }
+  )
   sConfirmDelete.value = false
   if (!resp.ok) { sError.value = resp.error?.message ?? 'Delete failed'; return }
-  sSummary.value = `Deleted "${sDraft.value.id}"`; sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  sSummary.value = `Deleted "${sDraft.value.id}"`
+  if (plView.value === 'detail') {
+    await plReloadStages()
+    sSelectStage(plStages.value[0]?.id ?? null)
+  } else {
+    sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  }
 }
 async function sDoReset() {
-  const resp = await props.backend.send<{ stages: unknown[] }>('stages.reset', {})
+  const resp = await props.backend.send<{ stages: unknown[] }>(
+    'stages.reset', { ...sPipelineIdParam() }
+  )
   sConfirmReset.value = false
   if (!resp.ok) { sError.value = resp.error?.message ?? 'Reset failed'; return }
-  sSummary.value = 'Reset to factory defaults'; sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  sSummary.value = 'Reset to factory defaults'
+  if (plView.value === 'detail') {
+    await plReloadStages()
+    sSelectStage(plStages.value[0]?.id ?? null)
+  } else {
+    sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  }
 }
 async function sMoveUp(index: number) {
   if (index <= 0) return
-  const ids = props.stagesApi.stages.value.map(s => s.id)
+  const ids = sActiveStages.value.map(s => s.id)
   ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
-  await props.backend.send('stages.reorder', { ids })
+  await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
+  if (plView.value === 'detail') await plReloadStages()
 }
 async function sMoveDown(index: number) {
-  if (index >= props.stagesApi.stages.value.length - 1) return
-  const ids = props.stagesApi.stages.value.map(s => s.id)
+  if (index >= sActiveStages.value.length - 1) return
+  const ids = sActiveStages.value.map(s => s.id)
   ;[ids[index], ids[index + 1]] = [ids[index + 1], ids[index]]
-  await props.backend.send('stages.reorder', { ids })
+  await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
+  if (plView.value === 'detail') await plReloadStages()
 }
 const sEditingSlotIndex = ref<number | null>(null)
 
@@ -320,7 +349,7 @@ async function sExport() {
   if (!window.agentTeam?.saveJson) return
   sExportBusy.value = true
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const envelope = { format_version: 1, exported_at: new Date().toISOString(), stages: props.stagesApi.stages.value }
+  const envelope = { format_version: 1, exported_at: new Date().toISOString(), stages: sActiveStages.value }
   const result = await window.agentTeam.saveJson({ title: 'Export stages', defaultName: `agent-team-stages-${stamp}.json`, content: JSON.stringify(envelope, null, 2) })
   if (result.ok) sSummary.value = `Exported ${envelope.stages.length} stage(s)`
   sExportBusy.value = false
@@ -337,7 +366,7 @@ async function sImport() {
       for (const entry of raw) {
         const s = entry as Record<string, unknown>
         if (!s.id) { failed++; continue }
-        const resp = await props.backend.send('stages.upsert', { stage: s })
+        const resp = await props.backend.send('stages.upsert', { stage: s, ...sPipelineIdParam() })
         if (resp.ok) ok++; else failed++
       }
       sSummary.value = `Imported ${ok} stage(s)` + (failed ? ` · ${failed} failed` : '')
@@ -458,6 +487,112 @@ async function mOpenConfig() {
 }
 
 watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mLoad() })
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PIPELINES TAB
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── List view ──
+const plNewName = ref('')
+const plCreating = ref(false)
+const plBusy = ref(false)
+const plSummary = ref('')
+
+// ── Detail view (pipeline + stage editor) ──
+const plView = ref<'list' | 'detail'>('list')
+const plEditingId = ref<string>('')
+const plStages = ref<Stage[]>([])   // stages for the pipeline being edited
+const plStagesLoading = ref(false)
+const plRenamingId = ref('')
+const plRenameText = ref('')
+
+const plCurrentPipeline = computed(() =>
+  props.pipelinesApi?.pipelines.value.find(p => p.id === plEditingId.value) ?? null
+)
+
+// Stages to use in the stage editor — plStages when in pipeline detail, global otherwise
+const sActiveStages = computed(() =>
+  plView.value === 'detail' ? plStages.value : props.stagesApi.stages.value
+)
+
+async function plEnterDetail(id: string) {
+  plEditingId.value = id
+  plView.value = 'detail'
+  sSelectedId.value = null
+  sDraft.value = null
+  sIsNew.value = false
+  sError.value = ''
+  plStagesLoading.value = true
+  try {
+    const resp = await props.backend.send<{ stages: Record<string, unknown>[] }>(
+      'stages.list', { pipeline_id: id }
+    )
+    if (resp.ok && resp.payload) {
+      plStages.value = resp.payload.stages.map(stageDefToFrontend)
+      if (plStages.value.length > 0) sSelectStage(plStages.value[0].id)
+    }
+  } finally {
+    plStagesLoading.value = false
+  }
+}
+
+function plBackToList() {
+  plView.value = 'list'
+  plEditingId.value = ''
+  plStages.value = []
+  sSelectedId.value = null
+  sDraft.value = null
+}
+
+async function plReloadStages() {
+  if (!plEditingId.value) return
+  const resp = await props.backend.send<{ stages: Record<string, unknown>[] }>(
+    'stages.list', { pipeline_id: plEditingId.value }
+  )
+  if (resp.ok && resp.payload) {
+    plStages.value = resp.payload.stages.map(stageDefToFrontend)
+  }
+}
+
+async function plCreate() {
+  if (!plNewName.value.trim() || plBusy.value) return
+  plBusy.value = true
+  const p = await props.pipelinesApi?.createPipeline(plNewName.value.trim())
+  plBusy.value = false
+  if (p) { plNewName.value = ''; plCreating.value = false; plSummary.value = `已新增「${p.name}」` }
+}
+
+async function plSetActive(id: string) {
+  if (plBusy.value) return
+  plBusy.value = true
+  await props.pipelinesApi?.setActivePipeline(id)
+  plBusy.value = false
+  plSummary.value = '已切換預設 pipeline'
+}
+
+function plStartRename(id: string, currentName: string) {
+  plRenamingId.value = id
+  plRenameText.value = currentName
+}
+
+async function plConfirmRename() {
+  if (!plRenameText.value.trim() || plBusy.value) return
+  plBusy.value = true
+  await props.pipelinesApi?.renamePipeline(plRenamingId.value, plRenameText.value.trim())
+  plBusy.value = false
+  plSummary.value = '已改名'
+  plRenamingId.value = ''
+}
+
+async function plDelete(id: string, name: string) {
+  if (!confirm(`確定刪除「${name}」？此操作無法復原。`)) return
+  plBusy.value = true
+  await props.pipelinesApi?.deletePipeline(id)
+  plBusy.value = false
+  plSummary.value = `已刪除「${name}」`
+  plBackToList()
+}
+
 </script>
 
 <template>
@@ -470,7 +605,7 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
         <div class="s-header">
           <div class="s-tabs">
             <button :class="['s-tab', { active: activeTab === 'roles' }]" @click="activeTab = 'roles'">🎭 Roles</button>
-            <button :class="['s-tab', { active: activeTab === 'stages' }]" @click="activeTab = 'stages'">⚙ Stages</button>
+            <button :class="['s-tab', { active: activeTab === 'pipelines' }]" @click="activeTab = 'pipelines'">🔀 Pipelines</button>
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">🔌 MCP</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">🧠 Analyzer</button>
           </div>
@@ -482,7 +617,6 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
           <div class="tab-toolbar">
             <button class="ghost" :disabled="rExportBusy" @click="rExport">{{ rExportBusy ? '…' : '⬇ Export JSON' }}</button>
             <button class="ghost" :disabled="rImporting" @click="rImport">{{ rImporting ? '…' : '⬆ Import JSON' }}</button>
-            <button class="ghost danger-link" @click="rConfirmReset = true">↺ Reset to defaults</button>
             <span v-if="rSummary" class="summary-ok">{{ rSummary }}</span>
           </div>
           <div class="split">
@@ -533,139 +667,6 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
         </div>
 
         <!-- ── STAGES TAB ────────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'stages'" class="s-body">
-          <div class="tab-toolbar">
-            <button class="ghost" :disabled="sExportBusy" @click="sExport">{{ sExportBusy ? '…' : '⬇ Export JSON' }}</button>
-            <button class="ghost" :disabled="sImporting" @click="sImport">{{ sImporting ? '…' : '⬆ Import JSON' }}</button>
-            <button class="ghost danger-link" @click="sConfirmReset = true">↺ Reset to defaults</button>
-            <span v-if="sSummary" class="summary-ok">{{ sSummary }}</span>
-          </div>
-          <div class="split">
-            <aside class="split-list">
-              <button class="primary new-btn" @click="sStartNew">+ Add Stage</button>
-              <ul>
-                <li v-for="(s, idx) in stagesApi.stages.value" :key="s.id"
-                    :class="{ active: sSelectedId === s.id && !sIsNew }"
-                    @click="sSelectStage(s.id)">
-                  <div class="row-g spread">
-                    <span class="mono-key">{{ s.id }}</span>
-                    <div class="row-g gap">
-                      <button class="icon-btn" @click.stop="sMoveUp(idx)" :disabled="idx === 0">▲</button>
-                      <button class="icon-btn" @click.stop="sMoveDown(idx)" :disabled="idx === stagesApi.stages.value.length - 1">▼</button>
-                    </div>
-                  </div>
-                  <div class="item-label">
-                    {{ s.shortTitle }}
-                    <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`指揮官: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
-                  </div>
-                  <div class="item-sub">
-                    {{ s.slots.length === 1
-                      ? `${s.slots[0].agentKey} · ${s.slots[0].roleKey}`
-                      : `${s.slots.length} parallel slots` }}
-                  </div>
-                </li>
-              </ul>
-            </aside>
-            <section v-if="sDraft" class="split-detail">
-              <div class="detail-head">
-                <h3>{{ sIsNew ? 'New stage' : 'Edit stage' }}</h3>
-                <div class="row-g gap">
-                  <button v-if="!sIsNew" class="danger" @click="sConfirmDelete = true">🗑 Delete</button>
-                  <button class="primary" :disabled="!sCanSave || sSaving" @click="sSave">{{ sSaving ? 'Saving…' : sIsNew ? 'Create' : 'Save' }}</button>
-                </div>
-              </div>
-              <p v-if="sError" class="err-msg">{{ sError }}</p>
-              <div class="two-col">
-                <div class="field"><label class="lbl">ID</label><input v-model="sDraft.id" type="text" placeholder="e.g. 04.5" spellcheck="false" :disabled="!sIsNew" /></div>
-                <div class="field"><label class="lbl">Short title</label><input v-model="sDraft.shortTitle" type="text" placeholder="e.g. Review" spellcheck="false" /></div>
-              </div>
-              <div class="field"><label class="lbl">Full title</label><input v-model="sDraft.title" type="text" spellcheck="false" /></div>
-              <div class="two-col">
-                <div class="field"><label class="lbl">Sentinel</label><input v-model="sDraft.sentinel" type="text" placeholder="---DONE---" spellcheck="false" /></div>
-                <div class="field">
-                  <label class="lbl">Allow questions</label>
-                  <label class="check-row"><input type="checkbox" v-model="sDraft.allowQuestions" /><span>Pause for user answers</span></label>
-                </div>
-              </div>
-              <div class="field"><label class="lbl">Context7 doc query</label><input v-model="sDraft.docQuery" type="text" placeholder="e.g. security best practices, authentication" spellcheck="false" /></div>
-              <!-- Slots (required — every stage needs at least one) -->
-              <div class="slots-section">
-                <div class="row-g spread">
-                  <label class="lbl">Slots <span class="slot-required">* 必填至少一個</span></label>
-                  <button class="ghost" @click="sStartAddSlot">+ Add slot</button>
-                </div>
-                <p v-if="!sDraft.slots?.length" class="warn-msg">請新增至少一個 slot 才能儲存。</p>
-                <template v-for="(slot, i) in sDraft.slots" :key="i">
-                  <!-- collapsed row -->
-                  <div v-if="sEditingSlotIndex !== i" class="slot-item slot-clickable" @click="sStartEditSlot(i)">
-                    <div class="row-g spread">
-                      <span class="item-label">
-                        {{ slot.label }}
-                        <span v-if="slot.isCommander" class="manager-badge">🎯 指揮官</span>
-                      </span>
-                      <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="最後一個 slot 無法刪除">✕</button>
-                    </div>
-                    <div class="item-sub">{{ slot.agentKey }} · {{ slot.roleKey }}</div>
-                  </div>
-                  <!-- inline edit form -->
-                  <div v-else class="slot-form">
-                    <div class="two-col">
-                      <div class="field"><label class="lbl">Label</label><input v-model="sSlotDraft.label" type="text" /></div>
-                      <div class="field">
-                        <label class="lbl">Agent</label>
-                        <select v-model="sSlotDraft.agentKey"><option v-for="a in AGENT_OPTIONS" :key="a.key" :value="a.key">{{ a.label }}</option></select>
-                      </div>
-                    </div>
-                    <div class="field">
-                      <label class="lbl">Role key</label>
-                      <select v-model="sSlotDraft.roleKey">
-                        <option value="">（未指定）</option>
-                        <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
-                      </select>
-                    </div>
-                    <label class="check-row manager-toggle">
-                      <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                      <span><strong>🎯 指定為全域指揮官</strong> — 此 slot 先完成自己的工作後印 <code>---MANAGER-READY---</code>，再跨階段協調（接收所有 slot 的 ASK/REPORT、發 DISPATCH，最後印 <code>---STAGE-DONE---</code> 收尾）。整個 pipeline 只能有一個指揮官。</span>
-                    </label>
-                    <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
-                    <div class="row-g gap">
-                      <button class="ghost" @click="sCancelAddSlot">Cancel</button>
-                      <button class="primary" @click="sSaveEditSlot">Save slot</button>
-                    </div>
-                  </div>
-                </template>
-                <div v-if="sAddingSlot" class="slot-form">
-                  <div class="two-col">
-                    <div class="field"><label class="lbl">Label</label><input v-model="sSlotDraft.label" type="text" /></div>
-                    <div class="field">
-                      <label class="lbl">Agent</label>
-                      <select v-model="sSlotDraft.agentKey"><option v-for="a in AGENT_OPTIONS" :key="a.key" :value="a.key">{{ a.label }}</option></select>
-                    </div>
-                  </div>
-                  <div class="field">
-                    <label class="lbl">Role key</label>
-                    <select v-model="sSlotDraft.roleKey">
-                      <option value="">（未指定）</option>
-                      <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
-                    </select>
-                  </div>
-                  <label class="check-row manager-toggle">
-                    <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                    <span><strong>🎯 指定為全域指揮官</strong> — 整個 pipeline 只能有一個。</span>
-                  </label>
-                  <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
-                  <div class="row-g gap">
-                    <button class="ghost" @click="sCancelAddSlot">Cancel</button>
-                    <button class="primary" @click="sConfirmAddSlot">Add</button>
-                  </div>
-                </div>
-              </div>
-
-            </section>
-            <section v-else class="split-detail empty-detail"><p>Select a stage or click + Add Stage</p></section>
-          </div>
-        </div>
-
         <!-- ── MCP TAB ───────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'mcp'" class="s-body mcp-body">
 
@@ -1058,6 +1059,198 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
 
         </div>
 
+        <!-- ── PIPELINES TAB ────────────────────────────────────────────── -->
+        <div v-show="activeTab === 'pipelines'" class="s-body pipelines-body">
+
+          <!-- ── LIST VIEW ──────────────────────────────────────────────── -->
+          <template v-if="plView === 'list'">
+            <div class="tab-toolbar">
+              <button class="ghost" @click="plCreating = !plCreating" :disabled="plBusy">＋ 新增 Pipeline</button>
+              <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
+            </div>
+            <div v-if="plCreating" class="pl-create-row">
+              <input v-model="plNewName" type="text" placeholder="流程名稱…" class="pl-input"
+                @keyup.enter="plCreate" @keyup.escape="plCreating = false; plNewName = ''" />
+              <button class="ghost" :disabled="!plNewName.trim() || plBusy" @click="plCreate">確認新增</button>
+              <button class="ghost" @click="plCreating = false; plNewName = ''">取消</button>
+            </div>
+            <ul v-if="pipelinesApi?.pipelines.value.length" class="pl-list">
+              <li v-for="p in pipelinesApi.pipelines.value" :key="p.id"
+                  class="pl-item" :class="{ 'pl-active': p.id === pipelinesApi.activePipelineId.value }"
+                  @click="plEnterDetail(p.id)" role="button">
+                <div class="pl-item-main">
+                  <span class="pl-name">{{ p.name }}</span>
+                  <span class="pl-meta">{{ p.stage_count }} 階段</span>
+                  <span v-if="p.id === pipelinesApi.activePipelineId.value" class="pl-badge active">預設</span>
+                  <span class="pl-enter">›</span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="hint">尚未載入 pipelines…</p>
+          </template>
+
+          <!-- ── DETAIL VIEW: pipeline + stage editor ───────────────────── -->
+          <template v-else>
+            <!-- Detail header: back + pipeline name (inline rename) + actions -->
+            <div class="pl-detail-header">
+              <button class="ghost" @click="plBackToList">← 返回</button>
+              <!-- Inline rename mode -->
+              <template v-if="plRenamingId === plEditingId">
+                <input v-model="plRenameText" class="pl-input pl-rename" autofocus
+                  @keyup.enter="plConfirmRename" @keyup.escape="plRenamingId = ''" />
+                <button class="ghost tiny" :disabled="plBusy" @click="plConfirmRename">✓</button>
+                <button class="ghost tiny" @click="plRenamingId = ''">✕</button>
+              </template>
+              <!-- Display mode: title + pencil icon -->
+              <template v-else>
+                <h3 class="pl-detail-title">
+                  {{ plCurrentPipeline?.name }}
+                  <button class="pl-rename-icon" :disabled="plBusy"
+                    @click="plStartRename(plEditingId, plCurrentPipeline?.name ?? '')"
+                    title="改名">✎</button>
+                </h3>
+              </template>
+              <div class="pl-detail-actions">
+                <button class="pl-delete-icon"
+                  :disabled="plBusy || (pipelinesApi?.pipelines.value.length ?? 0) <= 1"
+                  :title="(pipelinesApi?.pipelines.value.length ?? 0) <= 1 ? '至少保留一個 pipeline' : '刪除此 pipeline'"
+                  @click="plDelete(plEditingId, plCurrentPipeline?.name ?? '')">
+                  🗑
+                </button>
+                <span v-if="plEditingId === pipelinesApi?.activePipelineId.value" class="pl-badge active">預設</span>
+                <button v-if="plEditingId !== pipelinesApi?.activePipelineId.value"
+                  class="ghost tiny" :disabled="plBusy" @click="plSetActive(plEditingId)">
+                  ✓ 設為預設
+                </button>
+                <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
+                <button class="pl-run-btn"
+                  @click="emit('open-pipeline', plEditingId); emit('close')"
+                  title="關閉設定並前往執行">
+                  ▶ 執行
+                </button>
+              </div>
+            </div>
+
+            <!-- Stage editor for this pipeline -->
+            <div v-if="plStagesLoading" class="hint">載入階段中…</div>
+            <template v-else>
+              <div class="tab-toolbar">
+                <button class="ghost" :disabled="sExportBusy" @click="sExport">{{ sExportBusy ? '…' : '⬇ Export JSON' }}</button>
+                <button class="ghost" :disabled="sImporting" @click="sImport">{{ sImporting ? '…' : '⬆ Import JSON' }}</button>
+                <span v-if="sSummary" class="summary-ok">{{ sSummary }}</span>
+              </div>
+              <div class="split">
+                <aside class="split-list">
+                  <button class="primary new-btn" @click="sStartNew">+ Add Stage</button>
+                  <ul>
+                    <li v-for="(s, idx) in sActiveStages" :key="s.id"
+                        :class="{ active: sSelectedId === s.id && !sIsNew }"
+                        @click="sSelectStage(s.id)">
+                      <div class="row-g spread">
+                        <span class="mono-key">{{ s.id }}</span>
+                        <div class="row-g gap">
+                          <button class="icon-btn" @click.stop="sMoveUp(idx)" :disabled="idx === 0">▲</button>
+                          <button class="icon-btn" @click.stop="sMoveDown(idx)" :disabled="idx === sActiveStages.length - 1">▼</button>
+                        </div>
+                      </div>
+                      <div class="item-label">
+                        {{ s.shortTitle }}
+                        <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`指揮官: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
+                      </div>
+                      <div class="item-sub">
+                        {{ s.slots.length === 1 ? `${s.slots[0].agentKey} · ${s.slots[0].roleKey}` : `${s.slots.length} parallel slots` }}
+                      </div>
+                    </li>
+                  </ul>
+                </aside>
+                <section v-if="sDraft" class="split-detail">
+                  <div class="detail-head">
+                    <h3>{{ sIsNew ? 'New stage' : 'Edit stage' }}</h3>
+                    <div class="row-g gap">
+                      <button v-if="!sIsNew" class="danger" @click="sConfirmDelete = true">🗑 Delete</button>
+                      <button class="primary" :disabled="!sCanSave || sSaving" @click="sSave">{{ sSaving ? 'Saving…' : sIsNew ? 'Create' : 'Save' }}</button>
+                    </div>
+                  </div>
+                  <p v-if="sError" class="err-msg">{{ sError }}</p>
+                  <div class="two-col">
+                    <div class="field"><label class="lbl">ID</label><input v-model="sDraft.id" type="text" placeholder="e.g. 04.5" spellcheck="false" :disabled="!sIsNew" /></div>
+                    <div class="field"><label class="lbl">Short title</label><input v-model="sDraft.shortTitle" type="text" placeholder="e.g. Review" spellcheck="false" /></div>
+                  </div>
+                  <div class="field"><label class="lbl">Full title</label><input v-model="sDraft.title" type="text" spellcheck="false" /></div>
+                  <div class="two-col">
+                    <div class="field"><label class="lbl">Sentinel</label><input v-model="sDraft.sentinel" type="text" placeholder="---DONE---" spellcheck="false" /></div>
+                    <div class="field">
+                      <label class="lbl">Allow questions</label>
+                      <label class="check-row"><input type="checkbox" v-model="sDraft.allowQuestions" /><span>Pause for user answers</span></label>
+                    </div>
+                  </div>
+                  <div class="field"><label class="lbl">Context7 doc query</label><input v-model="sDraft.docQuery" type="text" placeholder="e.g. security best practices, authentication" spellcheck="false" /></div>
+                  <div class="slots-section">
+                    <div class="row-g spread">
+                      <label class="lbl">Slots <span class="slot-required">* 必填至少一個</span></label>
+                      <button class="ghost" @click="sStartAddSlot">+ Add slot</button>
+                    </div>
+                    <p v-if="!sDraft.slots?.length" class="warn-msg">請新增至少一個 slot 才能儲存。</p>
+                    <template v-for="(slot, i) in sDraft.slots" :key="i">
+                      <div v-if="sEditingSlotIndex !== i" class="slot-item slot-clickable" @click="sStartEditSlot(i)">
+                        <div class="row-g spread">
+                          <span class="item-label">{{ slot.label }}<span v-if="slot.isCommander" class="manager-badge">🎯 指揮官</span></span>
+                          <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="最後一個 slot 無法刪除">✕</button>
+                        </div>
+                        <div class="item-sub">{{ slot.agentKey }} · {{ slot.roleKey }}</div>
+                      </div>
+                      <div v-else class="slot-form">
+                        <div class="two-col">
+                          <div class="field"><label class="lbl">Label</label><input v-model="sSlotDraft.label" type="text" /></div>
+                          <div class="field"><label class="lbl">Agent</label><select v-model="sSlotDraft.agentKey"><option v-for="a in AGENT_OPTIONS" :key="a.key" :value="a.key">{{ a.label }}</option></select></div>
+                        </div>
+                        <div class="field"><label class="lbl">Role key</label>
+                          <select v-model="sSlotDraft.roleKey">
+                            <option value="">（未指定）</option>
+                            <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
+                          </select>
+                        </div>
+                        <label class="check-row manager-toggle">
+                          <input type="checkbox" v-model="sSlotDraft.isCommander" />
+                          <span><strong>🎯 指定為全域指揮官</strong> — 此 slot 先完成自己的工作後印 <code>---MANAGER-READY---</code>，再跨階段協調。整個 pipeline 只能有一個指揮官。</span>
+                        </label>
+                        <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
+                        <div class="row-g gap">
+                          <button class="ghost" @click="sCancelAddSlot">Cancel</button>
+                          <button class="primary" @click="sSaveEditSlot">Save slot</button>
+                        </div>
+                      </div>
+                    </template>
+                    <div v-if="sAddingSlot" class="slot-form">
+                      <div class="two-col">
+                        <div class="field"><label class="lbl">Label</label><input v-model="sSlotDraft.label" type="text" /></div>
+                        <div class="field"><label class="lbl">Agent</label><select v-model="sSlotDraft.agentKey"><option v-for="a in AGENT_OPTIONS" :key="a.key" :value="a.key">{{ a.label }}</option></select></div>
+                      </div>
+                      <div class="field"><label class="lbl">Role key</label>
+                        <select v-model="sSlotDraft.roleKey">
+                          <option value="">（未指定）</option>
+                          <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
+                        </select>
+                      </div>
+                      <label class="check-row manager-toggle">
+                        <input type="checkbox" v-model="sSlotDraft.isCommander" />
+                        <span><strong>🎯 指定為全域指揮官</strong> — 整個 pipeline 只能有一個。</span>
+                      </label>
+                      <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
+                      <div class="row-g gap">
+                        <button class="ghost" @click="sCancelAddSlot">Cancel</button>
+                        <button class="primary" @click="sConfirmAddSlot">Add</button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section v-else class="split-detail empty-detail"><p>選擇一個階段或點 + Add Stage</p></section>
+              </div>
+            </template>
+          </template>
+
+        </div>
+
       </div>
     </div>
 
@@ -1092,15 +1285,7 @@ watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mL
         </div>
       </div>
     </div>
-    <div v-if="sConfirmReset" class="s-overlay confirm" @click.self="sConfirmReset = false">
-      <div class="confirm-card">
-        <h3>將所有 Stage 重設為預設？</h3>
-        <p>所有自訂 Stage 將被清除。</p>
-        <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="sConfirmReset = false">取消</button>
-          <button class="danger" @click="sDoReset">重設</button>
-        </div>
-      </div>
+    <div v-if="false" class="s-overlay confirm">
     </div>
   </Teleport>
 </template>
@@ -1645,4 +1830,56 @@ button.ghost:hover:not(:disabled) { background: #21262d; }
   border-radius: 10px;
   font-size: 11px;
 }
+/* ── Pipelines tab ─────────────────────────────────────────────────────────── */
+.pipelines-body { display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.pl-create-row { display: flex; gap: 6px; align-items: center; }
+.pl-input {
+  background: #010409; border: 1px solid #1f6feb; border-radius: 4px;
+  color: #e6edf3; font-size: 12px; padding: 5px 8px; flex: 1;
+}
+.pl-rename { max-width: 180px; }
+.pl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pl-item {
+  background: #161b22; border: 1px solid #21262d; border-radius: 6px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.pl-item.pl-active { border-color: #1f6feb; background: #0d1a2e; }
+.pl-item-main { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pl-name { font-size: 13px; font-weight: 600; color: #e6edf3; flex: 1; }
+.pl-active .pl-name { color: #79c0ff; }
+.pl-meta { font-size: 11px; color: #6e7681; }
+.pl-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.pl-badge.active { background: #1a2e1a; color: #3fb950; border: 1px solid #2ea04355; }
+.pl-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pl-summary { font-size: 12px; color: #3fb950; }
+.pl-enter { color: #6e7681; font-size: 14px; }
+.pl-item:hover .pl-enter { color: #e6edf3; }
+.pl-item { cursor: pointer; }
+.pl-run-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #1a2e1a; border: 1px solid #2ea04355; border-radius: 5px;
+  color: #3fb950; font-size: 12px; font-weight: 600;
+  padding: 4px 10px; cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.pl-run-btn:hover { background: #1f3d1f; border-color: #3fb950; }
+.pl-delete-icon {
+  background: none; border: none; cursor: pointer;
+  color: #6e7681; font-size: 14px; padding: 2px 4px; border-radius: 3px;
+  opacity: 0.45; transition: opacity 0.1s, color 0.1s;
+}
+.pl-delete-icon:hover:not(:disabled) { opacity: 1; color: #f85149; }
+.pl-delete-icon:disabled { opacity: 0.2; cursor: not-allowed; }
+.pl-detail-header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid #21262d; margin-bottom: 6px;
+}
+.pl-detail-title { font-size: 15px; font-weight: 600; color: #79c0ff; margin: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
+.pl-rename-icon {
+  background: none; border: none; cursor: pointer; color: #6e7681;
+  font-size: 13px; padding: 1px 3px; border-radius: 3px; line-height: 1;
+  opacity: 0.6; transition: opacity 0.1s;
+}
+.pl-rename-icon:hover { opacity: 1; color: #e6edf3; background: #21262d; }
+.pl-detail-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
 </style>

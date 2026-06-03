@@ -636,6 +636,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 total_stages=int(payload.get("total_stages", 4)),
                 stage_blueprint=payload.get("stage_blueprint", []),
                 backend_version=__version__,
+                pipeline_id=payload.get("pipeline_id", "") or stages_store.get_active_pipeline_id(),
             )
             _register_workspace_and_backfill(project.workspace_path)
             # Start a fresh token-stats run for this workspace.
@@ -915,48 +916,189 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 make_event("roles.changed", {"roles": roles, "reason": "reset"})
             )
 
-        # -------- stages registry --------
-        elif msg_type == "stages.list":
+        # -------- pipelines registry --------
+        elif msg_type == "pipelines.list":
+            pipelines = stages_store.list_pipelines()
+            active_id = stages_store.get_active_pipeline_id()
             await session.websocket.send_json(
                 make_response(
                     msg_id,
                     msg_type,
-                    {"stages": stages_store.list(), "path": str(stages_store.path)},
+                    {"pipelines": pipelines, "active_pipeline_id": active_id, "path": str(stages_store.path)},
+                )
+            )
+        elif msg_type == "pipelines.create":
+            name = payload.get("name", "新流程")
+            pipeline = stages_store.create_pipeline(name)
+            pipelines = stages_store.list_pipelines()
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
+            )
+            await broadcast(make_event("pipelines.changed", {
+                "pipelines": pipelines,
+                "active_pipeline_id": stages_store.get_active_pipeline_id(),
+                "reason": "create",
+            }))
+        elif msg_type == "pipelines.rename":
+            pipeline_id = payload.get("pipeline_id", "")
+            name = payload.get("name", "")
+            pipeline = stages_store.rename_pipeline(pipeline_id, name)
+            pipelines = stages_store.list_pipelines()
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
+            )
+            await broadcast(make_event("pipelines.changed", {
+                "pipelines": pipelines,
+                "active_pipeline_id": stages_store.get_active_pipeline_id(),
+                "reason": "rename",
+            }))
+        elif msg_type == "pipelines.delete":
+            pipeline_id = payload.get("pipeline_id", "")
+            ws_path = payload.get("workspace_path", "") or ""
+            if ws_path:
+                proj = project_store.peek(ws_path)
+                if proj and proj.state == "running":
+                    await session.websocket.send_json(
+                        make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot delete pipeline while a project is running")
+                    )
+                    return
+            pipelines = stages_store.delete_pipeline(pipeline_id)
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"pipelines": pipelines})
+            )
+            await broadcast(make_event("pipelines.changed", {
+                "pipelines": pipelines,
+                "active_pipeline_id": stages_store.get_active_pipeline_id(),
+                "reason": "delete",
+            }))
+        elif msg_type == "pipelines.set_active":
+            pipeline_id = payload.get("pipeline_id", "")
+            ws_path = payload.get("workspace_path", "") or ""
+            if ws_path:
+                proj = project_store.peek(ws_path)
+                if proj and proj.state == "running":
+                    await session.websocket.send_json(
+                        make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot switch pipeline while a project is running")
+                    )
+                    return
+            stages_store.set_active_pipeline(pipeline_id)
+            pipelines = stages_store.list_pipelines()
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {
+                    "active_pipeline_id": pipeline_id,
+                    "pipelines": pipelines,
+                })
+            )
+            await broadcast(make_event("pipelines.changed", {
+                "pipelines": pipelines,
+                "active_pipeline_id": pipeline_id,
+                "reason": "set_active",
+            }))
+        elif msg_type == "pipelines.reset_builtin":
+            pipeline_id = payload.get("pipeline_id", "")
+            pipeline = stages_store.reset_builtin(pipeline_id)
+            pipelines = stages_store.list_pipelines()
+            stages = stages_store.list(pipeline_id)
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
+            )
+            await broadcast(make_event("pipelines.changed", {
+                "pipelines": pipelines,
+                "active_pipeline_id": stages_store.get_active_pipeline_id(),
+                "reason": "reset_builtin",
+            }))
+            await broadcast(make_event("stages.changed", {
+                "stages": stages,
+                "pipeline_id": pipeline_id,
+                "reason": "reset_builtin",
+            }))
+
+        # -------- stages registry --------
+        elif msg_type == "stages.list":
+            pipeline_id = payload.get("pipeline_id") or None
+            stages = stages_store.list(pipeline_id)
+            active_id = stages_store.get_active_pipeline_id()
+            await session.websocket.send_json(
+                make_response(
+                    msg_id,
+                    msg_type,
+                    {"stages": stages, "path": str(stages_store.path), "pipeline_id": pipeline_id or active_id},
                 )
             )
         elif msg_type == "stages.upsert":
-            stage = stages_store.upsert(payload["stage"])
-            updated_stages = stages_store.list()
+            pipeline_id = payload.get("pipeline_id") or None
+            ws_path = payload.get("workspace_path", "") or ""
+            if ws_path and not pipeline_id:
+                # Check running guard for active pipeline
+                proj = project_store.peek(ws_path)
+                if proj and proj.state == "running":
+                    await session.websocket.send_json(
+                        make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot edit stages while the active pipeline is running")
+                    )
+                    return
+            stage = stages_store.upsert(payload["stage"], pipeline_id)
+            effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
+            updated_stages = stages_store.list(pipeline_id)
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, {"stage": stage, "stages": updated_stages})
             )
-            await broadcast(
-                make_event("stages.changed", {"stages": updated_stages, "reason": "upsert"})
-            )
+            await broadcast(make_event("stages.changed", {
+                "stages": updated_stages,
+                "pipeline_id": effective_pipeline_id,
+                "reason": "upsert",
+            }))
         elif msg_type == "stages.reorder":
-            updated_stages = stages_store.reorder(payload["ids"])
+            pipeline_id = payload.get("pipeline_id") or None
+            ws_path = payload.get("workspace_path", "") or ""
+            if ws_path and not pipeline_id:
+                proj = project_store.peek(ws_path)
+                if proj and proj.state == "running":
+                    await session.websocket.send_json(
+                        make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot reorder stages while the active pipeline is running")
+                    )
+                    return
+            updated_stages = stages_store.reorder(payload["ids"], pipeline_id)
+            effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
-            await broadcast(
-                make_event("stages.changed", {"stages": updated_stages, "reason": "reorder"})
-            )
+            await broadcast(make_event("stages.changed", {
+                "stages": updated_stages,
+                "pipeline_id": effective_pipeline_id,
+                "reason": "reorder",
+            }))
         elif msg_type == "stages.delete":
-            updated_stages = stages_store.delete(payload["id"])
+            pipeline_id = payload.get("pipeline_id") or None
+            ws_path = payload.get("workspace_path", "") or ""
+            if ws_path and not pipeline_id:
+                proj = project_store.peek(ws_path)
+                if proj and proj.state == "running":
+                    await session.websocket.send_json(
+                        make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot delete stages while the active pipeline is running")
+                    )
+                    return
+            updated_stages = stages_store.delete(payload["id"], pipeline_id)
+            effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
-            await broadcast(
-                make_event("stages.changed", {"stages": updated_stages, "reason": "delete"})
-            )
+            await broadcast(make_event("stages.changed", {
+                "stages": updated_stages,
+                "pipeline_id": effective_pipeline_id,
+                "reason": "delete",
+            }))
         elif msg_type == "stages.reset":
-            updated_stages = stages_store.reset()
+            pipeline_id = payload.get("pipeline_id") or None
+            updated_stages = stages_store.reset(pipeline_id)
+            effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
-            await broadcast(
-                make_event("stages.changed", {"stages": updated_stages, "reason": "reset"})
-            )
+            await broadcast(make_event("stages.changed", {
+                "stages": updated_stages,
+                "pipeline_id": effective_pipeline_id,
+                "reason": "reset",
+            }))
 
         # -------- analyzer (local LLM / Ollama) --------
         elif msg_type == "analyzer.detect_llama_cli":

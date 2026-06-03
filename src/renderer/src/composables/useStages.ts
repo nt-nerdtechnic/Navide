@@ -4,10 +4,13 @@ import { stageDefToFrontend, type Stage } from '../data/stages'
 
 /**
  * Per-window stages cache. Loads from backend on mount and refreshes whenever
- * the backend broadcasts a `stages.changed` event (triggered by any window's
- * upsert / delete / reset / reorder). Reconnect-safe.
+ * the backend broadcasts a `stages.changed` event matching the current active
+ * pipeline. Reconnect-safe.
  */
-export function useStages(backend: ReturnType<typeof useBackend>) {
+export function useStages(
+  backend: ReturnType<typeof useBackend>,
+  getActivePipelineId?: () => string
+) {
   const stages = ref<Stage[]>([])
   const stagesPath = shallowRef<string>('')
   const isLoaded = ref<boolean>(false)
@@ -17,14 +20,16 @@ export function useStages(backend: ReturnType<typeof useBackend>) {
   let unsubChanged: (() => void) | null = null
   let unsubBackend: (() => void) | null = null
 
-  async function refresh(): Promise<void> {
+  async function refresh(pipelineId?: string): Promise<void> {
     loading.value = true
     error.value = ''
     try {
-      const resp = await backend.send<{ stages: Record<string, unknown>[]; path: string }>(
-        'stages.list',
-        {}
-      )
+      const pid = pipelineId ?? getActivePipelineId?.() ?? undefined
+      const resp = await backend.send<{
+        stages: Record<string, unknown>[]
+        path: string
+        pipeline_id: string
+      }>('stages.list', pid ? { pipeline_id: pid } : {})
       if (!resp.ok || !resp.payload) {
         error.value = resp.error?.message ?? 'failed to load stages'
         return
@@ -39,10 +44,15 @@ export function useStages(backend: ReturnType<typeof useBackend>) {
     }
   }
 
-  // Subscribe to backend broadcasts so the cache stays in sync across windows.
+  // Subscribe to backend broadcasts. Only apply if the changed pipeline matches
+  // the currently active pipeline (ignore edits to other pipelines).
   unsubChanged = backend.on('stages.changed', (raw) => {
-    const payload = raw as { stages: Record<string, unknown>[] }
-    if (payload?.stages) {
+    const payload = raw as { stages: Record<string, unknown>[]; pipeline_id?: string }
+    if (!payload?.stages) return
+    const activePid = getActivePipelineId?.() ?? ''
+    const changedPid = payload.pipeline_id ?? ''
+    // Accept if no filter, or if changed pipeline matches active
+    if (!changedPid || !activePid || changedPid === activePid) {
       stages.value = payload.stages.map(stageDefToFrontend)
     }
   })

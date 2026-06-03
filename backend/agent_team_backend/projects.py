@@ -102,6 +102,7 @@ class Project:
     backend_version: str = ""
     log_file_name: str = ""  # set by start_pipeline(); e.g. "pipeline-20260527-183000-建立登入頁面.log"
     layout_mode: str = "grid"
+    pipeline_id: str = ""  # which pipeline template was used for this run
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -250,10 +251,13 @@ class ProjectStore:
         total_stages: int,
         stage_blueprint: list[dict[str, Any]],
         backend_version: str = "",
+        pipeline_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path, backend_version=backend_version)
         project.task_description = task_description
         project.total_stages = total_stages
+        if pipeline_id:
+            project.pipeline_id = pipeline_id
         project.state = "running"
         project.current_stage_index = -1  # spawn_stage will bump to 0
         project.stages = [

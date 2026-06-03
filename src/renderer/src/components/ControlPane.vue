@@ -48,17 +48,17 @@ export interface SpawnPayload {
   workspacePath: string
 }
 
-export interface MaintenanceSpawnPayload {
-  task: string
-  agentKey: string
-  roleKey: RoleKey
-  workspacePath: string
+export interface PipelineSummary {
+  id: string
+  name: string
+  builtin: boolean
+  stage_count: number
 }
 
 export type PipelineState = 'idle' | 'running' | 'completed' | 'aborted'
 
 /** Entry mode detected from the opened workspace (see App.detectMode). */
-export type WorkspaceMode = 'pipeline' | 'spawn' | 'completed' | 'maintenance'
+export type WorkspaceMode = 'pipeline' | 'spawn' | 'completed'
 
 export interface PipelineStatusView {
   state: PipelineState
@@ -125,6 +125,10 @@ interface Props {
   mode?: WorkspaceMode
   /** Current layout mode for the terminal grid; passed through to ViewPanel. */
   layoutMode?: LayoutMode
+  /** All pipeline summaries from usePipelines. */
+  pipelines?: PipelineSummary[]
+  /** Currently active pipeline id (global). */
+  activePipelineId?: string
 }
 
 const props = defineProps<Props>()
@@ -141,8 +145,7 @@ const emit = defineEmits<{
   (e: 'interrupt', paneId: string): void
   (e: 'reinject', paneId: string): void
   (e: 'restore', paneId: string): void
-  (e: 'maintenance-spawn', payload: MaintenanceSpawnPayload): void
-  (e: 'pipeline-start', payload: { task: string; workspacePath: string }): void
+  (e: 'pipeline-start', payload: { task: string; workspacePath: string; pipelineId?: string }): void
   (e: 'pipeline-next'): void
   (e: 'pipeline-abort'): void
   (e: 'pipeline-reset'): void
@@ -304,7 +307,7 @@ function loadTaskIntoTextarea(t: string): void {
     taskDescription.value = t
   }
 }
-defineExpose({ loadTaskIntoTextarea })
+defineExpose({ loadTaskIntoTextarea, openPipelineDetail })
 
 function shortPath(p: string): string {
   if (!p) return ''
@@ -333,23 +336,27 @@ async function openPath(p: string): Promise<void> {
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
 const commandOverride = ref<string>('')
-const maintenanceTask = ref<string>('')
-const maintenanceAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
-const maintenanceRole = ref<RoleKey>('')
-const maintenanceBusy = ref<boolean>(false)
+// ── Pipeline two-layer navigation ─────────────────────────────────────────────
+const sidebarView = ref<'list' | 'pipeline'>('list')
+const openedPipelineId = ref<string>('')
 
-function onMaintenanceLaunch(): void {
-  if (!maintenanceTask.value.trim() || maintenanceBusy.value) return
-  maintenanceBusy.value = true
-  emit('maintenance-spawn', {
-    task: maintenanceTask.value.trim(),
-    agentKey: maintenanceAgent.value,
-    roleKey: maintenanceRole.value,
-    workspacePath: workspacePath.value
-  })
-  maintenanceTask.value = ''
-  maintenanceBusy.value = false
+const openedPipeline = computed(
+  () => props.pipelines?.find((p) => p.id === openedPipelineId.value) ?? null
+)
+
+function openPipelineDetail(id: string): void {
+  openedPipelineId.value = id
+  sidebarView.value = 'pipeline'
 }
+
+function backToList(): void {
+  sidebarView.value = 'list'
+}
+
+function isPipelineRunning(pipelineId: string): boolean {
+  return pipelineId === (props.activePipelineId ?? '') && props.pipeline.state === 'running'
+}
+
 const previewOpen = ref<boolean>(false)
 const manualSpawnOpen = ref<boolean>(false)
 const pipelineOpen = ref<boolean>(true)
@@ -360,7 +367,6 @@ watch(
   () => props.mode,
   (m) => {
     if (m) manualSpawnOpen.value = m === 'spawn'
-    if (m === 'maintenance') pipelineOpen.value = false
   },
   { immediate: true }
 )
@@ -393,12 +399,21 @@ const canSpawn = computed(
   () => props.backendStatus === 'connected' && workspacePath.value.trim().length > 0
 )
 
+// Stage count for the pipeline currently being viewed (may differ from active pipeline)
+const effectiveStageCount = computed(() => {
+  if (!openedPipelineId.value || openedPipelineId.value === (props.activePipelineId ?? '')) {
+    return props.stages.length
+  }
+  return openedPipeline.value?.stage_count ?? 0
+})
+
 const canRunPipeline = computed(
   () =>
     props.backendStatus === 'connected' &&
     workspacePath.value.trim().length > 0 &&
     taskDescription.value.trim().length > 0 &&
-    props.pipeline.state !== 'running'
+    props.pipeline.state !== 'running' &&
+    effectiveStageCount.value > 0
 )
 
 function spawn(): void {
@@ -418,6 +433,8 @@ function startPipeline(): void {
   emit('pipeline-start', {
     task: taskDescription.value.trim(),
     workspacePath: workspacePath.value.trim(),
+    // Pass the opened pipeline id so App.vue activates it first if it differs from active
+    pipelineId: openedPipelineId.value || undefined,
   })
 }
 
@@ -498,7 +515,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       <div class="build-tag" title="目前執行的 build 版本">🏷 build {{ buildTag }}</div>
     </header>
 
-    <section class="block">
+    <section v-if="sidebarView === 'list'" class="block panel-section">
       <label class="lbl">Workspace</label>
       <div class="row workspace-row">
         <input
@@ -534,41 +551,41 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </label>
     </section>
 
-    <!-- ── Maintenance Mode section ──────────────────────────────────────── -->
-    <section v-if="mode === 'maintenance'" class="block maintenance-section">
-      <label class="lbl maintenance-header">🔧 維護任務</label>
-      <p class="hint ok" style="margin-bottom:8px">Pipeline 已完成。描述這次要修什麼或加什麼功能。</p>
-      <textarea
-        v-model="maintenanceTask"
-        placeholder="e.g. 修 login 頁面 validation 錯誤提示、加深色模式 toggle…"
-        rows="3"
-        spellcheck="false"
-        class="maintenance-textarea"
-      ></textarea>
-      <div class="row two-col" style="margin-top:6px">
-        <select v-model="maintenanceAgent">
-          <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
-            {{ spec.label }}
-          </option>
-        </select>
-        <select v-model="maintenanceRole">
-          <option value="">Select role…</option>
-          <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
-        </select>
-      </div>
-      <button
-        class="primary wide"
-        style="margin-top:8px"
-        :disabled="!maintenanceTask.trim() || maintenanceBusy"
-        @click="onMaintenanceLaunch"
-      >
-        ▶ 派出去
-      </button>
+    <!-- ── Pipeline list (list view only) ───────────────────────────────── -->
+    <section v-if="sidebarView === 'list'" class="block panel-section">
+      <label class="lbl">Pipelines</label>
+      <ul v-if="pipelines && pipelines.length" class="pipeline-list">
+        <li
+          v-for="p in pipelines"
+          :key="p.id"
+          class="pipeline-item"
+          :class="{ 'pipeline-active': p.id === activePipelineId }"
+          @click="openPipelineDetail(p.id)"
+        >
+          <span class="pipeline-item-name">{{ p.name }}</span>
+          <span class="pipeline-item-meta">{{ p.stage_count }} 階段</span>
+          <span class="pipeline-item-badge" :class="isPipelineRunning(p.id) ? 'running' : 'idle'">
+            {{ isPipelineRunning(p.id) ? '● running' : '○ idle' }}
+          </span>
+        </li>
+      </ul>
+      <p v-else class="hint">尚未載入 pipelines…</p>
     </section>
 
-    <section class="block" :class="{ pipeline: pipelineOpen }">
+    <!-- ── Pipeline detail header (back + name only) ─────────────────────── -->
+    <template v-if="sidebarView === 'pipeline'">
+      <section class="block pipeline-detail-header">
+        <div class="pipeline-detail-nav">
+          <button class="ghost back-btn" @click="backToList">← 返回</button>
+          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
+          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
+        </div>
+      </section>
+    </template>
+
+    <section v-if="sidebarView === 'pipeline'" class="block" :class="{ pipeline: pipelineOpen }">
       <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
-        {{ pipelineOpen ? '▾' : '▸' }} Pipeline · {{ stages.length }}-stage SDLC
+        {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
       </button>
       <template v-if="pipelineOpen">
       <div
@@ -738,7 +755,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
       </template>
     </section>
 
-    <section class="block">
+    <section v-if="sidebarView === 'list'" class="block panel-section">
       <div class="row between">
         <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
         <div class="agent-header-actions">
@@ -790,9 +807,8 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           </div>
         </li>
       </ul>
-    </section>
 
-    <section class="block" :class="{ 'manual-spawn': manualSpawnOpen }">
+      <hr class="section-divider" />
       <button class="lbl collapsible-header" @click="manualSpawnOpen = !manualSpawnOpen">
         {{ manualSpawnOpen ? '▾' : '▸' }} Manual spawn
       </button>
@@ -935,6 +951,17 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.panel-section {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #161b22;
+}
+.section-divider {
+  border: none;
+  border-top: 1px solid #30363d;
+  margin: 8px 0;
 }
 .lbl {
   font-size: 10px;
@@ -1164,28 +1191,124 @@ button.icon-btn.muted:hover {
 .hint.ok {
   color: #3fb950;
 }
-.maintenance-section {
-  border-top: 1px solid #1f6feb55;
-  background: #0d1a2a;
+/* ── Pipeline list styles ──────────────────────────────────────────────────── */
+.pipeline-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
-.maintenance-header {
+.pipeline-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.pipeline-item:hover {
+  background: #1c2128;
+  border-color: #30363d;
+}
+.pipeline-item.pipeline-active {
+  border-color: #1f6feb;
+  background: #0d1a2e;
+}
+.pipeline-item-name {
+  flex: 1;
+  font-size: 12px;
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-active .pipeline-item-name {
   color: #79c0ff;
 }
-.maintenance-textarea {
-  width: 100%;
-  box-sizing: border-box;
+.pipeline-item-meta {
+  font-size: 10px;
+  color: #6e7681;
+  white-space: nowrap;
+}
+.pipeline-item-badge {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.pipeline-item-badge.running {
+  color: #3fb950;
+}
+.pipeline-item-badge.idle {
+  color: #6e7681;
+}
+.new-pipeline-row {
+  margin-top: 6px;
+  gap: 4px;
+}
+.new-pipeline-input {
+  flex: 1;
   background: #010409;
-  border: 1px solid #30363d;
+  border: 1px solid #1f6feb;
   border-radius: 4px;
   color: #e6edf3;
   font-size: 12px;
-  padding: 6px 8px;
-  resize: vertical;
-  font-family: inherit;
+  padding: 4px 6px;
 }
-.maintenance-textarea:focus {
-  outline: none;
-  border-color: #1f6feb;
+/* ── Pipeline detail header ────────────────────────────────────────────────── */
+.pipeline-detail-header {
+  padding: 8px 10px;
+}
+.pipeline-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.back-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  color: #8b949e;
+}
+.back-btn:hover {
+  color: #e6edf3;
+}
+.pipeline-detail-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #79c0ff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-detail-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.active-tag {
+  font-size: 10px;
+  color: #3fb950;
+  background: #1a2e1a;
+  border: 1px solid #2ea04355;
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.rename-input {
+  flex: 1;
+  background: #010409;
+  border: 1px solid #1f6feb;
+  border-radius: 4px;
+  color: #e6edf3;
+  font-size: 12px;
+  padding: 3px 6px;
 }
 .hint code,
 .agent-cmd code {
