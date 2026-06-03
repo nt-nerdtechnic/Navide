@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import type { BackendStatus } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
@@ -503,19 +504,6 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
     case 'failed':
       return '· kickoff: failed'
   }
-}
-
-function extractDropPaths(e: DragEvent): string[] {
-  const dt = e.dataTransfer
-  if (!dt) return []
-  const getPath = window.agentTeam?.getPathForFile
-  if (!getPath) return []
-
-  const sources: File[] = dt.items?.length
-    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
-    : Array.from(dt.files)
-
-  return sources.map(f => getPath(f)).filter(Boolean)
 }
 
 function onWorkspaceDrop(e: DragEvent): void {

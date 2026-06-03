@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { extractDropPaths } from '../lib/drop'
 
 export interface QuestionItem {
   prompt: string
@@ -63,19 +64,6 @@ function buildCombined(): string {
 function submit(): void {
   if (!allAnswered.value) return
   emit('answer', buildCombined(), [...answers.value])
-}
-
-function extractDropPaths(e: DragEvent): string[] {
-  const dt = e.dataTransfer
-  if (!dt) return []
-  const getPath = window.agentTeam?.getPathForFile
-  if (!getPath) return []
-
-  const sources: File[] = dt.items?.length
-    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
-    : Array.from(dt.files)
-
-  return sources.map(f => getPath(f)).filter(Boolean)
 }
 
 function onAnswerDrop(i: number, e: DragEvent): void {

@@ -91,6 +91,20 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
+    // macOS terminal keyboard shortcuts xterm.js doesn't handle by default.
+    // !e.shiftKey guard ensures Shift+combos pass through to xterm.js selection.
+    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+      if (e.type !== 'keydown') return true
+      // Cmd+Backspace → Ctrl+U (kill to beginning of line)
+      if (e.metaKey && !e.shiftKey && e.key === 'Backspace') { pasteText('\x15'); return false }
+      // Cmd+Left → Ctrl+A (beginning of line)
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft') { pasteText('\x01'); return false }
+      // Cmd+Right → Ctrl+E (end of line)
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { pasteText('\x05'); return false }
+      // Option+Backspace → Ctrl+W (delete word backward)
+      if (e.altKey && !e.shiftKey && e.key === 'Backspace') { pasteText('\x17'); return false }
+      return true
+    })
     // Make the whole pane click-focusable so the user can type immediately.
     el.tabIndex = 0
     el.style.cursor = 'text'

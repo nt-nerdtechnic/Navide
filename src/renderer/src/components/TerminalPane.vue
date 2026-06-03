@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useTerminal } from '../composables/useTerminal'
 import type { useBackend } from '../composables/useBackend'
+import { extractDropPaths, shellEscape } from '../lib/drop'
 
 interface Props {
   paneId: string
@@ -62,24 +63,6 @@ defineExpose({
   recleanBuffer: terminal.recleanBuffer,
   fitTerminal: terminal.fitTerminal
 })
-
-function extractDropPaths(e: DragEvent): string[] {
-  const dt = e.dataTransfer
-  if (!dt) return []
-  const getPath = window.agentTeam?.getPathForFile
-  if (!getPath) return []
-
-  // items includes both files and folders; files may be empty for folder drops
-  const sources: File[] = dt.items?.length
-    ? Array.from(dt.items).filter(i => i.kind === 'file').map(i => i.getAsFile()).filter((f): f is File => f !== null)
-    : Array.from(dt.files)
-
-  return sources.map(f => getPath(f)).filter(Boolean)
-}
-
-function shellEscape(p: string): string {
-  return `'${p.replace(/'/g, "'\\''")}'`
-}
 
 function onTerminalDrop(e: DragEvent): void {
   isDragOver.value = false

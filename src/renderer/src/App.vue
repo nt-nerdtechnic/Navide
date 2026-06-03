@@ -1165,7 +1165,6 @@ function onReviveAgent(entry: SpawnHistoryEntry): void {
     agentKey: entry.agentKey,
     roleKey: entry.roleKey,
     stageId: '',
-    commandOverride: '',
     workspacePath: entry.workspacePath || currentWorkspace.value,
   })
   showHistory.value = false
