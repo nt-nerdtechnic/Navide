@@ -16,6 +16,7 @@ import QuestionAlert from './components/QuestionAlert.vue'
 import CompletionModal from './components/CompletionModal.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
 import { useBackend } from './composables/useBackend'
 import { useRoles } from './composables/useRoles'
@@ -4471,6 +4472,7 @@ function paneIsCommander(p: ActivePane): boolean {
     </Teleport>
     <div class="resize-handle resize-handle-left" @mousedown="onResizeStart($event, 'left')" />
     <div v-if="tokenPanelExpanded" class="resize-handle resize-handle-right" @mousedown="onResizeStart($event, 'right')" />
+    <NotificationHost />
   </div>
 </template>
 

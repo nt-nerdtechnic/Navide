@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import type { useBackend } from '../composables/useBackend'
+import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
 
 const props = defineProps<{
@@ -438,6 +439,10 @@ async function doGenerate(): Promise<void> {
 }
 
 // ── remote actions ────────────────────────────────────────────────────────────
+const { toast: notifyToast, alert: notifyAlert } = useNotify()
+const remoteOpLabel: Record<string, string> = {
+  fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: '同步', publish: '發布'
+}
 const remoteOutput = ref('')
 const remoteError = ref('')
 const showRemoteOutput = ref(false)
@@ -448,7 +453,16 @@ const remoteBusy = ref<'' | 'fetch' | 'pull' | 'push' | 'sync' | 'publish'>('')
 async function runRemote(op: Exclude<typeof remoteBusy.value, ''>, fn: () => Promise<void>): Promise<void> {
   if (remoteBusy.value) return
   remoteBusy.value = op
-  try { await fn() } finally { remoteBusy.value = '' }
+  try {
+    await fn()
+    // Surface the outcome through the modular notification system:
+    // failures as a blocking alert (full git output), success as a toast.
+    const label = remoteOpLabel[op] ?? op
+    if (remoteError.value) void notifyAlert(remoteError.value, { title: `${label} 失敗` })
+    else if (remoteOutput.value) notifyToast(`${label} 完成`, { type: 'success' })
+  } finally {
+    remoteBusy.value = ''
+  }
 }
 async function doFetch(): Promise<void> {
   await runRemote('fetch', async () => {
@@ -1384,13 +1398,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="menu-item danger" @click="doPushForce">↑ Push (Force with lease)</button>
           </div>
         </Teleport>
-      </div>
-
-      <!-- Remote output -->
-      <div v-if="showRemoteOutput && (remoteOutput || remoteError)" class="remote-output">
-        <pre v-if="remoteOutput">{{ remoteOutput }}</pre>
-        <pre v-if="remoteError" class="err-pre">{{ remoteError }}</pre>
-        <button class="close-btn" @click="showRemoteOutput = false">✕</button>
       </div>
 
       <!-- Branch panel -->
