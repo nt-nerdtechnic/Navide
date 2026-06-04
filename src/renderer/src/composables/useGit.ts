@@ -1,0 +1,759 @@
+import { ref, watch, onScopeDispose } from 'vue'
+import type { useBackend } from './useBackend'
+
+export interface GitFileEntry {
+  path: string
+  status: string
+}
+
+export interface GitStatus {
+  is_git_repo: boolean
+  branch: string
+  remote_branch: string
+  ahead: number
+  behind: number
+  staged: GitFileEntry[]
+  unstaged: GitFileEntry[]
+  untracked: GitFileEntry[]
+  operation_in_progress: string // '' | 'merge' | 'rebase' | 'cherry-pick'
+}
+
+export interface GitCommit {
+  hash: string
+  short_hash: string
+  message: string
+  branches: string[]
+  parents: string[]
+}
+
+export interface GitBranch {
+  name: string
+  is_current: boolean
+  is_remote: boolean
+  tracking: string
+}
+
+export interface GitStashEntry {
+  index: number
+  ref: string
+  message: string
+}
+
+export interface GitRemote {
+  name: string
+  fetch_url: string
+  push_url: string
+}
+
+export interface GitTag {
+  name: string
+  commit_hash: string
+  message: string
+}
+
+export interface GitWorktree {
+  path: string
+  head: string
+  branch: string
+  is_main: boolean
+}
+
+export interface BlameEntry {
+  short_hash: string
+  author: string
+  date: string
+  line_no: number
+  content: string
+}
+
+export interface GitCommitDetail {
+  hash: string
+  short_hash: string
+  author_name: string
+  author_email: string
+  date: string
+  message: string
+  body: string
+  files: string[]
+}
+
+const emptyStatus = (): GitStatus => ({
+  is_git_repo: false,
+  branch: '',
+  remote_branch: '',
+  ahead: 0,
+  behind: 0,
+  staged: [],
+  unstaged: [],
+  untracked: [],
+  operation_in_progress: '',
+})
+
+export function useGit(
+  workspacePath: () => string,
+  backend: ReturnType<typeof useBackend>,
+) {
+  const { send, on } = backend
+
+  const gitStatus = ref<GitStatus>(emptyStatus())
+  const gitLog = ref<GitCommit[]>([])
+  const gitBranches = ref<GitBranch[]>([])
+  const gitStashes = ref<GitStashEntry[]>([])
+  const gitRemotes = ref<GitRemote[]>([])
+  const gitTags = ref<GitTag[]>([])
+  const gitWorktrees = ref<GitWorktree[]>([])
+  const gitConfig = ref<Record<string, string>>({})
+  const isLoadingStatus = ref(false)
+  const isLoadingLog = ref(false)
+  const isCommitting = ref(false)
+  const isSyncing = ref(false)
+  const isFetching = ref(false)
+  const isGenerating = ref(false)
+  const syncOutput = ref('')
+  const syncError = ref('')
+
+  async function loadStatus(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) {
+      gitStatus.value = emptyStatus()
+      return
+    }
+    isLoadingStatus.value = true
+    try {
+      const resp = await send<GitStatus>('git.status', { workspace_path: ws })
+      if (resp.ok && resp.payload) {
+        gitStatus.value = resp.payload
+      }
+    } finally {
+      isLoadingStatus.value = false
+    }
+  }
+
+  async function loadLog(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) {
+      gitLog.value = []
+      return
+    }
+    isLoadingLog.value = true
+    try {
+      const resp = await send<{ commits: GitCommit[] }>('git.log', { workspace_path: ws, n: 20 })
+      if (resp.ok && resp.payload) {
+        gitLog.value = resp.payload.commits ?? []
+      }
+    } finally {
+      isLoadingLog.value = false
+    }
+  }
+
+  async function compareBranches(base: string, compare: string): Promise<{ ok: boolean; stat: string; files: string[]; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, stat: '', files: [], error: 'no workspace' }
+    const resp = await send<{ ok: boolean; stat: string; files: string[]; error?: string }>(
+      'git.compare_branches', { workspace_path: ws, base, compare }
+    )
+    return resp.payload ?? { ok: false, stat: '', files: [], error: 'no response' }
+  }
+
+  async function rebaseOn(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.rebase', { workspace_path: ws, branch })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function restoreFileFromBranch(branch: string, filepath: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.restore_from_branch', { workspace_path: ws, branch, filepath })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function cleanUntracked(dry_run: boolean): Promise<{ ok: boolean; files: string[]; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, files: [], error: 'no workspace' }
+    const resp = await send<{ ok: boolean; files: string[]; dry_run: boolean; error?: string }>(
+      'git.clean', { workspace_path: ws, dry_run }
+    )
+    if (resp.ok && resp.payload?.ok && !dry_run) await loadStatus()
+    return resp.payload ? { ok: resp.payload.ok, files: resp.payload.files ?? [], error: resp.payload.error } : { ok: false, files: [], error: 'no response' }
+  }
+
+  async function showCommit(commit_hash: string): Promise<GitCommitDetail | null> {
+    const ws = workspacePath()
+    if (!ws) return null
+    const resp = await send<GitCommitDetail & { ok: boolean; error?: string }>('git.show_commit', { workspace_path: ws, commit_hash })
+    if (resp.ok && resp.payload?.ok) return resp.payload as GitCommitDetail
+    return null
+  }
+
+  async function pushUpstream(branch: string, remote = 'origin'): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>(
+      'git.push_upstream', { workspace_path: ws, branch, remote }, 30_000
+    )
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function loadWorktrees(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitWorktrees.value = []; return }
+    const resp = await send<{ worktrees: GitWorktree[] }>('git.worktrees', { workspace_path: ws })
+    if (resp.ok && resp.payload) gitWorktrees.value = resp.payload.worktrees ?? []
+  }
+
+  async function addWorktree(worktree_path: string, branch: string, new_branch = false): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>(
+      'git.add_worktree', { workspace_path: ws, worktree_path, branch, new_branch }
+    )
+    if (resp.ok && resp.payload?.ok) await loadWorktrees()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function removeWorktree(worktree_path: string, force = false): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error: string }>('git.remove_worktree', { workspace_path: ws, worktree_path, force })
+    if (resp.ok && resp.payload?.ok) await loadWorktrees()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  const gitConfigAllowedKeys = ref<string[]>([])
+
+  async function loadGitConfig(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitConfig.value = {}; return }
+    const resp = await send<{ ok: boolean; config: Record<string, string>; allowed_keys?: string[] }>('git.config_get', { workspace_path: ws })
+    if (resp.ok && resp.payload?.ok) {
+      gitConfig.value = resp.payload.config ?? {}
+      if (resp.payload.allowed_keys) gitConfigAllowedKeys.value = resp.payload.allowed_keys
+    }
+  }
+
+  async function setGitConfig(key: string, value: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.config_set', { workspace_path: ws, key, value })
+    if (resp.ok && resp.payload?.ok) await loadGitConfig()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function blameFile(filepath: string): Promise<BlameEntry[]> {
+    const ws = workspacePath()
+    if (!ws) return []
+    const resp = await send<{ ok: boolean; lines: BlameEntry[] }>('git.blame', { workspace_path: ws, filepath })
+    return resp.ok && resp.payload?.ok ? resp.payload.lines ?? [] : []
+  }
+
+  async function loadTags(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitTags.value = []; return }
+    const resp = await send<{ tags: GitTag[] }>('git.tags', { workspace_path: ws })
+    if (resp.ok && resp.payload) gitTags.value = resp.payload.tags ?? []
+  }
+
+  async function createTag(name: string, message = '', commit_hash = ''): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.create_tag', { workspace_path: ws, name, message, commit_hash })
+    if (resp.ok && resp.payload?.ok) await loadTags()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function deleteTag(name: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.delete_tag', { workspace_path: ws, name })
+    if (resp.ok && resp.payload?.ok) await loadTags()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function cherryPick(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.cherry_pick', { workspace_path: ws, commit_hash })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function fileLog(filepath: string, n = 15): Promise<GitCommit[]> {
+    const ws = workspacePath()
+    if (!ws) return []
+    const resp = await send<{ commits: GitCommit[] }>('git.file_log', { workspace_path: ws, filepath, n })
+    return resp.ok && resp.payload ? resp.payload.commits ?? [] : []
+  }
+
+  async function resolveConflictOurs(filepath: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.resolve_ours', { workspace_path: ws, filepath })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function resolveConflictTheirs(filepath: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.resolve_theirs', { workspace_path: ws, filepath })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function loadRemotes(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitRemotes.value = []; return }
+    const resp = await send<{ remotes: GitRemote[] }>('git.remotes', { workspace_path: ws })
+    if (resp.ok && resp.payload) gitRemotes.value = resp.payload.remotes ?? []
+  }
+
+  async function diffFile(filepath: string, staged = false): Promise<string> {
+    const ws = workspacePath()
+    if (!ws) return ''
+    const resp = await send<{ ok: boolean; diff: string }>('git.diff_file', { workspace_path: ws, filepath, staged })
+    return resp.ok && resp.payload?.ok ? (resp.payload.diff ?? '') : ''
+  }
+
+  async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.merge', { workspace_path: ws, branch })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function revertCommit(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.revert', { workspace_path: ws, commit_hash })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function addRemote(name: string, url: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.add_remote', { workspace_path: ws, name, url })
+    if (resp.ok && resp.payload?.ok) await loadRemotes()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function removeRemote(name: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.remove_remote', { workspace_path: ws, name })
+    if (resp.ok && resp.payload?.ok) await loadRemotes()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function loadBranches(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitBranches.value = []; return }
+    const resp = await send<{ ok: boolean; branches: GitBranch[] }>('git.branches', { workspace_path: ws })
+    if (resp.ok && resp.payload?.ok) gitBranches.value = resp.payload.branches ?? []
+  }
+
+  async function loadStashes(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) { gitStashes.value = []; return }
+    const resp = await send<{ stashes: GitStashEntry[] }>('git.stash_list', { workspace_path: ws })
+    if (resp.ok && resp.payload) gitStashes.value = resp.payload.stashes ?? []
+  }
+
+  async function discardFile(path: string): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) return
+    await send('git.discard', { workspace_path: ws, files: [path] })
+    await loadStatus()
+  }
+
+  async function fetchRemote(): Promise<{ ok: boolean; output: string; error: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, output: '', error: 'no workspace' }
+    isFetching.value = true
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.fetch', { workspace_path: ws }, 30_000)
+      await loadStatus()
+      await loadBranches()
+      return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    } finally {
+      isFetching.value = false
+    }
+  }
+
+  async function pullOnly(): Promise<{ ok: boolean; output: string; error: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, output: '', error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', { workspace_path: ws }, 30_000)
+    await loadStatus()
+    return resp.payload ?? { ok: false, output: '', error: 'no response' }
+  }
+
+  async function pushOnly(): Promise<{ ok: boolean; output: string; error: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, output: '', error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws }, 30_000)
+    await loadStatus()
+    return resp.payload ?? { ok: false, output: '', error: 'no response' }
+  }
+
+  async function createBranch(name: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function switchBranch(name: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.switch_branch', { workspace_path: ws, name })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function deleteBranch(name: string, force = false): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.delete_branch', { workspace_path: ws, name, force })
+    if (resp.ok && resp.payload?.ok) await loadBranches()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function stashPush(message = ''): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function stashPop(index = 0): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.stash_pop', { workspace_path: ws, index })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function stashDrop(index: number): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.stash_drop', { workspace_path: ws, index })
+    if (resp.ok && resp.payload?.ok) await loadStashes()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function amendCommit(message = ''): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.amend', { workspace_path: ws, message })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function undoLastCommit(): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.undo_commit', { workspace_path: ws })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  const isInitializing = ref(false)
+
+  async function initRepo(createGitignore = true): Promise<{ ok: boolean; error?: string; gitignore_created?: boolean }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    isInitializing.value = true
+    try {
+      const resp = await send<{ ok: boolean; error?: string; gitignore_created?: boolean }>(
+        'git.init',
+        { workspace_path: ws, create_gitignore: createGitignore },
+      )
+      if (resp.ok && resp.payload?.ok) {
+        await loadStatus()
+        await loadLog()
+        return { ok: true, gitignore_created: resp.payload.gitignore_created }
+      }
+      return { ok: false, error: resp.payload?.error || resp.error?.message || 'git init failed' }
+    } finally {
+      isInitializing.value = false
+    }
+  }
+
+  async function stageFile(path: string): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) return
+    await send('git.stage', { workspace_path: ws, files: [path] })
+    await loadStatus()
+  }
+
+  async function unstageFile(path: string): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) return
+    await send('git.unstage', { workspace_path: ws, files: [path] })
+    await loadStatus()
+  }
+
+  async function stageAll(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) return
+    await send('git.stage_all', { workspace_path: ws })
+    await loadStatus()
+  }
+
+  async function unstageFiles(paths: string[]): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    if (!paths.length) return { ok: true }
+    const resp = await send<{ ok: boolean; error?: string }>('git.unstage', { workspace_path: ws, files: paths })
+    await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function discardFiles(paths: string[]): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    if (!paths.length) return { ok: true }
+    const resp = await send<{ ok: boolean; error?: string }>('git.discard', { workspace_path: ws, files: paths })
+    await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function commit(message: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    isCommitting.value = true
+    try {
+      const resp = await send<{ ok: boolean; error?: string; hash?: string }>(
+        'git.commit',
+        { workspace_path: ws, message },
+      )
+      if (resp.ok && resp.payload?.ok) {
+        await loadStatus()
+        await loadLog()
+        return { ok: true }
+      }
+      return { ok: false, error: resp.payload?.error || resp.error?.message || 'commit failed' }
+    } finally {
+      isCommitting.value = false
+    }
+  }
+
+  async function sync(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) return
+    isSyncing.value = true
+    syncOutput.value = ''
+    syncError.value = ''
+    try {
+      const resp = await send<{ ok: boolean; pull_output: string; push_output: string; error: string }>(
+        'git.sync',
+        { workspace_path: ws },
+        30_000,
+      )
+      if (resp.ok && resp.payload) {
+        const { pull_output, push_output, error } = resp.payload
+        syncOutput.value = [pull_output, push_output].filter(Boolean).join('\n').trim()
+        syncError.value = error || ''
+        await loadStatus()
+        await loadLog()
+      }
+    } finally {
+      isSyncing.value = false
+    }
+  }
+
+  async function generateMessage(model: string): Promise<string> {
+    const ws = workspacePath()
+    if (!ws) return ''
+    isGenerating.value = true
+    try {
+      const resp = await send<{ ok: boolean; message: string; error?: string }>(
+        'git.generate_message',
+        { workspace_path: ws, model },
+        45_000,
+      )
+      if (resp.ok && resp.payload?.ok) {
+        return resp.payload.message
+      }
+      return ''
+    } finally {
+      isGenerating.value = false
+    }
+  }
+
+  // Hunk / line-level staging: apply a frontend-built patch to the index.
+  // reverse=true unstages; cached=false applies to the working tree (discard).
+  async function applyPatch(
+    patch: string,
+    reverse = false,
+    cached = true,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.apply_patch', {
+      workspace_path: ws,
+      patch,
+      reverse,
+      cached,
+    })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function cloneRepo(
+    url: string,
+    target_dir: string,
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    const resp = await send<{ ok: boolean; path: string; error?: string }>('git.clone', {
+      url,
+      target_dir,
+    })
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function addToGitignore(pattern: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.ignore', {
+      workspace_path: ws,
+      pattern,
+    })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function abortOperation(op: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.abort', {
+      workspace_path: ws,
+      op,
+    })
+    if (resp.ok && resp.payload?.ok) {
+      await loadStatus()
+      await loadLog()
+    }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function stashApply(index: number): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.stash_apply', {
+      workspace_path: ws,
+      index,
+    })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function pullRebase(): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', {
+      workspace_path: ws,
+    })
+    if (resp.ok && resp.payload?.ok) {
+      await loadStatus()
+      await loadLog()
+    }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function pushForce(): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', {
+      workspace_path: ws,
+    })
+    if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  // Refresh when workspace changes
+  watch(workspacePath, () => {
+    gitStatus.value = emptyStatus()
+    gitLog.value = []
+    gitBranches.value = []
+    gitStashes.value = []
+    gitRemotes.value = []
+    gitTags.value = []
+    gitWorktrees.value = []
+    gitConfig.value = {}
+    void loadStatus()
+    void loadLog()
+    void loadBranches()
+    void loadStashes()
+    void loadRemotes()
+    void loadTags()
+    void loadWorktrees()
+    void loadGitConfig()
+  }, { immediate: true })
+
+  // Auto-refresh every 30s to pick up external git changes (e.g. another terminal)
+  const _autoRefreshTimer = window.setInterval(() => {
+    if (workspacePath()) void loadStatus()
+  }, 30_000)
+  onScopeDispose(() => window.clearInterval(_autoRefreshTimer))
+
+  // Refresh on backend git.changed broadcast
+  on('git.changed', (payload: unknown) => {
+    const p = payload as { workspace_path?: string }
+    if (!p?.workspace_path || p.workspace_path === workspacePath()) {
+      void loadStatus()
+      void loadLog()
+      void loadBranches()
+      void loadStashes()
+      void loadRemotes()
+      void loadTags()
+      void loadWorktrees()
+    }
+  })
+
+  return {
+    // state
+    gitStatus, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+    gitWorktrees, gitConfig,
+    isLoadingStatus, isLoadingLog, isInitializing,
+    isCommitting, isSyncing, isFetching, isGenerating,
+    syncOutput, syncError,
+    // loaders
+    loadStatus, loadLog, loadBranches, loadStashes, loadRemotes, loadTags,
+    loadWorktrees, loadGitConfig,
+    // init
+    initRepo,
+    // file operations
+    stageFile, unstageFile, stageAll, unstageFiles, discardFiles, discardFile, diffFile,
+    fileLog, resolveConflictOurs, resolveConflictTheirs,
+    cleanUntracked, blameFile,
+    // remote
+    fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
+    addRemote, removeRemote,
+    // branches
+    createBranch, switchBranch, deleteBranch, mergeBranch, rebaseOn,
+    compareBranches, restoreFileFromBranch,
+    // stash
+    stashPush, stashPop, stashDrop,
+    // tags
+    createTag, deleteTag,
+    // worktrees
+    addWorktree, removeWorktree,
+    // config
+    gitConfigAllowedKeys, setGitConfig,
+    // commit
+    commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
+    showCommit,
+    // vscode-parity additions
+    applyPatch, cloneRepo, addToGitignore, abortOperation, stashApply,
+    pullRebase, pushForce,
+  }
+}

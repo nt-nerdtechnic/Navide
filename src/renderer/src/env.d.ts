@@ -24,8 +24,15 @@ declare global {
       getBackendInfo: () => Promise<BackendInfo>
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
       openPath: (target: string) => Promise<{ ok: boolean; revealed?: boolean; error?: string }>
+      revealPath: (target: string) => Promise<{ ok: boolean; error?: string }>
       openRolesWindow: () => Promise<{ ok: boolean }>
       openStagesWindow: () => Promise<{ ok: boolean }>
+      openDiffWindow: (args: {
+        workspace_path: string
+        filepath: string
+        staged: boolean
+        name?: string
+      }) => Promise<{ ok: boolean }>
       saveJson: (args: {
         defaultName?: string
         content: string

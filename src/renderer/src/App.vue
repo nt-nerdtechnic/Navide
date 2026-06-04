@@ -4128,6 +4128,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :analyzer-status="analyzerStatus"
       :pipelines="pipelinesApi.pipelines.value"
       :active-pipeline-id="pipelinesApi.activePipelineId.value"
+      :backend="backend"
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
       v-model:auto-answer-enabled="autoAnswerEnabled"

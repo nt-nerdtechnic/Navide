@@ -16,8 +16,22 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('workspace:pick', defaultPath),
   openPath: (target: string): Promise<{ ok: boolean; revealed?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openPath', target),
+  revealPath: (target: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:revealPath', target),
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
+  openDiffWindow: (args: {
+    workspace_path: string
+    filepath: string
+    staged: boolean
+    name?: string
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openDiff', {
+      workspace_path: args.workspace_path,
+      filepath: args.filepath,
+      staged: String(args.staged),
+      name: args.name ?? args.filepath,
+    }),
   saveJson: (args: {
     defaultName?: string
     content: string

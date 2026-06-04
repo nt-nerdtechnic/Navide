@@ -2,7 +2,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
-import type { BackendStatus } from '../composables/useBackend'
+import GitPane from './GitPane.vue'
+import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
 
@@ -131,6 +132,8 @@ interface Props {
   pipelines?: PipelineSummary[]
   /** Currently active pipeline id (global). */
   activePipelineId?: string
+  /** Full backend instance — forwarded to GitPane for git operations. */
+  backend?: ReturnType<typeof useBackend>
 }
 
 const props = defineProps<Props>()
@@ -330,6 +333,18 @@ async function openPath(p: string): Promise<void> {
 }
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
+
+// ── Top-level tab: pipeline | git ─────────────────────────────────────────────
+const _TAB_KEY = 'agentTeam.sidebarTab'
+const sidebarTab = ref<'pipeline' | 'git'>(
+  (() => {
+    try { return (sessionStorage.getItem(_TAB_KEY) as 'pipeline' | 'git') || 'pipeline' } catch { return 'pipeline' }
+  })()
+)
+watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /* ignore */ } })
+
+// Git tab badge — updated by GitPane via changes-count event
+const gitChangesCount = ref(0)
 
 // ── Pipeline two-layer navigation ─────────────────────────────────────────────
 const sidebarView = ref<'list' | 'pipeline'>('list')
@@ -537,6 +552,30 @@ function onTaskDrop(e: DragEvent): void {
       </div>
       <div class="build-tag" title="目前執行的 build 版本">🏷 build {{ buildTag }}</div>
     </header>
+
+    <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
+    <div class="sidebar-tabs">
+      <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline" @click="sidebarTab = 'pipeline'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
+      </button>
+      <button :class="['tab-btn', { active: sidebarTab === 'git' }]" title="Git" @click="sidebarTab = 'git'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
+        <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
+      </button>
+    </div>
+
+    <!-- ── Git tab ────────────────────────────────────────────────────────── -->
+    <GitPane
+      v-if="sidebarTab === 'git' && backend"
+      :workspace-path="workspace ?? ''"
+      :analyzer-model="analyzerModel"
+      :backend="backend"
+      @changes-count="gitChangesCount = $event"
+      @open-workspace="$emit('workspace-browse', $event)"
+    />
+
+    <!-- ── Pipeline tab (all existing content) ───────────────────────────── -->
+    <template v-if="sidebarTab === 'pipeline'">
 
     <section v-if="sidebarView === 'list'" class="block panel-section">
       <label class="lbl">Workspace</label>
@@ -955,6 +994,8 @@ function onTaskDrop(e: DragEvent): void {
       </template>
     </section>
 
+    </template><!-- end sidebarTab === 'pipeline' -->
+
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
         <div class="restart-card">
@@ -994,6 +1035,53 @@ function onTaskDrop(e: DragEvent): void {
   color: #c9d1d9;
   font-size: 12px;
   overflow-y: auto;
+}
+
+/* ── Sidebar top-level tabs ─────────────────────────────────────── */
+.sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #21262d;
+  margin: -4px -14px 0;
+  padding: 4px 10px 6px;
+}
+.tab-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: #8b949e;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.tab-btn:hover { color: #c9d1d9; background: #1c2128; }
+.tab-btn.active {
+  color: #e6edf3;
+  background: #21262d;
+}
+.git-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #d29922;
+  color: #0d1117;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0 3px;
+  line-height: 1;
+  border: 1px solid #0d1117;
 }
 .brand {
   border-bottom: 1px solid #21262d;

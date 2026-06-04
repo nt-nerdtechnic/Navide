@@ -14,6 +14,7 @@ let backend: BackendHandle | null = null
 let mainWindow: BrowserWindow | null = null
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
+let diffWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   const qs = new URLSearchParams(params).toString()
@@ -119,6 +120,33 @@ function openStagesWindow(): void {
   loadWindow(win, { window: 'stages' })
 }
 
+function openDiffWindow(params: Record<string, string>): void {
+  const search = { window: 'diff', ...params }
+  if (diffWindow && !diffWindow.isDestroyed()) {
+    // Reuse the window: reload it with the new file's params and focus.
+    loadWindow(diffWindow, search)
+    diffWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'Agent-Team · Diff',
+    parent: mainWindow ?? undefined,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  diffWindow = win
+  win.on('closed', () => {
+    if (diffWindow === win) diffWindow = null
+  })
+  loadWindow(win, search)
+}
+
 ipcMain.handle('window:openRoles', () => {
   openRolesWindow()
   return { ok: true }
@@ -126,6 +154,11 @@ ipcMain.handle('window:openRoles', () => {
 
 ipcMain.handle('window:openStages', () => {
   openStagesWindow()
+  return { ok: true }
+})
+
+ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
+  openDiffWindow(args ?? {})
   return { ok: true }
 })
 
@@ -223,6 +256,16 @@ ipcMain.handle('shell:openPath', async (_event, target: string) => {
     }
   }
   return { ok: true }
+})
+
+ipcMain.handle('shell:revealPath', async (_event, target: string) => {
+  if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
+  try {
+    shell.showItemInFolder(target)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
 })
 
 // Read bytes from a file starting at a given offset. Used by the stage watcher

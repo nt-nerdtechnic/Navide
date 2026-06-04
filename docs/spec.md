@@ -36,7 +36,7 @@ Plans:       none active · all detail plans retired · 2 future ideas F4-F5 —
 | Workspace-first entry + mode-aware UI | ✅ Stable | `recent_workspaces.py` + `Welcome.vue` · recent list + pin · pipeline/spawn/completed mode (M11) |
 | Manager pattern + pre-spawn team | ✅ Stable | default execution model: pre-spawn all slots (role only) → activate per stage · `isManager` slot + dispatch/ask/stage-done router (M13) |
 | Frontend tests | ✅ Stable | Vitest 63 (buffer/stages pure fns + 3 composables w/ mock backend) + Playwright 2 (Electron launch + Welcome→workspace smoke) (M14) |
-| Git preflight + task branch | 📋 Planned | See [[git-control.md]] |
+| Git panel (source control tab) | ✅ Stable | `git_service.py` + `useGit.ts` + `GitPane.vue`; Pipeline/Git top tabs in ControlPane |
 | Cross-agent route engine | 📋 Planned | See [[route-engine.md]] |
 
 Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · 📋 planned, detail plan exists · ❌ identified gap, no plan yet
