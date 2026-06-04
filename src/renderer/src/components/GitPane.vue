@@ -855,7 +855,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
           />
-          <button class="ai-btn" :disabled="isGenerating || !hasStaged" title="AI 生成 commit message" @click.stop="doGenerate">
+          <button class="ai-btn" :class="{ generating: isGenerating }" :disabled="isGenerating || !hasStaged" title="AI 生成 commit message" @click.stop="doGenerate">
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
@@ -1631,6 +1631,8 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 }
 .ai-btn:hover { border-color: #58a6ff; color: #58a6ff; }
 .ai-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.ai-btn.generating { opacity: 1; color: #58a6ff; border-color: #58a6ff; cursor: progress; }
+.ai-btn.generating .spinner { font-size: 15px; }
 .commit-btn-row { display: flex; gap: 0; }
 .commit-main-btn {
   flex: 1; background: #238636; color: #fff; border: 1px solid #2ea043;
