@@ -1069,6 +1069,31 @@ class TestStagedDiff:
         assert diff == ""
 
 
+# ── get_working_diff ─────────────────────────────────────────────────────────────
+
+class TestWorkingDiff:
+    @pytest.mark.asyncio
+    async def test_includes_untracked_file(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "new.txt").write_text("brand new content")
+        diff = await git_service.get_working_diff(str(tmp_path))
+        assert "brand new content" in diff
+        assert "new.txt" in diff
+
+    @pytest.mark.asyncio
+    async def test_includes_unstaged_tracked_change(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("# test\nmodified line")
+        diff = await git_service.get_working_diff(str(tmp_path))
+        assert "modified line" in diff
+
+    @pytest.mark.asyncio
+    async def test_empty_when_clean(self, tmp_path):
+        init_repo(tmp_path)
+        diff = await git_service.get_working_diff(str(tmp_path))
+        assert diff == ""
+
+
 # ── helpers for the parity features ──────────────────────────────────────────────
 
 def _current_branch(path: Path) -> str:

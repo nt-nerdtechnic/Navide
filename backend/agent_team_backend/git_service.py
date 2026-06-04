@@ -1054,6 +1054,38 @@ async def get_staged_diff(workspace_path: str) -> str:
     return out[:_MAX_DIFF_CHARS]
 
 
+async def get_working_diff(workspace_path: str) -> str:
+    """Return the working-tree diff (unstaged tracked changes + untracked files).
+
+    Untracked files are invisible to plain ``git diff``, so each is diffed against
+    /dev/null to render the whole file as additions (matching ``diff_file``). Used
+    as a fallback for commit-message generation when nothing is staged.
+    """
+    parts: list[str] = []
+    rc, out, _ = await _run(["git", "-c", "core.quotePath=false", "diff"], workspace_path)
+    if rc == 0 and out.strip():
+        parts.append(out)
+
+    rc, out, _ = await _run(["git", "ls-files", "--others", "--exclude-standard"], workspace_path)
+    if rc == 0:
+        for filepath in out.splitlines():
+            filepath = filepath.strip()
+            if not filepath:
+                continue
+            # --no-index exits 1 when the files differ (the normal case here), so
+            # only treat rc >= 2 as a real failure.
+            drc, dout, _ = await _run(
+                ["git", "-c", "core.quotePath=false", "diff", "--no-index", "--", os.devnull, filepath],
+                workspace_path,
+            )
+            if drc < 2 and dout.strip():
+                parts.append(dout)
+            if sum(len(p) for p in parts) >= _MAX_DIFF_CHARS:
+                break
+
+    return "\n".join(parts)[:_MAX_DIFF_CHARS]
+
+
 _NODE_GITIGNORE = """\
 node_modules/
 dist/
@@ -1291,10 +1323,17 @@ async def check_ignore(workspace_path: str, filepath: str) -> dict[str, Any]:
 
 
 async def generate_commit_message(workspace_path: str, ollama_url: str, model: str = "llama3.2") -> dict[str, Any]:
-    """Generate a commit message from the staged diff using Ollama."""
+    """Generate a commit message from the staged diff using Ollama.
+
+    Mirrors VS Code/Cursor: if anything is staged, the message targets just the
+    staged diff; otherwise it falls back to the whole working tree (unstaged
+    tracked changes + untracked files).
+    """
     diff = await get_staged_diff(workspace_path)
     if not diff:
-        return {"ok": False, "error": "no staged changes", "message": ""}
+        diff = await get_working_diff(workspace_path)
+    if not diff:
+        return {"ok": False, "error": "no changes", "message": ""}
 
     system = (
         "You are a git commit message writer. "

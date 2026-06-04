@@ -171,8 +171,9 @@ function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
 function openBranchCtxMenu(e: MouseEvent, name: string): void {
   e.preventDefault()
   e.stopPropagation()
+  // Branch menu has a single item (~48px), so clamp to its real height, not the file menu's.
   const x = Math.min(e.clientX, window.innerWidth - 224)
-  const y = Math.min(e.clientY, window.innerHeight - 304)
+  const y = Math.min(e.clientY, window.innerHeight - 48)
   ctxMenu.value = { show: true, x, y, kind: 'branch', file: null, dir: '', branch: name, staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
@@ -916,7 +917,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
           />
-          <button class="ai-btn" :class="{ generating: isGenerating }" :disabled="isGenerating || !hasStaged" title="AI 生成 commit message" @click.stop="doGenerate">
+          <button class="ai-btn" :class="{ generating: isGenerating }" :disabled="isGenerating || !hasChanges" title="AI 生成 commit message" @click.stop="doGenerate">
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
@@ -1264,7 +1265,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
-        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu="!b.is_current && openBranchCtxMenu($event, b.name)">
+        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu.prevent="!b.is_current && openBranchCtxMenu($event, b.name)">
           <span class="b-check">{{ b.is_current ? '✓' : '' }}</span>
           <span class="b-name">{{ b.name }}</span>
           <span v-if="b.tracking" class="b-track">→ {{ b.tracking }}</span>
