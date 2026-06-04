@@ -356,12 +356,19 @@ function autoGrowCommit(): void {
 }
 watch(commitMessage, () => nextTick(autoGrowCommit))
 
-async function doCommit(): Promise<void> {
+// Commit variants mirror VS Code / Cursor's commit dropdown:
+// plain Commit, Commit (Amend), Commit & Push, Commit & Sync.
+async function runCommit(opts: { amend?: boolean; then?: 'push' | 'sync' } = {}): Promise<void> {
+  showCommitMenu.value = false
   commitError.value = ''
-  const r = amendMode.value ? await amendCommit(commitMessage.value) : await commit(commitMessage.value)
-  if (r.ok) { commitMessage.value = ''; amendMode.value = false }
-  else commitError.value = r.error || 'commit failed'
+  const amend = opts.amend ?? amendMode.value
+  const r = amend ? await amendCommit(commitMessage.value) : await commit(commitMessage.value)
+  if (!r.ok) { commitError.value = r.error || 'commit failed'; return }
+  commitMessage.value = ''; amendMode.value = false
+  if (opts.then === 'push') await doPush()
+  else if (opts.then === 'sync') await doSync()
 }
+async function doCommit(): Promise<void> { await runCommit() }
 async function doUndo(): Promise<void> {
   commitError.value = ''
   const r = await undoLastCommit()
@@ -871,9 +878,20 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <Teleport to="body">
             <div v-if="showCommitMenu" class="tp-backdrop" @click="showCommitMenu = false" />
             <div v-if="showCommitMenu" class="tp-dropdown" :style="{ top: showCommitMenuPos.top + 'px', right: showCommitMenuPos.right + 'px' }" @click.stop>
-              <button class="menu-item" @click="amendMode = !amendMode; showCommitMenu = false">
-                <span class="menu-check">{{ amendMode ? '✓' : '' }}</span> Amend Last Commit
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit()">
+                <span class="menu-check" /> Commit
               </button>
+              <button class="menu-item" :disabled="!gitLog.length" @click="runCommit({ amend: true })">
+                <span class="menu-check" /> Commit (Amend)
+              </button>
+              <div class="menu-sep" />
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'push' })">
+                <span class="menu-check" /> Commit &amp; Push
+              </button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'sync' })">
+                <span class="menu-check" /> Commit &amp; Sync
+              </button>
+              <div class="menu-sep" />
               <button class="menu-item" :disabled="!gitLog.length" @click="doUndo(); showCommitMenu = false">
                 ↺ Undo Last Commit
               </button>
