@@ -203,6 +203,30 @@ describe('useGit', () => {
     scope.stop()
   })
 
+  it('diffBlame sends git.diff_blame and returns the annotated hunks', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.diff_blame', {
+      ok: true,
+      hunks: [{ header: '@@ -1 +1,2 @@', lines: [
+        { kind: '+', old_no: null, new_no: 2, text: 'new line', author: '', date: '', committed: false },
+      ] }],
+    })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    const hunks = await result.diffBlame('README.md', false)
+    await flush()
+
+    expect(hunks).toHaveLength(1)
+    expect(hunks[0].lines[0]).toMatchObject({ kind: '+', committed: false })
+    const call = mock.sent.find(s => s.type === 'git.diff_blame')
+    expect(call?.payload).toMatchObject({ filepath: 'README.md', staged: false })
+    scope.stop()
+  })
+
   it('cloneRepo sends git.clone and returns the cloned path', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)

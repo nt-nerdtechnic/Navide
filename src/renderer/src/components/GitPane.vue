@@ -28,7 +28,7 @@ const {
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
-  fileLog, showFile, blameFile, resolveConflictOurs, resolveConflictTheirs,
+  fileLog, showFile, blameFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
   addWorktree, removeWorktree,
@@ -657,6 +657,18 @@ async function showBlame(path: string): Promise<void> {
   blameLines.value = await blameFile(path); blameLoading.value = false
 }
 
+// ── diff blame (single-click inline preview) ────────────────────────────────────
+// Shows only the changed lines with per-line blame, rather than the whole file.
+const diffBlamePath = ref(''), diffBlameStaged = ref(false)
+const diffBlameHunks = ref<import('../composables/useGit').DiffBlameHunk[]>([]), diffBlameLoading = ref(false)
+async function showDiffBlame(path: string, staged: boolean): Promise<void> {
+  if (diffBlamePath.value === path && diffBlameStaged.value === staged) {
+    diffBlamePath.value = ''; diffBlameHunks.value = []; return
+  }
+  diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
+  diffBlameHunks.value = await diffBlame(path, staged); diffBlameLoading.value = false
+}
+
 // ── diff ──────────────────────────────────────────────────────────────────────
 // Open the standalone side-by-side diff window (kept the `toggleDiff` name so
 // every call site stays unchanged). Staging happens inside that window; the
@@ -674,11 +686,11 @@ function toggleDiff(path: string, staged: boolean): void {
 // the standalone diff window. A short timer distinguishes the two (a dblclick
 // also fires two clicks, so the pending single-click action is cancelled).
 let fileClickTimer: ReturnType<typeof setTimeout> | null = null
-function onFileClick(path: string, _staged: boolean): void {
+function onFileClick(path: string, staged: boolean): void {
   if (fileClickTimer) return
   fileClickTimer = setTimeout(() => {
     fileClickTimer = null
-    void showBlame(path)
+    void showDiffBlame(path, staged)
   }, 220)
 }
 function onFileOpen(path: string, staged: boolean): void {
@@ -1056,6 +1068,19 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
               </div>
+              <div v-if="diffBlamePath === row.file!.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
+                <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
+                  <div class="db-hunk-head">{{ dh.header }}</div>
+                  <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
+                    <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
+                    <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
+                    <code class="db-code">{{ dl.text }}</code>
+                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                  </div>
+                </template>
+              </div>
             </template>
           </template>
         </template>
@@ -1093,6 +1118,19 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <code class="blame-content">{{ l.content }}</code>
                 <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
               </div>
+            </div>
+            <div v-if="diffBlamePath === f.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
+              <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
+              <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+              <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
+                <div class="db-hunk-head">{{ dh.header }}</div>
+                <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
+                  <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
+                  <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
+                  <code class="db-code">{{ dl.text }}</code>
+                  <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                </div>
+              </template>
             </div>
           </template>
         </template>
@@ -1202,6 +1240,19 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                     <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                   </div>
                 </div>
+                <div v-if="diffBlamePath === row.file!.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
+                  <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
+                  <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                  <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
+                    <div class="db-hunk-head">{{ dh.header }}</div>
+                    <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
+                      <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
+                      <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
+                      <code class="db-code">{{ dl.text }}</code>
+                      <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                    </div>
+                  </template>
+                </div>
               </template>
             </template>
           </template>
@@ -1235,6 +1286,19 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <code class="blame-content">{{ l.content }}</code>
                   <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
+              </div>
+              <div v-if="diffBlamePath === f.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
+                <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
+                  <div class="db-hunk-head">{{ dh.header }}</div>
+                  <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
+                    <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
+                    <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
+                    <code class="db-code">{{ dl.text }}</code>
+                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                  </div>
+                </template>
               </div>
             </template>
           </template>
@@ -1945,6 +2009,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .blue-border   { border-left-color: #388bfd !important; }
 .yellow-border { border-left-color: #d29922 !important; }
+.green-border  { border-left-color: #3fb950 !important; }
 .mini-row {
   display: flex; align-items: center; gap: 6px; padding: 2px 8px; font-size: 11px;
 }
@@ -1957,6 +2022,20 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .blame-ln { color: #6e7681; min-width: 34px; text-align: right; padding-right: 12px; flex-shrink: 0; user-select: none; }
 .blame-content { color: #c9d1d9; white-space: pre; flex-shrink: 0; }
 .blame-annot { color: #6e7681; font-style: italic; margin-left: 16px; white-space: nowrap; flex-shrink: 0; }
+
+/* Inline diff-blame — only changed lines, each tagged with last author/date. */
+.diffblame-inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-x: auto; padding: 2px 0; }
+.db-hunk-head { color: #79c0ff; font-size: 10px; opacity: 0.8; padding: 2px 8px; white-space: pre; }
+.db-line { display: flex; align-items: baseline; line-height: 1.5; width: max-content; padding: 0 8px; }
+.db-no { color: #6e7681; min-width: 30px; text-align: right; padding-right: 8px; flex-shrink: 0; user-select: none; }
+.db-sign { width: 10px; flex-shrink: 0; text-align: center; user-select: none; }
+.db-code { white-space: pre; flex-shrink: 0; }
+.db-annot { color: #6e7681; font-style: italic; margin-left: 16px; white-space: nowrap; flex-shrink: 0; }
+.db-line.db-add { background: rgba(63,185,80,0.12); }
+.db-line.db-add .db-code, .db-line.db-add .db-sign { color: #56d364; }
+.db-line.db-del { background: rgba(248,81,73,0.12); }
+.db-line.db-del .db-code, .db-line.db-del .db-sign { color: #f85149; }
+.db-line.db-ctx .db-code { color: #c9d1d9; }
 
 /* ── Part divider ───────────────────────────────────────────────────────────── */
 .part-resize {

@@ -1051,6 +1051,55 @@ class TestBlameFile:
         assert result["ok"] is False
 
 
+# ── diff_blame ───────────────────────────────────────────────────────────────────
+
+class TestDiffBlame:
+    def _all_lines(self, result):
+        return [ln for h in result["hunks"] for ln in h["lines"]]
+
+    @pytest.mark.asyncio
+    async def test_added_line_is_uncommitted(self, tmp_path):
+        init_repo(tmp_path)
+        # README starts as "# test"; append a new line in the working tree.
+        (tmp_path / "README.md").write_text("# test\nbrand new line\n")
+        result = await git_service.diff_blame(str(tmp_path), "README.md", staged=False)
+        assert result["ok"] is True
+        added = [ln for ln in self._all_lines(result) if ln["kind"] == "+"]
+        assert added, "expected at least one added line"
+        assert any("brand new line" in ln["text"] for ln in added)
+        assert all(ln["committed"] is False for ln in added)
+
+    @pytest.mark.asyncio
+    async def test_context_line_carries_author(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "f.txt").write_text("one\ntwo\n")
+        subprocess.run(["git", "add", "f.txt"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add f"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / "f.txt").write_text("one\ntwo\nthree\n")  # append a line
+        result = await git_service.diff_blame(str(tmp_path), "f.txt", staged=False)
+        context = [ln for ln in self._all_lines(result) if ln["kind"] == " "]
+        # "one"/"two" stay as unchanged context, blamed to the commit that added them.
+        assert any(ln["author"] == "Test" and ln["committed"] for ln in context)
+
+    @pytest.mark.asyncio
+    async def test_removed_line_carries_head_author(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "f.txt").write_text("one\ntwo\nthree\n")
+        subprocess.run(["git", "add", "f.txt"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add f"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / "f.txt").write_text("one\nthree\n")  # remove "two"
+        result = await git_service.diff_blame(str(tmp_path), "f.txt", staged=False)
+        removed = [ln for ln in self._all_lines(result) if ln["kind"] == "-"]
+        assert any("two" in ln["text"] for ln in removed)
+        assert all(ln["author"] == "Test" and ln["committed"] for ln in removed)
+
+    @pytest.mark.asyncio
+    async def test_rejects_dash_filepath(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.diff_blame(str(tmp_path), "-flag")
+        assert result["ok"] is False
+
+
 # ── get_staged_diff ────────────────────────────────────────────────────────────
 
 class TestStagedDiff:

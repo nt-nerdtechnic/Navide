@@ -79,6 +79,21 @@ export interface BlameEntry {
   content: string
 }
 
+export interface DiffBlameLine {
+  kind: ' ' | '-' | '+'
+  old_no: number | null
+  new_no: number | null
+  text: string
+  author: string
+  date: string
+  committed: boolean
+}
+
+export interface DiffBlameHunk {
+  header: string
+  lines: DiffBlameLine[]
+}
+
 export interface GitCommitDetail {
   hash: string
   short_hash: string
@@ -396,6 +411,13 @@ export function useGit(
     if (!ws) return ''
     const resp = await send<{ ok: boolean; diff: string }>('git.diff_file', { workspace_path: ws, filepath, staged })
     return resp.ok && resp.payload?.ok ? (resp.payload.diff ?? '') : ''
+  }
+
+  async function diffBlame(filepath: string, staged = false): Promise<DiffBlameHunk[]> {
+    const ws = workspacePath()
+    if (!ws) return []
+    const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[] }>('git.diff_blame', { workspace_path: ws, filepath, staged })
+    return resp.ok && resp.payload?.ok ? (resp.payload.hunks ?? []) : []
   }
 
   async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
@@ -838,7 +860,7 @@ export function useGit(
     // file operations
     stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, diffFile,
     fileLog, showFile, resolveConflictOurs, resolveConflictTheirs,
-    cleanUntracked, blameFile,
+    cleanUntracked, blameFile, diffBlame,
     // remote
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
     addRemote, removeRemote,

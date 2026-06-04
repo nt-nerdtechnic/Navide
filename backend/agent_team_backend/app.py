@@ -1455,6 +1455,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.diff_file(ws_path, filepath, staged=staged)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.diff_blame":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            staged = bool(payload.get("staged", False))
+            result = await git_service.diff_blame(ws_path, filepath, staged=staged)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.merge":
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""

@@ -545,6 +545,126 @@ async def blame_file(workspace_path: str, filepath: str) -> dict[str, Any]:
     return {"ok": True, "lines": entries}
 
 
+_ZERO_HASH = "0" * 40
+
+
+def _parse_blame_porcelain(out: str) -> dict[int, dict]:
+    """Parse ``git blame --porcelain`` output into {final_line_no: {meta}}.
+
+    Each entry carries short_hash, author, date (YYYY-MM-DD) and a ``committed``
+    flag (False for the all-zero hash git uses for not-yet-committed lines).
+    """
+    from datetime import datetime, timezone
+
+    result: dict[int, dict] = {}
+    commit_cache: dict[str, dict] = {}
+    current_hash = ""
+    current_line_no = 0
+    for line in out.splitlines():
+        if re.match(r"^[0-9a-f]{40} ", line):
+            parts = line.split()
+            current_hash = parts[0]
+            current_line_no = int(parts[2]) if len(parts) > 2 else 0
+            commit_cache.setdefault(current_hash, {"author": "", "date": ""})
+        elif line.startswith("author "):
+            commit_cache.setdefault(current_hash, {})["author"] = line[7:].strip()
+        elif line.startswith("author-time "):
+            ts = int(line[12:].strip())
+            commit_cache.setdefault(current_hash, {})["date"] = (
+                datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            )
+        elif line.startswith("\t"):
+            meta = commit_cache.get(current_hash, {})
+            result[current_line_no] = {
+                "short_hash": current_hash[:8],
+                "author": meta.get("author", ""),
+                "date": meta.get("date", ""),
+                "committed": current_hash != _ZERO_HASH,
+            }
+    return result
+
+
+def _annotate_diff(diff: str, new_map: dict[int, dict], old_map: dict[int, dict]) -> list[dict]:
+    """Walk a unified diff and tag each line with blame info.
+
+    Context/added lines map to the new (working-tree) blame by new line number;
+    removed lines map to the old (HEAD) blame by old line number. Added lines are
+    inherently uncommitted.
+    """
+    hunks: list[dict] = []
+    cur: dict | None = None
+    old_no = new_no = 0
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+            if not m:
+                continue
+            old_no, new_no = int(m.group(1)), int(m.group(2))
+            cur = {"header": line, "lines": []}
+            hunks.append(cur)
+        elif cur is None or line.startswith("\\"):
+            continue  # file-header lines before the first hunk / "No newline" markers
+        elif line.startswith(" "):
+            info = new_map.get(new_no, {})
+            cur["lines"].append({
+                "kind": " ", "old_no": old_no, "new_no": new_no, "text": line[1:],
+                "author": info.get("author", ""), "date": info.get("date", ""),
+                "committed": info.get("committed", True),
+            })
+            old_no += 1
+            new_no += 1
+        elif line.startswith("-"):
+            info = old_map.get(old_no, {})
+            cur["lines"].append({
+                "kind": "-", "old_no": old_no, "new_no": None, "text": line[1:],
+                "author": info.get("author", ""), "date": info.get("date", ""),
+                "committed": info.get("committed", True),
+            })
+            old_no += 1
+        elif line.startswith("+"):
+            info = new_map.get(new_no, {})
+            cur["lines"].append({
+                "kind": "+", "old_no": None, "new_no": new_no, "text": line[1:],
+                "author": info.get("author", ""), "date": info.get("date", ""),
+                "committed": info.get("committed", False),
+            })
+            new_no += 1
+    return hunks
+
+
+async def diff_blame(workspace_path: str, filepath: str, staged: bool = False) -> dict[str, Any]:
+    """Return the diff for *filepath* with per-line blame annotation.
+
+    Combines ``diff_file`` with two ``git blame`` passes (working tree + HEAD) so
+    the UI can show only the changed lines and who last touched each one. Added
+    lines are reported as uncommitted.
+    """
+    fp = filepath.strip()
+    if not fp or fp.startswith("-"):
+        return {"ok": False, "hunks": [], "error": "invalid filepath"}
+
+    diff_res = await diff_file(workspace_path, fp, staged=staged)
+    if not diff_res.get("ok"):
+        return {"ok": False, "hunks": [], "error": diff_res.get("error", "")}
+    diff = diff_res.get("diff", "")
+
+    new_map: dict[int, dict] = {}
+    rc, out, _ = await _run(
+        ["git", "-c", "core.quotePath=false", "blame", "--porcelain", "--", fp], workspace_path
+    )
+    if rc == 0:
+        new_map = _parse_blame_porcelain(out)
+
+    old_map: dict[int, dict] = {}
+    rc, out, _ = await _run(
+        ["git", "-c", "core.quotePath=false", "blame", "--porcelain", "HEAD", "--", fp], workspace_path
+    )
+    if rc == 0:
+        old_map = _parse_blame_porcelain(out)
+
+    return {"ok": True, "hunks": _annotate_diff(diff, new_map, old_map)}
+
+
 async def compare_branches(workspace_path: str, base: str, compare: str) -> dict[str, Any]:
     """Return diff stat summary between *base* and *compare* branches.
 
