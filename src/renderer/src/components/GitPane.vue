@@ -878,19 +878,11 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <Teleport to="body">
             <div v-if="showCommitMenu" class="tp-backdrop" @click="showCommitMenu = false" />
             <div v-if="showCommitMenu" class="tp-dropdown" :style="{ top: showCommitMenuPos.top + 'px', right: showCommitMenuPos.right + 'px' }" @click.stop>
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit()">
-                <span class="menu-check" /> Commit
-              </button>
-              <button class="menu-item" :disabled="!gitLog.length" @click="runCommit({ amend: true })">
-                <span class="menu-check" /> Commit (Amend)
-              </button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit()">✓ Commit</button>
+              <button class="menu-item" :disabled="!gitLog.length" @click="runCommit({ amend: true })">✎ Commit (Amend)</button>
               <div class="menu-sep" />
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'push' })">
-                <span class="menu-check" /> Commit &amp; Push
-              </button>
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'sync' })">
-                <span class="menu-check" /> Commit &amp; Sync
-              </button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'push' })">↑ Commit &amp; Push</button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'sync' })">⇅ Commit &amp; Sync</button>
               <div class="menu-sep" />
               <button class="menu-item" :disabled="!gitLog.length" @click="doUndo(); showCommitMenu = false">
                 ↺ Undo Last Commit
