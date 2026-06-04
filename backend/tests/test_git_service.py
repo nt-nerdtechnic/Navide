@@ -399,6 +399,19 @@ class TestStash:
         assert "wip changes" in stashes[0]["message"]
 
     @pytest.mark.asyncio
+    async def test_stash_push_single_path(self, tmp_path):
+        # Stashing one pathspec must leave other changed files untouched.
+        init_repo(tmp_path)
+        (tmp_path / "a.txt").write_text("a-change")
+        (tmp_path / "b.txt").write_text("b-change")
+        result = await git_service.stash_push(str(tmp_path), "", ["a.txt"])
+        assert result["ok"] is True
+        assert not (tmp_path / "a.txt").exists()  # a.txt was stashed away
+        assert (tmp_path / "b.txt").read_text() == "b-change"  # b.txt untouched
+        status = await git_service.get_status(str(tmp_path))
+        assert any(f["path"] == "b.txt" for f in status["untracked"])
+
+    @pytest.mark.asyncio
     async def test_stash_pop(self, tmp_path):
         init_repo(tmp_path)
         (tmp_path / "README.md").write_text("stashed content")
@@ -638,6 +651,26 @@ class TestFileLog:
         init_repo(tmp_path)
         commits = await git_service.file_log(str(tmp_path), "nonexistent.txt")
         assert commits == []
+
+
+# ── show_file ──────────────────────────────────────────────────────────────────
+
+class TestShowFile:
+    @pytest.mark.asyncio
+    async def test_show_file_returns_head_content(self, tmp_path):
+        init_repo(tmp_path)
+        # Working tree differs from HEAD; show_file must return the committed version.
+        (tmp_path / "README.md").write_text("# changed in working tree")
+        result = await git_service.show_file(str(tmp_path), "README.md")
+        assert result["ok"] is True
+        assert result["content"].rstrip("\n") == "# test"
+
+    @pytest.mark.asyncio
+    async def test_show_file_missing_at_rev(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.show_file(str(tmp_path), "nonexistent.txt")
+        assert result["ok"] is False
+        assert result["error"]
 
 
 # ── resolve_conflict ──────────────────────────────────────────────────────────
@@ -1194,6 +1227,23 @@ class TestAddToGitignore:
     async def test_target_unknown_rejected(self, tmp_path):
         init_repo(tmp_path)
         r = await git_service.add_to_gitignore(str(tmp_path), "x", target="bogus")
+        assert r["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_nested_rejects_parent_traversal(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.add_to_gitignore(
+            str(tmp_path), "../escape/cache.db", target="nested"
+        )
+        assert r["ok"] is False
+        assert not (tmp_path.parent / "escape" / ".gitignore").exists()
+
+    @pytest.mark.asyncio
+    async def test_nested_rejects_absolute_path(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.add_to_gitignore(
+            str(tmp_path), "/etc/cache.db", target="nested"
+        )
         assert r["ok"] is False
 
 

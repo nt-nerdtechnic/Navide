@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { startBackend, type BackendHandle } from './backend'
 
 // Give the Electron process a distinct name so it can be targeted precisely
@@ -263,6 +265,23 @@ ipcMain.handle('shell:revealPath', async (_event, target: string) => {
   try {
     shell.showItemInFolder(target)
     return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// Write read-only content (e.g. a file's HEAD version) to a temp file and open
+// it with the OS default app — the equivalent of Cursor's "Open File (HEAD)".
+ipcMain.handle('shell:openTempFile', async (_event, filename: string, content: string) => {
+  if (!filename || typeof filename !== 'string') return { ok: false, error: 'invalid filename' }
+  try {
+    const dir = join(tmpdir(), 'agent-team-head')
+    await mkdir(dir, { recursive: true })
+    const safe = filename.replace(/[/\\]/g, '_')
+    const file = join(dir, safe)
+    await writeFile(file, content ?? '', 'utf8')
+    const err = await shell.openPath(file)
+    return err ? { ok: false, error: err } : { ok: true, path: file }
   } catch (e) {
     return { ok: false, error: String(e) }
   }

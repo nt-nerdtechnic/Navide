@@ -19,7 +19,7 @@ const emit = defineEmits<{
 const {
   gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
-  isCommitting, isSyncing, isFetching, isGenerating, isInitializing,
+  isCommitting, isFetching, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, cleanUntracked,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
@@ -27,7 +27,7 @@ const {
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
-  fileLog, blameFile, resolveConflictOurs, resolveConflictTheirs,
+  fileLog, showFile, blameFile, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
   addWorktree, removeWorktree,
@@ -143,18 +143,19 @@ function treeIndent(depth: number): Record<string, string> {
 // ── file context menu (right-click) ─────────────────────────────────────────────
 const ctxMenu = ref<{
   show: boolean; x: number; y: number
-  kind: 'file' | 'folder'
+  kind: 'file' | 'folder' | 'branch'
   file: GitFileEntry | null
   dir: string
+  branch: string
   staged: boolean
-}>({ show: false, x: 0, y: 0, kind: 'file', file: null, dir: '', staged: false })
+}>({ show: false, x: 0, y: 0, kind: 'file', file: null, dir: '', branch: '', staged: false })
 
 function openCtxMenu(e: MouseEvent, file: GitFileEntry, staged: boolean): void {
   e.preventDefault()
   // Clamp so the menu stays on-screen (menu is ~220×300).
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
-  ctxMenu.value = { show: true, x, y, kind: 'file', file, dir: '', staged }
+  ctxMenu.value = { show: true, x, y, kind: 'file', file, dir: '', branch: '', staged }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
@@ -163,9 +164,22 @@ function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
   e.stopPropagation()
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
-  ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, staged }
+  ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, branch: '', staged }
   showViewMenu.value = false
   showCommitMenu.value = false
+}
+function openBranchCtxMenu(e: MouseEvent, name: string): void {
+  e.preventDefault()
+  e.stopPropagation()
+  const x = Math.min(e.clientX, window.innerWidth - 224)
+  const y = Math.min(e.clientY, window.innerHeight - 304)
+  ctxMenu.value = { show: true, x, y, kind: 'branch', file: null, dir: '', branch: name, staged: false }
+  showViewMenu.value = false
+  showCommitMenu.value = false
+}
+function ctxDeleteBranch(): void {
+  if (ctxMenu.value.branch) void doDeleteBranch(ctxMenu.value.branch)
+  closeCtxMenu()
 }
 function closeCtxMenu(): void { ctxMenu.value.show = false }
 
@@ -213,6 +227,14 @@ async function ctxOpenFile(): Promise<void> {
   if (f) await window.agentTeam?.openPath(absPath(f.path))
   closeCtxMenu()
 }
+async function ctxOpenFileAtHead(): Promise<void> {
+  const f = ctxMenu.value.file
+  closeCtxMenu()
+  if (!f) return
+  const r = await showFile(f.path)
+  if (r.ok) await window.agentTeam?.openTempFile(`${fileName(f.path)} (HEAD)`, r.content)
+  else { gitError.value = r.error || '無法讀取 HEAD 版本' }
+}
 async function ctxReveal(): Promise<void> {
   const f = ctxMenu.value.file
   if (f) await window.agentTeam?.revealPath(absPath(f.path))
@@ -232,6 +254,20 @@ function ctxDiscard(): void {
   const f = ctxMenu.value.file
   if (f) discardFile(f.path)
   closeCtxMenu()
+}
+async function ctxStashFile(): Promise<void> {
+  const f = ctxMenu.value.file
+  closeCtxMenu()
+  if (!f) return
+  const r = await stashPush('', [f.path])
+  if (!r.ok) gitError.value = r.error || 'stash failed'
+}
+async function ctxRestoreFromBranch(branch: string): Promise<void> {
+  const f = ctxMenu.value.file
+  closeCtxMenu()
+  if (!f) return
+  const r = await restoreFileFromBranch(branch, f.path)
+  if (!r.ok) gitError.value = r.error || 'restore failed'
 }
 function ctxHistory(): void {
   const f = ctxMenu.value.file
@@ -273,6 +309,12 @@ async function ctxWhyIgnored(): Promise<void> {
   }
   ignoreResult.value = { path: p, text }
 }
+// "Why is this ignored?" only makes sense on a file that is actually ignored —
+// a file showing up in Staged/Changes is by definition tracked, never ignored.
+const ctxIsIgnored = computed(() => {
+  const f = ctxMenu.value.file
+  return !!f && (gitStatus.value?.ignored ?? []).some((ig) => ig.path === f.path)
+})
 
 // ── init ──────────────────────────────────────────────────────────────────────
 const initError = ref('')
@@ -384,48 +426,72 @@ const remoteOutput = ref('')
 const remoteError = ref('')
 const showRemoteOutput = ref(false)
 
+// Tracks the in-flight remote operation so the clicked button shows a spinner
+// and the rest stay disabled until it finishes.
+const remoteBusy = ref<'' | 'fetch' | 'pull' | 'push' | 'sync' | 'publish'>('')
+async function runRemote(op: Exclude<typeof remoteBusy.value, ''>, fn: () => Promise<void>): Promise<void> {
+  if (remoteBusy.value) return
+  remoteBusy.value = op
+  try { await fn() } finally { remoteBusy.value = '' }
+}
 async function doFetch(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
-  const r = await fetchRemote()
-  remoteOutput.value = r.output; remoteError.value = r.error
-  showRemoteOutput.value = !!(r.output || r.error)
+  await runRemote('fetch', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await fetchRemote()
+    remoteOutput.value = r.output; remoteError.value = r.error
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 async function doPull(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
-  const r = await pullOnly()
-  remoteOutput.value = r.output; remoteError.value = r.error
-  showRemoteOutput.value = !!(r.output || r.error)
+  await runRemote('pull', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pullOnly()
+    remoteOutput.value = r.output; remoteError.value = r.error
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 async function doPush(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
-  const r = await pushOnly()
-  remoteOutput.value = r.output; remoteError.value = r.error
-  showRemoteOutput.value = !!(r.output || r.error)
+  await runRemote('push', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pushOnly()
+    remoteOutput.value = r.output; remoteError.value = r.error
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 async function doPullRebase(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false; showRemoteMenu.value = false
-  const r = await pullRebase()
-  remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
-  showRemoteOutput.value = !!(r.output || r.error)
+  showRemoteMenu.value = false
+  await runRemote('pull', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pullRebase()
+    remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 async function doPushForce(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false; showRemoteMenu.value = false
-  const r = await pushForce()
-  remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
-  showRemoteOutput.value = !!(r.output || r.error)
+  showRemoteMenu.value = false
+  await runRemote('push', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pushForce()
+    remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 async function doSync(): Promise<void> {
-  showRemoteOutput.value = false; remoteOutput.value = ''; remoteError.value = ''
-  await sync()
-  remoteOutput.value = syncOutput.value; remoteError.value = syncError.value
-  showRemoteOutput.value = !!(syncOutput.value || syncError.value)
+  await runRemote('sync', async () => {
+    showRemoteOutput.value = false; remoteOutput.value = ''; remoteError.value = ''
+    await sync()
+    remoteOutput.value = syncOutput.value; remoteError.value = syncError.value
+    showRemoteOutput.value = !!(syncOutput.value || syncError.value)
+  })
 }
 async function doPushUpstream(): Promise<void> {
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
   const branch = gitStatus.value?.branch; if (!branch) return
-  const r = await pushUpstream(branch)
-  remoteOutput.value = r.output || ''; remoteError.value = r.error || ''
-  showRemoteOutput.value = !!(r.output || r.error)
+  await runRemote('publish', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pushUpstream(branch)
+    remoteOutput.value = r.output || ''; remoteError.value = r.error || ''
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
 }
 
 const aheadBehind = computed(() => {
@@ -482,24 +548,21 @@ async function doMerge(branch: string): Promise<void> {
   mergeOutput.value = r.output || ''; if (!r.ok) mergeError.value = r.error || 'merge failed'
 }
 
-const restoreFromBranch = ref(''), restoreFilePath = ref(''), restoreError = ref('')
-async function doRestoreFile(): Promise<void> {
-  restoreError.value = ''
-  const r = await restoreFileFromBranch(restoreFromBranch.value, restoreFilePath.value)
-  if (r.ok) { restoreFromBranch.value = ''; restoreFilePath.value = '' }
-  else restoreError.value = r.error || 'restore failed'
-}
-
 // ── stash ─────────────────────────────────────────────────────────────────────
 const stashExpanded = ref(false), stashMessage = ref(''), stashError = ref('')
+const showStashPrompt = ref(false)
 // Auto-expand the Stashes section when stashes appear (e.g. after a stash push)
 watch(() => gitStashes.value.length, (n, prev) => {
   if (n > 0 && (prev ?? 0) === 0) stashExpanded.value = true
 }, { immediate: true })
+function openStashPrompt(): void {
+  stashError.value = ''; stashMessage.value = ''; showStashPrompt.value = true
+}
 async function doStash(): Promise<void> {
   stashError.value = ''
   const r = await stashPush(stashMessage.value)
-  if (r.ok) stashMessage.value = ''; else stashError.value = r.error || 'stash failed'
+  if (r.ok) { stashMessage.value = ''; showStashPrompt.value = false }
+  else stashError.value = r.error || 'stash failed'
 }
 async function doStashApply(i: number): Promise<void> {
   stashError.value = ''
@@ -571,15 +634,6 @@ async function showBlame(path: string): Promise<void> {
   blamePath.value = path; blameLoading.value = true
   blameLines.value = await blameFile(path); blameLoading.value = false
 }
-const blameGroups = computed(() => {
-  const groups: { hash: string; author: string; date: string; lineStart: number; lineEnd: number }[] = []
-  for (const l of blameLines.value) {
-    const last = groups[groups.length - 1]
-    if (last && last.hash === l.short_hash) last.lineEnd = l.line_no
-    else groups.push({ hash: l.short_hash, author: l.author, date: l.date, lineStart: l.line_no, lineEnd: l.line_no })
-  }
-  return groups
-})
 
 // ── diff ──────────────────────────────────────────────────────────────────────
 // Open the standalone side-by-side diff window (kept the `toggleDiff` name so
@@ -950,14 +1004,13 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   <span class="mini-msg">{{ hc.message }}</span>
                 </div>
               </div>
-              <div v-if="blamePath === row.file!.path" class="subpanel yellow-border">
+              <div v-if="blamePath === row.file!.path" class="subpanel yellow-border blame-inline">
                 <div v-if="blameLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!blameGroups.length" class="loading-text">尚無 blame 資訊</div>
-                <div v-for="g in blameGroups" :key="g.hash + g.lineStart" class="mini-row">
-                  <code class="hash-tag">{{ g.hash }}</code>
-                  <span class="blame-author">{{ g.author }}</span>
-                  <span class="blame-date">{{ g.date }}</span>
-                  <span class="blame-lines">L{{ g.lineStart }}<span v-if="g.lineEnd !== g.lineStart">–{{ g.lineEnd }}</span></span>
+                <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
+                <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
+                  <span class="blame-ln">{{ l.line_no }}</span>
+                  <code class="blame-content">{{ l.content }}</code>
+                  <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
               </div>
             </template>
@@ -991,14 +1044,13 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                 <span class="mini-msg">{{ hc.message }}</span>
               </div>
             </div>
-            <div v-if="blamePath === f.path" class="subpanel yellow-border">
+            <div v-if="blamePath === f.path" class="subpanel yellow-border blame-inline">
               <div v-if="blameLoading" class="loading-text">Loading…</div>
-              <div v-else-if="!blameGroups.length" class="loading-text">尚無 blame 資訊</div>
-              <div v-for="g in blameGroups" :key="g.hash + g.lineStart" class="mini-row">
-                <code class="hash-tag">{{ g.hash }}</code>
-                <span class="blame-author">{{ g.author }}</span>
-                <span class="blame-date">{{ g.date }}</span>
-                <span class="blame-lines">L{{ g.lineStart }}<span v-if="g.lineEnd !== g.lineStart">–{{ g.lineEnd }}</span></span>
+              <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
+              <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
+                <span class="blame-ln">{{ l.line_no }}</span>
+                <code class="blame-content">{{ l.content }}</code>
+                <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
               </div>
             </div>
           </template>
@@ -1016,7 +1068,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <div class="sec-actions" @click.stop>
           <button v-if="gitStatus.untracked?.length" class="sec-btn danger" title="Clean untracked" @click="doCleanPreview">🗑</button>
           <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
-          <button v-if="hasChanges" class="sec-btn" title="Stash All" @click="doStash">⊙</button>
+          <button v-if="hasChanges" class="sec-btn" title="Stash All" @click="openStashPrompt">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
         </div>
       </div>
@@ -1029,6 +1081,26 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <button class="btn-ghost" @click="showDiscardConfirm = false">取消</button>
           <button class="btn-danger" @click="doDiscardConfirm">確認捨棄</button>
         </div>
+      </div>
+
+      <!-- Stash with optional label -->
+      <div v-if="showStashPrompt" class="stash-box">
+        <div class="stash-title">Stash 所有變更（標記可留空）</div>
+        <div class="input-row">
+          <input
+            v-model="stashMessage"
+            class="git-input"
+            type="text"
+            placeholder="為這次 stash 命名…（選填）"
+            @keydown.enter="doStash"
+            @keydown.esc="showStashPrompt = false"
+          />
+        </div>
+        <div class="clean-actions">
+          <button class="btn-ghost" @click="showStashPrompt = false">取消</button>
+          <button class="btn-primary" @click="doStash">Stash</button>
+        </div>
+        <p v-if="stashError" class="err-text">{{ stashError }}</p>
       </div>
 
       <!-- Clean confirm -->
@@ -1148,18 +1220,23 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <span v-if="aheadBehind" class="ab-text">{{ aheadBehind }}</span>
         </button>
         <div class="spacer" />
-        <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" title="Publish Branch" :disabled="isSyncing" @click="doPushUpstream">
-          ↑ Publish
+        <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" :class="{ busy: remoteBusy === 'publish' }" title="Publish Branch" :disabled="!!remoteBusy" @click="doPushUpstream">
+          <span v-if="remoteBusy === 'publish'" class="spinner">⟳</span><template v-else>↑ Publish</template>
         </button>
-        <button class="remote-btn" title="Fetch" :disabled="isFetching" @click="doFetch">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'fetch' }" title="Fetch" :disabled="!!remoteBusy" @click="doFetch">
+          <span v-if="remoteBusy === 'fetch'" class="spinner">⟳</span>
+          <svg v-else width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <button class="remote-btn" title="Pull" :disabled="isSyncing" @click="doPull">↓</button>
-        <button class="remote-btn" title="Push" :disabled="isSyncing" @click="doPush">
-          ↑<span v-if="gitStatus.ahead" class="ahead-num">{{ gitStatus.ahead }}</span>
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" title="Pull" :disabled="!!remoteBusy" @click="doPull">
+          <span v-if="remoteBusy === 'pull'" class="spinner">⟳</span><template v-else>↓</template>
         </button>
-        <button class="remote-btn" title="Sync (pull --rebase + push)" :disabled="isSyncing" @click="doSync">⇅</button>
-        <button class="remote-btn" title="More pull/push options" :disabled="isSyncing" @click.stop="openRemoteMenu($event)">▾</button>
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush">
+          <span v-if="remoteBusy === 'push'" class="spinner">⟳</span><template v-else>↑<span v-if="gitStatus.ahead" class="ahead-num">{{ gitStatus.ahead }}</span></template>
+        </button>
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'sync' }" title="Sync (pull --rebase + push)" :disabled="!!remoteBusy" @click="doSync">
+          <span v-if="remoteBusy === 'sync'" class="spinner">⟳</span><template v-else>⇅</template>
+        </button>
+        <button class="remote-btn" title="More pull/push options" :disabled="!!remoteBusy" @click.stop="openRemoteMenu($event)">▾</button>
         <Teleport to="body">
           <div v-if="showRemoteMenu" class="tp-backdrop" @click="showRemoteMenu = false" />
           <div v-if="showRemoteMenu" class="tp-dropdown" :style="{ top: remoteMenuPos.top + 'px', right: remoteMenuPos.right + 'px' }" @click.stop>
@@ -1187,7 +1264,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
-        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }">
+        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu="!b.is_current && openBranchCtxMenu($event, b.name)">
           <span class="b-check">{{ b.is_current ? '✓' : '' }}</span>
           <span class="b-name">{{ b.name }}</span>
           <span v-if="b.tracking" class="b-track">→ {{ b.tracking }}</span>
@@ -1197,25 +1274,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <button class="row-btn always" title="Rebase onto" @click.stop="doRebase(b.name)">⇡</button>
             <button class="row-btn always" title="Merge into current" @click.stop="doMerge(b.name)">⇣</button>
             <button class="row-btn always" title="Switch" @click.stop="doSwitch(b.name)">↵</button>
-            <button class="row-btn always danger" title="Delete" @click.stop="doDeleteBranch(b.name)">✕</button>
           </template>
         </div>
         <div v-if="comparingBranch && compareResult" class="compare-panel">
           <div class="compare-title">{{ comparingBranch }} ↔ {{ gitStatus.branch }}</div>
           <div class="compare-stat">{{ compareResult.stat }}</div>
           <div v-for="f in compareResult.files" :key="f" class="compare-file">{{ f }}</div>
-        </div>
-        <div class="input-row" style="margin-top:8px; flex-direction:column; gap:4px">
-          <div class="sub-label">Restore file from branch</div>
-          <div class="input-row">
-            <select v-model="restoreFromBranch" class="git-input" style="flex:0 0 auto; width:90px">
-              <option value="">Branch…</option>
-              <option v-for="b in gitBranches.filter(x=>!x.is_current)" :key="b.name" :value="b.name">{{ b.name }}</option>
-            </select>
-            <input v-model="restoreFilePath" class="git-input" placeholder="path/to/file" @keydown.enter="doRestoreFile" />
-            <button class="btn-ghost sm" :disabled="!restoreFromBranch || !restoreFilePath.trim()" @click="doRestoreFile">↺</button>
-          </div>
-          <p v-if="restoreError" class="err-text">{{ restoreError }}</p>
         </div>
       </div>
 
@@ -1427,9 +1491,17 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
       <div v-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
         <button class="menu-item" @click="ctxOpenFile">Open File</button>
+        <button class="menu-item" @click="ctxOpenFileAtHead">Open File (HEAD)</button>
+        <button class="menu-item" @click="ctxStashFile">Stash File</button>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxStageToggle">{{ ctxMenu.staged ? 'Unstage Changes' : 'Stage Changes' }}</button>
         <button v-if="!ctxMenu.staged" class="menu-item danger" @click="ctxDiscard">Discard Changes</button>
+        <div v-if="gitBranches.some(x=>!x.is_current)" class="menu-item has-sub danger">
+          <span>Restore from branch</span><span class="sub-caret">▸</span>
+          <div class="ctx-submenu">
+            <button v-for="b in gitBranches.filter(x=>!x.is_current)" :key="b.name" class="menu-item" @click="ctxRestoreFromBranch(b.name)">{{ b.name }}</button>
+          </div>
+        </div>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxHistory">File History</button>
         <button class="menu-item" @click="ctxBlame">Blame</button>
@@ -1443,7 +1515,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <button class="menu-item" @click="ctxAddToGitignore('global')">全域 .gitignore</button>
           </div>
         </div>
-        <button class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
+        <button v-if="ctxIsIgnored" class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxReveal">Reveal in Finder</button>
         <button class="menu-item" @click="ctxCopyPath(false)">Copy Path</button>
@@ -1451,7 +1523,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
       </div>
 
       <!-- Folder menu (applies to all changed files under the folder) -->
-      <div v-else-if="ctxMenu.show" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+      <div v-else-if="ctxMenu.show && ctxMenu.kind === 'folder'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button v-if="ctxMenu.staged" class="menu-item" @click="ctxFolderUnstage">Unstage Changes</button>
         <template v-else>
           <button class="menu-item" @click="ctxFolderStage">Stage Changes</button>
@@ -1466,12 +1538,16 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
               <button class="menu-item" @click="ctxFolderAddIgnore('global')">全域 .gitignore</button>
             </div>
           </div>
-          <button class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
         </template>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxFolderReveal">Reveal in Finder</button>
         <button class="menu-item" @click="ctxFolderCopyPath(false)">Copy Path</button>
         <button class="menu-item" @click="ctxFolderCopyPath(true)">Copy Relative Path</button>
+      </div>
+
+      <!-- Branch menu -->
+      <div v-else-if="ctxMenu.show && ctxMenu.kind === 'branch'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button class="menu-item danger" @click="ctxDeleteBranch">Delete Branch</button>
       </div>
     </Teleport>
 
@@ -1778,9 +1854,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
   display: flex; align-items: center; gap: 6px; padding: 2px 8px; font-size: 11px;
 }
 .mini-msg { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-.blame-author { color: #79c0ff; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.blame-date   { color: #6e7681; flex-shrink: 0; font-size: 10px; }
-.blame-lines  { color: #8b949e; flex-shrink: 0; font-family: monospace; font-size: 10px; }
+/* Inline blame — VS Code style: each source line followed by its author/date */
+.blame-inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-x: auto; padding: 2px 0; }
+.blame-line { display: flex; align-items: baseline; line-height: 1.55; white-space: pre; }
+.blame-ln { color: #6e7681; min-width: 34px; text-align: right; padding-right: 12px; flex-shrink: 0; user-select: none; }
+.blame-content { color: #c9d1d9; white-space: pre; }
+.blame-annot { color: #6e7681; font-style: italic; margin-left: 16px; white-space: nowrap; flex-shrink: 0; }
 
 /* ── Part divider ───────────────────────────────────────────────────────────── */
 .part-resize {
@@ -1814,6 +1893,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 }
 .remote-btn:hover { color: #c9d1d9; background: rgba(177,186,196,0.08); }
 .remote-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.remote-btn.busy { opacity: 1; color: #58a6ff; cursor: progress; }
 .publish-btn { color: #d29922; font-size: 10px; }
 .ahead-num { font-size: 9px; color: #d29922; font-weight: 700; }
 
@@ -1943,6 +2023,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .clean-title { color: #f85149; font-weight: 600; margin-bottom: 4px; }
 .clean-file { color: #c9d1d9; padding: 1px 4px; font-family: monospace; font-size: 10px; }
 .clean-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
+
+.stash-box {
+  margin: 4px 8px; background: #161b22; border: 1px solid #30363d;
+  border-radius: 4px; padding: 8px 10px; font-size: 11px;
+}
+.stash-title { color: #c9d1d9; font-weight: 600; margin-bottom: 6px; }
 
 /* ── Inputs ─────────────────────────────────────────────────────────────────── */
 .git-input {

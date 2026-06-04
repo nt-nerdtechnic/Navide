@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('shell:openPath', target),
   revealPath: (target: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:revealPath', target),
+  openTempFile: (filename: string, content: string): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke('shell:openTempFile', filename, content),
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
   openDiffWindow: (args: {

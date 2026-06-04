@@ -327,6 +327,13 @@ export function useGit(
     return resp.ok && resp.payload ? resp.payload.commits ?? [] : []
   }
 
+  async function showFile(filepath: string, rev = 'HEAD'): Promise<{ ok: boolean; content: string; error: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, content: '', error: 'no workspace' }
+    const resp = await send<{ ok: boolean; content: string; error: string }>('git.show_file', { workspace_path: ws, filepath, rev })
+    return resp.payload ?? { ok: false, content: '', error: 'no response' }
+  }
+
   async function resolveConflictOurs(filepath: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
@@ -464,10 +471,10 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
-  async function stashPush(message = ''): Promise<{ ok: boolean; error?: string }> {
+  async function stashPush(message = '', paths?: string[]): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message })
+    const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message, paths })
     if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
     return resp.payload ?? { ok: false, error: 'no response' }
   }
@@ -795,7 +802,7 @@ export function useGit(
     initRepo,
     // file operations
     stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, diffFile,
-    fileLog, resolveConflictOurs, resolveConflictTheirs,
+    fileLog, showFile, resolveConflictOurs, resolveConflictTheirs,
     cleanUntracked, blameFile,
     // remote
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,

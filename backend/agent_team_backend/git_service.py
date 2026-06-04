@@ -692,6 +692,14 @@ async def push_force(workspace_path: str) -> dict[str, Any]:
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+async def show_file(workspace_path: str, filepath: str, rev: str = "HEAD") -> dict[str, Any]:
+    """Return the content of *filepath* at *rev* (default HEAD), like ``git show rev:path``."""
+    rc, out, stderr = await _run(["git", "show", f"{rev}:{filepath}"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "content": "", "error": stderr.strip() or f"{filepath} not found at {rev}"}
+    return {"ok": True, "content": out, "error": ""}
+
+
 async def diff_file(workspace_path: str, filepath: str, staged: bool = False) -> dict[str, Any]:
     """Return the diff for a single file (staged or working-tree).
 
@@ -926,11 +934,19 @@ async def stash_list(workspace_path: str) -> list[dict[str, Any]]:
     return entries
 
 
-async def stash_push(workspace_path: str, message: str = "") -> dict[str, Any]:
-    """Stash all local changes (tracked + untracked)."""
+async def stash_push(
+    workspace_path: str, message: str = "", paths: list[str] | None = None
+) -> dict[str, Any]:
+    """Stash local changes (tracked + untracked).
+
+    With no *paths* the whole working tree is stashed; pass *paths* to stash
+    only those pathspecs (``git stash push -- <paths>``).
+    """
     args = ["git", "stash", "push", "--include-untracked"]
     if message.strip():
         args += ["-m", message.strip()]
+    if paths:
+        args += ["--", *paths]
     rc, out, stderr = await _run(args, workspace_path)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 

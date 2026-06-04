@@ -1410,7 +1410,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.stash":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
-            result = await git_service.stash_push(ws_path, message)
+            paths = payload.get("paths") or None
+            result = await git_service.stash_push(ws_path, message, paths)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1520,6 +1521,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             n = int(payload.get("n", 15))
             commits = await git_service.file_log(ws_path, filepath, n)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": commits}))
+
+        elif msg_type == "git.show_file":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            rev = payload.get("rev") or "HEAD"
+            result = await git_service.show_file(ws_path, filepath, rev)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.resolve_ours":
             ws_path = payload.get("workspace_path") or ""
