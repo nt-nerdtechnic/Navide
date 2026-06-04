@@ -1342,7 +1342,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             ollama_url = _az_base_url()
             model = payload.get("model") or "llama3.2"
-            result = await git_service.generate_commit_message(ws_path, ollama_url, model)
+            attempt_count = int(payload.get("attempt_count") or 0)
+            result = await git_service.generate_commit_message(ws_path, ollama_url, model, attempt_count)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.discard":

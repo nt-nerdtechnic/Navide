@@ -1503,3 +1503,185 @@ class TestLogAllBranches:
         messages = [c["message"] for c in commits]
         # --all pulls in the side branch's commit even though HEAD isn't on it.
         assert "feature commit" in messages
+
+
+# ── commit-message generation (Cursor-style adaptive) ──────────────────────────
+
+from agent_team_backend import commit_message_prompt
+
+
+class TestRecentCommitMessages:
+    @pytest.mark.asyncio
+    async def test_non_git_dir(self, tmp_path):
+        result = await git_service.get_recent_commit_messages(str(tmp_path))
+        assert result == {"repository": [], "user": []}
+
+    @pytest.mark.asyncio
+    async def test_returns_subjects(self, tmp_path):
+        init_repo(tmp_path)  # author/committer is "Test"
+        (tmp_path / "a.txt").write_text("a")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat: add a"], cwd=tmp_path, check=True, capture_output=True)
+        result = await git_service.get_recent_commit_messages(str(tmp_path))
+        assert "feat: add a" in result["repository"]
+        assert "init" in result["repository"]
+        # init_repo sets user.name="Test", so user commits mirror the repository list.
+        assert "feat: add a" in result["user"]
+
+    @pytest.mark.asyncio
+    async def test_user_empty_when_no_name(self, tmp_path):
+        init_repo(tmp_path)
+        subprocess.run(["git", "config", "--unset", "user.name"], cwd=tmp_path, check=True, capture_output=True)
+        result = await git_service.get_recent_commit_messages(str(tmp_path))
+        assert result["repository"] != []
+        assert result["user"] == []
+
+
+class TestCommitContext:
+    @pytest.mark.asyncio
+    async def test_staged_takes_priority(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("# test\nstaged change")
+        await git_service.stage_files(str(tmp_path), ["README.md"])
+        # An unstaged untracked file must be ignored once something is staged.
+        (tmp_path / "ignored.txt").write_text("not included")
+        ctx = await git_service.get_commit_context(str(tmp_path))
+        assert ctx["staged"] is True
+        assert ctx["repo_name"] == tmp_path.name
+        paths = [c["path"] for c in ctx["changes"]]
+        assert paths == ["README.md"]
+        change = ctx["changes"][0]
+        assert "# test" in change["original"]  # HEAD version
+        assert "staged change" in change["diff"]
+
+    @pytest.mark.asyncio
+    async def test_working_tree_fallback_includes_untracked(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "new.txt").write_text("brand new")
+        ctx = await git_service.get_commit_context(str(tmp_path))
+        assert ctx["staged"] is False
+        change = next(c for c in ctx["changes"] if c["path"] == "new.txt")
+        assert change["original"] == ""  # untracked → no HEAD version
+        assert "brand new" in change["diff"]
+
+    @pytest.mark.asyncio
+    async def test_empty_when_clean(self, tmp_path):
+        init_repo(tmp_path)
+        ctx = await git_service.get_commit_context(str(tmp_path))
+        assert ctx["changes"] == []
+
+
+class TestBuildUserPrompt:
+    def test_assembles_sections(self):
+        context = {
+            "repo_name": "Agent-Team",
+            "branch": "main",
+            "changes": [{"path": "a.py", "original": "old code", "diff": "+new line"}],
+            "staged": True,
+        }
+        recent = {"repository": ["feat: x", "fix: y"], "user": ["chore: z"]}
+        prompt = commit_message_prompt.build_user_prompt(context, recent, 1000)
+        assert "Repository name: Agent-Team" in prompt
+        assert "Branch name: main" in prompt
+        assert "# RECENT USER COMMITS" in prompt and "chore: z" in prompt
+        assert "# RECENT REPOSITORY COMMITS" in prompt and "feat: x" in prompt
+        assert "# FILE: a.py" in prompt
+        assert "# ORIGINAL CODE:" in prompt and "old code" in prompt
+        assert "# CODE CHANGES:" in prompt and "+new line" in prompt
+
+    def test_omits_recent_when_empty(self):
+        context = {"repo_name": "r", "branch": "b", "changes": [], "staged": False}
+        prompt = commit_message_prompt.build_user_prompt(context, {"repository": [], "user": []}, 1000)
+        assert "# RECENT USER COMMITS" not in prompt
+        assert "# RECENT REPOSITORY COMMITS" not in prompt
+
+    def test_truncates_oversized_diff(self):
+        context = {
+            "repo_name": "r",
+            "branch": "b",
+            "changes": [{"path": "big.py", "original": "", "diff": "x" * 5000}],
+            "staged": True,
+        }
+        prompt = commit_message_prompt.build_user_prompt(context, {"repository": [], "user": []}, 200)
+        assert "... (truncated)" in prompt
+
+
+class TestParseCommitMessage:
+    def test_extracts_text_block(self):
+        resp = "Here you go:\n```text\nfeat: add thing\n```\nDone."
+        assert commit_message_prompt.parse_commit_message(resp) == "feat: add thing"
+
+    def test_extracts_plain_fence(self):
+        assert commit_message_prompt.parse_commit_message("```\nfix: bug\n```") == "fix: bug"
+
+    def test_fallback_to_stripped_response(self):
+        assert commit_message_prompt.parse_commit_message('  "fix: bug"  ') == "fix: bug"
+
+    def test_empty(self):
+        assert commit_message_prompt.parse_commit_message("") == ""
+
+    def test_multiline_body_preserved(self):
+        resp = "```text\nfeat: add thing\n\nLonger body line.\n```"
+        assert commit_message_prompt.parse_commit_message(resp) == "feat: add thing\n\nLonger body line."
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    """Stand-in for httpx.AsyncClient that records the request and replies fixed."""
+
+    captured: dict = {}
+
+    def __init__(self, *args, **kwargs):
+        _FakeClient.captured["init"] = kwargs
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, json):
+        _FakeClient.captured["body"] = json
+        return _FakeResponse({"response": "```text\nfeat: add staged change\n```"})
+
+
+class TestGenerateCommitMessage:
+    @pytest.mark.asyncio
+    async def test_no_changes(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.generate_commit_message(str(tmp_path), "http://x")
+        assert result["ok"] is False
+        assert result["error"] == "no changes"
+
+    @pytest.mark.asyncio
+    async def test_generates_from_staged(self, tmp_path, monkeypatch):
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("# test\nchanged")
+        await git_service.stage_files(str(tmp_path), ["README.md"])
+        _FakeClient.captured = {}
+        monkeypatch.setattr(git_service.httpx, "AsyncClient", _FakeClient)
+        result = await git_service.generate_commit_message(str(tmp_path), "http://x", "llama3.2")
+        assert result["ok"] is True
+        assert result["message"] == "feat: add staged change"
+        assert _FakeClient.captured["body"]["options"]["temperature"] == 0.2
+
+    @pytest.mark.asyncio
+    async def test_attempt_count_raises_temperature(self, tmp_path, monkeypatch):
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("# test\nchanged")
+        await git_service.stage_files(str(tmp_path), ["README.md"])
+        _FakeClient.captured = {}
+        monkeypatch.setattr(git_service.httpx, "AsyncClient", _FakeClient)
+        await git_service.generate_commit_message(str(tmp_path), "http://x", "llama3.2", attempt_count=2)
+        # 0.2 * (1 + 2) = 0.6
+        assert _FakeClient.captured["body"]["options"]["temperature"] == pytest.approx(0.6)

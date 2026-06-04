@@ -17,6 +17,8 @@ from typing import Any
 
 import httpx
 
+from agent_team_backend import commit_message_prompt
+
 log = logging.getLogger("agent_team_backend.git_service")
 
 _MAX_DIFF_CHARS = 8_000  # truncate staged diff before sending to Ollama
@@ -1450,39 +1452,129 @@ async def check_ignore(workspace_path: str, filepath: str) -> dict[str, Any]:
     return {"ok": True, "ignored": False, "tracked": tracked, "source": "", "line": 0, "pattern": ""}
 
 
-async def generate_commit_message(workspace_path: str, ollama_url: str, model: str = "llama3.2") -> dict[str, Any]:
-    """Generate a commit message from the staged diff using Ollama.
+async def get_recent_commit_messages(workspace_path: str, n: int = 5) -> dict[str, list[str]]:
+    """Return recent commit subjects for commit-message *style* reference.
 
-    Mirrors VS Code/Cursor: if anything is staged, the message targets just the
-    staged diff; otherwise it falls back to the whole working tree (unstaged
-    tracked changes + untracked files).
+    ``repository``: the last *n* subjects in HEAD's history. ``user``: the last
+    *n* subjects authored by the configured ``user.name`` (empty when the name
+    can't be resolved). Subjects only (first line), matching Copilot. A repo
+    with no commits yet yields two empty lists (``git log`` exits non-zero).
     """
-    diff = await get_staged_diff(workspace_path)
-    if not diff:
-        diff = await get_working_diff(workspace_path)
-    if not diff:
+    if not workspace_path or not Path(workspace_path).is_dir():
+        return {"repository": [], "user": []}
+
+    rc, out, _ = await _run(["git", "log", f"-n{n}", "--pretty=format:%s"], workspace_path)
+    repository = [ln for ln in out.splitlines() if ln.strip()] if rc == 0 else []
+
+    user: list[str] = []
+    rc, name_out, _ = await _run(["git", "config", "user.name"], workspace_path)
+    author = name_out.strip()
+    if rc == 0 and author:
+        rc, out, _ = await _run(
+            ["git", "log", f"-n{n}", f"--author={author}", "--pretty=format:%s"],
+            workspace_path,
+        )
+        if rc == 0:
+            user = [ln for ln in out.splitlines() if ln.strip()]
+    return {"repository": repository, "user": user}
+
+
+async def get_commit_context(workspace_path: str) -> dict[str, Any]:
+    """Collect per-file context for adaptive commit-message generation.
+
+    Mirrors VS Code/Cursor: uses staged files when anything is staged, else the
+    unstaged tracked changes + untracked files. For each file it returns the
+    path, the ``original`` HEAD content (empty for added/untracked files or a
+    repo with no HEAD yet), and the file's unified ``diff``.
+    """
+    status = await get_status(workspace_path)
+    staged = status.get("staged") or []
+    if staged:
+        entries = [(e["path"], e["status"], True) for e in staged]
+    else:
+        unstaged = status.get("unstaged") or []
+        untracked = status.get("untracked") or []
+        entries = [(e["path"], e["status"], False) for e in unstaged]
+        entries += [(e["path"], "?", False) for e in untracked]
+
+    changes: list[dict[str, str]] = []
+    for path, st, is_staged in entries:
+        # original: the HEAD version of the file. Empty for added/untracked
+        # files and for a repo without a HEAD commit (git show exits non-zero).
+        original = ""
+        if st not in ("A", "?"):
+            rc, out, _ = await _run(["git", "show", f"HEAD:{path}"], workspace_path)
+            if rc == 0:
+                original = out
+
+        if is_staged:
+            rc, dout, _ = await _run(
+                ["git", "-c", "core.quotePath=false", "diff", "--staged", "--", path],
+                workspace_path,
+            )
+            diff = dout if rc == 0 else ""
+        elif st == "?":
+            # Untracked: --no-index exits 1 when files differ (the normal case),
+            # so only rc >= 2 is a real failure. Renders the whole file as adds.
+            drc, dout, _ = await _run(
+                ["git", "-c", "core.quotePath=false", "diff", "--no-index", "--", os.devnull, path],
+                workspace_path,
+            )
+            diff = dout if drc < 2 else ""
+        else:
+            rc, dout, _ = await _run(
+                ["git", "-c", "core.quotePath=false", "diff", "--", path],
+                workspace_path,
+            )
+            diff = dout if rc == 0 else ""
+
+        changes.append({"path": path, "original": original, "diff": diff})
+
+    return {
+        "repo_name": Path(workspace_path).name,
+        "branch": status.get("branch", ""),
+        "changes": changes,
+        "staged": bool(staged),
+    }
+
+
+async def generate_commit_message(
+    workspace_path: str,
+    ollama_url: str,
+    model: str = "llama3.2",
+    attempt_count: int = 0,
+) -> dict[str, Any]:
+    """Generate a commit message that adapts to the repo's existing style.
+
+    Instead of forcing Conventional Commits, this gathers per-file diffs +
+    original code and recent commit subjects, then asks Ollama to follow the
+    repository's established conventions (matching Cursor's adaptive behaviour).
+    Mirrors VS Code/Cursor: targets the staged diff when anything is staged,
+    otherwise the whole working tree. *attempt_count* raises the temperature on
+    retries to escape a repeated bad answer (Copilot does the same).
+    """
+    context = await get_commit_context(workspace_path)
+    if not context["changes"]:
         return {"ok": False, "error": "no changes", "message": ""}
 
-    system = (
-        "You are a git commit message writer. "
-        "Given a git diff, output ONLY a single commit message line (no explanation, no quotes). "
-        "Rules: imperative mood, ≤72 chars, Conventional Commits prefix "
-        "(feat/fix/refactor/docs/test/chore/style/perf), e.g. 'feat: add user avatar upload'."
-    )
-    prompt = f"Write a commit message for this diff:\n\n{diff}"
+    recent = await get_recent_commit_messages(workspace_path)
+    per_file_budget = _MAX_DIFF_CHARS // max(1, len(context["changes"]))
+    system = commit_message_prompt.SYSTEM_PROMPT
+    prompt = commit_message_prompt.build_user_prompt(context, recent, per_file_budget)
+    temperature = min(0.2 * (1 + attempt_count), 1.0)
 
     try:
-        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=30.0) as client:
+        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=45.0) as client:
             resp = await client.post("/api/generate", json={
                 "model": model,
                 "system": system,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0.2, "num_predict": 80},
+                "options": {"temperature": temperature, "num_predict": 256},
             })
             resp.raise_for_status()
             data = resp.json()
-            message = (data.get("response") or "").strip().strip('"').strip("'")
+            message = commit_message_prompt.parse_commit_message(data.get("response") or "")
             if not message:
                 return {"ok": False, "error": "empty response from Ollama", "message": ""}
             return {"ok": True, "message": message}

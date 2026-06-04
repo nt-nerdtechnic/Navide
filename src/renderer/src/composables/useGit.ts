@@ -681,20 +681,23 @@ export function useGit(
     }
   }
 
-  async function generateMessage(model: string): Promise<string> {
+  async function generateMessage(
+    model: string,
+    attemptCount = 0,
+  ): Promise<{ ok: boolean; message: string; error?: string }> {
     const ws = workspacePath()
-    if (!ws) return ''
+    if (!ws) return { ok: false, message: '', error: 'no workspace' }
     isGenerating.value = true
     try {
       const resp = await send<{ ok: boolean; message: string; error?: string }>(
         'git.generate_message',
-        { workspace_path: ws, model },
+        { workspace_path: ws, model, attempt_count: attemptCount },
         45_000,
       )
       if (resp.ok && resp.payload?.ok) {
-        return resp.payload.message
+        return { ok: true, message: resp.payload.message }
       }
-      return ''
+      return { ok: false, message: '', error: resp.payload?.error || resp.error || 'generation failed' }
     } finally {
       isGenerating.value = false
     }

@@ -408,7 +408,7 @@ async function runCommit(opts: { amend?: boolean; then?: 'push' | 'sync' } = {})
   const amend = opts.amend ?? amendMode.value
   const r = amend ? await amendCommit(commitMessage.value) : await commit(commitMessage.value)
   if (!r.ok) { commitError.value = r.error || 'commit failed'; return }
-  commitMessage.value = ''; amendMode.value = false
+  commitMessage.value = ''; amendMode.value = false; genAttempt.value = 0
   if (opts.then === 'push') await doPush()
   else if (opts.then === 'sync') await doSync()
 }
@@ -418,9 +418,14 @@ async function doUndo(): Promise<void> {
   const r = await undoLastCommit()
   if (!r.ok) commitError.value = r.error || 'undo failed'
 }
+// Each successive sparkle click raises the backend temperature (Copilot-style
+// retry) to escape a repeated answer; reset to 0 once the form clears.
+const genAttempt = ref(0)
 async function doGenerate(): Promise<void> {
-  const msg = await generateMessage(props.analyzerModel || 'llama3.2')
-  if (msg) commitMessage.value = msg
+  commitError.value = ''
+  const r = await generateMessage(props.analyzerModel || 'llama3.2', genAttempt.value)
+  if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
+  else commitError.value = r.error || 'generation failed'
 }
 
 // ── remote actions ────────────────────────────────────────────────────────────
@@ -835,7 +840,7 @@ function onGitDividerEnd(): void {
 }
 
 watch(() => props.workspacePath, () => {
-  commitMessage.value = ''; commitError.value = ''
+  commitMessage.value = ''; commitError.value = ''; genAttempt.value = 0
   remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
   branchError.value = ''; stashError.value = ''
   clearGitError()
