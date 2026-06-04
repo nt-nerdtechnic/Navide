@@ -160,18 +160,63 @@ async function openFile(): Promise<void> {
     /* ignore */
   }
 }
+
+// ─────────────────── Draggable split: log (top) ↔ history (bottom) ──────────
+// Log region stays visible at all times; drag the divider to resize its height.
+// Height is persisted so it survives reloads. Bounds are static (clamped px).
+const logHeight = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.history.logHeight') ?? '') || 160 } catch { return 160 } })()
+)
+watch(logHeight, (v) => { try { localStorage.setItem('agentTeam.history.logHeight', String(v)) } catch { /* ignore */ } })
+
+let _logDragStartY = 0
+let _logDragStartH = 0
+function onLogDividerStart(e: MouseEvent): void {
+  _logDragStartY = e.clientY
+  _logDragStartH = logHeight.value
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onLogDividerMove)
+  document.addEventListener('mouseup', onLogDividerEnd)
+  e.preventDefault()
+}
+function onLogDividerMove(e: MouseEvent): void {
+  const h = _logDragStartH + e.clientY - _logDragStartY
+  logHeight.value = Math.max(60, Math.min(480, h))
+}
+function onLogDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onLogDividerMove)
+  document.removeEventListener('mouseup', onLogDividerEnd)
+}
 </script>
 
 <template>
   <div class="history">
-    <div v-if="pipeline.projectId || pipeline.log.length" class="run-info">
+    <div class="run-info">
       <div v-if="pipeline.projectId" class="paths-actions">
         <button class="ghost" :title="pipeline.projectFile" @click="openPath(pipeline.projectFile)">📄 project.json</button>
         <button class="ghost" :title="pipeline.pipelineLogFile" @click="openPath(pipeline.pipelineLogFile)">📜 pipeline.log</button>
         <button class="ghost" :title="pipeline.backendLogFile" @click="openPath(pipeline.backendLogFile)">🪵 backend.log</button>
       </div>
-      <div v-if="pipeline.log.length" ref="pipelineLogEl" class="pipeline-log">
-        <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
+      <div class="log-panel" :style="{ height: logHeight + 'px' }">
+        <div class="log-hdr">
+          <span class="log-title">›_ Console</span>
+          <span v-if="pipeline.log.length" class="log-count">{{ pipeline.log.length }}</span>
+        </div>
+        <div ref="pipelineLogEl" class="pipeline-log">
+          <template v-if="pipeline.log.length">
+            <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
+          </template>
+          <div v-else class="pipeline-log-empty">
+            <span class="empty-glyph">›_</span>
+            <span>目前沒有輸出</span>
+          </div>
+        </div>
+      </div>
+      <div class="log-resize" title="拖曳調整 log 區高度" @mousedown="onLogDividerStart">
+        <div class="log-resize-grip" />
       </div>
     </div>
 
@@ -241,16 +286,83 @@ async function openFile(): Promise<void> {
 .paths-actions .ghost:hover {
   background: #21262d;
 }
-.pipeline-log {
-  background: #010409;
-  border-radius: 4px;
-  padding: 6px 8px;
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   margin-top: 4px;
-  max-height: 200px;
+  background: #010409;
+  border: 1px solid #1b2230;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.log-hdr {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid #161b22;
+  background: #0d1117;
+}
+.log-title {
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: #8b949e;
+}
+.log-count {
+  font-size: 9px;
+  color: #6e7681;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 8px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.pipeline-log {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
   font-family: Menlo, Monaco, 'Courier New', monospace;
   font-size: 10px;
+}
+.pipeline-log-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #6e7681;
+  font-size: 11px;
+}
+.empty-glyph {
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 16px;
+  color: #30363d;
+  letter-spacing: 1px;
+}
+.log-resize {
+  flex-shrink: 0;
+  height: 7px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.log-resize-grip {
+  height: 1px;
+  width: 100%;
+  background: #21262d;
+  transition: background 0.12s, height 0.12s;
+}
+.log-resize:hover .log-resize-grip {
+  height: 3px;
+  background: #388bfd;
 }
 .pipeline-log-line {
   color: #8b949e;

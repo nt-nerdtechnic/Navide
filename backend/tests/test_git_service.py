@@ -1423,3 +1423,34 @@ class TestLogParents:
         # newest commit has exactly one parent; the root has none.
         assert len(commits[0]["parents"]) == 1
         assert commits[-1]["parents"] == []
+
+
+# ── get_log all_branches (SourceTree-style multi-lane view) ────────────────────
+
+class TestLogAllBranches:
+    @staticmethod
+    def _make_two_branches(path: Path) -> None:
+        """init + a commit on a side branch, then switch back to the main branch."""
+        init_repo(path)
+        main = _current_branch(path)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=path, check=True, capture_output=True)
+        (path / "feat.txt").write_text("feature work")
+        subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feature commit"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", main], cwd=path, check=True, capture_output=True)
+
+    @pytest.mark.asyncio
+    async def test_current_excludes_other_branches(self, tmp_path):
+        self._make_two_branches(tmp_path)
+        commits = await git_service.get_log(str(tmp_path), 10, all_branches=False)
+        messages = [c["message"] for c in commits]
+        # HEAD is on the main branch, so the side-branch commit must NOT appear.
+        assert "feature commit" not in messages
+
+    @pytest.mark.asyncio
+    async def test_all_includes_other_branches(self, tmp_path):
+        self._make_two_branches(tmp_path)
+        commits = await git_service.get_log(str(tmp_path), 10, all_branches=True)
+        messages = [c["message"] for c in commits]
+        # --all pulls in the side branch's commit even though HEAD isn't on it.
+        assert "feature commit" in messages

@@ -1,4 +1,4 @@
-import { ref, watch, onScopeDispose } from 'vue'
+import { ref, computed, watch, onScopeDispose } from 'vue'
 import type { useBackend } from './useBackend'
 
 export interface GitFileEntry {
@@ -112,6 +112,20 @@ export function useGit(
   const gitStatus = ref<GitStatus>(emptyStatus())
   const showIgnored = ref(false)
   const gitLog = ref<GitCommit[]>([])
+  // History view scope (SourceTree-style): 'all' shows every branch's commits as
+  // a multi-lane DAG, 'current' shows only HEAD's ancestry. logLimit grows via
+  // loadMoreLog() to page through history without breaking the graph.
+  const LOG_PAGE = 50
+  const LOG_SCOPE_KEY = 'agentTeam.git.logScope'
+  const loadLogScope = (): 'all' | 'current' => {
+    try {
+      return localStorage.getItem(LOG_SCOPE_KEY) === 'current' ? 'current' : 'all'
+    } catch {
+      return 'all'
+    }
+  }
+  const logScope = ref<'all' | 'current'>(loadLogScope())
+  const logLimit = ref(LOG_PAGE)
   const gitBranches = ref<GitBranch[]>([])
   const gitStashes = ref<GitStashEntry[]>([])
   const gitRemotes = ref<GitRemote[]>([])
@@ -175,13 +189,33 @@ export function useGit(
     }
     isLoadingLog.value = true
     try {
-      const resp = await send<{ commits: GitCommit[] }>('git.log', { workspace_path: ws, n: 20 })
+      const resp = await send<{ commits: GitCommit[] }>('git.log', {
+        workspace_path: ws,
+        n: logLimit.value,
+        all: logScope.value === 'all',
+      })
       if (resp.ok && resp.payload) {
         gitLog.value = resp.payload.commits ?? []
       }
     } finally {
       isLoadingLog.value = false
     }
+  }
+
+  // Whether more commits may exist beyond what's loaded (full page came back).
+  const canLoadMoreLog = computed(() => gitLog.value.length >= logLimit.value)
+
+  async function loadMoreLog(): Promise<void> {
+    logLimit.value += LOG_PAGE
+    await loadLog()
+  }
+
+  async function setLogScope(scope: 'all' | 'current'): Promise<void> {
+    if (logScope.value === scope) return
+    logScope.value = scope
+    logLimit.value = LOG_PAGE
+    try { localStorage.setItem(LOG_SCOPE_KEY, scope) } catch { /* ignore */ }
+    await loadLog()
   }
 
   async function compareBranches(base: string, compare: string): Promise<{ ok: boolean; stat: string; files: string[]; error?: string }> {
@@ -791,12 +825,13 @@ export function useGit(
     // state
     gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
     gitWorktrees, gitConfig,
+    logScope, logLimit, canLoadMoreLog,
     isLoadingStatus, isLoadingLog, isInitializing,
     isCommitting, isSyncing, isFetching, isGenerating,
     syncOutput, syncError,
     gitError, clearGitError,
     // loaders
-    loadStatus, loadLog, loadBranches, loadStashes, loadRemotes, loadTags,
+    loadStatus, loadLog, loadMoreLog, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
     loadWorktrees, loadGitConfig,
     // init
     initRepo,

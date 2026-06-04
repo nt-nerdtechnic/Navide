@@ -19,6 +19,7 @@ const emit = defineEmits<{
 const {
   gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
+  logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
   isCommitting, isFetching, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, cleanUntracked,
@@ -261,7 +262,7 @@ async function ctxStashFile(): Promise<void> {
   closeCtxMenu()
   if (!f) return
   const r = await stashPush('', [f.path])
-  if (!r.ok) gitError.value = r.error || 'stash failed'
+  if (!r.ok) gitError.value = r.error || 'draft failed'
 }
 async function ctxRestoreFromBranch(branch: string): Promise<void> {
   const f = ctxMenu.value.file
@@ -563,7 +564,7 @@ async function doStash(): Promise<void> {
   stashError.value = ''
   const r = await stashPush(stashMessage.value)
   if (r.ok) { stashMessage.value = ''; showStashPrompt.value = false }
-  else stashError.value = r.error || 'stash failed'
+  else stashError.value = r.error || 'draft failed'
 }
 async function doStashApply(i: number): Promise<void> {
   stashError.value = ''
@@ -604,6 +605,8 @@ async function doDeleteTag(name: string): Promise<void> {
 
 // ── worktrees ─────────────────────────────────────────────────────────────────
 const worktreeExpanded = ref(false), newWtPath = ref(''), newWtBranch = ref(''), newWtIsNew = ref(false), worktreeError = ref('')
+const worktreeBranchOptions = computed(() => gitBranches.value.filter((b) => !b.is_remote).map((b) => b.name))
+watch(newWtIsNew, () => { newWtBranch.value = '' })
 async function doAddWorktree(): Promise<void> {
   worktreeError.value = ''
   const r = await addWorktree(newWtPath.value.trim(), newWtBranch.value.trim(), newWtIsNew.value)
@@ -613,19 +616,37 @@ async function doRemoveWorktree(path: string): Promise<void> {
   worktreeError.value = ''
   const r = await removeWorktree(path); if (!r.ok) worktreeError.value = r.error || 'remove failed'
 }
+async function pickWorktreeDir(): Promise<void> {
+  if (!window.agentTeam?.pickWorkspace) return
+  const picked = await window.agentTeam.pickWorkspace(newWtPath.value || undefined)
+  if (picked) newWtPath.value = picked
+}
 
 // ── config ────────────────────────────────────────────────────────────────────
-const configExpanded = ref(false), editingConfigKey = ref(''), editingConfigValue = ref(''), configError = ref('')
+const configExpanded = ref(false), configError = ref('')
 const configDisplayKeys = computed(() =>
   gitConfigAllowedKeys.value.length ? gitConfigAllowedKeys.value
     : ['user.name', 'user.email', 'core.autocrlf', 'core.filemode', 'pull.rebase']
 )
-async function saveConfig(): Promise<void> {
+const CONFIG_OPTIONS: Record<string, string[]> = {
+  'core.autocrlf': ['true', 'false', 'input'],
+  'core.filemode': ['true', 'false'],
+  'pull.rebase': ['true', 'false'],
+}
+const inlineEditKey = ref(''), inlineEditValue = ref('')
+function startInlineEdit(key: string): void {
   configError.value = ''
-  if (!editingConfigKey.value.trim()) return
-  const r = await setGitConfig(editingConfigKey.value.trim(), editingConfigValue.value)
+  inlineEditKey.value = key
+  inlineEditValue.value = gitConfig.value[key] || ''
+}
+function cancelInlineEdit(): void { inlineEditKey.value = ''; inlineEditValue.value = '' }
+async function saveInlineEdit(): Promise<void> {
+  configError.value = ''
+  const key = inlineEditKey.value
+  if (!key) return
+  const r = await setGitConfig(key, inlineEditValue.value)
   if (!r.ok) configError.value = r.error || 'failed'
-  else { editingConfigKey.value = ''; editingConfigValue.value = '' }
+  else cancelInlineEdit()
 }
 
 // ── blame ─────────────────────────────────────────────────────────────────────
@@ -647,6 +668,22 @@ function toggleDiff(path: string, staged: boolean): void {
     staged,
     name: fileName(path),
   })
+}
+
+// File-name interaction: single click toggles inline blame; double click opens
+// the standalone diff window. A short timer distinguishes the two (a dblclick
+// also fires two clicks, so the pending single-click action is cancelled).
+let fileClickTimer: ReturnType<typeof setTimeout> | null = null
+function onFileClick(path: string, _staged: boolean): void {
+  if (fileClickTimer) return
+  fileClickTimer = setTimeout(() => {
+    fileClickTimer = null
+    void showBlame(path)
+  }, 220)
+}
+function onFileOpen(path: string, staged: boolean): void {
+  if (fileClickTimer) { clearTimeout(fileClickTimer); fileClickTimer = null }
+  toggleDiff(path, staged)
 }
 
 // ── file history ──────────────────────────────────────────────────────────────
@@ -793,6 +830,12 @@ watch(() => props.workspacePath, () => {
 })
 
 function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remotes)\//, '') }
+// A commit is HEAD when its ref names include "HEAD" (e.g. "HEAD -> branch", or
+// bare "HEAD" when detached). In all-branches mode the topmost row isn't always
+// HEAD, so we detect the ref rather than assuming index 0.
+function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
+  return (c.branches ?? []).some(b => b === 'HEAD' || b.startsWith('HEAD '))
+}
 </script>
 
 <template>
@@ -984,7 +1027,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                 @contextmenu="openCtxMenu($event, row.file!, true)"
               >
                 <span class="file-status" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                <span class="file-name-only" :title="row.file!.path" @click="toggleDiff(row.file!.path, true)">{{ row.name }}</span>
+                <span class="file-name-only" :title="row.file!.path" @click="onFileClick(row.file!.path, true)" @dblclick="onFileOpen(row.file!.path, true)">{{ row.name }}</span>
                 <div class="row-actions">
                   <template v-if="row.file!.status === 'U'">
                     <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(row.file!.path)">↰</button>
@@ -992,7 +1035,6 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   </template>
                   <template v-else>
                     <button class="row-btn" title="File history" @click.stop="showFileHistory(row.file!.path)">⊡</button>
-                    <button class="row-btn" title="Blame" @click.stop="showBlame(row.file!.path)">⧖</button>
                     <button class="row-btn" title="Unstage" @click.stop="unstageFile(row.file!.path)">−</button>
                   </template>
                 </div>
@@ -1023,8 +1065,8 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <template v-for="f in sortFiles(gitStatus.staged)" :key="'sl:' + f.path">
             <div class="file-row" :class="{ 'row-conflict': f.status === 'U' }" @contextmenu="openCtxMenu($event, f, true)">
               <span class="file-status" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-              <span class="file-name-main" :title="f.path" @click="toggleDiff(f.path, true)">{{ fileName(f.path) }}</span>
-              <span class="file-path-dim" :title="f.path" @click="toggleDiff(f.path, true)">{{ fileDir(f.path) }}</span>
+              <span class="file-name-main" :title="f.path" @click="onFileClick(f.path, true)" @dblclick="onFileOpen(f.path, true)">{{ fileName(f.path) }}</span>
+              <span class="file-path-dim" :title="f.path" @click="onFileClick(f.path, true)" @dblclick="onFileOpen(f.path, true)">{{ fileDir(f.path) }}</span>
               <div class="row-actions">
                 <template v-if="f.status === 'U'">
                   <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(f.path)">↰</button>
@@ -1032,8 +1074,6 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                 </template>
                 <template v-else>
                   <button class="row-btn" title="File history" @click.stop="showFileHistory(f.path)">⊡</button>
-                  <button class="row-btn" title="Blame" @click.stop="showBlame(f.path)">⧖</button>
-                  <button class="row-btn" title="Unstage" @click.stop="unstageFile(f.path)">−</button>
                 </template>
               </div>
             </div>
@@ -1069,7 +1109,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <div class="sec-actions" @click.stop>
           <button v-if="gitStatus.untracked?.length" class="sec-btn danger" title="Clean untracked" @click="doCleanPreview">🗑</button>
           <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
-          <button v-if="hasChanges" class="sec-btn" title="Stash All" @click="openStashPrompt">⊙</button>
+          <button v-if="hasChanges" class="sec-btn" title="Save Draft" @click="openStashPrompt">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
         </div>
       </div>
@@ -1086,20 +1126,20 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 
       <!-- Stash with optional label -->
       <div v-if="showStashPrompt" class="stash-box">
-        <div class="stash-title">Stash 所有變更（標記可留空）</div>
+        <div class="stash-title">儲存為 Draft（標記可留空）</div>
         <div class="input-row">
           <input
             v-model="stashMessage"
             class="git-input"
             type="text"
-            placeholder="為這次 stash 命名…（選填）"
+            placeholder="為這次 Draft 命名…（選填）"
             @keydown.enter="doStash"
             @keydown.esc="showStashPrompt = false"
           />
         </div>
         <div class="clean-actions">
           <button class="btn-ghost" @click="showStashPrompt = false">取消</button>
-          <button class="btn-primary" @click="doStash">Stash</button>
+          <button class="btn-primary" @click="doStash">Save Draft</button>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
       </div>
@@ -1138,11 +1178,11 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   @contextmenu="openCtxMenu($event, row.file!, false)"
                 >
                   <span class="file-status unstaged-st" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                  <span class="file-name-only" :title="row.file!.path" @click="toggleDiff(row.file!.path, false)">{{ row.name }}</span>
+                  <span class="file-name-only" :title="row.file!.path" @click="onFileClick(row.file!.path, false)" @dblclick="onFileOpen(row.file!.path, false)">{{ row.name }}</span>
                   <div class="row-actions">
                     <button class="row-btn" title="File history" @click.stop="showFileHistory(row.file!.path)">⊡</button>
-                    <button class="row-btn" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
-                    <button class="row-btn danger" title="Discard" @click.stop="discardFile(row.file!.path)">✕</button>
+                    <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">✕</button>
+                    <button class="row-btn primary" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
                   </div>
                 </div>
                 <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
@@ -1151,6 +1191,15 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                     <code class="hash-tag">{{ hc.short_hash }}</code>
                     <span class="mini-msg">{{ hc.message }}</span>
+                  </div>
+                </div>
+                <div v-if="blamePath === row.file!.path" class="subpanel yellow-border blame-inline">
+                  <div v-if="blameLoading" class="loading-text">Loading…</div>
+                  <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
+                  <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
+                    <span class="blame-ln">{{ l.line_no }}</span>
+                    <code class="blame-content">{{ l.content }}</code>
+                    <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                   </div>
                 </div>
               </template>
@@ -1162,12 +1211,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <template v-for="f in sortFiles([...gitStatus.unstaged, ...gitStatus.untracked])" :key="'ul:' + f.path">
               <div class="file-row" @contextmenu="openCtxMenu($event, f, false)">
                 <span class="file-status unstaged-st" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-                <span class="file-name-main" :title="f.path" @click="toggleDiff(f.path, false)">{{ fileName(f.path) }}</span>
-                <span class="file-path-dim" :title="f.path" @click="toggleDiff(f.path, false)">{{ fileDir(f.path) }}</span>
+                <span class="file-name-main" :title="f.path" @click="onFileClick(f.path, false)" @dblclick="onFileOpen(f.path, false)">{{ fileName(f.path) }}</span>
+                <span class="file-path-dim" :title="f.path" @click="onFileClick(f.path, false)" @dblclick="onFileOpen(f.path, false)">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
                   <button class="row-btn" title="File history" @click.stop="showFileHistory(f.path)">⊡</button>
-                  <button class="row-btn" title="Stage" @click.stop="stageFile(f.path)">＋</button>
-                  <button class="row-btn danger" title="Discard" @click.stop="discardFile(f.path)">✕</button>
+                  <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">✕</button>
+                  <button class="row-btn primary" title="Stage" @click.stop="stageFile(f.path)">＋</button>
                 </div>
               </div>
               <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
@@ -1176,6 +1225,15 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
+                </div>
+              </div>
+              <div v-if="blamePath === f.path" class="subpanel yellow-border blame-inline">
+                <div v-if="blameLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
+                <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
+                  <span class="blame-ln">{{ l.line_no }}</span>
+                  <code class="blame-content">{{ l.content }}</code>
+                  <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
               </div>
             </template>
@@ -1296,6 +1354,10 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <svg width="11" height="11" viewBox="0 0 16 16" fill="#6e7681" style="flex-shrink:0"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
           <input v-model="historySearch" class="search-input" placeholder="Search commits…" @click.stop />
         </div>
+        <div class="history-scope-row" @click.stop>
+          <button class="scope-btn" :class="{ active: logScope === 'all' }" :disabled="isLoadingLog" @click="setLogScope('all')">All branches</button>
+          <button class="scope-btn" :class="{ active: logScope === 'current' }" :disabled="isLoadingLog" @click="setLogScope('current')">Current</button>
+        </div>
         <p v-if="revertError || cherryPickError" class="err-text" style="padding:2px 16px">{{ revertError || cherryPickError }}</p>
         <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? 'No matches' : 'No commits yet' }}</div>
         <div v-else class="commit-list">
@@ -1314,7 +1376,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                 </svg>
                 <span
                   class="graph-dot"
-                  :class="{ head: gi === 0 }"
+                  :class="{ head: isHeadCommit(c) }"
                   :style="{ left: laneX(graphLayout.rows[gi]?.lane ?? 0) + 'px', background: laneColor(graphLayout.rows[gi]?.lane ?? 0) }"
                 />
               </div>
@@ -1350,6 +1412,11 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <span class="pg-info">{{ historyPage + 1 }} / {{ historyPageCount }}</span>
           <button class="pg-btn" :disabled="historyPage >= historyPageCount - 1" @click="historyPage++">›</button>
         </div>
+        <div v-if="canLoadMoreLog && historyPage >= historyPageCount - 1" class="history-load-more">
+          <button class="load-more-btn" :disabled="isLoadingLog" @click="loadMoreLog">
+            {{ isLoadingLog ? 'Loading…' : 'Load more' }}
+          </button>
+        </div>
         </div>
       </div>
 
@@ -1357,17 +1424,17 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
       <div class="git-card">
         <div class="card-hdr clickable" @click="stashExpanded = !stashExpanded">
           <span class="sec-caret">{{ stashExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Stashes</span>
+          <span class="sec-label">Draft</span>
           <span v-if="gitStashes.length" class="sec-badge">{{ gitStashes.length }}</span>
           <div class="spacer" />
         </div>
         <div v-if="stashExpanded" class="card-body">
-        <div v-if="!gitStashes.length" class="empty-msg">No stashes</div>
+        <div v-if="!gitStashes.length" class="empty-msg">No draft</div>
         <div v-for="s in gitStashes" :key="s.ref" class="generic-row">
           <span class="stash-ref">{{ s.ref }}</span>
           <span class="stash-msg">{{ s.message }}</span>
           <div class="row-actions always">
-            <button class="row-btn always" title="Apply (keep stash)" @click.stop="doStashApply(s.index)">⎘</button>
+            <button class="row-btn always" title="Apply (keep draft)" @click.stop="doStashApply(s.index)">⎘</button>
             <button class="row-btn always" title="Pop (apply &amp; remove)" @click.stop="doStashPop(s.index)">↑</button>
             <button class="row-btn always danger" title="Drop" @click.stop="doStashDrop(s.index)">✕</button>
           </div>
@@ -1446,7 +1513,14 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
           <div class="input-row">
             <input v-model="newWtPath" class="git-input" placeholder="/path/to/worktree" style="flex:2" />
-            <input v-model="newWtBranch" class="git-input" placeholder="branch" style="flex:1" />
+            <button class="btn-ghost sm icon-only" title="瀏覽資料夾" @click="pickWorktreeDir">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
+            </button>
+            <input v-if="newWtIsNew" v-model="newWtBranch" class="git-input" placeholder="new branch" style="flex:1" />
+            <select v-else v-model="newWtBranch" class="git-input" style="flex:1">
+              <option value="" disabled>branch…</option>
+              <option v-for="b in worktreeBranchOptions" :key="b" :value="b">{{ b }}</option>
+            </select>
             <button class="btn-ghost sm" :disabled="!newWtPath.trim() || !newWtBranch.trim()" @click="doAddWorktree">＋</button>
           </div>
           <label class="check-label">
@@ -1467,15 +1541,27 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <div v-if="configExpanded" class="card-body collapsible-body">
         <div v-for="key in configDisplayKeys" :key="key" class="config-row">
           <span class="config-key">{{ key }}</span>
-          <span class="config-val">{{ gitConfig[key] || '—' }}</span>
-        </div>
-        <div class="input-row" style="margin-top:6px">
-          <select v-model="editingConfigKey" class="git-input" style="flex:1">
-            <option value="">Key…</option>
-            <option v-for="k in configDisplayKeys" :key="k" :value="k">{{ k }}</option>
-          </select>
-          <input v-model="editingConfigValue" class="git-input" placeholder="value" style="flex:2" @keydown.enter="saveConfig" />
-          <button class="btn-ghost sm" :disabled="!editingConfigKey || !editingConfigValue.trim()" @click="saveConfig">✓</button>
+          <template v-if="inlineEditKey === key">
+            <select
+              v-if="CONFIG_OPTIONS[key]"
+              v-model="inlineEditValue"
+              class="git-input config-inline-input"
+            >
+              <option value="" disabled>—</option>
+              <option v-for="opt in CONFIG_OPTIONS[key]" :key="opt" :value="opt">{{ opt }}</option>
+            </select>
+            <input
+              v-else
+              v-model="inlineEditValue"
+              class="git-input config-inline-input"
+              autofocus
+              @keydown.enter="saveInlineEdit"
+              @keydown.esc="cancelInlineEdit"
+            />
+            <button class="btn-ghost sm" @click="saveInlineEdit">✓</button>
+            <button class="btn-ghost sm" @click="cancelInlineEdit">✕</button>
+          </template>
+          <span v-else class="config-val clickable" @click="startInlineEdit(key)">{{ gitConfig[key] || '—' }}</span>
         </div>
         <p v-if="configError" class="err-text">{{ configError }}</p>
         </div>
@@ -1493,7 +1579,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
         <button class="menu-item" @click="ctxOpenFile">Open File</button>
         <button class="menu-item" @click="ctxOpenFileAtHead">Open File (HEAD)</button>
-        <button class="menu-item" @click="ctxStashFile">Stash File</button>
+        <button class="menu-item" @click="ctxStashFile">Save File as Draft</button>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxStageToggle">{{ ctxMenu.staged ? 'Unstage Changes' : 'Stage Changes' }}</button>
         <button v-if="!ctxMenu.staged" class="menu-item danger" @click="ctxDiscard">Discard Changes</button>
@@ -1649,6 +1735,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .btn-ghost:hover { border-color: #6e7681; color: #c9d1d9; }
 .btn-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ghost.sm { font-size: 11px; padding: 3px 7px; }
+.btn-ghost.icon-only { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; flex: 0 0 auto; }
 .btn-danger {
   background: #6e1111; border: 1px solid #8a2929; border-radius: 4px;
   color: #f4d2d2; font-size: 11px; padding: 4px 10px; cursor: pointer;
@@ -1658,8 +1745,8 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 /* ── Panel header ───────────────────────────────────────────────────────────── */
 .panel-header {
   display: flex; align-items: center; gap: 2px;
-  padding: 4px 6px; border-bottom: 1px solid #21262d;
-  min-height: 30px; flex-shrink: 0; z-index: 10;
+  padding: 1px 6px; border-bottom: 1px solid #21262d;
+  min-height: 24px; flex-shrink: 0; z-index: 10;
   background: #0d1117;
 }
 .panel-title {
@@ -1700,6 +1787,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .commit-area {
   padding: 8px 8px 6px; border-bottom: 1px solid #21262d;
   display: flex; flex-direction: column; gap: 5px;
+  position: sticky; top: 0; z-index: 6; background: #0d1117;
 }
 .commit-input-row { display: flex; gap: 5px; align-items: flex-start; }
 .commit-input {
@@ -1826,6 +1914,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .row-btn:hover { color: #c9d1d9; background: rgba(177,186,196,0.1); }
 .row-btn.danger:hover { color: #f85149; }
 .row-btn.always { opacity: 1; }
+/* Stage = primary action, emphasised and rightmost */
+.row-btn.primary { color: #58a6ff; font-size: 13px; font-weight: 700; }
+.row-btn.primary:hover { color: #fff; background: rgba(56,139,253,0.25); }
+/* Discard = shrunk to avoid accidental clicks */
+.row-btn.shrink { min-width: 14px; height: 14px; font-size: 8px; opacity: 0.5; padding: 0; }
+.row-btn.shrink:hover { opacity: 1; }
 
 /* ── Folder rows (tree mode) ────────────────────────────────────────────────── */
 .folder-row {
@@ -1857,9 +1951,11 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .mini-msg { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 /* Inline blame — VS Code style: each source line followed by its author/date */
 .blame-inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-x: auto; padding: 2px 0; }
-.blame-line { display: flex; align-items: baseline; line-height: 1.55; white-space: pre; }
+/* Each row is only as wide as its content (no full-width stretch → no long trailing
+   blank on short lines), full content kept, long lines scroll horizontally. */
+.blame-line { display: flex; align-items: baseline; line-height: 1.55; width: max-content; }
 .blame-ln { color: #6e7681; min-width: 34px; text-align: right; padding-right: 12px; flex-shrink: 0; user-select: none; }
-.blame-content { color: #c9d1d9; white-space: pre; }
+.blame-content { color: #c9d1d9; white-space: pre; flex-shrink: 0; }
 .blame-annot { color: #6e7681; font-style: italic; margin-left: 16px; white-space: nowrap; flex-shrink: 0; }
 
 /* ── Part divider ───────────────────────────────────────────────────────────── */
@@ -1878,6 +1974,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .remote-bar {
   display: flex; align-items: center; gap: 2px;
   padding: 4px 6px; min-height: 30px; border-bottom: 1px solid #21262d;
+  position: sticky; top: 0; z-index: 5; background: #0d1117;
 }
 .branch-pill {
   display: flex; align-items: center; gap: 5px;
@@ -1945,7 +2042,24 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 }
 .search-input:focus { outline: none; border-bottom-color: #388bfd; }
 .search-input::placeholder { color: #6e7681; }
+.history-scope-row {
+  display: flex; gap: 4px; padding: 2px 12px 6px;
+}
+.scope-btn {
+  flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 5px;
+  color: #8b949e; font-size: 10px; padding: 3px 6px; cursor: pointer;
+}
+.scope-btn:hover:not(:disabled) { color: #e6edf3; border-color: #388bfd; }
+.scope-btn.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.scope-btn:disabled { opacity: 0.5; cursor: default; }
 .commit-list { margin-bottom: 4px; }
+.history-load-more { display: flex; justify-content: center; padding: 0 0 6px; }
+.load-more-btn {
+  background: #161b22; border: 1px solid #30363d; border-radius: 5px;
+  color: #c9d1d9; font-size: 11px; padding: 3px 14px; cursor: pointer;
+}
+.load-more-btn:hover:not(:disabled) { border-color: #388bfd; color: #e6edf3; }
+.load-more-btn:disabled { opacity: 0.5; cursor: default; }
 .history-pagination {
   display: flex; align-items: center; justify-content: center;
   gap: 6px; padding: 4px 0 6px;
@@ -2015,6 +2129,9 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .config-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
 .config-key { color: #6e7681; min-width: 108px; flex-shrink: 0; font-family: monospace; font-size: 10px; }
 .config-val { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-val.clickable { cursor: pointer; border-radius: 3px; padding: 1px 4px; margin: -1px -4px; }
+.config-val.clickable:hover { background: #1c2330; color: #fff; }
+.config-inline-input { flex: 1; min-width: 0; }
 
 /* ── Clean confirm ──────────────────────────────────────────────────────────── */
 .clean-box {

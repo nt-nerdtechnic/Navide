@@ -197,17 +197,25 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
     return asdict(status)
 
 
-async def get_log(workspace_path: str, n: int = 20) -> list[dict[str, Any]]:
-    """Return the last *n* commits as serialisable dicts."""
+async def get_log(
+    workspace_path: str, n: int = 20, all_branches: bool = False
+) -> list[dict[str, Any]]:
+    """Return the last *n* commits as serialisable dicts.
+
+    *all_branches* mirrors SourceTree's default view: ``--all`` includes commits
+    from every branch/remote/tag (not just HEAD's ancestry) so the frontend can
+    render a true multi-lane DAG. ``--topo-order`` keeps children above their
+    parents in both modes, which is what the lane layout assumes.
+    """
     if not workspace_path or not Path(workspace_path).is_dir():
         return []
 
     # %H=full hash, %h=short, %s=subject, %D=ref names, %P=parent hashes
     fmt = "%H%x00%h%x00%s%x00%D%x00%P"
-    rc, out, _ = await _run(
-        ["git", "log", f"--pretty=format:{fmt}", f"-n{n}"],
-        workspace_path,
-    )
+    args = ["git", "log", "--topo-order", f"--pretty=format:{fmt}", f"-n{n}"]
+    if all_branches:
+        args.append("--all")
+    rc, out, _ = await _run(args, workspace_path)
     if rc != 0:
         return []
 

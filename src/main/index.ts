@@ -135,6 +135,8 @@ function openDiffWindow(params: Record<string, string>): void {
     height: 760,
     title: 'Agent-Team · Diff',
     parent: mainWindow ?? undefined,
+    // Match the renderer's dark theme so reopening/reloading doesn't flash white.
+    backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

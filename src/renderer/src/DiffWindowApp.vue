@@ -21,7 +21,9 @@ const applyError = ref('')
 const selected = ref<Record<number, Set<number>>>({})
 
 const parsed = computed(() => (rawDiff.value ? parseHunks(rawDiff.value) : { fileHeader: '', hunks: [] }))
-const isEmpty = computed(() => !!rawDiff.value && parsed.value.hunks.length === 0)
+// An empty diff string ("") is also "no changes" — without the !== null guard it
+// would slip past this check and render an empty hunk list (a blank window).
+const isEmpty = computed(() => rawDiff.value !== null && parsed.value.hunks.length === 0)
 
 async function loadDiff(): Promise<void> {
   if (!workspacePath || !filepath) {
@@ -125,7 +127,11 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
       <div v-if="loading" class="dw-msg">Loading…</div>
       <div v-else-if="loadError" class="dw-msg err">{{ loadError }}</div>
       <div v-else-if="isEmpty" class="dw-msg">沒有可顯示的變更（可能是 binary 檔或無差異）</div>
-      <div v-else-if="rawDiff !== null" class="dw-hunks">
+      <div v-else-if="rawDiff === null" class="dw-msg">
+        尚未載入 diff
+        <button class="dw-refresh" style="margin-left: 8px" @click="loadDiff">重新載入</button>
+      </div>
+      <div v-else class="dw-hunks">
         <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dw-hunk">
           <div class="dw-hunk-head">
             <span class="dw-range">{{ hunk.header }}</span>

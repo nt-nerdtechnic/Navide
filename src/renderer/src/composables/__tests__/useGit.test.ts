@@ -334,4 +334,84 @@ describe('useGit', () => {
     expect(mock.sent.find(s => s.type === 'git.push_force')).toBeDefined()
     scope.stop()
   })
+
+  it('loadLog defaults to all-branches scope with the page limit', async () => {
+    localStorage.clear()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    const logSend = mock.sent.find(s => s.type === 'git.log')
+    expect(logSend?.payload.all).toBe(true)
+    expect(logSend?.payload.n).toBe(50)
+    expect(result.logScope.value).toBe('all')
+    scope.stop()
+  })
+
+  it('setLogScope("current") reloads with all:false and resets the limit', async () => {
+    localStorage.clear()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    await result.setLogScope('current')
+    await flush()
+
+    const last = [...mock.sent].reverse().find(s => s.type === 'git.log')
+    expect(last?.payload.all).toBe(false)
+    expect(last?.payload.n).toBe(50)
+    expect(result.logScope.value).toBe('current')
+    scope.stop()
+  })
+
+  it('persists log scope to localStorage and restores it on init', async () => {
+    localStorage.clear()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    // First instance: switch to 'current' → persisted.
+    const first = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+    await first.result.setLogScope('current')
+    await flush()
+    first.scope.stop()
+
+    // Second instance starts up reading the persisted scope.
+    const mock2 = createMockBackend('connected')
+    mock2.setResponse('git.status', mockStatus)
+    mock2.setResponse('git.log', { commits: [] })
+    const second = withScope(() => useGit(() => WS, mock2.backend))
+    await flush()
+
+    expect(second.result.logScope.value).toBe('current')
+    const logSend = mock2.sent.find(s => s.type === 'git.log')
+    expect(logSend?.payload.all).toBe(false)
+    second.scope.stop()
+    localStorage.clear()
+  })
+
+  it('loadMoreLog grows the limit by a page and refetches', async () => {
+    localStorage.clear()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    await result.loadMoreLog()
+    await flush()
+
+    const last = [...mock.sent].reverse().find(s => s.type === 'git.log')
+    expect(last?.payload.n).toBe(100)
+    expect(result.logLimit.value).toBe(100)
+    scope.stop()
+  })
 })

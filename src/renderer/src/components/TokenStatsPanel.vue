@@ -55,7 +55,7 @@ watch(expanded, (v) => {
 }, { immediate: true })
 
 // Active right-panel tab — Tokens (default) or the pipeline History timeline.
-const tab = ref<'tokens' | 'history'>('tokens')
+const tab = ref<'history' | 'tokens'>('history')
 try {
   const t = localStorage.getItem('agentTeam.rightPanel.tab')
   if (t === 'history' || t === 'tokens') tab.value = t
@@ -63,35 +63,6 @@ try {
 watch(tab, (v) => {
   try { localStorage.setItem('agentTeam.rightPanel.tab', v) } catch { /* ignore */ }
 })
-
-// Per-section visibility toggles
-const sectionDefaults = {
-  run: true,
-  vendor: true,
-  stage: true,
-  pane: true,
-  cumulative: true,
-  global: true
-}
-type SectionKey = keyof typeof sectionDefaults
-
-const sections = ref<Record<SectionKey, boolean>>({ ...sectionDefaults })
-;(function loadSections() {
-  try {
-    const raw = localStorage.getItem('agentTeam.tokenPanel.sections')
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, boolean>>
-      for (const k of Object.keys(sectionDefaults) as SectionKey[]) {
-        if (typeof parsed[k] === 'boolean') sections.value[k] = parsed[k] as boolean
-      }
-    }
-  } catch { /* ignore */ }
-})()
-watch(sections, (v) => {
-  try { localStorage.setItem('agentTeam.tokenPanel.sections', JSON.stringify(v)) } catch { /* ignore */ }
-}, { deep: true })
-
-const settingsOpen = ref(false)
 
 // ─────────────────────── Derived view models ──────────────────────────────
 
@@ -183,14 +154,14 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   <aside class="token-panel" :class="{ 'is-expanded': expanded, 'is-collapsed': !expanded }">
     <!-- Collapsed rail: one icon per tab — click to expand + switch tab -->
     <div v-if="!expanded" class="rail">
+      <button class="rail-btn" :class="{ active: tab === 'history' }" title="Expand pipeline history" @click="tab = 'history'; expanded = true">
+        <span class="rail-icon">📜</span>
+        <span class="rail-label">History</span>
+      </button>
       <button class="rail-btn" :class="{ active: tab === 'tokens' }" :title="`Expand token stats · ${collapsedTotal} so far`" @click="tab = 'tokens'; expanded = true">
         <span class="rail-icon">📊</span>
         <span class="rail-label">Tokens</span>
         <span v-if="runTotals.calls > 0" class="rail-badge">{{ collapsedTotal }}</span>
-      </button>
-      <button class="rail-btn" :class="{ active: tab === 'history' }" title="Expand pipeline history" @click="tab = 'history'; expanded = true">
-        <span class="rail-icon">📜</span>
-        <span class="rail-label">History</span>
       </button>
     </div>
 
@@ -199,33 +170,19 @@ async function confirmReset(scope: ResetScope): Promise<void> {
       <header class="hdr">
         <button class="collapse" title="Collapse" @click="expanded = false">‹</button>
         <div class="tabs">
-          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 Tokens</button>
           <button class="tab" :class="{ active: tab === 'history' }" @click="tab = 'history'">📜 History</button>
+          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 Tokens</button>
         </div>
-        <button
-          v-if="tab === 'tokens'"
-          class="gear"
-          :class="{ active: settingsOpen }"
-          title="Show / hide sections"
-          @click="settingsOpen = !settingsOpen"
-        >⚙</button>
       </header>
 
       <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
 
       <template v-else>
-      <div v-if="settingsOpen" class="settings">
-        <label v-for="k in (Object.keys(sectionDefaults) as SectionKey[])" :key="k" class="setting">
-          <input type="checkbox" v-model="sections[k]" />
-          <span>{{ k }}</span>
-        </label>
-      </div>
-
       <div v-if="loading && !snapshot" class="msg">Loading…</div>
 
       <div class="body">
         <!-- Current run total -->
-        <section v-if="sections.run" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">Current run</span>
             <button class="reset-btn" title="Reset run counter" @click="confirmReset('run')">⟲</button>
@@ -243,7 +200,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- Cumulative (workspace lifetime) -->
-        <section v-if="sections.cumulative" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">Workspace cumulative</span>
             <button class="reset-btn" title="Wipe workspace history" @click="confirmReset('workspace')">⟲</button>
@@ -257,7 +214,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- Global all-time -->
-        <section v-if="sections.global" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">All time (global)</span>
             <button class="reset-btn" title="Wipe global tally" @click="confirmReset('global')">⟲</button>
@@ -271,7 +228,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Vendor -->
-        <section v-if="sections.vendor" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By vendor</span></div>
           <table class="grid">
             <tr v-for="row in vendorRows" :key="row.key">
@@ -287,7 +244,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Stage -->
-        <section v-if="sections.stage" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By stage</span></div>
           <div v-if="!stageRows.length" class="muted">No stages defined.</div>
           <table v-else class="grid">
@@ -301,7 +258,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Pane -->
-        <section v-if="sections.pane" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By pane</span></div>
           <div v-if="!paneRows.length" class="muted">No active panes.</div>
           <table v-else class="grid">
@@ -421,32 +378,6 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   color: #e6edf3;
   background: #0d1117;
   border-color: #30363d;
-}
-.gear {
-  background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: 3px;
-}
-.gear.active { color: #58a6ff; border-color: #1f6feb; }
-.settings {
-  padding: 8px 12px;
-  border-bottom: 1px solid #21262d;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  background: #0d1117;
-  font-size: 11px;
-}
-.setting {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  text-transform: capitalize;
-  color: #c9d1d9;
-  cursor: pointer;
 }
 .body {
   flex: 1;
