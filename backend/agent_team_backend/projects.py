@@ -153,6 +153,13 @@ class ProjectStore:
     def _ensure_dir(self, workspace_path: str) -> Path:
         d = self.project_dir(workspace_path)
         d.mkdir(parents=True, exist_ok=True)
+        # Make the runtime dir self-ignoring so git never tracks it, regardless
+        # of the workspace's own .gitignore or staging order. `.gitignore` with
+        # `*` ignores the whole directory (including itself) — same pattern as
+        # pytest's .pytest_cache/.gitignore.
+        gi = d / ".gitignore"
+        if not gi.exists():
+            gi.write_text("*\n", encoding="utf-8")
         return d
 
     def peek(self, workspace_path: str) -> Project | None:
