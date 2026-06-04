@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import GitPane from './GitPane.vue'
+import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
@@ -288,9 +289,14 @@ const pickedRole = ref<RoleKey>('')
 
 // ── Top-level tab: pipeline | git ─────────────────────────────────────────────
 const _TAB_KEY = 'agentTeam.sidebarTab'
-const sidebarTab = ref<'pipeline' | 'git'>(
+type SidebarTab = 'explorer' | 'pipeline' | 'git'
+const sidebarTab = ref<SidebarTab>(
   (() => {
-    try { return (sessionStorage.getItem(_TAB_KEY) as 'pipeline' | 'git') || 'pipeline' } catch { return 'pipeline' }
+    try {
+      const v = sessionStorage.getItem(_TAB_KEY) as SidebarTab | null
+      // Backward-compat: unknown / legacy values fall back to 'pipeline'.
+      return v === 'explorer' || v === 'pipeline' || v === 'git' ? v : 'pipeline'
+    } catch { return 'pipeline' }
   })()
 )
 watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /* ignore */ } })
@@ -507,6 +513,9 @@ function onTaskDrop(e: DragEvent): void {
 
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
     <div class="sidebar-tabs">
+      <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer" @click="sidebarTab = 'explorer'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
+      </button>
       <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline" @click="sidebarTab = 'pipeline'">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
       </button>
@@ -515,6 +524,13 @@ function onTaskDrop(e: DragEvent): void {
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
       </button>
     </div>
+
+    <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
+    <ExplorerPane
+      v-if="sidebarTab === 'explorer' && backend"
+      :workspace-path="workspace ?? ''"
+      :backend="backend"
+    />
 
     <!-- ── Git tab ────────────────────────────────────────────────────────── -->
     <GitPane

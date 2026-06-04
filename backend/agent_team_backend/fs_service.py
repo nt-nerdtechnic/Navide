@@ -1,0 +1,157 @@
+"""Filesystem service — safe, workspace-rooted directory listing + CRUD.
+
+Backs the Explorer pane. Every operation is resolved relative to
+``workspace_path`` and must stay inside it; the internal ``.agent-team`` dir is
+protected, and high-noise dirs (node_modules / .git / …) are flagged so the UI
+can avoid auto-expanding them. This is NOT a gitignore filter — real on-disk
+contents are listed; git status is only an overlay decided elsewhere.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from .projects import PROJECT_DIR_NAME
+
+# High-noise dirs the UI should not auto-expand (performance, NOT gitignore).
+# Mirrors git_watcher._IGNORE_SEGMENTS, plus `.git`.
+_NOISE_SEGMENTS = frozenset({
+    "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
+    "target", ".next", ".nuxt", ".turbo", ".cache", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache", ".idea", ".gradle", ".git",
+})
+
+
+class FsError(Exception):
+    """Raised on invalid or unsafe filesystem operations."""
+
+
+def _resolve_safe(workspace_path: str, rel_path: str) -> Path:
+    """Resolve ``rel_path`` under the workspace root, rejecting any escape.
+
+    Guards against ``..`` traversal, absolute-path escapes, symlink escapes
+    (via ``resolve()``), and operations touching the internal ``.agent-team``
+    directory.
+    """
+    if not workspace_path:
+        raise FsError("no workspace selected")
+    root = Path(workspace_path).resolve()
+    if not root.is_dir():
+        raise FsError("workspace not found")
+
+    rel = (rel_path or "").strip().replace("\\", "/").lstrip("/")
+    target = (root / rel).resolve()
+
+    if target != root and root not in target.parents:
+        raise FsError("path escapes workspace")
+
+    parts = target.relative_to(root).parts
+    if parts and parts[0] == PROJECT_DIR_NAME:
+        raise FsError("the internal directory is protected")
+    return target
+
+
+def _entry(root: Path, child: Path) -> dict[str, Any]:
+    name = child.name
+    is_dir = child.is_dir()
+    return {
+        "name": name,
+        "rel_path": str(child.relative_to(root)),
+        "is_dir": is_dir,
+        "is_hidden": name.startswith("."),
+        # Noise dirs are shown as nodes but the UI should not auto-expand them.
+        "is_noise": is_dir and name in _NOISE_SEGMENTS,
+    }
+
+
+def list_dir(workspace_path: str, rel_path: str = "", show_hidden: bool = False) -> dict[str, Any]:
+    """List a single directory level (lazy; never recurses).
+
+    Dirs first, then files, each alphabetical. ``.agent-team`` is always
+    excluded. Dotfiles are excluded unless ``show_hidden`` is True.
+    """
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+    except FsError as exc:
+        return {"ok": False, "error": str(exc)}
+    if not target.is_dir():
+        return {"ok": False, "error": "not a directory"}
+
+    root = Path(workspace_path).resolve()
+    entries: list[dict[str, Any]] = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            name = child.name
+            if name == PROJECT_DIR_NAME and child.parent == root:
+                continue  # internal dir — never surfaced
+            if name.startswith(".") and not show_hidden:
+                continue
+            entries.append(_entry(root, child))
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "entries": entries, "rel_path": str(target.relative_to(root)) if target != root else ""}
+
+
+def mkdir(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if target == Path(workspace_path).resolve():
+            raise FsError("invalid name")
+        if target.exists():
+            raise FsError("already exists")
+        target.mkdir(parents=True, exist_ok=False)
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+def create_file(workspace_path: str, rel_path: str, content: str = "") -> dict[str, Any]:
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if target == Path(workspace_path).resolve():
+            raise FsError("invalid name")
+        if target.exists():
+            raise FsError("already exists")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
+    try:
+        src = _resolve_safe(workspace_path, src_rel)
+        dst = _resolve_safe(workspace_path, dst_rel)
+        if src == Path(workspace_path).resolve():
+            raise FsError("cannot rename the workspace root")
+        if not src.exists():
+            raise FsError("source not found")
+        if dst.exists():
+            raise FsError("destination already exists")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.rename(dst)
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
+def delete(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    """Delete a file or an EMPTY directory. Non-empty dirs are rejected."""
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if target == Path(workspace_path).resolve():
+            raise FsError("cannot delete the workspace root")
+        if not target.exists():
+            raise FsError("not found")
+        if target.is_dir():
+            try:
+                target.rmdir()
+            except OSError:
+                raise FsError("directory is not empty")
+        else:
+            target.unlink()
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}

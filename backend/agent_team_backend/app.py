@@ -52,6 +52,7 @@ from .terminals import TerminalService
 from .tokens_store import TokensStore
 from .history_store import HistoryStore
 from . import git_service
+from . import fs_service
 from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
@@ -1741,6 +1742,46 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.push_force":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.push_force(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        # ── Explorer filesystem (fs.*) ──────────────────────────────────────
+        elif msg_type == "fs.list_dir":
+            ws_path = payload.get("workspace_path") or ""
+            rel = payload.get("rel_path", "") or ""
+            show_hidden = bool(payload.get("show_hidden", False))
+            result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "fs.mkdir":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.mkdir(ws_path, payload.get("rel_path", "") or "")
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.create_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.create_file(
+                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.rename":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.rename(
+                ws_path, payload.get("src_path", "") or "", payload.get("dst_path", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.delete":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.delete(ws_path, payload.get("rel_path", "") or "")
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
