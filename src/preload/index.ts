@@ -34,6 +34,16 @@ contextBridge.exposeInMainWorld('agentTeam', {
       staged: String(args.staged),
       name: args.name ?? args.filepath,
     }),
+  openEditorWindow: (args: {
+    workspace_path: string
+    filepath: string
+    name?: string
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openEditor', {
+      workspace_path: args.workspace_path,
+      filepath: args.filepath,
+      name: args.name ?? args.filepath,
+    }),
   saveJson: (args: {
     defaultName?: string
     content: string

@@ -137,6 +137,35 @@ def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
     return {"ok": True}
 
 
+def read_file(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    """Read a UTF-8 text file. Binary / undecodable files return an error."""
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if not target.is_file():
+            raise FsError("not a file")
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return {"ok": False, "error": "binary or non-UTF-8 file"}
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "content": content}
+
+
+def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, Any]:
+    """Overwrite (or create) a text file with `content`."""
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if target == Path(workspace_path).resolve():
+            raise FsError("invalid path")
+        if target.exists() and target.is_dir():
+            raise FsError("path is a directory")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True}
+
+
 def delete(workspace_path: str, rel_path: str) -> dict[str, Any]:
     """Delete a file or an EMPTY directory. Non-empty dirs are rejected."""
     try:

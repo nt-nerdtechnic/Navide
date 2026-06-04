@@ -53,6 +53,7 @@ from .tokens_store import TokensStore
 from .history_store import HistoryStore
 from . import git_service
 from . import fs_service
+from . import editor_service
 from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
@@ -1785,6 +1786,41 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.write_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.write_file(
+                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.read_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "")
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        # ── Editor AI (editor.*) ────────────────────────────────────────────
+        elif msg_type == "editor.rewrite":
+            result = await editor_service.rewrite(
+                _az_base_url(),
+                payload.get("model") or "llama3.2",
+                payload.get("code", "") or "",
+                payload.get("instruction", "") or "",
+                payload.get("language", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "editor.complete":
+            result = await editor_service.complete(
+                _az_base_url(),
+                payload.get("model") or "llama3.2",
+                payload.get("prefix", "") or "",
+                payload.get("suffix", "") or "",
+                payload.get("language", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         else:
             await session.websocket.send_json(

@@ -34,6 +34,11 @@ declare global {
         staged: boolean
         name?: string
       }) => Promise<{ ok: boolean }>
+      openEditorWindow: (args: {
+        workspace_path: string
+        filepath: string
+        name?: string
+      }) => Promise<{ ok: boolean }>
       saveJson: (args: {
         defaultName?: string
         content: string

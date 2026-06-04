@@ -76,6 +76,14 @@ function openDiff(entry: FsEntry): void {
   })
 }
 
+function openInEditor(entry: FsEntry): void {
+  void window.agentTeam?.openEditorWindow({
+    workspace_path: props.workspacePath,
+    filepath: entry.rel_path,
+    name: entry.name,
+  })
+}
+
 // ── Context menu ─────────────────────────────────────────────────────────────
 const ctx = ref<{ x: number; y: number; entry: FsEntry | null } | null>(null)
 
@@ -288,6 +296,7 @@ watch(wsRef, (v) => {
       <template v-if="ctx.entry">
         <div class="exp-ctx-sep" />
         <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
+        <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">在編輯器開啟</button>
         <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">重新命名</button>
         <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">刪除</button>
         <div class="exp-ctx-sep" />

@@ -17,6 +17,7 @@ let mainWindow: BrowserWindow | null = null
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let diffWindow: BrowserWindow | null = null
+let editorWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   const qs = new URLSearchParams(params).toString()
@@ -163,6 +164,38 @@ ipcMain.handle('window:openStages', () => {
 
 ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
   openDiffWindow(args ?? {})
+  return { ok: true }
+})
+
+function openEditorWindow(params: Record<string, string>): void {
+  const search = { window: 'editor', ...params }
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    loadWindow(editorWindow, search)
+    editorWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'Agent-Team · Editor',
+    parent: mainWindow ?? undefined,
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  editorWindow = win
+  win.on('closed', () => {
+    if (editorWindow === win) editorWindow = null
+  })
+  loadWindow(win, search)
+}
+
+ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
+  openEditorWindow(args ?? {})
   return { ok: true }
 })
 

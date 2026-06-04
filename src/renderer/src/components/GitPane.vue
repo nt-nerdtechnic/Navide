@@ -248,6 +248,17 @@ function ctxOpenChanges(): void {
   if (f) toggleDiff(f.path, ctxMenu.value.staged)
   closeCtxMenu()
 }
+function ctxOpenInEditor(): void {
+  const f = ctxMenu.value.file
+  if (f) {
+    void window.agentTeam?.openEditorWindow({
+      workspace_path: props.workspacePath,
+      filepath: f.path,
+      name: f.path.split('/').pop() || f.path,
+    })
+  }
+  closeCtxMenu()
+}
 function ctxStageToggle(): void {
   const f = ctxMenu.value.file
   if (f) ctxMenu.value.staged ? unstageFile(f.path) : stageFile(f.path)
@@ -1662,6 +1673,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- File menu -->
       <div v-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
+        <button class="menu-item" @click="ctxOpenInEditor">Open in Editor</button>
         <button class="menu-item" @click="ctxOpenFile">Open File</button>
         <button class="menu-item" @click="ctxOpenFileAtHead">Open File (HEAD)</button>
         <button class="menu-item" @click="ctxStashFile">Save File as Draft</button>

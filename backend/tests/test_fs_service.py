@@ -119,3 +119,25 @@ def test_delete_empty_dir_ok(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     fs_service.mkdir(ws, "emptydir")
     assert fs_service.delete(ws, "emptydir")["ok"] is True
+
+
+# ── read / write (editor) ────────────────────────────────────────────────────
+def test_read_file(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.read_file(ws, "README.md")
+    assert res["ok"] is True and res["content"] == "hi"
+
+
+def test_read_file_rejects_escape(tmp_path: Path) -> None:
+    assert fs_service.read_file(_ws(tmp_path), "../../etc/hosts")["ok"] is False
+
+
+def test_write_file_roundtrip(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    assert fs_service.write_file(ws, "src/main.ts", "// edited")["ok"] is True
+    assert (Path(ws) / "src" / "main.ts").read_text() == "// edited"
+    assert fs_service.read_file(ws, "src/main.ts")["content"] == "// edited"
+
+
+def test_write_file_blocks_internal_dir(tmp_path: Path) -> None:
+    assert fs_service.write_file(_ws(tmp_path), ".agent-team/x", "y")["ok"] is False
