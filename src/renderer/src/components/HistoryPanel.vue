@@ -11,19 +11,9 @@ interface Props {
 }
 const props = defineProps<Props>()
 
-// ─────────────────────── Run info: paths + live log ───────────────────────
+// ─────────────────────── Run info: file links + live log ───────────────────
 // Moved here from ControlPane so the run's project.json / pipeline.log /
 // backend.log links and the supervision log live alongside the timeline.
-function shortPath(p: string): string {
-  if (!p) return ''
-  const home = '/Users/'
-  if (p.startsWith(home)) {
-    const rest = p.slice(home.length)
-    const slash = rest.indexOf('/')
-    if (slash > 0) return '~/' + rest.slice(slash + 1)
-  }
-  return p
-}
 // Classify a supervision-log line so errors stand out (red) and warnings (yellow).
 function logLevel(line: string): '' | 'is-error' | 'is-warn' {
   if (/❌|✕|✗|exception|unreachable|rejection|\berror\b|\bfailed\b|\bthrew\b/i.test(line)) {
@@ -175,24 +165,10 @@ async function openFile(): Promise<void> {
 <template>
   <div class="history">
     <div v-if="pipeline.projectId || pipeline.log.length" class="run-info">
-      <div v-if="pipeline.projectId" class="paths">
-        <div class="paths-line">
-          <span class="paths-key">project</span>
-          <code :title="pipeline.projectFile">{{ shortPath(pipeline.projectFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">events</span>
-          <code :title="pipeline.pipelineLogFile">{{ shortPath(pipeline.pipelineLogFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">backend</span>
-          <code :title="pipeline.backendLogFile">{{ shortPath(pipeline.backendLogFile) }}</code>
-        </div>
-        <div class="paths-actions">
-          <button class="ghost" @click="openPath(pipeline.projectFile)" title="Open project.json">📄 project.json</button>
-          <button class="ghost" @click="openPath(pipeline.pipelineLogFile)" title="Open pipeline.log">📜 pipeline.log</button>
-          <button class="ghost" @click="openPath(pipeline.backendLogFile)" title="Open backend.log">🪵 backend.log</button>
-        </div>
+      <div v-if="pipeline.projectId" class="paths-actions">
+        <button class="ghost" :title="pipeline.projectFile" @click="openPath(pipeline.projectFile)">📄 project.json</button>
+        <button class="ghost" :title="pipeline.pipelineLogFile" @click="openPath(pipeline.pipelineLogFile)">📜 pipeline.log</button>
+        <button class="ghost" :title="pipeline.backendLogFile" @click="openPath(pipeline.backendLogFile)">🪵 backend.log</button>
       </div>
       <div v-if="pipeline.log.length" ref="pipelineLogEl" class="pipeline-log">
         <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
@@ -247,35 +223,9 @@ async function openFile(): Promise<void> {
   padding: 6px 8px;
   border-bottom: 1px solid #21262d;
 }
-.paths {
-  padding: 6px 8px;
-  background: #010409;
-  border-radius: 4px;
-  font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 10px;
-}
-.paths-line {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 2px;
-  align-items: baseline;
-}
-.paths-key {
-  color: #8b949e;
-  width: 50px;
-  flex-shrink: 0;
-}
-.paths code {
-  color: #e6edf3;
-  background: transparent;
-  padding: 0;
-  word-break: break-all;
-  font-size: 10px;
-}
 .paths-actions {
   display: flex;
   gap: 4px;
-  margin-top: 4px;
 }
 .paths-actions .ghost {
   flex: 1;
