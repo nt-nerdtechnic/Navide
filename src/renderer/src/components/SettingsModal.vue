@@ -8,6 +8,7 @@ import type { usePipelines } from '../composables/usePipelines'
 import { stageToBackend, stageDefToFrontend, type Stage, type StageSlot } from '../data/stages'
 import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCatalog'
 import { useTheme } from '../composables/useTheme'
+import { useNotify } from '../composables/useNotify'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -35,6 +36,8 @@ const {
   setCustomOverride,
   resetCustom,
 } = useTheme()
+
+const { confirm: notifyConfirm } = useNotify()
 
 // Live value bound to each color picker. Seeded from the override map; when an
 // override is absent we fall back to the resolved computed token value so the
@@ -639,7 +642,7 @@ async function plConfirmRename() {
 }
 
 async function plDelete(id: string, name: string) {
-  if (!confirm(`確定刪除「${name}」？此操作無法復原。`)) return
+  if (!(await notifyConfirm(`確定刪除「${name}」？此操作無法復原。`, { title: '刪除 Pipeline', confirmText: '刪除' }))) return
   plBusy.value = true
   await props.pipelinesApi?.deletePipeline(id)
   plBusy.value = false

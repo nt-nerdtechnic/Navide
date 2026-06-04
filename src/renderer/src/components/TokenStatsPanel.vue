@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
+import { useNotify } from '../composables/useNotify'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
 import type { PipelineStatusView } from './ControlPane.vue'
@@ -139,13 +140,15 @@ function fmt(n: number): string {
 
 // ─────────────────────── Reset confirmations ──────────────────────────────
 
+const { confirm: notifyConfirm } = useNotify()
+
 async function confirmReset(scope: ResetScope): Promise<void> {
   const msg = {
     run: 'Reset the current pipeline run’s token counters? Workspace cumulative and global totals stay intact.',
     workspace: 'Wipe all token data for this workspace (current run + runs history + cumulative)? Global totals stay intact.',
     global: 'Wipe global all-time token totals? This affects every workspace.'
   }[scope]
-  if (!window.confirm(msg)) return
+  if (!(await notifyConfirm(msg, { title: 'Reset tokens', confirmText: 'Reset' }))) return
   await reset(scope)
 }
 </script>
