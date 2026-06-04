@@ -1326,7 +1326,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.commit":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
-            result = await git_service.commit(ws_path, message)
+            commit_all = bool(payload.get("all"))
+            result = await git_service.commit(ws_path, message, commit_all)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))

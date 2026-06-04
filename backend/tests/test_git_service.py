@@ -216,6 +216,26 @@ class TestCommit:
         result = await git_service.commit(str(tmp_path), "")
         assert result["ok"] is False
 
+    @pytest.mark.asyncio
+    async def test_commit_all_includes_unstaged_tracked(self, tmp_path):
+        init_repo(tmp_path)  # README.md is tracked
+        (tmp_path / "README.md").write_text("# test\nmodified")
+        # Nothing staged; all=True must commit the tracked modification (git commit -a).
+        result = await git_service.commit(str(tmp_path), "docs: update readme", all=True)
+        assert result["ok"] is True
+        status = await git_service.get_status(str(tmp_path))
+        assert status["unstaged"] == []
+
+    @pytest.mark.asyncio
+    async def test_commit_all_excludes_untracked(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "brand_new.txt").write_text("new")  # untracked
+        # git commit -a does not pick up untracked files → nothing to commit.
+        result = await git_service.commit(str(tmp_path), "should fail", all=True)
+        assert result["ok"] is False
+        status = await git_service.get_status(str(tmp_path))
+        assert any(e["path"] == "brand_new.txt" for e in status["untracked"])
+
 
 # ── init_repo ─────────────────────────────────────────────────────────────────
 

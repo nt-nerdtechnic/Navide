@@ -377,6 +377,12 @@ const hasStaged = computed(() => (gitStatus.value?.staged?.length ?? 0) > 0)
 const hasChanges = computed(
   () => hasStaged.value || (gitStatus.value?.unstaged?.length ?? 0) > 0 || (gitStatus.value?.untracked?.length ?? 0) > 0
 )
+// What `git commit` can pick up: staged files, or — when nothing is staged —
+// tracked modifications via `git commit -a`. Untracked-only can't be committed
+// without staging, so it doesn't enable the button.
+const hasCommittable = computed(
+  () => hasStaged.value || (gitStatus.value?.unstaged?.length ?? 0) > 0
+)
 watch(gitStatus, (s) => {
   emit('changes-count', (s.staged?.length ?? 0) + (s.unstaged?.length ?? 0) + (s.untracked?.length ?? 0))
 }, { immediate: true })
@@ -389,7 +395,7 @@ const commitMessage = ref('')
 const commitError = ref('')
 const amendMode = ref(false)
 const showCommitMenu = ref(false)
-const canCommit = computed(() => hasStaged.value && commitMessage.value.trim().length > 0 && !isCommitting.value)
+const canCommit = computed(() => hasCommittable.value && commitMessage.value.trim().length > 0 && !isCommitting.value)
 
 const commitInputEl = ref<HTMLTextAreaElement | null>(null)
 function autoGrowCommit(): void {
@@ -406,7 +412,10 @@ async function runCommit(opts: { amend?: boolean; then?: 'push' | 'sync' } = {})
   showCommitMenu.value = false
   commitError.value = ''
   const amend = opts.amend ?? amendMode.value
-  const r = amend ? await amendCommit(commitMessage.value) : await commit(commitMessage.value)
+  // Nothing staged → commit all tracked changes (git commit -a), mirroring VS Code.
+  const r = amend
+    ? await amendCommit(commitMessage.value)
+    : await commit(commitMessage.value, !hasStaged.value)
   if (!r.ok) { commitError.value = r.error || 'commit failed'; return }
   commitMessage.value = ''; amendMode.value = false; genAttempt.value = 0
   if (opts.then === 'push') await doPush()

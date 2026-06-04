@@ -637,14 +637,14 @@ export function useGit(
     return r
   }
 
-  async function commit(message: string): Promise<{ ok: boolean; error?: string }> {
+  async function commit(message: string, all = false): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     isCommitting.value = true
     try {
       const resp = await send<{ ok: boolean; error?: string; hash?: string }>(
         'git.commit',
-        { workspace_path: ws, message },
+        { workspace_path: ws, message, all },
       )
       if (resp.ok && resp.payload?.ok) {
         await loadStatus()
