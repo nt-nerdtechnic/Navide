@@ -17,6 +17,7 @@ import CompletionModal from './components/CompletionModal.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import NotificationHost from './components/NotificationHost.vue'
+import OnboardingWizard from './components/OnboardingWizard.vue'
 import Welcome from './components/Welcome.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -56,6 +57,30 @@ const themeApi = useTheme()
 onMounted(() => {
   themeApi.loadTheme()
 })
+
+// ── First-run onboarding gate ────────────────────────────────────────────────
+// `null` = not yet checked. When the backend connects we ask whether the
+// environment setup is complete; if not, OnboardingWizard hard-blocks the shell.
+const onboardingComplete = ref<boolean | null>(null)
+async function checkOnboarding(): Promise<void> {
+  try {
+    const resp = await backend.send<{ complete?: boolean; skip?: boolean }>('onboarding.status', {})
+    onboardingComplete.value = resp.payload?.complete ?? true
+  } catch {
+    // If the check fails, don't lock the user out — fail open.
+    onboardingComplete.value = true
+  }
+}
+watch(
+  () => backend.status.value,
+  (s) => {
+    if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+  },
+  { immediate: true },
+)
+function reopenOnboarding(): void {
+  onboardingComplete.value = false
+}
 
 // --- Workspace-first entry gate (phase-4) ------------------------------------
 // The Welcome screen is shown until a workspace is chosen. Selection is kept in
@@ -4138,6 +4163,12 @@ function paneIsCommander(p: ActivePane): boolean {
 </script>
 
 <template>
+  <!-- First-run environment wizard: hard-blocks the shell until complete. -->
+  <OnboardingWizard
+    v-if="onboardingComplete === false"
+    :backend="backend"
+    @complete="onboardingComplete = true"
+  />
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <ControlPane
       ref="controlPaneRef"
@@ -4237,6 +4268,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :pipelines-api="pipelinesApi"
       @close="showSettings = false"
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
+      @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
     />
     <Teleport v-if="showHistory" to="body">
       <div class="history-overlay" @click.self="showHistory = false">

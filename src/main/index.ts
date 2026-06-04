@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electro
 import { join } from 'node:path'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 
 // Give the Electron process a distinct name so it can be targeted precisely
@@ -277,6 +278,19 @@ ipcMain.handle(
     return { ok: true, path: result.filePaths[0] }
   }
 )
+
+ipcMain.handle('shell:openTerminal', async (_event, command: string) => {
+  if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
+  // Open Terminal.app and run the install command interactively (sudo / OAuth
+  // prompts need a real TTY). The command is AppleScript-escaped.
+  const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const script = `tell application "Terminal" to do script "${escaped}"\ntell application "Terminal" to activate`
+  return await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    const proc = spawn('osascript', ['-e', script])
+    proc.on('error', (err) => resolve({ ok: false, error: String(err) }))
+    proc.on('close', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `osascript exited ${code}` }))
+  })
+})
 
 ipcMain.handle('shell:openPath', async (_event, target: string) => {
   if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }

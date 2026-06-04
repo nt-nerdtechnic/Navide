@@ -20,6 +20,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'open-pipeline', id: string): void
+  (e: 'reopen-onboarding'): void
 }>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
@@ -1370,6 +1371,12 @@ async function plDelete(id: string, name: string) {
                 >✕</button>
               </label>
             </div>
+          </section>
+
+          <section class="ap-section">
+            <h3 class="ap-title">環境設定 Environment</h3>
+            <p class="ap-hint">重新執行首次啟動的環境偵測精靈（檢查 Homebrew / Node / CLI / Ollama 等）。</p>
+            <button class="ap-reset" @click="emit('reopen-onboarding')">↻ 重新執行環境檢查</button>
           </section>
         </div>
 

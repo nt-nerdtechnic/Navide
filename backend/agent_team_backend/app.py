@@ -54,6 +54,7 @@ from .history_store import HistoryStore
 from . import git_service
 from . import fs_service
 from . import editor_service
+from . import onboarding_deps
 from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
@@ -1821,6 +1822,27 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload.get("language", "") or "",
             )
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        # ── Onboarding (onboarding.*) ───────────────────────────────────────
+        elif msg_type == "onboarding.status":
+            status = await asyncio.to_thread(onboarding_deps.get_status)
+            status["complete"] = onboarding_deps.is_complete()
+            status["skip"] = onboarding_deps.should_skip()
+            await session.websocket.send_json(make_response(msg_id, msg_type, status))
+
+        elif msg_type == "onboarding.install":
+            dep_id = payload.get("dep_id", "") or ""
+            result = await asyncio.to_thread(onboarding_deps.install_dep, dep_id)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "onboarding.pull_model":
+            model = payload.get("model", "") or onboarding_deps._SUGGESTED_MODEL
+            result = onboarding_deps.pull_model(model)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "onboarding.complete":
+            onboarding_deps.set_complete(bool(payload.get("complete", True)))
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         else:
             await session.websocket.send_json(
