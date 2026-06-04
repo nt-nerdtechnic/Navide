@@ -149,14 +149,14 @@ onUnmounted(() => {
 .comp-card {
   position: relative;
   z-index: 1;
-  background: linear-gradient(145deg, #1a1f2e, #0d1117);
+  background: linear-gradient(145deg, #1a1f2e, var(--bg-base));
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   padding: 48px 56px;
   text-align: center;
   box-shadow:
     0 0 60px rgba(255, 200, 0, 0.15),
-    0 24px 60px rgba(0, 0, 0, 0.6);
+    0 24px 60px var(--shadow-overlay);
   max-width: 420px;
   width: 90%;
   animation: pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
@@ -182,10 +182,10 @@ onUnmounted(() => {
 .comp-title {
   font-size: 28px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-on-emphasis);
   margin: 0 0 10px;
   letter-spacing: 0.01em;
-  background: linear-gradient(90deg, #ffd700, #ff6b6b, #a855f7, #06b6d4);
+  background: linear-gradient(90deg, #ffd700, #ff6b6b, var(--done-emphasis), #06b6d4);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;

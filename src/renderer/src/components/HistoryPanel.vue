@@ -266,7 +266,7 @@ function onLogDividerEnd(): void {
 }
 .run-info {
   padding: 6px 8px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-muted);
 }
 .paths-actions {
   display: flex;
@@ -275,8 +275,8 @@ function onLogDividerEnd(): void {
 .paths-actions .ghost {
   flex: 1;
   background: transparent;
-  color: #c9d1d9;
-  border: 1px solid #30363d;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 5px;
   font-size: 10px;
   padding: 4px 4px;
@@ -284,14 +284,14 @@ function onLogDividerEnd(): void {
   white-space: nowrap;
 }
 .paths-actions .ghost:hover {
-  background: #21262d;
+  background: var(--bg-muted);
 }
 .log-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   margin-top: 4px;
-  background: #010409;
+  background: var(--bg-inset);
   border: 1px solid #1b2230;
   border-radius: 6px;
   overflow: hidden;
@@ -302,21 +302,21 @@ function onLogDividerEnd(): void {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  border-bottom: 1px solid #161b22;
-  background: #0d1117;
+  border-bottom: 1px solid var(--bg-subtle);
+  background: var(--bg-base);
 }
 .log-title {
   font-family: Menlo, Monaco, 'Courier New', monospace;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.4px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .log-count {
   font-size: 9px;
-  color: #6e7681;
-  background: #161b22;
-  border: 1px solid #21262d;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 8px;
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
@@ -337,13 +337,13 @@ function onLogDividerEnd(): void {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 11px;
 }
 .empty-glyph {
   font-family: Menlo, Monaco, 'Courier New', monospace;
   font-size: 16px;
-  color: #30363d;
+  color: var(--border-default);
   letter-spacing: 1px;
 }
 .log-resize {
@@ -357,37 +357,37 @@ function onLogDividerEnd(): void {
 .log-resize-grip {
   height: 1px;
   width: 100%;
-  background: #21262d;
+  background: var(--bg-muted);
   transition: background 0.12s, height 0.12s;
 }
 .log-resize:hover .log-resize-grip {
   height: 3px;
-  background: #388bfd;
+  background: var(--accent-focus);
 }
 .pipeline-log-line {
-  color: #8b949e;
+  color: var(--text-secondary);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
 .pipeline-log-line.is-error {
-  color: #f85149;
+  color: var(--danger-fg);
   font-weight: 600;
 }
 .pipeline-log-line.is-warn {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .filters {
   display: flex;
   gap: 6px;
   padding: 6px 8px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-muted);
 }
 .flt,
 .search {
-  background: #0d1117;
-  color: #e6edf3;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  color: var(--text-bright);
+  border: 1px solid var(--border-default);
   border-radius: 5px;
   font-size: 11px;
   padding: 3px 5px;
@@ -414,14 +414,14 @@ function onLogDividerEnd(): void {
   border-left: 2px solid transparent;
 }
 .row:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .row.open {
-  background: #161b22;
+  background: var(--bg-subtle);
   border-left-color: #2f81f7;
 }
 .ts {
-  color: #6e7681;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -430,17 +430,17 @@ function onLogDividerEnd(): void {
   text-align: center;
 }
 .summary {
-  color: #c9d1d9;
+  color: var(--text-primary);
   word-break: break-word;
 }
 .detail {
   grid-column: 1 / -1;
   margin: 4px 0 2px;
   padding: 6px 8px;
-  background: #010409;
-  border: 1px solid #21262d;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
   border-radius: 5px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -449,27 +449,27 @@ function onLogDividerEnd(): void {
 }
 .msg {
   padding: 12px 8px;
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 12px;
 }
 .actions {
   display: flex;
   gap: 6px;
   padding: 6px 8px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
 }
 .act {
   flex: 1;
-  background: #0d1117;
-  color: #c9d1d9;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 5px;
   font-size: 11px;
   padding: 5px 6px;
   cursor: pointer;
 }
 .act:hover:not(:disabled) {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .act:disabled {
   opacity: 0.5;

@@ -279,11 +279,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 <style scoped>
 .token-panel {
   height: 100%;
-  background: #0d1117;
-  border-left: 1px solid #21262d;
+  background: var(--bg-base);
+  border-left: 1px solid var(--border-muted);
   display: flex;
   flex-direction: column;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 12px;
   min-height: 0;
@@ -300,7 +300,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   appearance: none;
   background: transparent;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -310,11 +310,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   width: 100%;
 }
 .rail-btn:hover {
-  background: #161b22;
-  color: #e6edf3;
+  background: var(--bg-subtle);
+  color: var(--text-bright);
 }
 .rail-btn.active {
-  color: #58a6ff;
+  color: var(--accent-fg);
 }
 .rail-icon { font-size: 16px; }
 .rail-label {
@@ -326,8 +326,8 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .rail-badge {
   font-size: 10px;
-  background: #1f6feb;
-  color: #fff;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
   padding: 2px 6px;
   border-radius: 999px;
   margin-top: auto;
@@ -339,21 +339,21 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid #21262d;
-  background: #161b22;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
   flex-shrink: 0;
 }
 .collapse {
   background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 3px;
   font-size: 14px;
   line-height: 1;
 }
-.collapse:hover { color: #e6edf3; }
+.collapse:hover { color: var(--text-bright); }
 .title {
   font-weight: 600;
   flex: 1;
@@ -366,18 +366,18 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 .tab {
   background: transparent;
   border: 1px solid transparent;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 5px;
   font-size: 12px;
   font-weight: 600;
 }
-.tab:hover { color: #e6edf3; }
+.tab:hover { color: var(--text-bright); }
 .tab.active {
-  color: #e6edf3;
-  background: #0d1117;
-  border-color: #30363d;
+  color: var(--text-bright);
+  background: var(--bg-base);
+  border-color: var(--border-default);
 }
 .body {
   flex: 1;
@@ -385,11 +385,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   padding: 8px 0;
   min-height: 0;
 }
-.msg { padding: 12px; color: #8b949e; }
+.msg { padding: 12px; color: var(--text-secondary); }
 
 .block {
   padding: 8px 12px;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--bg-subtle);
 }
 .block-hdr {
   display: flex;
@@ -401,24 +401,24 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #8b949e;
+  color: var(--text-secondary);
   flex: 1;
 }
 .reset-btn {
   appearance: none;
   background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   border-radius: 3px;
   padding: 0 6px;
   line-height: 1.7;
 }
-.reset-btn:hover { color: #f85149; border-color: #f85149; }
+.reset-btn:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
 .run-meta {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -427,7 +427,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 .run-id {
   font-family: Menlo, Monaco, monospace;
 }
-.muted { color: #8b949e; font-size: 11px; margin: 4px 0; }
+.muted { color: var(--text-secondary); font-size: 11px; margin: 4px 0; }
 
 .totals {
   display: grid;
@@ -436,14 +436,14 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .cell {
   text-align: center;
-  background: #161b22;
+  background: var(--bg-subtle);
   border-radius: 3px;
   padding: 6px 0;
 }
-.big { font-size: 14px; font-weight: 600; color: #e6edf3; }
+.big { font-size: 14px; font-weight: 600; color: var(--text-bright); }
 .lbl {
   font-size: 9px;
-  color: #8b949e;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -455,15 +455,15 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .grid tr.head td, .grid tr.head th {
   font-size: 9px;
-  color: #8b949e;
+  color: var(--text-secondary);
   text-transform: uppercase;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
   padding-top: 4px;
 }
 .grid th {
   text-align: left;
   font-weight: 500;
-  color: #c9d1d9;
+  color: var(--text-primary);
   padding: 3px 6px 3px 0;
   white-space: nowrap;
 }
@@ -471,7 +471,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   text-align: right;
   padding: 3px 6px;
   font-variant-numeric: tabular-nums;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
-.grid td.dim { color: #8b949e; }
+.grid td.dim { color: var(--text-secondary); }
 </style>

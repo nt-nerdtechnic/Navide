@@ -34,7 +34,7 @@ const modes: [LayoutMode, string, string][] = [
   display: flex;
   gap: 2px;
   background: #161b22cc;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 3px;
   backdrop-filter: blur(4px);
@@ -45,7 +45,7 @@ const modes: [LayoutMode, string, string][] = [
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 13px;
   cursor: pointer;
   display: flex;
@@ -54,11 +54,11 @@ const modes: [LayoutMode, string, string][] = [
   transition: background 0.1s, color 0.1s;
 }
 .mode-btn:hover {
-  background: #21262d;
-  color: #c9d1d9;
+  background: var(--bg-muted);
+  color: var(--text-primary);
 }
 .mode-btn.active {
   background: #1f6feb33;
-  color: #79c0ff;
+  color: var(--accent-bright);
 }
 </style>

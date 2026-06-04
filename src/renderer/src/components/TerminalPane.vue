@@ -110,8 +110,8 @@ onMounted(() => {
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  background: #0d1117;
-  border: 1px solid #21262d;
+  background: var(--bg-base);
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
   overflow: hidden;
   position: relative;
@@ -119,18 +119,18 @@ onMounted(() => {
 .pipe-tag {
   font-size: 9px;
   font-weight: 700;
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
   padding: 1px 5px;
   border-radius: 3px;
   flex-shrink: 0;
 }
 .pane:focus-within {
-  border-color: #1f6feb;
+  border-color: var(--accent-emphasis);
   box-shadow: 0 0 0 1px #1f6feb33;
 }
 .pane.pane-focus {
-  border-color: #388bfd;
+  border-color: var(--accent-focus);
   box-shadow: 0 0 0 2px #388bfd44;
 }
 .pane.pane-focus .pane-header {
@@ -143,7 +143,7 @@ onMounted(() => {
   z-index: 10;
   background: none;
   border: none;
-  color: #484f58;
+  color: var(--text-disabled);
   font-size: 14px;
   cursor: pointer;
   padding: 0 3px;
@@ -156,8 +156,8 @@ onMounted(() => {
   opacity: 1;
 }
 .minimize-btn:hover {
-  color: #c9d1d9;
-  background: #21262d;
+  color: var(--text-primary);
+  background: var(--bg-muted);
   opacity: 1;
 }
 .pane-header {
@@ -165,10 +165,10 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   padding: 6px 32px 6px 12px;
-  background: #161b22;
-  border-bottom: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .title {
   font-weight: 600;
@@ -177,8 +177,8 @@ onMounted(() => {
   /* Own row below header so the 🎯 Manager pill doesn't squeeze the title /
    * subtitle / status into wrapping. */
   padding: 4px 12px 6px;
-  background: #161b22;
-  border-bottom: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
 }
 .manager-tag {
   display: inline-block;
@@ -192,7 +192,7 @@ onMounted(() => {
   letter-spacing: 0.3px;
 }
 .subtitle {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .status {
@@ -201,27 +201,27 @@ onMounted(() => {
   text-transform: uppercase;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #21262d;
-  color: #8b949e;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
 }
 .status[data-status='running'] {
-  background: #1f6f43;
+  background: var(--success-muted);
   color: #d2f4dc;
 }
 .status[data-status='starting'] {
-  background: #6f5b1f;
+  background: var(--attention-muted);
   color: #f4ecd2;
 }
 .status[data-status='error'] {
-  background: #6f1f1f;
+  background: var(--danger-deep);
   color: #f4d2d2;
 }
 .status[data-status='exited'] {
   background: #3a3a3a;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .status[data-status='idle'] {
-  background: #6f5b1f;
+  background: var(--attention-muted);
   color: #f4ecd2;
 }
 .xterm-host {
@@ -232,7 +232,7 @@ onMounted(() => {
   transition: box-shadow 0.1s;
 }
 .xterm-host.drag-over {
-  box-shadow: inset 0 0 0 2px #388bfd;
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .xterm-host.drag-over::after {
   content: 'Drop to insert path';
@@ -242,7 +242,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   background: rgba(56, 139, 253, 0.12);
-  color: #79c0ff;
+  color: var(--accent-bright);
   font-size: 13px;
   font-family: inherit;
   pointer-events: none;

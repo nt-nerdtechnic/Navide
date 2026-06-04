@@ -104,6 +104,8 @@ class Project:
     layout_mode: str = "grid"
     pipeline_id: str = ""  # which pipeline template was used for this run
     run_count: int = 0     # incremented on each successful pipeline completion
+    theme: str = "dark-github"  # backup of the user-level theme (source of truth is the renderer's localStorage)
+    theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

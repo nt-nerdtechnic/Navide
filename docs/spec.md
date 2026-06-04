@@ -199,6 +199,9 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 │ Welcome.vue gates entry · ControlPane mode-aware (M11)       │
 │ Composables: useBackend / useTerminal / useTokens / useHistory│
 │   useAnalyzer / useRoles / useStages / useRecentWorkspaces   │
+│   useTheme (CSS-var theming · localStorage source of truth)  │
+│ Styles: styles/tokens/ — base (primitives) · semantic (roles)│
+│   · themes/*.css (5 built-ins via [data-theme] on <html>)    │
 │ App.vue: pipeline state machine · watchers · question queue  │
 └─────────────────────────────────────────────────────────────┘
               ↓ WebSocket (34 message types)
@@ -291,6 +294,9 @@ Rules:
 ---
 
 ## 9 · Progress log (most recent first)
+
+### 2026-06-05
+- **Theme System** shipped (`feat/theme-system`, plan `theme-system_35d87146`) — CSS custom-property token architecture replacing 68+ hardcoded colors. Three token layers: `styles/tokens/base.css` (primitives) → `semantic.css` (59 semantic roles + `--syntax-*` group) → `themes/*.css` (5 built-ins: Dark GitHub / Midnight / Forest / Light / High Contrast) applied via `[data-theme]` on `<html>`. `useTheme` composable manages selection + 8-token custom overrides; **localStorage is the source of truth**, workspace JSON `theme`/`theme_custom` are best-effort backup (load order localStorage → backend → `dark-github`). Appearance tab in SettingsModal (theme cards + color pickers w/ 300ms debounced live preview + reset). Default theme migration is pixel-identical (token defaults equal the old hex). 11 renderer files migrated (App.vue + 10 components, GitPane separated from the concurrent notification-system work). +10 useTheme tests, +4 backend theme tests; 173 frontend + 414 backend green; production build + cross-theme token-coverage smoke test pass.
 
 ### 2026-05-30 (later)
 - **M14 Frontend tests** shipped — Vitest infra + 63 unit tests (buffer/stages pure fns + useTokens/useHistory/useAnalyzer via mock backend) + Playwright 2 Electron E2E (launch + Welcome→workspace). Local scripts only. `App.vue`/`parseDispatchBlocks` deliberately untouched. Plan `frontend-tests_9c4ad7e2` retired. `typecheck:web` still exit 0.

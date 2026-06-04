@@ -1,4 +1,13 @@
 import { createApp } from 'vue'
+
+// Theme token layers — order matters: primitives → semantic roles → theme overrides.
+import './styles/tokens/base.css'
+import './styles/tokens/semantic.css'
+import './styles/tokens/themes/dark-midnight.css'
+import './styles/tokens/themes/dark-forest.css'
+import './styles/tokens/themes/light.css'
+import './styles/tokens/themes/high-contrast.css'
+
 import App from './App.vue'
 import RolesManagerApp from './RolesManagerApp.vue'
 import StagesEditorApp from './StagesEditorApp.vue'
