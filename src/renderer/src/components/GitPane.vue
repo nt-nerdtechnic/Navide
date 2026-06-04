@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useGit } from '../composables/useGit'
+import type { IgnoreTarget } from '../composables/useGit'
 import type { useBackend } from '../composables/useBackend'
 import { computeGraph, laneColor } from '../lib/git-graph'
 
@@ -16,7 +17,7 @@ const emit = defineEmits<{
 }>()
 
 const {
-  gitStatus, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+  gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
   isCommitting, isSyncing, isFetching, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
@@ -31,7 +32,7 @@ const {
   createTag, deleteTag, showCommit,
   addWorktree, removeWorktree,
   setGitConfig,
-  cloneRepo, addToGitignore, abortOperation, stashApply,
+  cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
 } = useGit(() => props.workspacePath, props.backend)
 
@@ -190,8 +191,8 @@ function ctxFolderDiscard(): void {
   closeCtxMenu()
   if (discardTargets.value.length) showDiscardConfirm.value = true
 }
-async function ctxFolderAddIgnore(): Promise<void> {
-  if (ctxMenu.value.dir) await addToGitignore(ctxMenu.value.dir + '/')
+async function ctxFolderAddIgnore(target: IgnoreTarget = 'project'): Promise<void> {
+  if (ctxMenu.value.dir) await addToGitignore(ctxMenu.value.dir + '/', target)
   closeCtxMenu()
 }
 async function ctxFolderReveal(): Promise<void> {
@@ -247,10 +248,30 @@ async function ctxCopyPath(rel: boolean): Promise<void> {
   if (f) await navigator.clipboard.writeText(rel ? f.path : absPath(f.path))
   closeCtxMenu()
 }
-async function ctxAddToGitignore(): Promise<void> {
+async function ctxAddToGitignore(target: IgnoreTarget = 'project'): Promise<void> {
   const f = ctxMenu.value.file
-  if (f) await addToGitignore(f.path)
+  if (f) await addToGitignore(f.path, target)
   closeCtxMenu()
+}
+
+// "Why is this ignored?" — runs git check-ignore -v and shows the verdict.
+const ignoreResult = ref<{ path: string; text: string } | null>(null)
+async function ctxWhyIgnored(): Promise<void> {
+  const f = ctxMenu.value.file
+  const p = f ? f.path : (ctxMenu.value.dir || '')
+  closeCtxMenu()
+  if (!p) return
+  const r = await checkIgnore(p)
+  let text: string
+  if (!r.ok) {
+    text = r.error || 'check-ignore 失敗'
+  } else if (r.ignored) {
+    text = `被 ${r.source}:${r.line} 的規則「${r.pattern}」忽略`
+    if (r.tracked) text += '；但此檔已被 git 追蹤，規則暫不生效 — 用「Add to .gitignore」會自動 untrack。'
+  } else {
+    text = r.tracked ? '沒有任何忽略規則命中（檔案已被追蹤）。' : '沒有任何忽略規則命中。'
+  }
+  ignoreResult.value = { path: p, text }
 }
 
 // ── init ──────────────────────────────────────────────────────────────────────
@@ -668,6 +689,7 @@ watch(() => filteredLog.value.length, () => { historyPage.value = 0 })
 // ── section expand states ─────────────────────────────────────────────────────
 const stagedExpanded = ref(true)
 const changesExpanded = ref(true)
+const ignoredExpanded = ref(false)
 
 // ── draggable split between top (changes) and bottom (history/cards) ────────────
 const partTopEl = ref<HTMLElement | null>(null)
@@ -801,6 +823,10 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <button class="menu-item" @click="sortBy = 'status'; showViewMenu = false">
               <span class="menu-check">{{ sortBy === 'status' ? '✓' : '' }}</span> Status
             </button>
+            <div class="menu-sep" />
+            <button class="menu-item" @click="showIgnored = !showIgnored; showViewMenu = false">
+              <span class="menu-check">{{ showIgnored ? '✓' : '' }}</span> Show Ignored Files
+            </button>
           </div>
         </Teleport>
       </div>
@@ -908,6 +934,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
               </div>
               <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
                 <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
@@ -915,6 +942,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
               </div>
               <div v-if="blamePath === row.file!.path" class="subpanel yellow-border">
                 <div v-if="blameLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!blameGroups.length" class="loading-text">尚無 blame 資訊</div>
                 <div v-for="g in blameGroups" :key="g.hash + g.lineStart" class="mini-row">
                   <code class="hash-tag">{{ g.hash }}</code>
                   <span class="blame-author">{{ g.author }}</span>
@@ -943,6 +971,24 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   <button class="row-btn" title="Blame" @click.stop="showBlame(f.path)">⧖</button>
                   <button class="row-btn" title="Unstage" @click.stop="unstageFile(f.path)">−</button>
                 </template>
+              </div>
+            </div>
+            <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
+              <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
+              <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+              <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
+                <code class="hash-tag">{{ hc.short_hash }}</code>
+                <span class="mini-msg">{{ hc.message }}</span>
+              </div>
+            </div>
+            <div v-if="blamePath === f.path" class="subpanel yellow-border">
+              <div v-if="blameLoading" class="loading-text">Loading…</div>
+              <div v-else-if="!blameGroups.length" class="loading-text">尚無 blame 資訊</div>
+              <div v-for="g in blameGroups" :key="g.hash + g.lineStart" class="mini-row">
+                <code class="hash-tag">{{ g.hash }}</code>
+                <span class="blame-author">{{ g.author }}</span>
+                <span class="blame-date">{{ g.date }}</span>
+                <span class="blame-lines">L{{ g.lineStart }}<span v-if="g.lineEnd !== g.lineStart">–{{ g.lineEnd }}</span></span>
               </div>
             </div>
           </template>
@@ -1016,6 +1062,14 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                     <button class="row-btn danger" title="Discard" @click.stop="discardFile(row.file!.path)">✕</button>
                   </div>
                 </div>
+                <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
+                  <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
+                  <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+                  <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
+                    <code class="hash-tag">{{ hc.short_hash }}</code>
+                    <span class="mini-msg">{{ hc.message }}</span>
+                  </div>
+                </div>
               </template>
             </template>
           </template>
@@ -1033,9 +1087,35 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
                   <button class="row-btn danger" title="Discard" @click.stop="discardFile(f.path)">✕</button>
                 </div>
               </div>
+              <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
+                <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+                <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
+                  <code class="hash-tag">{{ hc.short_hash }}</code>
+                  <span class="mini-msg">{{ hc.message }}</span>
+                </div>
+              </div>
             </template>
           </template>
         </div>
+      </div>
+
+      <!-- ── IGNORED (only when "Show Ignored Files" is on) ──────── -->
+      <div v-if="showIgnored" class="sec-hdr clickable" @click="ignoredExpanded = !ignoredExpanded">
+        <span class="sec-caret">{{ ignoredExpanded ? '▾' : '▸' }}</span>
+        <span class="sec-label">Ignored</span>
+        <span v-if="gitStatus.ignored?.length" class="sec-badge">{{ gitStatus.ignored.length }}</span>
+        <div class="spacer" />
+      </div>
+      <div v-if="showIgnored && ignoredExpanded">
+        <div v-if="!gitStatus.ignored?.length" class="empty-msg">No ignored files</div>
+        <template v-for="f in sortFiles(gitStatus.ignored ?? [])" :key="'ig:' + f.path">
+          <div class="file-row ignored-row" @contextmenu="openCtxMenu($event, f, false)">
+            <span class="file-status" :title="'ignored'">!</span>
+            <span class="file-name-main" :title="f.path">{{ fileName(f.path) }}</span>
+            <span class="file-path-dim" :title="f.path">{{ fileDir(f.path) }}</span>
+          </div>
+        </template>
       </div>
 
       </div><!-- /part-top -->
@@ -1344,7 +1424,16 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <button class="menu-item" @click="ctxHistory">File History</button>
         <button class="menu-item" @click="ctxBlame">Blame</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="ctxAddToGitignore">Add to .gitignore</button>
+        <div class="menu-item has-sub">
+          <span>Add to ignore</span><span class="sub-caret">▸</span>
+          <div class="ctx-submenu">
+            <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore（專案根目錄）</button>
+            <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore（所在資料夾）</button>
+            <button class="menu-item" @click="ctxAddToGitignore('local')">.git/info/exclude（本機限定）</button>
+            <button class="menu-item" @click="ctxAddToGitignore('global')">全域 .gitignore</button>
+          </div>
+        </div>
+        <button class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxReveal">Reveal in Finder</button>
         <button class="menu-item" @click="ctxCopyPath(false)">Copy Path</button>
@@ -1358,12 +1447,31 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <button class="menu-item" @click="ctxFolderStage">Stage Changes</button>
           <button class="menu-item danger" @click="ctxFolderDiscard">Discard Changes</button>
           <div class="menu-sep" />
-          <button class="menu-item" @click="ctxFolderAddIgnore">Add to .gitignore</button>
+          <div class="menu-item has-sub">
+            <span>Add to ignore</span><span class="sub-caret">▸</span>
+            <div class="ctx-submenu">
+              <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore（專案根目錄）</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore（所在資料夾）</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('local')">.git/info/exclude（本機限定）</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('global')">全域 .gitignore</button>
+            </div>
+          </div>
+          <button class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
         </template>
         <div class="menu-sep" />
         <button class="menu-item" @click="ctxFolderReveal">Reveal in Finder</button>
         <button class="menu-item" @click="ctxFolderCopyPath(false)">Copy Path</button>
         <button class="menu-item" @click="ctxFolderCopyPath(true)">Copy Relative Path</button>
+      </div>
+    </Teleport>
+
+    <!-- ── "Why is this ignored?" verdict ───────────────────────────────── -->
+    <Teleport to="body">
+      <div v-if="ignoreResult" class="tp-backdrop" @click="ignoreResult = null" />
+      <div v-if="ignoreResult" class="ignore-modal" @click.stop>
+        <div class="ignore-modal-path" :title="ignoreResult.path">{{ ignoreResult.path }}</div>
+        <div class="ignore-modal-text">{{ ignoreResult.text }}</div>
+        <button class="btn-ghost sm" @click="ignoreResult = null">關閉</button>
       </div>
     </Teleport>
   </div>
@@ -1922,4 +2030,32 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
   background: #21262d;
   margin: 4px 0;
 }
+/* Hover submenu (Add to ignore ▸) */
+.ctx-menu .menu-item.has-sub { position: relative; justify-content: space-between; }
+.ctx-menu .sub-caret { color: #6e7681; font-size: 10px; }
+.ctx-menu .ctx-submenu {
+  position: absolute; top: -5px; left: 100%; margin-left: 2px;
+  display: none; min-width: 220px;
+  background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+  padding: 4px; box-shadow: 0 8px 24px rgba(1, 4, 9, 0.85);
+}
+.ctx-menu .menu-item.has-sub:hover .ctx-submenu { display: block; }
+
+/* Ignored file rows — dimmed */
+.file-row.ignored-row { opacity: 0.55; }
+.file-row.ignored-row .file-status { color: #6e7681; width: 14px; text-align: center; }
+
+/* "Why is this ignored?" verdict modal */
+.ignore-modal {
+  position: fixed; z-index: 10000; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(420px, 80vw); background: #161b22; border: 1px solid #30363d;
+  border-radius: 8px; padding: 16px; box-shadow: 0 12px 32px rgba(1, 4, 9, 0.9);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ignore-modal-path {
+  font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; color: #58a6ff;
+  word-break: break-all;
+}
+.ignore-modal-text { font-size: 13px; color: #c9d1d9; line-height: 1.5; }
+.ignore-modal .btn-ghost { align-self: flex-end; }
 </style>

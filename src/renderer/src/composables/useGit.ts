@@ -15,7 +15,20 @@ export interface GitStatus {
   staged: GitFileEntry[]
   unstaged: GitFileEntry[]
   untracked: GitFileEntry[]
+  ignored: GitFileEntry[]
   operation_in_progress: string // '' | 'merge' | 'rebase' | 'cherry-pick'
+}
+
+export type IgnoreTarget = 'project' | 'nested' | 'local' | 'global'
+
+export interface CheckIgnoreResult {
+  ok: boolean
+  ignored: boolean
+  tracked: boolean
+  source: string
+  line: number
+  pattern: string
+  error?: string
 }
 
 export interface GitCommit {
@@ -86,6 +99,7 @@ const emptyStatus = (): GitStatus => ({
   staged: [],
   unstaged: [],
   untracked: [],
+  ignored: [],
   operation_in_progress: '',
 })
 
@@ -96,6 +110,7 @@ export function useGit(
   const { send, on } = backend
 
   const gitStatus = ref<GitStatus>(emptyStatus())
+  const showIgnored = ref(false)
   const gitLog = ref<GitCommit[]>([])
   const gitBranches = ref<GitBranch[]>([])
   const gitStashes = ref<GitStashEntry[]>([])
@@ -140,7 +155,10 @@ export function useGit(
     }
     isLoadingStatus.value = true
     try {
-      const resp = await send<GitStatus>('git.status', { workspace_path: ws })
+      const resp = await send<GitStatus>('git.status', {
+        workspace_path: ws,
+        include_ignored: showIgnored.value,
+      })
       if (resp.ok && resp.payload) {
         gitStatus.value = resp.payload
       }
@@ -649,15 +667,26 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
-  async function addToGitignore(pattern: string): Promise<{ ok: boolean; error?: string }> {
+  async function addToGitignore(
+    pattern: string,
+    target: IgnoreTarget = 'project',
+    untrack = true,
+  ): Promise<{ ok: boolean; error?: string; target_file?: string; untracked?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.ignore', {
-      workspace_path: ws,
-      pattern,
-    })
+    const resp = await send<{ ok: boolean; error?: string; target_file?: string; untracked?: string[] }>(
+      'git.ignore',
+      { workspace_path: ws, pattern, target, untrack },
+    )
     if (resp.ok && resp.payload?.ok) await loadStatus()
     return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function checkIgnore(filepath: string): Promise<CheckIgnoreResult> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: 'no workspace' }
+    const resp = await send<CheckIgnoreResult>('git.check_ignore', { workspace_path: ws, filepath })
+    return resp.payload ?? { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: 'no response' }
   }
 
   async function abortOperation(op: string): Promise<{ ok: boolean; error?: string }> {
@@ -728,6 +757,9 @@ export function useGit(
     void loadGitConfig()
   }, { immediate: true })
 
+  // Re-fetch status when the "show ignored files" toggle flips.
+  watch(showIgnored, () => { if (workspacePath()) void loadStatus() })
+
   // Auto-refresh every 30s to pick up external git changes (e.g. another terminal)
   const _autoRefreshTimer = window.setInterval(() => {
     if (workspacePath()) void loadStatus()
@@ -750,7 +782,7 @@ export function useGit(
 
   return {
     // state
-    gitStatus, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+    gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
     gitWorktrees, gitConfig,
     isLoadingStatus, isLoadingLog, isInitializing,
     isCommitting, isSyncing, isFetching, isGenerating,
@@ -783,7 +815,7 @@ export function useGit(
     commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
     showCommit,
     // vscode-parity additions
-    applyPatch, cloneRepo, addToGitignore, abortOperation, stashApply,
+    applyPatch, cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,
     pullRebase, pushForce,
   }
 }

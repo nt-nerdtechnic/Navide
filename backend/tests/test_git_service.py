@@ -263,6 +263,15 @@ class TestInitRepo:
         assert "__pycache__/" in content
 
     @pytest.mark.asyncio
+    async def test_init_fullstack_includes_both_node_and_python(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}")
+        (tmp_path / "requirements.txt").write_text("django\n")
+        await git_service.init_repo(str(tmp_path))
+        content = (tmp_path / ".gitignore").read_text()
+        assert "node_modules/" in content
+        assert "__pycache__/" in content
+
+    @pytest.mark.asyncio
     async def test_init_invalid_path(self):
         result = await git_service.init_repo("/nonexistent/path/xyz")
         assert result["ok"] is False
@@ -1134,6 +1143,120 @@ class TestAddToGitignore:
         init_repo(tmp_path)
         r = await git_service.add_to_gitignore(str(tmp_path), "  ")
         assert r["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_untracks_already_tracked_file(self, tmp_path):
+        """The core fix: adding an ignore for a tracked file untracks it
+        (git rm --cached) so the rule actually takes effect; file stays on disk."""
+        init_repo(tmp_path)
+        secret = tmp_path / "secret.env"
+        secret.write_text("KEY=1")
+        subprocess.run(["git", "add", "secret.env"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add secret"], cwd=tmp_path, check=True, capture_output=True)
+
+        r = await git_service.add_to_gitignore(str(tmp_path), "secret.env")
+        assert r["ok"] is True
+        assert r["untracked"] == ["secret.env"]
+        assert secret.exists()  # file untouched on disk
+        ls = subprocess.run(["git", "ls-files", "secret.env"], cwd=tmp_path, capture_output=True, text=True)
+        assert ls.stdout.strip() == ""  # no longer tracked
+
+    @pytest.mark.asyncio
+    async def test_untrack_disabled(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "keep.log").write_text("x")
+        subprocess.run(["git", "add", "keep.log"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add"], cwd=tmp_path, check=True, capture_output=True)
+        r = await git_service.add_to_gitignore(str(tmp_path), "keep.log", untrack=False)
+        assert r["untracked"] == []
+        ls = subprocess.run(["git", "ls-files", "keep.log"], cwd=tmp_path, capture_output=True, text=True)
+        assert ls.stdout.strip() == "keep.log"  # still tracked
+
+    @pytest.mark.asyncio
+    async def test_target_local_writes_info_exclude(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.add_to_gitignore(str(tmp_path), "scratch/", target="local")
+        assert r["ok"] is True
+        exclude = tmp_path / ".git" / "info" / "exclude"
+        assert "scratch/" in exclude.read_text()
+        assert not (tmp_path / ".gitignore").exists()  # project .gitignore untouched
+
+    @pytest.mark.asyncio
+    async def test_target_nested_writes_into_subdir(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "backend").mkdir()
+        r = await git_service.add_to_gitignore(str(tmp_path), "backend/cache.db", target="nested")
+        assert r["ok"] is True
+        nested = tmp_path / "backend" / ".gitignore"
+        assert nested.read_text().strip() == "cache.db"
+
+    @pytest.mark.asyncio
+    async def test_target_unknown_rejected(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.add_to_gitignore(str(tmp_path), "x", target="bogus")
+        assert r["ok"] is False
+
+
+# ── check_ignore ──────────────────────────────────────────────────────────────────
+
+class TestCheckIgnore:
+    @pytest.mark.asyncio
+    async def test_reports_matching_rule(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        r = await git_service.check_ignore(str(tmp_path), "debug.log")
+        assert r["ok"] is True
+        assert r["ignored"] is True
+        assert r["pattern"] == "*.log"
+        assert ".gitignore" in r["source"]
+
+    @pytest.mark.asyncio
+    async def test_not_ignored(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        r = await git_service.check_ignore(str(tmp_path), "main.py")
+        assert r["ok"] is True
+        assert r["ignored"] is False
+
+    @pytest.mark.asyncio
+    async def test_reports_tracked_despite_rule(self, tmp_path):
+        """A tracked file matching a rule: ignored=True (rule matches) but
+        tracked=True — explains why it still shows up."""
+        init_repo(tmp_path)
+        (tmp_path / "app.log").write_text("x")
+        subprocess.run(["git", "add", "-f", "app.log"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "log"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        r = await git_service.check_ignore(str(tmp_path), "app.log")
+        assert r["ignored"] is True
+        assert r["tracked"] is True
+
+    @pytest.mark.asyncio
+    async def test_empty_filepath_rejected(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.check_ignore(str(tmp_path), "")
+        assert r["ok"] is False
+
+
+# ── get_status include_ignored ─────────────────────────────────────────────────────
+
+class TestStatusIncludeIgnored:
+    @pytest.mark.asyncio
+    async def test_ignored_hidden_by_default(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        (tmp_path / "a.log").write_text("x")
+        result = await git_service.get_status(str(tmp_path))
+        assert result["ignored"] == []
+
+    @pytest.mark.asyncio
+    async def test_ignored_surfaced_when_requested(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("*.log\n")
+        (tmp_path / "a.log").write_text("x")
+        result = await git_service.get_status(str(tmp_path), include_ignored=True)
+        paths = {f["path"] for f in result["ignored"]}
+        assert "a.log" in paths
 
 
 # ── abort_operation + status detection ────────────────────────────────────────────

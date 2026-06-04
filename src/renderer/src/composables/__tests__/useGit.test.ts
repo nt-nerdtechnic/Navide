@@ -232,6 +232,57 @@ describe('useGit', () => {
     await result.addToGitignore('node_modules/')
     const call = mock.sent.find(s => s.type === 'git.ignore')
     expect(call?.payload.pattern).toBe('node_modules/')
+    expect(call?.payload.target).toBe('project')
+    expect(call?.payload.untrack).toBe(true)
+    scope.stop()
+  })
+
+  it('addToGitignore forwards the chosen target', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.ignore', { ok: true })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    await result.addToGitignore('cache/', 'local')
+    const call = mock.sent.find(s => s.type === 'git.ignore')
+    expect(call?.payload.target).toBe('local')
+    scope.stop()
+  })
+
+  it('checkIgnore sends git.check_ignore and returns the verdict', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.check_ignore', {
+      ok: true, ignored: true, tracked: false, source: '.gitignore', line: 3, pattern: '*.log',
+    })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    const r = await result.checkIgnore('debug.log')
+    const call = mock.sent.find(s => s.type === 'git.check_ignore')
+    expect(call?.payload.filepath).toBe('debug.log')
+    expect(r.ignored).toBe(true)
+    expect(r.pattern).toBe('*.log')
+    scope.stop()
+  })
+
+  it('toggling showIgnored re-requests status with include_ignored', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    result.showIgnored.value = true
+    await flush()
+    const statusCalls = mock.sent.filter(s => s.type === 'git.status')
+    expect(statusCalls.at(-1)?.payload.include_ignored).toBe(true)
     scope.stop()
   })
 

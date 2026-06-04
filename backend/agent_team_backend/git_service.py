@@ -40,6 +40,7 @@ class GitStatus:
     staged: list[GitFileEntry] = field(default_factory=list)
     unstaged: list[GitFileEntry] = field(default_factory=list)
     untracked: list[GitFileEntry] = field(default_factory=list)
+    ignored: list[GitFileEntry] = field(default_factory=list)
     operation_in_progress: str = ""  # "", "merge", "rebase", "cherry-pick"
 
 
@@ -128,8 +129,13 @@ async def _run_with_input(args: list[str], cwd: str, stdin_text: str) -> tuple[i
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-async def get_status(workspace_path: str) -> dict[str, Any]:
-    """Return serialisable GitStatus dict for the given workspace."""
+async def get_status(workspace_path: str, include_ignored: bool = False) -> dict[str, Any]:
+    """Return serialisable GitStatus dict for the given workspace.
+
+    When *include_ignored* is True, also surface git-ignored paths (``!!`` in
+    porcelain) so the UI can optionally show them — mirrors VS Code's
+    "show ignored files" toggle.
+    """
     if not workspace_path or not Path(workspace_path).is_dir():
         return asdict(GitStatus(is_git_repo=False))
 
@@ -141,10 +147,10 @@ async def get_status(workspace_path: str) -> dict[str, Any]:
     status = GitStatus(is_git_repo=True)
 
     # Branch + ahead/behind
-    rc, out, _ = await _run(
-        ["git", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--branch", "-u"],
-        workspace_path,
-    )
+    args = ["git", "-c", "core.quotePath=false", "status", "--porcelain=v1", "--branch", "-u"]
+    if include_ignored:
+        args.append("--ignored")
+    rc, out, _ = await _run(args, workspace_path)
     lines = out.splitlines()
     if lines:
         header = lines[0]  # ## main...origin/main [ahead 2, behind 1]
@@ -167,7 +173,9 @@ async def get_status(workspace_path: str) -> dict[str, Any]:
             # later stage/unstage/discard/diff operations resolve a real file.
             if (x in ("R", "C") or y in ("R", "C")) and " -> " in path:
                 path = path.split(" -> ", 1)[1]
-            if x == "?" and y == "?":
+            if x == "!" and y == "!":
+                status.ignored.append(GitFileEntry(path=path, status="!"))
+            elif x == "?" and y == "?":
                 status.untracked.append(GitFileEntry(path=path, status="?"))
             else:
                 if x != " " and x != "?":
@@ -1061,13 +1069,19 @@ _GENERIC_GITIGNORE = """\
 
 
 def _detect_gitignore_template(workspace_path: str) -> str:
-    """Return an appropriate .gitignore content based on project files present."""
+    """Return an appropriate .gitignore based on project files present.
+
+    Full-stack projects (e.g. a Node frontend + Python backend) match more than
+    one stack, so the templates are composed rather than picked exclusively —
+    otherwise the second stack's artifacts (e.g. __pycache__/) leak into git.
+    """
     root = Path(workspace_path)
+    parts: list[str] = []
     if (root / "package.json").exists():
-        return _NODE_GITIGNORE
+        parts.append(_NODE_GITIGNORE)
     if any(root.glob("*.py")) or (root / "pyproject.toml").exists() or (root / "requirements.txt").exists():
-        return _PYTHON_GITIGNORE
-    return _GENERIC_GITIGNORE
+        parts.append(_PYTHON_GITIGNORE)
+    return "\n".join(parts) if parts else _GENERIC_GITIGNORE
 
 
 async def init_repo(workspace_path: str, create_gitignore: bool = True) -> dict[str, Any]:
@@ -1118,23 +1132,146 @@ async def clone_repo(url: str, target_dir: str) -> dict[str, Any]:
     return {"ok": True, "path": str(dest)}
 
 
-async def add_to_gitignore(workspace_path: str, pattern: str) -> dict[str, Any]:
-    """Append *pattern* to the workspace .gitignore (creating it if needed).
+async def _resolve_git_dir(workspace_path: str) -> Path | None:
+    """Absolute path to the repo's .git dir, or None if not a repo."""
+    rc, out, _ = await _run(["git", "rev-parse", "--git-dir"], workspace_path)
+    if rc != 0 or not out.strip():
+        return None
+    p = Path(out.strip())
+    return p if p.is_absolute() else Path(workspace_path) / p
 
-    No-op if the pattern is already present. Returns ``{"ok": bool, "error": str}``.
+
+async def _resolve_global_excludes(workspace_path: str) -> Path:
+    """Path to git's global excludes file (core.excludesFile), or its default.
+
+    Default per git: $XDG_CONFIG_HOME/git/ignore, falling back to
+    ~/.config/git/ignore.
+    """
+    rc, out, _ = await _run(["git", "config", "--global", "core.excludesFile"], workspace_path)
+    if rc == 0 and out.strip():
+        return Path(os.path.expanduser(out.strip()))
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "git" / "ignore"
+
+
+def _append_ignore_pattern(file_path: Path, pattern: str) -> bool:
+    """Append *pattern* to *file_path* (creating it + parents) unless already
+    present. Returns True when a line was actually written."""
+    existing = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
+    if pattern in {ln.strip() for ln in existing.splitlines()}:
+        return False
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+    file_path.write_text(existing + prefix + pattern + "\n", encoding="utf-8")
+    return True
+
+
+async def add_to_gitignore(
+    workspace_path: str,
+    pattern: str,
+    target: str = "project",
+    untrack: bool = True,
+) -> dict[str, Any]:
+    """Add *pattern* to an ignore file and (by default) untrack matching files.
+
+    *target* selects which of git's four ignore sources to write:
+      - ``project`` → ``<workspace>/.gitignore`` (committed, repo-wide)
+      - ``nested``  → ``.gitignore`` inside the pattern's own directory
+      - ``local``   → ``.git/info/exclude`` (repo-local, not committed)
+      - ``global``  → ``core.excludesFile`` (all repos for this user)
+
+    A freshly-added rule has no effect on files already in the index, so unless
+    *untrack* is False any tracked path matching *pattern* is removed from the
+    index with ``git rm --cached`` (the file stays on disk). This is what makes
+    "Add to .gitignore" actually hide an already-committed file.
+
+    Returns ``{"ok", "target_file", "written", "untracked": [paths]}``.
     """
     pattern = (pattern or "").strip()
     if not pattern:
         return {"ok": False, "error": "pattern is required"}
     if not workspace_path or not Path(workspace_path).is_dir():
         return {"ok": False, "error": "invalid workspace path"}
-    gi_path = Path(workspace_path) / ".gitignore"
-    existing = gi_path.read_text(encoding="utf-8") if gi_path.exists() else ""
-    if pattern in {ln.strip() for ln in existing.splitlines()}:
-        return {"ok": True}  # already ignored
-    prefix = "" if (not existing or existing.endswith("\n")) else "\n"
-    gi_path.write_text(existing + prefix + pattern + "\n", encoding="utf-8")
-    return {"ok": True}
+
+    write_pattern = pattern
+    if target == "project":
+        dest = Path(workspace_path) / ".gitignore"
+    elif target == "nested":
+        rel = pattern.rstrip("/")
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            return {"ok": False, "error": "pattern escapes workspace"}
+        ws_real = Path(workspace_path).resolve()
+        dest = ((Path(workspace_path) / rel).parent / ".gitignore").resolve()
+        try:
+            dest.relative_to(ws_real)
+        except ValueError:
+            return {"ok": False, "error": "pattern escapes workspace"}
+        write_pattern = Path(rel).name + ("/" if pattern.endswith("/") else "")
+    elif target == "local":
+        git_dir = await _resolve_git_dir(workspace_path)
+        if git_dir is None:
+            return {"ok": False, "error": "not a git repository"}
+        dest = git_dir / "info" / "exclude"
+    elif target == "global":
+        dest = await _resolve_global_excludes(workspace_path)
+    else:
+        return {"ok": False, "error": f"unknown target: {target}"}
+
+    written = _append_ignore_pattern(dest, write_pattern)
+
+    untracked: list[str] = []
+    if untrack:
+        path = pattern.rstrip("/")
+        rc, out, _ = await _run(["git", "ls-files", "-z", "--", path], workspace_path)
+        if rc == 0 and out:
+            tracked = [p for p in out.split("\0") if p]
+            if tracked:
+                # -f: tracked files whose staged content differs from disk/HEAD
+                # otherwise make `git rm --cached` refuse.
+                await _run(
+                    ["git", "rm", "--cached", "-r", "-f", "--quiet", "--", path],
+                    workspace_path,
+                )
+                untracked = tracked
+
+    return {"ok": True, "target_file": str(dest), "written": written, "untracked": untracked}
+
+
+async def check_ignore(workspace_path: str, filepath: str) -> dict[str, Any]:
+    """Explain why *filepath* is (or isn't) ignored — git's own debug tool.
+
+    Runs ``git check-ignore -v --no-index`` so the matching rule is reported
+    even for a path that is currently tracked (``--no-index`` evaluates rules
+    irrespective of the index). Also reports whether the path is tracked, since
+    a tracked file keeps showing up despite a matching rule.
+
+    Returns ``{"ok", "ignored", "tracked", "source", "line", "pattern"}``.
+    """
+    filepath = (filepath or "").strip()
+    if not filepath:
+        return {"ok": False, "error": "filepath is required"}
+    if not workspace_path or not Path(workspace_path).is_dir():
+        return {"ok": False, "error": "invalid workspace path"}
+
+    ls_rc, ls_out, _ = await _run(["git", "ls-files", "--", filepath], workspace_path)
+    tracked = ls_rc == 0 and bool(ls_out.strip())
+
+    rc, out, _ = await _run(
+        ["git", "check-ignore", "-v", "--no-index", "--", filepath], workspace_path
+    )
+    if rc == 0 and out.strip():
+        first = out.strip().splitlines()[0]
+        # "<source>:<line>:<pattern>\t<path>"
+        m = re.match(r"^(.*?):(\d+):(.*?)\t", first)
+        if m:
+            return {
+                "ok": True, "ignored": True, "tracked": tracked,
+                "source": m.group(1), "line": int(m.group(2)), "pattern": m.group(3),
+            }
+        return {"ok": True, "ignored": True, "tracked": tracked, "source": "", "line": 0, "pattern": ""}
+    # rc == 1: not ignored. rc == 128: error (treat as not ignored).
+    return {"ok": True, "ignored": False, "tracked": tracked, "source": "", "line": 0, "pattern": ""}
 
 
 async def generate_commit_message(workspace_path: str, ollama_url: str, model: str = "llama3.2") -> dict[str, Any]:

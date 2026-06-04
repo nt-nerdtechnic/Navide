@@ -1295,7 +1295,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.status":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.get_status(ws_path)
+            include_ignored = bool(payload.get("include_ignored", False))
+            result = await git_service.get_status(ws_path, include_ignored=include_ignored)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.log":
@@ -1645,10 +1646,18 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.ignore":
             ws_path = payload.get("workspace_path") or ""
             pattern = payload.get("pattern") or ""
-            result = await git_service.add_to_gitignore(ws_path, pattern)
+            target = payload.get("target") or "project"
+            untrack = bool(payload.get("untrack", True))
+            result = await git_service.add_to_gitignore(ws_path, pattern, target=target, untrack=untrack)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.check_ignore":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.check_ignore(ws_path, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.abort":
             ws_path = payload.get("workspace_path") or ""

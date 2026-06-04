@@ -160,3 +160,22 @@ def test_manual_pane_session_can_be_cleared(store_with_stage: tuple[ProjectStore
 
     pane = store.peek(ws).manual_panes[0]
     assert pane.session_id == ""
+
+
+def test_ensure_dir_writes_self_ignoring_gitignore(tmp_path: Path) -> None:
+    """The .agent-team/ runtime dir ignores itself so git never tracks it,
+    regardless of the workspace's own .gitignore or staging order."""
+    store = ProjectStore()
+    d = store._ensure_dir(str(tmp_path))
+    gi = d / ".gitignore"
+    assert gi.exists()
+    assert gi.read_text(encoding="utf-8").strip() == "*"
+
+
+def test_ensure_dir_keeps_existing_gitignore(tmp_path: Path) -> None:
+    store = ProjectStore()
+    d = store.project_dir(str(tmp_path))
+    d.mkdir(parents=True)
+    (d / ".gitignore").write_text("# custom\n", encoding="utf-8")
+    store._ensure_dir(str(tmp_path))
+    assert (d / ".gitignore").read_text(encoding="utf-8") == "# custom\n"
