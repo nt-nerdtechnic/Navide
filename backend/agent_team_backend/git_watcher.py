@@ -1,0 +1,178 @@
+"""Filesystem watcher that fires `git.changed` when a repo's working tree or
+`.git` state changes on disk — the same model VS Code / Cursor use for their
+Source Control panel (event-driven, not fixed-interval polling).
+
+Design (mirrors LogWatcher):
+
+    GitWatcher.start(loop)
+        └─ observer (watchdog Observer)
+    GitWatcher.watch(ws_path)
+        └─ schedule a per-root handler (recursive) on each repo root
+
+A change anywhere in the working tree, or in the first-level git-state files
+under `.git/` (index, HEAD, refs, MERGE_HEAD, …), marks that workspace dirty.
+A short debounce coalesces bursts (e.g. a build writing many files, or `git
+checkout` touching thousands) into a single `on_change(ws_path)` call.
+
+Noise is filtered in the handler: build/dependency dirs (node_modules, .venv,
+dist, …) and git-internal churn (.git/objects, .git/logs, *.lock) never
+trigger a refresh — matching VS Code's behaviour, which ignores `index.lock`
+and only reacts to the first level of `.git`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
+
+log = logging.getLogger("agent_team_backend.git_watcher")
+
+ChangeSink = Callable[[str], Awaitable[None]]
+
+# Working-tree path segments that should never trigger a git refresh. These are
+# build artefacts / dependency trees that aren't tracked but churn constantly.
+_IGNORE_SEGMENTS = frozenset({
+    "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
+    "target", ".next", ".nuxt", ".turbo", ".cache", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache", ".idea", ".gradle",
+})
+
+# First-level entries under `.git/` that are pure internal churn — reacting to
+# them would fire on every object write / reflog append with no UI-visible
+# effect. Everything else at the first level (index, HEAD, refs, MERGE_HEAD,
+# ORIG_HEAD, FETCH_HEAD, packed-refs …) is meaningful git state.
+_IGNORE_GIT_FIRST_LEVEL = frozenset({"objects", "logs", "hooks", "lfs"})
+
+
+class _RepoHandler(FileSystemEventHandler):
+    """watchdog handler bound to one repo root. Filters noise, then bridges
+    meaningful events to the asyncio loop as a 'this workspace is dirty' signal."""
+
+    def __init__(self, root: Path, ws_path: str, on_dirty: Callable[[str], None]) -> None:
+        super().__init__()
+        self._root = root
+        self._ws_path = ws_path
+        self._on_dirty = on_dirty
+
+    def on_any_event(self, event: FileSystemEvent) -> None:
+        # `closed`/`opened` events carry no state change; only react to actual
+        # create/delete/modify/move.
+        if event.event_type in ("opened", "closed"):
+            return
+        src = str(event.src_path)
+        if self._is_relevant(src) or (
+            getattr(event, "dest_path", "") and self._is_relevant(str(event.dest_path))
+        ):
+            self._on_dirty(self._ws_path)
+
+    def _is_relevant(self, src: str) -> bool:
+        try:
+            rel = Path(src).resolve().relative_to(self._root)
+        except (ValueError, OSError):
+            return False
+        parts = rel.parts
+        if not parts:
+            return False
+        name = parts[-1]
+        if name.endswith(".lock"):
+            return False  # index.lock, ref locks — transient, ignore.
+        if ".git" in parts:
+            gi = parts.index(".git")
+            sub = parts[gi + 1:]
+            if not sub:
+                return False
+            return sub[0] not in _IGNORE_GIT_FIRST_LEVEL
+        # Working tree: drop anything under a known build/dependency dir.
+        return not any(seg in _IGNORE_SEGMENTS for seg in parts)
+
+
+class GitWatcher:
+    """One Observer, many repos. Lazily `watch()` a workspace the first time the
+    GitPane looks at it; debounced `on_change(ws_path)` fires on disk changes."""
+
+    def __init__(self, on_change: ChangeSink, *, debounce_s: float = 0.4) -> None:
+        self._on_change = on_change
+        self._debounce_s = debounce_s
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._observer: Observer | None = None
+        self._roots: dict[str, Path] = {}  # ws_path -> resolved root
+        self._pending: dict[str, asyncio.TimerHandle] = {}
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        self._loop = asyncio.get_event_loop()
+        self._observer = Observer()
+        self._observer.start()
+        log.info("GitWatcher started (debounce %.0fms)", self._debounce_s * 1000)
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._started = False
+        for th in self._pending.values():
+            th.cancel()
+        self._pending.clear()
+        if self._observer:
+            self._observer.stop()
+            try:
+                self._observer.join(timeout=2.0)
+            except Exception:  # noqa: BLE001
+                pass
+        log.info("GitWatcher stopped")
+
+    def watch(self, ws_path: str) -> None:
+        """Register a workspace to watch. Idempotent; safe to call on every
+        git.status. No-op until start() has run."""
+        if not self._started or self._observer is None or not ws_path:
+            return
+        if ws_path in self._roots:
+            return
+        try:
+            root = Path(ws_path).resolve(strict=True)
+        except OSError:
+            return
+        if not root.is_dir():
+            return
+        handler = _RepoHandler(root, ws_path, self._mark_dirty_threadsafe)
+        try:
+            self._observer.schedule(handler, str(root), recursive=True)
+        except Exception as err:  # noqa: BLE001
+            log.warning("GitWatcher schedule on %s failed: %s", root, err)
+            return
+        self._roots[ws_path] = root
+        log.info("GitWatcher watching %s", root)
+
+    # ───────────────────────── debounce (loop thread) ─────────────────────
+
+    def _mark_dirty_threadsafe(self, ws_path: str) -> None:
+        """Called from the watchdog observer thread → hop to the loop thread."""
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(self._schedule_fire, ws_path)
+        except RuntimeError:
+            pass  # loop closed mid-flight
+
+    def _schedule_fire(self, ws_path: str) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+        existing = self._pending.get(ws_path)
+        if existing is not None:
+            existing.cancel()
+        self._pending[ws_path] = loop.call_later(
+            self._debounce_s, self._fire, ws_path
+        )
+
+    def _fire(self, ws_path: str) -> None:
+        self._pending.pop(ws_path, None)
+        asyncio.create_task(self._on_change(ws_path))

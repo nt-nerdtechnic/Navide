@@ -167,6 +167,24 @@ describe('useGit', () => {
     scope.stop()
   })
 
+  it('re-syncs status on backend reconnect', async () => {
+    const mock = createMockBackend('disconnected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    const countBefore = mock.sent.filter(s => s.type === 'git.status').length
+
+    mock.status.value = 'connected'
+    await flush()
+
+    const countAfter = mock.sent.filter(s => s.type === 'git.status').length
+    expect(countAfter).toBeGreaterThan(countBefore)
+    scope.stop()
+  })
+
   it('does not refresh on git.changed for different workspace', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)

@@ -826,11 +826,17 @@ export function useGit(
   // Re-fetch status when the "show ignored files" toggle flips.
   watch(showIgnored, () => { if (workspacePath()) void loadStatus() })
 
-  // Auto-refresh every 30s to pick up external git changes (e.g. another terminal)
-  const _autoRefreshTimer = window.setInterval(() => {
-    if (workspacePath()) void loadStatus()
-  }, 30_000)
-  onScopeDispose(() => window.clearInterval(_autoRefreshTimer))
+  // No background polling. Like VS Code/Cursor, refresh is purely event-driven:
+  // the backend GitWatcher broadcasts git.changed on any disk change. The one
+  // gap our cross-process setup has (that an in-editor extension doesn't) is a
+  // WebSocket drop — a git.changed emitted while disconnected is lost. So on
+  // (re)connect, re-sync once; loadStatus also re-registers this workspace with
+  // the backend GitWatcher via git.status.
+  const _stopReconnect = watch(
+    () => backend.status.value,
+    (s) => { if (s === 'connected' && workspacePath()) void loadStatus() },
+  )
+  onScopeDispose(_stopReconnect)
 
   // Refresh on backend git.changed broadcast
   on('git.changed', (payload: unknown) => {

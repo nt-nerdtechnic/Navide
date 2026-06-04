@@ -52,6 +52,7 @@ from .terminals import TerminalService
 from .tokens_store import TokensStore
 from .history_store import HistoryStore
 from . import git_service
+from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
 
@@ -121,6 +122,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
 _readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
+_git_watcher: GitWatcher | None = None
 
 
 # Module-level registry of all currently-connected WebSocket sessions so that
@@ -152,6 +154,11 @@ class Session:
             await self.websocket.send_json(event)
         except Exception as err:  # noqa: BLE001
             log.warning("send_event failed: %s", err)
+
+
+async def _broadcast_git_changed(ws_path: str) -> None:
+    """GitWatcher sink: a repo's working tree / .git changed on disk."""
+    await broadcast(make_event("git.changed", {"workspace_path": ws_path}))
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
@@ -294,6 +301,15 @@ async def _start_log_watcher() -> None:
     for r in _readers:
         _log_watcher.add_reader(r)
     _log_watcher.start()
+
+    # Git filesystem watcher: fires `git.changed` near-instantly when the
+    # working tree or `.git` state changes on disk (external edits, another
+    # terminal running git). Workspaces are registered lazily on first
+    # git.status — see the WebSocket handler.
+    global _git_watcher
+    _git_watcher = GitWatcher(_broadcast_git_changed)
+    _git_watcher.start()
+
     # Start MCP servers in the background so they're ready for the first pipeline run.
     asyncio.create_task(mcp_manager.startup())
 
@@ -310,11 +326,14 @@ async def _start_log_watcher() -> None:
 
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
-    global _log_watcher
+    global _log_watcher, _git_watcher
     if _log_watcher is not None:
         _log_watcher.stop()
+    if _git_watcher is not None:
+        _git_watcher.stop()
     await mcp_manager.shutdown()
     _log_watcher = None
+    _git_watcher = None
 
 
 @app.get("/health")
@@ -1295,6 +1314,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.status":
             ws_path = payload.get("workspace_path") or ""
+            # The GitPane is now looking at this workspace — start (idempotently)
+            # watching it on disk so external changes refresh near-instantly.
+            if _git_watcher is not None:
+                _git_watcher.watch(ws_path)
             include_ignored = bool(payload.get("include_ignored", False))
             result = await git_service.get_status(ws_path, include_ignored=include_ignored)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
