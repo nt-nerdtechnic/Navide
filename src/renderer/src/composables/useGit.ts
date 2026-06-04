@@ -111,6 +111,26 @@ export function useGit(
   const isGenerating = ref(false)
   const syncOutput = ref('')
   const syncError = ref('')
+  // Single error channel for write operations: captures both ws-not-open
+  // rejections and backend {ok:false} responses so failures are never silent.
+  const gitError = ref('')
+  function clearGitError(): void { gitError.value = '' }
+  async function runWrite(
+    type: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; error?: string }> {
+    gitError.value = ''
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>(type, payload)
+      const r = resp.payload ?? { ok: false, error: 'no response' }
+      if (!r.ok) gitError.value = r.error || `${type} failed`
+      return r
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `${type}: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
 
   async function loadStatus(): Promise<void> {
     const ws = workspacePath()
@@ -368,7 +388,7 @@ export function useGit(
   async function discardFile(path: string): Promise<void> {
     const ws = workspacePath()
     if (!ws) return
-    await send('git.discard', { workspace_path: ws, files: [path] })
+    await runWrite('git.discard', { workspace_path: ws, files: [path] })
     await loadStatus()
   }
 
@@ -491,40 +511,49 @@ export function useGit(
   async function stageFile(path: string): Promise<void> {
     const ws = workspacePath()
     if (!ws) return
-    await send('git.stage', { workspace_path: ws, files: [path] })
+    await runWrite('git.stage', { workspace_path: ws, files: [path] })
     await loadStatus()
   }
 
   async function unstageFile(path: string): Promise<void> {
     const ws = workspacePath()
     if (!ws) return
-    await send('git.unstage', { workspace_path: ws, files: [path] })
+    await runWrite('git.unstage', { workspace_path: ws, files: [path] })
     await loadStatus()
   }
 
   async function stageAll(): Promise<void> {
     const ws = workspacePath()
     if (!ws) return
-    await send('git.stage_all', { workspace_path: ws })
+    await runWrite('git.stage_all', { workspace_path: ws })
     await loadStatus()
+  }
+
+  async function stageFiles(paths: string[]): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    if (!paths.length) return { ok: true }
+    const r = await runWrite('git.stage', { workspace_path: ws, files: paths })
+    await loadStatus()
+    return r
   }
 
   async function unstageFiles(paths: string[]): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     if (!paths.length) return { ok: true }
-    const resp = await send<{ ok: boolean; error?: string }>('git.unstage', { workspace_path: ws, files: paths })
+    const r = await runWrite('git.unstage', { workspace_path: ws, files: paths })
     await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    return r
   }
 
   async function discardFiles(paths: string[]): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     if (!paths.length) return { ok: true }
-    const resp = await send<{ ok: boolean; error?: string }>('git.discard', { workspace_path: ws, files: paths })
+    const r = await runWrite('git.discard', { workspace_path: ws, files: paths })
     await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    return r
   }
 
   async function commit(message: string): Promise<{ ok: boolean; error?: string }> {
@@ -726,13 +755,14 @@ export function useGit(
     isLoadingStatus, isLoadingLog, isInitializing,
     isCommitting, isSyncing, isFetching, isGenerating,
     syncOutput, syncError,
+    gitError, clearGitError,
     // loaders
     loadStatus, loadLog, loadBranches, loadStashes, loadRemotes, loadTags,
     loadWorktrees, loadGitConfig,
     // init
     initRepo,
     // file operations
-    stageFile, unstageFile, stageAll, unstageFiles, discardFiles, discardFile, diffFile,
+    stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, diffFile,
     fileLog, resolveConflictOurs, resolveConflictTheirs,
     cleanUntracked, blameFile,
     // remote

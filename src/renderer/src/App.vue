@@ -4440,6 +4440,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :workspace-path="pipeline.workspacePath"
       :stages="stagesApi.stages.value"
       :panes="paneViews"
+      :pipeline="pipelineView"
       v-model:expanded="tokenPanelExpanded"
     />
     <Welcome

@@ -19,8 +19,8 @@ const {
   gitStatus, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
   isCommitting, isSyncing, isFetching, isGenerating, isInitializing,
-  syncOutput, syncError,
-  initRepo, stageFile, unstageFile, stageAll, unstageFiles, discardFiles, discardFile, cleanUntracked,
+  syncOutput, syncError, gitError, clearGitError,
+  initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, cleanUntracked,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
   createBranch, switchBranch, deleteBranch, mergeBranch, rebaseOn,
   compareBranches, restoreFileFromBranch,
@@ -140,19 +140,69 @@ function treeIndent(depth: number): Record<string, string> {
 }
 
 // ── file context menu (right-click) ─────────────────────────────────────────────
-const ctxMenu = ref<{ show: boolean; x: number; y: number; file: GitFileEntry | null; staged: boolean }>({
-  show: false, x: 0, y: 0, file: null, staged: false,
-})
+const ctxMenu = ref<{
+  show: boolean; x: number; y: number
+  kind: 'file' | 'folder'
+  file: GitFileEntry | null
+  dir: string
+  staged: boolean
+}>({ show: false, x: 0, y: 0, kind: 'file', file: null, dir: '', staged: false })
+
 function openCtxMenu(e: MouseEvent, file: GitFileEntry, staged: boolean): void {
   e.preventDefault()
   // Clamp so the menu stays on-screen (menu is ~220×300).
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
-  ctxMenu.value = { show: true, x, y, file, staged }
+  ctxMenu.value = { show: true, x, y, kind: 'file', file, dir: '', staged }
+  showViewMenu.value = false
+  showCommitMenu.value = false
+}
+function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
+  e.preventDefault()
+  e.stopPropagation()
+  const x = Math.min(e.clientX, window.innerWidth - 224)
+  const y = Math.min(e.clientY, window.innerHeight - 304)
+  ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, staged }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
 function closeCtxMenu(): void { ctxMenu.value.show = false }
+
+// All changed-file paths under a folder, scoped to the tree the menu opened on:
+// staged tree → staged list; Changes tree → unstaged + untracked.
+function filesUnderDir(dir: string, staged: boolean): string[] {
+  const pool = staged
+    ? gitStatus.value.staged
+    : [...(gitStatus.value.unstaged ?? []), ...(gitStatus.value.untracked ?? [])]
+  const prefix = dir + '/'
+  return pool.filter((f) => f.path === dir || f.path.startsWith(prefix)).map((f) => f.path)
+}
+function ctxFolderStage(): void {
+  void stageFiles(filesUnderDir(ctxMenu.value.dir, false))
+  closeCtxMenu()
+}
+function ctxFolderUnstage(): void {
+  void unstageFiles(filesUnderDir(ctxMenu.value.dir, true))
+  closeCtxMenu()
+}
+function ctxFolderDiscard(): void {
+  discardTargets.value = filesUnderDir(ctxMenu.value.dir, false)
+  closeCtxMenu()
+  if (discardTargets.value.length) showDiscardConfirm.value = true
+}
+async function ctxFolderAddIgnore(): Promise<void> {
+  if (ctxMenu.value.dir) await addToGitignore(ctxMenu.value.dir + '/')
+  closeCtxMenu()
+}
+async function ctxFolderReveal(): Promise<void> {
+  if (ctxMenu.value.dir) await window.agentTeam?.revealPath(absPath(ctxMenu.value.dir))
+  closeCtxMenu()
+}
+async function ctxFolderCopyPath(rel: boolean): Promise<void> {
+  const d = ctxMenu.value.dir
+  if (d) await navigator.clipboard.writeText(rel ? d : absPath(d))
+  closeCtxMenu()
+}
 
 function absPath(p: string): string {
   return `${props.workspacePath.replace(/\/+$/, '')}/${p}`
@@ -552,30 +602,25 @@ async function doCleanConfirm(): Promise<void> {
 }
 
 // ── group actions: discard all (Changes) / unstage all (Staged) ─────────────────
-const showDiscardAllConfirm = ref(false)
-const groupActionError = ref('')
-const discardAllPaths = computed(() => [
-  ...(gitStatus.value.unstaged ?? []).map((f) => f.path),
-  ...(gitStatus.value.untracked ?? []).map((f) => f.path),
-])
-async function doDiscardAllConfirm(): Promise<void> {
-  groupActionError.value = ''
-  try {
-    const r = await discardFiles(discardAllPaths.value)
-    if (!r.ok) groupActionError.value = r.error || 'discard all failed'
-  } catch (e) {
-    groupActionError.value = `discard all error: ${e instanceof Error ? e.message : String(e)}`
-  }
-  showDiscardAllConfirm.value = false
+// Errors surface through the shared gitError channel (set inside useGit's
+// runWrite), so these handlers stay thin.
+// Discard confirm is shared by the "Discard All" group action and folder-level
+// discard; discardTargets holds whichever set of paths is being confirmed.
+const showDiscardConfirm = ref(false)
+const discardTargets = ref<string[]>([])
+function openDiscardAll(): void {
+  discardTargets.value = [
+    ...(gitStatus.value.unstaged ?? []).map((f) => f.path),
+    ...(gitStatus.value.untracked ?? []).map((f) => f.path),
+  ]
+  if (discardTargets.value.length) showDiscardConfirm.value = true
+}
+async function doDiscardConfirm(): Promise<void> {
+  await discardFiles(discardTargets.value)
+  showDiscardConfirm.value = false
 }
 async function doUnstageAll(): Promise<void> {
-  groupActionError.value = ''
-  try {
-    const r = await unstageFiles(gitStatus.value.staged.map((f) => f.path))
-    if (!r.ok) groupActionError.value = r.error || 'unstage all failed'
-  } catch (e) {
-    groupActionError.value = `unstage all error: ${e instanceof Error ? e.message : String(e)}`
-  }
+  await unstageFiles(gitStatus.value.staged.map((f) => f.path))
 }
 
 // ── commit detail ─────────────────────────────────────────────────────────────
@@ -660,6 +705,7 @@ watch(() => props.workspacePath, () => {
   commitMessage.value = ''; commitError.value = ''
   remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
   branchError.value = ''; stashError.value = ''
+  clearGitError()
 })
 
 function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remotes)\//, '') }
@@ -811,7 +857,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
       </div>
 
       <!-- ── STAGED CHANGES ──────────────────────────────────── -->
-      <div class="sec-hdr" @click="stagedExpanded = !stagedExpanded">
+      <div class="sec-hdr clickable" @click="stagedExpanded = !stagedExpanded">
         <span class="sec-caret">{{ stagedExpanded ? '▾' : '▸' }}</span>
         <span class="sec-label">Staged Changes</span>
         <span v-if="hasStaged" class="sec-badge">{{ gitStatus.staged.length }}</span>
@@ -820,7 +866,10 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
           <button v-if="hasStaged" class="sec-btn" title="Unstage All Changes" @click="doUnstageAll">−</button>
         </div>
       </div>
-      <p v-if="groupActionError" class="err-text" style="padding:2px 16px">{{ groupActionError }}</p>
+      <p v-if="gitError" class="err-text git-error-row" style="padding:2px 16px">
+        {{ gitError }}
+        <button class="git-error-x" title="Dismiss" @click.stop="clearGitError">✕</button>
+      </p>
 
       <div v-if="stagedExpanded && hasStaged" class="file-group">
         <div v-if="conflictError" class="err-text" style="padding:2px 16px">{{ conflictError }}</div>
@@ -831,6 +880,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <div
               v-if="row.kind === 'folder'"
               class="folder-row" :style="treeIndent(row.depth)" @click.stop="toggleDir(row.key)"
+              @contextmenu="openFolderCtxMenu($event, row.dir!, true)"
             >
               <span class="folder-caret">{{ collapsedDirs.has(row.key) ? '▸' : '▾' }}</span>
               <svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
@@ -882,7 +932,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
             <div class="file-row" :class="{ 'row-conflict': f.status === 'U' }" @contextmenu="openCtxMenu($event, f, true)">
               <span class="file-status" :data-s="f.status">{{ statusLabel(f.status) }}</span>
               <span class="file-name-main" :title="f.path" @click="toggleDiff(f.path, true)">{{ fileName(f.path) }}</span>
-              <span class="file-path-dim">{{ fileDir(f.path) }}</span>
+              <span class="file-path-dim" :title="f.path" @click="toggleDiff(f.path, true)">{{ fileDir(f.path) }}</span>
               <div class="row-actions">
                 <template v-if="f.status === 'U'">
                   <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(f.path)">↰</button>
@@ -900,7 +950,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
       </div>
 
       <!-- ── CHANGES (unstaged) ──────────────────────────────── -->
-      <div class="sec-hdr" @click="changesExpanded = !changesExpanded">
+      <div class="sec-hdr clickable" @click="changesExpanded = !changesExpanded">
         <span class="sec-caret">{{ changesExpanded ? '▾' : '▸' }}</span>
         <span class="sec-label">Changes</span>
         <span v-if="gitStatus.unstaged?.length || gitStatus.untracked?.length" class="sec-badge">
@@ -909,19 +959,19 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <div class="spacer" />
         <div class="sec-actions" @click.stop>
           <button v-if="gitStatus.untracked?.length" class="sec-btn danger" title="Clean untracked" @click="doCleanPreview">🗑</button>
-          <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="showDiscardAllConfirm = true">↩</button>
+          <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
           <button v-if="hasChanges" class="sec-btn" title="Stash All" @click="doStash">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
         </div>
       </div>
 
-      <!-- Discard all confirm -->
-      <div v-if="showDiscardAllConfirm" class="clean-box">
-        <div class="clean-title">捨棄全部 {{ discardAllPaths.length }} 項變更？此動作無法復原</div>
-        <div v-for="f in discardAllPaths" :key="f" class="clean-file">{{ f }}</div>
+      <!-- Discard confirm (shared by Discard All + folder discard) -->
+      <div v-if="showDiscardConfirm" class="clean-box">
+        <div class="clean-title">捨棄 {{ discardTargets.length }} 項變更？此動作無法復原</div>
+        <div v-for="f in discardTargets" :key="f" class="clean-file">{{ f }}</div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showDiscardAllConfirm = false">取消</button>
-          <button class="btn-danger" @click="doDiscardAllConfirm">確認捨棄</button>
+          <button class="btn-ghost" @click="showDiscardConfirm = false">取消</button>
+          <button class="btn-danger" @click="doDiscardConfirm">確認捨棄</button>
         </div>
       </div>
 
@@ -946,6 +996,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
               <div
                 v-if="row.kind === 'folder'"
                 class="folder-row" :style="treeIndent(row.depth)" @click.stop="toggleDir(row.key)"
+                @contextmenu="openFolderCtxMenu($event, row.dir!, false)"
               >
                 <span class="folder-caret">{{ collapsedDirs.has(row.key) ? '▸' : '▾' }}</span>
                 <svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
@@ -975,7 +1026,7 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
               <div class="file-row" @contextmenu="openCtxMenu($event, f, false)">
                 <span class="file-status unstaged-st" :data-s="f.status">{{ statusLabel(f.status) }}</span>
                 <span class="file-name-main" :title="f.path" @click="toggleDiff(f.path, false)">{{ fileName(f.path) }}</span>
-                <span class="file-path-dim">{{ fileDir(f.path) }}</span>
+                <span class="file-path-dim" :title="f.path" @click="toggleDiff(f.path, false)">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
                   <button class="row-btn" title="File history" @click.stop="showFileHistory(f.path)">⊡</button>
                   <button class="row-btn" title="Stage" @click.stop="stageFile(f.path)">＋</button>
@@ -1282,7 +1333,8 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
     <!-- ── File context menu (right-click) ──────────────────────────────── -->
     <Teleport to="body">
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
-      <div v-if="ctxMenu.show" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+      <!-- File menu -->
+      <div v-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
         <button class="menu-item" @click="ctxOpenFile">Open File</button>
         <div class="menu-sep" />
@@ -1297,6 +1349,21 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
         <button class="menu-item" @click="ctxReveal">Reveal in Finder</button>
         <button class="menu-item" @click="ctxCopyPath(false)">Copy Path</button>
         <button class="menu-item" @click="ctxCopyPath(true)">Copy Relative Path</button>
+      </div>
+
+      <!-- Folder menu (applies to all changed files under the folder) -->
+      <div v-else-if="ctxMenu.show" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button v-if="ctxMenu.staged" class="menu-item" @click="ctxFolderUnstage">Unstage Changes</button>
+        <template v-else>
+          <button class="menu-item" @click="ctxFolderStage">Stage Changes</button>
+          <button class="menu-item danger" @click="ctxFolderDiscard">Discard Changes</button>
+          <div class="menu-sep" />
+          <button class="menu-item" @click="ctxFolderAddIgnore">Add to .gitignore</button>
+        </template>
+        <div class="menu-sep" />
+        <button class="menu-item" @click="ctxFolderReveal">Reveal in Finder</button>
+        <button class="menu-item" @click="ctxFolderCopyPath(false)">Copy Path</button>
+        <button class="menu-item" @click="ctxFolderCopyPath(true)">Copy Relative Path</button>
       </div>
     </Teleport>
   </div>
@@ -1321,6 +1388,12 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 .part-bottom { flex: 1 1 0; padding-bottom: 20px; }
 .spacer { flex: 1; }
 .err-text { color: #f85149; font-size: 11px; margin: 0; padding: 2px 12px; }
+.git-error-row { display: flex; align-items: flex-start; gap: 6px; }
+.git-error-x {
+  flex-shrink: 0; margin-left: auto; background: transparent; border: none;
+  color: #f85149; cursor: pointer; font-size: 11px; line-height: 1; padding: 0 2px;
+}
+.git-error-x:hover { color: #ff7b72; }
 .ok-text  { color: #3fb950; font-size: 11px; margin: 0; padding: 2px 4px; }
 .loading-text { color: #6e7681; font-size: 10px; padding: 3px 8px; }
 .empty-msg { color: #6e7681; font-size: 11px; font-style: italic; padding: 3px 20px 6px; }

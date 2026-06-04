@@ -147,6 +147,23 @@ class TestStageUnstage:
         assert f.read_text() == "v2-modified-after-staging"  # working file preserved
 
     @pytest.mark.asyncio
+    async def test_status_rename_uses_new_path(self, tmp_path):
+        # A staged rename renders as "old -> new"; status must expose the new
+        # path (a real file) rather than the literal "old -> new" string.
+        init_repo(tmp_path)
+        (tmp_path / "old.txt").write_text("x\n" * 5)
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], cwd=tmp_path, check=True, capture_output=True)
+        status = await git_service.get_status(str(tmp_path))
+        staged_paths = [f["path"] for f in status["staged"]]
+        assert "new.txt" in staged_paths
+        assert all("->" not in p for p in staged_paths)
+        # And the resolved path can actually be unstaged.
+        result = await git_service.unstage_files(str(tmp_path), ["new.txt"])
+        assert result["ok"] is True, result
+
+    @pytest.mark.asyncio
     async def test_status_non_ascii_path_unquoted(self, tmp_path):
         # Non-ASCII paths must be returned as raw UTF-8, not git's quoted/octal form.
         init_repo(tmp_path)

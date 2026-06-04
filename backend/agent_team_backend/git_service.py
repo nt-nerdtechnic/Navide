@@ -163,6 +163,10 @@ async def get_status(workspace_path: str) -> dict[str, Any]:
             xy = line[:2]
             path = line[3:]
             x, y = xy[0], xy[1]
+            # Renames/copies render as "orig -> new"; use the new path so that
+            # later stage/unstage/discard/diff operations resolve a real file.
+            if (x in ("R", "C") or y in ("R", "C")) and " -> " in path:
+                path = path.split(" -> ", 1)[1]
             if x == "?" and y == "?":
                 status.untracked.append(GitFileEntry(path=path, status="?"))
             else:

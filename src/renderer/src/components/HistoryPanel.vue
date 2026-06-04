@@ -2,12 +2,57 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
 import { useHistory, type HistoryEvent } from '../composables/useHistory'
 import type { useBackend } from '../composables/useBackend'
+import type { PipelineStatusView } from './ControlPane.vue'
 
 interface Props {
   backend: ReturnType<typeof useBackend>
   workspacePath: string
+  pipeline: PipelineStatusView
 }
 const props = defineProps<Props>()
+
+// ─────────────────────── Run info: paths + live log ───────────────────────
+// Moved here from ControlPane so the run's project.json / pipeline.log /
+// backend.log links and the supervision log live alongside the timeline.
+function shortPath(p: string): string {
+  if (!p) return ''
+  const home = '/Users/'
+  if (p.startsWith(home)) {
+    const rest = p.slice(home.length)
+    const slash = rest.indexOf('/')
+    if (slash > 0) return '~/' + rest.slice(slash + 1)
+  }
+  return p
+}
+// Classify a supervision-log line so errors stand out (red) and warnings (yellow).
+function logLevel(line: string): '' | 'is-error' | 'is-warn' {
+  if (/❌|✕|✗|exception|unreachable|rejection|\berror\b|\bfailed\b|\bthrew\b/i.test(line)) {
+    return 'is-error'
+  }
+  if (/⚠/.test(line)) return 'is-warn'
+  return ''
+}
+async function openPath(p: string): Promise<void> {
+  if (!p) return
+  if (!window.agentTeam?.openPath) {
+    try {
+      await navigator.clipboard.writeText(p)
+    } catch {
+      /* ignore */
+    }
+    return
+  }
+  await window.agentTeam.openPath(p)
+}
+// Auto-scroll the supervision log to the bottom whenever a new entry arrives.
+const pipelineLogEl = ref<HTMLElement | null>(null)
+watch(
+  () => props.pipeline.log.length,
+  async () => {
+    await nextTick()
+    if (pipelineLogEl.value) pipelineLogEl.value.scrollTop = pipelineLogEl.value.scrollHeight
+  }
+)
 
 const workspacePathRef: Ref<string> = computed(() => props.workspacePath) as unknown as Ref<string>
 const { events, path, loading } = useHistory(props.backend, workspacePathRef)
@@ -129,6 +174,31 @@ async function openFile(): Promise<void> {
 
 <template>
   <div class="history">
+    <div v-if="pipeline.projectId || pipeline.log.length" class="run-info">
+      <div v-if="pipeline.projectId" class="paths">
+        <div class="paths-line">
+          <span class="paths-key">project</span>
+          <code :title="pipeline.projectFile">{{ shortPath(pipeline.projectFile) }}</code>
+        </div>
+        <div class="paths-line">
+          <span class="paths-key">events</span>
+          <code :title="pipeline.pipelineLogFile">{{ shortPath(pipeline.pipelineLogFile) }}</code>
+        </div>
+        <div class="paths-line">
+          <span class="paths-key">backend</span>
+          <code :title="pipeline.backendLogFile">{{ shortPath(pipeline.backendLogFile) }}</code>
+        </div>
+        <div class="paths-actions">
+          <button class="ghost" @click="openPath(pipeline.projectFile)" title="Open project.json">📄 project.json</button>
+          <button class="ghost" @click="openPath(pipeline.pipelineLogFile)" title="Open pipeline.log">📜 pipeline.log</button>
+          <button class="ghost" @click="openPath(pipeline.backendLogFile)" title="Open backend.log">🪵 backend.log</button>
+        </div>
+      </div>
+      <div v-if="pipeline.log.length" ref="pipelineLogEl" class="pipeline-log">
+        <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
+      </div>
+    </div>
+
     <div class="filters">
       <select v-model="typeFilter" class="flt" title="Filter by type">
         <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
@@ -172,6 +242,78 @@ async function openFile(): Promise<void> {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+.run-info {
+  padding: 6px 8px;
+  border-bottom: 1px solid #21262d;
+}
+.paths {
+  padding: 6px 8px;
+  background: #010409;
+  border-radius: 4px;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 10px;
+}
+.paths-line {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 2px;
+  align-items: baseline;
+}
+.paths-key {
+  color: #8b949e;
+  width: 50px;
+  flex-shrink: 0;
+}
+.paths code {
+  color: #e6edf3;
+  background: transparent;
+  padding: 0;
+  word-break: break-all;
+  font-size: 10px;
+}
+.paths-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.paths-actions .ghost {
+  flex: 1;
+  background: transparent;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 5px;
+  font-size: 10px;
+  padding: 4px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.paths-actions .ghost:hover {
+  background: #21262d;
+}
+.pipeline-log {
+  background: #010409;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 10px;
+}
+.pipeline-log-line {
+  color: #8b949e;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pipeline-log-line.is-error {
+  color: #f85149;
+  font-weight: 600;
+}
+.pipeline-log-line.is-warn {
+  color: #d29922;
 }
 .filters {
   display: flex;

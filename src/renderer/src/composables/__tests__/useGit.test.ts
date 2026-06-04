@@ -75,6 +75,47 @@ describe('useGit', () => {
     scope.stop()
   })
 
+  it('sets gitError when a write op fails, and clears it on next success', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.unstage', { ok: false, error: 'could not resolve HEAD' })
+    mock.setResponse('git.stage', { ok: true })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    expect(result.gitError.value).toBe('')
+
+    await result.unstageFiles(['a.txt'])
+    await flush()
+    expect(result.gitError.value).toBe('could not resolve HEAD')
+
+    // A subsequent successful write clears the prior error.
+    await result.stageFile('a.txt')
+    await flush()
+    expect(result.gitError.value).toBe('')
+    scope.stop()
+  })
+
+  it('clearGitError resets the error channel', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.discard', { ok: false, error: 'boom' })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    await result.discardFiles(['x.txt'])
+    await flush()
+    expect(result.gitError.value).toBe('boom')
+
+    result.clearGitError()
+    expect(result.gitError.value).toBe('')
+    scope.stop()
+  })
+
   it('commit sends git.commit and reloads on success', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)

@@ -3,6 +3,7 @@ import { computed, ref, watch, type Ref } from 'vue'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
+import type { PipelineStatusView } from './ControlPane.vue'
 
 interface Stage {
   id: string
@@ -23,6 +24,7 @@ interface Props {
   workspacePath: string
   stages: Stage[]
   panes: ActivePane[]
+  pipeline: PipelineStatusView
 }
 
 const props = defineProps<Props>()
@@ -209,7 +211,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         >⚙</button>
       </header>
 
-      <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" />
+      <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
 
       <template v-else>
       <div v-if="settingsOpen" class="settings">

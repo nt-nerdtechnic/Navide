@@ -281,56 +281,8 @@ watch(workspacePath, (v) => {
   }, 400)
 }, { immediate: true })
 
-// Classify a supervision-log line so errors stand out (red) and warnings
-// (yellow) from the normal grey flow. Matches the markers pipelineLog() emits:
-// ❌/✕/✗ + words like error/failed/threw/exception/unreachable/rejection → error;
-// ⚠ → warning. Everything else stays default.
-function logLevel(line: string): '' | 'is-error' | 'is-warn' {
-  if (/❌|✕|✗|exception|unreachable|rejection|\berror\b|\bfailed\b|\bthrew\b/i.test(line)) {
-    return 'is-error'
-  }
-  if (/⚠/.test(line)) return 'is-warn'
-  return ''
-}
-
-// Auto-scroll pipeline log to bottom whenever a new entry arrives.
-const pipelineLogRef = ref<HTMLElement | null>(null)
-watch(
-  () => props.pipeline.log.length,
-  async () => {
-    await nextTick()
-    if (pipelineLogRef.value) {
-      pipelineLogRef.value.scrollTop = pipelineLogRef.value.scrollHeight
-    }
-  }
-)
-
 defineExpose({ openPipelineDetail })
 
-function shortPath(p: string): string {
-  if (!p) return ''
-  const home = '/Users/'
-  if (p.startsWith(home)) {
-    const rest = p.slice(home.length)
-    const slash = rest.indexOf('/')
-    if (slash > 0) return '~/' + rest.slice(slash + 1)
-  }
-  return p
-}
-
-async function openPath(p: string): Promise<void> {
-  if (!p) return
-  if (!window.agentTeam?.openPath) {
-    // Fallback: copy to clipboard
-    try {
-      await navigator.clipboard.writeText(p)
-    } catch {
-      /* ignore */
-    }
-    return
-  }
-  await window.agentTeam.openPath(p)
-}
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
 
@@ -712,9 +664,6 @@ function onTaskDrop(e: DragEvent): void {
         <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
           Pipeline aborted. Agents are kept — Resume to continue, or Reset to clear.
         </p>
-        <div v-if="pipeline.log.length > 0" ref="pipelineLogRef" class="pipeline-log">
-          <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
-        </div>
       </template>
     </section>
 
@@ -866,34 +815,6 @@ function onTaskDrop(e: DragEvent): void {
       <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
         Provide task description + workspace, then start.
       </p>
-      <div v-if="pipeline.projectId && openedPipelineId === activePipelineId" class="paths">
-        <div class="paths-line">
-          <span class="paths-key">project</span>
-          <code :title="pipeline.projectFile">{{ shortPath(pipeline.projectFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">events</span>
-          <code :title="pipeline.pipelineLogFile">{{ shortPath(pipeline.pipelineLogFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">backend</span>
-          <code :title="pipeline.backendLogFile">{{ shortPath(pipeline.backendLogFile) }}</code>
-        </div>
-        <div class="row tight">
-          <button class="ghost" @click="openPath(pipeline.projectFile)" title="Open project.json">
-            📄 project.json
-          </button>
-          <button class="ghost" @click="openPath(pipeline.pipelineLogFile)" title="Open pipeline.log">
-            📜 pipeline.log
-          </button>
-          <button class="ghost" @click="openPath(pipeline.backendLogFile)" title="Open backend.log">
-            🪵 backend.log
-          </button>
-        </div>
-      </div>
-      <div v-if="pipeline.log.length > 0 && openedPipelineId === activePipelineId" ref="pipelineLogRef" class="pipeline-log">
-        <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
-      </div>
       </template>
     </section>
 
@@ -1743,56 +1664,6 @@ button.icon-btn.muted:hover {
 .pipeline-line .muted {
   color: #8b949e;
   font-weight: 400;
-}
-.pipeline-log {
-  background: #010409;
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-top: 4px;
-  max-height: 200px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 10px;
-}
-.pipeline-log-line {
-  color: #8b949e;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.pipeline-log-line.is-error {
-  color: #f85149;
-  font-weight: 600;
-}
-.pipeline-log-line.is-warn {
-  color: #d29922;
-}
-.paths {
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: #010409;
-  border-radius: 4px;
-  font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 10px;
-}
-.paths-line {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 2px;
-  align-items: baseline;
-}
-.paths-key {
-  color: #8b949e;
-  width: 50px;
-  flex-shrink: 0;
-}
-.paths code {
-  color: #e6edf3;
-  background: transparent;
-  padding: 0;
-  word-break: break-all;
-  font-size: 10px;
 }
 .empty {
   color: #6e7681;
