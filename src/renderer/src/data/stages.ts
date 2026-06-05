@@ -185,13 +185,13 @@ export function stageDefToFrontend(raw: Record<string, unknown>): Stage {
   }
 
   return {
-    id: raw.id as string,
-    title: raw.title as string,
-    shortTitle: raw.short_title as string,
-    question: raw.question as string,
-    description: raw.description as string,
+    id: ((raw.id as string) ?? '') ,
+    title: ((raw.title as string) ?? ''),
+    shortTitle: ((raw.short_title as string) ?? ''),
+    question: ((raw.question as string) ?? ''),
+    description: ((raw.description as string) ?? ''),
     recommendedRoles: (raw.recommended_roles ?? []) as string[],
-    sentinel: raw.sentinel as string,
+    sentinel: ((raw.sentinel as string) ?? ''),
     allowQuestions: (raw.allow_questions ?? false) as boolean,
     docQuery: (raw.doc_query ?? '') as string,
     slots,
