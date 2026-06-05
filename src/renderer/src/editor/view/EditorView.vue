@@ -584,7 +584,7 @@ function onInput(): void {
       const c = cursor.value
       const lineText = model.getLine(c.line)
       if (v === '"' || v === "'" || v === '`') {
-        if (lineText[c.col] === v) { cursor.value = { line: c.line, col: c.col + 1 }; void nextTick(scrollCursorIntoView); return }
+        if (lineText[c.col] === v) { ghost.value = null; cursor.value = { line: c.line, col: c.col + 1 }; void nextTick(scrollCursorIntoView); return }
       }
       insertText(v + closing)
       cursor.value = { ...cursor.value, col: cursor.value.col - 1 }
@@ -595,6 +595,7 @@ function onInput(): void {
     if (CLOSE_CHARS.has(v)) {
       const c = cursor.value
       if (model.getLine(c.line)[c.col] === v) {
+        ghost.value = null
         cursor.value = { line: c.line, col: c.col + 1 }
         void nextTick(scrollCursorIntoView)
         return
