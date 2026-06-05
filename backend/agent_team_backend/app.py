@@ -1101,7 +1101,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 )
             )
         elif msg_type == "pipelines.create":
-            name = payload.get("name", "新流程")
+            name = payload.get("name", "New Pipeline")
             pipeline = stages_store.create_pipeline(name)
             pipelines = stages_store.list_pipelines()
             await session.websocket.send_json(

@@ -6,6 +6,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
 let animId = 0
+let _resizeFn: (() => void) | null = null
 
 // ── Fireworks engine ──────────────────────────────────────────────────────────
 
@@ -53,12 +54,12 @@ onMounted(() => {
   if (!canvas) return
   const ctx = canvas.getContext('2d')!
 
-  function resize() {
+  _resizeFn = () => {
     canvas!.width = window.innerWidth
     canvas!.height = window.innerHeight
   }
-  resize()
-  window.addEventListener('resize', resize)
+  _resizeFn()
+  window.addEventListener('resize', _resizeFn)
 
   let particles: Particle[] = []
   let lastBurst = -999
@@ -102,13 +103,11 @@ onMounted(() => {
   }
 
   animId = requestAnimationFrame(tick)
-
-  // Cleanup listener when component unmounts
-  onUnmounted(() => window.removeEventListener('resize', resize))
 })
 
 onUnmounted(() => {
   cancelAnimationFrame(animId)
+  if (_resizeFn) { window.removeEventListener('resize', _resizeFn); _resizeFn = null }
 })
 </script>
 
