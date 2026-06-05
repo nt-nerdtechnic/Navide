@@ -52,6 +52,8 @@ function alert(
   opts: { title?: string; confirmText?: string } = {}
 ): Promise<void> {
   return new Promise<void>((resolve) => {
+    // Resolve any existing dialog with false (cancel) so its promise doesn't hang.
+    if (dialog.value) dialog.value.resolve(false)
     dialog.value = {
       kind: 'alert',
       title: opts.title ?? 'Alert',
@@ -69,6 +71,8 @@ function confirm(
   opts: { title?: string; confirmText?: string; cancelText?: string } = {}
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
+    // Resolve any existing dialog with false (cancel) so its promise doesn't hang.
+    if (dialog.value) dialog.value.resolve(false)
     dialog.value = {
       kind: 'confirm',
       title: opts.title ?? 'Confirm',
