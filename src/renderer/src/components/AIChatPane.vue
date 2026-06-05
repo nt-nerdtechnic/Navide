@@ -1414,10 +1414,34 @@ function teardownListeners(): void {
   unsubSettingsGet?.()
 }
 
+const workspaceRulesFile = ref<string | null>(null)
+
+async function detectWorkspaceRules(): Promise<void> {
+  const RULE_FILES = [
+    '.cursor/rules', '.cursor/rules.md', 'AGENTS.md',
+    '.ai/rules.md', '.ai/instructions.md', '.github/copilot-instructions.md',
+  ]
+  for (const rf of RULE_FILES) {
+    try {
+      interface ReadResp { ok: boolean; content?: string }
+      const resp = await props.backend.send<ReadResp>('fs.read_file', {
+        workspace_path: props.workspacePath,
+        rel_path: rf,
+      })
+      if (resp.payload?.ok && resp.payload.content) {
+        workspaceRulesFile.value = rf
+        return
+      }
+    } catch { /* file not found */ }
+  }
+  workspaceRulesFile.value = null
+}
+
 onMounted(() => {
   setupListeners()
   fetchSettings()
   loadThreads()
+  void detectWorkspaceRules()
 })
 
 onUnmounted(() => {
@@ -2235,6 +2259,12 @@ function getDateLabel(ts: number): string {
 
       <!-- Model quick-picker badge -->
       <div class="ai-model-bar">
+        <span
+          v-if="workspaceRulesFile"
+          class="ai-rules-badge"
+          :title="`Workspace rules active from ${workspaceRulesFile}`"
+          @click="showSettings = true"
+        >✦ rules</span>
         <button class="ai-model-badge-btn" :title="`Model: ${settingsModel} (click to change)`" @click="showModelPicker = !showModelPicker">
           <span class="ai-model-badge-icon">⬡</span>
           <span class="ai-model-badge-name">{{ settingsModel.split('/').pop()?.replace('claude-', '').replace('-20', ' 20') }}</span>
@@ -2472,6 +2502,13 @@ function getDateLabel(ts: number): string {
             rows="4"
             placeholder="You are a helpful AI coding assistant."
           />
+        </div>
+        <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
+          <span class="ai-rules-icon">✦</span>
+          <span>Workspace rules auto-applied from <code>{{ workspaceRulesFile }}</code></span>
+        </div>
+        <div v-else class="ai-settings-row ai-rules-notice ai-rules-missing">
+          <span>No workspace rules found. Create <code>AGENTS.md</code> or <code>.cursor/rules</code> to add project-specific AI instructions.</span>
         </div>
         <div class="ai-settings-footer">
           <button class="ai-settings-save" @click="saveSettings">Save</button>
@@ -3247,7 +3284,18 @@ function getDateLabel(ts: number): string {
 .ai-char-count.warn { color: var(--danger-fg, #cf222e); }
 
 /* Model picker bar */
-.ai-model-bar { position: relative; display: flex; align-items: center; padding: 2px 8px 0; }
+.ai-model-bar { position: relative; display: flex; align-items: center; padding: 2px 8px 0; gap: 4px; }
+.ai-rules-badge {
+  font-size: 10px;
+  color: var(--accent-fg);
+  opacity: 0.7;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent);
+  letter-spacing: 0.02em;
+}
+.ai-rules-badge:hover { opacity: 1; }
 .ai-model-badge-btn {
   display: flex; align-items: center; gap: 4px;
   background: none; border: 1px solid var(--border-muted); border-radius: 10px;
@@ -3502,6 +3550,16 @@ function getDateLabel(ts: number): string {
 }
 .ai-settings-textarea:focus { border-color: var(--accent-emphasis); }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
+.ai-rules-notice {
+  font-size: 11px;
+  color: var(--text-muted);
+  gap: 5px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.ai-rules-notice code { font-size: 10.5px; background: var(--bg-muted); padding: 0 3px; border-radius: 2px; }
+.ai-rules-icon { color: var(--accent-fg); flex-shrink: 0; }
+.ai-rules-missing { opacity: 0.6; }
 .ai-settings-save {
   padding: 5px 16px;
   background: var(--accent-emphasis);

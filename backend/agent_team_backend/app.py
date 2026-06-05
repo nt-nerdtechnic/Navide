@@ -2104,6 +2104,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             workspace_path = payload.get("workspace_path", "") or ""
             system_suffix = payload.get("system_suffix", "") or ""
             settings = {**ai_chat_settings_store.get()}
+
+            # Auto-inject workspace rules from well-known rule files
+            _RULE_FILES = [
+                ".cursor/rules", ".cursor/rules.md", "AGENTS.md",
+                ".ai/rules.md", ".ai/instructions.md",
+                ".github/copilot-instructions.md",
+            ]
+            if workspace_path:
+                for _rf in _RULE_FILES:
+                    _rp = Path(workspace_path) / _rf
+                    if _rp.is_file():
+                        try:
+                            _rules = _rp.read_text(encoding="utf-8", errors="replace").strip()
+                            if _rules:
+                                system_suffix = f"{_rules}\n\n{system_suffix}".strip()
+                        except OSError:
+                            pass
+                        break  # use only the first found
+
             if system_suffix:
                 base_sys = settings.get("system_prompt", "You are a helpful AI coding assistant.")
                 settings["system_prompt"] = f"{base_sys}\n\n{system_suffix}"
