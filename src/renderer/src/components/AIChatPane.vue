@@ -324,6 +324,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@file', label: '@file — 目前開啟的檔案' },
   { id: '@selection', label: '@selection — 編輯器選取內容' },
   { id: '@git', label: '@git — 目前 git diff (unstaged)' },
+  { id: '@codebase', label: '@codebase — 搜尋工作區程式碼' },
 ]
 const atDirItems = ref<AtOption[]>([])
 
@@ -350,15 +351,38 @@ const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 
 // ── Code-block copy via event delegation ─────────────────────────────────────
 function onMessagesClick(e: MouseEvent): void {
-  const btn = (e.target as Element).closest<HTMLButtonElement>('.ai-code-copy-btn')
-  if (!btn) return
-  try {
-    const code = decodeURIComponent(escape(atob(btn.dataset.code ?? '')))
-    navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = 'Copied!'
-      window.setTimeout(() => { btn.textContent = 'Copy' }, 1500)
-    }).catch(() => {/* ignore */})
-  } catch {/* ignore */}
+  const target = e.target as Element
+  // Copy button
+  const copyBtn = target.closest<HTMLButtonElement>('.ai-code-copy-btn')
+  if (copyBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(copyBtn.dataset.code ?? '')))
+      navigator.clipboard.writeText(code).then(() => {
+        copyBtn.textContent = 'Copied!'
+        window.setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+      }).catch(() => {/* ignore */})
+    } catch {/* ignore */}
+    return
+  }
+  // Apply to editor button
+  const applyBtn = target.closest<HTMLButtonElement>('.ai-code-apply-btn')
+  if (applyBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
+      const relPath = props.getActiveRelPath?.()
+      if (!relPath) { showToast('沒有開啟中的檔案'); return }
+      props.backend.send('fs.write_file', {
+        workspace_path: props.workspacePath,
+        rel_path: relPath,
+        content: code,
+      }).then(() => {
+        applyBtn.textContent = 'Applied ✓'
+        applyBtn.style.color = 'var(--success-fg, #3fb950)'
+        window.setTimeout(() => { applyBtn.textContent = 'Apply'; applyBtn.style.color = '' }, 2000)
+        showToast(`已套用到 ${relPath}`)
+      }).catch(() => showToast('套用失敗'))
+    } catch { showToast('套用失敗') }
+  }
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
@@ -382,10 +406,16 @@ function renderMarkdownLite(rawText: string): string {
       highlighted = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
     const i = blocks.length
+    // Only show Apply button when an active file path is available
+    const hasActiveFile = !!(props.getActiveRelPath?.())
+    const applyBtn = hasActiveFile
+      ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="套用到目前開啟的檔案">Apply</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap">` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
+      `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
       `<pre class="ai-code-block hljs"><code>${highlighted}</code></pre>` +
@@ -932,6 +962,7 @@ onMounted(() => {
 onUnmounted(() => {
   teardownListeners()
   if (toastTimer !== null) clearTimeout(toastTimer)
+  if (saveTimer !== null) clearTimeout(saveTimer)
 })
 
 // ── @context system ────────────────────────────────────────────────────────────
@@ -958,11 +989,19 @@ function onTextareaInput(e: Event): void {
   if (atIdx === -1) { showAtMenu.value = false; return }
 
   const fragment = beforeCursor.slice(atIdx + 1)
-  if (fragment.includes(' ')) { showAtMenu.value = false; return }
+  // Allow spaces only inside @codebase <query>
+  const isCodebaseQuery = /^codebase\s+\S/i.test(fragment)
+  if (fragment.includes(' ') && !isCodebaseQuery) { showAtMenu.value = false; return }
 
   atMenuFilter.value = fragment
   atMenuIdx.value = 0
   showAtMenu.value = true
+
+  if (isCodebaseQuery) {
+    const cbQuery = fragment.slice(fragment.indexOf(' ') + 1).trim()
+    atOptions.value = [{ id: `@codebase:${cbQuery}`, label: `@codebase 搜尋: "${cbQuery}"` }]
+    return
+  }
 
   const lower = fragment.toLowerCase()
   const filtered: AtOption[] = AT_OPTIONS_STATIC.filter(
@@ -1078,6 +1117,45 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = resp.payload?.diff ? `// git diff (unstaged)\n${resp.payload.diff}` : '// git diff: no changes'
     } catch {
       chipContent = '// git diff: unavailable'
+    }
+  } else if (option.id === '@codebase') {
+    // Static option selected without a query — replace with a prompt hint in input
+    const newVal = val.slice(0, atIdx) + '@codebase ' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    // Position cursor after '@codebase '
+    const pos = atIdx + '@codebase '.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@codebase:')) {
+    const query = option.id.slice('@codebase:'.length)
+    chipLabel = `@codebase:${query}`
+    try {
+      interface SearchMatch { line: number; col: number; text: string }
+      interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+      const resp = await props.backend.send<SearchResp>('search.find_in_files', {
+        workspace_path: props.workspacePath,
+        query,
+        is_regex: false,
+        case_sensitive: false,
+        max_results: 30,
+      })
+      const results = resp.payload?.results ?? []
+      if (results.length === 0) {
+        chipContent = `// @codebase search "${query}": no results`
+      } else {
+        chipContent = `// @codebase search "${query}" — ${results.length} files\n`
+        for (const r of results.slice(0, 8)) {
+          chipContent += `\n// ${r.rel_path}\n`
+          for (const m of r.matches.slice(0, 5)) {
+            chipContent += `${m.line}: ${m.text}\n`
+          }
+        }
+      }
+    } catch {
+      chipContent = `// @codebase search "${query}": unavailable`
     }
   } else {
     // It's a file path
@@ -1793,6 +1871,20 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-text :deep(.ai-code-copy-btn:hover) {
   background: var(--bg-subtle);
   color: var(--text-bright);
+}
+.ai-text :deep(.ai-code-apply-btn) {
+  background: none;
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 4px;
+  color: var(--accent-fg);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 7px;
+  margin-left: 2px;
+}
+.ai-text :deep(.ai-code-apply-btn:hover) {
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis, #fff);
 }
 .ai-text :deep(pre.ai-code-block) {
   background: var(--bg-muted);
