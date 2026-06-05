@@ -51,6 +51,10 @@ export class KeyResolver {
     this.chordState = null
   }
 
+  hasPendingChord(): boolean {
+    return this.chordState !== null
+  }
+
   private resolveSingle(
     e: KeyboardEvent,
     ctx: Record<string, boolean | string>,

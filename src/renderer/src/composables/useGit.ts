@@ -707,7 +707,7 @@ export function useGit(
       if (resp.ok && resp.payload?.ok) {
         return { ok: true, message: resp.payload.message }
       }
-      return { ok: false, message: '', error: resp.payload?.error || resp.error || 'generation failed' }
+      return { ok: false, message: '', error: resp.payload?.error || resp.error?.message || 'generation failed' }
     } finally {
       isGenerating.value = false
     }

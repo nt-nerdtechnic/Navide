@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -342,6 +343,28 @@ async def _stop_log_watcher() -> None:
     _git_watcher = None
 
 
+@app.get("/api/tmux/check")
+async def tmux_check(request: Request) -> dict[str, Any]:
+    """Check which tmux sessions are still alive.
+
+    Query param: names=session1,session2,...
+    Returns: { "results": { "session1": true, "session2": false, ... } }
+    """
+    names_raw = request.query_params.get("names", "")
+    names = [n.strip() for n in names_raw.split(",") if n.strip()]
+    results: dict[str, bool] = {}
+    for name in names:
+        try:
+            ret = subprocess.run(
+                ["tmux", "has-session", "-t", name],
+                capture_output=True,
+            )
+            results[name] = ret.returncode == 0
+        except OSError:
+            results[name] = False
+    return {"results": results}
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
@@ -566,6 +589,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         "pane_id": term.pane_id,
                         "pid": term.proc.pid,
                         "command": term.command,
+                        "tmux_name": term.tmux_name,
                     },
                 )
             )
@@ -751,6 +775,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload["workspace_path"],
                 pane_id=payload["pane_id"],
                 session_id=payload.get("session_id", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "pipeline.slot_tmux":
+            project = project_store.record_slot_tmux_name(
+                payload["workspace_path"],
+                stage_index=int(payload["stage_index"]),
+                slot_label=payload["slot_label"],
+                tmux_name=payload.get("tmux_name", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "manual_pane.tmux":
+            project = project_store.record_manual_pane_tmux_name(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+                tmux_name=payload.get("tmux_name", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))

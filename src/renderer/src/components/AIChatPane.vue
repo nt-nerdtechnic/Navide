@@ -328,17 +328,25 @@ function setupListeners(): void {
           const resultStr = typeof p.result === 'string'
             ? p.result
             : JSON.stringify(p.result)
-          // Check if this is an edit_file result
-          const resultObj = typeof p.result === 'object' && p.result !== null ? p.result as Record<string, unknown> : null
+          // Check if this is an edit_file result (backend returns JSON string)
+          let resultObj: Record<string, unknown> | null = null
+          if (card.tool_name === 'edit_file') {
+            try {
+              const parsed = typeof p.result === 'string' ? JSON.parse(p.result) : p.result
+              if (parsed && typeof parsed === 'object') resultObj = parsed as Record<string, unknown>
+            } catch { /* not JSON, treat as plain result */ }
+          }
           if (
-            card.tool_name === 'edit_file' &&
-            resultObj &&
+            resultObj !== null &&
             typeof resultObj.file_path === 'string' &&
             typeof resultObj.new_content === 'string'
           ) {
             // Replace tool_call card with edit_proposal card
             const idx = last.cards.indexOf(card)
-            const diffStr = makeDiff(resultObj.file_path, resultObj.new_content)
+            // Prefer the real unified diff from the backend (difflib); fall back to synthetic
+            const diffStr = typeof resultObj.diff === 'string' && resultObj.diff
+              ? resultObj.diff
+              : makeDiff(resultObj.file_path, resultObj.new_content)
             const editCard: EditProposalCard = {
               kind: 'edit_proposal',
               tool_id: p.tool_id,
@@ -622,7 +630,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <template v-if="msg.cards">
             <template v-for="(card, ci) in msg.cards" :key="ci">
               <!-- Tool call card -->
-              <div v-if="card.kind === 'tool_call' && !card.discarded" class="ai-tool-card">
+              <div v-if="card.kind === 'tool_call'" class="ai-tool-card">
                 <div class="ai-tool-header" @click="card.collapsed = !card.collapsed">
                   <span class="ai-tool-name">⚙ {{ card.tool_name }}</span>
                   <span class="ai-tool-toggle">{{ card.collapsed ? '▶' : '▼' }}</span>

@@ -283,7 +283,7 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                 <template v-else-if="choiceOf(block.conflictIdx!) === 'both'">✓ 保留兩者</template>
                 <template v-else>✓ 手動編輯</template>
               </span>
-              <button class="cp-undo-btn" @click="choices.value = new Map([...choices.value].filter(([k]) => k !== block.conflictIdx!))">撤銷</button>
+              <button class="cp-undo-btn" @click="choices = new Map([...choices].filter(([k]) => k !== block.conflictIdx!))">撤銷</button>
             </div>
           </div>
         </div>

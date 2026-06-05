@@ -315,7 +315,10 @@ function replaceAll(): void {
   const pattern = needWordBoundary ? `\\b${escaped}\\b` : escaped
   const flags = findCase.value ? 'g' : 'gi'
   const re = new RegExp(pattern, flags)
-  content.value = content.value.replace(re, replaceQuery.value)
+  // Escape $ in replacement so it's always treated as a literal string,
+  // not a regex backreference ($&, $`, $', $1, etc.).
+  const literalReplace = replaceQuery.value.replace(/\$/g, '$$$$')
+  content.value = content.value.replace(re, literalReplace)
   dirty.value = true
   void nextTick(() => computeMatches({ navigate: false }))
 }
@@ -439,6 +442,8 @@ function addLineComment(): void { editorRef.value?.addLineComment() }
 function removeLineComment(): void { editorRef.value?.removeLineComment() }
 function jumpToLine(n: number): void { editorRef.value?.revealLine(n); editorRef.value?.focus() }
 function deleteLine(): void { editorRef.value?.deleteLine() }
+function deleteLineLeft(): void { editorRef.value?.deleteLineLeft() }
+function deleteLineRight(): void { editorRef.value?.deleteLineRight() }
 function insertLineBelow(): void { editorRef.value?.insertLineBelow() }
 function insertLineAbove(): void { editorRef.value?.insertLineAbove() }
 function moveLineUp(): void { editorRef.value?.moveLineUp() }
@@ -456,6 +461,9 @@ function transformToUppercase(): void { editorRef.value?.transformToUppercase() 
 function transformToLowercase(): void { editorRef.value?.transformToLowercase() }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 function formatDocument(): void { editorRef.value?.formatDocument() }
+function formatSelection(): void { editorRef.value?.formatSelection() }
+function expandSelection(): void { editorRef.value?.expandSelection() }
+function shrinkSelection(): void { editorRef.value?.shrinkSelection() }
 
 function selectNextOccurrence(): void {
   const curSel = editorRef.value?.getSelectionText() ?? ''
@@ -509,10 +517,11 @@ function selectAll(): void { editorRef.value?.selectAll() }
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
   toggleLineComment, addLineComment, removeLineComment, jumpToLine,
-  deleteLine, insertLineBelow, insertLineAbove,
+  deleteLine, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
+  expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,
   setLanguage, zoomIn, zoomOut, zoomReset,
   undo, redo, selectAll,

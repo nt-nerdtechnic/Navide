@@ -60,6 +60,8 @@ class SlotRecord:
     # Claude: the --session-id we pinned at spawn (known immediately).
     # Codex/Gemini: the CLI-generated id, detected after spawn. "" = no resume.
     session_id: str = ""
+    # tmux session name when spawned via tmux; "" = plain PTY (no tmux).
+    tmux_name: str = ""
 
 
 @dataclass
@@ -70,6 +72,8 @@ class ManualPaneRecord:
     command: str = ""
     spawn_status: str = "spawned"  # spawned / removed
     session_id: str = ""
+    # tmux session name when spawned via tmux; "" = plain PTY (no tmux).
+    tmux_name: str = ""
 
 
 @dataclass
@@ -506,6 +510,40 @@ class ProjectStore:
         if pane is None:
             return project
         pane.session_id = session_id
+        self.save(project)
+        return project
+
+    def record_slot_tmux_name(
+        self,
+        workspace_path: str,
+        *,
+        stage_index: int,
+        slot_label: str,
+        tmux_name: str,
+    ) -> Project:
+        project = self.load_or_create(workspace_path)
+        if stage_index < 0 or stage_index >= len(project.stages):
+            raise IndexError(f"stage_index {stage_index} out of range")
+        stage = project.stages[stage_index]
+        slot = next((s for s in stage.slots if s.label == slot_label), None)
+        if slot is None:
+            return project
+        slot.tmux_name = tmux_name
+        self.save(project)
+        return project
+
+    def record_manual_pane_tmux_name(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        tmux_name: str,
+    ) -> Project:
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.manual_panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.tmux_name = tmux_name
         self.save(project)
         return project
 

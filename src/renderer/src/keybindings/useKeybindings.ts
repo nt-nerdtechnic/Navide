@@ -18,7 +18,16 @@ function buildResolver(): void {
 
 function handleKeydown(e: KeyboardEvent): void {
   const rule = _resolver.resolve(e, getContext())
-  if (!rule) return
+  if (!rule) {
+    // Chord started: consume the first key so it doesn't reach bubble-phase
+    // handlers (e.g. cmd+k would otherwise open CmdK while waiting for the
+    // second key of the cmd+k cmd+f chord).
+    if (_resolver.hasPendingChord()) {
+      e.stopImmediatePropagation()
+      e.preventDefault()
+    }
+    return
+  }
   if (executeCommand(rule.command, rule.args)) {
     e.stopImmediatePropagation()
     e.preventDefault()

@@ -341,6 +341,7 @@ interface SpawnHistoryEntry {
   workspacePath: string
   spawnedAt: string
   removedAt?: string
+  restoreMode?: 'tmux-reattach' | 'memory-resume' | 'fresh'
 }
 
 const panes = ref<ActivePane[]>([])
@@ -918,6 +919,10 @@ interface SpawnInternal {
    *  prior session. Suppresses the fresh Claude --session-id and the
    *  Codex/Gemini detection marker — the session id is already known. */
   isResume?: boolean
+  /** Pipeline stage index — needed to persist tmux_name via pipeline.slot_tmux. */
+  stageIndex?: number
+  /** Restore mode label for the agent history badge. */
+  restoreMode?: 'tmux-reattach' | 'memory-resume' | 'fresh'
 }
 
 /** Trailing line embedded in a Codex/Gemini kickoff so the backend can match
@@ -1024,6 +1029,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     stageId: pane.stageId,
     workspacePath: pane.workspacePath,
     spawnedAt: new Date().toISOString(),
+    restoreMode: opts.restoreMode,
   })
   await nextTick()
   const ref = paneRefs[id]
@@ -1043,7 +1049,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       : undefined
     pane.outputLogFile = outputLogFile
 
-    await ref.spawn({
+    const { tmuxName } = await ref.spawn({
       command: ['bash', '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
@@ -1059,6 +1065,25 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       },
       outputLogFile
     })
+
+    // Persist tmux_name immediately so it survives an App restart.
+    if (tmuxName && opts.workspacePath) {
+      if (opts.origin === 'pipeline' && opts.stageIndex !== undefined && opts.slotLabel) {
+        void sendQuiet('pipeline.slot_tmux', {
+          workspace_path: opts.workspacePath,
+          stage_index: opts.stageIndex,
+          slot_label: opts.slotLabel,
+          tmux_name: tmuxName,
+        })
+      } else if (opts.origin === 'manual') {
+        void sendQuiet('manual_pane.tmux', {
+          workspace_path: opts.workspacePath,
+          pane_id: id,
+          tmux_name: tmuxName,
+        })
+      }
+    }
+
     if ((ref.status as unknown as string) === 'running') {
       if (pane.origin === 'manual' && !pane.roleKey && !pane.kickoffPrompt) {
         pane.injectionStatus = 'skipped'
@@ -1507,6 +1532,20 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   }
 }
 
+async function checkTmuxAlive(names: string[]): Promise<Record<string, boolean>> {
+  if (!names.length) return {}
+  try {
+    const resp = await fetch(
+      `/api/tmux/check?names=${encodeURIComponent(names.join(','))}`
+    )
+    if (!resp.ok) return Object.fromEntries(names.map((n) => [n, false]))
+    const data = await resp.json() as { results: Record<string, boolean> }
+    return data.results ?? {}
+  } catch {
+    return Object.fromEntries(names.map((n) => [n, false]))
+  }
+}
+
 /** Re-spawn CLI panes for all slots recorded in project.json.
  *  Called on workspace load so terminal screens appear immediately without
  *  waiting for the user to click Resume.
@@ -1529,30 +1568,59 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     (p) => p.spawn_status === 'spawned'
   )
   if (spawned.length === 0 && manualPanes.length === 0) return
+
+  // Batch-check which tmux sessions are still alive.
+  const allTmuxNames = [
+    ...spawned.map((s) => s.slot.tmux_name ?? '').filter(Boolean),
+    ...manualPanes.map((p) => p.tmux_name ?? '').filter(Boolean),
+  ]
+  const tmuxAlive = await checkTmuxAlive(allTmuxNames)
+
+  const tmuxCount = Object.values(tmuxAlive).filter(Boolean).length
   const resumable = spawned.filter((s) => (s.slot.session_id ?? '').trim()).length
   const resumableManual = manualPanes.filter((p) => (p.session_id ?? '').trim()).length
   pipelineLog(
-    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s) — ${resumable + resumableManual} with memory`
+    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s)` +
+    ` — ${tmuxCount} tmux reattach, ${resumable + resumableManual - tmuxCount} with memory`
   )
   pipeline.workspacePath = workspacePath
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
     const sessionId = (slot.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const resumeCmd = buildResumeCommand(slot.agent, sessionId, skipFlag)
-    const isResume = !!resumeCmd
+    const slotTmuxName = slot.tmux_name ?? ''
+    const isTmuxAlive = slotTmuxName ? (tmuxAlive[slotTmuxName] ?? false) : false
+
+    let commandOverride: string
+    let isResume: boolean
+    let skipRoleInjection: boolean
+    let restoreMode: 'tmux-reattach' | 'memory-resume' | 'fresh'
+
+    if (isTmuxAlive) {
+      commandOverride = `tmux attach-session -t ${slotTmuxName} -d`
+      isResume = true
+      skipRoleInjection = true
+      restoreMode = 'tmux-reattach'
+    } else {
+      const resumeCmd = buildResumeCommand(slot.agent, sessionId, skipFlag)
+      commandOverride = resumeCmd
+      isResume = !!resumeCmd
+      skipRoleInjection = isResume
+      restoreMode = isResume ? 'memory-resume' : 'fresh'
+    }
+
     const paneId = await spawnPane({
       agentKey: slot.agent as AgentKey,
       roleKey: slot.role,
       stageId: stageId as StageId,
       slotLabel: slot.label,
-      commandOverride: resumeCmd, // '' when no session_id → fresh spawn fallback
+      commandOverride,
       workspacePath,
       origin: 'pipeline',
       isResume,
-      // Resume restores memory; don't re-inject role/kickoff (decision: load
-      // memory only, wait for the user). Fresh fallback keeps prior behaviour.
-      skipRoleInjection: isResume,
+      skipRoleInjection,
+      stageIndex,
+      restoreMode,
     })
     if (paneId) {
       await sendQuiet('pipeline.slot_spawn', {
@@ -1570,21 +1638,46 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const sessionId = (saved.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
-    const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
-    const isResume = !!resumeCmd
-    const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
+    const savedTmuxName = saved.tmux_name ?? ''
+    const isTmuxAlive = savedTmuxName ? (tmuxAlive[savedTmuxName] ?? false) : false
+
+    let commandOverride: string
+    let isResume: boolean
+    let skipRoleInjection: boolean
+    let restoreMode: 'tmux-reattach' | 'memory-resume' | 'fresh'
+
+    if (isTmuxAlive) {
+      commandOverride = `tmux attach-session -t ${savedTmuxName} -d`
+      isResume = true
+      skipRoleInjection = true
+      restoreMode = 'tmux-reattach'
+    } else {
+      const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
+      const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+      const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
+      commandOverride = resumeCmd || fallbackCommand || ''
+      isResume = !!resumeCmd
+      skipRoleInjection = isResume
+      restoreMode = isResume ? 'memory-resume' : 'fresh'
+    }
+
+    const fallbackCommand = !isTmuxAlive
+      ? (looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command)
+      : ''
+
     const paneId = await spawnPane({
       agentKey: saved.agent as AgentKey,
       roleKey: saved.role,
       stageId: '',
-      commandOverride: resumeCmd || fallbackCommand || '',
+      commandOverride,
       workspacePath,
       origin: 'manual',
       isResume,
-      skipRoleInjection: isResume,
+      skipRoleInjection,
+      restoreMode,
     })
     if (paneId) {
+      const canResume = !isTmuxAlive && isResume
       await sendQuiet<ProjectPayload>('manual_pane.spawn', {
         workspace_path: workspacePath,
         pane_id: paneId,
@@ -1594,7 +1687,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         command: fallbackCommand,
         session_id: canResume ? sessionId : '',
       })
-      if (sessionId && !canResume) {
+      if (sessionId && !isTmuxAlive && !isResume) {
         await sendQuiet('manual_pane.session', {
           workspace_path: workspacePath,
           pane_id: paneId,

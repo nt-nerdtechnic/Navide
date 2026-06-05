@@ -33,6 +33,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const containerRef = shallowRef<HTMLElement | null>(null)
   const status = ref<TerminalStatus>('idle')
   const sessionId = ref<string>('')
+  const tmuxName = ref<string>('')
   const error = ref<string>('')
   const lastCommand = ref<string>('')
 
@@ -208,7 +209,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  async function spawn(opts: SpawnOptions): Promise<void> {
+  async function spawn(opts: SpawnOptions): Promise<{ tmuxName: string }> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
     }
@@ -219,6 +220,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const resp = await backend.send<{
         terminal_session_id: string
         pid: number
+        tmux_name?: string
       }>('terminal.create', {
         pane_id: paneId,
         agent_key: opts.agentKey ?? null,
@@ -234,9 +236,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         status.value = 'error'
         error.value = resp.error?.message ?? 'spawn failed'
         term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
-        return
+        return { tmuxName: '' }
       }
       sessionId.value = resp.payload.terminal_session_id
+      tmuxName.value = resp.payload.tmux_name ?? ''
       status.value = 'running'
       // Auto-focus once the PTY is wired up so the user can immediately type
       // without having to click the pane.
@@ -268,6 +271,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       error.value = String((err as Error).message ?? err)
       term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
     }
+    return { tmuxName: tmuxName.value }
   }
 
   function pasteText(text: string): void {
@@ -330,6 +334,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pasteText,
     status,
     sessionId,
+    tmuxName,
     error,
     lastCommand,
     cleanBuffer,

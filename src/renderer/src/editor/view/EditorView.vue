@@ -208,6 +208,7 @@ function deleteForward(): void {
 }
 
 function afterChange(): void {
+  _selStack.length = 0 // editing invalidates the expand/shrink history
   version.value++
   emit('update:modelValue', model.getValue())
   void nextTick(scrollCursorIntoView)
@@ -216,6 +217,7 @@ function afterChange(): void {
 // Used when the content arrives from the parent prop — emitting back would
 // cause EditorPane.onChange() to fire and mark the file dirty on load.
 function afterExternalChange(): void {
+  _selStack.length = 0
   version.value++
   void nextTick(scrollCursorIntoView)
 }
@@ -365,6 +367,19 @@ function deleteWordRight(): void {
   const end = _wordRightPos(start)
   if (comparePos(start, end) !== 0) applyEdit({ start, end }, '')
 }
+function deleteLineLeft(): void {
+  const sel = selectionRange()
+  if (sel) { applyEdit(sel, ''); return }
+  const c = cursor.value
+  if (c.col > 0) applyEdit({ start: { line: c.line, col: 0 }, end: { ...c } }, '')
+}
+function deleteLineRight(): void {
+  const sel = selectionRange()
+  if (sel) { applyEdit(sel, ''); return }
+  const c = cursor.value
+  const lineLen = model.getLine(c.line).length
+  if (c.col < lineLen) applyEdit({ start: { ...c }, end: { line: c.line, col: lineLen } }, '')
+}
 
 // ── Indent / dedent selected lines ───────────────────────────────────────────
 const INDENT = '  '
@@ -493,8 +508,8 @@ function onKeydown(e: KeyboardEvent): void {
       break
     }
     case 'End': e.preventDefault(); endKey(shift); break
-    case 'Backspace': e.preventDefault(); e.altKey ? deleteWordLeft() : deleteBackward(); break
-    case 'Delete': e.preventDefault(); e.altKey ? deleteWordRight() : deleteForward(); break
+    case 'Backspace': e.preventDefault(); mod ? deleteLineLeft() : e.altKey ? deleteWordLeft() : deleteBackward(); break
+    case 'Delete': e.preventDefault(); mod ? deleteLineRight() : e.altKey ? deleteWordRight() : deleteForward(); break
     case 'Enter': {
       e.preventDefault()
       const c = cursor.value
@@ -720,6 +735,30 @@ function transformToLowercase(): void {
   const sel = selectionRange()
   if (!sel) return
   applyEdit(sel, model.getValueInRange(sel).toLowerCase())
+}
+function formatSelection(): void {
+  const sel = selectionRange()
+  if (!sel) { formatDocument(); return }
+  // If selection ends at col 0 (visual end-of-line), exclude that line to match
+  // the convention used by toggleLineComment / indentLines.
+  const endLine = sel.end.col > 0 ? sel.end.line : Math.max(sel.start.line, sel.end.line - 1)
+  const lines: string[] = []
+  let changed = false
+  for (let i = sel.start.line; i <= endLine; i++) {
+    const raw = model.getLine(i)
+    const trimmed = raw.trimEnd()
+    lines.push(trimmed)
+    if (trimmed.length !== raw.length) changed = true
+  }
+  if (!changed) return
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  applyEdit(
+    { start: { line: sel.start.line, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
+    lines.join('\n'),
+  )
+  cursor.value = clampPos(savedCursor)
+  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
 function formatDocument(): void {
   const lc = model.lineCount()
@@ -995,6 +1034,51 @@ function posFromMouse(e: MouseEvent): Position {
   return { line, col }
 }
 
+// ── Smart expand / shrink selection (⇧⌥→ / ⇧⌥←) ──────────────────────────
+const _selStack: Array<{ anchor: Position | null; cursor: Position }> = []
+function expandSelection(): void {
+  const cur = cursor.value
+  const anc = anchor.value
+  const noSel = !anc || (anc.line === cur.line && anc.col === cur.col)
+  // Save current state for shrink
+  _selStack.push({ anchor: anc ? { ...anc } : null, cursor: { ...cur } })
+  if (noSel && getWordAtCursor()) {
+    // Step 1: select word under cursor.
+    // selectWordAt() only extends FORWARD from col — it misses the cursor-at-word-end
+    // case where col is one past the last char. Instead, extend both directions here.
+    const text = model.getLine(cur.line)
+    let wStart = Math.min(cur.col, text.length)
+    let wEnd = wStart
+    while (wStart > 0 && isWordChar(text[wStart - 1])) wStart--
+    while (wEnd < text.length && isWordChar(text[wEnd])) wEnd++
+    anchor.value = { line: cur.line, col: wStart }
+    cursor.value = { line: cur.line, col: wEnd }
+    return
+  }
+  // Step 2: expand to whole line (using effective range — cursor pos when no selection)
+  const sel = selectionRange()
+  const sLine = sel ? sel.start.line : cur.line
+  const sCol  = sel ? sel.start.col  : cur.col
+  const eLine = sel ? sel.end.line   : cur.line
+  const eCol  = sel ? sel.end.col    : cur.col
+  const lineText = model.getLine(sLine)
+  if (sLine === eLine && (sCol > 0 || eCol < lineText.length)) {
+    anchor.value = { line: sLine, col: 0 }
+    cursor.value = { line: sLine, col: lineText.length }
+    return
+  }
+  // Step 3: expand to whole document
+  anchor.value = { line: 0, col: 0 }
+  const last = model.lineCount() - 1
+  cursor.value = { line: last, col: model.getLine(last).length }
+}
+function shrinkSelection(): void {
+  if (_selStack.length > 0) {
+    const prev = _selStack.pop()!
+    anchor.value = prev.anchor ? clampPos(prev.anchor) : null
+    cursor.value = clampPos(prev.cursor)
+  }
+}
 function selectWordAt(pos: Position): void {
   preferredCol = -1
   const text = model.getLine(pos.line)
@@ -1241,11 +1325,13 @@ defineExpose({
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
   toggleLineComment, addLineComment, removeLineComment,
   deleteLine, insertLineBelow, insertLineAbove,
+  deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight,
   moveLineUp, moveLineDown, getWordAtCursor,
   jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
+  expandSelection, shrinkSelection,
   setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,
 })

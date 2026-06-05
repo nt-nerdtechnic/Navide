@@ -1,9 +1,8 @@
 import { defineConfig } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
-import { resolve } from 'node:path'
+import { resolve, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 // ── App version ──────────────────────────────────────────────────────────────

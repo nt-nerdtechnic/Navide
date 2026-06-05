@@ -256,8 +256,11 @@ registerCommand('workbench.action.toggleSidebar', () => { sidebarHidden.value = 
 registerCommand('workbench.action.focusExplorer', () => { sidebarHidden.value = false; sidebarView.value = 'explorer' })
 registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
 registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !aiPanelOpen.value })
+function getActiveRelPath(): string { return activeRel.value }
 registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
 registerCommand('editor.action.deleteLines',      () => activeEditor()?.deleteLine())
+registerCommand('editor.action.deleteAllLeft',    () => activeEditor()?.deleteLineLeft())
+registerCommand('editor.action.deleteAllRight',   () => activeEditor()?.deleteLineRight())
 registerCommand('editor.action.insertLineAfter',  () => activeEditor()?.insertLineBelow())
 registerCommand('editor.action.insertLineBefore', () => activeEditor()?.insertLineAbove())
 registerCommand('editor.action.moveLineUp',       () => activeEditor()?.moveLineUp())
@@ -276,10 +279,29 @@ registerCommand('editor.action.transformToUppercase', () => activeEditor()?.tran
 registerCommand('editor.action.transformToLowercase', () => activeEditor()?.transformToLowercase())
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
 registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
+registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
+registerCommand('editor.action.smartSelect.expand',     () => activeEditor()?.expandSelection())
+registerCommand('editor.action.smartSelect.shrink',     () => activeEditor()?.shrinkSelection())
+registerCommand('workbench.action.copyFilePath', async () => {
+  const path = activeRel.value
+  if (!path) return
+  await navigator.clipboard.writeText(path)
+})
+registerCommand('workbench.action.revealInExplorer', () => {
+  sidebarHidden.value = false
+  sidebarView.value = 'explorer'
+})
 registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
 registerCommand('editor.action.selectAll', () => activeEditor()?.selectAll())
+for (let _i = 1; _i <= 9; _i++) {
+  const idx = _i - 1
+  registerCommand(`workbench.action.openEditorAtIndex${_i}`, () => {
+    const f = openFiles.value[idx] ?? openFiles.value[openFiles.value.length - 1]
+    if (f) activeRel.value = f.relPath
+  })
+}
 registerCommand('workbench.action.closeActiveEditor', () => {
   if (!activeRel.value) return
   closeFile(activeRel.value)
@@ -307,6 +329,18 @@ registerCommand('workbench.action.openPreviousEditor', () => {
   if (!files.length) return
   const idx = files.findIndex((f) => f.relPath === activeRel.value)
   activeRel.value = files[(idx - 1 + files.length) % files.length]?.relPath ?? ''
+})
+registerCommand('workbench.action.moveEditorRightInGroup', () => {
+  const files = openFiles.value
+  const idx = files.findIndex((f) => f.relPath === activeRel.value)
+  if (idx < 0 || idx >= files.length - 1) return
+  ;[files[idx], files[idx + 1]] = [files[idx + 1], files[idx]]
+})
+registerCommand('workbench.action.moveEditorLeftInGroup', () => {
+  const files = openFiles.value
+  const idx = files.findIndex((f) => f.relPath === activeRel.value)
+  if (idx <= 0) return
+  ;[files[idx], files[idx - 1]] = [files[idx - 1], files[idx]]
 })
 
 watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
@@ -372,6 +406,19 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.reopenClosedEditor',    label: '重開最後關閉的分頁', keys: '⌘⇧T' },
   { id: 'workbench.action.openKeyboardShortcuts', label: '顯示快捷鍵',       keys: '⌘K ⌘S' },
   { id: 'workbench.action.selectTheme',           label: '選擇顏色主題',     keys: '⌘K ⌘T' },
+  { id: 'editor.action.openReplace',    label: '尋找並取代',       keys: '⌘H' },
+  { id: 'editor.action.formatDocument', label: '格式化文件',       keys: '⌥⇧F' },
+  { id: 'editor.action.formatSelection',label: '格式化選取範圍',   keys: '⌘K ⌘F' },
+  { id: 'workbench.action.toggleAIChat',            label: '切換 AI 對話',    keys: '⌘⇧A' },
+  { id: 'editor.action.smartSelect.expand',          label: '擴展選取範圍',   keys: '⇧⌥→' },
+  { id: 'editor.action.smartSelect.shrink',          label: '縮小選取範圍',   keys: '⇧⌥←' },
+  { id: 'workbench.action.copyFilePath',    label: '複製檔案路徑',      keys: '⌘K ⌘P' },
+  { id: 'workbench.action.revealInExplorer',label: '在檔案總管中顯示', keys: '⌘K ⌘R' },
+  { id: 'workbench.action.openEditorAtIndex1', label: '切換到第 1 個分頁', keys: '⌘1' },
+  { id: 'workbench.action.openEditorAtIndex2', label: '切換到第 2 個分頁', keys: '⌘2' },
+  { id: 'workbench.action.openEditorAtIndex3', label: '切換到第 3 個分頁', keys: '⌘3' },
+  { id: 'editor.action.deleteAllLeft',  label: '刪除到行首',   keys: '⌘⌫' },
+  { id: 'editor.action.deleteAllRight', label: '刪除到行尾',   keys: '⌘⌦' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -454,6 +501,7 @@ const symQuery = ref('')
 const symIdx = ref(0)
 const symInputEl = ref<HTMLInputElement | null>(null)
 const symItems = computed(() => {
+  if (!symOpen.value) return []
   const f = openFiles.value.find((f) => f.relPath === activeRel.value)
   if (!f || f.kind !== 'file') return []
   const content = activeEditor()?.getContent?.() ?? ''
@@ -835,7 +883,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         embedded
         :active="aiPanelOpen"
         :get-editor-content="() => activeEditor()?.getContent?.() ?? ''"
-        :get-active-rel-path="() => activeRel.value"
+        :get-active-rel-path="getActiveRelPath"
       />
     </div>
   </div>

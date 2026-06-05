@@ -345,4 +345,77 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
   it('shift+alt+f requires editorTextFocus', () => {
     expect(dr.resolve(mkEvent('f', { shiftKey: true, altKey: true }), {})).toBeNull()
   })
+
+  it('cmd+k cmd+f → formatSelection chord (editorTextFocus)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true })
+    expect(dr.resolve(mkEvent('f', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.formatSelection')
+  })
+
+  it('formatSelection chord null without editorTextFocus', () => {
+    // cmd+k enters chord (cmd+k cmd+w has no when)
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('f', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('shift+alt+right → smartSelect.expand (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowRight', { shiftKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.smartSelect.expand')
+  })
+
+  it('shift+alt+left → smartSelect.shrink (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowLeft', { shiftKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.smartSelect.shrink')
+  })
+
+  it('smartSelect.expand/shrink require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowRight', { shiftKey: true, altKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowLeft', { shiftKey: true, altKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+k cmd+p → copyFilePath chord (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true })
+    expect(dr.resolve(mkEvent('p', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.copyFilePath')
+  })
+
+  it('cmd+k cmd+r → revealInExplorer chord (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true })
+    expect(dr.resolve(mkEvent('r', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.revealInExplorer')
+  })
+
+  it('copyFilePath chord null without editorOpen', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('p', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+1 → openEditorAtIndex1 (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('1', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.openEditorAtIndex1')
+  })
+
+  it('cmd+9 → openEditorAtIndex9 (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('9', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.openEditorAtIndex9')
+  })
+
+  it('cmd+1 requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('1', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+backspace → deleteAllLeft (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('Backspace', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.deleteAllLeft')
+  })
+
+  it('cmd+delete → deleteAllRight (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('Delete', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.deleteAllRight')
+  })
+
+  it('cmd+backspace/delete require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('Backspace', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('Delete', { metaKey: true }), {})).toBeNull()
+  })
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import type { useBackend } from '../composables/useBackend'
@@ -480,6 +480,53 @@ async function doGenerate(): Promise<void> {
   if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
   else commitError.value = r.error || 'generation failed'
 }
+
+// ── auto-commit (background patrol) ──────────────────────────────────────────
+// When enabled, watches for stable uncommitted changes and auto-commits locally
+// using an AI-generated message. Never pushes to remote.
+const autoCommit = ref(false)
+const autoCommitPending = ref(false)
+const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes before committing
+let _autoCommitTimer: ReturnType<typeof setTimeout> | null = null
+
+function _clearAutoTimer(): void {
+  if (_autoCommitTimer) { clearTimeout(_autoCommitTimer); _autoCommitTimer = null }
+  autoCommitPending.value = false
+}
+
+async function runAutoCommit(): Promise<void> {
+  _autoCommitTimer = null
+  autoCommitPending.value = false
+  if (!autoCommit.value) return
+  // Guard: skip during merge/rebase/conflicts, or if nothing to commit
+  if (opInProgress.value || conflictFileCount.value > 0) return
+  if (!hasCommittable.value || isCommitting.value || isGenerating.value) return
+  const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
+  if (!r.ok || !r.message) return
+  const cr = await commit(r.message, !hasStaged.value)
+  if (cr.ok) notifyToast(`Auto-committed: ${r.message}`, { type: 'success' })
+}
+
+function scheduleAutoCommit(): void {
+  _clearAutoTimer()
+  if (!autoCommit.value || !hasCommittable.value) return
+  autoCommitPending.value = true
+  _autoCommitTimer = setTimeout(runAutoCommit, AUTO_COMMIT_DELAY_MS)
+}
+
+// Reset the timer whenever the change list shifts while auto-commit is active.
+watch(
+  () => [gitStatus.value.staged, gitStatus.value.unstaged, gitStatus.value.untracked],
+  () => { if (autoCommit.value) scheduleAutoCommit() },
+  { deep: true },
+)
+
+watch(autoCommit, (val) => {
+  if (!val) _clearAutoTimer()
+  else if (hasCommittable.value) scheduleAutoCommit()
+})
+
+onUnmounted(_clearAutoTimer)
 
 // ── remote actions ────────────────────────────────────────────────────────────
 const { toast: notifyToast, alert: notifyAlert } = useNotify()
@@ -1152,7 +1199,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
           />
-          <button class="ai-btn" :class="{ generating: isGenerating }" :disabled="isGenerating || !hasChanges" title="AI 生成 commit message" @click.stop="doGenerate">
+          <button class="ai-btn" :class="{ generating: isGenerating, 'auto-active': autoCommit }" :disabled="isGenerating || !hasChanges" :title="autoCommit ? 'AI 自動 commit 已開啟' : 'AI 生成 commit message'" @click.stop="doGenerate">
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
@@ -1176,6 +1223,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <div class="menu-sep" />
               <button class="menu-item" :disabled="!gitLog.length" @click="doUndo(); showCommitMenu = false">
                 ↺ Undo Last Commit
+              </button>
+              <div class="menu-sep" />
+              <button class="menu-item" :class="{ 'auto-commit-on': autoCommit }" @click="autoCommit = !autoCommit; showCommitMenu = false">
+                ✦ Auto Commit
+                <span v-if="autoCommitPending" class="auto-pending-dot" title="排程中，60 秒後自動提交" />
               </button>
             </div>
           </Teleport>
@@ -1497,9 +1549,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- ── selection action bar ──────────────────────────────── -->
       <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
         <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
-        <button v-if="selectedChangesPaths.length > 0" class="sel-btn primary" @click="stageSelected">Stage</button>
-        <button v-if="selectedStagedPaths.length > 0" class="sel-btn" @click="unstageSelected">Unstage</button>
-        <button v-if="selectedChangesPaths.length > 0" class="sel-btn danger" @click="discardSelected">Discard</button>
         <button class="sel-btn sel-clear" @click="clearSelection">✕</button>
       </div>
 
@@ -1822,8 +1871,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
     <!-- ── File context menu (right-click) ──────────────────────────────── -->
     <Teleport to="body">
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
+      <!-- Multi-select menu -->
+      <div v-if="ctxMenu.show && selectedKeys.size > 1" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} 個檔案</button>
+        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} 個檔案</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} 個檔案</button>
+      </div>
       <!-- File menu -->
-      <div v-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+      <div v-else-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
         <button class="menu-item" @click="ctxOpenInEditor">Open in Editor</button>
         <button class="menu-item" @click="ctxOpenFile">Open File</button>
@@ -2065,6 +2120,25 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .ai-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .ai-btn.generating { opacity: 1; color: var(--accent-fg); border-color: var(--accent-fg); cursor: progress; }
 .ai-btn.generating .spinner { font-size: 15px; }
+.ai-btn.auto-active {
+  color: var(--accent-fg);
+  border-color: var(--accent-fg);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-fg, #58a6ff) 45%, transparent);
+}
+.ai-btn.auto-active:not(.generating) span {
+  display: inline-block;
+  animation: auto-pulse 2.4s ease-in-out infinite;
+}
+@keyframes auto-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.88); }
+}
+.auto-pending-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-fg); margin-left: 4px; flex-shrink: 0;
+  animation: auto-pulse 1.2s ease-in-out infinite;
+}
+.menu-item.auto-commit-on { color: var(--accent-fg); }
 .commit-btn-row { display: flex; gap: 0; }
 .commit-main-btn {
   flex: 1; background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);

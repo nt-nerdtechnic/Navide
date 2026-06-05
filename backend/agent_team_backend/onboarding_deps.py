@@ -74,6 +74,9 @@ DEPS: list[Dep] = [
     Dep("ollama", "Ollama", "本地 LLM runtime（Analyzer 必要）", "analyzer",
         ["ollama", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install ollama", docs_url="https://ollama.com"),
+    Dep("tmux", "tmux", "Terminal multiplexer（CLI process survival）", "utils",
+        ["tmux", "-V"], r"tmux (\d+\.\d+(?:\.\d+)?)", min_version="3.0",
+        install_cmd="brew install tmux", optional=True, docs_url="https://github.com/tmux/tmux"),
 ]
 
 DEPS_BY_ID: dict[str, Dep] = {d.id: d for d in DEPS}
