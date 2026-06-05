@@ -53,6 +53,7 @@ const isBinary = computed(() => rawDiff.value !== null && /^Binary files /m.test
 const isEmpty = computed(() => rawDiff.value !== null && !isBinary.value && parsed.value.hunks.length === 0)
 
 async function loadDiff(): Promise<void> {
+  if (!props.filepath) { rawDiff.value = null; return }
   const seq = ++_loadSeq
   loading.value = true
   loadError.value = ''
