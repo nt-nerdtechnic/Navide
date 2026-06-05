@@ -1522,6 +1522,7 @@ defineExpose({
   expandSelection, shrinkSelection,
   setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,
+  insertText,
 })
 </script>
 

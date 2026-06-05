@@ -54,6 +54,7 @@ const props = defineProps<{
   getEditorContent?: () => string
   getEditorSelection?: () => string
   getActiveRelPath?: () => string
+  insertTextAtCursor?: (text: string) => void
 }>()
 
 // ── Message types ──────────────────────────────────────────────────────────────
@@ -434,6 +435,20 @@ function onMessagesClick(e: MouseEvent): void {
       }).catch(() => showToast('Apply failed'))
     } catch { showToast('Apply failed') }
   }
+
+  // Insert at cursor button
+  const insertBtn = target.closest<HTMLButtonElement>('.ai-code-insert-btn')
+  if (insertBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(insertBtn.dataset.code ?? '')))
+      if (!props.insertTextAtCursor) { showToast('No editor active'); return }
+      props.insertTextAtCursor(code)
+      insertBtn.textContent = 'Inserted ✓'
+      insertBtn.style.color = 'var(--success-fg, #3fb950)'
+      window.setTimeout(() => { insertBtn.textContent = 'Insert'; insertBtn.style.color = '' }, 2000)
+      showToast('Inserted at cursor')
+    } catch { showToast('Insert failed') }
+  }
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
@@ -457,8 +472,11 @@ function renderMarkdownLite(rawText: string): string {
       highlighted = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
     const i = blocks.length
-    // Only show Apply button when an active file path is available
+    // Only show Apply/Insert buttons when an active file path is available
     const hasActiveFile = !!(props.getActiveRelPath?.())
+    const insertBtn = hasActiveFile && props.insertTextAtCursor
+      ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor">Insert</button>`
+      : ''
     const applyBtn = hasActiveFile
       ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="Apply to current open file">Apply</button>`
       : ''
@@ -473,6 +491,7 @@ function renderMarkdownLite(rawText: string): string {
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
+      `${insertBtn}` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
