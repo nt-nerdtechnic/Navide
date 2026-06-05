@@ -1355,6 +1355,15 @@ function setupListeners(): void {
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
     }
+    // Auto-generate thread title from first user message
+    const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
+    if (curThread && curThread.title === 'New chat' && messages.value.length === 2) {
+      const firstUser = messages.value[0]
+      if (firstUser?.role === 'user' && firstUser.content.trim()) {
+        const raw = firstUser.content.replace(/@\S+/g, '').trim()
+        curThread.title = raw.length > 50 ? raw.slice(0, 47) + '…' : raw || 'New chat'
+      }
+    }
     sending.value = false
     currentSessionId.value = null
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
