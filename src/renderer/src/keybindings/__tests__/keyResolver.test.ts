@@ -651,3 +651,23 @@ describe('copy relative path shortcut', () => {
     expect(dr.resolve(mkEvent('c', { metaKey: true, shiftKey: true, altKey: true }), {})).toBeNull()
   })
 })
+
+describe('inlineRewrite shortcut (chord fix)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+k cmd+k → inlineRewrite (editorTextFocus)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true }) // enter chord
+    expect(dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.inlineRewrite')
+  })
+
+  it('ctrl+shift+i → inlineRewrite (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('i', { ctrlKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.inlineRewrite')
+  })
+
+  it('ctrl+shift+i requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('i', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
+  })
+})

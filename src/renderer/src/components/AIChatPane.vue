@@ -550,6 +550,15 @@ function renderMarkdownLite(rawText: string): string {
     }
     if (inBlockquote && line.trim() === '') { flushBlockquote(); parts.push('<br>'); continue }
     flushBlockquote()
+    // Task list items: - [ ] or - [x]
+    const taskm = line.match(/^[*\-+]\s+\[([ xX])\]\s+(.+)/)
+    if (taskm) {
+      const checked = taskm[1].toLowerCase() === 'x'
+      if (inOl) { parts.push('</ol>'); inOl = false }
+      if (!inUl) { parts.push('<ul class="ai-ul ai-task-list">'); inUl = true }
+      parts.push(`<li class="ai-task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled> ${taskm[2]}</li>`)
+      continue
+    }
     // Unordered list
     const ulm = line.match(/^[*\-+]\s+(.+)/)
     if (ulm) {
@@ -1863,6 +1872,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <tbody>
           <tr><td><kbd>Enter</kbd></td><td>送出訊息</td></tr>
           <tr><td><kbd>Shift+Enter</kbd></td><td>換行</td></tr>
+          <tr><td><kbd>↑ / ↓</kbd></td><td>瀏覽輸入歷史</td></tr>
+          <tr><td><kbd>Ctrl+N</kbd></td><td>新對話</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>搜尋對話</td></tr>
           <tr><td><kbd>@</kbd></td><td>插入 context（檔案、selection、git）</td></tr>
           <tr><td><kbd>/</kbd></td><td>Slash 指令（/explain、/fix…）</td></tr>
@@ -2104,6 +2115,9 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-top: 1px solid var(--border-muted);
   margin: 8px 0;
 }
+.ai-text :deep(ul.ai-task-list) { list-style: none; padding-left: 4px; }
+.ai-text :deep(li.ai-task-item) { display: flex; align-items: baseline; gap: 6px; }
+.ai-text :deep(li.ai-task-item input[type="checkbox"]) { margin: 0; flex-shrink: 0; }
 .ai-text :deep(blockquote.ai-blockquote) {
   border-left: 3px solid var(--accent-fg);
   margin: 4px 0;
