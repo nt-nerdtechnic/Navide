@@ -117,6 +117,9 @@ watch(settingsProvider, (provider) => {
   }
 })
 
+// Input char counter (shown when > 200 chars)
+const inputCharCount = computed(() => inputText.value.length)
+
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
   id: string
@@ -146,9 +149,11 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/fix',     label: '/fix',     description: '修復問題',   template: '請找出並修復以下程式碼中的問題：' },
   { id: '/tests',   label: '/tests',   description: '生成測試',   template: '請為以下程式碼撰寫完整的單元測試：' },
   { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
-  { id: '/review',  label: '/review',  description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
-  { id: '/clear',   label: '/clear',   description: '清除對話',   template: '' },
-  { id: '/export',  label: '/export',  description: '匯出對話',   template: '' },
+  { id: '/review',   label: '/review',   description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
+  { id: '/optimize', label: '/optimize', description: '效能優化',   template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
+  { id: '/refactor', label: '/refactor', description: '重構程式碼', template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
+  { id: '/clear',    label: '/clear',    description: '清除對話',   template: '' },
+  { id: '/export',   label: '/export',   description: '匯出對話',   template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -156,16 +161,42 @@ const slashMenuIdx = ref(0)
 const slashMenuEl = ref<HTMLElement | null>(null)
 const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 
+// ── Code-block copy via event delegation ─────────────────────────────────────
+function onMessagesClick(e: MouseEvent): void {
+  const btn = (e.target as Element).closest<HTMLButtonElement>('.ai-code-copy-btn')
+  if (!btn) return
+  try {
+    const code = decodeURIComponent(escape(atob(btn.dataset.code ?? '')))
+    navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = 'Copied!'
+      window.setTimeout(() => { btn.textContent = 'Copy' }, 1500)
+    }).catch(() => {/* ignore */})
+  } catch {/* ignore */}
+}
+
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
 function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
-  let text = rawText.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
+  let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const safe = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const langLabel = lang || 'code'
+    // Encode raw code for copy button (btoa with URI encode for unicode safety)
+    const encoded = btoa(unescape(encodeURIComponent(code.trim())))
     const i = blocks.length
-    blocks.push(`<pre class="ai-code-block"><code>${safe}</code></pre>`)
+    blocks.push(
+      `<div class="ai-code-wrap">` +
+      `<div class="ai-code-header">` +
+      `<span class="ai-code-lang">${langLabel}</span>` +
+      `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
+      `</div>` +
+      `<pre class="ai-code-block"><code>${safe}</code></pre>` +
+      `</div>`,
+    )
     return `\x00B${i}\x00`
   })
+  // HTML-escape non-code-block content to prevent XSS via v-html
+  text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   // 2. Line-by-line: headings, lists, blank lines
   const lines = text.split('\n')
@@ -938,7 +969,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 <template>
   <div class="ai-chat">
     <!-- Messages list -->
-    <div ref="messagesEl" class="ai-messages">
+    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick">
       <div v-if="messages.length === 0" class="ai-empty">
         <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="opacity:.35">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
@@ -1090,16 +1121,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
       </div>
 
       <div class="ai-input-row">
-        <textarea
-          ref="textareaEl"
-          v-model="inputText"
-          class="ai-textarea"
-          placeholder="輸入訊息… (@ 注入 context，Enter 送出，Shift+Enter 換行)"
-          :disabled="sending"
-          rows="1"
-          @input="onTextareaInput"
-          @keydown="onTextareaKeydown"
-        />
+        <div class="ai-textarea-wrap">
+          <textarea
+            ref="textareaEl"
+            v-model="inputText"
+            class="ai-textarea"
+            placeholder="輸入訊息… (@ 注入 context，Enter 送出，Shift+Enter 換行)"
+            :disabled="sending"
+            rows="1"
+            @input="onTextareaInput"
+            @keydown="onTextareaKeydown"
+          />
+          <span v-if="inputCharCount > 200" class="ai-char-count" :class="{ warn: inputCharCount > 2000 }">
+            {{ inputCharCount.toLocaleString() }}
+          </span>
+        </div>
         <div class="ai-input-btns">
           <button
             v-if="!sending"
@@ -1624,8 +1660,23 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   align-items: flex-end;
   gap: 6px;
 }
-.ai-textarea {
+.ai-textarea-wrap {
   flex: 1;
+  position: relative;
+}
+.ai-char-count {
+  position: absolute;
+  bottom: 5px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+  font-family: ui-monospace, monospace;
+}
+.ai-char-count.warn { color: var(--danger-fg, #cf222e); }
+.ai-textarea {
+  width: 100%;
+  box-sizing: border-box;
   resize: none;
   min-height: 60px;
   max-height: 200px;
