@@ -1577,18 +1577,18 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <button
             v-if="msg.role === 'user' && !sending"
             class="ai-msg-action-btn"
-            title="編輯並重送"
+            title="Edit & resend"
             @click="editMessage(mi)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/></svg>
           </button>
-          <button class="ai-msg-action-btn" title="複製" @click="copyMessage(msg.content)">
+          <button class="ai-msg-action-btn" title="Copy" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
             v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
             class="ai-msg-action-btn"
-            title="重新生成"
+            title="Regenerate"
             @click="regenerate"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
@@ -1716,7 +1716,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <button
             v-else
             class="ai-stop-btn"
-            title="停止"
+            title="Stop"
             @click="stopStreaming"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -1732,7 +1732,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="對話記錄"
+            title="Chat history"
             :class="{ active: showThreads }"
             @click="showThreads = !showThreads; if (!showThreads) threadSearchQuery = ''"
           >
@@ -1740,7 +1740,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="搜尋對話 (Ctrl+F)"
+            title="Search chat (Ctrl+F)"
             :disabled="messages.length === 0"
             @click="openSearch"
           >
@@ -1750,7 +1750,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="清除對話"
+            title="Clear chat"
             :disabled="messages.length === 0"
             @click="clearConversation"
           >
@@ -1760,14 +1760,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="快捷鍵 (?)"
+            title="Keyboard shortcuts (?)"
             @click="showShortcuts = !showShortcuts"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM5 8.5H2.75a.75.75 0 0 1 0-1.5H5a.75.75 0 0 1 0 1.5Zm2.5 2h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm0-4h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm5.75 4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Zm0-4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Z"/></svg>
           </button>
           <button
             class="ai-settings-btn"
-            title="設定"
+            title="Settings"
             @click="showSettings = !showSettings"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
@@ -1781,19 +1781,19 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     <!-- Thread list panel -->
     <div v-if="showThreads" class="ai-threads-panel">
       <div class="ai-threads-header">
-        <span>對話記錄 ({{ allThreads.length }})</span>
+        <span>Chat history ({{ allThreads.length }})</span>
         <button class="ai-settings-close" @click="showThreads = false; threadSearchQuery = ''">✕</button>
       </div>
       <div class="ai-threads-search">
         <input
           v-model="threadSearchQuery"
           class="ai-search-input"
-          placeholder="搜尋對話…"
+          placeholder="Search chats…"
           @keydown.escape="showThreads = false; threadSearchQuery = ''"
         />
       </div>
       <div class="ai-threads-list">
-        <div v-if="!filteredThreads.length" class="ai-threads-empty">無符合結果</div>
+        <div v-if="!filteredThreads.length" class="ai-threads-empty">No results</div>
         <div
           v-for="t in filteredThreads"
           :key="t.id"
@@ -1804,7 +1804,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <span class="ai-thread-title">{{ t.title }}</span>
           <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
           <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
-          <button class="ai-thread-del" title="刪除" @click.stop="deleteThread(t.id)">✕</button>
+          <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
         </div>
       </div>
     </div>
@@ -1812,7 +1812,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     <!-- Settings panel -->
     <div v-if="showSettings" class="ai-settings">
       <div class="ai-settings-header">
-        <span>AI 設定</span>
+        <span>AI Settings</span>
         <button class="ai-settings-close" @click="showSettings = false">✕</button>
       </div>
       <div class="ai-settings-body">
@@ -1837,14 +1837,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <label class="ai-settings-label">Model</label>
           <select v-model="selectedModelKey" class="ai-settings-select">
             <option v-for="m in currentModelOptions" :key="m" :value="m">{{ m }}</option>
-            <option value="custom">自訂…</option>
+            <option value="custom">Custom…</option>
           </select>
           <input
             v-if="modelIsCustom"
             v-model="settingsModel"
             type="text"
             class="ai-settings-input ai-settings-input--custom"
-            placeholder="輸入 model ID"
+            placeholder="Enter model ID"
           />
         </div>
         <div v-if="settingsProvider === 'ollama'" class="ai-settings-row">
@@ -1861,7 +1861,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           />
         </div>
         <div class="ai-settings-footer">
-          <button class="ai-settings-save" @click="saveSettings">儲存</button>
+          <button class="ai-settings-save" @click="saveSettings">Save</button>
         </div>
       </div>
     </div>
@@ -1869,20 +1869,20 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     <!-- Keyboard shortcuts panel -->
     <div v-if="showShortcuts" class="ai-shortcuts-panel">
       <div class="ai-shortcuts-header">
-        <span>鍵盤快捷鍵</span>
+        <span>Keyboard Shortcuts</span>
         <button class="ai-settings-close" @click="showShortcuts = false">✕</button>
       </div>
       <table class="ai-shortcuts-table">
         <tbody>
-          <tr><td><kbd>Enter</kbd></td><td>送出訊息</td></tr>
-          <tr><td><kbd>Shift+Enter</kbd></td><td>換行</td></tr>
-          <tr><td><kbd>↑ / ↓</kbd></td><td>瀏覽輸入歷史</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
+          <tr><td><kbd>Shift+Enter</kbd></td><td>New line</td></tr>
+          <tr><td><kbd>↑ / ↓</kbd></td><td>Browse input history</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
-          <tr><td><kbd>Ctrl+F</kbd></td><td>搜尋對話</td></tr>
-          <tr><td><kbd>@</kbd></td><td>插入 context（檔案、selection、git）</td></tr>
-          <tr><td><kbd>/</kbd></td><td>Slash 指令（/explain、/fix…）</td></tr>
-          <tr><td><kbd>Escape</kbd></td><td>關閉選單 / 搜尋列</td></tr>
-          <tr><td>拖曳檔案</td><td>將檔案加入 context</td></tr>
+          <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
+          <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix…)</td></tr>
+          <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
+          <tr><td>Drag file</td><td>Add file to context</td></tr>
         </tbody>
       </table>
     </div>
@@ -2599,6 +2599,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-search-close:hover { color: var(--text-bright); }
 .ai-msg-wrap.search-match .ai-bubble { outline: 1px solid var(--accent-emphasis); opacity: 0.7; }
 .ai-msg-wrap.search-active .ai-bubble { outline: 2px solid var(--accent-emphasis); opacity: 1; }
+.ai-text :deep(mark.ai-search-highlight) {
+  background: rgba(255, 213, 0, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.ai-msg-wrap.search-active .ai-text :deep(mark.ai-search-highlight) {
+  background: rgba(255, 165, 0, 0.5);
+}
 
 /* ── Settings panel ────────────────────────────────────────────────────────── */
 .ai-settings {
