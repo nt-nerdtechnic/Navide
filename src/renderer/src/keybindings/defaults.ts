@@ -82,6 +82,8 @@ export const defaults: KeybindingRule[] = [
   // ── Editor tabs ──────────────────────────────────────────────────────────────
   { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },
   { key: 'ctrl+shift+tab', command: 'workbench.action.openPreviousEditor' },
+  { key: 'cmd+shift+]', command: 'workbench.action.moveEditorRightInGroup', when: 'editorOpen' },
+  { key: 'cmd+shift+[', command: 'workbench.action.moveEditorLeftInGroup',  when: 'editorOpen' },
   { key: 'cmd+1', command: 'workbench.action.openEditorAtIndex1', when: 'editorOpen' },
   { key: 'cmd+2', command: 'workbench.action.openEditorAtIndex2', when: 'editorOpen' },
   { key: 'cmd+3', command: 'workbench.action.openEditorAtIndex3', when: 'editorOpen' },

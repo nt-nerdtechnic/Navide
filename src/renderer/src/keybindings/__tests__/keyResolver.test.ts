@@ -418,4 +418,19 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
     expect(dr.resolve(mkEvent('Backspace', { metaKey: true }), {})).toBeNull()
     expect(dr.resolve(mkEvent('Delete', { metaKey: true }), {})).toBeNull()
   })
+
+  it('cmd+shift+] → moveEditorRightInGroup (editorOpen)', () => {
+    expect(dr.resolve(mkEvent(']', { metaKey: true, shiftKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.moveEditorRightInGroup')
+  })
+
+  it('cmd+shift+[ → moveEditorLeftInGroup (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('[', { metaKey: true, shiftKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.moveEditorLeftInGroup')
+  })
+
+  it('moveEditor left/right require editorOpen', () => {
+    expect(dr.resolve(mkEvent(']', { metaKey: true, shiftKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('[', { metaKey: true, shiftKey: true }), {})).toBeNull()
+  })
 })

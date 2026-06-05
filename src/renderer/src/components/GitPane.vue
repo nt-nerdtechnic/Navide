@@ -28,7 +28,7 @@ const {
   logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
   isCommitting, isFetching, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
-  initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, cleanUntracked,
+  initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
   createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
@@ -908,21 +908,6 @@ async function doResolveTheirs(path: string): Promise<void> {
   const r = await resolveConflictTheirs(path); if (!r.ok) conflictError.value = r.error || 'failed'
 }
 
-// ── clean ─────────────────────────────────────────────────────────────────────
-const cleanPreview = ref<string[]>([]), cleanError = ref(''), showCleanConfirm = ref(false)
-async function doCleanPreview(): Promise<void> {
-  cleanError.value = ''
-  const r = await cleanUntracked(true)
-  if (!r.ok) { cleanError.value = r.error || 'preview failed'; return }
-  cleanPreview.value = r.files; showCleanConfirm.value = r.files.length > 0
-  if (!r.files.length) cleanError.value = 'No untracked files to clean'
-}
-async function doCleanConfirm(): Promise<void> {
-  cleanError.value = ''
-  const r = await cleanUntracked(false)
-  showCleanConfirm.value = false; cleanPreview.value = []
-  if (!r.ok) cleanError.value = r.error || 'clean failed'
-}
 
 // ── group actions: discard all (Changes) / unstage all (Staged) ─────────────────
 // Errors surface through the shared gitError channel (set inside useGit's
@@ -1225,8 +1210,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 ↺ Undo Last Commit
               </button>
               <div class="menu-sep" />
-              <button class="menu-item" :class="{ 'auto-commit-on': autoCommit }" @click="autoCommit = !autoCommit; showCommitMenu = false">
+              <button class="menu-item auto-commit-btn" :class="{ 'on': autoCommit }" @click="autoCommit = !autoCommit; showCommitMenu = false">
+                <span class="ac-check">{{ autoCommit ? '✓' : '' }}</span>
                 ✦ Auto Commit
+                <span class="spacer" />
+                <span class="ac-badge">{{ autoCommit ? 'ON' : 'OFF' }}</span>
                 <span v-if="autoCommitPending" class="auto-pending-dot" title="排程中，60 秒後自動提交" />
               </button>
             </div>
@@ -1366,7 +1354,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </span>
         <div class="spacer" />
         <div class="sec-actions" @click.stop>
-          <button v-if="gitStatus.untracked?.length" class="sec-btn danger" title="Clean untracked" @click="doCleanPreview">🗑</button>
           <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
           <button v-if="hasChanges" class="sec-btn" title="Save Draft" @click="openStashPrompt">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
@@ -1414,16 +1401,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
       </div>
 
-      <!-- Clean confirm -->
-      <div v-if="showCleanConfirm" class="clean-box">
-        <div class="clean-title">刪除 {{ cleanPreview.length }} 個未追蹤檔案？</div>
-        <div v-for="f in cleanPreview" :key="f" class="clean-file">{{ f }}</div>
-        <div class="clean-actions">
-          <button class="btn-ghost" @click="showCleanConfirm = false; cleanPreview = []">取消</button>
-          <button class="btn-danger" @click="doCleanConfirm">確認刪除</button>
-        </div>
-      </div>
-      <p v-if="cleanError" class="err-text" style="padding: 2px 16px">{{ cleanError }}</p>
 
       <div v-if="changesExpanded">
         <div v-if="!hasChanges" class="empty-msg">No changes</div>
@@ -1453,7 +1430,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <span class="file-name-only" :title="row.file!.path" @dblclick.stop="onFileOpen(row.file!.path, false)">{{ row.name }}</span>
                   <div class="row-actions">
                     <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
-                    <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">✕</button>
+                    <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">↩</button>
                     <button class="row-btn primary" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
                   </div>
                 </div>
@@ -1496,7 +1473,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <span class="file-path-dim" :title="f.path" @dblclick.stop="onFileOpen(f.path, false)">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
                   <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
-                  <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">✕</button>
+                  <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">↩</button>
                   <button class="row-btn primary" title="Stage" @click.stop="stageFile(f.path)">＋</button>
                 </div>
               </div>
@@ -2138,7 +2115,21 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: var(--accent-fg); margin-left: 4px; flex-shrink: 0;
   animation: auto-pulse 1.2s ease-in-out infinite;
 }
-.menu-item.auto-commit-on { color: var(--accent-fg); }
+.auto-commit-btn { gap: 4px; }
+.auto-commit-btn .ac-check { width: 14px; text-align: center; font-size: 11px; flex-shrink: 0; color: var(--accent-fg); }
+.auto-commit-btn .ac-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+  padding: 1px 5px; border-radius: 10px; flex-shrink: 0;
+  background: var(--border-muted); color: var(--text-muted);
+}
+.auto-commit-btn.on {
+  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 10%, transparent);
+}
+.auto-commit-btn.on .ac-badge {
+  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 25%, transparent);
+  color: var(--accent-fg);
+}
 .commit-btn-row { display: flex; gap: 0; }
 .commit-main-btn {
   flex: 1; background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);

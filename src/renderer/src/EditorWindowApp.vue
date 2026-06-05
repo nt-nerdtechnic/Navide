@@ -417,8 +417,10 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.openEditorAtIndex1', label: '切換到第 1 個分頁', keys: '⌘1' },
   { id: 'workbench.action.openEditorAtIndex2', label: '切換到第 2 個分頁', keys: '⌘2' },
   { id: 'workbench.action.openEditorAtIndex3', label: '切換到第 3 個分頁', keys: '⌘3' },
-  { id: 'editor.action.deleteAllLeft',  label: '刪除到行首',   keys: '⌘⌫' },
-  { id: 'editor.action.deleteAllRight', label: '刪除到行尾',   keys: '⌘⌦' },
+  { id: 'editor.action.deleteAllLeft',              label: '刪除到行首',       keys: '⌘⌫' },
+  { id: 'editor.action.deleteAllRight',             label: '刪除到行尾',       keys: '⌘⌦' },
+  { id: 'workbench.action.moveEditorRightInGroup',  label: '將分頁向右移動',   keys: '⌘⇧]' },
+  { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
