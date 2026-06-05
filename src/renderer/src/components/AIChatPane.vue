@@ -90,6 +90,8 @@ watch(messages, saveHistory, { deep: true })
 const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
 const settingsApiKey = ref('')
 const settingsModel = ref('claude-sonnet-4-6')
+const settingsOllamaUrl = ref('http://localhost:11434')
+const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 
 const ANTHROPIC_MODELS = [
   'claude-opus-4-8',
@@ -330,6 +332,8 @@ function saveSettings(): void {
     provider: settingsProvider.value,
     anthropic_api_key: settingsApiKey.value,
     model: settingsModel.value,
+    ollama_base_url: settingsOllamaUrl.value,
+    system_prompt: settingsSystemPrompt.value,
   }).catch(() => {/* ignore */})
   showSettings.value = false
   showToast('設定已儲存')
@@ -662,10 +666,15 @@ function setupListeners(): void {
   })
 
   unsubSettingsGet = props.backend.on('ai.chat.settings', (payload) => {
-    const p = payload as { provider?: string; anthropic_api_key?: string; model?: string }
+    const p = payload as {
+      provider?: string; anthropic_api_key?: string; model?: string
+      ollama_base_url?: string; system_prompt?: string
+    }
     if (p.provider === 'anthropic' || p.provider === 'ollama') settingsProvider.value = p.provider
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
     if (p.model) settingsModel.value = p.model
+    if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
+    if (p.system_prompt) settingsSystemPrompt.value = p.system_prompt
   })
 }
 
@@ -1234,6 +1243,19 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             type="text"
             class="ai-settings-input ai-settings-input--custom"
             placeholder="輸入 model ID"
+          />
+        </div>
+        <div v-if="settingsProvider === 'ollama'" class="ai-settings-row">
+          <label class="ai-settings-label">Ollama URL</label>
+          <input v-model="settingsOllamaUrl" type="text" class="ai-settings-input" placeholder="http://localhost:11434" />
+        </div>
+        <div class="ai-settings-row ai-settings-row--column">
+          <label class="ai-settings-label">System Prompt</label>
+          <textarea
+            v-model="settingsSystemPrompt"
+            class="ai-settings-textarea"
+            rows="4"
+            placeholder="You are a helpful AI coding assistant."
           />
         </div>
         <div class="ai-settings-footer">
@@ -1845,6 +1867,22 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 }
 .ai-settings-select:focus { border-color: var(--accent-emphasis); }
 .ai-settings-input--custom { margin-top: 5px; }
+.ai-settings-row--column { flex-direction: column; }
+.ai-settings-textarea {
+  padding: 5px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-base);
+  color: var(--text-bright);
+  font-size: 12.5px;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.5;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ai-settings-textarea:focus { border-color: var(--accent-emphasis); }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
 .ai-settings-save {
   padding: 5px 16px;
