@@ -352,7 +352,7 @@ const statusColor = computed(() => {
         <input v-model="draft.title" type="text" placeholder="e.g. 01 Requirement Analysis" spellcheck="false" />
 
         <label>Question</label>
-        <input v-model="draft.question" type="text" placeholder="e.g. 要做什麼 / 不做什麼？" spellcheck="false" />
+        <input v-model="draft.question" type="text" placeholder="e.g. What to do / not do?" spellcheck="false" />
 
         <label>Description</label>
         <textarea v-model="draft.description" rows="4" placeholder="Brief description of what this stage does" spellcheck="false"></textarea>

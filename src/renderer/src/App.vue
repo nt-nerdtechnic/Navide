@@ -1855,7 +1855,7 @@ async function fetchDocPrefix(stageDocQuery: string): Promise<string> {
       90_000   // 90 s — LLM detect + Context7 cold-start + relevance pass
     )
     if (resp.ok && resp.payload?.doc_prefix) {
-      pipelineLog(`📚 注入 ${resp.payload.doc_prefix.length} 字元（LLM強化）`)
+      pipelineLog(`📚 injected ${resp.payload.doc_prefix.length} chars (LLM-enhanced)`)
       return resp.payload.doc_prefix
     }
   } catch {
