@@ -1,6 +1,10 @@
 import { defineConfig } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 // ── App version ──────────────────────────────────────────────────────────────
 // 手動維護的版本號 —— 每次有意義的改動就在這裡 bump。
@@ -18,6 +22,12 @@ function buildTag(): string {
 }
 
 const APP_BUILD = buildTag()
+
+// Generate a fresh random token each dev session and write to tmpdir.
+// The Electron main process reads this file and injects the token into every
+// renderer request via session.webRequest — browsers can't guess the token.
+const DEV_TOKEN = randomBytes(32).toString('hex')
+writeFileSync(join(tmpdir(), 'agent-team-dev-token'), DEV_TOKEN)
 
 export default defineConfig({
   main: {
@@ -37,7 +47,7 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     server: {
-      port: 5174
+      port: 5174,
     },
     build: {
       rollupOptions: {
@@ -47,6 +57,24 @@ export default defineConfig({
     define: {
       __APP_BUILD__: JSON.stringify(APP_BUILD)
     },
-    plugins: [vue()]
+    plugins: [
+      vue(),
+      // Block all non-Electron requests with a per-session random token.
+      // The main process reads the token from tmpdir and injects it via
+      // session.webRequest — no browser can guess a 32-byte random value.
+      {
+        name: 'electron-only',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.headers['x-electron-token'] !== DEV_TOKEN) {
+              res.writeHead(403, { 'Content-Type': 'text/plain' })
+              res.end('403 Forbidden')
+              return
+            }
+            next()
+          })
+        },
+      },
+    ]
   }
 })

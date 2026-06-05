@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell } from 'electron'
 import { join } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
@@ -380,6 +381,24 @@ app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 
 app.whenReady().then(async () => {
+  // In dev mode, inject the per-session random token into every renderer →
+  // dev-server request so browsers without the token get 403.
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+  if (rendererUrl) {
+    try {
+      const devToken = readFileSync(join(tmpdir(), 'agent-team-dev-token'), 'utf-8').trim()
+      const origin = new URL(rendererUrl).origin
+      session.defaultSession.webRequest.onBeforeSendHeaders(
+        { urls: [`${origin}/*`] },
+        (details, callback) => {
+          callback({ requestHeaders: { ...details.requestHeaders, 'x-electron-token': devToken } })
+        }
+      )
+    } catch {
+      // Token file missing — dev server may not be running yet, proceed anyway.
+    }
+  }
+
   try {
     backend = await startBackend()
     console.log(`[main] backend ready at ${backend.host}:${backend.port}`)

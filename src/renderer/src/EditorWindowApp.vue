@@ -247,6 +247,7 @@ registerCommand('editor.action.save',          () => activeEditor()?.save())
 registerCommand('editor.action.inlineRewrite', () => activeEditor()?.openCmdK())
 registerCommand('editor.action.triggerGhost',  () => activeEditor()?.requestGhost())
 registerCommand('editor.action.openFind',      () => activeEditor()?.openFind())
+registerCommand('editor.action.openReplace',   () => activeEditor()?.openReplace())
 registerCommand('editor.action.nextMatch',     () => activeEditor()?.nextMatch())
 registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch())
 registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
@@ -274,6 +275,7 @@ registerCommand('editor.action.scrollLineDown',       () => activeEditor()?.scro
 registerCommand('editor.action.transformToUppercase', () => activeEditor()?.transformToUppercase())
 registerCommand('editor.action.transformToLowercase', () => activeEditor()?.transformToLowercase())
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
+registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
 registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
@@ -705,11 +707,6 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z"/></svg>
         <span v-if="changesCount" class="ide-act-badge">{{ changesCount > 99 ? '99+' : changesCount }}</span>
       </button>
-      <button class="ide-act-btn" :class="{ active: aiPanelOpen }" title="AI Chat (⌘⇧A)" @click="aiPanelOpen = !aiPanelOpen">
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
-        </svg>
-      </button>
     </div>
 
     <!-- Sidebar -->
@@ -813,6 +810,20 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           從左側 Explorer 或 Search 開啟檔案
         </div>
       </div>
+    </div>
+
+    <!-- Right activity bar (AI Chat toggle) -->
+    <div class="ide-right-act">
+      <button
+        class="ide-right-act-btn"
+        :class="{ active: aiPanelOpen }"
+        title="AI Chat (⌘⇧A)"
+        @click="aiPanelOpen = !aiPanelOpen"
+      >
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- AI Chat Panel (right) -->
@@ -1276,6 +1287,33 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   flex-shrink: 0;
 }
 .ide-palette-empty { padding: 12px 14px; color: var(--text-muted); font-size: 12px; }
+
+.ide-right-act {
+  flex-shrink: 0;
+  width: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  background: var(--bg-subtle);
+  border-left: 1px solid var(--border-muted);
+  gap: 2px;
+}
+.ide-right-act-btn {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-right: 2px solid transparent;
+  border-radius: 0;
+}
+.ide-right-act-btn:hover { color: var(--text-bright); }
+.ide-right-act-btn.active { color: var(--accent-fg); border-right-color: var(--accent-emphasis); }
 
 .ide-ai-resize-handle {
   flex-shrink: 0;

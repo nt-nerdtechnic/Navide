@@ -34,7 +34,7 @@ const {
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
-  fileLog, showFile, blameFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
+  fileLog, showFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
   addWorktree, removeWorktree,
@@ -293,16 +293,6 @@ async function ctxRestoreFromBranch(branch: string): Promise<void> {
   const r = await restoreFileFromBranch(branch, f.path)
   if (!r.ok) gitError.value = r.error || 'restore failed'
 }
-function ctxHistory(): void {
-  const f = ctxMenu.value.file
-  if (f) showFileHistory(f.path)
-  closeCtxMenu()
-}
-function ctxBlame(): void {
-  const f = ctxMenu.value.file
-  if (f) showBlame(f.path)
-  closeCtxMenu()
-}
 async function ctxCopyPath(rel: boolean): Promise<void> {
   const f = ctxMenu.value.file
   if (f) await navigator.clipboard.writeText(rel ? f.path : absPath(f.path))
@@ -426,8 +416,13 @@ const hasChanges = computed(
 const hasCommittable = computed(
   () => hasStaged.value || (gitStatus.value?.unstaged?.length ?? 0) > 0
 )
+// Key format: 'staged:<path>' | 'changes:<path>'
+const selectedKeys = ref(new Set<string>())
+const lastClickKey = ref<string | null>(null)
+
 watch(gitStatus, (s) => {
   emit('changes-count', (s.staged?.length ?? 0) + (s.unstaged?.length ?? 0) + (s.untracked?.length ?? 0))
+  clearSelection()
 }, { immediate: true })
 
 const STATUS_LABEL: Record<string, string> = { M: 'M', A: 'A', D: 'D', R: 'R', C: 'C', U: '!', '?': 'U' }
@@ -767,25 +762,9 @@ async function saveInlineEdit(): Promise<void> {
   else cancelInlineEdit()
 }
 
-// ── blame ─────────────────────────────────────────────────────────────────────
-const blamePath = ref(''), blameLines = ref<import('../composables/useGit').BlameEntry[]>([]), blameLoading = ref(false)
-async function showBlame(path: string): Promise<void> {
-  if (blamePath.value === path) { blamePath.value = ''; blameLines.value = []; return }
-  blamePath.value = path; blameLoading.value = true
-  blameLines.value = await blameFile(path); blameLoading.value = false
-}
-
-// ── diff blame (single-click inline preview) ────────────────────────────────────
-// Shows only the changed lines with per-line blame, rather than the whole file.
+// ── diff blame (used by toggleHistoryPanel) ───────────────────────────────────
 const diffBlamePath = ref(''), diffBlameStaged = ref(false)
 const diffBlameHunks = ref<import('../composables/useGit').DiffBlameHunk[]>([]), diffBlameLoading = ref(false)
-async function showDiffBlame(path: string, staged: boolean): Promise<void> {
-  if (diffBlamePath.value === path && diffBlameStaged.value === staged) {
-    diffBlamePath.value = ''; diffBlameHunks.value = []; return
-  }
-  diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
-  diffBlameHunks.value = await diffBlame(path, staged); diffBlameLoading.value = false
-}
 
 // ── diff ──────────────────────────────────────────────────────────────────────
 // Open the standalone side-by-side diff window (kept the `toggleDiff` name so
@@ -811,33 +790,64 @@ function isConflictFile(path: string): boolean {
   return allFiles.some((f) => f.path === path && f.status === 'U')
 }
 
-let fileClickTimer: ReturnType<typeof setTimeout> | null = null
-function onFileClick(path: string, staged: boolean): void {
-  if (props.embedded) {
-    if (isConflictFile(path)) {
-      emit('open-conflict', { filepath: path, name: fileName(path) })
-      return
-    }
-    toggleDiff(path, staged)
-    return
+// Single click = select; double click = open diff/conflict (onFileOpen).
+function handleFileRowClick(e: MouseEvent, path: string, staged: boolean): void {
+  const key = `${staged ? 'staged' : 'changes'}:${path}`
+  if (e.shiftKey) {
+    rangeSelect(key)
+  } else if (e.metaKey || e.ctrlKey) {
+    const next = new Set(selectedKeys.value)
+    if (next.has(key)) next.delete(key); else next.add(key)
+    selectedKeys.value = next
+    lastClickKey.value = key
+  } else {
+    selectedKeys.value = new Set([key])
+    lastClickKey.value = key
   }
-  if (fileClickTimer) return
-  fileClickTimer = setTimeout(() => {
-    fileClickTimer = null
-    void showDiffBlame(path, staged)
-  }, 220)
+}
+function rangeSelect(toKey: string): void {
+  const ordered = orderedKeys.value
+  const from = lastClickKey.value ? ordered.indexOf(lastClickKey.value) : -1
+  const to = ordered.indexOf(toKey)
+  if (from === -1 || to === -1) { selectedKeys.value = new Set([toKey]); return }
+  const [a, b] = from <= to ? [from, to] : [to, from]
+  selectedKeys.value = new Set(ordered.slice(a, b + 1))
+}
+function clearSelection(): void {
+  selectedKeys.value = new Set()
+  lastClickKey.value = null
 }
 function onFileOpen(path: string, staged: boolean): void {
-  if (fileClickTimer) { clearTimeout(fileClickTimer); fileClickTimer = null }
+  if (props.embedded && isConflictFile(path)) {
+    emit('open-conflict', { filepath: path, name: fileName(path) })
+    return
+  }
   toggleDiff(path, staged)
 }
+async function stageSelected(): Promise<void> {
+  const paths = selectedChangesPaths.value; if (!paths.length) return
+  await stageFiles(paths); clearSelection()
+}
+async function unstageSelected(): Promise<void> {
+  const paths = selectedStagedPaths.value; if (!paths.length) return
+  await unstageFiles(paths); clearSelection()
+}
+function discardSelected(): void {
+  const paths = selectedChangesPaths.value; if (!paths.length) return
+  discardTargets.value = paths; showDiscardConfirm.value = true
+}
 
-// ── file history ──────────────────────────────────────────────────────────────
+// ── file history + diff blame (combined ⊡ panel) ─────────────────────────────
 const fileHistoryPath = ref(''), fileHistoryCommits = ref<import('../composables/useGit').GitCommit[]>([]), fileHistoryLoading = ref(false)
-async function showFileHistory(path: string): Promise<void> {
-  if (fileHistoryPath.value === path) { fileHistoryPath.value = ''; fileHistoryCommits.value = []; return }
+async function toggleHistoryPanel(path: string, staged: boolean): Promise<void> {
+  const isOpen = fileHistoryPath.value === path
+  fileHistoryPath.value = ''; fileHistoryCommits.value = []
+  diffBlamePath.value = ''; diffBlameHunks.value = []
+  if (isOpen) return
   fileHistoryPath.value = path; fileHistoryLoading.value = true
   fileHistoryCommits.value = await fileLog(path); fileHistoryLoading.value = false
+  diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
+  diffBlameHunks.value = await diffBlame(path, staged); diffBlameLoading.value = false
 }
 
 // ── conflict ──────────────────────────────────────────────────────────────────
@@ -884,6 +894,7 @@ function openDiscardAll(): void {
 async function doDiscardConfirm(): Promise<void> {
   await discardFiles(discardTargets.value)
   showDiscardConfirm.value = false
+  clearSelection()
 }
 async function doUnstageAll(): Promise<void> {
   await unstageFiles(gitStatus.value.staged.map((f) => f.path))
@@ -932,6 +943,36 @@ watch(() => filteredLog.value.length, () => { historyPage.value = 0 })
 const stagedExpanded = ref(true)
 const changesExpanded = ref(true)
 const ignoredExpanded = ref(false)
+
+// ── multi-select ───────────────────────────────────────────────────────────────
+const orderedKeys = computed((): string[] => {
+  const keys: string[] = []
+  const status = gitStatus.value
+  if (stagedExpanded.value) {
+    const files = status?.staged ?? []
+    if (viewMode.value === 'tree') {
+      flattenTree(files, 's:').filter((r) => r.kind === 'file').forEach((r) => keys.push(`staged:${r.file!.path}`))
+    } else {
+      sortFiles(files).forEach((f) => keys.push(`staged:${f.path}`))
+    }
+  }
+  if (changesExpanded.value) {
+    const files = [...(status?.unstaged ?? []), ...(status?.untracked ?? [])]
+    if (viewMode.value === 'tree') {
+      flattenTree(files, 'u:').filter((r) => r.kind === 'file').forEach((r) => keys.push(`changes:${r.file!.path}`))
+    } else {
+      sortFiles(files).forEach((f) => keys.push(`changes:${f.path}`))
+    }
+  }
+  return keys
+})
+
+const selectedStagedPaths = computed(() =>
+  [...selectedKeys.value].filter((k) => k.startsWith('staged:')).map((k) => k.slice(7)),
+)
+const selectedChangesPaths = computed(() =>
+  [...selectedKeys.value].filter((k) => k.startsWith('changes:')).map((k) => k.slice(8)),
+)
 
 // ── draggable split between top (changes) and bottom (history/cards) ────────────
 const partTopEl = ref<HTMLElement | null>(null)
@@ -982,7 +1023,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 </script>
 
 <template>
-  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false">
+  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; clearSelection()">
 
     <div v-if="!workspacePath" class="empty-state">請先選擇 Workspace</div>
 
@@ -1174,18 +1215,20 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             </div>
             <template v-else>
               <div
-                class="file-row" :style="treeIndent(row.depth)" :class="{ 'row-conflict': row.file!.status === 'U' }"
+                class="file-row" :style="treeIndent(row.depth)"
+                :class="{ 'row-conflict': row.file!.status === 'U', 'row-selected': selectedKeys.has('staged:' + row.file!.path) }"
+                @click.stop="handleFileRowClick($event, row.file!.path, true)"
                 @contextmenu="openCtxMenu($event, row.file!, true)"
               >
                 <span class="file-status" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                <span class="file-name-only" :title="row.file!.path" @click="onFileClick(row.file!.path, true)" @dblclick="onFileOpen(row.file!.path, true)">{{ row.name }}</span>
+                <span class="file-name-only" :title="row.file!.path" @dblclick.stop="onFileOpen(row.file!.path, true)">{{ row.name }}</span>
                 <div class="row-actions">
                   <template v-if="row.file!.status === 'U'">
                     <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(row.file!.path)">↰</button>
                     <button class="row-btn" title="Accept Theirs" @click.stop="doResolveTheirs(row.file!.path)">↱</button>
                   </template>
                   <template v-else>
-                    <button class="row-btn" title="File history" @click.stop="showFileHistory(row.file!.path)">⊡</button>
+                    <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, true)">⊡</button>
                     <button class="row-btn" title="Unstage" @click.stop="unstageFile(row.file!.path)">−</button>
                   </template>
                 </div>
@@ -1196,15 +1239,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
-                </div>
-              </div>
-              <div v-if="blamePath === row.file!.path" class="subpanel yellow-border blame-inline">
-                <div v-if="blameLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
-                <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
-                  <span class="blame-ln">{{ l.line_no }}</span>
-                  <code class="blame-content">{{ l.content }}</code>
-                  <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
               </div>
               <div v-if="diffBlamePath === row.file!.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
@@ -1227,17 +1261,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <!-- List mode -->
         <template v-else>
           <template v-for="f in sortFiles(gitStatus.staged)" :key="'sl:' + f.path">
-            <div class="file-row" :class="{ 'row-conflict': f.status === 'U' }" @contextmenu="openCtxMenu($event, f, true)">
+            <div
+              class="file-row"
+              :class="{ 'row-conflict': f.status === 'U', 'row-selected': selectedKeys.has('staged:' + f.path) }"
+              @click.stop="handleFileRowClick($event, f.path, true)"
+              @contextmenu="openCtxMenu($event, f, true)"
+            >
               <span class="file-status" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-              <span class="file-name-main" :title="f.path" @click="onFileClick(f.path, true)" @dblclick="onFileOpen(f.path, true)">{{ fileName(f.path) }}</span>
-              <span class="file-path-dim" :title="f.path" @click="onFileClick(f.path, true)" @dblclick="onFileOpen(f.path, true)">{{ fileDir(f.path) }}</span>
+              <span class="file-name-main" :title="f.path" @dblclick.stop="onFileOpen(f.path, true)">{{ fileName(f.path) }}</span>
+              <span class="file-path-dim" :title="f.path" @dblclick.stop="onFileOpen(f.path, true)">{{ fileDir(f.path) }}</span>
               <div class="row-actions">
                 <template v-if="f.status === 'U'">
                   <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(f.path)">↰</button>
                   <button class="row-btn" title="Accept Theirs" @click.stop="doResolveTheirs(f.path)">↱</button>
                 </template>
                 <template v-else>
-                  <button class="row-btn" title="File history" @click.stop="showFileHistory(f.path)">⊡</button>
+                  <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, true)">⊡</button>
                 </template>
               </div>
             </div>
@@ -1247,15 +1286,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                 <code class="hash-tag">{{ hc.short_hash }}</code>
                 <span class="mini-msg">{{ hc.message }}</span>
-              </div>
-            </div>
-            <div v-if="blamePath === f.path" class="subpanel yellow-border blame-inline">
-              <div v-if="blameLoading" class="loading-text">Loading…</div>
-              <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
-              <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
-                <span class="blame-ln">{{ l.line_no }}</span>
-                <code class="blame-content">{{ l.content }}</code>
-                <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
               </div>
             </div>
             <div v-if="diffBlamePath === f.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
@@ -1363,12 +1393,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <template v-else>
                 <div
                   class="file-row" :style="treeIndent(row.depth)"
+                  :class="{ 'row-selected': selectedKeys.has('changes:' + row.file!.path) }"
+                  @click.stop="handleFileRowClick($event, row.file!.path, false)"
                   @contextmenu="openCtxMenu($event, row.file!, false)"
                 >
                   <span class="file-status unstaged-st" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                  <span class="file-name-only" :title="row.file!.path" @click="onFileClick(row.file!.path, false)" @dblclick="onFileOpen(row.file!.path, false)">{{ row.name }}</span>
+                  <span class="file-name-only" :title="row.file!.path" @dblclick.stop="onFileOpen(row.file!.path, false)">{{ row.name }}</span>
                   <div class="row-actions">
-                    <button class="row-btn" title="File history" @click.stop="showFileHistory(row.file!.path)">⊡</button>
+                    <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
                     <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">✕</button>
                     <button class="row-btn primary" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
                   </div>
@@ -1379,15 +1411,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                     <code class="hash-tag">{{ hc.short_hash }}</code>
                     <span class="mini-msg">{{ hc.message }}</span>
-                  </div>
-                </div>
-                <div v-if="blamePath === row.file!.path" class="subpanel yellow-border blame-inline">
-                  <div v-if="blameLoading" class="loading-text">Loading…</div>
-                  <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
-                  <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
-                    <span class="blame-ln">{{ l.line_no }}</span>
-                    <code class="blame-content">{{ l.content }}</code>
-                    <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                   </div>
                 </div>
                 <div v-if="diffBlamePath === row.file!.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
@@ -1410,12 +1433,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <!-- List mode -->
           <template v-else>
             <template v-for="f in sortFiles([...gitStatus.unstaged, ...gitStatus.untracked])" :key="'ul:' + f.path">
-              <div class="file-row" @contextmenu="openCtxMenu($event, f, false)">
+              <div
+                class="file-row"
+                :class="{ 'row-selected': selectedKeys.has('changes:' + f.path) }"
+                @click.stop="handleFileRowClick($event, f.path, false)"
+                @contextmenu="openCtxMenu($event, f, false)"
+              >
                 <span class="file-status unstaged-st" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-                <span class="file-name-main" :title="f.path" @click="onFileClick(f.path, false)" @dblclick="onFileOpen(f.path, false)">{{ fileName(f.path) }}</span>
-                <span class="file-path-dim" :title="f.path" @click="onFileClick(f.path, false)" @dblclick="onFileOpen(f.path, false)">{{ fileDir(f.path) }}</span>
+                <span class="file-name-main" :title="f.path" @dblclick.stop="onFileOpen(f.path, false)">{{ fileName(f.path) }}</span>
+                <span class="file-path-dim" :title="f.path" @dblclick.stop="onFileOpen(f.path, false)">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
-                  <button class="row-btn" title="File history" @click.stop="showFileHistory(f.path)">⊡</button>
+                  <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
                   <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">✕</button>
                   <button class="row-btn primary" title="Stage" @click.stop="stageFile(f.path)">＋</button>
                 </div>
@@ -1426,15 +1454,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
-                </div>
-              </div>
-              <div v-if="blamePath === f.path" class="subpanel yellow-border blame-inline">
-                <div v-if="blameLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!blameLines.length" class="loading-text">尚無 blame 資訊</div>
-                <div v-for="l in blameLines" :key="l.line_no" class="blame-line">
-                  <span class="blame-ln">{{ l.line_no }}</span>
-                  <code class="blame-content">{{ l.content }}</code>
-                  <span class="blame-annot">{{ l.author }}, {{ l.date }}</span>
                 </div>
               </div>
               <div v-if="diffBlamePath === f.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
@@ -1474,6 +1493,15 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
 
       </div><!-- /part-top -->
+
+      <!-- ── selection action bar ──────────────────────────────── -->
+      <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
+        <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
+        <button v-if="selectedChangesPaths.length > 0" class="sel-btn primary" @click="stageSelected">Stage</button>
+        <button v-if="selectedStagedPaths.length > 0" class="sel-btn" @click="unstageSelected">Unstage</button>
+        <button v-if="selectedChangesPaths.length > 0" class="sel-btn danger" @click="discardSelected">Discard</button>
+        <button class="sel-btn sel-clear" @click="clearSelection">✕</button>
+      </div>
 
       <!-- ══════════════════════════════════════════════════════
            PART 2 — REMOTE / HISTORY
@@ -1811,9 +1839,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           </div>
         </div>
         <div class="menu-sep" />
-        <button class="menu-item" @click="ctxHistory">File History</button>
-        <button class="menu-item" @click="ctxBlame">Blame</button>
-        <div class="menu-sep" />
         <div class="menu-item has-sub">
           <span>Add to ignore</span><span class="sub-caret">▸</span>
           <div class="ctx-submenu">
@@ -2108,6 +2133,24 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .file-row:hover { background: rgba(177,186,196,0.06); }
 .row-conflict { background: rgba(248,81,73,0.05) !important; }
+.row-selected { background: rgba(88,166,255,0.10) !important; }
+.row-selected:hover { background: rgba(88,166,255,0.15) !important; }
+.selection-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-top: 1px solid rgba(88,166,255,0.25);
+  background: rgba(13,17,23,0.96); flex-shrink: 0; z-index: 2;
+}
+.sel-count { font-size: 11px; color: var(--text-muted); margin-right: 4px; white-space: nowrap; }
+.sel-btn {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(177,186,196,0.2);
+  background: rgba(177,186,196,0.08); color: var(--text-primary); cursor: pointer;
+}
+.sel-btn:hover { background: rgba(177,186,196,0.15); }
+.sel-btn.primary { border-color: rgba(88,166,255,0.4); color: #58a6ff; }
+.sel-btn.primary:hover { background: rgba(88,166,255,0.12); }
+.sel-btn.danger { border-color: rgba(248,81,73,0.4); color: #f85149; }
+.sel-btn.danger:hover { background: rgba(248,81,73,0.12); }
+.sel-clear { margin-left: auto; opacity: 0.6; }
 
 .file-status {
   flex-shrink: 0; width: 14px; text-align: center;

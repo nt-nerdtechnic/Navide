@@ -721,6 +721,25 @@ function transformToLowercase(): void {
   if (!sel) return
   applyEdit(sel, model.getValueInRange(sel).toLowerCase())
 }
+function formatDocument(): void {
+  const lc = model.lineCount()
+  const lines: string[] = []
+  for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
+  // Ensure single trailing newline (drop empty-only trailing lines, keep one)
+  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  lines.push('')
+  const newText = lines.join('\n')
+  if (newText === model.getValue()) return
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const last = model.lineCount() - 1
+  applyEdit(
+    { start: { line: 0, col: 0 }, end: { line: last, col: model.getLine(last).length } },
+    newText,
+  )
+  cursor.value = clampPos(savedCursor)
+  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
+}
 function trimTrailingWhitespace(): void {
   const lc = model.lineCount()
   const lines: string[] = []
@@ -1226,7 +1245,7 @@ defineExpose({
   jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, trimTrailingWhitespace,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument,
   setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,
 })

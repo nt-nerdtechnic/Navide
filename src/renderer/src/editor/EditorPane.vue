@@ -138,6 +138,7 @@ function closeCmdK(): void {
 }
 
 async function submitCmdK(): Promise<void> {
+  if (cmdk.value.busy) return
   if (!cmdk.value.instruction.trim()) return
   if (!cmdk.value.range || !cmdk.value.code) {
     void alert('請先選取要改寫的程式碼', { title: 'Cmd+K' })
@@ -182,6 +183,9 @@ const findWholeWord = ref(false)
 const findMatches = ref<Array<{ line: number; startCol: number; endCol: number }>>([])
 const findIdx = ref(-1)
 const findInputEl = ref<HTMLInputElement | null>(null)
+const replaceOpen = ref(false)
+const replaceQuery = ref('')
+const replaceInputEl = ref<HTMLInputElement | null>(null)
 
 function isWordBoundary(haystack: string, matchStart: number, matchLen: number): boolean {
   const isWC = (ch: string) => /[a-zA-Z0-9_]/.test(ch)
@@ -225,6 +229,7 @@ function openFind(): void {
 }
 function closeFind(): void {
   findOpen.value = false
+  replaceOpen.value = false
   findMatches.value = []
   findIdx.value = -1
   editorRef.value?.setDecorations([])
@@ -287,9 +292,43 @@ function prevMatch(): void {
   if (!findMatches.value.length) return
   goToMatch((findIdx.value - 1 + findMatches.value.length) % findMatches.value.length)
 }
+function openReplace(): void {
+  replaceOpen.value = true
+  openFind()
+  void nextTick(() => replaceInputEl.value?.focus())
+}
+function replaceNext(): void {
+  if (findIdx.value < 0 || !findMatches.value.length) return
+  const m = findMatches.value[findIdx.value]
+  editorRef.value?.applyEditExternal(
+    { start: { line: m.line, col: m.startCol }, end: { line: m.line, col: m.endCol } },
+    replaceQuery.value,
+  )
+  dirty.value = true
+  void nextTick(() => computeMatches({ navigate: true }))
+}
+function replaceAll(): void {
+  if (!findMatches.value.length) return
+  const q = findQuery.value
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const needWordBoundary = findWholeWord.value && queryIsAllWord(q)
+  const pattern = needWordBoundary ? `\\b${escaped}\\b` : escaped
+  const flags = findCase.value ? 'g' : 'gi'
+  const re = new RegExp(pattern, flags)
+  content.value = content.value.replace(re, replaceQuery.value)
+  dirty.value = true
+  void nextTick(() => computeMatches({ navigate: false }))
+}
 function onFindKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); closeFind() }
   else if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? prevMatch() : nextMatch() }
+  else if (e.key === 'Tab' && replaceOpen.value) { e.preventDefault(); replaceInputEl.value?.focus() }
+}
+function onReplaceKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.preventDefault(); closeFind() }
+  else if (e.key === 'Enter' && e.altKey) { e.preventDefault(); replaceAll() }
+  else if (e.key === 'Enter') { e.preventDefault(); replaceNext() }
+  else if (e.key === 'Tab') { e.preventDefault(); findInputEl.value?.focus() }
 }
 
 // ── Go-to-line overlay (⌘L) ──────────────────────────────────────────────────
@@ -337,6 +376,7 @@ function onEditorBodyFocusout(e: FocusEvent): void {
 }
 
 async function requestGhost(): Promise<void> {
+  if (ghostBusy.value) return
   const cur = editorRef.value?.getCursor()
   const value = editorRef.value?.getValue() ?? ''
   if (!cur) return
@@ -415,6 +455,7 @@ function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
 function transformToUppercase(): void { editorRef.value?.transformToUppercase() }
 function transformToLowercase(): void { editorRef.value?.transformToLowercase() }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
+function formatDocument(): void { editorRef.value?.formatDocument() }
 
 function selectNextOccurrence(): void {
   const curSel = editorRef.value?.getSelectionText() ?? ''
@@ -471,10 +512,11 @@ defineExpose({
   deleteLine, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, trimTrailingWhitespace,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument,
   selectNextOccurrence, selectAllOccurrences,
   setLanguage, zoomIn, zoomOut, zoomReset,
   undo, redo, selectAll,
+  openReplace,
   getContent: () => content.value,
 })
 </script>
@@ -556,34 +598,53 @@ defineExpose({
       </div>
     </div>
 
-    <!-- Find bar (⌘F / ⌘G / Esc) -->
+    <!-- Find / Replace bar (⌘F / ⌘H / Esc) -->
     <div v-if="findOpen" class="ep-find">
-      <input
-        ref="findInputEl"
-        v-model="findQuery"
-        class="ep-find-input"
-        placeholder="搜尋…"
-        @keydown="onFindKeydown"
-      />
-      <button
-        class="ep-find-btn"
-        :class="{ active: findCase }"
-        title="區分大小寫"
-        @click="findCase = !findCase"
-      >Aa</button>
-      <button
-        class="ep-find-btn"
-        :class="{ active: findWholeWord }"
-        title="全字比對"
-        @click="findWholeWord = !findWholeWord"
-      >W|</button>
-      <span class="ep-find-count">
-        <template v-if="findQuery && findMatches.length === 0">無結果</template>
-        <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
-      </span>
-      <button class="ep-find-nav" title="上一個 (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
-      <button class="ep-find-nav" title="下一個 (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
-      <button class="ep-find-close" title="關閉 (Esc)" @click="closeFind">✕</button>
+      <div class="ep-find-row">
+        <input
+          ref="findInputEl"
+          v-model="findQuery"
+          class="ep-find-input"
+          placeholder="搜尋…"
+          @keydown="onFindKeydown"
+        />
+        <button
+          class="ep-find-btn"
+          :class="{ active: findCase }"
+          title="區分大小寫"
+          @click="findCase = !findCase"
+        >Aa</button>
+        <button
+          class="ep-find-btn"
+          :class="{ active: findWholeWord }"
+          title="全字比對"
+          @click="findWholeWord = !findWholeWord"
+        >W|</button>
+        <span class="ep-find-count">
+          <template v-if="findQuery && findMatches.length === 0">無結果</template>
+          <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
+        </span>
+        <button class="ep-find-nav" title="上一個 (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
+        <button class="ep-find-nav" title="下一個 (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
+        <button
+          class="ep-find-btn"
+          :class="{ active: replaceOpen }"
+          title="顯示取代 (⌘H)"
+          @click="replaceOpen = !replaceOpen"
+        >ab</button>
+        <button class="ep-find-close" title="關閉 (Esc)" @click="closeFind">✕</button>
+      </div>
+      <div v-if="replaceOpen" class="ep-find-row">
+        <input
+          ref="replaceInputEl"
+          v-model="replaceQuery"
+          class="ep-find-input"
+          placeholder="取代…"
+          @keydown="onReplaceKeydown"
+        />
+        <button class="ep-find-nav" title="取代 (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>
+        <button class="ep-find-nav" title="全部取代 (⌥↵)" :disabled="!findMatches.length" @click="replaceAll">⇥⇥</button>
+      </div>
     </div>
 
     <!-- Status bar -->
@@ -701,12 +762,17 @@ defineExpose({
 
 .ep-find {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 10px;
   border-top: 1px solid var(--border-default);
   background: var(--bg-subtle);
   flex-shrink: 0;
+}
+.ep-find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .ep-find-input {
   flex: 1;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 
 const props = defineProps<{
@@ -31,11 +31,19 @@ interface EditProposalCard {
   discarded: boolean
 }
 
+interface CommandProposalCard {
+  kind: 'command_proposal'
+  tool_id: string
+  command: string
+  cwd: string
+  status: 'pending' | 'approved' | 'rejected'
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
-  cards?: Array<ToolCallCard | EditProposalCard>
+  cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -53,6 +61,32 @@ let toastTimer: number | null = null
 const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
 const settingsApiKey = ref('')
 const settingsModel = ref('')
+
+const ANTHROPIC_MODELS = [
+  'claude-opus-4-8',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5-20251001',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-haiku-20241022',
+]
+const OLLAMA_MODELS = ['llama3.2', 'llama3.1', 'qwen2.5-coder', 'mistral', 'codellama', 'gemma2']
+const currentModelOptions = computed(() =>
+  settingsProvider.value === 'anthropic' ? ANTHROPIC_MODELS : OLLAMA_MODELS,
+)
+const modelIsCustom = computed(() => !currentModelOptions.value.includes(settingsModel.value))
+const selectedModelKey = computed({
+  get: () => (modelIsCustom.value ? 'custom' : settingsModel.value),
+  set: (val: string) => { if (val !== 'custom') settingsModel.value = val },
+})
+// When provider switches, reset model to the first preset for that provider
+// (only if current model belongs to the other provider's list)
+watch(settingsProvider, (provider) => {
+  const opts = provider === 'anthropic' ? ANTHROPIC_MODELS : OLLAMA_MODELS
+  const other = provider === 'anthropic' ? OLLAMA_MODELS : ANTHROPIC_MODELS
+  if (!opts.includes(settingsModel.value) && other.includes(settingsModel.value)) {
+    settingsModel.value = opts[0]
+  }
+})
 
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
@@ -229,10 +263,28 @@ function discardEdit(card: EditProposalCard): void {
   card.discarded = true
 }
 
+// ── Command proposal ──────────────────────────────────────────────────────────
+async function approveCommand(card: CommandProposalCard): Promise<void> {
+  card.status = 'approved'
+  await props.backend.send('ai.chat.approve_command', {
+    session_id: currentSessionId.value ?? '',
+    tool_id: card.tool_id,
+  }).catch(() => { card.status = 'pending' })
+}
+
+async function rejectCommand(card: CommandProposalCard): Promise<void> {
+  card.status = 'rejected'
+  await props.backend.send('ai.chat.reject_command', {
+    session_id: currentSessionId.value ?? '',
+    tool_id: card.tool_id,
+  }).catch(() => { card.status = 'pending' })
+}
+
 // ── Backend event listeners ────────────────────────────────────────────────────
 let unsubChunk: (() => void) | null = null
 let unsubToolCall: (() => void) | null = null
 let unsubToolResult: (() => void) | null = null
+let unsubCommandProposal: (() => void) | null = null
 let unsubDone: (() => void) | null = null
 let unsubError: (() => void) | null = null
 let unsubSettingsGet: (() => void) | null = null
@@ -330,6 +382,27 @@ function setupListeners(): void {
     void scrollBottom()
   })
 
+  unsubCommandProposal = props.backend.on('ai.chat.command_proposal', (payload) => {
+    const p = payload as { session_id: string; tool_id: string; command: string; cwd: string }
+    if (p.session_id !== currentSessionId.value) return
+    const last = messages.value[messages.value.length - 1]
+    if (last?.role === 'assistant') {
+      if (!last.cards) last.cards = []
+      // Replace the matching tool_call card (if present) with a command_proposal card
+      const existingIdx = last.cards.findIndex((c) => c.tool_id === p.tool_id)
+      const card: CommandProposalCard = {
+        kind: 'command_proposal',
+        tool_id: p.tool_id,
+        command: p.command,
+        cwd: p.cwd,
+        status: 'pending',
+      }
+      if (existingIdx !== -1) last.cards.splice(existingIdx, 1, card)
+      else last.cards.push(card)
+      void scrollBottom()
+    }
+  })
+
   unsubSettingsGet = props.backend.on('ai.chat.settings', (payload) => {
     const p = payload as { provider?: string; anthropic_api_key?: string; model?: string }
     if (p.provider === 'anthropic' || p.provider === 'ollama') settingsProvider.value = p.provider
@@ -342,6 +415,7 @@ function teardownListeners(): void {
   unsubChunk?.()
   unsubToolCall?.()
   unsubToolResult?.()
+  unsubCommandProposal?.()
   unsubDone?.()
   unsubError?.()
   unsubSettingsGet?.()
@@ -561,6 +635,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
                 </div>
               </div>
 
+              <!-- Command proposal card -->
+              <div v-else-if="card.kind === 'command_proposal'" class="ai-cmd-card" :class="card.status">
+                <div class="ai-cmd-header">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 1 1-1.06-1.06L5.44 8 3.72 6.28a.749.749 0 1 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53Zm1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5Z"/></svg>
+                  <span class="ai-cmd-label">執行命令</span>
+                  <span v-if="card.status === 'approved'" class="ai-cmd-status approved">已執行 ✓</span>
+                  <span v-else-if="card.status === 'rejected'" class="ai-cmd-status rejected">已拒絕 ✕</span>
+                  <div v-else class="ai-cmd-actions">
+                    <button class="ai-cmd-btn approve" @click="approveCommand(card)">執行</button>
+                    <button class="ai-cmd-btn reject" @click="rejectCommand(card)">拒絕</button>
+                  </div>
+                </div>
+                <pre class="ai-cmd-pre">$ {{ card.command }}{{ card.cwd ? `\n# cwd: ${card.cwd}` : '' }}</pre>
+              </div>
+
               <!-- Edit proposal card -->
               <div v-else-if="card.kind === 'edit_proposal' && !card.discarded" class="ai-edit-card">
                 <div class="ai-edit-header">
@@ -682,7 +771,17 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         </div>
         <div class="ai-settings-row">
           <label class="ai-settings-label">Model</label>
-          <input v-model="settingsModel" type="text" class="ai-settings-input" placeholder="claude-3-5-sonnet-20241022" />
+          <select v-model="selectedModelKey" class="ai-settings-select">
+            <option v-for="m in currentModelOptions" :key="m" :value="m">{{ m }}</option>
+            <option value="custom">自訂…</option>
+          </select>
+          <input
+            v-if="modelIsCustom"
+            v-model="settingsModel"
+            type="text"
+            class="ai-settings-input ai-settings-input--custom"
+            placeholder="輸入 model ID"
+          />
         </div>
         <div class="ai-settings-footer">
           <button class="ai-settings-save" @click="saveSettings">儲存</button>
@@ -876,6 +975,55 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-diff-view :deep(.diff-hunk) { color: var(--accent-fg); background: rgba(79, 140, 201, 0.1); padding: 0 8px; white-space: pre; }
 .ai-diff-view :deep(.diff-ctx) { color: var(--text-muted); padding: 0 8px; white-space: pre; }
 
+/* ── Command proposal card ─────────────────────────────────────────────────── */
+.ai-cmd-card {
+  margin-top: 8px;
+  border: 1px solid var(--border-muted);
+  border-left: 4px solid #e3b341;
+  border-radius: 0 6px 6px 0;
+  overflow: hidden;
+  font-size: 11.5px;
+}
+.ai-cmd-card.approved { border-left-color: #3fb950; }
+.ai-cmd-card.rejected { border-left-color: var(--text-muted); opacity: 0.6; }
+.ai-cmd-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.ai-cmd-label { font-weight: 600; color: #e3b341; flex: 1; }
+.ai-cmd-card.approved .ai-cmd-label { color: #3fb950; }
+.ai-cmd-card.rejected .ai-cmd-label { color: var(--text-muted); }
+.ai-cmd-actions { display: flex; gap: 6px; }
+.ai-cmd-btn {
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+.ai-cmd-btn.approve { background: #1a7f37; color: #fff; }
+.ai-cmd-btn.approve:hover { background: #2ea043; }
+.ai-cmd-btn.reject { background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-muted); }
+.ai-cmd-btn.reject:hover { background: var(--bg-muted); }
+.ai-cmd-status { font-size: 11px; }
+.ai-cmd-status.approved { color: #3fb950; }
+.ai-cmd-status.rejected { color: var(--text-muted); }
+.ai-cmd-pre {
+  margin: 0;
+  padding: 7px 10px;
+  font-family: ui-monospace, Menlo, 'Courier New', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* ── Input area ────────────────────────────────────────────────────────────── */
 .ai-input-area {
   flex-shrink: 0;
@@ -1044,6 +1192,23 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   outline: none;
 }
 .ai-settings-input:focus { border-color: var(--accent-emphasis); }
+.ai-settings-select {
+  padding: 5px 28px 5px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-base);
+  color: var(--text-bright);
+  font-size: 12.5px;
+  outline: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%236e7681' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+  width: 100%;
+}
+.ai-settings-select:focus { border-color: var(--accent-emphasis); }
+.ai-settings-input--custom { margin-top: 5px; }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
 .ai-settings-save {
   padding: 5px 16px;

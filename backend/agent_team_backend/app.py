@@ -1924,6 +1924,24 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
+        elif msg_type == "ai.chat.approve_command":
+            from .ai_chat_tools import approve_command
+            approve_command(
+                str(payload.get("session_id", "")),
+                str(payload.get("tool_id", "")),
+                approved=True,
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        elif msg_type == "ai.chat.reject_command":
+            from .ai_chat_tools import approve_command
+            approve_command(
+                str(payload.get("session_id", "")),
+                str(payload.get("tool_id", "")),
+                approved=False,
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
         else:
             await session.websocket.send_json(
                 make_error(msg_id, msg_type, "UNKNOWN_TYPE", f"Unsupported message type: {msg_type!r}")

@@ -60,7 +60,13 @@ class AIChatSettingsStore:
         return current
 
     def _write(self, data: dict[str, Any]) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        # 0o700 on dir so other users can't list it; 0o600 on file so they can't read the API key.
+        self._path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        encoded = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, encoded)
+        finally:
+            os.close(fd)
         os.replace(tmp, self._path)

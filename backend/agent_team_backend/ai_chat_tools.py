@@ -7,13 +7,23 @@ import difflib
 import json
 import logging
 import shlex
-import subprocess
 from pathlib import Path
-from typing import AsyncIterator
 
 from .ai_chat_service import stream_chat
 
 log = logging.getLogger("agent_team_backend.ai_chat_tools")
+
+# ── Command approval registry ────────────────────────────────────────────────
+# Maps f"{session_id}:{tool_id}" → Future[bool] (True=approved, False=rejected)
+_pending_approvals: dict[str, "asyncio.Future[bool]"] = {}
+
+
+def approve_command(session_id: str, tool_id: str, *, approved: bool) -> None:
+    """Resolve a pending command approval Future from a WebSocket handler."""
+    key = f"{session_id}:{tool_id}"
+    fut = _pending_approvals.get(key)
+    if fut is not None and not fut.done():
+        fut.set_result(approved)
 
 # ── Tool definitions (Anthropic schema) ──────────────────────────────────────
 
@@ -82,8 +92,9 @@ TOOL_DEFS = [
     {
         "name": "run_command",
         "description": (
-            "Execute a shell command in the workspace directory. "
-            "Timeout is 15 seconds. Dangerous patterns (rm -rf /, sudo, mkfs, etc.) are blocked."
+            "Propose a shell command to run in the workspace directory. "
+            "The user must approve the command before it executes. "
+            "Timeout is 15 seconds after approval."
         ),
         "input_schema": {
             "type": "object",
@@ -101,26 +112,6 @@ TOOL_DEFS = [
         },
     },
 ]
-
-# ── Safety patterns for run_command ──────────────────────────────────────────
-
-_DANGEROUS_PATTERNS = [
-    "rm -rf /",
-    "rm -fr /",
-    "sudo ",
-    "mkfs",
-    ":(){:|:&};:",
-    "dd if=",
-    "> /dev/",
-    "chmod -R 777 /",
-    "chown -R ",
-]
-
-
-def _is_dangerous(command: str) -> bool:
-    lower = command.lower()
-    return any(p.lower() in lower for p in _DANGEROUS_PATTERNS)
-
 
 # ── Path safety helper ────────────────────────────────────────────────────────
 
@@ -264,17 +255,8 @@ async def _tool_edit_file(input: dict, workspace_path: str) -> str:
     })
 
 
-async def _tool_run_command(input: dict, workspace_path: str) -> str:
-    command = input.get("command", "").strip()
-    cwd_rel = (input.get("cwd") or "").strip()
-
-    if not command:
-        return "Error: command is required"
-
-    if _is_dangerous(command):
-        return "Error: command blocked for safety reasons"
-
-    # Resolve cwd
+async def _execute_command(command: str, cwd_rel: str, workspace_path: str) -> str:
+    """Actually run a pre-approved command. Called only after user confirms."""
     if cwd_rel:
         try:
             cwd_path = _safe_resolve(workspace_path, cwd_rel)
@@ -312,23 +294,64 @@ async def _tool_run_command(input: dict, workspace_path: str) -> str:
     max_chars = 2000
     if len(output) > max_chars:
         output = output[:max_chars] + f"\n[Truncated: output exceeded {max_chars} characters]"
-
-    exit_code = proc.returncode
-    return f"Exit code: {exit_code}\n{output}"
+    return f"Exit code: {proc.returncode}\n{output}"
 
 
-# ── Dispatch ──────────────────────────────────────────────────────────────────
+async def _run_command_with_approval(
+    input: dict,
+    workspace_path: str,
+    session_id: str,
+    tool_id: str,
+    emit,
+) -> str:
+    """Emit a command proposal, wait for user approval, then execute if approved."""
+    command = input.get("command", "").strip()
+    cwd_rel = (input.get("cwd") or "").strip()
+
+    if not command:
+        return "Error: command is required"
+
+    # Validate cwd path before proposing (no execution yet)
+    if cwd_rel:
+        try:
+            _safe_resolve(workspace_path, cwd_rel)
+        except ValueError as exc:
+            return f"Error: {exc}"
+
+    await emit("ai.chat.command_proposal", {
+        "session_id": session_id,
+        "tool_id": tool_id,
+        "command": command,
+        "cwd": cwd_rel,
+    })
+
+    key = f"{session_id}:{tool_id}"
+    loop = asyncio.get_event_loop()
+    fut: asyncio.Future[bool] = loop.create_future()
+    _pending_approvals[key] = fut
+    try:
+        approved = await asyncio.wait_for(asyncio.shield(fut), timeout=300.0)
+    except asyncio.TimeoutError:
+        return "Command proposal timed out — user did not respond within 5 minutes."
+    finally:
+        _pending_approvals.pop(key, None)
+
+    if not approved:
+        return "Command rejected by user."
+
+    return await _execute_command(command, cwd_rel, workspace_path)
+
+
+# ── Dispatch (non-command tools only) ────────────────────────────────────────
 
 async def execute_tool(name: str, input: dict, workspace_path: str) -> str:
-    """Dispatch a tool call and return the result string."""
+    """Dispatch a non-interactive tool call and return the result string."""
     if name == "read_file":
         return await _tool_read_file(input, workspace_path)
     elif name == "search_files":
         return await _tool_search_files(input, workspace_path)
     elif name == "edit_file":
         return await _tool_edit_file(input, workspace_path)
-    elif name == "run_command":
-        return await _tool_run_command(input, workspace_path)
     else:
         return f"Error: unknown tool: {name!r}"
 
@@ -405,10 +428,16 @@ async def run_agent_loop(
             })
         conversation.append({"role": "assistant", "content": assistant_content})
 
-        # Execute each tool and collect results
+        # Execute each tool and collect results.
+        # run_command goes through the approval flow; all others execute directly.
         tool_results: list[dict] = []
         for tc in tool_calls:
-            result_str = await execute_tool(tc["name"], tc.get("input") or {}, workspace_path)
+            if tc["name"] == "run_command":
+                result_str = await _run_command_with_approval(
+                    tc.get("input") or {}, workspace_path, session_id, tc["id"], emit
+                )
+            else:
+                result_str = await execute_tool(tc["name"], tc.get("input") or {}, workspace_path)
             await emit("ai.chat.tool_result", {
                 "session_id": session_id,
                 "tool_id": tc["id"],

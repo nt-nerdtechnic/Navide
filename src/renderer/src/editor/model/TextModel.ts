@@ -14,7 +14,7 @@ export class TextModel {
   private lines: string[]
 
   constructor(initialText: string = '') {
-    this.lines = initialText.split('\n')
+    this.lines = initialText.replace(/\r\n/g, '\n').split('\n')
   }
 
   lineCount(): number {
@@ -30,7 +30,7 @@ export class TextModel {
   }
 
   setValue(text: string): void {
-    this.lines = text.split('\n')
+    this.lines = text.replace(/\r\n/g, '\n').split('\n')
   }
 
   getValueInRange(range: Range): string {

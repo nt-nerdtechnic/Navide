@@ -327,4 +327,22 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
   it('cmd+shift+s requires editorOpen', () => {
     expect(dr.resolve(mkEvent('S', { metaKey: true, shiftKey: true }), {})).toBeNull()
   })
+
+  it('cmd+h → openReplace (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('h', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.openReplace')
+  })
+
+  it('cmd+h requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('h', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('shift+alt+f → formatDocument (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('f', { shiftKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.formatDocument')
+  })
+
+  it('shift+alt+f requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('f', { shiftKey: true, altKey: true }), {})).toBeNull()
+  })
 })
