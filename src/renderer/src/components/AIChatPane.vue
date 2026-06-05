@@ -99,6 +99,7 @@ interface ChatMessage {
   isError?: boolean        // true when last chunk was an error
   errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
+  bookmarked?: boolean
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -1680,6 +1681,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
 defineExpose({ focusInput: () => { textareaEl.value?.focus() } })
 
+// ── Message bookmarks ─────────────────────────────────────────────────────────
+function toggleBookmark(mi: number): void {
+  const msg = messages.value[mi]
+  if (msg) { msg.bookmarked = !msg.bookmarked; saveCurrentThread() }
+}
+
 // ── Message date separators ────────────────────────────────────────────────────
 function showDateSep(mi: number): boolean {
   const ts = messages.value[mi]?.timestamp
@@ -1833,11 +1840,18 @@ function getDateLabel(ts: number): string {
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
           </button>
+          <button
+            class="ai-msg-action-btn"
+            :class="{ 'ai-bookmark-active': msg.bookmarked }"
+            :title="msg.bookmarked ? 'Remove bookmark' : 'Bookmark'"
+            @click="toggleBookmark(mi)"
+          >{{ msg.bookmarked ? '★' : '☆' }}</button>
           <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
         </div>
+        <span v-if="msg.bookmarked" class="ai-bookmark-indicator" title="Bookmarked">★</span>
       </div>
       </template>
     </div>
@@ -2208,7 +2222,7 @@ function getDateLabel(ts: number): string {
 }
 .ai-empty p { margin: 0; }
 
-.ai-msg-wrap { display: flex; flex-direction: column; }
+.ai-msg-wrap { display: flex; flex-direction: column; position: relative; }
 .ai-msg-wrap.user { align-items: flex-end; }
 .ai-msg-wrap.assistant { align-items: flex-start; }
 
@@ -2259,6 +2273,11 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-wrap:hover .ai-msg-time { opacity: 1; }
 .ai-msg-elapsed { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; }
+.ai-bookmark-active { color: #f0c040 !important; opacity: 1 !important; }
+.ai-bookmark-indicator {
+  position: absolute; top: 2px; right: 4px;
+  font-size: 11px; color: #f0c040; pointer-events: none; user-select: none;
+}
 .ai-scroll-to-bottom {
   position: absolute;
   bottom: 130px;
