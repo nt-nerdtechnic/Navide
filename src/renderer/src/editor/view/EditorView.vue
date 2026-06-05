@@ -62,6 +62,10 @@ const sizerMinWidth = computed(() => {
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
 })
 
+// Column ruler at 80 chars (VS Code-compatible guide line)
+const RULER_COL = 80
+const rulerLeft = computed(() => gutterWidth.value + PAD_LEFT + RULER_COL * charWidth.value - scrollLeftVal.value)
+
 const vs = useVirtualScroll(lineCount, lineHeightPx)
 const scrollEl = ref<HTMLElement | null>(null)
 const scrollLeftVal = ref(0)
@@ -1533,6 +1537,8 @@ defineExpose({
 
 <template>
   <div class="editor-view" :style="{ '--ev-fs': fontSizePx + 'px', '--ev-lh': lineHeightPx + 'px' }" @mousedown="onMousedown" @mousemove="onMousemove">
+    <!-- Column ruler (80-char guide) -->
+    <div v-if="rulerLeft > gutterWidth" class="ev-ruler" :style="{ left: rulerLeft + 'px' }" />
     <textarea
       ref="textareaEl"
       class="ev-input"
@@ -1607,6 +1613,13 @@ defineExpose({
   position: absolute;
   inset: 0;
   overflow: auto;
+}
+.ev-ruler {
+  position: absolute;
+  top: 0; bottom: 0; width: 1px;
+  background: var(--text-muted, rgba(120,120,120,.18));
+  pointer-events: none;
+  z-index: 1;
 }
 .ev-sizer { position: relative; width: 100%; }
 .ev-slab { position: absolute; top: 0; left: 0; will-change: transform; }
