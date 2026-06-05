@@ -577,6 +577,19 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     return
   }
 
+  // Save code block to file
+  const saveBtn = target.closest<HTMLButtonElement>('.ai-code-save-btn')
+  if (saveBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(saveBtn.dataset.code ?? '')))
+      const ext = saveBtn.dataset.ext ?? 'txt'
+      const r = await window.agentTeam?.saveJson({ defaultName: `snippet.${ext}`, content: code, title: 'Save code to file' })
+      if (r?.ok) showToast('Saved')
+      else if (!r?.canceled) showToast('Save failed')
+    } catch { showToast('Save failed') }
+    return
+  }
+
   // Clickable file path in inline code
   const fileRef = target.closest<HTMLElement>('.ai-file-ref')
   if (fileRef) {
@@ -642,11 +655,23 @@ function renderMarkdownLite(rawText: string): string {
     const runBtn = isShell
       ? `<button class="ai-code-run-btn" data-code="${encoded}" title="Run in workspace">▶ Run</button>`
       : ''
+    const LANG_EXT: Record<string, string> = {
+      ts: 'ts', tsx: 'tsx', js: 'js', jsx: 'jsx', py: 'py', python: 'py',
+      rb: 'rb', go: 'go', rs: 'rs', java: 'java', kt: 'kt', swift: 'swift',
+      cpp: 'cpp', c: 'c', cs: 'cs', php: 'php', sh: 'sh', bash: 'sh',
+      json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'toml', html: 'html',
+      css: 'css', scss: 'scss', sql: 'sql', md: 'md', vue: 'vue',
+    }
+    const ext = lang ? (LANG_EXT[lang.toLowerCase()] ?? 'txt') : 'txt'
+    const saveBtn = window.agentTeam?.saveJson
+      ? `<button class="ai-code-save-btn" data-code="${encoded}" data-ext="${ext}" title="Save to file">Save</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
       `${runBtn}` +
+      `${saveBtn}` +
       `${insertBtn}` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
@@ -2509,6 +2534,12 @@ function getDateLabel(ts: number): string {
   letter-spacing: 0.02em;
 }
 .ai-text :deep(.ai-code-fold-btn:hover) { color: var(--text-bright); background: var(--bg-subtle); }
+.ai-text :deep(.ai-code-save-btn) {
+  background: none; border: 1px solid var(--text-muted);
+  border-radius: 4px; color: var(--text-secondary);
+  cursor: pointer; font-size: 11px; padding: 2px 7px; margin-left: 2px;
+}
+.ai-text :deep(.ai-code-save-btn:hover) { border-color: var(--text-bright); color: var(--text-bright); }
 .ai-text :deep(.ai-code-run-btn) {
   background: none; border: 1px solid var(--warning-fg, #d29922);
   border-radius: 4px; color: var(--warning-fg, #d29922);
