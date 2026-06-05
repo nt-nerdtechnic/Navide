@@ -583,6 +583,16 @@ describe('select line shortcut', () => {
   })
 })
 
+describe('open file shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+o → openFile', () => {
+    expect(dr.resolve(mkEvent('o', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.openFile')
+  })
+})
+
 describe('block comment alias shortcut', () => {
   let dr: KeyResolver
   beforeEach(() => { dr = new KeyResolver(defaults) })

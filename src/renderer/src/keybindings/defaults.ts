@@ -76,6 +76,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'f3',          command: 'editor.action.nextMatch',          when: 'findOpen' },
   { key: 'shift+f3',    command: 'editor.action.prevMatch',          when: 'findOpen' },
 
+  { key: 'cmd+o',       command: 'workbench.action.openFile' },
   { key: 'cmd+n',       command: 'workbench.action.newFile' },
   { key: 'cmd+shift+n', command: 'workbench.action.newWindow' },
   { key: 'cmd+shift+o', command: 'workbench.action.gotoSymbol', when: 'editorOpen' },

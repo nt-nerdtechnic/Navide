@@ -316,6 +316,14 @@ registerCommand('workbench.action.openFolder', async () => {
   if (path) await window.agentTeam?.openEditorWindow({ workspace_path: path })
 })
 registerCommand('workbench.action.reloadWindow', () => { window.location.reload() })
+registerCommand('workbench.action.openFile', async () => {
+  const result = await window.agentTeam?.pickFile({ title: '開啟檔案' })
+  if (!result?.ok || !result.path) return
+  const prefix = workspacePath.replace(/\/+$/, '') + '/'
+  const relPath = result.path.startsWith(prefix) ? result.path.slice(prefix.length) : result.path
+  openFile({ filepath: relPath })
+})
+registerCommand('workbench.action.openSettings', openKeyboardShortcuts)
 registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
@@ -506,6 +514,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.toggleZenMode',  label: '切換禪模式',    keys: '⌘K ⌘Z' },
   { id: 'workbench.action.openFolder',    label: '開啟資料夾',    keys: '⌘K ⌘O' },
   { id: 'workbench.action.reloadWindow',  label: '重新載入視窗' },
+  { id: 'workbench.action.openFile',      label: '開啟檔案',     keys: '⌘O' },
+  { id: 'workbench.action.openSettings',  label: '開啟設定',     keys: '⌘,' },
   { id: 'workbench.action.findInFilesReplace', label: '在檔案中取代', keys: '⌘⇧H' },
   { id: 'editor.action.transpose',           label: '轉置字元',     keys: '⌃T' },
   { id: 'editor.action.selectLine',          label: '選取目前行',     keys: '⌃L' },
