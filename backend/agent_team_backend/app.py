@@ -1999,15 +1999,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         )
                         try:
                             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                            output = stdout.decode("utf-8", errors="replace")
+                            await session.websocket.send_json(make_response(msg_id, msg_type, {
+                                "ok": True, "output": output[:8000], "exit_code": proc.returncode,
+                            }))
                         except asyncio.TimeoutError:
                             proc.kill()
                             await proc.communicate()
                             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout after 30s"}))
-                            continue
-                        output = stdout.decode("utf-8", errors="replace")
-                        await session.websocket.send_json(make_response(msg_id, msg_type, {
-                            "ok": True, "output": output[:8000], "exit_code": proc.returncode,
-                        }))
                     except Exception as exc:
                         await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
 
