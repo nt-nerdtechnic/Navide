@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ def _empty_doc() -> dict[str, Any]:
 class RecentWorkspacesStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or (app_data_dir() / RECENT_FILE)
+        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
@@ -97,31 +99,32 @@ class RecentWorkspacesStore:
     def touch(self, path: str, *, state: str = "", task: str = "") -> dict[str, Any]:
         """Record that ``path`` was just opened; move it to the front."""
         norm = self._normalize(path)
-        doc = self._read()
-        recent: list[dict[str, Any]] = doc["recent"]
-        now = _now_iso()
+        with self._lock:
+            doc = self._read()
+            recent: list[dict[str, Any]] = doc["recent"]
+            now = _now_iso()
 
-        idx = next((i for i, e in enumerate(recent) if e["path"] == norm), -1)
-        if idx >= 0:
-            entry = recent.pop(idx)
-            entry["last_opened_at"] = now
-            if state:
-                entry["last_known_state"] = state
-            if task:
-                entry["last_known_task"] = task
-        else:
-            entry = {
-                "path": norm,
-                "name": os.path.basename(norm.rstrip("/")) or norm,
-                "last_opened_at": now,
-                "pinned": False,
-                "last_known_state": state,
-                "last_known_task": task,
-            }
-        recent.insert(0, entry)
-        doc["recent"] = self._cap(recent, doc.get("max_size", DEFAULT_MAX_SIZE))
-        self._write(doc)
-        return entry
+            idx = next((i for i, e in enumerate(recent) if e["path"] == norm), -1)
+            if idx >= 0:
+                entry = recent.pop(idx)
+                entry["last_opened_at"] = now
+                if state:
+                    entry["last_known_state"] = state
+                if task:
+                    entry["last_known_task"] = task
+            else:
+                entry = {
+                    "path": norm,
+                    "name": os.path.basename(norm.rstrip("/")) or norm,
+                    "last_opened_at": now,
+                    "pinned": False,
+                    "last_known_state": state,
+                    "last_known_task": task,
+                }
+            recent.insert(0, entry)
+            doc["recent"] = self._cap(recent, doc.get("max_size", DEFAULT_MAX_SIZE))
+            self._write(doc)
+            return entry
 
     def pin(self, path: str) -> None:
         self._set_pinned(path, True)
@@ -131,19 +134,21 @@ class RecentWorkspacesStore:
 
     def _set_pinned(self, path: str, pinned: bool) -> None:
         norm = self._normalize(path)
-        doc = self._read()
-        for e in doc["recent"]:
-            if e["path"] == norm:
-                e["pinned"] = pinned
-                self._write(doc)
-                return
-        raise KeyError(f"workspace not in recent list: {norm}")
+        with self._lock:
+            doc = self._read()
+            for e in doc["recent"]:
+                if e["path"] == norm:
+                    e["pinned"] = pinned
+                    self._write(doc)
+                    return
+            raise KeyError(f"workspace not in recent list: {norm}")
 
     def remove(self, path: str) -> None:
         norm = self._normalize(path)
-        doc = self._read()
-        new_recent = [e for e in doc["recent"] if e["path"] != norm]
-        if len(new_recent) == len(doc["recent"]):
-            raise KeyError(f"workspace not in recent list: {norm}")
-        doc["recent"] = new_recent
-        self._write(doc)
+        with self._lock:
+            doc = self._read()
+            new_recent = [e for e in doc["recent"] if e["path"] != norm]
+            if len(new_recent) == len(doc["recent"]):
+                raise KeyError(f"workspace not in recent list: {norm}")
+            doc["recent"] = new_recent
+            self._write(doc)
