@@ -9,6 +9,9 @@ from typing import AsyncIterator
 log = logging.getLogger("agent_team_backend.ai_chat_service")
 
 
+_MAX_TOKENS_CAP = 16_000  # hard cap across all models to limit runaway API cost
+
+
 async def stream_chat(
     settings: dict,
     messages: list[dict],
@@ -22,6 +25,7 @@ async def stream_chat(
         ``\\x00TOOL:<json>``
     where ``<json>`` is ``{"id": ..., "name": ..., "input": ...}``.
     """
+    max_tokens = min(max_tokens, _MAX_TOKENS_CAP)
     provider = settings.get("provider", "ollama")
     if provider == "anthropic":
         async for chunk in _stream_anthropic(settings, messages, system, max_tokens, tools):
