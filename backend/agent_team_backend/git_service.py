@@ -791,22 +791,27 @@ async def push_set_upstream(workspace_path: str, branch: str, remote: str = "ori
         return {"ok": False, "output": "", "error": err}
     if err := _validate_ref_name(remote, "remote name"):
         return {"ok": False, "output": "", "error": err}
-    rc, out, stderr = await _run(
+    rc, out, stderr = await _run_with_timeout(
         ["git", "push", "--set-upstream", remote.strip(), branch.strip()],
         workspace_path,
+        timeout=60.0,
     )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
 async def fetch(workspace_path: str) -> dict[str, Any]:
     """Run `git fetch --prune` to update remote-tracking refs."""
-    rc, out, stderr = await _run(["git", "fetch", "--prune"], workspace_path)
+    rc, out, stderr = await _run_with_timeout(
+        ["git", "fetch", "--prune"], workspace_path, timeout=60.0
+    )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
 async def pull_only(workspace_path: str) -> dict[str, Any]:
     """Run `git pull` (fast-forward preferred)."""
-    rc, out, stderr = await _run(["git", "pull"], workspace_path)
+    rc, out, stderr = await _run_with_timeout(
+        ["git", "pull"], workspace_path, timeout=60.0
+    )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
