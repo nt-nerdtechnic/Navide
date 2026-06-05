@@ -300,10 +300,10 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
 
 
 def _reap_orphan_tmux_sessions() -> None:
-    """啟動時清除不屬於任何 workspace 的孤兒 at-* tmux session。
+    """Kill orphan at-* tmux sessions that don't belong to any known workspace.
 
-    比對 tmux ls 的 at-* sessions 與所有已知 workspace 的 project.json 記錄，
-    凡不在任何 project.json 中的 session 一律 kill。
+    Compares running at-* sessions from `tmux ls` against all known workspace
+    project.json records; any session not found in any project.json is killed.
     """
     try:
         result = subprocess.run(
@@ -379,7 +379,7 @@ async def _start_log_watcher() -> None:
     except Exception as err:  # noqa: BLE001
         log.warning("claude hooks install failed: %s", err)
 
-    # 清除上次 App 崩潰後殘留的孤兒 tmux session
+    # Reap orphan tmux sessions left by a previous App crash
     try:
         _reap_orphan_tmux_sessions()
     except Exception as err:  # noqa: BLE001

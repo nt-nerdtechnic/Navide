@@ -213,7 +213,7 @@ class TerminalService:
             except (subprocess.CalledProcessError, OSError) as err:
                 log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
                 if _session_created:
-                    # new-session 成功但 attach 失敗 → 補償清理避免孤兒 session
+                    # new-session succeeded but attach failed — clean up to avoid orphan session
                     subprocess.run(
                         ["tmux", "kill-session", "-t", tmux_name],
                         capture_output=True, check=False,
