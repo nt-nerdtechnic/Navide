@@ -688,6 +688,22 @@ async function waitForQuiet(
   }
 }
 
+async function waitForStartupActivity(paneId: string, timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!paneAlive(paneId)) return false
+    const ref = paneRefs[paneId]
+    if (!ref) return false
+    const status = ref.status as unknown as string
+    if (status === 'error' || status === 'exited') return false
+    const cleanSize = ((ref.cleanBuffer as unknown as string) ?? '').length
+    const rawAt = Number((ref.lastRawActivityAt as unknown as number | undefined) ?? 0)
+    if (cleanSize > 0 || rawAt > 0) return true
+    await sleep(250)
+  }
+  return false
+}
+
 // Global injection semaphore — at most 2 panes may inject simultaneously.
 // Without this, all 6+ pre-spawned panes send role prompts at the same moment,
 // flooding the WS connection and causing some 512-byte chunks to timeout/drop.
@@ -911,6 +927,42 @@ function sessionMarkerLine(marker?: string): string {
   return marker ? `\n\n<!-- agent-team-session: ${marker} -->` : ''
 }
 
+async function sendSessionMarkerBootstrap(pane: ActivePane, tag: string): Promise<boolean> {
+  const markerText = sessionMarkerLine(pane.sessionMarker).trim()
+  if (!markerText) return false
+  try {
+    await dismissStartupDialog(pane.id, DISMISS_TIMEOUT_MS)
+    if (!(await waitForStartupActivity(pane.id))) {
+      pipelineLog(`${tag} ⚠ no startup activity detected — session marker not sent`)
+      return false
+    }
+    await waitForQuiet(pane.id, 1000, 8000)
+    if (!paneAlive(pane.id)) return false
+    const ref = paneRefs[pane.id]
+    if (!ref?.sessionId) return false
+    backend.send('terminal.log_sent', {
+      terminal_session_id: ref.sessionId as string,
+      label: `session-marker:${pane.agentKey}`,
+      text: markerText
+    }).catch(() => {/* ignore */})
+    await backend.send('terminal.input', {
+      terminal_session_id: ref.sessionId as string,
+      data: BRACKETED_PASTE_START + markerText + BRACKETED_PASTE_END
+    })
+    await sleep(250)
+    await backend.send('terminal.input', {
+      terminal_session_id: ref.sessionId as string,
+      data: '\r'
+    })
+    pipelineLog(`${tag} ✓ session marker sent for resume capture`)
+    return true
+  } catch (err) {
+    console.error('[sendSessionMarkerBootstrap] failed:', err)
+    pipelineLog(`${tag} ⚠ session marker send failed — resume id may stay unknown`)
+    return false
+  }
+}
+
 async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const spec = agentSpecs.find((s) => s.agentKey === opts.agentKey)
   if (!spec) return null
@@ -1048,6 +1100,10 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
           ? ''
           : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
     })
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
+      void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
+    }
   }
 }
 
