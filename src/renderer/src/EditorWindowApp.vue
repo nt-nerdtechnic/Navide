@@ -1096,6 +1096,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         embedded
         :active="aiPanelOpen"
         :get-editor-content="() => activeEditor()?.getContent?.() ?? ''"
+        :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
       />
     </div>

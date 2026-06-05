@@ -52,6 +52,7 @@ const props = defineProps<{
   embedded?: boolean
   active?: boolean
   getEditorContent?: () => string
+  getEditorSelection?: () => string
   getActiveRelPath?: () => string
 }>()
 
@@ -1244,9 +1245,16 @@ async function selectAtOption(option: AtOption): Promise<void> {
     chipLabel = relPath ? `@${relPath.split('/').pop()}` : '@file'
     chipContent = relPath ? `// ${relPath}\n${content}` : content
   } else if (option.id === '@selection') {
-    const content = props.getEditorContent?.() ?? ''
+    const selected = props.getEditorSelection?.() ?? ''
+    const relPath = props.getActiveRelPath?.() ?? ''
     chipLabel = '@selection'
-    chipContent = content
+    if (selected) {
+      chipContent = relPath ? `// ${relPath} (selection)\n${selected}` : selected
+    } else {
+      // Fall back to full file content when nothing is selected
+      const content = props.getEditorContent?.() ?? ''
+      chipContent = relPath ? `// ${relPath}\n${content}` : content
+    }
   } else if (option.id === '@git') {
     chipLabel = '@git'
     try {

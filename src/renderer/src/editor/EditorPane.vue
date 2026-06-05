@@ -613,6 +613,7 @@ defineExpose({
   undo, redo, selectAll,
   openReplace,
   getContent: () => content.value,
+  getSelection: () => editorRef.value?.getSelectionText() ?? '',
 })
 </script>
 
