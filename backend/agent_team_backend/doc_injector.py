@@ -159,12 +159,12 @@ async def _llm_call(
 # ── Enhancement ①: LLM stack detection + doc_query ──────────────────────────
 
 _DETECT_SYSTEM = (
-    "你是一個技術棧分析器。分析任務描述，回傳 JSON：\n"
-    "{\"libraries\": [\"技術名稱\"], \"doc_query\": \"英文搜尋字串\"}\n"
-    "libraries 最多 2 個，只列主要框架（Vue, React, FastAPI, Django, Laravel, Express 等）。\n"
-    "doc_query 針對任務的具體需求，英文，10-50 字。\n"
-    "若沒有框架需求，libraries 回傳空陣列。\n"
-    "只回傳 JSON，不要 markdown，不要其他文字。"
+    "You are a tech-stack analyzer. Analyze the task description and return JSON:\n"
+    "{\"libraries\": [\"framework-name\"], \"doc_query\": \"english search string\"}\n"
+    "At most 2 libraries — list only major frameworks (Vue, React, FastAPI, Django, Laravel, Express, etc.).\n"
+    "doc_query should target the specific needs of the task, in English, 10-50 words.\n"
+    "If there are no framework requirements, return an empty array for libraries.\n"
+    "Return JSON only — no markdown, no extra text."
 )
 
 
@@ -177,7 +177,7 @@ async def _llm_detect_stack(
 
     Returns (libraries, doc_query) or None on failure (caller uses regex fallback).
     """
-    raw = await _llm_call(_DETECT_SYSTEM, f"任務：{task}", gguf_path,
+    raw = await _llm_call(_DETECT_SYSTEM, f"Task: {task}", gguf_path,
                           n_predict=128, timeout=timeout)
     if not raw:
         return None
@@ -195,9 +195,9 @@ async def _llm_detect_stack(
 # ── Enhancement ②: Workspace summary ─────────────────────────────────────────
 
 _SUMMARY_SYSTEM = (
-    "你是一個技術文件摘要助手。根據提供的專案檔案，用 1-2 句話（繁體中文，100字以內）"
-    "描述這個 workspace 是什麼專案、主要技術棧是什麼。"
-    "直接輸出摘要，不要標題、不要額外說明。"
+    "You are a technical documentation summarizer. Based on the provided project files, "
+    "write 1-2 sentences describing what this workspace is and its main tech stack. "
+    "Output the summary directly — no headings, no extra explanation."
 )
 
 
@@ -247,10 +247,12 @@ async def _llm_workspace_summary(
 # ── Enhancement ③: Relevance selection ───────────────────────────────────────
 
 _RELEVANCE_SYSTEM = (
-    "你是一個文件相關性評分器。根據任務描述，從以下文件段落中選出最相關的段落。\n"
-    "回傳 JSON：{\"keep\": [段落索引列表（從0開始）]}\n"
-    "只保留真正有用的段落；若全部相關則全部保留；若只有一個段落直接回傳 {\"keep\": [0]}。\n"
-    "只回傳 JSON，不要其他文字。"
+    "You are a document relevance scorer. Based on the task description, select the most relevant "
+    "sections from the provided document segments.\n"
+    "Return JSON: {\"keep\": [list of paragraph indices starting from 0]}\n"
+    "Keep only genuinely useful sections; keep all if all are relevant; "
+    "if there is only one section return {\"keep\": [0]}.\n"
+    "Return JSON only — no extra text."
 )
 
 
@@ -349,7 +351,7 @@ async def fetch_stage_docs(
         if workspace_summary:
             sep = "─" * 60
             return (
-                f"[Workspace 上下文]\n{sep}\n{workspace_summary}\n{sep}\n\n"
+                f"[Workspace Context]\n{sep}\n{workspace_summary}\n{sep}\n\n"
             )
         return ""
 
@@ -377,7 +379,7 @@ async def fetch_stage_docs(
                 continue
 
             if len(doc_text) > _DOC_CHAR_LIMIT:
-                doc_text = doc_text[:_DOC_CHAR_LIMIT] + "\n…（已截斷）"
+                doc_text = doc_text[:_DOC_CHAR_LIMIT] + "\n...[truncated]"
 
             doc_parts.append((lib_name, doc_text))
             log.info("Context7: fetched %d chars for '%s'", len(doc_text), lib_name)
@@ -394,16 +396,16 @@ async def fetch_stage_docs(
     sections: list[str] = []
 
     if workspace_summary:
-        sections.append(f"[Workspace 上下文]\n{sep}\n{workspace_summary}")
+        sections.append(f"[Workspace Context]\n{sep}\n{workspace_summary}")
 
     for lib_name, doc_text in doc_parts:
-        sections.append(f"[{lib_name} 參考文件 — via Context7]\n{doc_text}")
+        sections.append(f"[{lib_name} Reference Docs — via Context7]\n{doc_text}")
 
     if not sections:
         return ""
 
     return (
-        f"[動態文件注入 — LLM 強化版]\n{sep}\n\n"
+        f"[Dynamic Doc Injection — LLM Enhanced]\n{sep}\n\n"
         + f"\n\n{sep}\n\n".join(sections)
         + f"\n\n{sep}\n\n"
     )

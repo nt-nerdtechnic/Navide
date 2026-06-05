@@ -79,20 +79,20 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   async function install(dep: OnboardDep): Promise<void> {
     if (installing.value) return
     installing.value = dep.id
-    log(`▶ 安裝 ${dep.label}…`)
+    log(`▶ Installing ${dep.label}…`)
     try {
       const resp = await backend.send<InstallResult>('onboarding.install', { dep_id: dep.id })
       const r = resp.payload
       if (!r?.ok) {
-        log(`✗ ${dep.label} 安裝失敗：${r?.error || resp.error?.message || 'unknown'}`)
+        log(`✗ ${dep.label} installation failed: ${r?.error || resp.error?.message || 'unknown'}`)
         return
       }
       if (r.needs_terminal && r.command) {
         await window.agentTeam?.openTerminal(r.command)
-        log(`↗ 已在外部終端機開啟：${r.command}`)
-        log('  完成後請按「重新偵測」。')
+        log(`↗ Opened in external terminal: ${r.command}`)
+        log('  After completing, click Re-detect.')
       } else {
-        log(r.output?.trim() || `✓ ${dep.label} 安裝完成`)
+        log(r.output?.trim() || `✓ ${dep.label} installed`)
       }
     } finally {
       installing.value = ''
@@ -102,14 +102,14 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
 
   async function pullModel(model?: string): Promise<void> {
     const name = model || status.value?.gate.suggested_model || 'qwen2.5-coder'
-    log(`▶ 下載模型 ${name}…`)
+    log(`▶ Downloading model ${name}…`)
     const resp = await backend.send<InstallResult>('onboarding.pull_model', { model: name })
     const r = resp.payload
-    if (!r?.ok) { log(`✗ ${r?.error || '下載失敗'}`); return }
+    if (!r?.ok) { log(`✗ ${r?.error || 'download failed'}`); return }
     if (r.needs_terminal && r.command) {
       await window.agentTeam?.openTerminal(r.command)
-      log(`↗ 已在外部終端機開啟：${r.command}`)
-      log('  下載完成後請按「重新偵測」。')
+      log(`↗ Opened in external terminal: ${r.command}`)
+      log('  After completion, click Re-detect.')
     }
   }
 

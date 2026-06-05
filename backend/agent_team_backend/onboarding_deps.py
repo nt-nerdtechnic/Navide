@@ -74,7 +74,7 @@ DEPS: list[Dep] = [
     Dep("ollama", "Ollama", "Local LLM runtime (required for Analyzer)", "analyzer",
         ["ollama", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install ollama", docs_url="https://ollama.com"),
-    Dep("tmux", "tmux", "Terminal multiplexer（CLI process survival）", "foundation",
+    Dep("tmux", "tmux", "Terminal multiplexer (CLI process survival)", "foundation",
         ["tmux", "-V"], r"tmux (\d+\.\d+(?:\.\d+)?)", min_version="3.0",
         install_cmd="brew install tmux", optional=False, docs_url="https://github.com/tmux/tmux"),
 ]
