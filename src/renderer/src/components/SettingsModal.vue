@@ -2046,7 +2046,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
   background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: 6px;
   padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
 }
-.pl-item.pl-active { border-color: var(--accent-emphasis); background: #0d1a2e; }
+.pl-item.pl-active { border-color: var(--accent-emphasis); background: var(--accent-subtle); }
 .pl-item-main { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .pl-name { font-size: 13px; font-weight: 600; color: var(--text-bright); flex: 1; }
 .pl-active .pl-name { color: var(--accent-bright); }

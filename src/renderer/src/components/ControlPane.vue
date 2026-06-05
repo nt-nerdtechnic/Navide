@@ -1365,7 +1365,7 @@ button.icon-btn.muted:hover {
 }
 .pipeline-item.pipeline-active {
   border-color: var(--accent-emphasis);
-  background: #0d1a2e;
+  background: var(--accent-subtle);
 }
 .pipeline-item-name {
   flex: 1;

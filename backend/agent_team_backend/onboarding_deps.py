@@ -80,7 +80,28 @@ DEPS_BY_ID: dict[str, Dep] = {d.id: d for d in DEPS}
 
 # A model whose presence satisfies the analyzer requirement is any installed
 # Ollama model; we surface the list so the UI can offer a pull if empty.
-_SUGGESTED_MODEL = "qwen2.5-coder"
+_SUGGESTED_MODEL = "qwen2.5-coder:7b"
+
+# Curated catalog of analyzer-suitable Ollama models surfaced in the wizard so
+# the common choices are one-click. Any installed model satisfies the gate; the
+# user may still pull an arbitrary (validated) name via the custom field. Sizes
+# are approximate download sizes for the default quantization.
+MODEL_CATALOG: list[dict[str, Any]] = [
+    {"name": "qwen2.5-coder:7b", "size": "~4.7 GB",
+     "desc": "推薦 · 程式碼分析最佳平衡", "recommended": True},
+    {"name": "qwen2.5-coder:1.5b", "size": "~1.0 GB",
+     "desc": "輕量 · 低記憶體、速度快", "recommended": False},
+    {"name": "qwen2.5-coder:3b", "size": "~2.0 GB",
+     "desc": "輕量加強 · 體積與品質兼顧", "recommended": False},
+    {"name": "qwen2.5-coder:14b", "size": "~9.0 GB",
+     "desc": "高品質 · 需較多記憶體", "recommended": False},
+    {"name": "qwen2.5-coder:32b", "size": "~20 GB",
+     "desc": "最高品質 · 需大量記憶體", "recommended": False},
+    {"name": "deepseek-coder-v2:16b", "size": "~8.9 GB",
+     "desc": "替代 · 強程式碼理解", "recommended": False},
+    {"name": "llama3.1:8b", "size": "~4.7 GB",
+     "desc": "通用 · 泛用對話與分析", "recommended": False},
+]
 
 
 def _parse_version(text: str, regex: str) -> str:
@@ -181,7 +202,12 @@ def get_status() -> dict[str, Any]:
     """Full onboarding status: every dep + installed models + gate."""
     deps = [detect_dep(d) for d in DEPS]
     models = detect_ollama_models()
-    return {"deps": deps, "models": models, "gate": compute_gate(deps, models)}
+    return {
+        "deps": deps,
+        "models": models,
+        "gate": compute_gate(deps, models),
+        "model_catalog": MODEL_CATALOG,
+    }
 
 
 # ── Install (whitelist-driven) ────────────────────────────────────────────────

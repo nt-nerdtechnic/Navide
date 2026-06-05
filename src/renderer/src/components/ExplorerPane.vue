@@ -62,7 +62,7 @@ function onRowClick(entry: FsEntry): void {
   if (entry.is_dir) {
     void explorer.toggleDir(entry.rel_path)
   } else {
-    openDiff(entry)
+    openInEditor(entry)
   }
 }
 

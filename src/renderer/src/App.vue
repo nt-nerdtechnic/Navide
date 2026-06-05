@@ -4944,7 +4944,7 @@ function paneIsCommander(p: ActivePane): boolean {
   font-family: Menlo, Monaco, monospace;
   font-size: 12px;
   color: var(--accent-bright);
-  background: #0a1426;
+  background: var(--accent-subtle);
   border: 1px solid var(--accent-muted);
   border-radius: 4px;
   padding: 8px 12px;

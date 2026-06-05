@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import EditorView from './view/EditorView.vue'
@@ -27,16 +27,20 @@ interface FsRead { ok: boolean; content?: string; error?: string }
 interface AiResult { ok: boolean; text?: string; error?: string }
 
 async function load(): Promise<void> {
-  const resp = await props.backend.send<FsRead>('fs.read_file', {
-    workspace_path: props.workspacePath,
-    rel_path: props.relPath,
-  })
-  if (!resp.payload?.ok) {
-    loadError.value = resp.payload?.error || '無法讀取檔案'
-    return
+  try {
+    const resp = await props.backend.send<FsRead>('fs.read_file', {
+      workspace_path: props.workspacePath,
+      rel_path: props.relPath,
+    })
+    if (!resp.payload?.ok) {
+      loadError.value = resp.payload?.error || '無法讀取檔案'
+      return
+    }
+    content.value = resp.payload.content ?? ''
+    loaded.value = true
+  } catch (err) {
+    loadError.value = err instanceof Error ? err.message : '讀取檔案失敗'
   }
-  content.value = resp.payload.content ?? ''
-  loaded.value = true
 }
 
 function onChange(v: string): void {
@@ -145,7 +149,16 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   document.title = `Editor · ${props.name}`
   window.addEventListener('keydown', onKeydown)
-  void load()
+  // 編輯器為獨立視窗，開窗當下後端 WebSocket 通常尚未連上，
+  // 若立即 send 會以「ws not open」reject 且不會重試，畫面卡在「載入中」。
+  // 改為等 status 變 connected 後再讀檔。
+  watch(
+    () => props.backend.status.value,
+    (s) => {
+      if (s === 'connected' && !loaded.value && !loadError.value) void load()
+    },
+    { immediate: true },
+  )
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>

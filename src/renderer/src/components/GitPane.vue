@@ -2212,12 +2212,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 999px; line-height: 1.5;
 }
 .ref-pill.local  { background: var(--accent-muted); color: var(--accent-bright); }
-.ref-pill.remote { background: #1f3a2f; color: var(--success-bright); }
+.ref-pill.remote { background: var(--success-subtle); color: var(--success-bright); }
 .commit-btns-right { display: flex; align-items: center; gap: 2px; padding: 3px 0; flex-shrink: 0; }
 .expand-caret { font-size: 9px; color: var(--text-muted); padding: 0 2px; }
 
 .commit-detail {
-  margin: 0 8px 4px 24px; background: #0a0e14; border: 1px solid var(--border-muted);
+  margin: 0 8px 4px 24px; background: var(--bg-inset); border: 1px solid var(--border-muted);
   border-radius: 4px; padding: 6px 10px; font-size: 11px;
 }
 .cd-row { display: flex; gap: 8px; margin-bottom: 3px; color: var(--text-primary); }

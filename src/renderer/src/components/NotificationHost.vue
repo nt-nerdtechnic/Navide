@@ -71,25 +71,25 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
   min-width: 240px;
   max-width: 420px;
   padding: 10px 14px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-left: 4px solid #8b949e;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-left: 4px solid var(--text-secondary);
   border-radius: 6px;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
   line-height: 1.45;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 24px var(--shadow-overlay);
   cursor: pointer;
 }
 .toast.success {
-  border-left-color: #3fb950;
+  border-left-color: var(--success-fg);
 }
 .toast.error {
-  border-left-color: #f85149;
+  border-left-color: var(--danger-fg);
 }
 .toast.info {
-  border-left-color: #58a6ff;
+  border-left-color: var(--accent-fg);
 }
 .toast-icon {
   flex-shrink: 0;

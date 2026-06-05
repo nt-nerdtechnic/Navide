@@ -27,10 +27,18 @@ export interface OnboardGate {
   suggested_model: string
 }
 
+export interface ModelOption {
+  name: string
+  size: string
+  desc: string
+  recommended: boolean
+}
+
 export interface OnboardStatus {
   deps: OnboardDep[]
   models: string[]
   gate: OnboardGate
+  model_catalog: ModelOption[]
   complete: boolean
   skip: boolean
 }
@@ -116,6 +124,7 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   const cliDeps = computed(() => deps.value.filter((d) => d.group === 'agent_cli'))
   const analyzerDeps = computed(() => deps.value.filter((d) => d.group === 'analyzer'))
   const models = computed(() => status.value?.models ?? [])
+  const modelCatalog = computed<ModelOption[]>(() => status.value?.model_catalog ?? [])
   const gate = computed<OnboardGate | null>(() => status.value?.gate ?? null)
   const foundationReady = computed(() => gate.value?.foundation_ready ?? false)
   const hasAnyCli = computed(() => gate.value?.has_any_cli ?? false)
@@ -125,7 +134,7 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   return {
     status, loading, installing, logLines,
     refresh, install, pullModel, markComplete,
-    deps, foundationDeps, cliDeps, analyzerDeps, models, gate,
+    deps, foundationDeps, cliDeps, analyzerDeps, models, modelCatalog, gate,
     foundationReady, hasAnyCli, analyzerReady, allRequiredReady,
   }
 }

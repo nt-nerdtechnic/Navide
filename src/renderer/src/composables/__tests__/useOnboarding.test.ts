@@ -16,6 +16,9 @@ function status(opts: { found?: boolean; cli?: boolean; ollama?: boolean; models
       { id: 'ollama', label: 'Ollama', description: '', group: 'analyzer', status: ollama ? 'ok' : 'missing', version: '', min_version: '', optional: false, needs_terminal: false, can_install: true, docs_url: '' },
     ],
     models,
+    model_catalog: [
+      { name: 'qwen2.5-coder:7b', size: '~4.7 GB', desc: '', recommended: true },
+    ],
     gate: {
       foundation_ready: found,
       has_any_cli: cli,
