@@ -211,11 +211,11 @@ function onLogDividerEnd(): void {
           </template>
           <div v-else class="pipeline-log-empty">
             <span class="empty-glyph">›_</span>
-            <span>目前沒有輸出</span>
+            <span>No output yet</span>
           </div>
         </div>
       </div>
-      <div class="log-resize" title="拖曳調整 log 區高度" @mousedown="onLogDividerStart">
+      <div class="log-resize" title="Drag to resize log panel" @mousedown="onLogDividerStart">
         <div class="log-resize-grip" />
       </div>
     </div>
@@ -233,7 +233,7 @@ function onLogDividerEnd(): void {
     </div>
 
     <div v-if="loading && events.length === 0" class="msg">Loading…</div>
-    <div v-else-if="filtered.length === 0" class="msg">尚無事件</div>
+    <div v-else-if="filtered.length === 0" class="msg">No events</div>
 
     <div ref="timelineEl" class="timeline" @scroll="onScroll">
       <div

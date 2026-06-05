@@ -119,10 +119,10 @@ onUnmounted(() => {
 
       <div class="comp-card">
         <div class="comp-emoji">🎉</div>
-        <h1 class="comp-title">Pipeline 完成！</h1>
-        <p class="comp-sub">全部 {{ totalStages }} 個階段都已順利完成</p>
-        <p class="comp-sub2">所有 agent 已交付成果，請查看右側各個面板。</p>
-        <button class="comp-btn" @click="emit('close')">太棒了！繼續 🚀</button>
+        <h1 class="comp-title">Pipeline complete!</h1>
+        <p class="comp-sub">All {{ totalStages }} stages finished successfully</p>
+        <p class="comp-sub2">Every agent has delivered its results — check the panels on the right.</p>
+        <button class="comp-btn" @click="emit('close')">Awesome, let's go 🚀</button>
       </div>
     </div>
   </Teleport>

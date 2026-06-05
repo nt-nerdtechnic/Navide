@@ -594,7 +594,7 @@ function onExplorerDividerEnd(): void {
       <div class="brand-sub">
         backend {{ backendStatus }} <span v-if="backendUrl">· {{ backendUrl }}</span>
       </div>
-      <div class="build-tag" title="目前執行的 build 版本">🏷 build {{ buildTag }}</div>
+      <div class="build-tag" title="Currently running build version">🏷 build {{ buildTag }}</div>
     </header>
 
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
@@ -621,7 +621,7 @@ function onExplorerDividerEnd(): void {
           :backend="backend"
         />
       </div>
-      <div class="part-resize" title="拖曳調整上下比例" @mousedown="onExplorerDividerStart">
+      <div class="part-resize" title="Drag to resize" @mousedown="onExplorerDividerStart">
         <div class="part-resize-grip" />
       </div>
       <div class="part-bottom">
@@ -647,7 +647,7 @@ function onExplorerDividerEnd(): void {
                 <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
               </div>
               <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
-                <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+                <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
               </div>
               <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
                 stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
@@ -662,7 +662,7 @@ function onExplorerDividerEnd(): void {
               <div v-if="p.error" class="err">{{ p.error }}</div>
               <div class="row tight">
                 <template v-if="p.isMinimized">
-                  <button class="ghost" @click="emit('restore', p.id)">↑ 還原</button>
+                  <button class="ghost" @click="emit('restore', p.id)">↑ Restore</button>
                   <button class="danger" @click="emit('kill', p.id)">Remove</button>
                 </template>
                 <template v-else>
@@ -788,7 +788,7 @@ function onExplorerDividerEnd(): void {
           @click="openPipelineDetail(p.id)"
         >
           <span class="pipeline-item-name">{{ p.name }}</span>
-          <span class="pipeline-item-meta">{{ p.stage_count }} 階段</span>
+          <span class="pipeline-item-meta">{{ p.stage_count }} stages</span>
           <span
             class="pipeline-item-badge"
             :class="isPipelineRunning(p.id) ? 'running'
@@ -803,7 +803,7 @@ function onExplorerDividerEnd(): void {
           </span>
         </li>
       </ul>
-      <p v-else-if="pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="hint">尚未載入 pipelines…</p>
+      <p v-else-if="pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="hint">No pipelines loaded…</p>
       <div v-if="pipelinePageCount > 1 && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-pagination">
         <button class="ghost pg-btn" :disabled="pipelinePage === 0" @click="pipelinePage--">‹</button>
         <span class="pg-info">{{ pipelinePage + 1 }} / {{ pipelinePageCount }}</span>
@@ -852,7 +852,7 @@ function onExplorerDividerEnd(): void {
           <div v-if="pipeline.task" class="prn-task">{{ pipeline.task }}</div>
           <div class="prn-meta">
             <span v-if="autoAnswerEnabled" class="prn-auto">🤖 Full auto · {{ analyzerModelLocal }}</span>
-            <span v-else class="prn-manual">手動確認</span>
+            <span v-else class="prn-manual">Manual confirm</span>
           </div>
         </div>
         <div v-if="pipeline.state === 'running'" class="pipeline-running">
@@ -877,7 +877,7 @@ function onExplorerDividerEnd(): void {
     </section>
 
     </div><!-- /part-top -->
-    <div class="part-resize" title="拖曳調整上下比例" @mousedown="onPipelineDividerStart">
+    <div class="part-resize" title="Drag to resize" @mousedown="onPipelineDividerStart">
       <div class="part-resize-grip" />
     </div>
     <div class="part-bottom">
@@ -905,7 +905,7 @@ function onExplorerDividerEnd(): void {
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
           </div>
           <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
-            <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+            <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
           </div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
             stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
@@ -920,7 +920,7 @@ function onExplorerDividerEnd(): void {
           <div v-if="p.error" class="err">{{ p.error }}</div>
           <div class="row tight">
             <template v-if="p.isMinimized">
-              <button class="ghost" @click="emit('restore', p.id)">↑ 還原</button>
+              <button class="ghost" @click="emit('restore', p.id)">↑ Restore</button>
               <button class="danger" @click="emit('kill', p.id)">Remove</button>
             </template>
             <template v-else>
@@ -989,9 +989,9 @@ function onExplorerDividerEnd(): void {
     <div v-else class="pipeline-detail-scroll">
       <section class="block pipeline-detail-header">
         <div class="pipeline-detail-nav">
-          <button class="ghost back-btn" @click="backToList">← 返回</button>
+          <button class="ghost back-btn" @click="backToList">← Back</button>
           <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
-          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
+          <span v-if="openedPipelineId === activePipelineId" class="active-tag">Default</span>
         </div>
       </section>
       <section class="block" :class="{ pipeline: pipelineOpen }">
@@ -1051,7 +1051,7 @@ function onExplorerDividerEnd(): void {
           v-model="taskDescription"
           :disabled="pipeline.state === 'running'"
           :class="{ 'drag-over': isTaskDragOver }"
-          placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
+          placeholder="Describe the task to drive through all stages. e.g. &#10;&quot;Build an internal approval system for the store, digitising the paper workflow…&quot;"
           rows="3"
           spellcheck="false"
           @dragover.prevent

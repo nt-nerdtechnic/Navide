@@ -170,7 +170,7 @@ function _doSave(): void {
   allThreads.value[idx].messages = toSave
   allThreads.value[idx].updatedAt = Date.now()
   const firstUser = toSave.find((m) => m.role === 'user')
-  if (firstUser && (allThreads.value[idx].title === 'New chat' || allThreads.value[idx].title === '新對話')) {
+  if (firstUser && (allThreads.value[idx].title === 'New chat' )) {
     // Truncate at word boundary within 40 chars
     const raw = firstUser.content.replace(/\s+/g, ' ').trim()
     const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
@@ -321,6 +321,18 @@ function isSearchActive(idx: number): boolean {
   return showSearch.value && searchMatches.value[searchMatchIdx.value] === idx
 }
 
+function renderWithSearchHighlight(content: string): string {
+  const html = renderMarkdownLite(content)
+  const q = searchQuery.value.trim()
+  if (!showSearch.value || !q) return html
+  // Only highlight in text nodes — skip content inside HTML tags
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return html.replace(
+    new RegExp(`(?![^<]*>)(${escaped})`, 'gi'),
+    '<mark class="ai-search-highlight">$1</mark>',
+  )
+}
+
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
   id: string
@@ -347,15 +359,15 @@ const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 // ── Slash commands ────────────────────────────────────────────────────────────
 interface SlashCommand { id: string; label: string; description: string; template: string }
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: '/explain', label: '/explain', description: 'Explain code',             template: '請詳細解釋以下程式碼的功能與邏輯：' },
-  { id: '/fix',     label: '/fix',     description: 'Fix issue',               template: '請找出並修復以下程式碼中的問題：' },
-  { id: '/tests',   label: '/tests',   description: 'Generate tests',          template: '請為以下程式碼撰寫完整的單元測試：' },
-  { id: '/doc',     label: '/doc',     description: 'Write docs',              template: '請為以下程式碼撰寫清晰的文件與說明：' },
-  { id: '/review',   label: '/review',   description: 'Code review',           template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
-  { id: '/optimize', label: '/optimize', description: 'Performance optimization', template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
-  { id: '/refactor', label: '/refactor', description: 'Refactor code',         template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
-  { id: '/new',       label: '/new',       description: 'Create new file',     template: '請建立一個新檔案，包含以下內容：' },
-  { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: '請根據以下程式碼變更，生成一個簡潔的 git commit message（使用 conventional commits 格式）：\n\n' },
+  { id: '/explain', label: '/explain', description: 'Explain code',             template: 'Explain the following code in detail:' },
+  { id: '/fix',     label: '/fix',     description: 'Fix issue',               template: 'Find and fix the issues in the following code:' },
+  { id: '/tests',   label: '/tests',   description: 'Generate tests',          template: 'Write comprehensive unit tests for the following code:' },
+  { id: '/doc',     label: '/doc',     description: 'Write docs',              template: 'Write clear documentation for the following code:' },
+  { id: '/review',   label: '/review',   description: 'Code review',           template: 'Review the following code and point out potential issues and improvements:' },
+  { id: '/optimize', label: '/optimize', description: 'Performance optimization', template: 'Analyze performance bottlenecks in the following code and provide optimization suggestions:' },
+  { id: '/refactor', label: '/refactor', description: 'Refactor code',         template: 'Refactor the following code to improve readability and maintainability without changing functionality:' },
+  { id: '/new',       label: '/new',       description: 'Create new file',     template: 'Create a new file with the following content:' },
+  { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: 'Generate a concise git commit message (conventional commits format) for the following changes:\n\n' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
 ]
@@ -1484,7 +1496,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <div class="ai-bubble" :class="msg.role">
           <!-- Text content -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <div v-if="msg.content" class="ai-text" v-html="renderMarkdownLite(msg.content)" />
+          <div v-if="msg.content" class="ai-text" v-html="renderWithSearchHighlight(msg.content)" />
 
           <!-- Cards (tool calls / edit proposals) -->
           <template v-if="msg.cards">
@@ -1507,12 +1519,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
               <div v-else-if="card.kind === 'command_proposal'" class="ai-cmd-card" :class="card.status">
                 <div class="ai-cmd-header">
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 1 1-1.06-1.06L5.44 8 3.72 6.28a.749.749 0 1 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53Zm1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5Z"/></svg>
-                  <span class="ai-cmd-label">執行命令</span>
-                  <span v-if="card.status === 'approved'" class="ai-cmd-status approved">已執行 ✓</span>
-                  <span v-else-if="card.status === 'rejected'" class="ai-cmd-status rejected">已拒絕 ✕</span>
+                  <span class="ai-cmd-label">Run command</span>
+                  <span v-if="card.status === 'approved'" class="ai-cmd-status approved">Executed ✓</span>
+                  <span v-else-if="card.status === 'rejected'" class="ai-cmd-status rejected">Rejected ✕</span>
                   <div v-else class="ai-cmd-actions">
-                    <button class="ai-cmd-btn approve" @click="approveCommand(card)">執行</button>
-                    <button class="ai-cmd-btn reject" @click="rejectCommand(card)">拒絕</button>
+                    <button class="ai-cmd-btn approve" @click="approveCommand(card)">Run</button>
+                    <button class="ai-cmd-btn reject" @click="rejectCommand(card)">Reject</button>
                   </div>
                 </div>
                 <pre class="ai-cmd-pre">$ {{ card.command }}{{ card.cwd ? `\n# cwd: ${card.cwd}` : '' }}</pre>
@@ -1527,7 +1539,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
                     <button class="ai-edit-btn accept" @click="acceptEdit(card)">Accept</button>
                     <button class="ai-edit-btn discard" @click="discardEdit(card)">Discard</button>
                   </div>
-                  <span v-else class="ai-edit-accepted">已套用 ✓</span>
+                  <span v-else class="ai-edit-accepted">Applied ✓</span>
                 </div>
                 <div class="ai-diff-view" v-html="renderDiff(card.diff)" />
               </div>
@@ -1547,8 +1559,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0">
               <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
             </svg>
-            <span class="ai-error-msg">{{ msg.errorMsg || '發生錯誤' }}</span>
-            <button class="ai-error-retry" @click="retryAfterError">重試</button>
+            <span class="ai-error-msg">{{ msg.errorMsg || 'An error occurred' }}</span>
+            <button class="ai-error-retry" @click="retryAfterError">Retry</button>
           </div>
         </div>
         <!-- Accept All / Reject All bar for last assistant message -->
@@ -1592,10 +1604,10 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     <button
       v-if="sending && !autoScroll"
       class="ai-scroll-to-bottom"
-      title="捲到最新"
+      title="Scroll to bottom"
       @click="autoScroll = true; scrollBottom(true)"
     >
-      ↓ 捲到最新
+      ↓ Scroll to bottom
     </button>
 
     <!-- Search bar -->
@@ -1604,15 +1616,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         ref="searchInput"
         v-model="searchQuery"
         class="ai-search-input"
-        placeholder="搜尋對話…"
+        placeholder="Search chat…"
         @keydown.escape="closeSearch"
         @keydown.enter.prevent="searchNav(1)"
       />
       <span class="ai-search-count">
-        {{ searchMatches.length ? `${searchMatchIdx + 1}/${searchMatches.length}` : '無結果' }}
+        {{ searchMatches.length ? `${searchMatchIdx + 1}/${searchMatches.length}` : 'No results' }}
       </span>
-      <button class="ai-search-nav" title="上一個" @click="searchNav(-1)">↑</button>
-      <button class="ai-search-nav" title="下一個" @click="searchNav(1)">↓</button>
+      <button class="ai-search-nav" title="Previous" @click="searchNav(-1)">↑</button>
+      <button class="ai-search-nav" title="Next" @click="searchNav(1)">↓</button>
       <button class="ai-search-close" @click="closeSearch">✕</button>
     </div>
 
@@ -1679,14 +1691,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             ref="textareaEl"
             v-model="inputText"
             class="ai-textarea"
-            placeholder="輸入訊息… (@ 注入 context，Enter 送出，Shift+Enter 換行)"
+            placeholder="Type a message… (@ to insert context, Enter to send, Shift+Enter for new line)"
             :disabled="sending"
             rows="1"
             @input="onTextareaInput"
             @keydown="onTextareaKeydown"
           />
           <span v-if="inputCharCount > 200" class="ai-char-count" :class="{ warn: inputCharCount > 2000 }">
-            {{ inputCharCount.toLocaleString() }} 字 · ~{{ inputTokenEstimate.toLocaleString() }} tokens
+            {{ inputCharCount.toLocaleString() }} chars · ~{{ inputTokenEstimate.toLocaleString() }} tokens
           </span>
         </div>
         <div class="ai-input-btns">
@@ -1694,7 +1706,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             v-if="!sending"
             class="ai-send-btn"
             :disabled="!inputText.trim() && contextChips.length === 0"
-            title="送出 (Enter)"
+            title="Send (Enter)"
             @click="sendMessage"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -1713,7 +1725,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="新對話"
+            title="New chat"
             @click="newThread"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/></svg>
@@ -1865,7 +1877,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <tr><td><kbd>Enter</kbd></td><td>送出訊息</td></tr>
           <tr><td><kbd>Shift+Enter</kbd></td><td>換行</td></tr>
           <tr><td><kbd>↑ / ↓</kbd></td><td>瀏覽輸入歷史</td></tr>
-          <tr><td><kbd>Ctrl+N</kbd></td><td>新對話</td></tr>
+          <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>搜尋對話</td></tr>
           <tr><td><kbd>@</kbd></td><td>插入 context（檔案、selection、git）</td></tr>
           <tr><td><kbd>/</kbd></td><td>Slash 指令（/explain、/fix…）</td></tr>

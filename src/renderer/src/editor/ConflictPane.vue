@@ -58,12 +58,12 @@ async function loadFile(): Promise<void> {
     if (resp.ok && resp.payload?.ok) {
       const raw = resp.payload.content ?? ''
       if (!hasConflicts(raw)) {
-        loadError.value = '此檔案目前沒有衝突標記'
+        loadError.value = 'This file has no conflict markers'
       } else {
         content.value = raw
       }
     } else {
-      loadError.value = resp.payload?.error || resp.error?.message || '無法讀取檔案'
+      loadError.value = resp.payload?.error || resp.error?.message || 'Failed to read file'
     }
   } finally {
     loading.value = false
@@ -151,7 +151,7 @@ async function applyAndStage(): Promise<void> {
       { workspace_path: props.workspacePath, rel_path: props.filepath, content: resolved },
     )
     if (!(writeResp.ok && writeResp.payload?.ok)) {
-      notify.toast(writeResp.payload?.error || '寫入失敗', { type: 'error' })
+      notify.toast(writeResp.payload?.error || 'Write failed', { type: 'error' })
       return
     }
     const stageResp = await props.backend.send<{ ok: boolean; error?: string }>(
@@ -159,10 +159,10 @@ async function applyAndStage(): Promise<void> {
       { workspace_path: props.workspacePath, files: [props.filepath] },
     )
     if (!(stageResp.ok && stageResp.payload?.ok)) {
-      notify.toast(stageResp.payload?.error || 'stage 失敗', { type: 'error' })
+      notify.toast(stageResp.payload?.error || 'Stage failed', { type: 'error' })
       return
     }
-    notify.toast(`${props.name} 衝突已解決`, { type: 'success' })
+    notify.toast(`${props.name} conflicts resolved`, { type: 'success' })
     emit('resolved')
   } finally {
     applying.value = false
@@ -208,26 +208,26 @@ function choiceOf(idx: number): ConflictChoice | undefined {
     <div class="cp-toolbar">
       <span class="cp-badge conflict">CONFLICT</span>
       <span class="cp-filepath" :title="filepath">{{ filepath }}</span>
-      <span class="cp-progress">{{ resolvedCount }} / {{ totalConflicts }} 已解決</span>
+      <span class="cp-progress">{{ resolvedCount }} / {{ totalConflicts }} resolved</span>
       <button
         class="cp-apply"
         :disabled="!allResolved || applying || !!mergeAborted"
-        :title="allResolved ? '寫入並 stage 此檔案' : '請先解決所有衝突'"
+        :title="allResolved ? 'Write and stage this file' : 'Resolve all conflicts first'"
         @click="applyAndStage"
       >
-        {{ applying ? '套用中…' : 'Apply & Stage' }}
+        {{ applying ? 'Applying…' : 'Apply & Stage' }}
       </button>
-      <button class="cp-reload" title="重新載入" @click="loadFile">
+      <button class="cp-reload" title="Reload" @click="loadFile">
         <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
       </button>
     </div>
 
     <!-- Body -->
     <div class="cp-body">
-      <div v-if="loading" class="cp-msg">載入中…</div>
-      <div v-else-if="mergeAborted" class="cp-msg warn">Merge 已中止，衝突已取消。</div>
+      <div v-if="loading" class="cp-msg">Loading…</div>
+      <div v-else-if="mergeAborted" class="cp-msg warn">Merge aborted — conflicts cancelled.</div>
       <div v-else-if="loadError" class="cp-msg err">{{ loadError }}</div>
-      <div v-else-if="content === null" class="cp-msg">尚未載入</div>
+      <div v-else-if="content === null" class="cp-msg">Not loaded</div>
 
       <template v-else>
         <div v-for="(block, bi) in blocks" :key="bi">
@@ -273,8 +273,8 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                 rows="6"
               />
               <div class="cp-manual-actions">
-                <button class="cp-btn primary" @click="saveManual(block.conflictIdx!)">確認</button>
-                <button class="cp-btn" @click="cancelManual(block.conflictIdx!)">取消</button>
+                <button class="cp-btn primary" @click="saveManual(block.conflictIdx!)">Confirm</button>
+                <button class="cp-btn" @click="cancelManual(block.conflictIdx!)">Cancel</button>
               </div>
             </div>
 
@@ -292,7 +292,7 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                   <span class="cp-lno">{{ li + 1 }}</span>
                   <span class="cp-ltext">{{ line }}</span>
                 </div>
-                <div v-if="!block.ours!.length" class="cp-empty-side">(空)</div>
+                <div v-if="!block.ours!.length" class="cp-empty-side">(empty)</div>
               </div>
               <!-- Theirs -->
               <div
@@ -306,19 +306,19 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                   <span class="cp-lno">{{ li + 1 }}</span>
                   <span class="cp-ltext">{{ line }}</span>
                 </div>
-                <div v-if="!block.theirs!.length" class="cp-empty-side">(空)</div>
+                <div v-if="!block.theirs!.length" class="cp-empty-side">(empty)</div>
               </div>
             </div>
 
             <!-- Resolution preview -->
             <div v-if="choiceOf(block.conflictIdx!) !== undefined && editingIdx !== block.conflictIdx" class="cp-preview">
               <span class="cp-preview-label">
-                <template v-if="choiceOf(block.conflictIdx!) === 'ours'">✓ 採用 Ours</template>
-                <template v-else-if="choiceOf(block.conflictIdx!) === 'theirs'">✓ 採用 Theirs</template>
-                <template v-else-if="choiceOf(block.conflictIdx!) === 'both'">✓ 保留兩者</template>
-                <template v-else>✓ 手動編輯</template>
+                <template v-if="choiceOf(block.conflictIdx!) === 'ours'">✓ Accepted Ours</template>
+                <template v-else-if="choiceOf(block.conflictIdx!) === 'theirs'">✓ Accepted Theirs</template>
+                <template v-else-if="choiceOf(block.conflictIdx!) === 'both'">✓ Accepted Both</template>
+                <template v-else>✓ Manually edited</template>
               </span>
-              <button class="cp-undo-btn" @click="choices = new Map([...choices].filter(([k]) => k !== block.conflictIdx!))">撤銷</button>
+              <button class="cp-undo-btn" @click="choices = new Map([...choices].filter(([k]) => k !== block.conflictIdx!))">Undo</button>
             </div>
           </div>
         </div>

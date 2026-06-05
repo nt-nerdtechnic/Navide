@@ -1181,7 +1181,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <input
           v-model="connectUrl"
           class="clone-input"
-          placeholder="Repository URL (https://… 或 git@…)"
+          placeholder="Repository URL (https://… or git@…)"
           :disabled="connecting"
         />
         <button class="btn-ghost w-full" :disabled="connecting" @click="doConnect">
@@ -1479,29 +1479,29 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Discard confirm (shared by Discard All + folder discard) -->
       <div v-if="showDiscardConfirm" class="clean-box">
-        <div class="clean-title">捨棄 {{ discardTargets.length }} 項變更？此動作無法復原</div>
+        <div class="clean-title">Discard {{ discardTargets.length }} change(s)? This cannot be undone.</div>
         <div v-for="f in discardTargets" :key="f" class="clean-file">{{ f }}</div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showDiscardConfirm = false">取消</button>
-          <button class="btn-danger" @click="doDiscardConfirm">確認捨棄</button>
+          <button class="btn-ghost" @click="showDiscardConfirm = false">Cancel</button>
+          <button class="btn-danger" @click="doDiscardConfirm">Discard</button>
         </div>
       </div>
 
       <!-- Stash with optional label -->
       <div v-if="showStashPrompt" class="stash-box">
-        <div class="stash-title">儲存為 Draft（標記可留空）</div>
+        <div class="stash-title">Save as Draft (label optional)</div>
         <div class="input-row">
           <input
             v-model="stashMessage"
             class="git-input"
             type="text"
-            placeholder="為這次 Draft 命名…（選填）"
+            placeholder="Name this draft… (optional)"
             @keydown.enter="doStash"
             @keydown.esc="showStashPrompt = false"
           />
         </div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showStashPrompt = false">取消</button>
+          <button class="btn-ghost" @click="showStashPrompt = false">Cancel</button>
           <button class="btn-primary" @click="doStash">Save Draft</button>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
@@ -1635,14 +1635,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- ── selection action bar ──────────────────────────────── -->
       <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
-        <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
+        <span class="sel-count">{{ selectedKeys.size }} selected</span>
         <button class="sel-btn sel-clear" @click="clearSelection">✕</button>
       </div>
 
       <!-- ══════════════════════════════════════════════════════
            PART 2 — REMOTE / HISTORY
            ══════════════════════════════════════════════════════ -->
-      <div class="part-resize" title="拖曳調整上下比例" @mousedown="onGitDividerStart">
+      <div class="part-resize" title="Drag to resize" @mousedown="onGitDividerStart">
         <div class="part-resize-grip" />
       </div>
 
@@ -1701,7 +1701,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="input-row">
           <input v-model="newBranchName" class="git-input" placeholder="New branch name…" @keydown.enter="doCreateBranch" />
           <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim()" @click="doCreateBranch">＋</button>
-          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? '隱藏遠端分支' : '顯示遠端分支'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
+          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? 'Hide remote branches' : 'Show remote branches'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
@@ -1720,7 +1720,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
         <!-- remote branches (toggleable) -->
         <template v-if="showRemoteBranches">
-          <div class="branch-section-label">遠端分支</div>
+          <div class="branch-section-label">Remote branches</div>
           <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">尚未設定遠端</div>
           <div
             v-for="b in gitBranches.filter(x => x.is_remote)"
@@ -1731,7 +1731,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <span class="b-check">{{ b.has_local ? '✓' : '' }}</span>
             <span class="b-name remote">{{ b.name }}</span>
             <div class="spacer" />
-            <button v-if="!b.has_local" class="row-btn always" title="Checkout 到本地" @click.stop="doCheckoutRemote(b.name)">⬇</button>
+            <button v-if="!b.has_local" class="row-btn always" title="Checkout locally" @click.stop="doCheckoutRemote(b.name)">⬇</button>
           </div>
         </template>
         <div v-if="comparingBranch && compareResult" class="compare-panel">

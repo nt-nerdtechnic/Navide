@@ -154,14 +154,20 @@ async function deleteSelected(): Promise<void> {
     confirmText: 'Delete',
   })
   if (!ok) return
-  const paths = [...selectedKeys.value]
+  // Sort shallowest first; skip children whose ancestor is also selected
+  const paths = [...selectedKeys.value].sort((a, b) => a.split('/').length - b.split('/').length)
+  const deleted = new Set<string>()
   for (const rel of paths) {
+    const parentDeleted = [...deleted].some(d => rel.startsWith(d + '/'))
+    if (parentDeleted) continue
     const res = await props.backend.send<FsResult>('fs.delete', {
       workspace_path: props.workspacePath,
       rel_path: rel,
     })
     if (!res.payload?.ok) {
       void alert(res.payload?.error || `Failed to delete "${rel}"`, { title: 'Error' })
+    } else {
+      deleted.add(rel)
     }
   }
   clearSelection()

@@ -64,7 +64,7 @@ async function loadDiff(): Promise<void> {
       selected.value = {}
       currentHunkIdx.value = -1
     } else {
-      loadError.value = resp.payload?.error || resp.error?.message || '無法載入 diff'
+      loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
     }
   } finally {
     loading.value = false
@@ -103,7 +103,7 @@ async function apply(patch: string, reverse: boolean, cached: boolean): Promise<
     cached,
   })
   if (!(resp.ok && resp.payload?.ok)) {
-    notify.toast(resp.payload?.error || resp.error?.message || 'apply patch 失敗', { type: 'error' })
+    notify.toast(resp.payload?.error || resp.error?.message || 'Failed to apply patch', { type: 'error' })
     return
   }
   await loadDiff()
@@ -133,20 +133,20 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
       <span class="dp-filepath" :title="filepath">{{ filepath }}</span>
       <div class="dp-toolbar-actions">
         <!-- Open file in editor -->
-        <button class="dp-tbtn" title="在編輯器中開啟檔案" @click="emit('open-file', { filepath, name })">
+        <button class="dp-tbtn" title="Open file in editor" @click="emit('open-file', { filepath, name })">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
             <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5H3.75zm6.75.56v2.19c0 .138.112.25.25.25h2.19L10.5 2.06z"/>
           </svg>
         </button>
         <!-- Prev hunk -->
-        <button class="dp-tbtn" title="上一個變更 (↑)" :disabled="!hunkCount || atFirst" @click="prevHunk">
+        <button class="dp-tbtn" title="Previous change (↑)" :disabled="!hunkCount || atFirst" @click="prevHunk">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M7.78 12.53a.75.75 0 0 1-1.06 0L2.47 8.28a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L4.81 7h7.44a.75.75 0 0 1 0 1.5H4.81l2.97 2.97a.75.75 0 0 1 0 1.06z" transform="rotate(90 8 8)"/></svg>
         </button>
         <!-- Next hunk -->
-        <button class="dp-tbtn" title="下一個變更 (↓)" :disabled="!hunkCount || atLast" @click="nextHunk">
+        <button class="dp-tbtn" title="Next change (↓)" :disabled="!hunkCount || atLast" @click="nextHunk">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8.22 3.47a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L11.19 9H3.75a.75.75 0 0 1 0-1.5h7.44L8.22 4.53a.75.75 0 0 1 0-1.06z" transform="rotate(90 8 8)"/></svg>
         </button>
-        <button class="dp-tbtn" title="重新載入 diff" @click="loadDiff">
+        <button class="dp-tbtn" title="Reload diff" @click="loadDiff">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
         </button>
       </div>
@@ -155,10 +155,10 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
     <div ref="bodyRef" class="dp-body">
       <div v-if="loading" class="dp-msg">Loading…</div>
       <div v-else-if="loadError" class="dp-msg err">{{ loadError }}</div>
-      <div v-else-if="isEmpty" class="dp-msg">沒有可顯示的變更（可能是 binary 檔或無差異）</div>
+      <div v-else-if="isEmpty" class="dp-msg">No changes to display (may be a binary file or no diff)</div>
       <div v-else-if="rawDiff === null" class="dp-msg">
-        尚未載入 diff
-        <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">重新載入</button>
+        Diff not loaded
+        <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">Reload</button>
       </div>
       <div v-else class="dp-hunks">
         <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dp-hunk" :class="{ active: hi === currentHunkIdx }">

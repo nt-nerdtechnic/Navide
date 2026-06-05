@@ -110,7 +110,7 @@ async function azDetectCli() {
 }
 async function azPickCli() {
   const result = await window.agentTeam?.pickFile?.({
-    title: '選擇 llama-cli 執行檔',
+    title: 'Select llama-cli executable',
     filters: [{ name: 'Executable', extensions: ['*'] }],
     defaultPath: '/opt/homebrew/bin',
   })
@@ -120,7 +120,7 @@ async function azPickCli() {
 }
 async function azPickGguf() {
   const result = await window.agentTeam?.pickFile?.({
-    title: '選擇 GGUF 模型檔案',
+    title: 'Select GGUF model file',
     filters: [{ name: 'GGUF Model', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
   })
   if (result?.ok && result.path) {
@@ -491,7 +491,7 @@ async function mSave(silent = false) {
     ({ name, command, args, env, enabled }))
   try {
     const resp = await props.backend.send<{ ok: boolean }>('mcp.save_servers', { servers: payload })
-    if (resp.ok) { if (!silent) mSummary.value = '已儲存，MCPManager 重新啟動中…' }
+    if (resp.ok) { if (!silent) mSummary.value = 'Saved — MCP Manager restarting…' }
     else mError.value = resp.error?.message ?? 'Save failed'
   } catch (err) { mError.value = String((err as Error).message ?? err) }
   finally { mSaving.value = false }
@@ -504,7 +504,7 @@ async function mAddFromCatalog(entry: CatalogEntry) {
   mView.value = 'list'
   // Auto-expand env editor if this server needs env vars filled
   if (entry.requiresEnv?.length) mExpandedEnv.value = new Set([...mExpandedEnv.value, entry.name])
-  mSummary.value = `已加入 ${entry.label}`
+  mSummary.value = `Added ${entry.label}`
 }
 
 async function mRemoveServer(idx: number) {
@@ -619,7 +619,7 @@ async function plCreate() {
   plBusy.value = true
   const p = await props.pipelinesApi?.createPipeline(plNewName.value.trim())
   plBusy.value = false
-  if (p) { plNewName.value = ''; plCreating.value = false; plSummary.value = `已新增「${p.name}」` }
+  if (p) { plNewName.value = ''; plCreating.value = false; plSummary.value = `Created "${p.name}"` }
 }
 
 async function plSetActive(id: string) {
@@ -627,7 +627,7 @@ async function plSetActive(id: string) {
   plBusy.value = true
   await props.pipelinesApi?.setActivePipeline(id)
   plBusy.value = false
-  plSummary.value = '已切換預設 pipeline'
+  plSummary.value = 'Default pipeline updated'
 }
 
 function plStartRename(id: string, currentName: string) {
@@ -640,16 +640,16 @@ async function plConfirmRename() {
   plBusy.value = true
   await props.pipelinesApi?.renamePipeline(plRenamingId.value, plRenameText.value.trim())
   plBusy.value = false
-  plSummary.value = '已改名'
+  plSummary.value = 'Renamed'
   plRenamingId.value = ''
 }
 
 async function plDelete(id: string, name: string) {
-  if (!(await notifyConfirm(`確定刪除「${name}」？此操作無法復原。`, { title: '刪除 Pipeline', confirmText: '刪除' }))) return
+  if (!(await notifyConfirm(`Delete "${name}"? This cannot be undone.`, { title: 'Delete Pipeline', confirmText: 'Delete' }))) return
   plBusy.value = true
   await props.pipelinesApi?.deletePipeline(id)
   plBusy.value = false
-  plSummary.value = `已刪除「${name}」`
+  plSummary.value = `Deleted "${name}"`
   plBackToList()
 }
 
@@ -670,7 +670,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">🧠 Analyzer</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">🎨 Appearance</button>
           </div>
-          <button class="s-close" @click="emit('close')" title="關閉 (ESC)">✕</button>
+          <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
 
         <!-- ── ROLES TAB ─────────────────────────────────────────────────── -->
@@ -745,7 +745,7 @@ async function plDelete(id: string, name: string) {
             <span v-if="mSummary" class="mcp-summary-ok">{{ mSummary }}</span>
 
             <div class="mcp-server-list">
-              <div v-if="mLoading" class="mcp-loading">載入中…</div>
+              <div v-if="mLoading" class="mcp-loading">Loading…</div>
 
               <div v-for="(srv, idx) in mServers" :key="srv.name" class="mcp-server-card">
                 <!-- Main row -->
@@ -753,9 +753,9 @@ async function plDelete(id: string, name: string) {
                   <span class="mcp-dot" :class="srv.status ?? 'unknown'"></span>
                   <span class="mcp-server-name">{{ srv.name }}</span>
                   <span class="mcp-spacer"></span>
-                  <button class="mcp-delete-btn" @click="mRemoveServer(idx)" title="移除">🗑</button>
+                  <button class="mcp-delete-btn" @click="mRemoveServer(idx)" title="Remove">🗑</button>
                   <!-- Toggle switch -->
-                  <button class="mcp-toggle" :class="{ on: srv.enabled }" @click="mToggleEnabled(srv)" :title="srv.enabled ? '停用' : '啟用'">
+                  <button class="mcp-toggle" :class="{ on: srv.enabled }" @click="mToggleEnabled(srv)" :title="srv.enabled ? 'Disable' : 'Enable'">
                     <span class="mcp-toggle-thumb"></span>
                   </button>
                 </div>
@@ -767,11 +767,11 @@ async function plDelete(id: string, name: string) {
                 </div>
                 <div v-else-if="srv.status === 'error'" class="mcp-tools-row mcp-tools-error">
                   <span class="mcp-chevron">!</span>
-                  <span>連線失敗 — 請確認 command 是否正確</span>
+                  <span>Connection failed — check that the command is correct</span>
                 </div>
                 <div v-else-if="srv.status === 'disabled'" class="mcp-tools-row mcp-tools-disabled">
                   <span class="mcp-chevron">–</span>
-                  <span>已停用</span>
+                  <span>Disabled</span>
                 </div>
 
                 <!-- Tool list (expanded) -->
@@ -800,20 +800,20 @@ async function plDelete(id: string, name: string) {
                   </div>
                   <!-- Env vars -->
                   <div class="field">
-                    <label class="lbl">Env vars <button class="mcp-add-env-btn" @click.stop="mAddEnvEntry(srv)">+ 新增</button></label>
+                    <label class="lbl">Env vars <button class="mcp-add-env-btn" @click.stop="mAddEnvEntry(srv)">+ Add</button></label>
                     <div v-for="[k, v] in mEnvEntries(srv)" :key="k" class="mcp-env-row">
                       <input :value="k" @change="mSetEnvKey(srv, k, ($event.target as HTMLInputElement).value)" type="text" spellcheck="false" placeholder="KEY" class="mcp-env-key" />
                       <span>=</span>
                       <input :value="v" @input="mSetEnvVal(srv, k, ($event.target as HTMLInputElement).value)" type="text" spellcheck="false" placeholder="value" class="mcp-env-val" @blur="mSave(true)" />
                       <button class="mcp-delete-btn small" @click.stop="mDeleteEnvEntry(srv, k)">✕</button>
                     </div>
-                    <p v-if="!Object.keys(srv.env).length" class="hint-msg" style="margin:4px 0 0">無環境變數</p>
+                    <p v-if="!Object.keys(srv.env).length" class="hint-msg" style="margin:4px 0 0">No environment variables</p>
                   </div>
                 </div>
               </div>
 
               <div v-if="!mLoading && mServers.length === 0" class="mcp-empty">
-                尚未安裝任何 MCP server。點擊「Add MCP +」從目錄加入。
+                No MCP servers installed. Click "Add MCP +" to add one from the catalog.
               </div>
             </div>
           </template>
@@ -821,7 +821,7 @@ async function plDelete(id: string, name: string) {
           <!-- ── CATALOG VIEW ────────────────────────────────────────────── -->
           <template v-else>
             <div class="mcp-topbar">
-              <button class="mcp-back-btn" @click="mView = 'list'">← 返回</button>
+              <button class="mcp-back-btn" @click="mView = 'list'">← Back</button>
               <span class="mcp-page-title">Add MCP Servers</span>
             </div>
 
@@ -831,7 +831,7 @@ async function plDelete(id: string, name: string) {
             </div>
 
             <div class="mcp-catalog-hint">
-              💡 這裡只列<strong>「Orchestrator 讀取上下文用」</strong>的 MCP。讀取 workspace / 文件 / 外部服務的資訊，注入 kickoff prompt 校正 agent 認知。跑測試、瀏覽器操作等執行行為由 CLI agents 自行處理。
+              💡 This catalog lists only <strong>"Orchestrator context-reading"</strong> MCPs — tools that read workspace / docs / external service data and inject it into kickoff prompts to ground agent knowledge. Execution actions (tests, browser automation, etc.) are handled by the CLI agents themselves.
             </div>
 
             <div class="mcp-catalog-list">
@@ -840,13 +840,13 @@ async function plDelete(id: string, name: string) {
                   <div class="mcp-catalog-name">{{ item.label }}</div>
                   <div class="mcp-catalog-desc">{{ item.description }}</div>
                   <div v-if="item.requiresEnv?.length" class="mcp-catalog-note">
-                    ⚠ 需填寫環境變數：{{ item.requiresEnv.join('、') }}
+                    ⚠ Requires env vars: {{ item.requiresEnv.join(', ') }}
                   </div>
                 </div>
-                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>已安裝</button>
+                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>Installed</button>
                 <button v-else class="mcp-add-btn" @click="mAddFromCatalog(item)" :disabled="mSaving">+ Add</button>
               </div>
-              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">找不到符合的 MCP server</div>
+              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">No matching MCP servers found</div>
             </div>
           </template>
 
@@ -855,9 +855,9 @@ async function plDelete(id: string, name: string) {
         <!-- ── ANALYZER TAB ─────────────────────────────────────────────── -->
         <div v-show="activeTab === 'analyzer'" class="s-body analyzer-body">
 
-          <!-- ① 推論後端 -->
+          <!-- ① Inference backend -->
           <div class="az-section">
-            <div class="az-section-title">推論後端</div>
+            <div class="az-section-title">Inference Backend</div>
             <div class="az-backend-toggle">
               <button
                 :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'ollama' }]"
@@ -869,17 +869,17 @@ async function plDelete(id: string, name: string) {
               >llama.cpp</button>
             </div>
 
-            <!-- llama.cpp 特有設定 -->
+            <!-- llama.cpp-specific settings -->
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
               <div class="az-subsection">
-                <label class="az-label">llama-cli 執行檔路徑
-                  <span class="az-hint-inline">（留空使用 PATH 中的預設值）</span>
+                <label class="az-label">llama-cli executable path
+                  <span class="az-hint-inline">(leave blank to use the default from PATH)</span>
                 </label>
                 <div class="az-url-row">
                   <input
                     class="az-input"
                     type="text"
-                    placeholder="例：llama-cli 或 /usr/local/bin/llama-completion"
+                    placeholder="e.g. llama-cli or /usr/local/bin/llama-completion"
                     :value="props.analyzerApi.analyzerSettings.value.llama_cli"
                     @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
                   />
@@ -887,28 +887,28 @@ async function plDelete(id: string, name: string) {
                     class="az-detect-btn"
                     :disabled="azDetecting"
                     @click="azDetectCli"
-                    title="自動掃描 PATH 與常見路徑"
-                  >{{ azDetecting ? '…' : '自動偵測' }}</button>
-                  <button class="az-browse-btn" @click="azPickCli" title="瀏覽…">…</button>
+                    title="Auto-scan PATH and common locations"
+                  >{{ azDetecting ? '…' : 'Auto-detect' }}</button>
+                  <button class="az-browse-btn" @click="azPickCli" title="Browse…">…</button>
                 </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
                     llama-cli {{ props.analyzerApi.health.value?.version }}
                   </span>
-                  <span class="az-version offline" v-else>llama-cli 未偵測到</span>
+                  <span class="az-version offline" v-else>llama-cli not detected</span>
                 </div>
               </div>
 
               <div class="az-subsection">
-                <label class="az-label">自訂 GGUF 模型路徑
-                  <span class="az-hint-inline">（設定後直接使用此檔案，不透過 Ollama）</span>
+                <label class="az-label">Custom GGUF model path
+                  <span class="az-hint-inline">(when set, this file is used directly, bypassing Ollama)</span>
                 </label>
                 <div class="az-url-row">
                   <input
                     class="az-input"
                     type="text"
-                    placeholder="例：/Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
+                    placeholder="e.g. /Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
                     :value="props.analyzerApi.analyzerSettings.value.gguf_path"
                     @change="props.analyzerApi.saveSettings({ gguf_path: ($event.target as HTMLInputElement).value })"
                   />
@@ -916,30 +916,30 @@ async function plDelete(id: string, name: string) {
                     class="az-recheck-btn"
                     :disabled="azRechecking"
                     @click="azRecheck"
-                    title="重新確認檔案是否存在"
+                    title="Re-check whether the file exists"
                   >{{ azRechecking ? '…' : '↻' }}</button>
-                  <button class="az-browse-btn" @click="azPickGguf" title="瀏覽 .gguf 檔案…">…</button>
+                  <button class="az-browse-btn" @click="azPickGguf" title="Browse .gguf files…">…</button>
                 </div>
                 <template v-if="props.analyzerApi.analyzerSettings.value.gguf_path">
                   <div class="az-status-row">
                     <span class="az-status-dot" :class="props.analyzerApi.health.value?.gguf_warning ? 'err' : 'ok'"></span>
                     <span class="az-version" v-if="props.analyzerApi.health.value?.ok && !props.analyzerApi.health.value?.gguf_warning">
-                      檔案存在 · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
+                      File found · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
                     </span>
-                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? '尚未偵測' }}</span>
+                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? 'Not yet detected' }}</span>
                   </div>
                 </template>
                 <div class="az-gguf-hint">
-                  從 <a class="az-link" href="https://huggingface.co/models?library=gguf" target="_blank">HuggingFace</a>
-                  下載 <code>.gguf</code> 檔後填入完整路徑。留空則使用模型管理區的 Ollama 模型。
+                  Download a <code>.gguf</code> file from <a class="az-link" href="https://huggingface.co/models?library=gguf" target="_blank">HuggingFace</a>
+                  and enter the full path here. Leave blank to use the Ollama model selected in the model manager.
                 </div>
               </div>
             </template>
 
-            <!-- Ollama REST 特有設定 -->
+            <!-- Ollama REST-specific settings -->
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'">
               <div class="az-subsection">
-                <label class="az-label">推論用 Server URL</label>
+                <label class="az-label">Inference server URL</label>
                 <div class="az-url-row">
                   <input
                     class="az-input"
@@ -952,35 +952,35 @@ async function plDelete(id: string, name: string) {
                     class="az-recheck-btn"
                     :disabled="azRechecking"
                     @click="azRecheck"
-                    title="重新偵測連線"
+                    title="Re-check connection"
                   >{{ azRechecking ? '…' : '↻' }}</button>
                 </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
-                    Ollama {{ props.analyzerApi.health.value?.version }} 已連線
+                    Ollama {{ props.analyzerApi.health.value?.version }} connected
                   </span>
                   <span class="az-version offline" v-else>
-                    未連線 · 請執行 <code class="az-code">ollama serve</code>
+                    Not connected · run <code class="az-code">ollama serve</code>
                   </span>
                 </div>
               </div>
             </template>
           </div>
 
-          <!-- ② 模型管理（僅 Ollama 模式顯示） -->
+          <!-- ② Model manager (Ollama mode only) -->
           <div v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'" class="az-section az-models-section">
             <div class="az-section-header">
-              <div class="az-section-title">模型管理</div>
-              <span class="az-section-note">下載 · 刪除本地模型</span>
+              <div class="az-section-title">Model Manager</div>
+              <span class="az-section-note">Download · delete local models</span>
             </div>
 
-            <!-- 下載新模型 -->
+            <!-- Pull a new model -->
             <div class="az-pull-row">
               <input
                 class="az-input az-pull-input"
                 type="text"
-                placeholder="模型名稱，例：qwen2.5-coder、llama3.2、gemma3"
+                placeholder="Model name, e.g. qwen2.5-coder, llama3.2, gemma3"
                 v-model="azPullName"
                 @keydown.enter="azDoPull"
               />
@@ -989,15 +989,15 @@ async function plDelete(id: string, name: string) {
                 :disabled="props.analyzerApi.pulling.value || !azPullName.trim()"
                 @click="azDoPull"
               >
-                {{ props.analyzerApi.pulling.value ? '下載中…' : '⬇ 下載' }}
+                {{ props.analyzerApi.pulling.value ? 'Downloading…' : '⬇ Download' }}
               </button>
             </div>
 
-            <!-- 下載進度 -->
+            <!-- Download progress -->
             <div v-if="props.analyzerApi.pulling.value" class="az-progress-wrap">
               <div class="az-progress-label">
                 <span class="az-spin">⏳</span>
-                <span>{{ props.analyzerApi.pullProgress.value?.status ?? '連線中…' }}</span>
+                <span>{{ props.analyzerApi.pullProgress.value?.status ?? 'Connecting…' }}</span>
                 <template v-if="props.analyzerApi.pullProgress.value?.total">
                   <span class="az-pct">
                     {{ Math.round((props.analyzerApi.pullProgress.value.completed ?? 0) / props.analyzerApi.pullProgress.value.total * 100) }}%
@@ -1019,10 +1019,10 @@ async function plDelete(id: string, name: string) {
               ⚠ {{ props.analyzerApi.pullError.value }}
             </div>
 
-            <!-- 已安裝模型列表 -->
+            <!-- Installed models list -->
             <div class="az-model-list">
               <div v-if="props.analyzerApi.models.value.length === 0" class="az-no-models">
-                尚未偵測到本地模型。請先執行 <code>ollama pull &lt;模型名稱&gt;</code> 或在上方輸入框下載。
+                No local models detected. Run <code>ollama pull &lt;model-name&gt;</code> or use the download field above.
               </div>
               <div
                 v-for="m in props.analyzerApi.models.value"
@@ -1036,59 +1036,59 @@ async function plDelete(id: string, name: string) {
                     <template v-if="m.size > 0"> · {{ (m.size / 1e9).toFixed(1) }} GB</template>
                   </span>
                 </div>
-                <button class="az-del-btn" @click="azDoDelete(m.name)" title="從本地刪除">✕</button>
+                <button class="az-del-btn" @click="azDoDelete(m.name)" title="Delete locally">✕</button>
               </div>
             </div>
           </div>
 
-          <!-- ③ 模型測試 (Benchmark) -->
+          <!-- ③ Model benchmark -->
           <div class="az-section az-benchmark-section">
             <div class="az-section-header">
-              <div class="az-section-title">模型測試 (Benchmark)</div>
+              <div class="az-section-title">Model Benchmark</div>
               <button
                 class="az-run-btn"
                 :disabled="props.analyzerApi.benchmarking.value || !props.analyzerApi.health.value?.ok"
                 @click="props.analyzerApi.benchmark()"
               >
-                {{ props.analyzerApi.benchmarking.value ? '⏳ 偵測中…' : '🧪 執行測試' }}
+                {{ props.analyzerApi.benchmarking.value ? '⏳ Running…' : '🧪 Run benchmark' }}
               </button>
             </div>
 
             <div v-if="props.analyzerApi.benchmarking.value" class="az-progress-wrap">
               <div v-if="props.analyzerApi.benchmarkProgress.value" class="az-progress-label">
                 <span class="az-spin">⏳</span>
-                測試中：<strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
+                Testing: <strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
                 · {{ props.analyzerApi.benchmarkProgress.value.task_id }}
               </div>
-              <div v-else class="az-progress-label">準備中…</div>
+              <div v-else class="az-progress-label">Preparing…</div>
             </div>
 
             <div v-if="!props.analyzerApi.benchmarking.value && props.analyzerApi.benchmarkResults.value.length === 0" class="az-hint">
-              <p>對所有本地模型跑 4 項標準任務，判斷哪些模型適合用於 pipeline 意圖判讀：</p>
+              <p>Runs 4 standard tasks against all local models to determine which ones are suitable for pipeline intent detection:</p>
               <ul>
-                <li><strong>T1</strong> 技術棧偵測 — 輸出 JSON <code>{libraries, doc_query}</code></li>
-                <li><strong>T2</strong> 工作區摘要 — 繁體中文一句話摘要</li>
-                <li><strong>T3</strong> 相關性選擇 — 從文件清單挑出最相關項目</li>
-                <li><strong>T4</strong> CLI 意圖解析 — 解析 agent 輸出並提取問題與選項</li>
+                <li><strong>T1</strong> Tech stack detection — outputs JSON <code>{libraries, doc_query}</code></li>
+                <li><strong>T2</strong> Workspace summary — one-sentence summary</li>
+                <li><strong>T3</strong> Relevance selection — picks the most relevant item from a doc list</li>
+                <li><strong>T4</strong> CLI intent parsing — parses agent output and extracts questions and options</li>
               </ul>
-              <p class="az-pass-rule">通過門檻：4 項中至少 3 項 (≥75%)。不合格模型將從 Model 下拉選單隱藏。</p>
+              <p class="az-pass-rule">Pass threshold: at least 3 of 4 tasks (≥75%). Models that fail will be hidden from the Model dropdown.</p>
             </div>
 
             <div v-if="props.analyzerApi.benchmarkResults.value.length > 0" class="az-results">
               <div class="az-results-summary">
-                通過
+                Passed
                 <strong>{{ props.analyzerApi.benchmarkResults.value.filter(r => r.passed).length }}</strong>
                 /
                 {{ props.analyzerApi.benchmarkResults.value.length }}
-                個模型
+                model(s)
               </div>
               <table class="az-table">
                 <thead>
                   <tr>
-                    <th class="az-th-model">模型</th>
+                    <th class="az-th-model">Model</th>
                     <th v-for="t in ['T1','T2','T3','T4']" :key="t" class="az-th-task">{{ t }}</th>
-                    <th class="az-th-score">分數</th>
-                    <th class="az-th-verdict">判定</th>
+                    <th class="az-th-score">Score</th>
+                    <th class="az-th-verdict">Verdict</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1109,8 +1109,8 @@ async function plDelete(id: string, name: string) {
                     </td>
                     <td class="az-td-score">{{ r.score }}/{{ r.tasks.length }}</td>
                     <td class="az-td-verdict">
-                      <span v-if="r.passed" class="az-badge-pass">合格</span>
-                      <span v-else class="az-badge-fail">排除</span>
+                      <span v-if="r.passed" class="az-badge-pass">Pass</span>
+                      <span v-else class="az-badge-fail">Excluded</span>
                     </td>
                   </tr>
                 </tbody>
@@ -1126,14 +1126,14 @@ async function plDelete(id: string, name: string) {
           <!-- ── LIST VIEW ──────────────────────────────────────────────── -->
           <template v-if="plView === 'list'">
             <div class="tab-toolbar">
-              <button class="ghost" @click="plCreating = !plCreating" :disabled="plBusy">＋ 新增 Pipeline</button>
+              <button class="ghost" @click="plCreating = !plCreating" :disabled="plBusy">＋ New Pipeline</button>
               <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
             </div>
             <div v-if="plCreating" class="pl-create-row">
-              <input v-model="plNewName" type="text" placeholder="流程名稱…" class="pl-input"
+              <input v-model="plNewName" type="text" placeholder="Pipeline name…" class="pl-input"
                 @keyup.enter="plCreate" @keyup.escape="plCreating = false; plNewName = ''" />
-              <button class="ghost" :disabled="!plNewName.trim() || plBusy" @click="plCreate">確認新增</button>
-              <button class="ghost" @click="plCreating = false; plNewName = ''">取消</button>
+              <button class="ghost" :disabled="!plNewName.trim() || plBusy" @click="plCreate">Create</button>
+              <button class="ghost" @click="plCreating = false; plNewName = ''">Cancel</button>
             </div>
             <ul v-if="pipelinesApi?.pipelines.value.length" class="pl-list">
               <li v-for="p in pipelinesApi.pipelines.value" :key="p.id"
@@ -1141,20 +1141,20 @@ async function plDelete(id: string, name: string) {
                   @click="plEnterDetail(p.id)" role="button">
                 <div class="pl-item-main">
                   <span class="pl-name">{{ p.name }}</span>
-                  <span class="pl-meta">{{ p.stage_count }} 階段</span>
-                  <span v-if="p.id === pipelinesApi.activePipelineId.value" class="pl-badge active">預設</span>
+                  <span class="pl-meta">{{ p.stage_count }} stage(s)</span>
+                  <span v-if="p.id === pipelinesApi.activePipelineId.value" class="pl-badge active">Default</span>
                   <span class="pl-enter">›</span>
                 </div>
               </li>
             </ul>
-            <p v-else class="hint">尚未載入 pipelines…</p>
+            <p v-else class="hint">No pipelines loaded yet…</p>
           </template>
 
           <!-- ── DETAIL VIEW: pipeline + stage editor ───────────────────── -->
           <template v-else>
             <!-- Detail header: back + pipeline name (inline rename) + actions -->
             <div class="pl-detail-header">
-              <button class="pl-back-btn" @click="plBackToList">← 返回</button>
+              <button class="pl-back-btn" @click="plBackToList">← Back</button>
               <!-- Inline rename mode -->
               <template v-if="plRenamingId === plEditingId">
                 <input v-model="plRenameText" class="pl-input pl-rename" autofocus
@@ -1168,7 +1168,7 @@ async function plDelete(id: string, name: string) {
                   {{ plCurrentPipeline?.name }}
                   <button class="pl-rename-icon" :disabled="plBusy"
                     @click="plStartRename(plEditingId, plCurrentPipeline?.name ?? '')"
-                    title="改名">✎</button>
+                    title="Rename">✎</button>
                 </h3>
               </template>
               <div class="pl-detail-actions">

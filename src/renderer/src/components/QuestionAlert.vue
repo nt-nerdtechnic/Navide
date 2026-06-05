@@ -160,12 +160,12 @@ const queueBadge = computed(() =>
 
         <!-- Auto-answer status bar -->
         <div v-if="autoMode" class="auto-bar">
-          <span v-if="!autoText" class="auto-spinner">🤖 LLM 自動回覆中…</span>
-          <span v-else class="auto-answer-preview">🤖 自動回覆：{{ autoText.slice(0, 120) }}{{ autoText.length > 120 ? '…' : '' }}</span>
+          <span v-if="!autoText" class="auto-spinner">🤖 Auto-answering via LLM…</span>
+          <span v-else class="auto-answer-preview">🤖 Auto-answer: {{ autoText.slice(0, 120) }}{{ autoText.length > 120 ? '…' : '' }}</span>
         </div>
 
         <footer>
-          <span v-if="autoMode" class="hint ok">🤖 全自動模式 — 即將自動送出</span>
+          <span v-if="autoMode" class="hint ok">🤖 Auto mode — submitting automatically</span>
           <span v-else-if="!allAnswered" class="hint">Answer all {{ questions.length }} question(s) to send.</span>
           <span v-else class="hint ok">⌘+Enter to send</span>
           <div class="actions">

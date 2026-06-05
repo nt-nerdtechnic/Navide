@@ -38,9 +38,9 @@ watch(
 )
 
 const STEPS = [
-  { n: 1, label: '基礎環境' },
-  { n: 2, label: 'Agent 與 Analyzer' },
-  { n: 3, label: '就緒確認' },
+  { n: 1, label: 'Foundation' },
+  { n: 2, label: 'Agent & Analyzer' },
+  { n: 3, label: 'Ready check' },
 ]
 
 async function installMissing(deps: OnboardDep[]): Promise<void> {
@@ -57,7 +57,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   <div class="ob-overlay">
     <div class="ob-modal">
       <header class="ob-header">
-        <div class="ob-title">Agent-Team · 環境設定</div>
+        <div class="ob-title">Agent-Team · Environment Setup</div>
         <ol class="ob-steps">
           <li
             v-for="s in STEPS"
@@ -72,7 +72,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       <div class="ob-body">
         <!-- Step 1 -->
         <section v-if="step === 1">
-          <p class="ob-hint">安裝執行 Agent-Team 所需的基礎工具。已安裝者顯示綠勾。</p>
+          <p class="ob-hint">Install the foundational tools required to run Agent-Team. Already-installed items show a green checkmark.</p>
           <OnboardingDepRow
             v-for="d in ob.foundationDeps.value"
             :key="d.id"
@@ -81,14 +81,14 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             @install="ob.install(d)"
           />
           <div class="ob-row-actions">
-            <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">一鍵安裝缺少項</button>
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? '偵測中…' : '重新偵測' }}</button>
+            <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">Install missing</button>
+            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
           </div>
         </section>
 
         <!-- Step 2 -->
         <section v-else-if="step === 2">
-          <p class="ob-hint">至少需要一個 Agent CLI（claude / codex / gemini）。偵測通過僅代表 binary 在 PATH，<b>不保證已登入</b>，請於外部終端機完成登入。</p>
+          <p class="ob-hint">At least one Agent CLI (claude / codex / gemini) is required. Detection only confirms the binary is in PATH — <b>it does not verify you are logged in</b>. Complete login in an external terminal.</p>
           <OnboardingDepRow
             v-for="d in ob.cliDeps.value"
             :key="d.id"
@@ -96,7 +96,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             :installing="ob.installing.value"
             @install="ob.install(d)"
           />
-          <p class="ob-hint" style="margin-top:14px">Analyzer 需要 Ollama + 至少一個模型。</p>
+          <p class="ob-hint" style="margin-top:14px">Analyzer requires Ollama + at least one model.</p>
           <OnboardingDepRow
             v-for="d in ob.analyzerDeps.value"
             :key="d.id"
@@ -108,15 +108,15 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           <!-- Model picker -->
           <div class="ob-models">
             <div class="ob-models-head">
-              <span class="ob-models-title">分析模型</span>
-              <span class="ob-models-sub">選一個下載即可；任一已安裝模型都能通過。</span>
+              <span class="ob-models-title">Analysis model</span>
+              <span class="ob-models-sub">Download any one; any installed model will pass.</span>
             </div>
 
             <div class="ob-installed">
               <template v-if="ob.models.value.length">
                 <span v-for="m in ob.models.value" :key="m" class="ob-chip ok">✓ {{ m }}</span>
               </template>
-              <span v-else class="ob-chip empty">尚未安裝任何模型</span>
+              <span v-else class="ob-chip empty">No models installed</span>
             </div>
 
             <div class="ob-model-grid">
@@ -132,8 +132,8 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
                 <span class="ob-model-info">
                   <span class="ob-model-name">
                     {{ m.name }}
-                    <span v-if="m.recommended" class="ob-tag rec">推薦</span>
-                    <span v-if="isInstalled(m.name)" class="ob-tag inst">已安裝</span>
+                    <span v-if="m.recommended" class="ob-tag rec">Recommended</span>
+                    <span v-if="isInstalled(m.name)" class="ob-tag inst">Installed</span>
                   </span>
                   <span class="ob-model-desc">{{ m.desc }}</span>
                 </span>
@@ -142,34 +142,34 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             </div>
 
             <label class="ob-model-custom">
-              <span class="ob-model-custom-label">其他模型</span>
+              <span class="ob-model-custom-label">Other model</span>
               <input
                 v-model="customModel"
                 class="ob-input"
-                placeholder="例：codellama:7b、gemma3:4b"
+                placeholder="e.g. codellama:7b, gemma3:4b"
                 spellcheck="false"
               />
             </label>
 
             <div class="ob-row-actions">
               <button class="ob-btn primary small" :disabled="!pullTarget" @click="ob.pullModel(pullTarget)">
-                下載 {{ pullTarget || '模型' }}
+                Download {{ pullTarget || 'model' }}
               </button>
-              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? '偵測中…' : '重新偵測' }}</button>
+              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
             </div>
           </div>
         </section>
 
         <!-- Step 3 -->
         <section v-else>
-          <p class="ob-hint">全部必要項目就緒後即可進入主畫面。</p>
+          <p class="ob-hint">Once all required items are ready, you can enter the main screen.</p>
           <ul class="ob-gate">
-            <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> 基礎環境全部就緒</li>
-            <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> 至少一個 Agent CLI</li>
-            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> Ollama + 至少一個模型</li>
+            <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> Foundation environment ready</li>
+            <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> At least one Agent CLI</li>
+            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> Ollama + at least one model</li>
           </ul>
           <div class="ob-row-actions">
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? '偵測中…' : '重新偵測' }}</button>
+            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
           </div>
         </section>
 
@@ -180,16 +180,16 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       </div>
 
       <footer class="ob-footer">
-        <button v-if="step > 1" class="ob-btn ghost" @click="step--">上一步</button>
+        <button v-if="step > 1" class="ob-btn ghost" @click="step--">Back</button>
         <span class="ob-spacer" />
-        <button v-if="step < 3" class="ob-btn primary" @click="step++">下一步</button>
+        <button v-if="step < 3" class="ob-btn primary" @click="step++">Next</button>
         <button
           v-else
           class="ob-btn primary"
           :disabled="!ob.allRequiredReady.value"
-          :title="ob.allRequiredReady.value ? '' : '尚有必要項目未就緒'"
+          :title="ob.allRequiredReady.value ? '' : 'Some required items are not yet ready'"
           @click="ob.markComplete().then(() => emit('complete'))"
-        >進入 Agent-Team</button>
+        >Open Agent-Team</button>
       </footer>
     </div>
   </div>

@@ -743,8 +743,8 @@ defineExpose({
           placeholder="Replace…"
           @keydown="onReplaceKeydown"
         />
-        <button class="ep-find-nav" title="取代 (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>
-        <button class="ep-find-nav" title="全部取代 (⌥↵)" :disabled="!findMatches.length" @click="replaceAll">⇥⇥</button>
+        <button class="ep-find-nav" title="Replace (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>
+        <button class="ep-find-nav" title="Replace all (⌥↵)" :disabled="!findMatches.length" @click="replaceAll">⇥⇥</button>
       </div>
     </div>
 
