@@ -121,6 +121,8 @@ const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
 const followUps = ref<string[]>([])
+const streamNow = ref(Date.now())
+let streamTickInterval: number | null = null
 
 // ── Conversation thread persistence ──────────────────────────────────────────
 interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
@@ -994,6 +996,7 @@ async function sendMessage(): Promise<void> {
   if (!rawText && contextChips.value.length === 0) return
   if (sending.value) return
   followUps.value = []
+  streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
   let fullContent = ''
@@ -1352,6 +1355,7 @@ function setupListeners(): void {
     }
     sending.value = false
     currentSessionId.value = null
+    if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
   })
 
   unsubError = props.backend.on('ai.chat.error', (payload) => {
@@ -1366,6 +1370,7 @@ function setupListeners(): void {
     }
     sending.value = false
     currentSessionId.value = null
+    if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
     void scrollBottom()
   })
 
@@ -2088,7 +2093,12 @@ function getDateLabel(ts: number): string {
             <span class="ai-thinking-label">Thinking…</span>
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
-          <span v-if="msg.streaming && msg.content.length > 0" class="ai-stream-tokens">~{{ Math.ceil(msg.content.length / 4) }} tokens</span>
+          <span v-if="msg.streaming && msg.content.length > 0" class="ai-stream-tokens">
+            ~{{ Math.ceil(msg.content.length / 4) }}t
+            <template v-if="msg.responseStartMs && streamNow - msg.responseStartMs > 500">
+              · {{ Math.round(Math.ceil(msg.content.length / 4) / ((streamNow - msg.responseStartMs) / 1000)) }}t/s
+            </template>
+          </span>
 
           <!-- Error card -->
           <div v-if="msg.isError" class="ai-error-card">
