@@ -131,10 +131,28 @@ const renamingThreadId = ref('')
 const renamingTitle = ref('')
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
-  const list = q ? allThreads.value.filter((t) => t.title.toLowerCase().includes(q)) : allThreads.value
+  const list = q
+    ? allThreads.value.filter((t) =>
+        t.title.toLowerCase().includes(q) ||
+        t.messages.some((m) => m.content.toLowerCase().includes(q)),
+      )
+    : allThreads.value
   // Pinned threads always at top, then by updatedAt desc (array is already sorted that way)
   return [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]
 })
+
+function getThreadMatchSnippet(thread: ChatThread, q: string): string {
+  if (!q) return ''
+  for (const m of thread.messages) {
+    const idx = m.content.toLowerCase().indexOf(q.toLowerCase())
+    if (idx >= 0) {
+      const start = Math.max(0, idx - 20)
+      const end = Math.min(m.content.length, idx + q.length + 40)
+      return (start > 0 ? '…' : '') + m.content.slice(start, end).replace(/\n/g, ' ') + (end < m.content.length ? '…' : '')
+    }
+  }
+  return ''
+}
 
 function togglePinThread(id: string, e: Event): void {
   e.stopPropagation()
@@ -2184,6 +2202,7 @@ function getDateLabel(ts: number): string {
               title="Double-click to rename"
               @dblclick.stop="startRenameThread(t.id, t.title, $event)"
             >{{ t.pinned ? '📌 ' : '' }}{{ t.title }}</span>
+            <span v-if="threadSearchQuery && !t.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(t, threadSearchQuery) }}</span>
           </div>
           <div class="ai-thread-meta">
             <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
@@ -3242,7 +3261,8 @@ function getDateLabel(ts: number): string {
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.1s;
 }
-.ai-thread-main { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ai-thread-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ai-thread-snippet { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.7; }
 .ai-thread-meta { display: flex; align-items: center; gap: 4px; }
 .ai-thread-item:hover { background: var(--bg-muted); }
 .ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
