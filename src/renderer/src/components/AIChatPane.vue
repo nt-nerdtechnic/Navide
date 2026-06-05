@@ -1651,6 +1651,18 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     newThread()
   }
+  // Ctrl+Shift+K — clear current conversation
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'k') {
+    e.preventDefault()
+    clearConversation()
+  }
+  // Ctrl+Enter — regenerate last AI response (when not sending)
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !sending.value && !e.shiftKey) {
+    if (inputText.value.trim() === '' && lastAssistantIdx.value >= 0) {
+      e.preventDefault()
+      void regenerate()
+    }
+  }
 }
 
 // Auto-resize textarea
@@ -2176,7 +2188,9 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>↑ / ↓</kbd></td><td>Browse input history</td></tr>
           <tr><td><kbd>Ctrl+L</kbd></td><td>Focus AI chat input</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
+          <tr><td><kbd>Ctrl+Shift+K</kbd></td><td>Clear current conversation</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
+          <tr><td><kbd>Ctrl+Enter</kbd></td><td>Regenerate last response (empty input)</td></tr>
           <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>
           <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix…)</td></tr>
           <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
