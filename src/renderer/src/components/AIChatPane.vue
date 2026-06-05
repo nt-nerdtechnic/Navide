@@ -170,7 +170,7 @@ function _doSave(): void {
   allThreads.value[idx].messages = toSave
   allThreads.value[idx].updatedAt = Date.now()
   const firstUser = toSave.find((m) => m.role === 'user')
-  if (firstUser && allThreads.value[idx].title === 'New chat') {
+  if (firstUser && (allThreads.value[idx].title === 'New chat' || allThreads.value[idx].title === '新對話')) {
     // Truncate at word boundary within 40 chars
     const raw = firstUser.content.replace(/\s+/g, ' ').trim()
     const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
