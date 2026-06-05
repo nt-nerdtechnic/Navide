@@ -155,27 +155,32 @@ function loadThreads(): void {
   messages.value = latest.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
 }
 
+function _doSave(): void {
+  const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
+  if (idx === -1) return
+  const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
+  allThreads.value[idx].messages = toSave
+  allThreads.value[idx].updatedAt = Date.now()
+  const firstUser = toSave.find((m) => m.role === 'user')
+  if (firstUser && allThreads.value[idx].title === '新對話') {
+    // Truncate at word boundary within 40 chars
+    const raw = firstUser.content.replace(/\s+/g, ' ').trim()
+    const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
+    allThreads.value[idx].title = cut
+  }
+  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value.slice(0, MAX_THREADS))) }
+  catch { /* quota */ }
+}
+
 function saveCurrentThread(): void {
   if (saveTimer !== null) clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => {
-    const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
-    if (idx === -1) return
-    const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
-    allThreads.value[idx].messages = toSave
-    allThreads.value[idx].updatedAt = Date.now()
-    // Auto-update title from first user message
-    const firstUser = toSave.find((m) => m.role === 'user')
-    if (firstUser && allThreads.value[idx].title === '新對話') {
-      allThreads.value[idx].title = firstUser.content.slice(0, 40)
-    }
-    try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value.slice(0, MAX_THREADS))) }
-    catch { /* quota */ }
-  }, 1000)
+  saveTimer = window.setTimeout(() => { _doSave() }, 1000)
 }
 
 function newThread(): void {
   if (sending.value) stopStreaming()
-  saveCurrentThread()
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  _doSave()
   const id = newThreadId()
   const thread: ChatThread = { id, title: '新對話', messages: [], updatedAt: Date.now() }
   allThreads.value.unshift(thread)
@@ -187,7 +192,8 @@ function newThread(): void {
 function switchThread(id: string): void {
   if (id === currentThreadId.value) { showThreads.value = false; return }
   if (sending.value) stopStreaming()
-  saveCurrentThread()
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  _doSave()
   const thread = allThreads.value.find((t) => t.id === id)
   if (!thread) return
   currentThreadId.value = id
