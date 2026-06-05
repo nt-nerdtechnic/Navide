@@ -639,6 +639,11 @@ defineExpose({
   getContent: () => content.value,
   getSelection: () => editorRef.value?.getSelectionText() ?? '',
   insertTextAtCursor: (text: string) => editorRef.value?.insertText(text),
+  getCursorLineText: (): string => {
+    const cur = editorRef.value?.getCursor()
+    if (!cur) return ''
+    return content.value.split('\n')[cur.line] ?? ''
+  },
 })
 </script>
 

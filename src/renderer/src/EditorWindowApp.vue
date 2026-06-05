@@ -671,6 +671,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
   { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
   { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
+  { id: 'editor.action.openFileAtCursor', label: 'Open File at Cursor', keys: 'F12' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')

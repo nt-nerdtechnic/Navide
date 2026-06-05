@@ -128,4 +128,5 @@ export const defaults: KeybindingRule[] = [
   // ── Navigation ────────────────────────────────────────────────────────────────
   { key: 'cmd+k cmd+q', command: 'editor.action.navigateToLastEditLocation', when: 'editorOpen' },
   { key: 'cmd+k cmd+d', command: 'editor.action.moveSelectionToNextFindMatch', when: 'editorTextFocus' },
+  { key: 'f12',         command: 'editor.action.openFileAtCursor',             when: 'editorTextFocus' },
 ]

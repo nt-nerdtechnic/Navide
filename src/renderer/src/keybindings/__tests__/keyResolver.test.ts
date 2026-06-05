@@ -687,3 +687,17 @@ describe('focusActiveEditorGroup shortcut', () => {
     expect(dr.resolve(mkEvent('e', { metaKey: true }), {})).toBeNull()
   })
 })
+
+describe('openFileAtCursor shortcut (F12)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('F12 → openFileAtCursor (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('F12'), { editorTextFocus: true })?.command)
+      .toBe('editor.action.openFileAtCursor')
+  })
+
+  it('F12 requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('F12'), {})).toBeNull()
+  })
+})
