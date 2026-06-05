@@ -340,6 +340,7 @@ function _wordRightPos(pos: Position): Position {
 
 function moveWordLeft(extend: boolean): void {
   preferredCol = -1
+  ghost.value = null
   startOrClearSelection(extend)
   cursor.value = _wordLeftPos(cursor.value)
   void nextTick(scrollCursorIntoView)
@@ -347,6 +348,7 @@ function moveWordLeft(extend: boolean): void {
 
 function moveWordRight(extend: boolean): void {
   preferredCol = -1
+  ghost.value = null
   startOrClearSelection(extend)
   cursor.value = _wordRightPos(cursor.value)
   void nextTick(scrollCursorIntoView)
@@ -764,9 +766,12 @@ function formatDocument(): void {
   const lc = model.lineCount()
   const lines: string[] = []
   for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
-  // Ensure single trailing newline (drop empty-only trailing lines, keep one)
-  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-  lines.push('')
+  // Ensure single trailing newline, but only for non-empty documents.
+  // An empty document stays empty — adding '\n' would corrupt it.
+  if (lines.some(l => l !== '')) {
+    while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+    lines.push('')
+  }
   const newText = lines.join('\n')
   if (newText === model.getValue()) return
   const savedCursor = { ...cursor.value }
