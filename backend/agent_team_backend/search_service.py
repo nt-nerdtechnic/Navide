@@ -81,7 +81,7 @@ def find_in_files(
     try:
         pattern = _build_pattern(query, is_regex, whole_word, case_sensitive)
     except re.error as e:
-        return {"ok": False, "error": f"正則錯誤: {e}"}
+        return {"ok": False, "error": f"Regex error: {e}"}
 
     rg = _rg_bin()
     if rg:
@@ -128,9 +128,9 @@ def _find_rg(
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=_TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "搜尋逾時"}
+        return {"ok": False, "error": "Search timed out"}
     if proc.returncode not in (0, 1):  # 0 = matches, 1 = none, 2 = error
-        return {"ok": False, "error": (proc.stderr or "搜尋失敗").strip()[:500]}
+        return {"ok": False, "error": (proc.stderr or "Search failed").strip()[:500]}
 
     grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -246,11 +246,11 @@ def replace_in_files(
     (``\\1``); otherwise it is inserted literally.
     """
     if not query:
-        return {"ok": False, "error": "查詢字串為空"}
+        return {"ok": False, "error": "Query is empty"}
     try:
         pattern = _build_pattern(query, is_regex, whole_word, case_sensitive)
     except re.error as e:
-        return {"ok": False, "error": f"正則錯誤: {e}"}
+        return {"ok": False, "error": f"Regex error: {e}"}
 
     repl: Any = replacement if is_regex else (lambda _m: replacement)
     changed: list[dict[str, Any]] = []
@@ -273,7 +273,7 @@ def replace_in_files(
         try:
             target.write_text(new_content, encoding="utf-8")
         except OSError as e:
-            return {"ok": False, "error": f"寫入失敗 {rel}: {e}"}
+            return {"ok": False, "error": f"Write failed {rel}: {e}"}
         changed.append({"rel_path": rel, "count": n})
         total += n
 
