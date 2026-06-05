@@ -286,8 +286,8 @@ const closedHistory: Array<{ relPath: string; name: string }> = []
 async function closeFile(relPath: string): Promise<void> {
   const f = openFiles.value.find((x) => x.relPath === relPath)
   if (f?.dirty) {
-    const ok = await confirm(`「${f.name}」有未存檔的變更，確定要關閉？`, {
-      title: '關閉檔案', confirmText: '關閉',
+    const ok = await confirm(`"${f.name}" has unsaved changes. Close anyway?`, {
+      title: 'Close File', confirmText: 'Close',
     })
     if (!ok) return
   }
@@ -401,7 +401,7 @@ registerCommand('workbench.action.openFolder', async () => {
 })
 registerCommand('workbench.action.reloadWindow', () => { window.location.reload() })
 registerCommand('workbench.action.openFile', async () => {
-  const result = await window.agentTeam?.pickFile({ title: '開啟檔案' })
+  const result = await window.agentTeam?.pickFile({ title: 'Open File' })
   if (!result?.ok || !result.path) return
   const prefix = workspacePath.replace(/\/+$/, '') + '/'
   const relPath = result.path.startsWith(prefix) ? result.path.slice(prefix.length) : result.path
@@ -433,8 +433,8 @@ registerCommand('workbench.action.saveAll', async () => {
 registerCommand('workbench.action.closeAllEditors', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要全部關閉？`, {
-      title: '關閉所有分頁', confirmText: '全部關閉',
+    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, {
+      title: 'Close All Tabs', confirmText: 'Close All',
     })
     if (!ok) return
   }
@@ -446,8 +446,8 @@ registerCommand('workbench.action.closeOtherEditors', async () => {
   if (!cur) return
   const others = openFiles.value.filter((f) => f.relPath !== cur && f.kind === 'file' && f.dirty)
   if (others.length > 0) {
-    const ok = await confirm(`有 ${others.length} 個未存檔的檔案，確定要關閉其他分頁？`, {
-      title: '關閉其他分頁', confirmText: '關閉',
+    const ok = await confirm(`${others.length} file(s) have unsaved changes. Close other tabs anyway?`, {
+      title: 'Close Other Tabs', confirmText: 'Close',
     })
     if (!ok) return
   }
@@ -460,8 +460,8 @@ registerCommand('workbench.action.closeEditorsToTheRight', async () => {
   if (idx < 0) return
   const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉右側分頁？`, {
-      title: '關閉右側分頁', confirmText: '關閉',
+    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, {
+      title: 'Close Tabs to the Right', confirmText: 'Close',
     })
     if (!ok) return
   }
@@ -474,8 +474,8 @@ registerCommand('workbench.action.closeEditorsToTheLeft', async () => {
   if (idx <= 0) return
   const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉左側分頁？`, {
-      title: '關閉左側分頁', confirmText: '關閉',
+    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, {
+      title: 'Close Tabs to the Left', confirmText: 'Close',
     })
     if (!ok) return
   }
@@ -697,10 +697,10 @@ const qoIdx = ref(0)
 const qoInputEl = ref<HTMLInputElement | null>(null)
 const qoPlaceholder = computed(() => {
   const q = qoQuery.value
-  if (q.startsWith(':')) return '輸入行號跳轉… (例: :42)'
-  if (q === '@:') return '顯示所有符號分組'
-  if (q.startsWith('@')) return '輸入符號名稱… (例: @myFunction  @:分組)'
-  return '搜尋開放的檔案… (:行號  @符號  >指令)'
+  if (q.startsWith(':')) return 'Enter line number to jump to… (e.g. :42)'
+  if (q === '@:') return 'Show all symbols grouped'
+  if (q.startsWith('@')) return 'Enter symbol name… (e.g. @myFunction  @:grouped)'
+  return 'Search open files… (:line  @symbol  >command)'
 })
 const qoItems = computed((): QoItem[] => {
   const q = qoQuery.value
@@ -732,16 +732,22 @@ const qoItems = computed((): QoItem[] => {
     }
     return out
   }
-  // default: fuzzy-filter open files (subsequence match, prefer name hits)
+  // default: fuzzy-filter open + recently-closed files (subsequence match)
   const ql = q.toLowerCase()
   const files = openFiles.value.filter((f) => f.kind === 'file')
-  if (!ql) return files.map((f): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
-  type Scored = { f: typeof files[0]; score: number }
+  const openSet = new Set(files.map((f) => f.relPath))
+  const recentClosed = [...closedHistory].reverse().filter((r) => !openSet.has(r.relPath)).slice(0, 20)
+    .map((r) => ({ name: r.name, relPath: r.relPath, kind: 'file' as const, isDir: false }))
+  if (!ql) {
+    const openItems = files.map((f): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
+    const closedItems = recentClosed.slice(0, 8).map((r): QoFileItem => ({ qoKind: 'file', name: r.name, relPath: r.relPath }))
+    return [...openItems, ...closedItems]
+  }
+  type Scored = { f: (typeof files[0]) | (typeof recentClosed[0]); score: number }
   const scored: Scored[] = []
-  for (const f of files) {
+  for (const f of [...files, ...recentClosed]) {
     const nameLow = f.name.toLowerCase()
     const pathLow = f.relPath.toLowerCase()
-    // Substring match scores higher than fuzzy subsequence match
     const nameHit = nameLow.includes(ql) ? 2 : _fuzzyScore(ql, nameLow)
     const pathHit = pathLow.includes(ql) ? 1 : _fuzzyScore(ql, pathLow) * 0.5
     const best = Math.max(nameHit, pathHit)
@@ -970,7 +976,7 @@ registerCommand('workbench.action.closeModal', () => {
 // ── New file (⌘N) ─────────────────────────────────────────────────────────────
 registerCommand('workbench.action.newFile', async () => {
   if (!workspacePath) return
-  const name = window.prompt('新檔案路徑（相對工作區）：', 'untitled.txt')
+  const name = window.prompt('New file path (relative to workspace):', 'untitled.txt')
   if (!name?.trim()) return
   const relPath = name.trim()
   const resp = await backend.send('fs.write_file', { workspace_path: workspacePath, rel_path: relPath, content: '' })
