@@ -593,6 +593,10 @@ function renderMarkdownLite(rawText: string): string {
   html = html.replace(/`([^`\n]+)`/g, (_, c) =>
     `<code class="ai-inline-code">${c.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`,
   )
+  // Auto-link URLs (not inside existing tags)
+  html = html.replace(/(?<![="'])https?:\/\/[^\s<>"')\]]+/g,
+    (url) => `<a class="ai-link" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+  )
 
   // 4. Restore code blocks
   html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[Number(i)])
@@ -2102,6 +2106,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
   font-size: 0.9em;
 }
+.ai-text :deep(a.ai-link) {
+  color: var(--accent-fg);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.ai-text :deep(a.ai-link:hover) { opacity: 0.8; }
 .ai-text :deep(ul.ai-ul),
 .ai-text :deep(ol.ai-ol) {
   margin: 4px 0 4px 18px;
