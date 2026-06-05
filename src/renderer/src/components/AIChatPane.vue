@@ -92,8 +92,10 @@ interface ChatMessage {
   streaming?: boolean
   thinking?: boolean   // true until first chunk arrives
   model?: string
-  timestamp?: number   // ms since epoch
-  isError?: boolean    // true when last chunk was an error
+  timestamp?: number       // ms since epoch
+  responseStartMs?: number // when first chunk arrived
+  elapsedMs?: number       // total response duration in ms
+  isError?: boolean        // true when last chunk was an error
   errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
@@ -779,6 +781,13 @@ async function sendMessage(): Promise<void> {
   const sentContent = fullContent || displayText
 
   messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now() })
+  // Auto-name thread from first user message when still "New chat"
+  const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
+  if (curThread && curThread.title === 'New chat' && rawText) {
+    const stripped = rawText.replace(/^\/\S+\s*/, '').trim()
+    const firstLine = (stripped || rawText).split('\n')[0].trim()
+    curThread.title = firstLine.slice(0, 50) + (firstLine.length > 50 ? '…' : '')
+  }
   contextChips.value = []
   if (rawText) {
     inputHistory.push(rawText)
@@ -1015,6 +1024,7 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant' && last.streaming) {
+      if (last.thinking) last.responseStartMs = Date.now()
       last.thinking = false
       last.content += p.text
       void scrollBottom()
@@ -1094,7 +1104,10 @@ function setupListeners(): void {
     const p = payload as { session_id: string }
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
-    if (last?.streaming) { last.streaming = false; last.thinking = false }
+    if (last?.streaming) {
+      last.streaming = false; last.thinking = false
+      if (last.responseStartMs) last.elapsedMs = Date.now() - last.responseStartMs
+    }
     sending.value = false
     currentSessionId.value = null
   })
@@ -1694,6 +1707,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
           </button>
+          <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
@@ -2113,6 +2127,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   user-select: none;
 }
 .ai-msg-wrap:hover .ai-msg-time { opacity: 1; }
+.ai-msg-elapsed { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; }
 .ai-scroll-to-bottom {
   position: absolute;
   bottom: 130px;
