@@ -39,9 +39,20 @@ const lineCount = computed(() => {
 })
 // Gutter grows to accommodate the widest line number (e.g. ≥1000 lines needs 4 digits).
 const gutterWidth = computed(() => Math.max(48, String(lineCount.value).length * 9 + 12))
+// Sizer minimum width ensures long lines are horizontally scrollable.
+const sizerMinWidth = computed(() => {
+  version.value // track edits
+  let max = 0
+  for (let i = 0; i < model.lineCount(); i++) {
+    const len = model.getLine(i).length
+    if (len > max) max = len
+  }
+  return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
+})
 
 const vs = useVirtualScroll(lineCount, LINE_HEIGHT)
 const scrollEl = ref<HTMLElement | null>(null)
+const scrollLeftVal = ref(0)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const charWidth = ref(8)
 let composing = false
@@ -343,6 +354,25 @@ function onKeydown(e: KeyboardEvent): void {
   if (mod && (e.key === 'a' || e.key === 'A')) {
     e.preventDefault(); selectAll(); return
   }
+  if (mod && (e.key === 'c' || e.key === 'C')) {
+    e.preventDefault()
+    const sel = selectionRange()
+    const text = sel ? model.getValueInRange(sel) : model.getLine(cursor.value.line) + '\n'
+    void navigator.clipboard.writeText(text)
+    return
+  }
+  if (mod && (e.key === 'x' || e.key === 'X')) {
+    e.preventDefault()
+    const sel = selectionRange()
+    if (sel) {
+      void navigator.clipboard.writeText(model.getValueInRange(sel))
+      applyEdit(sel, '')
+    } else {
+      void navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n')
+      deleteLine()
+    }
+    return
+  }
   if (mod && e.key === '/') {
     e.preventDefault(); toggleLineComment(); return
   }
@@ -359,23 +389,45 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault()
     const up = e.key === 'ArrowUp'
-    if (e.altKey) { moveLineUpDown(up ? -1 : 1) }
+    if (e.altKey && !mod) { moveLineUpDown(up ? -1 : 1) }
+    else if (mod) {
+      // Shift+Cmd+Up/Down: select to file start/end (Cmd-only is handled by keybindings)
+      startOrClearSelection(shift)
+      preferredCol = -1
+      if (up) cursor.value = { line: 0, col: 0 }
+      else { const last = model.lineCount() - 1; cursor.value = { line: last, col: model.getLine(last).length } }
+      void nextTick(scrollCursorIntoView)
+    }
     else { moveCursor(up ? -1 : 1, 0, shift) }
     return
   }
 
   switch (e.key) {
     case 'Home': e.preventDefault(); homeKey(shift); break
+    case 'PageUp': case 'PageDown': {
+      e.preventDefault()
+      const pageLines = Math.max(1, Math.floor(vs.viewportHeight.value / LINE_HEIGHT) - 1)
+      moveCursor(e.key === 'PageUp' ? -pageLines : pageLines, 0, shift)
+      break
+    }
     case 'End': e.preventDefault(); endKey(shift); break
     case 'Backspace': e.preventDefault(); deleteBackward(); break
     case 'Delete': e.preventDefault(); deleteForward(); break
     case 'Enter': {
       e.preventDefault()
-      const curLine = model.getLine(cursor.value.line)
+      const c = cursor.value
+      const curLine = model.getLine(c.line)
       let indent = ''
       for (const ch of curLine) {
         if (ch === ' ' || ch === '\t') indent += ch
         else break
+      }
+      // Smart bracket expansion: pressing Enter between {|}, [|], (|) adds indented inner line
+      const EXPAND_PAIRS: Record<string, string> = { '{': '}', '[': ']', '(': ')' }
+      if (!selectionRange() && c.col > 0 && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
+        applyEdit({ start: c, end: c }, '\n' + indent + INDENT + '\n' + indent)
+        cursor.value = { line: c.line + 1, col: indent.length + INDENT.length }
+        break
       }
       insertText('\n' + indent)
       break
@@ -400,8 +452,8 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
-const AUTO_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" }
-const CLOSE_CHARS = new Set([')', ']', '}', '"', "'"])
+const AUTO_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' }
+const CLOSE_CHARS = new Set([')', ']', '}', '"', "'", '`'])
 
 function onInput(): void {
   const ta = textareaEl.value
@@ -432,7 +484,7 @@ function onInput(): void {
       // Skip if next char is already the same closing bracket
       const c = cursor.value
       const lineText = model.getLine(c.line)
-      if (v === '"' || v === "'") {
+      if (v === '"' || v === "'" || v === '`') {
         if (lineText[c.col] === v) { cursor.value = { line: c.line, col: c.col + 1 }; void nextTick(scrollCursorIntoView); return }
       }
       insertText(v + closing)
@@ -495,6 +547,7 @@ function toggleLineComment(): void {
 
   const allCommented = Array.from({ length: endLine - startLine + 1 }, (_, i) => {
     const raw = model.getLine(startLine + i).trimStart()
+    if (!raw) return true // empty lines don't count against "all commented"
     return raw.startsWith(prefixFull) || raw === token || raw.startsWith(token + '\t')
   }).every(Boolean)
 
@@ -519,7 +572,7 @@ function toggleLineComment(): void {
     lines.join('\n'),
   )
   cursor.value = clampPos(savedCursor)
-  anchor.value = savedAnchor
+  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
 
 function deleteLine(): void {
@@ -572,6 +625,169 @@ function insertLineAbove(): void {
   }
   applyEdit({ start: { line, col: 0 }, end: { line, col: 0 } }, indent + '\n')
   cursor.value = { line, col: indent.length }
+}
+
+function moveLineUp(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  if (startLine === 0) return
+
+  const aboveLine = model.getLine(startLine - 1)
+  const blockLines = Array.from({ length: endLine - startLine + 1 }, (_, i) => model.getLine(startLine + i))
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+
+  applyEdit(
+    { start: { line: startLine - 1, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
+    [...blockLines, aboveLine].join('\n'),
+  )
+  cursor.value = clampPos({ line: savedCursor.line - 1, col: savedCursor.col })
+  anchor.value = savedAnchor ? clampPos({ line: savedAnchor.line - 1, col: savedAnchor.col }) : null
+}
+
+function moveLineDown(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  if (endLine >= model.lineCount() - 1) return
+
+  const belowLine = model.getLine(endLine + 1)
+  const blockLines = Array.from({ length: endLine - startLine + 1 }, (_, i) => model.getLine(startLine + i))
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+
+  applyEdit(
+    { start: { line: startLine, col: 0 }, end: { line: endLine + 1, col: model.getLine(endLine + 1).length } },
+    [belowLine, ...blockLines].join('\n'),
+  )
+  cursor.value = clampPos({ line: savedCursor.line + 1, col: savedCursor.col })
+  anchor.value = savedAnchor ? clampPos({ line: savedAnchor.line + 1, col: savedAnchor.col }) : null
+}
+
+function getWordAtCursor(): string {
+  const { line, col } = cursor.value
+  const text = model.getLine(line)
+  let start = col
+  let end = col
+  while (start > 0 && isWordChar(text[start - 1])) start--
+  while (end < text.length && isWordChar(text[end])) end++
+  return text.slice(start, end)
+}
+
+function indentLine(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  indentLines(startLine, endLine)
+}
+
+function dedentLine(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  dedentLines(startLine, endLine)
+}
+
+function cursorTop(): void {
+  anchor.value = null
+  cursor.value = { line: 0, col: 0 }
+  preferredCol = -1
+  void nextTick(scrollCursorIntoView)
+}
+
+function cursorBottom(): void {
+  anchor.value = null
+  const lastLine = model.lineCount() - 1
+  cursor.value = { line: lastLine, col: model.getLine(lastLine).length }
+  preferredCol = -1
+  void nextTick(scrollCursorIntoView)
+}
+
+const BRACKET_OPEN = new Set(['(', '[', '{'])
+const BRACKET_CLOSE = new Set([')', ']', '}'])
+const BRACKET_MATCH: Record<string, string> = { '(': ')', '[': ']', '{': '}', ')': '(', ']': '[', '}': '{' }
+
+function jumpToBracket(): void {
+  const { line, col } = cursor.value
+  const lineText = model.getLine(line)
+
+  // Find a bracket at or after cursor on the same line
+  let bCol = -1
+  let bChar = ''
+  for (let c = col; c < lineText.length; c++) {
+    const ch = lineText[c]
+    if (BRACKET_OPEN.has(ch) || BRACKET_CLOSE.has(ch)) { bCol = c; bChar = ch; break }
+  }
+  if (bCol === -1) return
+
+  const isOpen = BRACKET_OPEN.has(bChar)
+  const matchChar = BRACKET_MATCH[bChar]
+  let depth = 0
+
+  if (isOpen) {
+    for (let l = line; l < model.lineCount(); l++) {
+      const text = model.getLine(l)
+      const startC = l === line ? bCol : 0
+      for (let c = startC; c < text.length; c++) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { cursor.value = { line: l, col: c }; anchor.value = null; void nextTick(scrollCursorIntoView); return } }
+      }
+    }
+  } else {
+    for (let l = line; l >= 0; l--) {
+      const text = model.getLine(l)
+      const endC = l === line ? bCol : text.length - 1
+      for (let c = endC; c >= 0; c--) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { cursor.value = { line: l, col: c }; anchor.value = null; void nextTick(scrollCursorIntoView); return } }
+      }
+    }
+  }
+}
+
+function duplicateLineDown(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  const blockLen = endLine - startLine + 1
+  const lines = Array.from({ length: blockLen }, (_, i) => model.getLine(startLine + i))
+  const insertCol = model.getLine(endLine).length
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+
+  applyEdit({ start: { line: endLine, col: insertCol }, end: { line: endLine, col: insertCol } }, '\n' + lines.join('\n'))
+  cursor.value = clampPos({ line: savedCursor.line + blockLen, col: savedCursor.col })
+  anchor.value = savedAnchor ? clampPos({ line: savedAnchor.line + blockLen, col: savedAnchor.col }) : null
+}
+
+function duplicateLineUp(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  const blockLen = endLine - startLine + 1
+  const lines = Array.from({ length: blockLen }, (_, i) => model.getLine(startLine + i))
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+
+  applyEdit({ start: { line: startLine, col: 0 }, end: { line: startLine, col: 0 } }, lines.join('\n') + '\n')
+  // cursor stays on the copy (same line numbers as before)
+  cursor.value = savedCursor
+  anchor.value = savedAnchor
 }
 
 // ── Mouse ────────────────────────────────────────────────────────────────────
@@ -629,10 +845,19 @@ function onMouseup(): void { dragging = false }
 function scrollCursorIntoView(): void {
   const el = scrollEl.value
   if (!el) return
+  // Vertical
   const top = cursor.value.line * LINE_HEIGHT
   if (top < el.scrollTop) el.scrollTop = top
   else if (top + LINE_HEIGHT > el.scrollTop + el.clientHeight) {
     el.scrollTop = top + LINE_HEIGHT - el.clientHeight
+  }
+  // Horizontal: keep caret within the visible content area
+  const caretX = xFor(cursor.value.col)
+  const MARGIN = 40
+  if (caretX < el.scrollLeft + gutterWidth.value + MARGIN) {
+    el.scrollLeft = Math.max(0, caretX - gutterWidth.value - MARGIN)
+  } else if (caretX + MARGIN > el.scrollLeft + el.clientWidth) {
+    el.scrollLeft = caretX + MARGIN - el.clientWidth
   }
 }
 
@@ -642,7 +867,6 @@ function xFor(col: number): number {
 }
 const caretStyle = computed(() => ({
   left: xFor(cursor.value.col) + 'px',
-  top: cursor.value.line * LINE_HEIGHT + 'px',
   height: LINE_HEIGHT + 'px',
 }))
 
@@ -650,8 +874,10 @@ interface SelRect { left: number; top: number; width: number }
 const selectionRects = computed<SelRect[]>(() => {
   const sel = selectionRange()
   if (!sel) return []
+  const vStart = vs.startLine.value
+  const vEnd = vs.endLine.value
   const rects: SelRect[] = []
-  for (let line = sel.start.line; line <= sel.end.line; line++) {
+  for (let line = Math.max(sel.start.line, vStart); line <= Math.min(sel.end.line, vEnd - 1); line++) {
     const lineLen = model.getLine(line).length
     const startCol = line === sel.start.line ? sel.start.col : 0
     const endCol = line === sel.end.line ? sel.end.col : lineLen
@@ -687,7 +913,7 @@ const decorationRects = computed<DecRect[]>(() => {
 
 const ghostStyle = computed(() => {
   if (!ghost.value) return null
-  return { left: xFor(ghost.value.pos.col) + 'px', top: ghost.value.pos.line * LINE_HEIGHT + 'px' }
+  return { left: xFor(ghost.value.pos.col) + 'px' }
 })
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -698,6 +924,11 @@ function measureChar(): void {
   document.body.appendChild(probe)
   charWidth.value = probe.getBoundingClientRect().width / 50
   probe.remove()
+}
+
+function onScroll(e: Event): void {
+  vs.onScroll(e)
+  scrollLeftVal.value = (e.target as HTMLElement).scrollLeft
 }
 
 function syncViewport(): void {
@@ -734,6 +965,7 @@ watch(() => props.modelValue, (v) => {
   if (v !== model.getValue()) {
     model.setValue(v)
     cursor.value = clampPos(cursor.value)
+    anchor.value = null
     afterChange()
   }
 })
@@ -743,7 +975,7 @@ watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
 function getValue(): string { return model.getValue() }
-function setValue(v: string): void { model.setValue(v); cursor.value = { line: 0, col: 0 }; afterChange() }
+function setValue(v: string): void { model.setValue(v); cursor.value = { line: 0, col: 0 }; anchor.value = null; afterChange() }
 function getSelectionRange(): Range | null { return selectionRange() }
 function getSelectionText(): string {
   const sel = selectionRange()
@@ -776,6 +1008,9 @@ defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
   toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
+  moveLineUp, moveLineDown, getWordAtCursor,
+  jumpToBracket, duplicateLineDown, duplicateLineUp,
+  indentLine, dedentLine, cursorTop, cursorBottom,
 })
 </script>
 
@@ -784,7 +1019,7 @@ defineExpose({
     <textarea
       ref="textareaEl"
       class="ev-input"
-      :style="{ left: xFor(cursor.col) + 'px', top: cursor.line * LINE_HEIGHT - vs.scrollTop.value + 'px' }"
+      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: cursor.line * LINE_HEIGHT - vs.scrollTop.value + 'px' }"
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
@@ -793,8 +1028,8 @@ defineExpose({
       @compositionstart="composing = true"
       @compositionend="onCompositionEnd"
     />
-    <div ref="scrollEl" class="ev-scroll" @scroll="vs.onScroll">
-      <div class="ev-sizer" :style="{ height: vs.totalHeight.value + 'px' }">
+    <div ref="scrollEl" class="ev-scroll" @scroll="onScroll">
+      <div class="ev-sizer" :style="{ height: vs.totalHeight.value + 'px', minWidth: sizerMinWidth + 'px' }">
         <div class="ev-slab" :style="{ transform: `translateY(${vs.offsetY.value}px)` }">
           <!-- selection -->
           <div
@@ -855,19 +1090,22 @@ defineExpose({
   overflow: auto;
 }
 .ev-sizer { position: relative; width: 100%; }
-.ev-slab { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+.ev-slab { position: absolute; top: 0; left: 0; will-change: transform; }
 .ev-line {
   position: absolute;
   left: 0;
-  right: 0;
   display: flex;
   white-space: pre;
 }
 .ev-gutter {
   flex-shrink: 0;
+  position: sticky;
+  left: 0;
+  z-index: 1;
   text-align: right;
   padding-right: 10px;
   color: var(--text-muted);
+  background: var(--bg-base);
   user-select: none;
 }
 .ev-content { flex: 1; white-space: pre; }

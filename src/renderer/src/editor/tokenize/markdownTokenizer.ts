@@ -2,11 +2,39 @@ import type { LineTokens, Token, TokenizerState, Tokenizer } from '../types'
 
 const STATE_NORMAL: TokenizerState = 0
 const STATE_CODE_FENCE: TokenizerState = 1
+const STATE_FRONT_MATTER_BODY: TokenizerState = 2
+/** Emitted by initialState(): we are at the very first line — `---` means front matter. */
+const STATE_FRONT_MATTER_AWAIT: TokenizerState = 3
 
 class MarkdownTokenizerImpl implements Tokenizer {
-  initialState(): TokenizerState { return STATE_NORMAL }
+  initialState(): TokenizerState { return STATE_FRONT_MATTER_AWAIT }
 
   tokenizeLine(line: string, startState: TokenizerState): LineTokens {
+    const len = line.length
+
+    // Very first line of file: `---` is YAML front matter; anything else is normal.
+    if (startState === STATE_FRONT_MATTER_AWAIT) {
+      if (/^-{3,}\s*$/.test(line)) {
+        const tokens: Token[] = len > 0 ? [{ start: 0, end: len, type: 'comment' }] : []
+        return { tokens, endState: STATE_FRONT_MATTER_BODY }
+      }
+      return this.tokenizeNormal(line, STATE_NORMAL)
+    }
+
+    // Inside YAML front matter block.
+    if (startState === STATE_FRONT_MATTER_BODY) {
+      if (/^(-{3,}|\.{3,})\s*$/.test(line)) {
+        const tokens: Token[] = len > 0 ? [{ start: 0, end: len, type: 'comment' }] : []
+        return { tokens, endState: STATE_NORMAL }
+      }
+      const tokens: Token[] = len > 0 ? [{ start: 0, end: len, type: 'comment' }] : []
+      return { tokens, endState: STATE_FRONT_MATTER_BODY }
+    }
+
+    return this.tokenizeNormal(line, startState)
+  }
+
+  private tokenizeNormal(line: string, startState: TokenizerState): LineTokens {
     const tokens: Token[] = []
     const len = line.length
     const trimmed = line.trimStart()

@@ -66,6 +66,15 @@ const KEYWORDS = new Set<string>([
   'protected',
   'readonly',
   'static',
+  'abstract',
+  'declare',
+  'namespace',
+  'override',
+  'infer',
+  'keyof',
+  'asserts',
+  'accessor',
+  'using',
   'get',
   'set',
   'as',
@@ -74,6 +83,12 @@ const KEYWORDS = new Set<string>([
   'true',
   'false',
   'undefined',
+  'never',
+  'unknown',
+  'any',
+  'object',
+  'symbol',
+  'bigint',
 ])
 
 function isWhitespace(ch: string): boolean {

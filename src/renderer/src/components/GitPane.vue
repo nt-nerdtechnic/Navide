@@ -741,6 +741,7 @@ function toggleDiff(path: string, staged: boolean): void {
 // also fires two clicks, so the pending single-click action is cancelled).
 let fileClickTimer: ReturnType<typeof setTimeout> | null = null
 function onFileClick(path: string, staged: boolean): void {
+  if (props.embedded) { toggleDiff(path, staged); return }
   if (fileClickTimer) return
   fileClickTimer = setTimeout(() => {
     fileClickTimer = null
@@ -1382,10 +1383,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="part-resize-grip" />
       </div>
 
-      <!-- ── PART 2 scroll region ──────────────────────────────── -->
-      <div class="git-scroll part-bottom">
+      <!-- ── PART 2: branch header (fixed) + scrollable cards ──── -->
+      <div class="part-bottom">
 
-      <!-- Branch + remote action bar -->
+      <!-- Branch + remote action bar (never scrolls) -->
       <div class="remote-bar">
         <button class="branch-pill" :class="{ active: branchExpanded }" @click.stop="branchExpanded = !branchExpanded">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
@@ -1458,6 +1459,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div v-for="f in compareResult.files" :key="f" class="compare-file">{{ f }}</div>
         </div>
       </div>
+
+      <!-- scrollable cards: History / Remotes / Tags / Worktrees / Config -->
+      <div class="part-bottom-cards">
 
       <!-- ── HISTORY ─────────────────────────────────────────── -->
       <div class="git-card">
@@ -1683,6 +1687,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
       </div>
 
+      </div><!-- /part-bottom-cards -->
       </div><!-- /part-bottom -->
 
     </template>
@@ -1785,7 +1790,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 /* Independent scroll regions: top (commit + changes) and bottom (history/cards) */
 .git-scroll { min-height: 0; overflow-y: auto; }
 .part-top { flex-grow: 0; flex-shrink: 0; }
-.part-bottom { flex: 1 1 0; padding-bottom: 20px; }
+.part-bottom { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.part-bottom-cards { flex: 1 1 0; overflow-y: auto; min-height: 0; padding-bottom: 20px; }
 .spacer { flex: 1; }
 .err-text { color: var(--danger-fg); font-size: 11px; margin: 0; padding: 2px 12px; }
 .git-error-row { display: flex; align-items: flex-start; gap: 6px; }
@@ -2107,7 +2113,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .remote-bar {
   display: flex; align-items: center; gap: 2px;
   padding: 4px 6px; min-height: 30px; border-bottom: 1px solid var(--border-muted);
-  position: sticky; top: 0; z-index: 5; background: var(--bg-base);
+  flex-shrink: 0; background: var(--bg-base);
 }
 .branch-pill {
   display: flex; align-items: center; gap: 5px;

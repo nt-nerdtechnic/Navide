@@ -52,6 +52,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onSwitchEditorSidebar: (cb: (sidebar: string) => void): void => {
     ipcRenderer.on('editor:switchSidebar', (_event, sidebar: string) => cb(sidebar))
   },
+  onOpenEditorDiff: (cb: (params: Record<string, string>) => void): void => {
+    ipcRenderer.on('editor:openDiff', (_event, params: Record<string, string>) => cb(params))
+  },
   saveJson: (args: {
     defaultName?: string
     content: string

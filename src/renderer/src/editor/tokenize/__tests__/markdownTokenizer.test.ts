@@ -44,19 +44,48 @@ describe('MarkdownTokenizer — blockquote', () => {
 })
 
 describe('MarkdownTokenizer — thematic break', () => {
-  it('tags --- as operator', () => {
+  // Thematic breaks appear after the first line, so use explicit state = 0 (STATE_NORMAL).
+  it('tags --- as operator after initial line', () => {
     const line = '---'
-    expect(lex(line)[0].type).toBe('operator')
+    expect(MarkdownTokenizer.tokenizeLine(line, 0).tokens[0].type).toBe('operator')
   })
 
   it('tags *** as operator', () => {
     const line = '***'
-    expect(lex(line)[0].type).toBe('operator')
+    expect(MarkdownTokenizer.tokenizeLine(line, 0).tokens[0].type).toBe('operator')
   })
 
   it('tags --- with spaces as operator', () => {
     const line = '- - -'
-    expect(lex(line)[0].type).toBe('operator')
+    expect(MarkdownTokenizer.tokenizeLine(line, 0).tokens[0].type).toBe('operator')
+  })
+})
+
+describe('MarkdownTokenizer — YAML front matter', () => {
+  it('tags opening --- as comment at file start', () => {
+    const tokens = MarkdownTokenizer.tokenizeLine('---', MarkdownTokenizer.initialState()).tokens
+    expect(tokens[0].type).toBe('comment')
+  })
+
+  it('enters FRONT_MATTER_BODY state (2) after opening ---', () => {
+    const state = MarkdownTokenizer.tokenizeLine('---', MarkdownTokenizer.initialState()).endState
+    expect(state).toBe(2)
+  })
+
+  it('treats front matter body lines as comment', () => {
+    const tokens = MarkdownTokenizer.tokenizeLine('title: Hello World', 2).tokens
+    expect(tokens[0].type).toBe('comment')
+  })
+
+  it('closes front matter on second ---', () => {
+    const state = MarkdownTokenizer.tokenizeLine('---', 2).endState
+    expect(state).toBe(0)
+  })
+
+  it('does not treat first non-front-matter line as front matter', () => {
+    const line = '# Heading'
+    const tokens = MarkdownTokenizer.tokenizeLine(line, MarkdownTokenizer.initialState()).tokens
+    expect(tokens[0].type).toBe('keyword')
   })
 })
 

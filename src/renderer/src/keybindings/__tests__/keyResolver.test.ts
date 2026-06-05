@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { KeyResolver } from '../keyResolver'
 import type { KeybindingRule } from '../types'
+import { defaults } from '../defaults'
 
 function mkEvent(
   key: string,
@@ -94,5 +95,63 @@ describe('KeyResolver – priority (later rule wins)', () => {
     ])
     const rule = r.resolve(mkEvent('s', { metaKey: true }), {})
     expect(rule?.command).toBe('new.command')
+  })
+})
+
+describe('KeyResolver – defaults integration (new shortcuts)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('shift+alt+down → duplicateLineDown (editorTextFocus)', () => {
+    const rule = dr.resolve(mkEvent('ArrowDown', { shiftKey: true, altKey: true }), { editorTextFocus: true })
+    expect(rule?.command).toBe('editor.action.duplicateLineDown')
+  })
+
+  it('shift+alt+up → duplicateLineUp (editorTextFocus)', () => {
+    const rule = dr.resolve(mkEvent('ArrowUp', { shiftKey: true, altKey: true }), { editorTextFocus: true })
+    expect(rule?.command).toBe('editor.action.duplicateLineUp')
+  })
+
+  it('alt+down → moveLineDown, shift+alt+down → duplicateLineDown (no confusion)', () => {
+    const ctx = { editorTextFocus: true }
+    expect(dr.resolve(mkEvent('ArrowDown', { altKey: true }), ctx)?.command).toBe('editor.action.moveLineDown')
+    expect(dr.resolve(mkEvent('ArrowDown', { shiftKey: true, altKey: true }), ctx)?.command).toBe('editor.action.duplicateLineDown')
+  })
+
+  it('cmd+shift+| → jumpToBracket (editorTextFocus)', () => {
+    const rule = dr.resolve(mkEvent('|', { metaKey: true, shiftKey: true }), { editorTextFocus: true })
+    expect(rule?.command).toBe('editor.action.jumpToBracket')
+  })
+
+  it('jumpToBracket requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('|', { metaKey: true, shiftKey: true }), {})).toBeNull()
+  })
+
+  it('duplicateLineDown/Up require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowDown', { shiftKey: true, altKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowUp', { shiftKey: true, altKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+] → indentLines (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent(']', { metaKey: true }), { editorTextFocus: true })?.command).toBe('editor.action.indentLines')
+  })
+
+  it('cmd+[ → outdentLines (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('[', { metaKey: true }), { editorTextFocus: true })?.command).toBe('editor.action.outdentLines')
+  })
+
+  it('cmd+up → cursorTop (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true }), { editorTextFocus: true })?.command).toBe('editor.action.cursorTop')
+  })
+
+  it('cmd+down → cursorBottom (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowDown', { metaKey: true }), { editorTextFocus: true })?.command).toBe('editor.action.cursorBottom')
+  })
+
+  it('indent/dedent/cursorTop/cursorBottom require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent(']', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('[', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowDown', { metaKey: true }), {})).toBeNull()
   })
 })

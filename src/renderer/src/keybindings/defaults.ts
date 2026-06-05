@@ -29,6 +29,20 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+enter',     command: 'editor.action.insertLineAfter', when: 'editorTextFocus' },
   { key: 'cmd+shift+enter', command: 'editor.action.insertLineBefore', when: 'editorTextFocus' },
 
+  { key: 'alt+up',         command: 'editor.action.moveLineUp',       when: 'editorTextFocus' },
+  { key: 'alt+down',       command: 'editor.action.moveLineDown',     when: 'editorTextFocus' },
+  { key: 'shift+alt+down', command: 'editor.action.duplicateLineDown', when: 'editorTextFocus' },
+  { key: 'shift+alt+up',   command: 'editor.action.duplicateLineUp',   when: 'editorTextFocus' },
+  { key: 'cmd+shift+l',    command: 'editor.action.selectHighlights',  when: 'editorTextFocus' },
+  // macOS US: Cmd+Shift+\ fires e.key='|'; use cmd+shift+| to match correctly
+  { key: 'cmd+shift+|',    command: 'editor.action.jumpToBracket',     when: 'editorTextFocus' },
+  { key: 'cmd+]',          command: 'editor.action.indentLines',        when: 'editorTextFocus' },
+  { key: 'cmd+[',          command: 'editor.action.outdentLines',       when: 'editorTextFocus' },
+  { key: 'cmd+up',         command: 'editor.action.cursorTop',          when: 'editorTextFocus' },
+  { key: 'cmd+down',       command: 'editor.action.cursorBottom',       when: 'editorTextFocus' },
+
+  { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
+
   // ── Workbench: sidebar & view ────────────────────────────────────────────────
   { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },
   { key: 'cmd+shift+e', command: 'workbench.action.focusExplorer' },

@@ -175,11 +175,21 @@ const ghostBusy = ref(false)
 const findOpen = ref(false)
 const findQuery = ref('')
 const findCase = ref(false)
+const findWholeWord = ref(false)
 const findMatches = ref<Array<{ line: number; startCol: number; endCol: number }>>([])
 const findIdx = ref(-1)
 const findInputEl = ref<HTMLInputElement | null>(null)
 
-watch([findQuery, findCase], () => { if (findOpen.value) computeMatches() })
+function isWordBoundary(haystack: string, matchStart: number, matchLen: number): boolean {
+  const isWC = (ch: string) => /[a-zA-Z0-9_]/.test(ch)
+  const before = matchStart === 0 || !isWC(haystack[matchStart - 1])
+  const after = matchStart + matchLen >= haystack.length || !isWC(haystack[matchStart + matchLen])
+  return before && after
+}
+/** True when the query contains only word characters — whole-word is meaningful. */
+function queryIsAllWord(q: string): boolean { return /^[a-zA-Z0-9_]+$/.test(q) }
+
+watch([findQuery, findCase, findWholeWord], () => { if (findOpen.value) computeMatches() })
 watch(content, () => { if (findOpen.value && findQuery.value) computeMatches() })
 
 // Sync findOpen/editorTextFocus to keybinding context so when-clauses work.
@@ -227,7 +237,9 @@ function computeMatches(): void {
     while (true) {
       const idx = haystack.indexOf(needle, start)
       if (idx === -1) break
-      matches.push({ line: li, startCol: idx, endCol: idx + q.length })
+      if (!findWholeWord.value || !queryIsAllWord(q) || isWordBoundary(haystack, idx, q.length)) {
+        matches.push({ line: li, startCol: idx, endCol: idx + q.length })
+      }
       start = idx + 1
     }
   }
@@ -361,10 +373,30 @@ function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
 function deleteLine(): void { editorRef.value?.deleteLine() }
 function insertLineBelow(): void { editorRef.value?.insertLineBelow() }
 function insertLineAbove(): void { editorRef.value?.insertLineAbove() }
+function moveLineUp(): void { editorRef.value?.moveLineUp() }
+function moveLineDown(): void { editorRef.value?.moveLineDown() }
+function jumpToBracket(): void { editorRef.value?.jumpToBracket() }
+function duplicateLineDown(): void { editorRef.value?.duplicateLineDown() }
+function duplicateLineUp(): void { editorRef.value?.duplicateLineUp() }
+function indentLine(): void { editorRef.value?.indentLine() }
+function dedentLine(): void { editorRef.value?.dedentLine() }
+function cursorTop(): void { editorRef.value?.cursorTop() }
+function cursorBottom(): void { editorRef.value?.cursorBottom() }
+function selectAllOccurrences(): void {
+  const sel = editorRef.value?.getSelectionText() || editorRef.value?.getWordAtCursor() || ''
+  if (!sel) return
+  findQuery.value = sel
+  if (!findOpen.value) findOpen.value = true
+  computeMatches()
+  void nextTick(() => { findInputEl.value?.focus(); findInputEl.value?.select() })
+}
 
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
   toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
+  moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
+  indentLine, dedentLine, cursorTop, cursorBottom,
+  selectAllOccurrences,
 })
 </script>
 
@@ -460,6 +492,12 @@ defineExpose({
         title="區分大小寫"
         @click="findCase = !findCase"
       >Aa</button>
+      <button
+        class="ep-find-btn"
+        :class="{ active: findWholeWord }"
+        title="全字比對"
+        @click="findWholeWord = !findWholeWord"
+      >W|</button>
       <span class="ep-find-count">
         <template v-if="findQuery && findMatches.length === 0">無結果</template>
         <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>

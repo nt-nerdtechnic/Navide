@@ -125,9 +125,15 @@ function openStagesWindow(): void {
 }
 
 function openDiffWindow(params: Record<string, string>): void {
+  // If the editor window is open, show the diff as a tab there instead.
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    editorWindow.webContents.send('editor:openDiff', params)
+    editorWindow.focus()
+    return
+  }
+  // Fall back to the standalone diff window when no editor window exists.
   const search = { window: 'diff', ...params }
   if (diffWindow && !diffWindow.isDestroyed()) {
-    // Reuse the window: reload it with the new file's params and focus.
     loadWindow(diffWindow, search)
     diffWindow.focus()
     return
@@ -137,7 +143,6 @@ function openDiffWindow(params: Record<string, string>): void {
     height: 760,
     title: 'Agent-Team · Diff',
     parent: mainWindow ?? undefined,
-    // Match the renderer's dark theme so reopening/reloading doesn't flash white.
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
