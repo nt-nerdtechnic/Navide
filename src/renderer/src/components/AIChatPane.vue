@@ -119,6 +119,7 @@ const autoScroll = ref(true)
 const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
+const followUps = ref<string[]>([])
 
 // ── Conversation thread persistence ──────────────────────────────────────────
 interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
@@ -602,6 +603,21 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
   }
 }
 
+// ── Follow-up suggestions ──────────────────────────────────────────────────────
+function extractFollowUps(content: string): string[] {
+  // Strip code blocks first
+  const stripped = content.replace(/```[\s\S]*?```/g, '').replace(/`[^`]+`/g, '')
+  // Find sentences ending with ?
+  const sentences = stripped.match(/[A-Z][^.!?]*\?/g) ?? []
+  // Filter: at least 15 chars, not too long, start with question words
+  const QUESTION_WORDS = /^(What|How|Why|When|Where|Which|Who|Can|Could|Should|Would|Is|Are|Does|Do)\b/i
+  const suggestions = sentences
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 15 && s.length <= 120 && QUESTION_WORDS.test(s))
+    .slice(0, 3)
+  return suggestions
+}
+
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
 function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
@@ -914,6 +930,7 @@ async function sendMessage(): Promise<void> {
   const rawText = inputText.value.trim()
   if (!rawText && contextChips.value.length === 0) return
   if (sending.value) return
+  followUps.value = []
 
   // Build user content with context chips prepended
   let fullContent = ''
@@ -1265,6 +1282,7 @@ function setupListeners(): void {
     if (last?.streaming) {
       last.streaming = false; last.thinking = false
       if (last.responseStartMs) last.elapsedMs = Date.now() - last.responseStartMs
+      followUps.value = extractFollowUps(last.content)
     }
     sending.value = false
     currentSessionId.value = null
@@ -2005,6 +2023,16 @@ function getDateLabel(ts: number): string {
       ↓ Scroll to bottom
     </button>
 
+    <!-- Follow-up suggestions -->
+    <div v-if="followUps.length && !sending" class="ai-followups">
+      <button
+        v-for="(q, qi) in followUps"
+        :key="qi"
+        class="ai-followup-btn"
+        @click="inputText = q; followUps = []; nextTick(() => textareaEl?.focus())"
+      >{{ q }}</button>
+    </div>
+
     <!-- Search bar -->
     <div v-if="showSearch" class="ai-search-bar">
       <input
@@ -2446,6 +2474,30 @@ function getDateLabel(ts: number): string {
   position: absolute; top: 2px; right: 4px;
   font-size: 11px; color: #f0c040; pointer-events: none; user-select: none;
 }
+.ai-followups {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 10px 2px;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-canvas);
+}
+.ai-followup-btn {
+  text-align: left;
+  background: none;
+  border: 1px solid var(--border-muted);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-followup-btn:hover { border-color: var(--accent-emphasis); color: var(--accent-fg); }
+.ai-followup-btn::before { content: '↩ '; opacity: 0.45; font-size: 10px; }
+
 .ai-scroll-to-bottom {
   position: absolute;
   bottom: 130px;
