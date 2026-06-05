@@ -389,8 +389,17 @@ function replaceAll(): void {
   dirty.value = true
   void nextTick(() => computeMatches({ navigate: false }))
 }
+function selectCurrentFindMatch(): void {
+  const idx = findIdx.value >= 0 ? findIdx.value : 0
+  const m = findMatches.value[idx]
+  if (!m) return
+  editorRef.value?.setSelection({ line: m.line, col: m.startCol }, { line: m.line, col: m.endCol })
+  closeFind()
+  void nextTick(() => editorRef.value?.focus())
+}
 function onFindKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); closeFind() }
+  else if (e.key === 'Enter' && e.altKey) { e.preventDefault(); selectCurrentFindMatch() }
   else if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? prevMatch() : nextMatch() }
   else if (e.key === 'Tab' && replaceOpen.value) { e.preventDefault(); replaceInputEl.value?.focus() }
   else if (e.altKey && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); findCase.value = !findCase.value }

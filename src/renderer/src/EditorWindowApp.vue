@@ -648,7 +648,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.openReplace',    label: 'Find and Replace',       keys: '⌘H' },
   { id: 'editor.action.formatDocument', label: 'Format Document',       keys: '⌥⇧F' },
   { id: 'editor.action.formatSelection',label: 'Format Selection',   keys: '⌘K ⌘F' },
-  { id: 'workbench.action.toggleAIChat',            label: 'Toggle AI Chat',    keys: '⌘⇧A' },
+  { id: 'workbench.action.toggleAIChat',            label: 'Toggle AI Chat',    keys: '⌘⇧A / ⌃`' },
   { id: 'editor.action.smartSelect.expand',          label: 'Expand Selection',   keys: '⇧⌥→' },
   { id: 'editor.action.smartSelect.shrink',          label: 'Shrink Selection',   keys: '⇧⌥←' },
   { id: 'workbench.action.copyFilePath',         label: 'Copy Absolute Path',      keys: '⌘K ⌘P' },
