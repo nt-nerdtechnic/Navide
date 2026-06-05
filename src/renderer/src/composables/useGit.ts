@@ -428,6 +428,14 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
+  async function mergeInto(target: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.merge_into', { workspace_path: ws, target })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
   async function revertCommit(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
@@ -874,7 +882,7 @@ export function useGit(
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
     addRemote, removeRemote,
     // branches
-    createBranch, switchBranch, deleteBranch, mergeBranch, rebaseOn,
+    createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
     compareBranches, restoreFileFromBranch,
     // stash
     stashPush, stashPop, stashDrop,

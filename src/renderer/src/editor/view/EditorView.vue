@@ -125,6 +125,12 @@ function deleteBackward(): void {
   if (sel) { applyEdit(sel, ''); return }
   const c = cursor.value
   if (c.col > 0) {
+    const lineText = model.getLine(c.line)
+    // Delete both brackets when cursor is between an auto-inserted pair
+    if (AUTO_PAIRS[lineText[c.col - 1]] === lineText[c.col]) {
+      applyEdit({ start: { line: c.line, col: c.col - 1 }, end: { line: c.line, col: c.col + 1 } }, '')
+      return
+    }
     applyEdit({ start: { line: c.line, col: c.col - 1 }, end: c }, '')
   } else if (c.line > 0) {
     const prevLen = model.getLine(c.line - 1).length
@@ -251,6 +257,26 @@ function moveWordRight(extend: boolean): void {
   void nextTick(scrollCursorIntoView)
 }
 
+function moveLineUpDown(dir: -1 | 1): void {
+  preferredCol = -1
+  const lineNum = cursor.value.line
+  const savedCol = cursor.value.col
+  const targetLine = lineNum + dir
+  if (targetLine < 0 || targetLine >= model.lineCount()) return
+  const curContent = model.getLine(lineNum)
+  const targetContent = model.getLine(targetLine)
+  const minLine = Math.min(lineNum, targetLine)
+  const swapped = dir === -1
+    ? curContent + '\n' + targetContent
+    : targetContent + '\n' + curContent
+  applyEdit(
+    { start: { line: minLine, col: 0 }, end: { line: minLine + 1, col: model.getLine(minLine + 1).length } },
+    swapped,
+  )
+  cursor.value = { line: targetLine, col: Math.min(savedCol, model.getLine(targetLine).length) }
+}
+
+
 // ── Indent / dedent selected lines ───────────────────────────────────────────
 const INDENT = '  '
 
@@ -317,6 +343,9 @@ function onKeydown(e: KeyboardEvent): void {
   if (mod && (e.key === 'a' || e.key === 'A')) {
     e.preventDefault(); selectAll(); return
   }
+  if (mod && e.key === '/') {
+    e.preventDefault(); toggleLineComment(); return
+  }
 
   // Arrow + modifier combos (must precede switch to capture modifiers)
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -328,7 +357,11 @@ function onKeydown(e: KeyboardEvent): void {
     return
   }
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-    e.preventDefault(); moveCursor(e.key === 'ArrowUp' ? -1 : 1, 0, shift); return
+    e.preventDefault()
+    const up = e.key === 'ArrowUp'
+    if (e.altKey) { moveLineUpDown(up ? -1 : 1) }
+    else { moveCursor(up ? -1 : 1, 0, shift) }
+    return
   }
 
   switch (e.key) {
@@ -440,6 +473,105 @@ function selectAll(): void {
   const last = model.lineCount() - 1
   anchor.value = { line: 0, col: 0 }
   cursor.value = { line: last, col: model.getLine(last).length }
+}
+
+// ── Editor commands ───────────────────────────────────────────────────────────
+const COMMENT_MAP: Record<string, string> = {
+  ts: '//', tsx: '//', js: '//', jsx: '//', vue: '//',
+  go: '//', rs: '//', java: '//', kt: '//', swift: '//',
+  cpp: '//', c: '//', cs: '//', dart: '//', scala: '//',
+  py: '#', rb: '#', sh: '#', bash: '#', yaml: '#', yml: '#', toml: '#', r: '#',
+  sql: '--', lua: '--', hs: '--',
+}
+
+function toggleLineComment(): void {
+  const token = COMMENT_MAP[props.language ?? ''] ?? '//'
+  const prefixFull = token + ' '
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+
+  const allCommented = Array.from({ length: endLine - startLine + 1 }, (_, i) => {
+    const raw = model.getLine(startLine + i).trimStart()
+    return raw.startsWith(prefixFull) || raw === token || raw.startsWith(token + '\t')
+  }).every(Boolean)
+
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+
+  const lines: string[] = []
+  for (let i = 0; i <= endLine - startLine; i++) {
+    const line = model.getLine(startLine + i)
+    const indent = line.match(/^(\s*)/)?.[1] ?? ''
+    const rest = line.slice(indent.length)
+    if (allCommented) {
+      if (rest.startsWith(prefixFull)) lines.push(indent + rest.slice(prefixFull.length))
+      else if (rest === token || rest.startsWith(token + '\t')) lines.push(indent + rest.slice(token.length))
+      else lines.push(line)
+    } else {
+      lines.push(rest ? indent + prefixFull + rest : line)
+    }
+  }
+  applyEdit(
+    { start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
+    lines.join('\n'),
+  )
+  cursor.value = clampPos(savedCursor)
+  anchor.value = savedAnchor
+}
+
+function deleteLine(): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : cursor.value.line
+  const total = model.lineCount()
+
+  if (total === 1) {
+    applyEdit({ start: { line: 0, col: 0 }, end: { line: 0, col: model.getLine(0).length } }, '')
+    cursor.value = { line: 0, col: 0 }
+    anchor.value = null
+    return
+  }
+
+  if (endLine < total - 1) {
+    applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine + 1, col: 0 } }, '')
+    cursor.value = clampPos({ line: startLine, col: 0 })
+  } else {
+    const prevLen = model.getLine(startLine - 1).length
+    applyEdit(
+      { start: { line: startLine - 1, col: prevLen }, end: { line: endLine, col: model.getLine(endLine).length } },
+      '',
+    )
+    cursor.value = { line: startLine - 1, col: prevLen }
+  }
+  anchor.value = null
+}
+
+function insertLineBelow(): void {
+  const line = cursor.value.line
+  const lineText = model.getLine(line)
+  let indent = ''
+  for (const ch of lineText) {
+    if (ch === ' ' || ch === '\t') indent += ch
+    else break
+  }
+  applyEdit({ start: { line, col: lineText.length }, end: { line, col: lineText.length } }, '\n' + indent)
+}
+
+function insertLineAbove(): void {
+  const line = cursor.value.line
+  const lineText = model.getLine(line)
+  let indent = ''
+  for (const ch of lineText) {
+    if (ch === ' ' || ch === '\t') indent += ch
+    else break
+  }
+  applyEdit({ start: { line, col: 0 }, end: { line, col: 0 } }, indent + '\n')
+  cursor.value = { line, col: indent.length }
 }
 
 // ── Mouse ────────────────────────────────────────────────────────────────────
@@ -643,6 +775,7 @@ function acceptGhost(): void {
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
+  toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
 })
 </script>
 

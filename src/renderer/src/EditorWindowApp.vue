@@ -103,6 +103,10 @@ registerCommand('workbench.action.findInFiles', () => { sidebarHidden.value = fa
 registerCommand('workbench.action.toggleSidebar', () => { sidebarHidden.value = !sidebarHidden.value })
 registerCommand('workbench.action.focusExplorer', () => { sidebarHidden.value = false; sidebarView.value = 'explorer' })
 registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
+registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
+registerCommand('editor.action.deleteLines',      () => activeEditor()?.deleteLine())
+registerCommand('editor.action.insertLineAfter',  () => activeEditor()?.insertLineBelow())
+registerCommand('editor.action.insertLineBefore', () => activeEditor()?.insertLineAbove())
 registerCommand('workbench.action.openNextEditor', () => {
   const files = openFiles.value
   if (!files.length) return

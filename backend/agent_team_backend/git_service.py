@@ -917,6 +917,28 @@ async def merge_branch(workspace_path: str, branch: str) -> dict[str, Any]:
     return {"ok": rc == 0, "output": output, "error": stderr.strip() if rc != 0 else ""}
 
 
+async def merge_into(workspace_path: str, target: str) -> dict[str, Any]:
+    """Switch to *target*, merge current branch into it, stay on *target*."""
+    if err := _validate_branch_name(target):
+        return {"ok": False, "output": "", "error": err}
+    rc, out, _ = await _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "output": "", "error": "could not determine current branch"}
+    source = out.strip()
+    if source == target:
+        return {"ok": False, "output": "", "error": "already on target branch"}
+    rc, _, stderr = await _run(["git", "switch", "--", target], workspace_path)
+    if rc != 0:
+        return {"ok": False, "output": "", "error": stderr.strip()}
+    rc, out, stderr = await _run(["git", "merge", "--no-ff", "--", source], workspace_path)
+    output = (out + stderr).strip()
+    if rc != 0:
+        await _run(["git", "merge", "--abort"], workspace_path)
+        await _run(["git", "switch", "--", source], workspace_path)
+        return {"ok": False, "output": output, "error": stderr.strip()}
+    return {"ok": True, "output": output, "error": ""}
+
+
 async def abort_operation(workspace_path: str, op: str) -> dict[str, Any]:
     """Abort an in-progress merge / rebase / cherry-pick."""
     op = (op or "").strip()

@@ -23,7 +23,11 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+z', command: 'editor.action.redo',    when: 'editorTextFocus' },
   { key: 'cmd+y',       command: 'editor.action.redo',    when: 'editorTextFocus' },
   { key: 'cmd+a',       command: 'editor.action.selectAll', when: 'editorTextFocus' },
-  { key: 'ctrl+g', command: 'editor.action.gotoLine',         when: 'editorOpen' },
+  { key: 'ctrl+g',         command: 'editor.action.gotoLine',       when: 'editorOpen' },
+  { key: 'cmd+/',         command: 'editor.action.toggleComment',  when: 'editorTextFocus' },
+  { key: 'cmd+shift+k',   command: 'editor.action.deleteLines',    when: 'editorTextFocus' },
+  { key: 'cmd+enter',     command: 'editor.action.insertLineAfter', when: 'editorTextFocus' },
+  { key: 'cmd+shift+enter', command: 'editor.action.insertLineBefore', when: 'editorTextFocus' },
 
   // ── Workbench: sidebar & view ────────────────────────────────────────────────
   { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },

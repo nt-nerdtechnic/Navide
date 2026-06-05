@@ -29,7 +29,7 @@ const {
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile, cleanUntracked,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
-  createBranch, switchBranch, deleteBranch, mergeBranch, rebaseOn,
+  createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
@@ -594,6 +594,13 @@ const mergeError = ref(''), mergeOutput = ref('')
 async function doMerge(branch: string): Promise<void> {
   mergeError.value = ''; mergeOutput.value = ''
   const r = await mergeBranch(branch)
+  mergeOutput.value = r.output || ''; if (!r.ok) mergeError.value = r.error || 'merge failed'
+}
+
+async function doMergeInto(target: string): Promise<void> {
+  mergeError.value = ''; mergeOutput.value = ''
+  ctxMenu.value.show = false
+  const r = await mergeInto(target)
   mergeOutput.value = r.output || ''; if (!r.ok) mergeError.value = r.error || 'merge failed'
 }
 
@@ -1744,6 +1751,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Branch menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'branch'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button class="menu-item" @click="doMergeInto(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }}</button>
+        <div class="menu-sep" />
         <button class="menu-item danger" @click="ctxDeleteBranch">Delete Branch</button>
       </div>
     </Teleport>

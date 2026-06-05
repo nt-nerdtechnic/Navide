@@ -1516,6 +1516,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
+        elif msg_type == "git.merge_into":
+            ws_path = payload.get("workspace_path") or ""
+            target = payload.get("target") or ""
+            result = await git_service.merge_into(ws_path, target)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
         elif msg_type == "git.revert":
             ws_path = payload.get("workspace_path") or ""
             commit_hash = payload.get("commit_hash") or ""

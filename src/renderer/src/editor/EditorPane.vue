@@ -357,7 +357,15 @@ onMounted(() => {
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
-defineExpose({ save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto })
+function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
+function deleteLine(): void { editorRef.value?.deleteLine() }
+function insertLineBelow(): void { editorRef.value?.insertLineBelow() }
+function insertLineAbove(): void { editorRef.value?.insertLineAbove() }
+
+defineExpose({
+  save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
+  toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
+})
 </script>
 
 <template>
