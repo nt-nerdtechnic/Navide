@@ -1053,6 +1053,15 @@ const lastAssistantIdx = computed(() => {
   return -1
 })
 
+// ── Diff expand/collapse ──────────────────────────────────────────────────────
+const expandedDiffs = ref(new Set<string>())
+function isDiffExpanded(toolId: string): boolean { return expandedDiffs.value.has(toolId) }
+function toggleDiff(toolId: string): void {
+  if (expandedDiffs.value.has(toolId)) expandedDiffs.value.delete(toolId)
+  else expandedDiffs.value.add(toolId)
+  expandedDiffs.value = new Set(expandedDiffs.value)
+}
+
 const pendingEditsInLastMsg = computed<EditProposalCard[]>(() => {
   const idx = lastAssistantIdx.value
   if (idx === -1) return []
@@ -1827,16 +1836,21 @@ function getDateLabel(ts: number): string {
 
               <!-- Edit proposal card -->
               <div v-else-if="card.kind === 'edit_proposal' && !card.discarded" class="ai-edit-card">
-                <div class="ai-edit-header">
+                <div class="ai-edit-header" @click="toggleDiff(card.tool_id)" style="cursor:pointer">
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/></svg>
                   <span class="ai-edit-path">{{ card.file_path }}</span>
-                  <div v-if="!card.accepted" class="ai-edit-actions">
+                  <span class="ai-diff-stat">
+                    <span class="diff-add-count">+{{ card.diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length }}</span>
+                    <span class="diff-del-count"> −{{ card.diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length }}</span>
+                  </span>
+                  <span class="ai-diff-toggle-icon">{{ isDiffExpanded(card.tool_id) ? '▾' : '▸' }}</span>
+                  <div v-if="!card.accepted" class="ai-edit-actions" @click.stop>
                     <button class="ai-edit-btn accept" @click="acceptEdit(card)">Accept</button>
                     <button class="ai-edit-btn discard" @click="discardEdit(card)">Discard</button>
                   </div>
                   <span v-else class="ai-edit-accepted">Applied ✓</span>
                 </div>
-                <div class="ai-diff-view" v-html="renderDiff(card.diff)" />
+                <div v-if="isDiffExpanded(card.tool_id)" class="ai-diff-view" v-html="renderDiff(card.diff)" />
               </div>
             </template>
           </template>
@@ -2750,6 +2764,10 @@ function getDateLabel(ts: number): string {
 .ai-edit-btn.discard { background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid var(--border-muted); }
 .ai-edit-btn.discard:hover { background: var(--bg-muted); }
 .ai-edit-accepted { font-size: 11px; color: #3fb950; margin-left: auto; }
+.ai-diff-stat { font-size: 10px; margin-left: 4px; }
+.diff-add-count { color: #3fb950; }
+.diff-del-count { color: #f85149; }
+.ai-diff-toggle-icon { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
 
 .ai-diff-view {
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
