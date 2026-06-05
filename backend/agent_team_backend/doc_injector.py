@@ -221,10 +221,12 @@ async def _llm_workspace_summary(
         if not fpath.is_file():
             continue
         try:
-            inode = fpath.stat().st_ino
-            if inode in seen_inodes:
+            st = fpath.stat()
+            if st.st_size > 5 * 1024 * 1024:  # skip files larger than 5 MB
                 continue
-            seen_inodes.add(inode)
+            if st.st_ino in seen_inodes:
+                continue
+            seen_inodes.add(st.st_ino)
             text = fpath.read_text(encoding="utf-8", errors="replace")[:char_limit]
             snippets.append(f"[{fname}]\n{text.strip()}")
         except Exception:  # noqa: BLE001
