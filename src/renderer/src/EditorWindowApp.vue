@@ -259,13 +259,22 @@ registerCommand('editor.action.openReplace',   () => activeEditor()?.openReplace
 registerCommand('editor.action.nextMatch',     () => activeEditor()?.nextMatch())
 registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch())
 registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
-registerCommand('workbench.action.findInFiles', () => { sidebarHidden.value = false; sidebarView.value = 'search' })
+registerCommand('workbench.action.findInFiles', () => {
+  sidebarHidden.value = false
+  sidebarView.value = 'search'
+  // If pane was already visible, the watcher on 'active' prop won't fire — focus explicitly.
+  void nextTick(() => searchRef.value?.focusInput())
+})
 registerCommand('workbench.action.toggleSidebar', () => { sidebarHidden.value = !sidebarHidden.value })
 registerCommand('workbench.action.toggleZenMode', () => {
   zenMode.value = !zenMode.value
   if (zenMode.value) sidebarHidden.value = true
 })
-registerCommand('workbench.action.focusExplorer', () => { sidebarHidden.value = false; sidebarView.value = 'explorer' })
+registerCommand('workbench.action.focusExplorer', () => {
+  sidebarHidden.value = false
+  sidebarView.value = 'explorer'
+  void nextTick(() => explorerRef.value?.focusTree())
+})
 registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
 registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !aiPanelOpen.value })
 function getActiveRelPath(): string { return activeRel.value }
@@ -460,10 +469,10 @@ registerCommand('workbench.action.navigateForward', () => {
 watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
 
 // ── Explorer pane ref (for revealFile) ───────────────────────────────────────
-const explorerRef = ref<{ revealFile: (path: string) => Promise<void> } | null>(null)
+const explorerRef = ref<{ revealFile: (path: string) => Promise<void>; focusTree: () => void } | null>(null)
 
-// ── Search pane ref (for openReplace) ────────────────────────────────────────
-const searchRef = ref<{ openReplace: () => void } | null>(null)
+// ── Search pane ref (for openReplace / focusInput) ───────────────────────────
+const searchRef = ref<{ openReplace: () => void; focusInput: () => void } | null>(null)
 registerCommand('workbench.action.findInFilesReplace', () => {
   sidebarHidden.value = false
   sidebarView.value = 'search'

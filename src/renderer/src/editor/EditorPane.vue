@@ -180,6 +180,7 @@ const findOpen = ref(false)
 const findQuery = ref('')
 const findCase = ref(false)
 const findWholeWord = ref(false)
+const findRegex = ref(false)
 const findMatches = ref<Array<{ line: number; startCol: number; endCol: number }>>([])
 const findIdx = ref(-1)
 const findInputEl = ref<HTMLInputElement | null>(null)
@@ -196,7 +197,7 @@ function isWordBoundary(haystack: string, matchStart: number, matchLen: number):
 /** True when the query contains only word characters — whole-word is meaningful. */
 function queryIsAllWord(q: string): boolean { return /^[a-zA-Z0-9_]+$/.test(q) }
 
-watch([findQuery, findCase, findWholeWord], () => { if (findOpen.value) computeMatches() })
+watch([findQuery, findCase, findWholeWord, findRegex], () => { if (findOpen.value) computeMatches() })
 // Content changed while find is open → recompute highlights but don't scroll/steal focus.
 // The user may be editing in the editor itself; navigating to a match would be disruptive.
 watch(content, () => { if (findOpen.value && findQuery.value) computeMatches({ navigate: false }) })
@@ -245,20 +246,39 @@ function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void 
   }
   const text = editorRef.value?.getValue() ?? content.value
   const lines = text.split('\n')
-  const needle = findCase.value ? q : q.toLowerCase()
   const matches: Array<{ line: number; startCol: number; endCol: number }> = []
-  for (let li = 0; li < lines.length; li++) {
-    const haystack = findCase.value ? lines[li] : lines[li].toLowerCase()
-    let start = 0
-    while (true) {
-      const idx = haystack.indexOf(needle, start)
-      if (idx === -1) break
-      if (!findWholeWord.value || !queryIsAllWord(q) || isWordBoundary(haystack, idx, q.length)) {
-        matches.push({ line: li, startCol: idx, endCol: idx + q.length })
+
+  if (findRegex.value) {
+    try {
+      const flags = 'g' + (findCase.value ? '' : 'i')
+      const re = new RegExp(q, flags)
+      for (let li = 0; li < lines.length; li++) {
+        re.lastIndex = 0
+        let m: RegExpExecArray | null
+        while ((m = re.exec(lines[li])) !== null) {
+          matches.push({ line: li, startCol: m.index, endCol: m.index + m[0].length })
+          if (m[0].length === 0) { re.lastIndex++; break }
+        }
       }
-      start = idx + 1
+    } catch {
+      // Invalid regex — show no matches
+    }
+  } else {
+    const needle = findCase.value ? q : q.toLowerCase()
+    for (let li = 0; li < lines.length; li++) {
+      const haystack = findCase.value ? lines[li] : lines[li].toLowerCase()
+      let start = 0
+      while (true) {
+        const idx = haystack.indexOf(needle, start)
+        if (idx === -1) break
+        if (!findWholeWord.value || !queryIsAllWord(q) || isWordBoundary(haystack, idx, q.length)) {
+          matches.push({ line: li, startCol: idx, endCol: idx + q.length })
+        }
+        start = idx + 1
+      }
     }
   }
+
   findMatches.value = matches
   if (findIdx.value < 0 || findIdx.value >= matches.length) findIdx.value = matches.length > 0 ? 0 : -1
   updateFindDecorations()
@@ -310,16 +330,27 @@ function replaceNext(): void {
 function replaceAll(): void {
   if (!findMatches.value.length) return
   const q = findQuery.value
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const needWordBoundary = findWholeWord.value && queryIsAllWord(q)
-  const pattern = needWordBoundary ? `\\b${escaped}\\b` : escaped
-  const flags = findCase.value ? 'g' : 'gi'
-  const re = new RegExp(pattern, flags)
-  // Escape $ in replacement so it's always treated as a literal string,
-  // not a regex backreference ($&, $`, $', $1, etc.).
-  const literalReplace = replaceQuery.value.replace(/\$/g, '$$$$')
   const oldText = editorRef.value?.getValue() ?? content.value
-  const newText = oldText.replace(re, literalReplace)
+  let newText: string
+  try {
+    if (findRegex.value) {
+      // Regex mode: use query as regex; allow backreferences in replacement string
+      const flags = findCase.value ? 'g' : 'gi'
+      const re = new RegExp(q, flags)
+      newText = oldText.replace(re, replaceQuery.value)
+    } else {
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const needWordBoundary = findWholeWord.value && queryIsAllWord(q)
+      const pattern = needWordBoundary ? `\\b${escaped}\\b` : escaped
+      const flags = findCase.value ? 'g' : 'gi'
+      const re = new RegExp(pattern, flags)
+      // Escape $ in replacement so it's treated as a literal string, not a backreference.
+      const literalReplace = replaceQuery.value.replace(/\$/g, '$$$$')
+      newText = oldText.replace(re, literalReplace)
+    }
+  } catch {
+    return // Invalid regex
+  }
   if (newText === oldText) return
   const lines = oldText.split('\n')
   const lastLine = lines.length - 1
@@ -335,6 +366,9 @@ function onFindKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); closeFind() }
   else if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? prevMatch() : nextMatch() }
   else if (e.key === 'Tab' && replaceOpen.value) { e.preventDefault(); replaceInputEl.value?.focus() }
+  else if (e.altKey && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); findCase.value = !findCase.value }
+  else if (e.altKey && (e.key === 'w' || e.key === 'W')) { e.preventDefault(); findWholeWord.value = !findWholeWord.value }
+  else if (e.altKey && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); findRegex.value = !findRegex.value }
 }
 function onReplaceKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); closeFind() }
@@ -649,15 +683,21 @@ defineExpose({
         <button
           class="ep-find-btn"
           :class="{ active: findCase }"
-          title="區分大小寫"
+          title="區分大小寫 (⌥C)"
           @click="findCase = !findCase"
         >Aa</button>
         <button
           class="ep-find-btn"
           :class="{ active: findWholeWord }"
-          title="全字比對"
+          title="全字比對 (⌥W)"
           @click="findWholeWord = !findWholeWord"
         >W|</button>
+        <button
+          class="ep-find-btn"
+          :class="{ active: findRegex }"
+          title="使用正規表示式 (⌥R)"
+          @click="findRegex = !findRegex"
+        >.*</button>
         <span class="ep-find-count">
           <template v-if="findQuery && findMatches.length === 0">無結果</template>
           <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>

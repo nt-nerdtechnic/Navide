@@ -232,7 +232,10 @@ function openReplace(): void {
   showReplace.value = true
   void nextTick(() => queryInput.value?.focus())
 }
-defineExpose({ openReplace })
+function focusInput(): void {
+  void nextTick(() => queryInput.value?.focus())
+}
+defineExpose({ openReplace, focusInput })
 </script>
 
 <template>

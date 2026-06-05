@@ -39,7 +39,7 @@ const {
   createTag, deleteTag, showCommit,
   addWorktree, removeWorktree,
   setGitConfig,
-  cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,
+  cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
 } = useGit(() => props.workspacePath, props.backend)
 
@@ -362,6 +362,20 @@ async function doClone(): Promise<void> {
     if (r.path) emit('open-workspace', r.path)
   } finally {
     cloning.value = false
+  }
+}
+
+// ── connect to remote ───────────────────────────────────────────────────────────
+const connectUrl = ref(''), connecting = ref(false), connectError = ref('')
+async function doConnect(): Promise<void> {
+  connectError.value = ''
+  if (!connectUrl.value.trim()) { connectError.value = '請輸入倉庫 URL'; return }
+  connecting.value = true
+  try {
+    const r = await connectToRemote(connectUrl.value.trim())
+    if (!r.ok) connectError.value = r.error || '連接失敗'
+  } finally {
+    connecting.value = false
   }
 }
 
@@ -1150,28 +1164,20 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </button>
       <p v-if="initError" class="err-text">{{ initError }}</p>
 
-      <!-- Clone an existing repository -->
+      <!-- Connect existing directory to a remote -->
       <div class="clone-box">
-        <div class="clone-title">或 Clone 既有倉庫</div>
+        <div class="clone-title">或連接到既有遠端倉庫</div>
+        <div class="clone-hint">將目前目錄的檔案與遠端 repo 合併（不需要另外選資料夾）</div>
         <input
-          v-model="cloneUrl"
+          v-model="connectUrl"
           class="clone-input"
           placeholder="Repository URL (https://… 或 git@…)"
-          :disabled="cloning"
+          :disabled="connecting"
         />
-        <div class="clone-dir-row">
-          <input
-            v-model="cloneParent"
-            class="clone-input"
-            placeholder="目標資料夾…"
-            :disabled="cloning"
-          />
-          <button class="btn-ghost clone-pick" :disabled="cloning" @click="pickCloneDir">瀏覽</button>
-        </div>
-        <button class="btn-primary w-full" :disabled="cloning" @click="doClone">
-          {{ cloning ? 'Cloning…' : 'Clone Repository' }}
+        <button class="btn-ghost w-full" :disabled="connecting" @click="doConnect">
+          {{ connecting ? '連接中…' : 'Connect to Remote' }}
         </button>
-        <p v-if="cloneError" class="err-text">{{ cloneError }}</p>
+        <p v-if="connectError" class="err-text">{{ connectError }}</p>
       </div>
     </div>
 
@@ -2094,7 +2100,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   width: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-muted);
   display: flex; flex-direction: column; gap: 6px;
 }
-.clone-title { font-size: 11px; color: var(--text-secondary); text-align: left; }
+.clone-title { font-size: 11px; color: var(--text-secondary); text-align: center; }
+.clone-hint { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; text-align: center; }
 .clone-input {
   width: 100%; box-sizing: border-box; background: var(--bg-base); border: 1px solid var(--border-default);
   border-radius: 5px; color: var(--text-primary); font-size: 11px; padding: 5px 8px;

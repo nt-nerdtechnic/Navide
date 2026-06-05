@@ -750,6 +750,19 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
+  async function connectToRemote(
+    url: string,
+  ): Promise<{ ok: boolean; branch?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; branch?: string; error?: string }>(
+      'git.connect_to_remote',
+      { workspace_path: ws, url },
+      60_000,
+    )
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
   async function cloneRepo(
     url: string,
     target_dir: string,
@@ -917,7 +930,7 @@ export function useGit(
     checkStaged,
     showCommit,
     // vscode-parity additions
-    applyPatch, cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,
+    applyPatch, cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
     pullRebase, pushForce,
   }
 }

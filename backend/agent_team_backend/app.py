@@ -1679,6 +1679,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.add_remote(ws_path, name, url)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.connect_to_remote":
+            ws_path = payload.get("workspace_path") or ""
+            url = payload.get("url") or ""
+            result = await git_service.connect_to_remote(ws_path, url)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
         elif msg_type == "git.remove_remote":
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""

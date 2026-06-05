@@ -111,6 +111,28 @@ TOOL_DEFS = [
             "required": ["command"],
         },
     },
+    {
+        "name": "list_directory",
+        "description": (
+            "List files and subdirectories in the workspace. "
+            "Shows a tree up to the specified depth (max 3). "
+            "Use this to understand the project structure before reading files."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Relative path within the workspace to list (default: '.' = root).",
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to recurse (1-3, default 2).",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 # ── Path safety helper ────────────────────────────────────────────────────────
@@ -126,6 +148,53 @@ def _safe_resolve(workspace_path: str, rel_path: str) -> Path:
 
 
 # ── Tool implementations ──────────────────────────────────────────────────────
+
+async def _tool_list_directory(input: dict, workspace_path: str) -> str:
+    rel_path = (input.get("path") or ".").strip() or "."
+    depth = max(1, min(int(input.get("depth") or 2), 3))
+
+    try:
+        root = _safe_resolve(workspace_path, "" if rel_path == "." else rel_path)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    if not root.is_dir():
+        return f"Error: not a directory: {rel_path}"
+
+    lines: list[str] = []
+
+    # Common dirs/files to skip for clarity
+    _SKIP = {
+        ".git", "__pycache__", ".venv", "venv", "node_modules",
+        ".mypy_cache", ".pytest_cache", "dist", "build", ".DS_Store",
+    }
+
+    def _walk(path: Path, current_depth: int, prefix: str) -> None:
+        if current_depth > depth:
+            return
+        try:
+            entries = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except PermissionError:
+            return
+        visible = [e for e in entries if e.name not in _SKIP]
+        for i, entry in enumerate(visible):
+            is_last = i == len(visible) - 1
+            connector = "└── " if is_last else "├── "
+            child_prefix = prefix + ("    " if is_last else "│   ")
+            suffix = "/" if entry.is_dir() else ""
+            lines.append(f"{prefix}{connector}{entry.name}{suffix}")
+            if entry.is_dir():
+                _walk(entry, current_depth + 1, child_prefix)
+
+    lines.append(f"{root.name}/")
+    _walk(root, 1, "")
+
+    if len(lines) > 200:
+        lines = lines[:200]
+        lines.append("... (truncated)")
+
+    return "\n".join(lines)
+
 
 async def _tool_read_file(input: dict, workspace_path: str) -> str:
     file_path = input.get("file_path", "")
@@ -352,6 +421,8 @@ async def execute_tool(name: str, input: dict, workspace_path: str) -> str:
         return await _tool_search_files(input, workspace_path)
     elif name == "edit_file":
         return await _tool_edit_file(input, workspace_path)
+    elif name == "list_directory":
+        return await _tool_list_directory(input, workspace_path)
     else:
         return f"Error: unknown tool: {name!r}"
 
@@ -432,12 +503,16 @@ async def run_agent_loop(
         # run_command goes through the approval flow; all others execute directly.
         tool_results: list[dict] = []
         for tc in tool_calls:
-            if tc["name"] == "run_command":
-                result_str = await _run_command_with_approval(
-                    tc.get("input") or {}, workspace_path, session_id, tc["id"], emit
-                )
-            else:
-                result_str = await execute_tool(tc["name"], tc.get("input") or {}, workspace_path)
+            try:
+                if tc["name"] == "run_command":
+                    result_str = await _run_command_with_approval(
+                        tc.get("input") or {}, workspace_path, session_id, tc["id"], emit
+                    )
+                else:
+                    result_str = await execute_tool(tc["name"], tc.get("input") or {}, workspace_path)
+            except Exception:
+                log.exception("tool %r raised unexpectedly", tc.get("name"))
+                result_str = "Error: tool execution failed. Check server logs for details."
             await emit("ai.chat.tool_result", {
                 "session_id": session_id,
                 "tool_id": tc["id"],

@@ -355,23 +355,29 @@ async function revealFile(relPath: string): Promise<void> {
 }
 
 // ── Keyboard navigation ───────────────────────────────────────────────────────
-const focusedIdx = ref(-1)
+// Track by rel_path so expanding/collapsing folders doesn't shift the focused item.
+const focusedRelPath = ref<string | null>(null)
+const focusedIdx = computed(() =>
+  focusedRelPath.value === null
+    ? -1
+    : rows.value.findIndex((r) => r.entry.rel_path === focusedRelPath.value),
+)
 
 function onTreeKeydown(e: KeyboardEvent): void {
   const list = rows.value
   if (!list.length) return
-  if (focusedIdx.value < 0) { focusedIdx.value = 0; return }
+  if (focusedRelPath.value === null) { focusedRelPath.value = list[0].entry.rel_path; return }
   const idx = focusedIdx.value
-  const entry = list[idx]?.entry
-  if (!entry) return
+  if (idx === -1) { focusedRelPath.value = list[0].entry.rel_path; return }
+  const entry = list[idx].entry
 
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    focusedIdx.value = Math.min(idx + 1, list.length - 1)
+    focusedRelPath.value = list[Math.min(idx + 1, list.length - 1)].entry.rel_path
     scrollFocusedIntoView()
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
-    focusedIdx.value = Math.max(idx - 1, 0)
+    focusedRelPath.value = list[Math.max(idx - 1, 0)].entry.rel_path
     scrollFocusedIntoView()
   } else if (e.key === 'ArrowRight' && entry.is_dir) {
     e.preventDefault()
@@ -382,8 +388,8 @@ function onTreeKeydown(e: KeyboardEvent): void {
       void explorer.toggleDir(entry.rel_path)
     } else {
       const parentRel = entry.rel_path.includes('/') ? entry.rel_path.slice(0, entry.rel_path.lastIndexOf('/')) : ''
-      const parentIdx = list.findIndex((r) => r.entry.rel_path === parentRel)
-      if (parentIdx >= 0) focusedIdx.value = parentIdx
+      const parentRow = list.find((r) => r.entry.rel_path === parentRel)
+      if (parentRow) focusedRelPath.value = parentRow.entry.rel_path
     }
   } else if (e.key === 'Enter') {
     e.preventDefault()
@@ -400,10 +406,13 @@ function scrollFocusedIntoView(): void {
 }
 
 function onTreeFocus(): void {
-  if (focusedIdx.value < 0 && rows.value.length > 0) focusedIdx.value = 0
+  if (focusedRelPath.value === null && rows.value.length > 0) focusedRelPath.value = rows.value[0].entry.rel_path
 }
 
-defineExpose({ revealFile })
+function focusTree(): void {
+  treeEl.value?.focus()
+}
+defineExpose({ revealFile, focusTree })
 </script>
 
 <template>

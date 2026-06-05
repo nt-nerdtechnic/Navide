@@ -439,6 +439,34 @@ function onKeydown(e: KeyboardEvent): void {
     acceptGhost()
     return
   }
+  // Right arrow: accept one char (plain) or one word (cmd/alt) of ghost text
+  if (e.key === 'ArrowRight' && ghost.value && !shift) {
+    e.preventDefault()
+    const text = ghost.value.text
+    if (mod || e.altKey) {
+      // Accept next word: skip leading whitespace, then advance through word chars
+      let i = 0
+      while (i < text.length && (text[i] === ' ' || text[i] === '\t')) i++
+      if (i < text.length && isWordChar(text[i])) {
+        while (i < text.length && isWordChar(text[i])) i++
+      } else if (i < text.length) {
+        i++
+      }
+      if (i === 0) { ghost.value = null; return }
+      const accepted = text.slice(0, i)
+      const remaining = text.slice(i)
+      ghost.value = null
+      insertText(accepted)
+      if (remaining) ghost.value = { pos: { ...cursor.value }, text: remaining }
+    } else {
+      // Accept one character
+      const remaining = text.slice(1)
+      ghost.value = null
+      insertText(text[0])
+      if (remaining) ghost.value = { pos: { ...cursor.value }, text: remaining }
+    }
+    return
+  }
 
   if (mod && (e.key === 'z' || e.key === 'Z')) {
     e.preventDefault()
@@ -837,7 +865,9 @@ function joinLines(): void {
 function sortLines(dir: 'asc' | 'desc'): void {
   const sel = selectionRange()
   const startLine = sel ? sel.start.line : 0
-  const endLine = sel ? sel.end.line : model.lineCount() - 1
+  const endLine = sel
+    ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1))
+    : model.lineCount() - 1
   const lines: string[] = []
   for (let i = startLine; i <= endLine; i++) lines.push(model.getLine(i))
   lines.sort((a, b) => dir === 'asc' ? a.localeCompare(b) : b.localeCompare(a))

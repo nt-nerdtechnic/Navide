@@ -200,11 +200,19 @@ ipcMain.handle(
     _event,
     args: { defaultName?: string; content: string; title?: string }
   ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => {
+    const defaultName = args?.defaultName ?? 'export.json'
+    const ext = defaultName.includes('.') ? defaultName.slice(defaultName.lastIndexOf('.') + 1) : 'json'
+    const extFilters: Record<string, { name: string; extensions: string[] }> = {
+      md:   { name: 'Markdown', extensions: ['md'] },
+      json: { name: 'JSON',     extensions: ['json'] },
+      txt:  { name: 'Text',     extensions: ['txt'] },
+    }
+    const primaryFilter = extFilters[ext] ?? { name: ext.toUpperCase(), extensions: [ext] }
     const opts: Electron.SaveDialogOptions = {
-      title: args?.title ?? 'Export JSON',
-      defaultPath: args?.defaultName ?? 'export.json',
+      title: args?.title ?? 'Export',
+      defaultPath: defaultName,
       filters: [
-        { name: 'JSON', extensions: ['json'] },
+        primaryFilter,
         { name: 'All Files', extensions: ['*'] }
       ]
     }

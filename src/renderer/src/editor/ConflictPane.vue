@@ -34,6 +34,9 @@ const totalConflicts = computed(() => countConflicts(sections.value))
 const choices = ref(new Map<number, ConflictChoice>())
 // per-conflict-index manual edit text
 const manualEdits = ref(new Map<number, string>())
+// Saves the non-manual choice that was active before the user clicked "Edit",
+// so Cancel can restore it instead of dropping the resolution entirely.
+const _priorChoice = ref(new Map<number, ConflictChoice>())
 const editingIdx = ref<number | null>(null)
 const editBuf = ref('')
 
@@ -45,6 +48,7 @@ async function loadFile(): Promise<void> {
   loadError.value = ''
   choices.value = new Map()
   manualEdits.value = new Map()
+  _priorChoice.value = new Map()
   editingIdx.value = null
   try {
     const resp = await props.backend.send<{ ok: boolean; content: string; error?: string }>(
@@ -83,6 +87,11 @@ function choose(conflictIdx: number, choice: ConflictChoice): void {
     if (editingIdx.value !== null && editingIdx.value !== conflictIdx) {
       manualEdits.value = new Map(manualEdits.value).set(editingIdx.value, editBuf.value)
     }
+    // Remember the current non-manual choice so Cancel can restore it
+    const existing = choices.value.get(conflictIdx)
+    if (existing !== undefined && existing !== 'manual') {
+      _priorChoice.value = new Map(_priorChoice.value).set(conflictIdx, existing)
+    }
     const sec = sections.value.filter((s) => s.kind === 'conflict')[conflictIdx]
     if (sec?.kind === 'conflict') {
       editBuf.value = manualEdits.value.get(conflictIdx) ?? sec.ours.join('\n')
@@ -97,15 +106,32 @@ function choose(conflictIdx: number, choice: ConflictChoice): void {
 
 function saveManual(conflictIdx: number): void {
   manualEdits.value = new Map(manualEdits.value).set(conflictIdx, editBuf.value)
+  // No longer need the pre-manual backup
+  if (_priorChoice.value.has(conflictIdx)) {
+    const next = new Map(_priorChoice.value)
+    next.delete(conflictIdx)
+    _priorChoice.value = next
+  }
   editingIdx.value = null
 }
 
 function cancelManual(conflictIdx: number): void {
-  // If no prior choice saved, revert to unresolved
   if (!manualEdits.value.has(conflictIdx)) {
-    const next = new Map(choices.value)
-    next.delete(conflictIdx)
-    choices.value = next
+    const prior = _priorChoice.value.get(conflictIdx)
+    if (prior !== undefined) {
+      // Restore the choice that was active before the user clicked "Edit"
+      choices.value = new Map(choices.value).set(conflictIdx, prior)
+    } else {
+      // No prior choice and no confirmed manual edit — revert to unresolved
+      const next = new Map(choices.value)
+      next.delete(conflictIdx)
+      choices.value = next
+    }
+    if (_priorChoice.value.has(conflictIdx)) {
+      const next = new Map(_priorChoice.value)
+      next.delete(conflictIdx)
+      _priorChoice.value = next
+    }
   }
   editingIdx.value = null
 }

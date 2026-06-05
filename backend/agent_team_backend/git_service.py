@@ -24,6 +24,9 @@ log = logging.getLogger("agent_team_backend.git_service")
 
 _MAX_DIFF_CHARS = 8_000  # truncate staged diff before sending to Ollama
 
+# Only allow https/http and SSH-style URLs; block git pseudo-protocols (ext::, fd::, file://, etc.)
+_SAFE_GIT_URL = re.compile(r"^(https?://|ssh://|git@[\w.\-]+:)")
+
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
 
@@ -1030,10 +1033,57 @@ async def add_remote(workspace_path: str, name: str, url: str) -> dict[str, Any]
     """Add a new remote."""
     if err := _validate_ref_name(name, "remote name"):
         return {"ok": False, "error": err}
-    if not url.strip():
+    url = url.strip()
+    if not url:
         return {"ok": False, "error": "url is required"}
-    rc, _, stderr = await _run(["git", "remote", "add", name.strip(), url.strip()], workspace_path)
+    if not _SAFE_GIT_URL.match(url):
+        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+    rc, _, stderr = await _run(["git", "remote", "add", name.strip(), url], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin") -> dict[str, Any]:
+    """git init → remote add → fetch → checkout, connecting an existing directory to a remote repo."""
+    url = url.strip()
+    if not url:
+        return {"ok": False, "error": "url is required"}
+    if not _SAFE_GIT_URL.match(url):
+        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+
+    rc, _, stderr = await _run(["git", "init"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git init 失敗: {stderr.strip()}"}
+
+    # Add remote (if already exists, update its URL)
+    rc, _, _ = await _run(["git", "remote", "add", remote, url.strip()], workspace_path)
+    if rc != 0:
+        rc2, _, stderr2 = await _run(["git", "remote", "set-url", remote, url.strip()], workspace_path)
+        if rc2 != 0:
+            return {"ok": False, "error": f"無法設定 remote: {stderr2.strip()}"}
+
+    rc, _, stderr = await _run(["git", "fetch", remote], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git fetch 失敗: {stderr.strip()}"}
+
+    # Detect default branch
+    rc, out, _ = await _run(["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"], workspace_path)
+    if rc == 0:
+        branch = out.strip().split("/")[-1]
+    else:
+        branch = ""
+        for b in ("main", "master"):
+            rc2, _, _ = await _run(["git", "rev-parse", "--verify", f"{remote}/{b}"], workspace_path)
+            if rc2 == 0:
+                branch = b
+                break
+        if not branch:
+            return {"ok": False, "error": "無法偵測預設分支（嘗試過 main / master），請確認 URL 正確"}
+
+    rc, _, stderr = await _run(["git", "checkout", "-B", branch, f"{remote}/{branch}"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git checkout 失敗: {stderr.strip()}"}
+
+    return {"ok": True, "branch": branch}
 
 
 async def remove_remote(workspace_path: str, name: str) -> dict[str, Any]:

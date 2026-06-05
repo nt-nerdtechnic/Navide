@@ -298,6 +298,21 @@ async function scrollBottom(): Promise<void> {
   }
 }
 
+// ── Tool call human-readable summary ─────────────────────────────────────────
+function getToolSummary(name: string, input: unknown): string {
+  if (typeof input !== 'object' || input === null) return name
+  const inp = input as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  switch (name) {
+    case 'read_file':       return `Reading: ${str(inp.file_path)}`
+    case 'search_files':    return `Searching: "${str(inp.query)}"${inp.file_pattern ? ` in ${inp.file_pattern}` : ''}`
+    case 'edit_file':       return `Editing: ${str(inp.file_path)}`
+    case 'run_command':     return `Running: ${str(inp.command)}`
+    case 'list_directory':  return `Listing: ${str(inp.path) || '.'}`
+    default:                return name
+  }
+}
+
 // ── Toast ──────────────────────────────────────────────────────────────────────
 function showToast(msg: string): void {
   toastMsg.value = msg
@@ -538,6 +553,7 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
+      last.thinking = false
       if (!last.cards) last.cards = []
       last.cards.push({
         kind: 'tool_call',
@@ -996,7 +1012,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
               <!-- Tool call card -->
               <div v-if="card.kind === 'tool_call'" class="ai-tool-card">
                 <div class="ai-tool-header" @click="card.collapsed = !card.collapsed">
-                  <span class="ai-tool-name">⚙ {{ card.tool_name }}</span>
+                  <span class="ai-tool-name">⚙ {{ getToolSummary(card.tool_name, card.tool_input) }}</span>
                   <span class="ai-tool-toggle">{{ card.collapsed ? '▶' : '▼' }}</span>
                 </div>
                 <div v-if="!card.collapsed" class="ai-tool-body">
