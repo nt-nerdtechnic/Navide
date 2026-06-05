@@ -346,6 +346,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/review',   label: '/review',   description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
   { id: '/optimize', label: '/optimize', description: '效能優化',   template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
   { id: '/refactor', label: '/refactor', description: '重構程式碼', template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
+  { id: '/new',       label: '/new',       description: '建立新檔案', template: '請建立一個新檔案，包含以下內容：' },
+  { id: '/commit',    label: '/commit',    description: 'AI 生成 commit message', template: '請根據以下程式碼變更，生成一個簡潔的 git commit message（使用 conventional commits 格式）：\n\n' },
   { id: '/clear',    label: '/clear',    description: '清除對話',   template: '' },
   { id: '/export',   label: '/export',   description: '匯出對話',   template: '' },
 ]
@@ -1061,6 +1063,30 @@ function selectSlashCommand(cmd: SlashCommand): void {
   if (cmd.id === '/export') {
     inputText.value = ''
     void exportConversation()
+    return
+  }
+  // /commit: auto-add @git chip so AI sees the actual diff
+  if (cmd.id === '/commit') {
+    inputText.value = cmd.template
+    void (async () => {
+      try {
+        interface DiffResp { ok: boolean; diff?: string }
+        const resp = await props.backend.send<DiffResp>('git.diff_all', {
+          workspace_path: props.workspacePath,
+          staged: false,
+        })
+        const diff = resp.payload?.diff
+        if (diff) {
+          contextChips.value.push({
+            id: crypto.randomUUID(),
+            label: '@git(diff)',
+            content: `// git diff (unstaged)\n${diff}`,
+          })
+        }
+      } catch {/* ignore */}
+      await nextTick()
+      textareaEl.value?.focus()
+    })()
     return
   }
   inputText.value = cmd.template + ' '
