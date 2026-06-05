@@ -143,6 +143,41 @@ const filteredThreads = computed(() => {
   return [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]
 })
 
+type GroupedItem = { kind: 'thread'; thread: ChatThread } | { kind: 'label'; label: string }
+const groupedThreads = computed<GroupedItem[]>(() => {
+  const threads = filteredThreads.value
+  const pinned = threads.filter((t) => t.pinned)
+  const unpinned = threads.filter((t) => !t.pinned)
+  const now = Date.now()
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1)
+  const lastWeek = new Date(today); lastWeek.setDate(today.getDate() - 7)
+
+  const items: GroupedItem[] = []
+  if (pinned.length) {
+    items.push({ kind: 'label', label: 'Pinned' })
+    for (const t of pinned) items.push({ kind: 'thread', thread: t })
+  }
+
+  const groups: { label: string; threads: ChatThread[] }[] = [
+    { label: 'Today', threads: [] }, { label: 'Yesterday', threads: [] },
+    { label: 'This Week', threads: [] }, { label: 'Older', threads: [] },
+  ]
+  for (const t of unpinned) {
+    const d = new Date(t.updatedAt)
+    if (d >= today) groups[0].threads.push(t)
+    else if (d >= yesterday) groups[1].threads.push(t)
+    else if (d >= lastWeek) groups[2].threads.push(t)
+    else groups[3].threads.push(t)
+  }
+  for (const g of groups) {
+    if (!g.threads.length) continue
+    items.push({ kind: 'label', label: g.label })
+    for (const t of g.threads) items.push({ kind: 'thread', thread: t })
+  }
+  return items
+})
+
 function getThreadMatchSnippet(thread: ChatThread, q: string): string {
   if (!q) return ''
   for (const m of thread.messages) {
@@ -2347,41 +2382,43 @@ function getDateLabel(ts: number): string {
       </div>
       <div class="ai-threads-list">
         <div v-if="!filteredThreads.length" class="ai-threads-empty">No results</div>
-        <div
-          v-for="t in filteredThreads"
-          :key="t.id"
-          class="ai-thread-item"
-          :class="{ active: t.id === currentThreadId }"
-          @click="switchThread(t.id)"
-        >
-          <div class="ai-thread-main">
-            <input
-              v-if="renamingThreadId === t.id"
-              v-model="renamingTitle"
-              class="ai-thread-rename-input"
-              @click.stop
-              @keydown.enter.prevent="finishRenameThread"
-              @keydown.escape.prevent="cancelRenameThread"
-              @blur="finishRenameThread"
-            />
-            <span
-              v-else
-              class="ai-thread-title"
-              title="Double-click to rename"
-              @dblclick.stop="startRenameThread(t.id, t.title, $event)"
-            >{{ t.pinned ? '📌 ' : '' }}{{ t.title }}</span>
-            <span v-if="threadSearchQuery && !t.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(t, threadSearchQuery) }}</span>
+        <template v-for="item in groupedThreads" :key="item.kind === 'label' ? 'label-' + item.label : item.thread.id">
+          <div v-if="item.kind === 'label'" class="ai-thread-group-label">{{ item.label }}</div>
+          <div
+            v-else
+            class="ai-thread-item"
+            :class="{ active: item.thread.id === currentThreadId }"
+            @click="switchThread(item.thread.id)"
+          >
+            <div class="ai-thread-main">
+              <input
+                v-if="renamingThreadId === item.thread.id"
+                v-model="renamingTitle"
+                class="ai-thread-rename-input"
+                @click.stop
+                @keydown.enter.prevent="finishRenameThread"
+                @keydown.escape.prevent="cancelRenameThread"
+                @blur="finishRenameThread"
+              />
+              <span
+                v-else
+                class="ai-thread-title"
+                title="Double-click to rename"
+                @dblclick.stop="startRenameThread(item.thread.id, item.thread.title, $event)"
+              >{{ item.thread.title }}</span>
+              <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(item.thread, threadSearchQuery) }}</span>
+            </div>
+            <div class="ai-thread-meta">
+              <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
+              <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
+              <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
+              <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(item.thread.id)">✕</button>
+            </div>
+            <div v-if="item.thread.messages.length && renamingThreadId !== item.thread.id" class="ai-thread-preview">
+              {{ item.thread.messages[item.thread.messages.length - 1]?.content.replace(/[#`*_~>]/g, '').trim().slice(0, 60) }}
+            </div>
           </div>
-          <div class="ai-thread-meta">
-            <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
-            <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
-            <button class="ai-thread-pin" :title="t.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(t.id, $event)">{{ t.pinned ? '📌' : '⊙' }}</button>
-            <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
-          </div>
-          <div v-if="t.messages.length && renamingThreadId !== t.id" class="ai-thread-preview">
-            {{ t.messages[t.messages.length - 1]?.content.replace(/[#`*_~>]/g, '').trim().slice(0, 60) }}
-          </div>
-        </div>
+        </template>
       </div>
     </div>
 
@@ -3521,6 +3558,16 @@ function getDateLabel(ts: number): string {
 .ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
 .ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .ai-thread-preview { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 0; }
+.ai-thread-group-label {
+  padding: 5px 10px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  opacity: 0.6;
+  user-select: none;
+}
 .ai-thread-rename-input { flex: 1; font-size: 12.5px; background: var(--bg-input); border: 1px solid var(--accent-emphasis); border-radius: 3px; color: var(--text-bright); padding: 1px 4px; outline: none; min-width: 0; }
 .ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
