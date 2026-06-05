@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import ExplorerPane from './components/ExplorerPane.vue'
 import SearchPane from './components/SearchPane.vue'
@@ -46,6 +46,16 @@ function markDirty(relPath: string, v: boolean): void {
   const f = openFiles.value.find((x) => x.relPath === relPath)
   if (f) f.dirty = v
 }
+
+// Host owns the window title — tracks the active file (+ dirty marker).
+watch(
+  [activeRel, openFiles],
+  () => {
+    const f = openFiles.value.find((x) => x.relPath === activeRel.value)
+    document.title = f ? `${f.dirty ? '● ' : ''}${f.name} — Editor` : 'Editor'
+  },
+  { deep: true, immediate: true },
+)
 
 if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialName, line: initialLine })
 </script>
@@ -135,6 +145,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
           :name="f.name"
           :initial-line="f.line"
           embedded
+          :active="f.relPath === activeRel"
           @dirty="(v) => markDirty(f.relPath, v)"
         />
         <div v-if="!openFiles.length" class="ide-empty">

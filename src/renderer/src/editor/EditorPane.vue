@@ -14,6 +14,9 @@ const props = defineProps<{
   // Inside the IDE shell the file name is shown by the host tab strip, so the
   // editor hides its own name chip and keeps only the action buttons.
   embedded?: boolean
+  // Multiple EditorPanes stay mounted (v-show) in the IDE; only the active one
+  // should respond to global keyboard shortcuts. Defaults true for standalone use.
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -153,6 +156,9 @@ async function requestGhost(): Promise<void> {
 
 // ── Keyboard shortcuts (window-level) ─────────────────────────────────────────
 function onKeydown(e: KeyboardEvent): void {
+  // When embedded, several panes share the window; only the active one reacts so
+  // a shortcut never fires on a hidden file.
+  if (props.embedded && props.active === false) return
   const mod = e.metaKey || e.ctrlKey
   if (mod && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save() }
   else if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openCmdK() }
@@ -160,7 +166,8 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  document.title = `Editor · ${props.name}`
+  // The host (IDE shell) owns the window title when embedded.
+  if (!props.embedded) document.title = `Editor · ${props.name}`
   window.addEventListener('keydown', onKeydown)
   // 編輯器為獨立視窗，開窗當下後端 WebSocket 通常尚未連上，
   // 若立即 send 會以「ws not open」reject 且不會重試，畫面卡在「載入中」。
