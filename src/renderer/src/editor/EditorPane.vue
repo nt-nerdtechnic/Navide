@@ -785,7 +785,7 @@ defineExpose({
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); toggleLineComment() }">Toggle Comment</button>
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); openFind() }">Find</button>
           <div class="ep-ctx-sep" />
-          <button class="ep-ctx-item" @click="() => { const sel = editorRef?.getSelection?.() ?? ''; closeContextMenu(); emit('addToChat', sel || editorRef?.getContent?.() ?? '') }">Add to AI Chat</button>
+          <button class="ep-ctx-item" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('addToChat', sel || editorRef?.getValue?.() || '') }">Add to AI Chat</button>
           <div class="ep-ctx-sep" />
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); editorRef?.selectAll() }">Select All</button>
         </div>
