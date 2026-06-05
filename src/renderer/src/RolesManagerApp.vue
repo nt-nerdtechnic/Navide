@@ -274,13 +274,13 @@ async function save(): Promise<void> {
     system_prompt: draft.value.system_prompt
   }
   // Key change on existing role: delete old + create new.
-  const wasRename =
-    !draft.value.isNew && draft.value.originalKey && draft.value.originalKey !== payload.key
+  const originalKey = draft.value.originalKey
+  const wasRename = !draft.value.isNew && originalKey && originalKey !== payload.key
   try {
     if (wasRename) {
       const role = await rolesApi.upsert(payload)
       if (role) {
-        await rolesApi.remove(draft.value.originalKey)
+        await rolesApi.remove(originalKey)
         selectKey(role.key)
       }
     } else {
