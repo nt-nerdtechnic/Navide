@@ -461,7 +461,7 @@ const slashMenuEl = ref<HTMLElement | null>(null)
 const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 
 // ── Code-block copy via event delegation ─────────────────────────────────────
-function onMessagesClick(e: MouseEvent): void {
+async function onMessagesClick(e: MouseEvent): Promise<void> {
   const target = e.target as Element
   // Copy button
   const copyBtn = target.closest<HTMLButtonElement>('.ai-code-copy-btn')
@@ -1925,6 +1925,7 @@ function getDateLabel(ts: number): string {
             @click="toggleBookmark(mi)"
           >{{ msg.bookmarked ? '★' : '☆' }}</button>
           <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
+          <span v-if="msg.role === 'assistant' && !msg.streaming && msg.content.length > 100" class="ai-msg-elapsed">~{{ Math.ceil(msg.content.length / 4).toLocaleString() }}t</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
