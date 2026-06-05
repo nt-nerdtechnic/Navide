@@ -10,11 +10,15 @@ const props = defineProps<{
   workspacePath: string
   analyzerModel?: string
   backend: ReturnType<typeof useBackend>
+  // When embedded in the editor window, "open in editor" opens in-place via the
+  // `open-file` event instead of spawning a separate editor window.
+  embedded?: boolean
 }>()
 
 const emit = defineEmits<{
   (e: 'changes-count', n: number): void
   (e: 'open-workspace', path: string): void
+  (e: 'open-file', payload: { filepath: string; name: string }): void
 }>()
 
 const {
@@ -251,11 +255,16 @@ function ctxOpenChanges(): void {
 function ctxOpenInEditor(): void {
   const f = ctxMenu.value.file
   if (f) {
-    void window.agentTeam?.openEditorWindow({
-      workspace_path: props.workspacePath,
-      filepath: f.path,
-      name: f.path.split('/').pop() || f.path,
-    })
+    const name = f.path.split('/').pop() || f.path
+    if (props.embedded) {
+      emit('open-file', { filepath: f.path, name })
+    } else {
+      void window.agentTeam?.openEditorWindow({
+        workspace_path: props.workspacePath,
+        filepath: f.path,
+        name,
+      })
+    }
   }
   closeCtxMenu()
 }

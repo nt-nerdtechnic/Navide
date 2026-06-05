@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useBackend } from './composables/useBackend'
 import ExplorerPane from './components/ExplorerPane.vue'
 import SearchPane from './components/SearchPane.vue'
+import GitPane from './components/GitPane.vue'
 import EditorPane from './editor/EditorPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 
@@ -20,7 +21,8 @@ const backend = useBackend()
 interface OpenFile { relPath: string; name: string; line: number; dirty: boolean }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
-const sidebarView = ref<'explorer' | 'search'>('explorer')
+const sidebarView = ref<'explorer' | 'search' | 'git'>('explorer')
+const changesCount = ref(0)
 
 function openFile(p: { filepath: string; name?: string; line?: number }): void {
   const relPath = p.filepath
@@ -68,6 +70,15 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
       >
         <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
       </button>
+      <button
+        class="ide-act-btn"
+        :class="{ active: sidebarView === 'git' }"
+        title="Source Control"
+        @click="sidebarView = 'git'"
+      >
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z"/></svg>
+        <span v-if="changesCount" class="ide-act-badge">{{ changesCount > 99 ? '99+' : changesCount }}</span>
+      </button>
     </div>
 
     <!-- Sidebar -->
@@ -85,6 +96,14 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         :backend="backend"
         embedded
         @open-file="openFile"
+      />
+      <GitPane
+        v-show="sidebarView === 'git'"
+        :workspace-path="workspacePath"
+        :backend="backend"
+        embedded
+        @open-file="openFile"
+        @changes-count="changesCount = $event"
       />
     </div>
 
@@ -161,6 +180,21 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
 }
 .ide-act-btn:hover { color: var(--text-bright); }
 .ide-act-btn.active { color: var(--text-bright); border-left-color: var(--accent-emphasis); }
+.ide-act-btn { position: relative; }
+.ide-act-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+}
 
 .ide-sidebar {
   flex-shrink: 0;
