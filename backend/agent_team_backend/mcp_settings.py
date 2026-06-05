@@ -129,7 +129,10 @@ class MCPSettingsStore:
             document = MCPServersDocument(servers=default_mcp_servers())
             self._write_document(document)
             return document
+        _MCP_SIZE_LIMIT = 1_000_000
         try:
+            if self._path.stat().st_size > _MCP_SIZE_LIMIT:
+                raise ValueError("MCP config file exceeds 1 MB — regenerating defaults")
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(raw, list):
                 return MCPServersDocument(servers=raw)

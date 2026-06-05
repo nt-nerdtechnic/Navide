@@ -127,6 +127,7 @@ let streamTickInterval: number | null = null
 // ── Conversation thread persistence ──────────────────────────────────────────
 interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
 const MAX_THREADS = 20
+const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
 const showThreads = ref(false)
@@ -1013,6 +1014,8 @@ async function sendMessage(): Promise<void> {
   const displayText = rawText || contextChips.value.map((c) => c.label).join(' ')
   const sentContent = fullContent || displayText
 
+  // Keep the in-memory list bounded so a very long session doesn't exhaust memory.
+  if (messages.value.length >= MAX_MESSAGES) messages.value.splice(0, messages.value.length - MAX_MESSAGES + 1)
   messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now() })
   // Auto-name thread from first user message when still "New chat"
   const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)

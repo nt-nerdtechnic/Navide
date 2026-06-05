@@ -187,6 +187,13 @@ class HistoryStore:
         # Cold read from disk.
         if not path.exists():
             return []
+        _COLD_READ_LIMIT = 50 * 1024 * 1024  # 50 MB guard — avoids OOM on huge files
+        try:
+            if path.stat().st_size > _COLD_READ_LIMIT:
+                log.warning("history file %s exceeds 50 MB — returning empty tail", path)
+                return []
+        except OSError:
+            return []
         events: list[dict[str, Any]] = []
         try:
             with path.open("r", encoding="utf-8") as fh:
