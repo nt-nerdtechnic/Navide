@@ -177,7 +177,7 @@ function rSelectKey(key: string | null) {
 }
 function rStartNew() {
   rSelectedKey.value = null; rError.value = ''
-  rDraft.value = { key: '', label: '', one_line: '', system_prompt: '# Role: \n你是一位...\n\n# Guidelines:\n1. ...\n\n# Output Format:\n...', isNew: true, originalKey: '' }
+  rDraft.value = { key: '', label: '', one_line: '', system_prompt: '# Role: \nYou are a...\n\n# Guidelines:\n1. ...\n\n# Output Format:\n...', isNew: true, originalKey: '' }
 }
 
 const rIsDirty = computed(() => {
@@ -785,7 +785,7 @@ async function plDelete(id: string, name: string) {
                 <!-- Env / command editor (collapsible) -->
                 <div class="mcp-config-toggle" @click="mToggleEnv(srv.name)">
                   <span class="mcp-chevron" :class="{ open: mExpandedEnv.has(srv.name) }">›</span>
-                  <span>設定</span>
+                  <span>Settings</span>
                 </div>
                 <div v-if="mExpandedEnv.has(srv.name)" class="mcp-config-form">
                   <div class="two-col">
@@ -1174,26 +1174,26 @@ async function plDelete(id: string, name: string) {
               <div class="pl-detail-actions">
                 <button class="pl-delete-icon"
                   :disabled="plBusy || (pipelinesApi?.pipelines.value.length ?? 0) <= 1"
-                  :title="(pipelinesApi?.pipelines.value.length ?? 0) <= 1 ? '至少保留一個 pipeline' : '刪除此 pipeline'"
+                  :title="(pipelinesApi?.pipelines.value.length ?? 0) <= 1 ? 'At least one pipeline must remain' : 'Delete this pipeline'"
                   @click="plDelete(plEditingId, plCurrentPipeline?.name ?? '')">
                   🗑
                 </button>
-                <span v-if="plEditingId === pipelinesApi?.activePipelineId.value" class="pl-badge active">預設</span>
+                <span v-if="plEditingId === pipelinesApi?.activePipelineId.value" class="pl-badge active">Default</span>
                 <button v-if="plEditingId !== pipelinesApi?.activePipelineId.value"
                   class="pl-set-default-btn" :disabled="plBusy" @click="plSetActive(plEditingId)">
-                  ✓ 設為預設
+                  ✓ Set as default
                 </button>
                 <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
                 <button class="pl-run-btn"
                   @click="emit('open-pipeline', plEditingId); emit('close')"
-                  title="關閉設定並前往執行">
-                  ▶ 執行
+                  title="Close settings and go to run">
+                  ▶ Run
                 </button>
               </div>
             </div>
 
             <!-- Stage editor for this pipeline -->
-            <div v-if="plStagesLoading" class="hint">載入階段中…</div>
+            <div v-if="plStagesLoading" class="hint">Loading stages…</div>
             <template v-else>
               <div class="tab-toolbar">
                 <button class="ghost" :disabled="sExportBusy" @click="sExport">{{ sExportBusy ? '…' : '⬇ Export JSON' }}</button>
@@ -1216,7 +1216,7 @@ async function plDelete(id: string, name: string) {
                       </div>
                       <div class="item-label">
                         {{ s.shortTitle }}
-                        <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`指揮官: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
+                        <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`Commander: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
                       </div>
                       <div class="item-sub">
                         {{ s.slots.length === 1 ? `${s.slots[0].agentKey} · ${s.slots[0].roleKey}` : `${s.slots.length} parallel slots` }}
@@ -1248,15 +1248,15 @@ async function plDelete(id: string, name: string) {
                   <div class="field"><label class="lbl">Context7 doc query</label><input v-model="sDraft.docQuery" type="text" placeholder="e.g. security best practices, authentication" spellcheck="false" /></div>
                   <div class="slots-section">
                     <div class="row-g spread">
-                      <label class="lbl">Slots <span class="slot-required">* 必填至少一個</span></label>
+                      <label class="lbl">Slots <span class="slot-required">* at least one required</span></label>
                       <button class="ghost" @click="sStartAddSlot">+ Add slot</button>
                     </div>
-                    <p v-if="!sDraft.slots?.length" class="warn-msg">請新增至少一個 slot 才能儲存。</p>
+                    <p v-if="!sDraft.slots?.length" class="warn-msg">Add at least one slot before saving.</p>
                     <template v-for="(slot, i) in sDraft.slots" :key="i">
                       <div v-if="sEditingSlotIndex !== i" class="slot-item slot-clickable" @click="sStartEditSlot(i)">
                         <div class="row-g spread">
-                          <span class="item-label">{{ slot.label }}<span v-if="slot.isCommander" class="manager-badge">🎯 指揮官</span></span>
-                          <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="最後一個 slot 無法刪除">✕</button>
+                          <span class="item-label">{{ slot.label }}<span v-if="slot.isCommander" class="manager-badge">🎯 Commander</span></span>
+                          <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="Cannot delete the last slot">✕</button>
                         </div>
                         <div class="item-sub">{{ slot.agentKey }} · {{ slot.roleKey }}</div>
                       </div>
@@ -1267,13 +1267,13 @@ async function plDelete(id: string, name: string) {
                         </div>
                         <div class="field"><label class="lbl">Role key</label>
                           <select v-model="sSlotDraft.roleKey">
-                            <option value="">（未指定）</option>
+                            <option value="">(unassigned)</option>
                             <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
                           </select>
                         </div>
                         <label class="check-row manager-toggle">
                           <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                          <span><strong>🎯 指定為全域指揮官</strong> — 此 slot 先完成自己的工作後印 <code>---MANAGER-READY---</code>，再跨階段協調。整個 pipeline 只能有一個指揮官。</span>
+                          <span><strong>🎯 Designate as global commander</strong> — This slot finishes its own work, prints <code>---MANAGER-READY---</code>, then coordinates across stages. Only one commander per pipeline.</span>
                         </label>
                         <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                         <div class="row-g gap">
@@ -1289,13 +1289,13 @@ async function plDelete(id: string, name: string) {
                       </div>
                       <div class="field"><label class="lbl">Role key</label>
                         <select v-model="sSlotDraft.roleKey">
-                          <option value="">（未指定）</option>
+                          <option value="">(unassigned)</option>
                           <option v-for="r in rolesApi.roles.value" :key="r.key" :value="r.key">{{ r.label }} ({{ r.key }})</option>
                         </select>
                       </div>
                       <label class="check-row manager-toggle">
                         <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                        <span><strong>🎯 指定為全域指揮官</strong> — 整個 pipeline 只能有一個。</span>
+                        <span><strong>🎯 Designate as global commander</strong> — Only one per pipeline.</span>
                       </label>
                       <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                       <div class="row-g gap">
@@ -1305,7 +1305,7 @@ async function plDelete(id: string, name: string) {
                     </div>
                   </div>
                 </section>
-                <section v-else class="split-detail empty-detail"><p>選擇一個階段或點 + Add Stage</p></section>
+                <section v-else class="split-detail empty-detail"><p>Select a stage or click + Add Stage</p></section>
               </div>
             </template>
           </template>
@@ -1315,8 +1315,8 @@ async function plDelete(id: string, name: string) {
         <!-- ══ APPEARANCE TAB ══ -->
         <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
           <section class="ap-section">
-            <h3 class="ap-title">主題 Theme</h3>
-            <p class="ap-hint">主題是使用者層級偏好，套用於所有工作區。</p>
+            <h3 class="ap-title">Theme</h3>
+            <p class="ap-hint">Theme is a user-level preference applied across all workspaces.</p>
             <div class="ap-theme-grid">
               <button
                 v-for="t in BUILTIN_THEMES"
@@ -1340,17 +1340,17 @@ async function plDelete(id: string, name: string) {
 
           <section class="ap-section">
             <div class="ap-section-head">
-              <h3 class="ap-title">自訂顏色 Custom Colors</h3>
+              <h3 class="ap-title">Custom Colors</h3>
               <button
                 v-if="hasCustomOverrides"
                 class="ap-reset"
                 @click="resetCustom"
-                title="清除所有自訂顏色，回到純內建主題"
+                title="Reset all custom colors to the built-in theme"
               >
-                ↺ 重設預設
+                ↺ Reset to defaults
               </button>
             </div>
-            <p class="ap-hint">微調會疊加在目前主題之上，並在切換內建主題時保留。</p>
+            <p class="ap-hint">Tweaks are layered on top of the current theme and preserved when switching themes.</p>
             <div class="ap-color-list">
               <label
                 v-for="tok in CUSTOMIZABLE_TOKENS"
@@ -1369,16 +1369,16 @@ async function plDelete(id: string, name: string) {
                   v-if="customOverrides[tok.id]"
                   class="ap-color-clear"
                   @click.prevent="setCustomOverride(tok.id, null)"
-                  title="清除此顏色覆寫"
+                  title="Clear this color override"
                 >✕</button>
               </label>
             </div>
           </section>
 
           <section class="ap-section">
-            <h3 class="ap-title">環境設定 Environment</h3>
-            <p class="ap-hint">重新執行首次啟動的環境偵測精靈（檢查 Homebrew / Node / CLI / Ollama 等）。</p>
-            <button class="ap-reset" @click="emit('reopen-onboarding')">↻ 重新執行環境檢查</button>
+            <h3 class="ap-title">Environment</h3>
+            <p class="ap-hint">Re-run the first-launch environment detection wizard (checks Homebrew / Node / CLI / Ollama, etc.).</p>
+            <button class="ap-reset" @click="emit('reopen-onboarding')">↻ Re-run environment check</button>
           </section>
         </div>
 
@@ -1388,31 +1388,31 @@ async function plDelete(id: string, name: string) {
     <!-- Confirm dialogs -->
     <div v-if="rConfirmDelete" class="s-overlay confirm" @click.self="rConfirmDelete = false">
       <div class="confirm-card">
-        <h3>刪除角色「{{ rDraft?.label }}」？</h3>
-        <p>此操作無法復原。</p>
+        <h3>Delete role "{{ rDraft?.label }}"?</h3>
+        <p>This action cannot be undone.</p>
         <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="rConfirmDelete = false">取消</button>
-          <button class="danger" @click="rDoDelete">刪除</button>
+          <button class="ghost" @click="rConfirmDelete = false">Cancel</button>
+          <button class="danger" @click="rDoDelete">Delete</button>
         </div>
       </div>
     </div>
     <div v-if="rConfirmReset" class="s-overlay confirm" @click.self="rConfirmReset = false">
       <div class="confirm-card">
-        <h3>將所有角色重設為預設？</h3>
-        <p>自訂角色將全部清除，此操作無法復原。</p>
+        <h3>Reset all roles to defaults?</h3>
+        <p>All custom roles will be removed. This action cannot be undone.</p>
         <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="rConfirmReset = false">取消</button>
-          <button class="danger" @click="rDoReset">重設</button>
+          <button class="ghost" @click="rConfirmReset = false">Cancel</button>
+          <button class="danger" @click="rDoReset">Reset</button>
         </div>
       </div>
     </div>
     <div v-if="sConfirmDelete" class="s-overlay confirm" @click.self="sConfirmDelete = false">
       <div class="confirm-card">
-        <h3>刪除 Stage「{{ sDraft?.id }}」？</h3>
-        <p>此操作無法復原。</p>
+        <h3>Delete stage "{{ sDraft?.id }}"?</h3>
+        <p>This action cannot be undone.</p>
         <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="sConfirmDelete = false">取消</button>
-          <button class="danger" @click="sDoDelete">刪除</button>
+          <button class="ghost" @click="sConfirmDelete = false">Cancel</button>
+          <button class="danger" @click="sDoDelete">Delete</button>
         </div>
       </div>
     </div>

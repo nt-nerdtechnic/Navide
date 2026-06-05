@@ -1721,7 +1721,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <!-- remote branches (toggleable) -->
         <template v-if="showRemoteBranches">
           <div class="branch-section-label">Remote branches</div>
-          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">尚未設定遠端</div>
+          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">No remote branches</div>
           <div
             v-for="b in gitBranches.filter(x => x.is_remote)"
             :key="b.name"
@@ -1914,7 +1914,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
           <div class="input-row">
             <input v-model="newWtPath" class="git-input" placeholder="/path/to/worktree" style="flex:2" />
-            <button class="btn-ghost sm icon-only" title="瀏覽資料夾" @click="pickWorktreeDir">
+            <button class="btn-ghost sm icon-only" title="Browse folder" @click="pickWorktreeDir">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
             </button>
             <input v-if="newWtIsNew" v-model="newWtBranch" class="git-input" placeholder="new branch" style="flex:1" />
@@ -1997,9 +1997,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
       <!-- Multi-select menu -->
       <div v-if="ctxMenu.show && selectedKeys.size > 1" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} 個檔案</button>
-        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} 個檔案</button>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} 個檔案</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} file(s)</button>
+        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} file(s)</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} file(s)</button>
       </div>
       <!-- File menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
@@ -2021,10 +2021,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="menu-item has-sub">
           <span>Add to ignore</span><span class="sub-caret">▸</span>
           <div class="ctx-submenu">
-            <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore（專案根目錄）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore（所在資料夾）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('local')">.git/info/exclude（本機限定）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('global')">全域 .gitignore</button>
+            <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore (project root)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore (current folder)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('local')">.git/info/exclude (local only)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('global')">Global .gitignore</button>
           </div>
         </div>
         <button v-if="ctxIsIgnored" class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
@@ -2044,10 +2044,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div class="menu-item has-sub">
             <span>Add to ignore</span><span class="sub-caret">▸</span>
             <div class="ctx-submenu">
-              <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore（專案根目錄）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore（所在資料夾）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('local')">.git/info/exclude（本機限定）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('global')">全域 .gitignore</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore (project root)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore (current folder)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('local')">.git/info/exclude (local only)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('global')">Global .gitignore</button>
             </div>
           </div>
         </template>
@@ -2071,7 +2071,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ignoreResult" class="ignore-modal" @click.stop>
         <div class="ignore-modal-path" :title="ignoreResult.path">{{ ignoreResult.path }}</div>
         <div class="ignore-modal-text">{{ ignoreResult.text }}</div>
-        <button class="btn-ghost sm" @click="ignoreResult = null">關閉</button>
+        <button class="btn-ghost sm" @click="ignoreResult = null">Close</button>
       </div>
     </Teleport>
   </div>
