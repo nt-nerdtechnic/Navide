@@ -496,17 +496,17 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     const sel = selectionRange()
     const text = sel ? model.getValueInRange(sel) : model.getLine(cursor.value.line) + '\n'
-    void navigator.clipboard.writeText(text)
+    navigator.clipboard.writeText(text).catch((err) => console.warn('[editor] copy failed:', err))
     return
   }
   if (mod && (e.key === 'x' || e.key === 'X')) {
     e.preventDefault()
     const sel = selectionRange()
     if (sel) {
-      void navigator.clipboard.writeText(model.getValueInRange(sel))
+      navigator.clipboard.writeText(model.getValueInRange(sel)).catch((err) => console.warn('[editor] cut failed:', err))
       applyEdit(sel, '')
     } else {
-      void navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n')
+      navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n').catch((err) => console.warn('[editor] cut failed:', err))
       deleteLine()
     }
     return

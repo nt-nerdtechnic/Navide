@@ -282,7 +282,14 @@ watch(workspacePath, (v) => {
     emit('workspace-check', v.trim())
   }, 400)
 }, { immediate: true })
-onUnmounted(() => { if (workspaceDebounce !== null) window.clearTimeout(workspaceDebounce) })
+onUnmounted(() => {
+  if (workspaceDebounce !== null) window.clearTimeout(workspaceDebounce)
+  // Guard against unmounting mid-drag leaving stale document listeners.
+  document.removeEventListener('mousemove', onPipelineDividerMove)
+  document.removeEventListener('mouseup', onPipelineDividerEnd)
+  document.removeEventListener('mousemove', onExplorerDividerMove)
+  document.removeEventListener('mouseup', onExplorerDividerEnd)
+})
 
 defineExpose({ openPipelineDetail })
 
