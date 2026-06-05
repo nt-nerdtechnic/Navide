@@ -30,7 +30,7 @@ const {
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
-  createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+  createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage, checkStaged,
@@ -699,6 +699,7 @@ const aheadBehind = computed(() => {
 
 // ── branches ──────────────────────────────────────────────────────────────────
 const branchExpanded = ref(false)
+const showRemoteBranches = ref(false)
 const newBranchName = ref('')
 const branchError = ref('')
 const branchCreating = ref(false)
@@ -713,6 +714,11 @@ async function doCreateBranch(): Promise<void> {
 async function doSwitch(name: string): Promise<void> {
   branchError.value = ''
   const r = await switchBranch(name); if (!r.ok) branchError.value = r.error || 'switch failed'
+}
+async function doCheckoutRemote(remoteRef: string): Promise<void> {
+  branchError.value = ''
+  const r = await checkoutRemoteBranch(remoteRef)
+  if (!r.ok) branchError.value = r.error || 'checkout failed'
 }
 async function doDeleteBranch(name: string): Promise<void> {
   branchError.value = ''
@@ -1691,10 +1697,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="input-row">
           <input v-model="newBranchName" class="git-input" placeholder="New branch name…" @keydown.enter="doCreateBranch" />
           <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim()" @click="doCreateBranch">＋</button>
+          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? '隱藏遠端分支' : '顯示遠端分支'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
-        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu.prevent="!b.is_current && openBranchCtxMenu($event, b.name)">
+        <!-- local branches -->
+        <div v-for="b in gitBranches.filter(x => !x.is_remote)" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu.prevent="!b.is_current && openBranchCtxMenu($event, b.name)">
           <span class="b-check">{{ b.is_current ? '✓' : '' }}</span>
           <span class="b-name">{{ b.name }}</span>
           <span v-if="b.tracking" class="b-track">→ {{ b.tracking }}</span>
@@ -1706,6 +1714,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="row-btn always" title="Switch" @click.stop="doSwitch(b.name)">↵</button>
           </template>
         </div>
+        <!-- remote-only branches (toggleable) -->
+        <template v-if="showRemoteBranches">
+          <div class="branch-section-label">遠端分支</div>
+          <div v-for="b in gitBranches.filter(x => x.is_remote)" :key="b.name" class="branch-row remote-branch-row">
+            <span class="b-check" />
+            <span class="b-name remote">{{ b.name }}</span>
+            <div class="spacer" />
+            <button class="row-btn always" title="Checkout 到本地" @click.stop="doCheckoutRemote(b.name)">⬇</button>
+          </div>
+          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">無遠端專屬分支</div>
+        </template>
         <div v-if="comparingBranch && compareResult" class="compare-panel">
           <div class="compare-title">{{ comparingBranch }} ↔ {{ gitStatus.branch }}</div>
           <div class="compare-stat">{{ compareResult.stat }}</div>
@@ -2517,6 +2536,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .b-check { width: 14px; color: var(--success-bright); font-size: 10px; text-align: center; flex-shrink: 0; }
 .b-name { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .b-track { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
+.b-name.remote { color: var(--text-muted); font-style: italic; }
+.branch-section-label { font-size: 10px; color: var(--text-muted); padding: 4px 0 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+.remote-branch-row { opacity: 0.85; }
+.btn-ghost.active { color: var(--accent-bright); }
 .compare-panel {
   margin: 4px 0; background: var(--bg-inset); border: 1px solid var(--border-muted);
   border-radius: 4px; padding: 6px 8px; font-size: 11px;

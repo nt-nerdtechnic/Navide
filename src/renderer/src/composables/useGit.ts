@@ -529,6 +529,14 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
+  async function checkoutRemoteBranch(remote_ref: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; error?: string }>('git.checkout_remote_branch', { workspace_path: ws, remote_ref })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
   async function deleteBranch(name: string, force = false): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
@@ -915,7 +923,7 @@ export function useGit(
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
     addRemote, removeRemote,
     // branches
-    createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+    createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
     compareBranches, restoreFileFromBranch,
     // stash
     stashPush, stashPop, stashDrop,
