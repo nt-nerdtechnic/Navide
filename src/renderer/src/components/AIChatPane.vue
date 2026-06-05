@@ -347,17 +347,17 @@ const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 // ── Slash commands ────────────────────────────────────────────────────────────
 interface SlashCommand { id: string; label: string; description: string; template: string }
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: '/explain', label: '/explain', description: '解釋程式碼', template: '請詳細解釋以下程式碼的功能與邏輯：' },
-  { id: '/fix',     label: '/fix',     description: '修復問題',   template: '請找出並修復以下程式碼中的問題：' },
-  { id: '/tests',   label: '/tests',   description: '生成測試',   template: '請為以下程式碼撰寫完整的單元測試：' },
-  { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
-  { id: '/review',   label: '/review',   description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
-  { id: '/optimize', label: '/optimize', description: '效能優化',   template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
-  { id: '/refactor', label: '/refactor', description: '重構程式碼', template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
-  { id: '/new',       label: '/new',       description: '建立新檔案', template: '請建立一個新檔案，包含以下內容：' },
-  { id: '/commit',    label: '/commit',    description: 'AI 生成 commit message', template: '請根據以下程式碼變更，生成一個簡潔的 git commit message（使用 conventional commits 格式）：\n\n' },
-  { id: '/clear',    label: '/clear',    description: '清除對話',   template: '' },
-  { id: '/export',   label: '/export',   description: '匯出對話',   template: '' },
+  { id: '/explain', label: '/explain', description: 'Explain code',             template: '請詳細解釋以下程式碼的功能與邏輯：' },
+  { id: '/fix',     label: '/fix',     description: 'Fix issue',               template: '請找出並修復以下程式碼中的問題：' },
+  { id: '/tests',   label: '/tests',   description: 'Generate tests',          template: '請為以下程式碼撰寫完整的單元測試：' },
+  { id: '/doc',     label: '/doc',     description: 'Write docs',              template: '請為以下程式碼撰寫清晰的文件與說明：' },
+  { id: '/review',   label: '/review',   description: 'Code review',           template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
+  { id: '/optimize', label: '/optimize', description: 'Performance optimization', template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
+  { id: '/refactor', label: '/refactor', description: 'Refactor code',         template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
+  { id: '/new',       label: '/new',       description: 'Create new file',     template: '請建立一個新檔案，包含以下內容：' },
+  { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: '請根據以下程式碼變更，生成一個簡潔的 git commit message（使用 conventional commits 格式）：\n\n' },
+  { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
+  { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -391,11 +391,11 @@ function onMessagesClick(e: MouseEvent): void {
     if (folded) {
       pre.style.display = ''
       wrap.dataset.folded = 'false'
-      foldBtn.textContent = `▼ 收合 (${lines} 行)`
+      foldBtn.textContent = `▼ Collapse (${lines} lines)`
     } else {
       pre.style.display = 'none'
       wrap.dataset.folded = 'true'
-      foldBtn.textContent = `▶ 展開 (${lines} 行)`
+      foldBtn.textContent = `▶ Expand (${lines} lines)`
     }
     return
   }
@@ -406,9 +406,9 @@ function onMessagesClick(e: MouseEvent): void {
     try {
       const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
       const relPath = props.getActiveRelPath?.()
-      if (!relPath) { showToast('沒有開啟中的檔案'); return }
+      if (!relPath) { showToast('No file open'); return }
       const lineCount = code.split('\n').length
-      if (!window.confirm(`套用 ${lineCount} 行程式碼到「${relPath}」？\n\n注意：這將覆蓋整個檔案內容。`)) return
+      if (!window.confirm(`Apply ${lineCount} lines of code to "${relPath}"?\n\nNote: This will overwrite the entire file.`)) return
       props.backend.send('fs.write_file', {
         workspace_path: props.workspacePath,
         rel_path: relPath,
@@ -417,9 +417,9 @@ function onMessagesClick(e: MouseEvent): void {
         applyBtn.textContent = 'Applied ✓'
         applyBtn.style.color = 'var(--success-fg, #3fb950)'
         window.setTimeout(() => { applyBtn.textContent = 'Apply'; applyBtn.style.color = '' }, 2000)
-        showToast(`已套用到 ${relPath}`)
-      }).catch(() => showToast('套用失敗'))
-    } catch { showToast('套用失敗') }
+        showToast(`Applied to ${relPath}`)
+      }).catch(() => showToast('Apply failed'))
+    } catch { showToast('Apply failed') }
   }
 }
 
@@ -447,14 +447,14 @@ function renderMarkdownLite(rawText: string): string {
     // Only show Apply button when an active file path is available
     const hasActiveFile = !!(props.getActiveRelPath?.())
     const applyBtn = hasActiveFile
-      ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="套用到目前開啟的檔案">Apply</button>`
+      ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="Apply to current open file">Apply</button>`
       : ''
     // Collapse code blocks that exceed 30 lines
     const lineCount = code.split('\n').length
     const isLong = lineCount > 30
     const foldAttr = isLong ? ' data-folded="true"' : ''
     const toggleBtn = isLong
-      ? `<button class="ai-code-fold-btn" data-lines="${lineCount}">▶ 展開 (${lineCount} 行)</button>`
+      ? `<button class="ai-code-fold-btn" data-lines="${lineCount}">▶ Expand (${lineCount} lines)</button>`
       : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
@@ -683,7 +683,7 @@ function saveSettings(): void {
     system_prompt: settingsSystemPrompt.value,
   }).catch(() => {/* ignore */})
   showSettings.value = false
-  showToast('設定已儲存')
+  showToast('Settings saved')
 }
 
 // ── Send message ───────────────────────────────────────────────────────────────
@@ -738,7 +738,7 @@ async function sendMessage(): Promise<void> {
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
       last.streaming = false; last.thinking = false
-      last.isError = true; last.errorMsg = '無法連線到後端'
+      last.isError = true; last.errorMsg = 'Unable to connect to backend'
     }
     sending.value = false
     currentSessionId.value = null
@@ -782,7 +782,7 @@ function editMessage(idx: number): void {
 // ── Export conversation ────────────────────────────────────────────────────────
 async function exportConversation(): Promise<void> {
   if (messages.value.filter((m) => !m.streaming).length === 0) {
-    showToast('沒有對話可匯出')
+    showToast('No messages to export')
     return
   }
   let md = '# AI Chat Export\n\n'
@@ -792,15 +792,15 @@ async function exportConversation(): Promise<void> {
     md += `### ${roleLabel}\n\n${msg.content}\n\n---\n\n`
   }
   try {
-    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: '匯出對話' })
-    if (r && !r.ok && !r.canceled) showToast('匯出失敗')
-    else if (r?.ok) showToast('對話已匯出')
-  } catch { showToast('匯出失敗') }
+    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: 'Export chat' })
+    if (r && !r.ok && !r.canceled) showToast('Export failed')
+    else if (r?.ok) showToast('Chat exported')
+  } catch { showToast('Export failed') }
 }
 
 function copyMessage(content: string): void {
   const plain = content.replace(/```[\s\S]*?```/g, (m) => m).replace(/<[^>]+>/g, '')
-  navigator.clipboard.writeText(plain).then(() => showToast('已複製')).catch(() => showToast('複製失敗'))
+  navigator.clipboard.writeText(plain).then(() => showToast('Copied')).catch(() => showToast('Copy failed'))
 }
 
 // ── Regenerate last AI response ────────────────────────────────────────────────
@@ -834,7 +834,7 @@ async function regenerate(): Promise<void> {
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
       last.streaming = false; last.thinking = false
-      last.isError = true; last.errorMsg = '無法連線到後端'
+      last.isError = true; last.errorMsg = 'Unable to connect to backend'
     }
     sending.value = false
     currentSessionId.value = null
@@ -874,9 +874,9 @@ async function acceptEdit(card: EditProposalCard): Promise<void> {
       new_content: card.new_content,
     })
     card.accepted = true
-    showToast(`已套用：${card.file_path}`)
+    showToast(`Applied: ${card.file_path}`)
   } catch {
-    showToast('套用失敗')
+    showToast('Apply failed')
   }
 }
 
@@ -1118,7 +1118,7 @@ function onTextareaInput(e: Event): void {
 
   if (isCodebaseQuery) {
     const cbQuery = fragment.slice(fragment.indexOf(' ') + 1).trim()
-    atOptions.value = [{ id: `@codebase:${cbQuery}`, label: `@codebase 搜尋: "${cbQuery}"` }]
+    atOptions.value = [{ id: `@codebase:${cbQuery}`, label: `@codebase search: "${cbQuery}"` }]
     return
   }
 
@@ -1194,26 +1194,16 @@ function selectSlashCommand(cmd: SlashCommand): void {
 
 async function searchFiles(query: string): Promise<void> {
   try {
-    interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
+    interface FlatResp { ok: boolean; files?: string[] }
     const lower = query.toLowerCase()
-    const found: AtOption[] = []
+    const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
+      workspace_path: props.workspacePath,
+      query,
+    })
+    const files: string[] = resp.payload?.files ?? []
+    const found: AtOption[] = files.map((f) => ({ id: f, label: `@${f}` }))
 
-    // BFS over directory tree up to 2 levels deep to find matching files
-    const dirsToVisit = ['', ...await _listSubdirs('')]
-    await Promise.all(dirsToVisit.map(async (dir) => {
-      const resp = await props.backend.send<LsResp>('fs.list_dir', {
-        workspace_path: props.workspacePath,
-        rel_path: dir,
-        show_hidden: false,
-      })
-      for (const e of resp.payload?.entries ?? []) {
-        if (!e.is_dir && e.name.toLowerCase().includes(lower)) {
-          found.push({ id: e.rel_path, label: `@${e.rel_path}` })
-        }
-      }
-    }))
-
-    atDirItems.value = found.slice(0, 12)
+    atDirItems.value = found.slice(0, 15)
     const filtered: AtOption[] = [
       ...AT_OPTIONS_STATIC.filter((o) => o.label.toLowerCase().includes(lower)),
       ...atDirItems.value,
@@ -1221,22 +1211,6 @@ async function searchFiles(query: string): Promise<void> {
     atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
   } catch {
     // ignore
-  }
-}
-
-async function _listSubdirs(relPath: string): Promise<string[]> {
-  interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
-  try {
-    const resp = await props.backend.send<LsResp>('fs.list_dir', {
-      workspace_path: props.workspacePath,
-      rel_path: relPath,
-      show_hidden: false,
-    })
-    return (resp.payload?.entries ?? [])
-      .filter((e) => e.is_dir)
-      .map((e) => e.rel_path)
-  } catch {
-    return []
   }
 }
 
@@ -1379,7 +1353,7 @@ async function onDrop(e: DragEvent): Promise<void> {
         content: `// ${relPath}\n${resp.payload?.content ?? ''}`,
       })
     } catch {
-      showToast(`無法讀取：${relPath}`)
+      showToast(`Unable to read: ${relPath}`)
     }
   }
 }
@@ -1497,7 +1471,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="opacity:.35">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
         </svg>
-        <p>AI 助理就緒，輸入訊息或 @ 注入 context</p>
+        <p>AI assistant ready — type a message or use @ to insert context</p>
       </div>
 
       <div
@@ -1524,7 +1498,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
                 <div v-if="!card.collapsed" class="ai-tool-body">
                   <pre class="ai-tool-pre">{{ JSON.stringify(card.tool_input, null, 2) }}</pre>
                   <div v-if="card.result != null" class="ai-tool-result">
-                    <span class="ai-tool-result-label">結果：</span>{{ card.result }}
+                    <span class="ai-tool-result-label">Result: </span>{{ card.result }}
                   </div>
                 </div>
               </div>

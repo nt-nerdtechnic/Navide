@@ -1920,6 +1920,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "fs.list_files_flat":
+            ws_path = payload.get("workspace_path") or ""
+            query = payload.get("query", "") or ""
+            result = fs_service.list_files_flat(ws_path, query=query)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "fs.mkdir":
             ws_path = payload.get("workspace_path") or ""
             result = fs_service.mkdir(ws_path, payload.get("rel_path", "") or "")
