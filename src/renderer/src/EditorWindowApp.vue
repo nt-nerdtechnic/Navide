@@ -97,6 +97,22 @@ interface BcDropdown { segIdx: number; items: BcItem[]; x: number; y: number }
 const bcDropdown = ref<BcDropdown | null>(null)
 const bcActiveIdx = ref(-1)
 
+// Returns a positive score if `query` is a subsequence of `target`, 0 otherwise.
+// Consecutive character matches score higher than scattered ones.
+function _fuzzyScore(query: string, target: string): number {
+  let qi = 0; let score = 0; let consecutive = 0
+  for (let ti = 0; ti < target.length && qi < query.length; ti++) {
+    if (target[ti] === query[qi]) {
+      consecutive++
+      score += 1 + consecutive  // reward runs of consecutive matches
+      qi++
+    } else {
+      consecutive = 0
+    }
+  }
+  return qi === query.length ? score : 0
+}
+
 function _extractSymbols(text: string, ext: string): BcItem[] {
   const lines = text.split('\n')
   const out: BcItem[] = []
@@ -703,11 +719,23 @@ const qoItems = computed((): QoItem[] => {
     const filtered = symQ ? all.filter((s) => s.name.toLowerCase().includes(symQ)) : all
     return filtered.map((s): QoSymbolItem => ({ qoKind: 'symbol', name: s.name, line: s.line ?? 1, kind: s.kind ?? '' }))
   }
-  // default: filter open files
+  // default: fuzzy-filter open files (subsequence match, prefer name hits)
   const ql = q.toLowerCase()
   const files = openFiles.value.filter((f) => f.kind === 'file')
-  const matching = ql ? files.filter((f) => f.name.toLowerCase().includes(ql) || f.relPath.toLowerCase().includes(ql)) : files
-  return matching.map((f): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
+  if (!ql) return files.map((f): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
+  type Scored = { f: typeof files[0]; score: number }
+  const scored: Scored[] = []
+  for (const f of files) {
+    const nameLow = f.name.toLowerCase()
+    const pathLow = f.relPath.toLowerCase()
+    // Substring match scores higher than fuzzy subsequence match
+    const nameHit = nameLow.includes(ql) ? 2 : _fuzzyScore(ql, nameLow)
+    const pathHit = pathLow.includes(ql) ? 1 : _fuzzyScore(ql, pathLow) * 0.5
+    const best = Math.max(nameHit, pathHit)
+    if (best > 0) scored.push({ f, score: best })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.map(({ f }): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
 })
 function openQuickOpen(): void {
   qoQuery.value = ''
