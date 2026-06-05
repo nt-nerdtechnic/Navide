@@ -306,10 +306,14 @@ async def _tool_edit_file(input: dict, workspace_path: str) -> str:
     except ValueError as exc:
         return f"Error: {exc}"
 
-    # Read existing content for diff; treat missing as empty
+    # Read existing content for diff; treat missing or oversized as empty
+    _EDIT_SIZE_CAP = 2 * 1024 * 1024  # 2 MB — skip diff for very large files
     if target.is_file():
         try:
-            old_content = target.read_text(encoding="utf-8")
+            if target.stat().st_size > _EDIT_SIZE_CAP:
+                old_content = ""
+            else:
+                old_content = target.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             old_content = ""
     else:
