@@ -1478,6 +1478,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.stage_all(ws_path)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.check_staged":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.check_staged(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.commit":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""

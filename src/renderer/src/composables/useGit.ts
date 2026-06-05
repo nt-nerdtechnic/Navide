@@ -713,6 +713,24 @@ export function useGit(
     }
   }
 
+  async function checkStaged(): Promise<{ ok: boolean; errorCount: number; summary: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: true, errorCount: 0, summary: '' }
+    try {
+      const resp = await send<{ ok: boolean; error_count: number; summary: string }>(
+        'git.check_staged',
+        { workspace_path: ws },
+        35_000,
+      )
+      if (resp.payload) {
+        return { ok: resp.payload.ok, errorCount: resp.payload.error_count, summary: resp.payload.summary }
+      }
+      return { ok: true, errorCount: 0, summary: '' }
+    } catch {
+      return { ok: true, errorCount: 0, summary: '' }
+    }
+  }
+
   // Hunk / line-level staging: apply a frontend-built patch to the index.
   // reverse=true unstages; cached=false applies to the working tree (discard).
   async function applyPatch(
@@ -896,6 +914,7 @@ export function useGit(
     gitConfigAllowedKeys, setGitConfig,
     // commit
     commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
+    checkStaged,
     showCommit,
     // vscode-parity additions
     applyPatch, cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,

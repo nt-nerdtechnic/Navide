@@ -33,7 +33,7 @@ const {
   createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
-  commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
+  commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage, checkStaged,
   fileLog, showFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
@@ -487,8 +487,8 @@ async function doGenerate(): Promise<void> {
 // Never pushes to remote.
 const autoCommit = ref(false)
 const autoCommitPending = ref(false)
-// '' = idle, 'staging' | 'generating' | 'committing' = active step
-const autoCommitStep = ref<'' | 'staging' | 'generating' | 'committing'>('')
+// '' = idle, 'staging' | 'checking' | 'generating' | 'committing' = active step
+const autoCommitStep = ref<'' | 'staging' | 'checking' | 'generating' | 'committing'>('')
 // Whole-flow lock: prevents concurrent runs and blocks manual ✦ during auto-commit
 const autoCommitRunning = ref(false)
 const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes
@@ -515,13 +515,22 @@ async function runAutoCommit(): Promise<void> {
     await stageAll()
     if (!autoCommit.value || !hasStaged.value) return
 
-    // Step 2: AI Generate — guard against user having started a manual generate
+    // Step 2: Lint check — abort if staged files have errors
+    if (isGenerating.value || isCommitting.value) return
+    autoCommitStep.value = 'checking'
+    const lint = await checkStaged()
+    if (!lint.ok) {
+      notifyToast(`Auto Commit 中止：偵測到 ${lint.errorCount} 個 lint 錯誤`, { type: 'error' })
+      return
+    }
+
+    // Step 3: AI Generate — guard against user having started a manual generate
     if (isGenerating.value || isCommitting.value) return
     autoCommitStep.value = 'generating'
     const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
     if (!r.ok || !r.message) return
 
-    // Step 3: Commit staged files — guard against user having committed manually
+    // Step 4: Commit staged files — guard against user having committed manually
     if (!autoCommit.value || isCommitting.value) return
     autoCommitStep.value = 'committing'
     const cr = await commit(r.message, false)
@@ -1267,12 +1276,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
         <!-- Auto Commit status bar -->
         <div v-if="autoCommit && (autoCommitPending || autoCommitStep)" class="ac-status-bar">
-          <span v-if="autoCommitStep === 'staging'" class="ac-status-spinner">⟳</span>
-          <span v-else-if="autoCommitStep === 'generating'" class="ac-status-spinner">⟳</span>
-          <span v-else-if="autoCommitStep === 'committing'" class="ac-status-spinner">⟳</span>
+          <span v-if="autoCommitStep" class="ac-status-spinner">⟳</span>
           <span v-else class="ac-status-dot" />
           <span class="ac-status-label">
             <template v-if="autoCommitStep === 'staging'">暫存所有變更…</template>
+            <template v-else-if="autoCommitStep === 'checking'">Lint 檢查中…</template>
             <template v-else-if="autoCommitStep === 'generating'">AI 生成 commit 訊息…</template>
             <template v-else-if="autoCommitStep === 'committing'">提交中…</template>
             <template v-else>Auto Commit 等待中，60 秒後觸發</template>

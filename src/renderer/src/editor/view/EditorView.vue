@@ -834,6 +834,43 @@ function sortLines(dir: 'asc' | 'desc'): void {
 }
 function sortLinesAscending(): void { sortLines('asc') }
 function sortLinesDescending(): void { sortLines('desc') }
+function transpose(): void {
+  const { line, col } = cursor.value
+  const text = model.getLine(line)
+  if (text.length < 2) return
+  const at = col < text.length ? col : col - 1
+  if (at < 1) return
+  const swapped = text.slice(0, at - 1) + text[at] + text[at - 1] + text.slice(at + 1)
+  applyEdit({ start: { line, col: 0 }, end: { line, col: text.length } }, swapped)
+  cursor.value = { line, col: Math.min(at + 1, swapped.length) }
+  anchor.value = null
+}
+function indentationToSpaces(): void {
+  const totalLines = model.lineCount()
+  const lines: string[] = []
+  for (let ln = 0; ln < totalLines; ln++) {
+    const text = model.getLine(ln)
+    let tabs = 0
+    while (tabs < text.length && text[tabs] === '\t') tabs++
+    lines.push(tabs > 0 ? INDENT.repeat(tabs) + text.slice(tabs) : text)
+  }
+  applyEdit({ start: { line: 0, col: 0 }, end: { line: totalLines - 1, col: model.getLine(totalLines - 1).length } }, lines.join('\n'))
+}
+function indentationToTabs(): void {
+  const totalLines = model.lineCount()
+  const spaceSize = INDENT.length
+  const lines: string[] = []
+  for (let ln = 0; ln < totalLines; ln++) {
+    const text = model.getLine(ln)
+    let spaces = 0
+    while (spaces < text.length && text[spaces] === ' ') spaces++
+    if (spaces < spaceSize) { lines.push(text); continue }
+    const tabs = Math.floor(spaces / spaceSize)
+    const rem = spaces % spaceSize
+    lines.push('\t'.repeat(tabs) + ' '.repeat(rem) + text.slice(spaces))
+  }
+  applyEdit({ start: { line: 0, col: 0 }, end: { line: totalLines - 1, col: model.getLine(totalLines - 1).length } }, lines.join('\n'))
+}
 function toggleBlockComment(): void {
   const sel = selectionRange()
   if (!sel) return
@@ -1415,6 +1452,7 @@ defineExpose({
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
+  transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
   setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,

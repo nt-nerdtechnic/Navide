@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -1221,6 +1222,63 @@ async def unstage_files(workspace_path: str, files: list[str]) -> dict[str, Any]
 async def stage_all(workspace_path: str) -> dict[str, Any]:
     rc, _, stderr = await _run(["git", "add", "-A"], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+async def _run_with_timeout(
+    args: list[str], cwd: str, timeout: float = 30.0
+) -> tuple[int, str, str]:
+    try:
+        return await asyncio.wait_for(_run(args, cwd), timeout=timeout)
+    except asyncio.TimeoutError:
+        return 1, "", f"timed out after {int(timeout)}s"
+
+
+async def check_staged(workspace_path: str) -> dict[str, Any]:
+    """Lint staged files with available tools. ok=False only when lint errors are found.
+    Tool unavailability is silently skipped so missing linters never block auto-commit."""
+    if not workspace_path:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    rc, stdout, _ = await _run(["git", "diff", "--cached", "--name-only"], workspace_path)
+    if rc != 0:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    staged = [f.strip() for f in stdout.splitlines() if f.strip()]
+    if not staged:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    ws = Path(workspace_path)
+    findings: list[str] = []
+
+    # ── ESLint ────────────────────────────────────────────────────────────────
+    ts_exts = {".ts", ".tsx", ".js", ".jsx", ".vue"}
+    ts_files = [f for f in staged if Path(f).suffix in ts_exts]
+    eslint_bin = ws / "node_modules" / ".bin" / "eslint"
+    if ts_files and eslint_bin.exists():
+        rc, out, _ = await _run_with_timeout(
+            [str(eslint_bin), "--max-warnings", "0", "--format", "compact", *ts_files],
+            workspace_path,
+        )
+        # rc=1 → lint errors; rc=2 → config/internal error (skip)
+        if rc == 1 and out.strip():
+            findings.append(f"ESLint: {out.strip()[:400]}")
+
+    # ── Ruff ─────────────────────────────────────────────────────────────────
+    py_files = [f for f in staged if f.endswith(".py")]
+    if py_files:
+        venv_ruff = ws / ".venv" / "bin" / "ruff"
+        ruff_bin = str(venv_ruff) if venv_ruff.exists() else shutil.which("ruff")
+        if ruff_bin:
+            rc, out, _ = await _run_with_timeout(
+                [ruff_bin, "check", "--output-format", "concise", *py_files],
+                workspace_path,
+            )
+            if rc == 1 and out.strip():
+                findings.append(f"Ruff: {out.strip()[:400]}")
+
+    if findings:
+        return {"ok": False, "error_count": len(findings), "summary": "\n".join(findings)}
+    return {"ok": True, "error_count": 0, "summary": ""}
 
 
 async def commit(workspace_path: str, message: str, all: bool = False) -> dict[str, Any]:
