@@ -1365,6 +1365,7 @@ interface ProjectSlot {
   spawn_status: string   // 'pending' | 'spawned' | 'removed'
   kickoff_status: string // 'none' | 'sent' | 'failed'
   session_id?: string    // CLI session id for resume-on-restart ('' if unknown)
+  tmux_name?: string
 }
 
 interface ProjectStage {
@@ -1381,6 +1382,7 @@ interface ProjectManualPane {
   command: string
   spawn_status: string
   session_id?: string
+  tmux_name?: string
 }
 
 interface ProjectPayload {
@@ -1588,7 +1590,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const sessionId = (slot.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const slotTmuxName = slot.tmux_name ?? ''
+    const rawSlotTmuxName = slot.tmux_name ?? ''
+    // Validate tmux session name to prevent command injection — only safe chars allowed.
+    const slotTmuxName = /^[a-zA-Z0-9_:.-]{1,64}$/.test(rawSlotTmuxName) ? rawSlotTmuxName : ''
     const isTmuxAlive = slotTmuxName ? (tmuxAlive[slotTmuxName] ?? false) : false
 
     let commandOverride: string
@@ -1638,7 +1642,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const sessionId = (saved.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const savedTmuxName = saved.tmux_name ?? ''
+    const rawSavedTmuxName = saved.tmux_name ?? ''
+    // Validate tmux session name to prevent command injection — only safe chars allowed.
+    const savedTmuxName = /^[a-zA-Z0-9_:.-]{1,64}$/.test(rawSavedTmuxName) ? rawSavedTmuxName : ''
     const isTmuxAlive = savedTmuxName ? (tmuxAlive[savedTmuxName] ?? false) : false
 
     let commandOverride: string
@@ -2571,6 +2577,9 @@ backend.on('agent.activity', (raw) => {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
+    // Clear the restore-mode badge once the user interacts with the pane.
+    const histEntry = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
+    if (histEntry?.restoreMode) histEntry.restoreMode = undefined
   }
   if (ev.vendor === 'claude' && ev.session_id) {
     const pane = panes.value.find((p) => p.id === ev.pane_id)
@@ -4508,6 +4517,16 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span class="ah-badge">{{ entry.agentLabel }}</span>
                 <span class="ah-badge ah-role">{{ entry.roleLabel }}</span>
                 <span class="ah-origin">{{ entry.origin }}</span>
+                <span
+                  v-if="entry.restoreMode === 'tmux-reattach'"
+                  class="ah-restore-badge ah-tmux"
+                  title="tmux session 仍存活，直接重連"
+                >重連中</span>
+                <span
+                  v-else-if="entry.restoreMode === 'memory-resume'"
+                  class="ah-restore-badge ah-resume"
+                  title="以 CLI resume 指令載入記憶"
+                >記憶恢復</span>
                 <span class="ah-status" :class="entry.removedAt ? 'removed' : 'active'">
                   {{ entry.removedAt ? 'removed' : 'active' }}
                 </span>
@@ -5303,6 +5322,25 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .ah-session {
   font-family: monospace;
+}
+.ah-restore-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  letter-spacing: 0.2px;
+}
+.ah-restore-badge.ah-tmux {
+  background: rgba(35, 134, 54, 0.18);
+  color: #3fb950;
+  border: 1px solid rgba(63, 185, 80, 0.35);
+}
+.ah-restore-badge.ah-resume {
+  background: rgba(31, 111, 235, 0.15);
+  color: #58a6ff;
+  border: 1px solid rgba(88, 166, 255, 0.3);
 }
 .agent-history-actions {
   display: flex;
