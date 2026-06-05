@@ -289,6 +289,19 @@ watch(settingsProvider, (provider) => {
   }
 })
 
+// Long message fold — collapse AI messages with > 50 lines (UI-only, ephemeral)
+const expandedMsgIdxs = ref(new Set<number>())
+const MSG_FOLD_LINE_THRESHOLD = 50
+function isMsgFolded(mi: number, content: string): boolean {
+  return content.split('\n').length > MSG_FOLD_LINE_THRESHOLD && !expandedMsgIdxs.value.has(mi)
+}
+function toggleMsgFold(mi: number): void {
+  if (expandedMsgIdxs.value.has(mi)) expandedMsgIdxs.value.delete(mi)
+  else expandedMsgIdxs.value.add(mi)
+  // Trigger reactivity
+  expandedMsgIdxs.value = new Set(expandedMsgIdxs.value)
+}
+
 // Input char counter + token estimate (shown when > 200 chars)
 const inputCharCount = computed(() => inputText.value.length)
 const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
@@ -1609,7 +1622,17 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <div class="ai-bubble" :class="msg.role">
           <!-- Text content -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <div v-if="msg.content" class="ai-text" v-html="renderWithSearchHighlight(msg.content)" />
+          <div
+            v-if="msg.content"
+            class="ai-text"
+            :class="{ 'ai-text-folded': isMsgFolded(mi, msg.content) }"
+            v-html="renderWithSearchHighlight(msg.content)"
+          />
+          <button
+            v-if="msg.content && !msg.streaming && msg.content.split('\n').length > MSG_FOLD_LINE_THRESHOLD"
+            class="ai-fold-btn"
+            @click="toggleMsgFold(mi)"
+          >{{ isMsgFolded(mi, msg.content) ? `▼ Show more (${msg.content.split('\n').length} lines)` : '▲ Show less' }}</button>
 
           <!-- Cards (tool calls / edit proposals) -->
           <template v-if="msg.cards">
@@ -2163,6 +2186,22 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   color: var(--text-bright);
   border-bottom-left-radius: 3px;
 }
+
+.ai-text-folded { max-height: 320px; overflow: hidden; position: relative; }
+.ai-text-folded::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 60px;
+  background: linear-gradient(transparent, var(--bg-bubble-assistant, #1c2128));
+  pointer-events: none;
+}
+.ai-fold-btn {
+  display: block; width: 100%; padding: 4px 0; margin-top: 2px;
+  font-size: 11px; color: var(--accent-fg, #58a6ff);
+  background: none; border: none; cursor: pointer; text-align: center;
+}
+.ai-fold-btn:hover { text-decoration: underline; }
 
 .ai-text :deep(.ai-code-wrap) {
   margin: 6px 0;
