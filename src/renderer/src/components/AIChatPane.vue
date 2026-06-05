@@ -365,7 +365,7 @@ async function sendMessage(): Promise<void> {
   } catch {
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) last.streaming = false
+    if (last) { last.streaming = false; last.thinking = false }
     sending.value = false
     currentSessionId.value = null
   }
@@ -376,7 +376,7 @@ function stopStreaming(): void {
   if (!sending.value) return
   props.backend.send('ai.chat.stop', { session_id: currentSessionId.value ?? '' }).catch(() => {/* ignore */})
   const last = messages.value[messages.value.length - 1]
-  if (last?.streaming) last.streaming = false
+  if (last?.streaming) { last.streaming = false; last.thinking = false }
   sending.value = false
   currentSessionId.value = null
 }
@@ -442,7 +442,7 @@ async function regenerate(): Promise<void> {
   } catch {
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) last.streaming = false
+    if (last) { last.streaming = false; last.thinking = false }
     sending.value = false
     currentSessionId.value = null
   }
@@ -605,7 +605,7 @@ function setupListeners(): void {
     const p = payload as { session_id: string }
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
-    if (last?.streaming) last.streaming = false
+    if (last?.streaming) { last.streaming = false; last.thinking = false }
     sending.value = false
     currentSessionId.value = null
   })
@@ -617,6 +617,7 @@ function setupListeners(): void {
     if (last?.role === 'assistant') {
       last.content += `\n\n**錯誤：** ${p.message}`
       last.streaming = false
+      last.thinking = false
     }
     sending.value = false
     currentSessionId.value = null
@@ -1330,14 +1331,46 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-bottom-left-radius: 3px;
 }
 
+.ai-text :deep(.ai-code-wrap) {
+  margin: 6px 0;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ai-text :deep(.ai-code-header) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 10px;
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.ai-text :deep(.ai-code-lang) {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: lowercase;
+}
+.ai-text :deep(.ai-code-copy-btn) {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.ai-text :deep(.ai-code-copy-btn:hover) {
+  background: var(--bg-subtle);
+  color: var(--text-bright);
+}
 .ai-text :deep(pre.ai-code-block) {
   background: var(--bg-muted);
-  border: 1px solid var(--border-muted);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 8px 10px;
   overflow-x: auto;
   font-size: 11.5px;
-  margin: 6px 0;
+  margin: 0;
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
   white-space: pre;
 }

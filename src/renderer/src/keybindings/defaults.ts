@@ -116,4 +116,5 @@ export const defaults: KeybindingRule[] = [
   // ── Replace in files / editor utilities ──────────────────────────────────────
   { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },
   { key: 'ctrl+t',      command: 'editor.action.transpose',           when: 'editorTextFocus' },
+  { key: 'ctrl+j',      command: 'editor.action.joinLines',           when: 'editorTextFocus' },
 ]

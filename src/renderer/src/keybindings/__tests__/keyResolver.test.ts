@@ -606,3 +606,17 @@ describe('block comment alias shortcut', () => {
     expect(dr.resolve(mkEvent('a', { shiftKey: true, altKey: true }), {})).toBeNull()
   })
 })
+
+describe('join lines shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+j → joinLines (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('j', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.joinLines')
+  })
+
+  it('ctrl+j requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('j', { ctrlKey: true }), {})).toBeNull()
+  })
+})

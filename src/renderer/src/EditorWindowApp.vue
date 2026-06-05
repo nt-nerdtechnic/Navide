@@ -516,7 +516,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.transformToUppercase',  label: '轉換為大寫' },
   { id: 'editor.action.transformToLowercase',  label: '轉換為小寫' },
   { id: 'editor.action.transformToTitlecase',  label: '轉換為標題大小寫' },
-  { id: 'editor.action.joinLines',              label: '合併行' },
+  { id: 'editor.action.joinLines',              label: '合併行',         keys: '⌃J' },
   { id: 'editor.action.sortLinesAscending',    label: '行遞增排序' },
   { id: 'editor.action.sortLinesDescending',   label: '行遞減排序' },
   { id: 'editor.action.trimTrailingWhitespace', label: '移除行尾空白',   keys: '⌘K ⌘X' },
