@@ -110,30 +110,104 @@ const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
 
-// ── Conversation persistence (localStorage) ────────────────────────────────────
+// ── Conversation thread persistence ──────────────────────────────────────────
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number }
+const MAX_THREADS = 20
+const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
+const showThreads = ref(false)
+const currentThreadId = ref('')
+const allThreads = ref<ChatThread[]>([])
 
-function loadHistory(): void {
+function newThreadId(): string { return crypto.randomUUID() }
+
+function loadThreads(): void {
   try {
-    const raw = localStorage.getItem(historyKey.value)
-    if (!raw) return
-    const saved = JSON.parse(raw) as ChatMessage[]
-    // Drop any incomplete streaming messages from a previous session
-    messages.value = saved.filter((m) => !m.streaming).slice(-100)
-  } catch { /* ignore corrupt storage */ }
+    const raw = localStorage.getItem(threadsKey.value)
+    if (raw) {
+      allThreads.value = (JSON.parse(raw) as ChatThread[]).slice(0, MAX_THREADS)
+    } else {
+      // Migrate from old single-key format
+      const legacyRaw = localStorage.getItem(historyKey.value)
+      if (legacyRaw) {
+        const legacyMsgs = (JSON.parse(legacyRaw) as ChatMessage[]).filter((m) => !m.streaming)
+        if (legacyMsgs.length) {
+          const firstUser = legacyMsgs.find((m) => m.role === 'user')
+          const thread: ChatThread = {
+            id: newThreadId(),
+            title: firstUser ? firstUser.content.slice(0, 40) : '對話記錄',
+            messages: legacyMsgs,
+            updatedAt: Date.now(),
+          }
+          allThreads.value = [thread]
+          localStorage.removeItem(historyKey.value)
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  if (allThreads.value.length === 0) {
+    const id = newThreadId()
+    allThreads.value = [{ id, title: '新對話', messages: [], updatedAt: Date.now() }]
+  }
+  const latest = allThreads.value[0]
+  currentThreadId.value = latest.id
+  messages.value = latest.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
 }
 
-function saveHistory(): void {
+function saveCurrentThread(): void {
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = window.setTimeout(() => {
-    try {
-      const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
-      localStorage.setItem(historyKey.value, JSON.stringify(toSave))
-    } catch { /* quota or serialization error */ }
+    const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
+    if (idx === -1) return
+    const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
+    allThreads.value[idx].messages = toSave
+    allThreads.value[idx].updatedAt = Date.now()
+    // Auto-update title from first user message
+    const firstUser = toSave.find((m) => m.role === 'user')
+    if (firstUser && allThreads.value[idx].title === '新對話') {
+      allThreads.value[idx].title = firstUser.content.slice(0, 40)
+    }
+    try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value.slice(0, MAX_THREADS))) }
+    catch { /* quota */ }
   }, 1000)
 }
 
-watch(messages, saveHistory, { deep: true })
+function newThread(): void {
+  if (sending.value) stopStreaming()
+  saveCurrentThread()
+  const id = newThreadId()
+  const thread: ChatThread = { id, title: '新對話', messages: [], updatedAt: Date.now() }
+  allThreads.value.unshift(thread)
+  currentThreadId.value = id
+  messages.value = []
+  showThreads.value = false
+}
+
+function switchThread(id: string): void {
+  if (id === currentThreadId.value) { showThreads.value = false; return }
+  if (sending.value) stopStreaming()
+  saveCurrentThread()
+  const thread = allThreads.value.find((t) => t.id === id)
+  if (!thread) return
+  currentThreadId.value = id
+  messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
+  // Move selected thread to front
+  allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
+  showThreads.value = false
+}
+
+function deleteThread(id: string): void {
+  allThreads.value = allThreads.value.filter((t) => t.id !== id)
+  if (currentThreadId.value === id) {
+    if (allThreads.value.length === 0) newThread()
+    else switchThread(allThreads.value[0].id)
+  }
+  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
+  catch { /* quota */ }
+}
+
+watch(messages, saveCurrentThread, { deep: true })
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
@@ -529,11 +603,14 @@ function stopStreaming(): void {
   currentSessionId.value = null
 }
 
-// ── Clear conversation ─────────────────────────────────────────────────────────
+// ── Clear conversation (clear current thread) ──────────────────────────────────
 function clearConversation(): void {
   if (sending.value) stopStreaming()
   messages.value = []
-  localStorage.removeItem(historyKey.value)
+  // Also reset the title so it auto-updates on next message
+  const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
+  if (idx !== -1) allThreads.value[idx].title = '新對話'
+  saveCurrentThread()
 }
 
 // ── Edit a previous user message (truncate history from that point) ────────────
@@ -545,7 +622,7 @@ function editMessage(idx: number): void {
   inputText.value = msg.content
   // Remove this message and everything after it
   messages.value.splice(idx)
-  saveHistory()
+  saveCurrentThread()
   nextTick(() => textareaEl.value?.focus())
 }
 
@@ -846,7 +923,7 @@ function teardownListeners(): void {
 onMounted(() => {
   setupListeners()
   fetchSettings()
-  loadHistory()
+  loadThreads()
 })
 
 onUnmounted(() => {
@@ -1401,6 +1478,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
+            title="新對話"
+            @click="newThread"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="對話記錄"
+            :class="{ active: showThreads }"
+            @click="showThreads = !showThreads"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
             title="搜尋對話 (Ctrl+F)"
             :disabled="messages.length === 0"
             @click="openSearch"
@@ -1435,6 +1527,27 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
               <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 9.99 1.409v.526c0 .384.214.706.535.862a6.98 6.98 0 0 1 .606.331c.316.19.693.16.965-.066l.372-.323a1.402 1.402 0 0 1 1.947.162l.739.845c.45.515.433 1.28-.037 1.773l-.365.388c-.224.238-.285.58-.152.892.144.343.27.694.374 1.052.098.339.364.59.706.643l.529.082c.764.119 1.282.823 1.2 1.593l-.116 1.112c-.076.729-.7 1.263-1.437 1.178l-.531-.065c-.345-.042-.668.163-.805.481a6.887 6.887 0 0 1-.376 1.053c-.134.312-.072.654.153.892l.365.388c.469.494.486 1.258.037 1.773l-.74.845a1.402 1.402 0 0 1-1.947.162l-.373-.324c-.272-.225-.648-.255-.963-.065-.198.12-.408.228-.61.331a.993.993 0 0 0-.535.862v.526c0 .764-.546 1.314-1.289 1.378A8.2 8.2 0 0 1 8 16a8.2 8.2 0 0 1-.701-.031C6.556 15.905 6.01 15.355 6.01 14.591v-.526a.993.993 0 0 0-.535-.862 6.942 6.942 0 0 1-.607-.331c-.315-.19-.691-.16-.963.065l-.373.324a1.402 1.402 0 0 1-1.947-.162l-.739-.845c-.45-.515-.433-1.28.037-1.773l.365-.388c.224-.238.285-.58.152-.892a6.933 6.933 0 0 1-.374-1.053c-.098-.339-.364-.59-.706-.643l-.529-.082C.236 9.177-.282 8.473-.2 7.703l.116-1.112C-.008 5.862.616 5.328 1.353 5.413l.531.065c.345.042.668-.163.805-.481A6.887 6.887 0 0 1 3.065 3.944c.134-.312.072-.654-.153-.892L2.547 2.664C2.078 2.17 2.061 1.406 2.51.891l.74-.845A1.402 1.402 0 0 1 5.197.884l.372.323c.272.226.649.256.965.066a6.98 6.98 0 0 1 .606-.331A.993.993 0 0 0 7.675 1.935V1.409C7.675.645 8.221.095 8.964.031 8.977.01 8.988 0 9 0H8ZM6.5 8a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Z"/>
             </svg>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Thread list panel -->
+    <div v-if="showThreads" class="ai-threads-panel">
+      <div class="ai-threads-header">
+        <span>對話記錄</span>
+        <button class="ai-settings-close" @click="showThreads = false">✕</button>
+      </div>
+      <div class="ai-threads-list">
+        <div
+          v-for="t in allThreads"
+          :key="t.id"
+          class="ai-thread-item"
+          :class="{ active: t.id === currentThreadId }"
+          @click="switchThread(t.id)"
+        >
+          <span class="ai-thread-title">{{ t.title }}</span>
+          <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
+          <button class="ai-thread-del" title="刪除" @click.stop="deleteThread(t.id)">✕</button>
         </div>
       </div>
     </div>
@@ -2262,6 +2375,48 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
 /* ── Shortcuts panel ─────────────────────────────────────────────────────── */
+/* ── Thread list panel ────────────────────────────────────────────────────── */
+.ai-threads-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 60%;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+}
+.ai-threads-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0;
+}
+.ai-threads-list { overflow-y: auto; flex: 1; }
+.ai-thread-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.1s;
+}
+.ai-thread-item:hover { background: var(--bg-muted); }
+.ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
+.ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
+.ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
+.ai-settings-btn.active { color: var(--accent-fg); }
+
 .ai-shortcuts-panel {
   position: absolute;
   bottom: 0;
