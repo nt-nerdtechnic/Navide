@@ -101,6 +101,7 @@ interface ChatMessage {
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
   bookmarked?: boolean
   feedback?: 'up' | 'down'
+  commitMsg?: string   // detected conventional-commit message
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -602,6 +603,28 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     } else if (relPath) {
       showToast(`File: ${relPath}${line ? `:${line}` : ''}`)
     }
+  }
+}
+
+// ── Run git commit from AI-detected commit message ────────────────────────────
+async function runCommit(msg: ChatMessage): Promise<void> {
+  if (!msg.commitMsg) return
+  if (!window.confirm(`Run git commit with message:\n\n${msg.commitMsg}\n\nThis will commit all staged changes.`)) return
+  try {
+    interface CommitResp { ok: boolean; error?: string }
+    const resp = await props.backend.send<CommitResp>('git.commit', {
+      workspace_path: props.workspacePath,
+      message: msg.commitMsg,
+      all: false,
+    })
+    if (resp.payload?.ok) {
+      showToast('Committed successfully')
+      msg.commitMsg = undefined
+    } else {
+      showToast(`Commit failed: ${resp.payload?.error ?? 'unknown error'}`)
+    }
+  } catch {
+    showToast('Commit failed')
   }
 }
 
@@ -1288,6 +1311,9 @@ function setupListeners(): void {
       last.streaming = false; last.thinking = false
       if (last.responseStartMs) last.elapsedMs = Date.now() - last.responseStartMs
       followUps.value = extractFollowUps(last.content)
+      // Detect conventional commit message in response
+      const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
+      if (commitMatch) last.commitMsg = commitMatch[1].trim()
     }
     sending.value = false
     currentSessionId.value = null
@@ -1850,7 +1876,15 @@ function onClickOutside(e: MouseEvent): void {
 onMounted(() => document.addEventListener('click', onClickOutside))
 onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
-defineExpose({ focusInput: () => { textareaEl.value?.focus() } })
+defineExpose({
+  focusInput: () => { textareaEl.value?.focus() },
+  addContextChip: (label: string, content: string) => {
+    if (!contextChips.value.some((c) => c.label === label)) {
+      contextChips.value.push({ id: crypto.randomUUID(), label, content })
+    }
+    void nextTick(() => textareaEl.value?.focus())
+  },
+})
 
 // ── Copy all messages to clipboard ────────────────────────────────────────────
 function copyAllMessages(): void {
@@ -2005,6 +2039,14 @@ function getDateLabel(ts: number): string {
             <span class="ai-error-msg">{{ msg.errorMsg || 'An error occurred' }}</span>
             <button class="ai-error-retry" @click="retryAfterError">Retry</button>
           </div>
+        </div>
+        <!-- Detected commit message — show "Run Commit" button -->
+        <div v-if="msg.role === 'assistant' && msg.commitMsg && !msg.streaming" class="ai-commit-action">
+          <span class="ai-commit-msg-preview">{{ msg.commitMsg }}</span>
+          <button class="ai-commit-run-btn" title="Run git commit with this message" @click="runCommit(msg)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.492 2.492 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z"/></svg>
+            Run git commit
+          </button>
         </div>
         <!-- Accept All / Reject All bar for last assistant message -->
         <div
@@ -2858,6 +2900,40 @@ function getDateLabel(ts: number): string {
   flex-shrink: 0;
 }
 .ai-error-retry:hover { opacity: 0.85; }
+
+/* ── Detected commit message action bar ──────────────────────────────────── */
+.ai-commit-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--accent-emphasis) 8%, transparent);
+  border-top: 1px solid var(--border-muted);
+  font-size: 11.5px;
+}
+.ai-commit-msg-preview {
+  flex: 1;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-commit-run-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #1a7f37;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ai-commit-run-btn:hover { background: #2ea043; }
 
 /* ── Accept All / Reject All bar ─────────────────────────────────────────── */
 .ai-bulk-actions {
