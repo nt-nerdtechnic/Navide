@@ -475,6 +475,7 @@ async function doUndo(): Promise<void> {
 // retry) to escape a repeated answer; reset to 0 once the form clears.
 const genAttempt = ref(0)
 async function doGenerate(): Promise<void> {
+  if (autoCommitRunning.value) return  // yield to in-flight auto-commit
   commitError.value = ''
   const r = await generateMessage(props.analyzerModel || 'llama3.2', genAttempt.value)
   if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
@@ -488,6 +489,8 @@ const autoCommit = ref(false)
 const autoCommitPending = ref(false)
 // '' = idle, 'staging' | 'generating' | 'committing' = active step
 const autoCommitStep = ref<'' | 'staging' | 'generating' | 'committing'>('')
+// Whole-flow lock: prevents concurrent runs and blocks manual ✦ during auto-commit
+const autoCommitRunning = ref(false)
 const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes
 let _autoCommitTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -500,28 +503,31 @@ async function runAutoCommit(): Promise<void> {
   _autoCommitTimer = null
   autoCommitPending.value = false
   if (!autoCommit.value) return
-  // Guard: skip during merge/rebase/conflicts or when already busy
+  // Guard: skip during merge/rebase/conflicts, user-initiated ops, or already running
   if (opInProgress.value || conflictFileCount.value > 0) return
   if (!hasChanges.value || isCommitting.value || isGenerating.value) return
+  if (autoCommitRunning.value) return
 
+  autoCommitRunning.value = true
   try {
-    // Step 1: Stage All (same as clicking the + button in Changes)
+    // Step 1: Stage All — re-check before each async step in case user acted
     autoCommitStep.value = 'staging'
     await stageAll()
+    if (!autoCommit.value || !hasStaged.value) return
 
-    // After staging, check there's actually something staged
-    if (!hasStaged.value) { autoCommitStep.value = ''; return }
-
-    // Step 2: AI Generate commit message (same as clicking ✦)
+    // Step 2: AI Generate — guard against user having started a manual generate
+    if (isGenerating.value || isCommitting.value) return
     autoCommitStep.value = 'generating'
     const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
-    if (!r.ok || !r.message) { autoCommitStep.value = ''; return }
+    if (!r.ok || !r.message) return
 
-    // Step 3: Commit staged files (no -a; staging was done explicitly)
+    // Step 3: Commit staged files — guard against user having committed manually
+    if (!autoCommit.value || isCommitting.value) return
     autoCommitStep.value = 'committing'
     const cr = await commit(r.message, false)
     if (cr.ok) notifyToast(`Auto-committed: ${r.message}`, { type: 'success' })
   } finally {
+    autoCommitRunning.value = false
     autoCommitStep.value = ''
   }
 }
@@ -536,13 +542,18 @@ function scheduleAutoCommit(): void {
 // Reset the timer whenever the change list shifts while auto-commit is active.
 watch(
   () => [gitStatus.value.staged, gitStatus.value.unstaged, gitStatus.value.untracked],
-  () => { if (autoCommit.value && !autoCommitStep.value) scheduleAutoCommit() },
+  () => { if (autoCommit.value && !autoCommitRunning.value) scheduleAutoCommit() },
   { deep: true },
 )
 
 watch(autoCommit, (val) => {
-  if (!val) { _clearAutoTimer(); autoCommitStep.value = '' }
-  else if (hasChanges.value) scheduleAutoCommit()
+  if (!val) {
+    _clearAutoTimer()
+    // Only clear step if not mid-run; running flow clears in finally
+    if (!autoCommitRunning.value) autoCommitStep.value = ''
+  } else if (hasChanges.value) {
+    scheduleAutoCommit()
+  }
 })
 
 onUnmounted(_clearAutoTimer)
@@ -728,6 +739,21 @@ function doConflictKeep(): void {
   mergeConflictFiles.value = []
   mergeConflictContext.value = ''
 }
+
+// ── Section header context menus ─────────────────────────────────────────────
+const stagedSectionMenu = ref<{ show: boolean; x: number; y: number }>({ show: false, x: 0, y: 0 })
+function openStagedSectionMenu(e: MouseEvent): void {
+  e.preventDefault()
+  stagedSectionMenu.value = { show: true, x: e.clientX, y: e.clientY }
+}
+function closeStagedSectionMenu(): void { stagedSectionMenu.value.show = false }
+
+const changesSectionMenu = ref<{ show: boolean; x: number; y: number }>({ show: false, x: 0, y: 0 })
+function openChangesSectionMenu(e: MouseEvent): void {
+  e.preventDefault()
+  changesSectionMenu.value = { show: true, x: e.clientX, y: e.clientY }
+}
+function closeChangesSectionMenu(): void { changesSectionMenu.value.show = false }
 
 // ── stash ─────────────────────────────────────────────────────────────────────
 const stashExpanded = ref(false), stashMessage = ref(''), stashError = ref('')
@@ -974,7 +1000,7 @@ const filteredLog = computed(() => {
   const q = historySearch.value.toLowerCase()
   return gitLog.value.filter(c =>
     c.message.toLowerCase().includes(q) || c.short_hash.toLowerCase().includes(q) ||
-    c.branches.some(b => b.toLowerCase().includes(q))
+    (c.branches ?? []).some(b => b.toLowerCase().includes(q))
   )
 })
 
@@ -1238,10 +1264,24 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             </div>
           </Teleport>
         </div>
+
+        <!-- Auto Commit status bar -->
+        <div v-if="autoCommit && (autoCommitPending || autoCommitStep)" class="ac-status-bar">
+          <span v-if="autoCommitStep === 'staging'" class="ac-status-spinner">⟳</span>
+          <span v-else-if="autoCommitStep === 'generating'" class="ac-status-spinner">⟳</span>
+          <span v-else-if="autoCommitStep === 'committing'" class="ac-status-spinner">⟳</span>
+          <span v-else class="ac-status-dot" />
+          <span class="ac-status-label">
+            <template v-if="autoCommitStep === 'staging'">暫存所有變更…</template>
+            <template v-else-if="autoCommitStep === 'generating'">AI 生成 commit 訊息…</template>
+            <template v-else-if="autoCommitStep === 'committing'">提交中…</template>
+            <template v-else>Auto Commit 等待中，60 秒後觸發</template>
+          </span>
+        </div>
       </div>
 
       <!-- ── STAGED CHANGES ──────────────────────────────────── -->
-      <div class="sec-hdr clickable" @click="stagedExpanded = !stagedExpanded">
+      <div class="sec-hdr clickable" @click="stagedExpanded = !stagedExpanded" @contextmenu.prevent="openStagedSectionMenu($event)">
         <span class="sec-caret">{{ stagedExpanded ? '▾' : '▸' }}</span>
         <span class="sec-label">Staged Changes</span>
         <span v-if="hasStaged" class="sec-badge">{{ gitStatus.staged.length }}</span>
@@ -1367,7 +1407,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
 
       <!-- ── CHANGES (unstaged) ──────────────────────────────── -->
-      <div class="sec-hdr clickable" @click="changesExpanded = !changesExpanded">
+      <div class="sec-hdr clickable" @click="changesExpanded = !changesExpanded" @contextmenu.prevent="openChangesSectionMenu($event)">
         <span class="sec-caret">{{ changesExpanded ? '▾' : '▸' }}</span>
         <span class="sec-label">Changes</span>
         <span v-if="gitStatus.unstaged?.length || gitStatus.untracked?.length" class="sec-badge">
@@ -1869,6 +1909,25 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
     </template>
 
+    <!-- ── Staged section context menu ──────────────────────────────────── -->
+    <Teleport to="body">
+      <div v-if="stagedSectionMenu.show" class="tp-backdrop" @click="closeStagedSectionMenu" @contextmenu.prevent="closeStagedSectionMenu" />
+      <div v-if="stagedSectionMenu.show" class="ctx-menu" :style="{ top: stagedSectionMenu.y + 'px', left: stagedSectionMenu.x + 'px' }" @click.stop>
+        <button v-if="hasStaged" class="menu-item" @click="doUnstageAll(); closeStagedSectionMenu()">Unstage All</button>
+      </div>
+    </Teleport>
+
+    <!-- ── Changes section context menu ─────────────────────────────────── -->
+    <Teleport to="body">
+      <div v-if="changesSectionMenu.show" class="tp-backdrop" @click="closeChangesSectionMenu" @contextmenu.prevent="closeChangesSectionMenu" />
+      <div v-if="changesSectionMenu.show" class="ctx-menu" :style="{ top: changesSectionMenu.y + 'px', left: changesSectionMenu.x + 'px' }" @click.stop>
+        <button class="menu-item" @click="openStashPrompt(); closeChangesSectionMenu()">Save Draft</button>
+        <div class="menu-sep" />
+        <button v-if="hasChanges" class="menu-item" @click="stageAll(); closeChangesSectionMenu()">Stage All</button>
+        <button v-if="hasChanges" class="menu-item danger" @click="openDiscardAll(); closeChangesSectionMenu()">Discard All</button>
+      </div>
+    </Teleport>
+
     <!-- ── File context menu (right-click) ──────────────────────────────── -->
     <Teleport to="body">
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
@@ -2153,6 +2212,25 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: color-mix(in srgb, var(--accent-fg, #58a6ff) 25%, transparent);
   color: var(--accent-fg);
 }
+.ac-status-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px;
+  font-size: 11px; color: var(--text-muted);
+  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 6%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--accent-fg, #58a6ff) 18%, transparent);
+}
+.ac-status-spinner {
+  display: inline-block; flex-shrink: 0;
+  animation: ac-spin 1s linear infinite;
+  color: var(--accent-fg);
+}
+@keyframes ac-spin { to { transform: rotate(360deg); } }
+.ac-status-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--accent-fg);
+  animation: auto-pulse 1.6s ease-in-out infinite;
+}
+.ac-status-label { flex: 1; }
 .commit-btn-row { display: flex; gap: 0; }
 .commit-main-btn {
   flex: 1; background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);
