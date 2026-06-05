@@ -1261,18 +1261,26 @@ async function selectAtOption(option: AtOption): Promise<void> {
   if (option.id === '@file') {
     const relPath = props.getActiveRelPath?.() ?? ''
     const content = props.getEditorContent?.() ?? ''
+    const ext = relPath.split('.').pop() ?? ''
     chipLabel = relPath ? `@${relPath.split('/').pop()}` : '@file'
-    chipContent = relPath ? `// ${relPath}\n${content}` : content
+    chipContent = relPath
+      ? `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``
+      : content
   } else if (option.id === '@selection') {
     const selected = props.getEditorSelection?.() ?? ''
     const relPath = props.getActiveRelPath?.() ?? ''
+    const ext = relPath.split('.').pop() ?? ''
     chipLabel = '@selection'
     if (selected) {
-      chipContent = relPath ? `// ${relPath} (selection)\n${selected}` : selected
+      chipContent = relPath
+        ? `// Selection from: ${relPath}\n\`\`\`${ext}\n${selected}\n\`\`\``
+        : selected
     } else {
       // Fall back to full file content when nothing is selected
       const content = props.getEditorContent?.() ?? ''
-      chipContent = relPath ? `// ${relPath}\n${content}` : content
+      chipContent = relPath
+        ? `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``
+        : content
     }
   } else if (option.id === '@git') {
     chipLabel = '@git'
@@ -1386,10 +1394,12 @@ async function onDrop(e: DragEvent): Promise<void> {
         rel_path: relPath,
       })
       const label = `@${relPath.split('/').pop()}`
+      const ext = relPath.split('.').pop() ?? ''
+      const fileContent = resp.payload?.content ?? ''
       contextChips.value.push({
         id: crypto.randomUUID(),
         label,
-        content: `// ${relPath}\n${resp.payload?.content ?? ''}`,
+        content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent}\n\`\`\``,
       })
     } catch {
       showToast(`Unable to read: ${relPath}`)
