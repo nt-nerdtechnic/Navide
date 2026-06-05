@@ -382,7 +382,11 @@ registerCommand('editor.action.transformToTitlecase',  () => activeEditor()?.tra
 registerCommand('editor.action.transformToSnakeCase',  () => activeEditor()?.transformToSnakeCase())
 registerCommand('editor.action.transformToCamelCase',  () => activeEditor()?.transformToCamelCase())
 registerCommand('editor.action.transformToKebabCase',  () => activeEditor()?.transformToKebabCase())
-registerCommand('editor.action.transformToPascalCase', () => activeEditor()?.transformToPascalCase())
+registerCommand('editor.action.transformToPascalCase',    () => activeEditor()?.transformToPascalCase())
+registerCommand('editor.action.transformToBase64',        () => activeEditor()?.transformToBase64())
+registerCommand('editor.action.transformFromBase64',      () => activeEditor()?.transformFromBase64())
+registerCommand('editor.action.transformToUrlEncoded',    () => activeEditor()?.transformToUrlEncoded())
+registerCommand('editor.action.transformFromUrlEncoded',  () => activeEditor()?.transformFromUrlEncoded())
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
@@ -665,7 +669,11 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.transformToSnakeCase',  label: 'Transform to Snake Case' },
   { id: 'editor.action.transformToCamelCase',  label: 'Transform to Camel Case' },
   { id: 'editor.action.transformToKebabCase',  label: 'Transform to Kebab Case' },
-  { id: 'editor.action.transformToPascalCase', label: 'Transform to Pascal Case' },
+  { id: 'editor.action.transformToPascalCase',   label: 'Transform to Pascal Case' },
+  { id: 'editor.action.transformToBase64',       label: 'Transform to Base64' },
+  { id: 'editor.action.transformFromBase64',     label: 'Transform from Base64' },
+  { id: 'editor.action.transformToUrlEncoded',   label: 'URL Encode Selection' },
+  { id: 'editor.action.transformFromUrlEncoded', label: 'URL Decode Selection' },
   { id: 'editor.action.joinLines',              label: 'Join Lines',         keys: '⌃J' },
   { id: 'editor.action.sortLinesAscending',    label: 'Sort Lines Ascending' },
   { id: 'editor.action.sortLinesDescending',   label: 'Sort Lines Descending' },

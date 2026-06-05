@@ -646,6 +646,10 @@ function transformToSnakeCase(): void { editorRef.value?.transformToSnakeCase() 
 function transformToCamelCase(): void { editorRef.value?.transformToCamelCase() }
 function transformToKebabCase(): void { editorRef.value?.transformToKebabCase() }
 function transformToPascalCase(): void { editorRef.value?.transformToPascalCase() }
+function transformToBase64(): void { editorRef.value?.transformToBase64() }
+function transformFromBase64(): void { editorRef.value?.transformFromBase64() }
+function transformToUrlEncoded(): void { editorRef.value?.transformToUrlEncoded() }
+function transformFromUrlEncoded(): void { editorRef.value?.transformFromUrlEncoded() }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 function formatDocument(): void { editorRef.value?.formatDocument() }
 function formatSelection(): void { editorRef.value?.formatSelection() }
@@ -722,6 +726,7 @@ defineExpose({
   scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, transformToTitleCase,
   transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
+  transformToBase64, transformFromBase64, transformToUrlEncoded, transformFromUrlEncoded,
   trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines, sortLinesAscending, sortLinesDescending,
   selectLine,

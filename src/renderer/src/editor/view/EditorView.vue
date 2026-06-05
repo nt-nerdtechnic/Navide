@@ -806,6 +806,26 @@ function transformToPascalCase(): void {
   if (!sel) return
   applyEdit(sel, toPascalCase(model.getValueInRange(sel)))
 }
+function transformToBase64(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  try { applyEdit(sel, btoa(model.getValueInRange(sel))) } catch { /* non-latin chars */ }
+}
+function transformFromBase64(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  try { applyEdit(sel, atob(model.getValueInRange(sel))) } catch { /* invalid base64 */ }
+}
+function transformToUrlEncoded(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, encodeURIComponent(model.getValueInRange(sel)))
+}
+function transformFromUrlEncoded(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  try { applyEdit(sel, decodeURIComponent(model.getValueInRange(sel))) } catch { /* invalid */ }
+}
 function formatSelection(): void {
   const sel = selectionRange()
   if (!sel) { formatDocument(); return }
@@ -1592,6 +1612,7 @@ defineExpose({
   scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, transformToTitleCase,
   transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
+  transformToBase64, transformFromBase64, transformToUrlEncoded, transformFromUrlEncoded,
   trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
