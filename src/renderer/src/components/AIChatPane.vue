@@ -55,7 +55,7 @@ const props = defineProps<{
   getEditorSelection?: () => string
   getActiveRelPath?: () => string
   insertTextAtCursor?: (text: string) => void
-  openFile?: (relPath: string) => void
+  openFile?: (relPath: string, line?: number) => void
 }>()
 
 // ── Message types ──────────────────────────────────────────────────────────────
@@ -592,14 +592,15 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     return
   }
 
-  // Clickable file path in inline code
+  // Clickable file path in inline code (supports :line notation)
   const fileRef = target.closest<HTMLElement>('.ai-file-ref')
   if (fileRef) {
     const relPath = fileRef.dataset.path ?? ''
+    const line = fileRef.dataset.line ? parseInt(fileRef.dataset.line, 10) : undefined
     if (relPath && props.openFile) {
-      props.openFile(relPath)
+      props.openFile(relPath, line)
     } else if (relPath) {
-      showToast(`File: ${relPath}`)
+      showToast(`File: ${relPath}${line ? `:${line}` : ''}`)
     }
   }
 }
@@ -826,12 +827,15 @@ function renderMarkdownLite(rawText: string): string {
   html = html.replace(/(?<!\*)\*([^*<\n]+)\*(?!\*)/g, '<em>$1</em>')
   // Strikethrough
   html = html.replace(/~~([^~<\n]+)~~/g, '<del>$1</del>')
-  // Inline code — file paths become clickable links
-  const FILE_PATH_RE = /^(?:\.{0,2}\/)?[\w.\-/ ]+\.(?:ts|tsx|js|jsx|vue|py|go|rs|rb|java|kt|swift|c|cpp|cs|php|sh|md|json|yaml|yml|toml|html|css|scss|sql)$/
+  // Inline code — file paths (optionally :line) become clickable links
+  const FILE_PATH_RE = /^((?:\.{0,2}\/)?[\w.\-/ ]+\.(?:ts|tsx|js|jsx|vue|py|go|rs|rb|java|kt|swift|c|cpp|cs|php|sh|md|json|yaml|yml|toml|html|css|scss|sql))(?::(\d+))?$/
   html = html.replace(/`([^`\n]+)`/g, (_, c) => {
     const escaped = c.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    if (FILE_PATH_RE.test(c.trim()) && c.includes('/')) {
-      return `<code class="ai-inline-code ai-file-ref" data-path="${c.trim()}">${escaped}</code>`
+    const m = c.trim().match(FILE_PATH_RE)
+    if (m && c.includes('/')) {
+      const lineAttr = m[2] ? ` data-line="${m[2]}"` : ''
+      const lineLabel = m[2] ? `<span class="ai-file-ref-line">:${m[2]}</span>` : ''
+      return `<code class="ai-inline-code ai-file-ref" data-path="${m[1]}"${lineAttr}>${escaped.replace(/:(\d+)$/, '')}${lineLabel}</code>`
     }
     return `<code class="ai-inline-code">${escaped}</code>`
   })
@@ -2740,6 +2744,7 @@ function getDateLabel(ts: number): string {
   text-underline-offset: 2px;
 }
 .ai-text :deep(code.ai-file-ref:hover) { background: var(--bg-subtle); }
+.ai-text :deep(.ai-file-ref-line) { opacity: 0.65; font-size: 0.85em; }
 .ai-text :deep(ul.ai-ul),
 .ai-text :deep(ol.ai-ol) {
   margin: 4px 0 4px 18px;
