@@ -402,12 +402,16 @@ const allConflictsResolved = computed(() =>
 watch(allConflictsResolved, async (val) => {
   if (!val || commitMessage.value) return
   // Read .git/MERGE_MSG to pre-populate commit message
-  const resp = await props.backend.send<{ ok: boolean; content: string }>(
-    'fs.read_file',
-    { workspace_path: props.workspacePath, rel_path: '.git/MERGE_MSG' },
-  )
-  if (resp.ok && resp.payload?.ok && resp.payload.content) {
-    commitMessage.value = resp.payload.content.trim()
+  try {
+    const resp = await props.backend.send<{ ok: boolean; content: string }>(
+      'fs.read_file',
+      { workspace_path: props.workspacePath, rel_path: '.git/MERGE_MSG' },
+    )
+    if (resp.ok && resp.payload?.ok && resp.payload.content) {
+      commitMessage.value = resp.payload.content.trim()
+    }
+  } catch {
+    // best-effort — leave commitMessage empty if read fails
   }
 })
 

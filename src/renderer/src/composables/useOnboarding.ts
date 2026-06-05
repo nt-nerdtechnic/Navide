@@ -71,6 +71,8 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
     try {
       const resp = await backend.send<OnboardStatus>('onboarding.status', {})
       if (resp.payload) status.value = resp.payload
+    } catch (e) {
+      log(`✗ Detection failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       loading.value = false
     }
@@ -94,6 +96,8 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
       } else {
         log(r.output?.trim() || `✓ ${dep.label} installed`)
       }
+    } catch (e) {
+      log(`✗ ${dep.label} installation error: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       installing.value = ''
       await refresh()
@@ -103,13 +107,17 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   async function pullModel(model?: string): Promise<void> {
     const name = model || status.value?.gate.suggested_model || 'qwen2.5-coder'
     log(`▶ Downloading model ${name}…`)
-    const resp = await backend.send<InstallResult>('onboarding.pull_model', { model: name })
-    const r = resp.payload
-    if (!r?.ok) { log(`✗ ${r?.error || 'download failed'}`); return }
-    if (r.needs_terminal && r.command) {
-      await window.agentTeam?.openTerminal(r.command)
-      log(`↗ Opened in external terminal: ${r.command}`)
-      log('  After completion, click Re-detect.')
+    try {
+      const resp = await backend.send<InstallResult>('onboarding.pull_model', { model: name })
+      const r = resp.payload
+      if (!r?.ok) { log(`✗ ${r?.error || 'download failed'}`); return }
+      if (r.needs_terminal && r.command) {
+        await window.agentTeam?.openTerminal(r.command)
+        log(`↗ Opened in external terminal: ${r.command}`)
+        log('  After completion, click Re-detect.')
+      }
+    } catch (e) {
+      log(`✗ Model download failed: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
