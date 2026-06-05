@@ -510,6 +510,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/debug',     label: '/debug',     description: 'Find bugs',            template: 'Analyze the following code for bugs, edge cases, and potential runtime errors. Be specific about line numbers and root causes:\n\n' },
   { id: '/improve',   label: '/improve',   description: 'Suggest improvements', template: 'Suggest concrete improvements for the following code in terms of readability, maintainability, and best practices:\n\n' },
   { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: 'Generate a concise git commit message (conventional commits format) for the following changes:\n\n' },
+  { id: '/summarize', label: '/summarize', description: 'Summarize conversation', template: '' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
 ]
@@ -1459,6 +1460,7 @@ onMounted(() => {
   loadThreads()
   void detectWorkspaceRules()
 })
+watch(() => props.workspacePath, () => { void detectWorkspaceRules() })
 
 onUnmounted(() => {
   teardownListeners()
@@ -1536,6 +1538,13 @@ function onTextareaInput(e: Event): void {
 
 function selectSlashCommand(cmd: SlashCommand): void {
   showSlashMenu.value = false
+  if (cmd.id === '/summarize') {
+    inputText.value = ''
+    if (messages.value.length < 2) { showToast('Nothing to summarize yet'); return }
+    const count = messages.value.length
+    void sendMessage(`Summarize our conversation so far (${count} messages) into 3-5 bullet points covering the main topics, decisions, and any code changes made. Be concise.`)
+    return
+  }
   if (cmd.id === '/clear') {
     inputText.value = ''
     clearConversation()
