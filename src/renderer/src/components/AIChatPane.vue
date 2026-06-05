@@ -145,6 +145,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/tests',   label: '/tests',   description: '生成測試',   template: '請為以下程式碼撰寫完整的單元測試：' },
   { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
   { id: '/review',  label: '/review',  description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
+  { id: '/clear',   label: '/clear',   description: '清除對話',   template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -153,22 +154,80 @@ const slashMenuEl = ref<HTMLElement | null>(null)
 const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
-function renderMarkdownLite(text: string): string {
-  // code blocks
-  text = text.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
-    const escaped = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    return `<pre class="ai-code-block"><code>${escaped}</code></pre>`
+function renderMarkdownLite(rawText: string): string {
+  // 1. Extract fenced code blocks so they are never touched by inline transforms
+  const blocks: string[] = []
+  let text = rawText.replace(/```[\w]*\n?([\s\S]*?)```/g, (_, code) => {
+    const safe = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const i = blocks.length
+    blocks.push(`<pre class="ai-code-block"><code>${safe}</code></pre>`)
+    return `\x00B${i}\x00`
   })
-  // inline code
-  text = text.replace(/`([^`]+)`/g, (_, code) => {
-    const escaped = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    return `<code class="ai-inline-code">${escaped}</code>`
-  })
-  // bold
-  text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  // newlines
-  text = text.replace(/\n/g, '<br>')
-  return text
+
+  // 2. Line-by-line: headings, lists, blank lines
+  const lines = text.split('\n')
+  const parts: string[] = []
+  let inUl = false, inOl = false
+  const flushList = () => {
+    if (inUl) { parts.push('</ul>'); inUl = false }
+    if (inOl) { parts.push('</ol>'); inOl = false }
+  }
+  for (const line of lines) {
+    // Code block placeholder (whole line)
+    if (/^\x00B\d+\x00$/.test(line.trim())) {
+      flushList(); parts.push(line.trim()); continue
+    }
+    // Horizontal rule
+    if (/^[-*_]{3,}$/.test(line.trim())) {
+      flushList(); parts.push('<hr class="ai-hr">'); continue
+    }
+    // Heading: #, ##, ###, ####
+    const hm = line.match(/^(#{1,4})\s+(.+)/)
+    if (hm) {
+      flushList()
+      const lvl = Math.min(hm[1].length + 1, 5)
+      parts.push(`<h${lvl} class="ai-h">${hm[2]}</h${lvl}>`)
+      continue
+    }
+    // Unordered list
+    const ulm = line.match(/^[*\-+]\s+(.+)/)
+    if (ulm) {
+      if (inOl) { parts.push('</ol>'); inOl = false }
+      if (!inUl) { parts.push('<ul class="ai-ul">'); inUl = true }
+      parts.push(`<li>${ulm[1]}</li>`)
+      continue
+    }
+    // Ordered list
+    const olm = line.match(/^\d+[.)]\s+(.+)/)
+    if (olm) {
+      if (inUl) { parts.push('</ul>'); inUl = false }
+      if (!inOl) { parts.push('<ol class="ai-ol">'); inOl = true }
+      parts.push(`<li>${olm[1]}</li>`)
+      continue
+    }
+    flushList()
+    parts.push(line === '' ? '<br>' : line + '<br>')
+  }
+  flushList()
+
+  let html = parts.join('')
+
+  // 3. Inline transforms (safe: never match inside code blocks — those are placeholders now)
+  // Bold
+  html = html.replace(/\*\*([^*<\n]+)\*\*/g, '<strong>$1</strong>')
+  // Italic (only single *, guard against **)
+  html = html.replace(/(?<!\*)\*([^*<\n]+)\*(?!\*)/g, '<em>$1</em>')
+  // Strikethrough
+  html = html.replace(/~~([^~<\n]+)~~/g, '<del>$1</del>')
+  // Inline code
+  html = html.replace(/`([^`\n]+)`/g, (_, c) =>
+    `<code class="ai-inline-code">${c.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`,
+  )
+
+  // 4. Restore code blocks
+  html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[Number(i)])
+
+  return html
 }
 
 // ── Diff rendering ─────────────────────────────────────────────────────────────
@@ -583,8 +642,13 @@ function onTextareaInput(e: Event): void {
 }
 
 function selectSlashCommand(cmd: SlashCommand): void {
-  inputText.value = cmd.template + ' '
   showSlashMenu.value = false
+  if (cmd.id === '/clear') {
+    inputText.value = ''
+    clearConversation()
+    return
+  }
+  inputText.value = cmd.template + ' '
   nextTick(() => {
     textareaEl.value?.focus()
     const len = inputText.value.length
@@ -1136,6 +1200,31 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   padding: 1px 4px;
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
   font-size: 0.9em;
+}
+.ai-text :deep(ul.ai-ul),
+.ai-text :deep(ol.ai-ol) {
+  margin: 4px 0 4px 18px;
+  padding: 0;
+  line-height: 1.6;
+}
+.ai-text :deep(ul.ai-ul) { list-style: disc; }
+.ai-text :deep(ol.ai-ol) { list-style: decimal; }
+.ai-text :deep(h2.ai-h),
+.ai-text :deep(h3.ai-h),
+.ai-text :deep(h4.ai-h),
+.ai-text :deep(h5.ai-h) {
+  margin: 8px 0 2px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.ai-text :deep(h2.ai-h) { font-size: 1.1em; }
+.ai-text :deep(h3.ai-h) { font-size: 1.0em; }
+.ai-text :deep(h4.ai-h),
+.ai-text :deep(h5.ai-h) { font-size: 0.95em; color: var(--text-secondary); }
+.ai-text :deep(hr.ai-hr) {
+  border: none;
+  border-top: 1px solid var(--border-muted);
+  margin: 8px 0;
 }
 
 .ai-cursor {
