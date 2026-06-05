@@ -1142,22 +1142,34 @@ function selectSlashCommand(cmd: SlashCommand): void {
     void exportConversation()
     return
   }
-  // /commit: auto-add @git chip so AI sees the actual diff
+  // /commit: auto-add @git chip so AI sees the staged diff (falls back to unstaged)
   if (cmd.id === '/commit') {
     inputText.value = cmd.template
     void (async () => {
       try {
         interface DiffResp { ok: boolean; diff?: string }
-        const resp = await props.backend.send<DiffResp>('git.diff_all', {
+        // Prefer staged diff (what git commit will actually include); fall back to unstaged
+        let resp = await props.backend.send<DiffResp>('git.diff_all', {
           workspace_path: props.workspacePath,
-          staged: false,
+          staged: true,
         })
-        const diff = resp.payload?.diff
+        let diff = resp.payload?.diff
+        let label = '@git(staged)'
+        let header = '// git diff --staged'
+        if (!diff) {
+          resp = await props.backend.send<DiffResp>('git.diff_all', {
+            workspace_path: props.workspacePath,
+            staged: false,
+          })
+          diff = resp.payload?.diff
+          label = '@git(diff)'
+          header = '// git diff (unstaged)'
+        }
         if (diff) {
           contextChips.value.push({
             id: crypto.randomUUID(),
-            label: '@git(diff)',
-            content: `// git diff (unstaged)\n${diff}`,
+            label,
+            content: `${header}\n${diff}`,
           })
         }
       } catch {/* ignore */}
