@@ -54,9 +54,9 @@ function alert(
   return new Promise<void>((resolve) => {
     dialog.value = {
       kind: 'alert',
-      title: opts.title ?? '提示',
+      title: opts.title ?? 'Alert',
       message,
-      confirmText: opts.confirmText ?? '確定',
+      confirmText: opts.confirmText ?? 'OK',
       cancelText: '',
       resolve: () => resolve()
     }
@@ -71,10 +71,10 @@ function confirm(
   return new Promise<boolean>((resolve) => {
     dialog.value = {
       kind: 'confirm',
-      title: opts.title ?? '請確認',
+      title: opts.title ?? 'Confirm',
       message,
-      confirmText: opts.confirmText ?? '確定',
-      cancelText: opts.cancelText ?? '取消',
+      confirmText: opts.confirmText ?? 'OK',
+      cancelText: opts.cancelText ?? 'Cancel',
       resolve
     }
   })

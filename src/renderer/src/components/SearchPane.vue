@@ -156,11 +156,15 @@ async function replaceInFiles(files: string[]): Promise<void> {
 
 async function replaceAll(): Promise<void> {
   if (!total.value) return
+  const q = query.value
+  const r = replacement.value
   const ok = await confirm(
-    `Replace "${query.value}" with "${replacement.value}" — ${total.value} occurrence(s) across ${fileCount.value} file(s). This will modify files directly.`,
+    `Replace "${q}" with "${r}" — ${total.value} occurrence(s) across ${fileCount.value} file(s). This will modify files directly.`,
     { title: 'Replace All', confirmText: 'Replace All' }
   )
   if (!ok) return
+  query.value = q
+  replacement.value = r
   await replaceInFiles(results.value.map((f) => f.rel_path))
 }
 
