@@ -611,11 +611,13 @@ function onCompositionEnd(): void {
 
 function doUndo(): void {
   preferredCol = -1
+  ghost.value = null
   const p = undo.undo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
 function doRedo(): void {
   preferredCol = -1
+  ghost.value = null
   const p = undo.redo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
@@ -1391,6 +1393,7 @@ watch(() => props.modelValue, (v) => {
     _tokInvalidFrom = 0
     cursor.value = clampPos(cursor.value)
     anchor.value = null
+    ghost.value = null
     afterExternalChange()
   }
 })
@@ -1400,7 +1403,7 @@ watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
 function getValue(): string { return model.getValue() }
-function setValue(v: string): void { model.setValue(v); _maxLineLenCache = -1; _tokCache = []; _tokInvalidFrom = 0; cursor.value = { line: 0, col: 0 }; anchor.value = null; afterExternalChange() }
+function setValue(v: string): void { model.setValue(v); _maxLineLenCache = -1; _tokCache = []; _tokInvalidFrom = 0; cursor.value = { line: 0, col: 0 }; anchor.value = null; ghost.value = null; afterExternalChange() }
 function getSelectionRange(): Range | null { return selectionRange() }
 function getSelectionText(): string {
   const sel = selectionRange()
