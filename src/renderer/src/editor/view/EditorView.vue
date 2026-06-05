@@ -834,6 +834,14 @@ function sortLines(dir: 'asc' | 'desc'): void {
 }
 function sortLinesAscending(): void { sortLines('asc') }
 function sortLinesDescending(): void { sortLines('desc') }
+function selectLine(): void {
+  ghost.value = null
+  preferredCol = -1
+  const line = cursor.value.line
+  const lastLine = model.lineCount() - 1
+  anchor.value = { line, col: 0 }
+  cursor.value = line < lastLine ? { line: line + 1, col: 0 } : { line, col: model.getLine(line).length }
+}
 function transpose(): void {
   const { line, col } = cursor.value
   const text = model.getLine(line)
@@ -1452,6 +1460,7 @@ defineExpose({
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
+  selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
   setSelection, zoomIn, zoomOut, zoomReset,

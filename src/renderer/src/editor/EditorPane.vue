@@ -471,6 +471,7 @@ function shrinkSelection(): void { editorRef.value?.shrinkSelection() }
 function joinLines(): void { editorRef.value?.joinLines() }
 function sortLinesAscending(): void { editorRef.value?.sortLinesAscending() }
 function sortLinesDescending(): void { editorRef.value?.sortLinesDescending() }
+function selectLine(): void { editorRef.value?.selectLine() }
 function transpose(): void { editorRef.value?.transpose() }
 function indentationToSpaces(): void { editorRef.value?.indentationToSpaces() }
 function indentationToTabs(): void { editorRef.value?.indentationToTabs() }
@@ -532,6 +533,7 @@ defineExpose({
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines, sortLinesAscending, sortLinesDescending,
+  selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,

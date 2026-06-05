@@ -568,3 +568,31 @@ describe('transpose shortcut', () => {
     expect(dr.resolve(mkEvent('t', { ctrlKey: true }), {})).toBeNull()
   })
 })
+
+describe('select line shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+l → selectLine (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('l', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.selectLine')
+  })
+
+  it('ctrl+l requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('l', { ctrlKey: true }), {})).toBeNull()
+  })
+})
+
+describe('block comment alias shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('shift+alt+a → blockComment (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('a', { shiftKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.blockComment')
+  })
+
+  it('shift+alt+a requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('a', { shiftKey: true, altKey: true }), {})).toBeNull()
+  })
+})

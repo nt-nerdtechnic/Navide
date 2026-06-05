@@ -410,6 +410,7 @@ registerCommand('workbench.action.findInFilesReplace', () => {
   sidebarView.value = 'search'
   void nextTick(() => searchRef.value?.openReplace())
 })
+registerCommand('editor.action.selectLine',          () => activeEditor()?.selectLine())
 registerCommand('editor.action.transpose',           () => activeEditor()?.transpose())
 registerCommand('editor.action.indentationToSpaces', () => activeEditor()?.indentationToSpaces())
 registerCommand('editor.action.indentationToTabs',   () => activeEditor()?.indentationToTabs())
@@ -507,6 +508,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.reloadWindow',  label: '重新載入視窗' },
   { id: 'workbench.action.findInFilesReplace', label: '在檔案中取代', keys: '⌘⇧H' },
   { id: 'editor.action.transpose',           label: '轉置字元',     keys: '⌃T' },
+  { id: 'editor.action.selectLine',          label: '選取目前行',     keys: '⌃L' },
   { id: 'editor.action.indentationToSpaces', label: '縮排轉換為空格' },
   { id: 'editor.action.indentationToTabs',   label: '縮排轉換為 Tab' },
 ]
