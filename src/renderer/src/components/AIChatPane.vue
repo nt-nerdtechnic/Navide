@@ -482,6 +482,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
+  { id: '@problems', label: '@problems — TypeScript & lint errors' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1731,6 +1732,28 @@ async function selectAtOption(option: AtOption): Promise<void> {
       }
     } catch {
       chipContent = `// @folder:${folderPath}: unavailable`
+    }
+  } else if (option.id === '@problems') {
+    chipLabel = '@problems'
+    if (!props.workspacePath) {
+      chipContent = '// @problems: no workspace open'
+    } else {
+      try {
+        showToast('Running type check…')
+        interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+        const resp = await props.backend.send<ShellResp>('shell.run', {
+          command: 'npx vue-tsc --noEmit 2>&1 | head -120',
+          workspace_path: props.workspacePath,
+        })
+        const out = (resp.payload?.output ?? '').trim()
+        if (!out || resp.payload?.exit_code === 0) {
+          chipContent = '// @problems: no TypeScript errors found ✓'
+        } else {
+          chipContent = `// TypeScript errors in workspace:\n${out}`
+        }
+      } catch {
+        chipContent = '// @problems: type check unavailable'
+      }
     }
   } else {
     // It's a file path
