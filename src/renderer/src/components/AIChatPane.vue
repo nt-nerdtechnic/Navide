@@ -364,6 +364,26 @@ function onMessagesClick(e: MouseEvent): void {
     } catch {/* ignore */}
     return
   }
+  // Code fold/expand toggle
+  const foldBtn = target.closest<HTMLButtonElement>('.ai-code-fold-btn')
+  if (foldBtn) {
+    const wrap = foldBtn.closest<HTMLElement>('.ai-code-wrap')
+    const pre = wrap?.querySelector<HTMLElement>('pre.ai-code-block')
+    if (!pre || !wrap) return
+    const folded = wrap.dataset.folded === 'true'
+    const lines = foldBtn.dataset.lines ?? '?'
+    if (folded) {
+      pre.style.display = ''
+      wrap.dataset.folded = 'false'
+      foldBtn.textContent = `▼ 收合 (${lines} 行)`
+    } else {
+      pre.style.display = 'none'
+      wrap.dataset.folded = 'true'
+      foldBtn.textContent = `▶ 展開 (${lines} 行)`
+    }
+    return
+  }
+
   // Apply to editor button
   const applyBtn = target.closest<HTMLButtonElement>('.ai-code-apply-btn')
   if (applyBtn) {
@@ -411,14 +431,22 @@ function renderMarkdownLite(rawText: string): string {
     const applyBtn = hasActiveFile
       ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="套用到目前開啟的檔案">Apply</button>`
       : ''
+    // Collapse code blocks that exceed 30 lines
+    const lineCount = code.split('\n').length
+    const isLong = lineCount > 30
+    const foldAttr = isLong ? ' data-folded="true"' : ''
+    const toggleBtn = isLong
+      ? `<button class="ai-code-fold-btn" data-lines="${lineCount}">▶ 展開 (${lineCount} 行)</button>`
+      : ''
     blocks.push(
-      `<div class="ai-code-wrap">` +
+      `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
-      `<pre class="ai-code-block hljs"><code>${highlighted}</code></pre>` +
+      `${toggleBtn}` +
+      `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code>${highlighted}</code></pre>` +
       `</div>`,
     )
     return `\x00B${i}\x00`
@@ -1872,6 +1900,20 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   background: var(--bg-subtle);
   color: var(--text-bright);
 }
+.ai-text :deep(.ai-code-fold-btn) {
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  background: var(--bg-muted);
+  border: none;
+  border-top: 1px solid var(--border-muted);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+  letter-spacing: 0.02em;
+}
+.ai-text :deep(.ai-code-fold-btn:hover) { color: var(--text-bright); background: var(--bg-subtle); }
 .ai-text :deep(.ai-code-apply-btn) {
   background: none;
   border: 1px solid var(--accent-emphasis);
