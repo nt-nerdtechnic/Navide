@@ -122,6 +122,8 @@ export const defaults: KeybindingRule[] = [
   // ── AI Chat ──────────────────────────────────────────────────────────────────
   { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },
   { key: 'ctrl+`',      command: 'workbench.action.toggleAIChat' },
+  // Note: cmd+shift+l is selectHighlights when editorTextFocus; addSelectionToChat fires only when editor is open but textarea is NOT focused
+  { key: 'cmd+shift+l', command: 'workbench.action.addSelectionToChat', when: 'editorOpen && !editorTextFocus' },
 
   // ── Replace in files / editor utilities ──────────────────────────────────────
   { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },
