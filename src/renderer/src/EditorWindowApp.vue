@@ -15,6 +15,10 @@ const workspacePath = params.get('workspace_path') ?? ''
 const initialRel = params.get('filepath') ?? ''
 const initialName = params.get('name') ?? (initialRel.split('/').pop() || initialRel)
 const initialLine = Number(params.get('line')) || 0
+// diff pre-load: when opened via openDiffWindow with no existing editor window
+const initialDiffFile = params.get('diff_filepath') ?? ''
+const initialDiffStaged = params.get('diff_staged') === 'true'
+const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
 
 const backend = useBackend()
 
@@ -56,6 +60,72 @@ const activePath = computed(() => {
   const displayPath = f?.kind === 'diff' ? (f.filepath ?? '') : activeRel.value
   return displayPath.split('/').filter(Boolean)
 })
+
+// ── Breadcrumb dropdown ───────────────────────────────────────────────────────
+interface BcItem { name: string; isDir: boolean; relPath: string; line?: number; kind?: string }
+interface BcDropdown { segIdx: number; items: BcItem[]; x: number; y: number }
+const bcDropdown = ref<BcDropdown | null>(null)
+
+function _extractSymbols(text: string, ext: string): BcItem[] {
+  const lines = text.split('\n')
+  const out: BcItem[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    let m: RegExpMatchArray | null
+    if ((m = raw.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+    else if ((m = raw.match(/^\s*(?:export\s+)?class\s+(\w+)/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+    else if ((m = raw.match(/^\s*(?:export\s+)?interface\s+(\w+)/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'interface' })
+    else if ((m = raw.match(/^\s*(?:export\s+)?type\s+(\w+)\s*=/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'type' })
+    else if ((m = raw.match(/^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\()/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+    else if (ext === 'py' && (m = raw.match(/^(\s*)def\s+(\w+)/)))
+      out.push({ name: m[2], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+    else if (ext === 'py' && (m = raw.match(/^class\s+(\w+)/)))
+      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+  }
+  return out
+}
+
+async function openBcDropdown(segIdx: number, e: MouseEvent): Promise<void> {
+  e.stopPropagation()
+  const rect = (e.target as HTMLElement).getBoundingClientRect()
+  const isFile = segIdx === activePath.value.length - 1
+  if (bcDropdown.value?.segIdx === segIdx) { bcDropdown.value = null; return }
+  if (isFile) {
+    const fileContent = activeEditor()?.getContent?.() ?? ''
+    const ext = activePath.value[segIdx].split('.').pop() ?? ''
+    const symbols = _extractSymbols(fileContent, ext)
+    bcDropdown.value = { segIdx, items: symbols, x: rect.left, y: rect.bottom }
+  } else {
+    const parentPath = activePath.value.slice(0, segIdx).join('/')
+    interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
+    const resp = await backend.send<LsResp>('fs.list_dir', { workspace_path: workspacePath, rel_path: parentPath, show_hidden: false })
+    if (resp.ok && resp.entries) {
+      bcDropdown.value = {
+        segIdx,
+        items: resp.entries.map((en) => ({ name: en.name, isDir: en.is_dir, relPath: en.rel_path })),
+        x: rect.left,
+        y: rect.bottom,
+      }
+    }
+  }
+}
+
+function onBcItemClick(item: BcItem): void {
+  bcDropdown.value = null
+  if (item.line) {
+    const f = openFiles.value.find((x) => x.relPath === activeRel.value)
+    if (f) { f.revealAt = item.line; f.revealSeq = (f.revealSeq ?? 0) + 1 }
+  } else if (!item.isDir && item.relPath) {
+    openFile({ filepath: item.relPath })
+  }
+}
+
+function closeBcDropdown(): void { bcDropdown.value = null }
 
 function openFile(p: { filepath: string; name?: string; line?: number }): void {
   const relPath = p.filepath
@@ -128,8 +198,15 @@ registerCommand('editor.action.duplicateLineDown',  () => activeEditor()?.duplic
 registerCommand('editor.action.duplicateLineUp',    () => activeEditor()?.duplicateLineUp())
 registerCommand('editor.action.indentLines',         () => activeEditor()?.indentLine())
 registerCommand('editor.action.outdentLines',        () => activeEditor()?.dedentLine())
-registerCommand('editor.action.cursorTop',           () => activeEditor()?.cursorTop())
-registerCommand('editor.action.cursorBottom',        () => activeEditor()?.cursorBottom())
+registerCommand('editor.action.cursorTop',            () => activeEditor()?.cursorTop())
+registerCommand('editor.action.cursorBottom',         () => activeEditor()?.cursorBottom())
+registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
+registerCommand('workbench.action.closeAllEditors', () => {
+  const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要全部關閉？`)) return
+  openFiles.value = []
+  activeRel.value = ''
+})
 registerCommand('workbench.action.openNextEditor', () => {
   const files = openFiles.value
   if (!files.length) return
@@ -172,6 +249,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.outdentLines',      label: '取消縮排行',    keys: '⌘[' },
   { id: 'editor.action.cursorTop',         label: '跳到檔案開頭',  keys: '⌘↑' },
   { id: 'editor.action.cursorBottom',      label: '跳到檔案結尾',  keys: '⌘↓' },
+  { id: 'editor.action.addSelectionToNextFindMatch', label: '選取下一個出現', keys: '⌘D' },
+  { id: 'workbench.action.closeAllEditors', label: '關閉所有編輯器', keys: '⌘K ⌘W' },
   { id: 'editor.action.nextMatch',         label: '下一個符合項',  keys: '⌘G' },
   { id: 'editor.action.prevMatch',       label: '上一個符合項',   keys: '⌘⇧G' },
   { id: 'editor.action.inlineRewrite',   label: 'AI 改寫 (Cmd+K)',keys: '⌘K' },
@@ -215,6 +294,7 @@ watch(paletteQuery, () => { paletteIdx.value = 0 })
 registerCommand('workbench.action.showCommands', openPalette)
 
 function onAppKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && bcDropdown.value) { bcDropdown.value = null; return }
   const mod = e.metaKey || e.ctrlKey
   if (mod && (e.key === 'w' || e.key === 'W') && activeRel.value) {
     // Don't close the tab while focus is in a find/goto/cmdk text input.
@@ -227,6 +307,7 @@ function onAppKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onAppKeydown)
+  document.addEventListener('click', closeBcDropdown)
   const api = (window as Window & {
     agentTeam?: {
       onSwitchEditorSidebar?: (cb: (s: string) => void) => void
@@ -248,6 +329,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onAppKeydown)
+  document.removeEventListener('click', closeBcDropdown)
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
 })
@@ -268,6 +350,7 @@ watch(
 )
 
 if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialName, line: initialLine })
+if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, staged: initialDiffStaged, name: initialDiffName })
 </script>
 
 <template>
@@ -351,7 +434,11 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
       <div v-if="activeRel" class="ide-breadcrumb">
         <template v-for="(seg, i) in activePath" :key="i">
           <span v-if="i > 0" class="ide-bc-sep">›</span>
-          <span class="ide-bc-seg" :class="{ 'ide-bc-file': i === activePath.length - 1 }">{{ seg }}</span>
+          <span
+            class="ide-bc-seg"
+            :class="{ 'ide-bc-file': i === activePath.length - 1, 'ide-bc-seg--open': bcDropdown?.segIdx === i }"
+            @click.stop="openBcDropdown(i, $event)"
+          >{{ seg }}</span>
         </template>
       </div>
 
@@ -380,6 +467,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
             :staged="f.staged!"
             :name="f.name"
             :backend="backend"
+            @open-file="openFile"
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">
@@ -415,6 +503,33 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
     </div>
   </div>
   <NotificationHost />
+
+  <!-- Breadcrumb dropdown -->
+  <teleport to="body">
+    <div
+      v-if="bcDropdown"
+      class="ide-bc-dd"
+      :style="{ left: bcDropdown.x + 'px', top: bcDropdown.y + 'px' }"
+      @click.stop
+    >
+      <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">（空）</div>
+      <div
+        v-for="item in bcDropdown.items"
+        :key="(item.relPath || '') + (item.line ?? 0)"
+        class="ide-bc-dd-item"
+        :class="{ 'is-dir': item.isDir, 'is-sym': !!item.line }"
+        @click="onBcItemClick(item)"
+      >
+        <span class="ide-bc-dd-icon">
+          <svg v-if="item.isDir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
+          <svg v-else-if="!item.line" width="12" height="14" viewBox="0 0 12 16" fill="currentColor"><path d="M6 5H2V4h4v1zM2 8h7V7H2v1zm0 2h7V9H2v1zm0 2h7v-1H2v1zm10-7.5V14c0 .55-.45 1-1 1H1c-.55 0-1-.45-1-1V2c0-.55.45-1 1-1h7.5L12 4.5zM11 5L8 2H1v12h10V5z"/></svg>
+          <span v-else class="ide-bc-dd-sym-badge" :data-kind="item.kind">{{ item.kind === 'function' ? 'ƒ' : item.kind === 'class' ? 'C' : item.kind === 'interface' ? 'I' : item.kind === 'type' ? 'T' : '·' }}</span>
+        </span>
+        <span class="ide-bc-dd-name">{{ item.name }}</span>
+        <span v-if="item.line" class="ide-bc-dd-line">L{{ item.line }}</span>
+      </div>
+    </div>
+  </teleport>
 </template>
 
 <style scoped>
@@ -557,8 +672,64 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
   overflow: hidden;
 }
 .ide-bc-sep { color: var(--text-muted); opacity: 0.6; font-size: 10px; }
-.ide-bc-seg { color: var(--text-secondary); white-space: nowrap; }
+.ide-bc-seg {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: 0 -4px;
+}
+.ide-bc-seg:hover { color: var(--text-primary); background: var(--bg-muted); }
+.ide-bc-seg--open { color: var(--text-primary) !important; background: var(--bg-muted) !important; }
 .ide-bc-file { color: var(--text-primary); font-weight: 500; }
+
+/* ── Breadcrumb Dropdown ─────────────────────────────────────────────────── */
+.ide-bc-dd {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  min-width: 180px;
+  max-width: 300px;
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px 0;
+  font-size: 12px;
+}
+.ide-bc-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.ide-bc-dd-item:hover { background: var(--bg-muted); }
+.ide-bc-dd-item.is-dir { color: var(--accent-fg); }
+.ide-bc-dd-icon { flex-shrink: 0; display: flex; align-items: center; width: 16px; }
+.ide-bc-dd-sym-badge {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+}
+.ide-bc-dd-sym-badge[data-kind="class"] { background: #6c9ef8; }
+.ide-bc-dd-sym-badge[data-kind="interface"] { background: #56b6c2; }
+.ide-bc-dd-sym-badge[data-kind="type"] { background: #c678dd; }
+.ide-bc-dd-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ide-bc-dd-line { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.ide-bc-dd-empty { padding: 8px 10px; color: var(--text-muted); font-size: 11.5px; }
 
 .ide-editors { flex: 1; position: relative; min-height: 0; }
 .ide-editors > * { height: 100%; }

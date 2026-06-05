@@ -36,12 +36,15 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+l',    command: 'editor.action.selectHighlights',  when: 'editorTextFocus' },
   // macOS US: Cmd+Shift+\ fires e.key='|'; use cmd+shift+| to match correctly
   { key: 'cmd+shift+|',    command: 'editor.action.jumpToBracket',     when: 'editorTextFocus' },
+  { key: 'cmd+d',          command: 'editor.action.addSelectionToNextFindMatch', when: 'editorTextFocus' },
   { key: 'cmd+]',          command: 'editor.action.indentLines',        when: 'editorTextFocus' },
   { key: 'cmd+[',          command: 'editor.action.outdentLines',       when: 'editorTextFocus' },
   { key: 'cmd+up',         command: 'editor.action.cursorTop',          when: 'editorTextFocus' },
   { key: 'cmd+down',       command: 'editor.action.cursorBottom',       when: 'editorTextFocus' },
 
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
+  { key: 'f1',          command: 'workbench.action.showCommands' },
+  { key: 'cmd+k cmd+w', command: 'workbench.action.closeAllEditors' },
 
   // ── Workbench: sidebar & view ────────────────────────────────────────────────
   { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },

@@ -992,6 +992,12 @@ function revealPosition(line: number, col: number): void {
   cursor.value = clampPos({ line, col })
   void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
 }
+function setSelection(start: Position, end: Position): void {
+  anchor.value = clampPos(start)
+  cursor.value = clampPos(end)
+  preferredCol = -1
+  void nextTick(scrollCursorIntoView)
+}
 function applyEditExternal(range: Range, text: string): void { applyEdit(range, text) }
 function setDecorations(d: Decoration[]): void { decorations.value = d }
 function setGhost(text: string | null): void {
@@ -1011,6 +1017,7 @@ defineExpose({
   moveLineUp, moveLineDown, getWordAtCursor,
   jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
+  setSelection,
 })
 </script>
 

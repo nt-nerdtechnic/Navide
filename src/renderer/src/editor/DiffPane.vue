@@ -12,7 +12,35 @@ const props = defineProps<{
   backend: ReturnType<typeof useBackend>
 }>()
 
+const emit = defineEmits<{ 'open-file': [{ filepath: string; name: string }] }>()
+
 const notify = useNotify()
+
+// ── Hunk navigation ───────────────────────────────────────────────────────────
+const bodyRef = ref<HTMLElement | null>(null)
+const currentHunkIdx = ref(-1)
+
+function hunkEls(): NodeListOf<Element> {
+  return bodyRef.value?.querySelectorAll('.dp-hunk') ?? (document.querySelectorAll('') as NodeListOf<Element>)
+}
+
+function jumpToHunk(idx: number): void {
+  const els = hunkEls()
+  if (!els.length) return
+  const clamped = Math.max(0, Math.min(idx, els.length - 1))
+  currentHunkIdx.value = clamped
+  els[clamped]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+function prevHunk(): void { jumpToHunk(currentHunkIdx.value <= 0 ? 0 : currentHunkIdx.value - 1) }
+function nextHunk(): void {
+  const count = hunkEls().length
+  jumpToHunk(currentHunkIdx.value < count - 1 ? currentHunkIdx.value + 1 : count - 1)
+}
+
+const hunkCount = computed(() => parsed.value.hunks.length)
+const atFirst = computed(() => currentHunkIdx.value <= 0)
+const atLast = computed(() => currentHunkIdx.value >= hunkCount.value - 1)
 
 const rawDiff = ref<string | null>(null)
 const loading = ref(false)
@@ -102,10 +130,28 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
     <div class="dp-toolbar">
       <span class="dp-badge" :class="staged ? 'staged' : 'unstaged'">{{ staged ? 'STAGED' : 'WORKING TREE' }}</span>
       <span class="dp-filepath" :title="filepath">{{ filepath }}</span>
-      <button class="dp-refresh" title="Reload diff" @click="loadDiff">⟳</button>
+      <div class="dp-toolbar-actions">
+        <!-- Open file in editor -->
+        <button class="dp-tbtn" title="在編輯器中開啟檔案" @click="emit('open-file', { filepath, name })">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5H3.75zm6.75.56v2.19c0 .138.112.25.25.25h2.19L10.5 2.06z"/>
+          </svg>
+        </button>
+        <!-- Prev hunk -->
+        <button class="dp-tbtn" title="上一個變更 (↑)" :disabled="!hunkCount || atFirst" @click="prevHunk">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M7.78 12.53a.75.75 0 0 1-1.06 0L2.47 8.28a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L4.81 7h7.44a.75.75 0 0 1 0 1.5H4.81l2.97 2.97a.75.75 0 0 1 0 1.06z" transform="rotate(90 8 8)"/></svg>
+        </button>
+        <!-- Next hunk -->
+        <button class="dp-tbtn" title="下一個變更 (↓)" :disabled="!hunkCount || atLast" @click="nextHunk">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8.22 3.47a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L11.19 9H3.75a.75.75 0 0 1 0-1.5h7.44L8.22 4.53a.75.75 0 0 1 0-1.06z" transform="rotate(90 8 8)"/></svg>
+        </button>
+        <button class="dp-tbtn" title="重新載入 diff" @click="loadDiff">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
+        </button>
+      </div>
     </div>
 
-    <div class="dp-body">
+    <div ref="bodyRef" class="dp-body">
       <div v-if="loading" class="dp-msg">Loading…</div>
       <div v-else-if="loadError" class="dp-msg err">{{ loadError }}</div>
       <div v-else-if="isEmpty" class="dp-msg">沒有可顯示的變更（可能是 binary 檔或無差異）</div>
@@ -186,16 +232,27 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
   white-space: nowrap;
   font-family: ui-monospace, Menlo, monospace;
 }
-.dp-refresh {
-  background: transparent;
-  border: 1px solid var(--border-muted);
-  color: var(--text-muted);
-  border-radius: 4px;
-  cursor: pointer;
-  padding: 2px 7px;
-  font-size: 13px;
+.dp-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
-.dp-refresh:hover { color: var(--text-primary); border-color: var(--border-default); }
+.dp-tbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.dp-tbtn:hover:not(:disabled) { background: var(--bg-muted); color: var(--text-primary); }
+.dp-tbtn:disabled { opacity: 0.35; cursor: default; }
 
 .dp-body { flex: 1; overflow: auto; }
 .dp-msg { padding: 24px; text-align: center; color: var(--text-muted); font-size: 12px; }

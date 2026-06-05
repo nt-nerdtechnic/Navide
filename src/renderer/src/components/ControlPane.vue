@@ -517,6 +517,38 @@ function onTaskDrop(e: DragEvent): void {
   taskDescription.value =
     taskDescription.value.slice(0, start) + text + taskDescription.value.slice(start)
 }
+
+// ── pipeline pane: draggable split (top = controls, bottom = agents) ─────────
+const pipelineTopEl = ref<HTMLElement | null>(null)
+const pipelineTopRatio = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.pipelineTopRatio') ?? '') || 0.55 } catch { return 0.55 } })()
+)
+watch(pipelineTopRatio, (v) => { try { localStorage.setItem('agentTeam.pipelineTopRatio', String(v)) } catch {} })
+
+let _plDragStartY = 0, _plDragStartTopPx = 0, _plDragContainerPx = 0
+function onPipelineDividerStart(e: MouseEvent): void {
+  const top = pipelineTopEl.value
+  if (!top) return
+  _plDragStartY = e.clientY
+  _plDragStartTopPx = top.getBoundingClientRect().height
+  _plDragContainerPx = top.parentElement?.getBoundingClientRect().height || 0
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onPipelineDividerMove)
+  document.addEventListener('mouseup', onPipelineDividerEnd)
+  e.preventDefault()
+}
+function onPipelineDividerMove(e: MouseEvent): void {
+  if (!_plDragContainerPx) return
+  const ratio = (_plDragStartTopPx + e.clientY - _plDragStartY) / _plDragContainerPx
+  pipelineTopRatio.value = Math.max(0.15, Math.min(0.85, ratio))
+}
+function onPipelineDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onPipelineDividerMove)
+  document.removeEventListener('mouseup', onPipelineDividerEnd)
+}
 </script>
 
 <template>
@@ -565,10 +597,14 @@ function onTaskDrop(e: DragEvent): void {
       @open-workspace="$emit('workspace-browse', $event)"
     />
 
-    <!-- ── Pipeline tab (all existing content) ───────────────────────────── -->
-    <template v-if="sidebarTab === 'pipeline'">
+    <!-- ── Pipeline tab ──────────────────────────────────────────────────── -->
+    <div v-if="sidebarTab === 'pipeline'" class="pipeline-split">
 
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ══ LIST VIEW: top (controls) / divider / bottom (agents) ═══════════ -->
+    <template v-if="sidebarView === 'list'">
+    <div class="part-top" ref="pipelineTopEl" :style="{ height: (pipelineTopRatio * 100) + '%' }">
+
+    <section class="block panel-section">
       <label class="lbl">Workspace</label>
       <div class="row workspace-row">
         <input
@@ -606,8 +642,8 @@ function onTaskDrop(e: DragEvent): void {
       </label>
     </section>
 
-    <!-- ── Pipeline list (list view only) ───────────────────────────────── -->
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ── Pipeline list ────────────────────────────────────────────────── -->
+    <section class="block panel-section">
       <label class="lbl">Pipelines</label>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
@@ -706,158 +742,14 @@ function onTaskDrop(e: DragEvent): void {
       </template>
     </section>
 
-    <!-- ── Pipeline detail header (back + name only) ─────────────────────── -->
-    <template v-if="sidebarView === 'pipeline'">
-      <section class="block pipeline-detail-header">
-        <div class="pipeline-detail-nav">
-          <button class="ghost back-btn" @click="backToList">← 返回</button>
-          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
-          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
-        </div>
-      </section>
-    </template>
+    </div><!-- /part-top -->
+    <div class="part-resize" title="拖曳調整上下比例" @mousedown="onPipelineDividerStart">
+      <div class="part-resize-grip" />
+    </div>
+    <div class="part-bottom">
 
-    <section v-if="sidebarView === 'pipeline'" class="block" :class="{ pipeline: pipelineOpen }">
-      <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
-        {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
-      </button>
-      <template v-if="pipelineOpen">
-      <div
-        v-if="
-          existingProject &&
-          pipeline.state !== 'running' &&
-          existingProject.state !== 'idle' &&
-          existingProject.nextStageIndex >= 0
-        "
-        class="resume-card"
-      >
-        <div class="resume-head">
-          <strong>↻ Resume existing pipeline</strong>
-          <span class="resume-state" :data-state="existingProject.state">{{ existingProject.state }}</span>
-        </div>
-        <div class="resume-meta">
-          <span>{{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages done</span>
-          <span class="dot">·</span>
-          <span>updated {{ existingProject.updatedAt }}</span>
-        </div>
-        <div v-if="existingProject.taskDescription" class="resume-task">
-          {{ existingProject.taskDescription.length > 200
-            ? existingProject.taskDescription.slice(0, 200) + '…'
-            : existingProject.taskDescription }}
-        </div>
-        <div class="row">
-          <button class="primary wide" @click="emit('pipeline-resume')">
-            ▶ Resume from Stage {{ String(existingProject.nextStageIndex + 1).padStart(2, '0') }}
-          </button>
-          <button
-            class="danger"
-            @click="confirmingRestart = true"
-            title="Discard all stage progress and re-run from Stage 01"
-          >
-            ↺ Start over
-          </button>
-        </div>
-      </div>
-      <div
-        v-else-if="existingProject && existingProject.nextStageIndex < 0 && openedPipelineId === activePipelineId"
-        class="resume-card done"
-      >
-        <div class="done-header">
-          <strong>✓ Project completed</strong>
-          <span class="resume-meta">
-            All {{ existingProject.totalStages }} stages done · {{ existingProject.updatedAt }}
-          </span>
-        </div>
-      </div>
-
-      <textarea
-        v-model="taskDescription"
-        :disabled="pipeline.state === 'running'"
-        :class="{ 'drag-over': isTaskDragOver }"
-        placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
-        rows="3"
-        spellcheck="false"
-        @dragover.prevent
-        @dragenter.prevent="isTaskDragOver = true"
-        @dragleave="isTaskDragOver = false"
-        @drop.prevent="onTaskDrop"
-      ></textarea>
-      <label class="checkbox-row">
-        <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />
-        <span>
-          <strong>🤖 Full auto</strong>
-          <span v-if="!analyzerStatus.available" class="muted-inline"> — needs Ollama</span>
-          <span v-else class="muted-inline"> — LLM auto-answers all agent questions</span>
-        </span>
-      </label>
-      <div v-if="analyzerStatus.available" class="analyzer-row">
-        <label class="lbl tiny">Model</label>
-        <select v-model="analyzerModelLocal">
-          <option v-for="m in filteredModels" :key="m.name" :value="m.name">
-            {{ m.name }} · {{ m.parameter_size || (m.size / 1e9).toFixed(1) + 'GB' }}
-          </option>
-        </select>
-        <button
-          class="ghost refresh"
-          @click="emit('refresh-analyzer')"
-          title="Refresh Ollama health + model list"
-        >
-          ↻
-        </button>
-      </div>
-      <div v-else class="analyzer-row">
-        <span class="muted-inline">Ollama unreachable.</span>
-        <button class="ghost refresh" @click="emit('refresh-analyzer')" title="Retry connection">
-          ↻ Retry
-        </button>
-      </div>
-      <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
-        <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
-          ▶ Run pipeline
-        </button>
-        <button
-          v-if="pipeline.state !== 'idle'"
-          class="ghost"
-          @click="emit('pipeline-reset')"
-          title="Clear pipeline state and close all agent panes"
-        >
-          Reset
-        </button>
-      </div>
-      <div v-else class="pipeline-running">
-        <div class="progress">
-          <div class="bar" :style="{ width: pipelineProgress + '%' }"></div>
-        </div>
-        <div class="pipeline-line">
-          Stage {{ pipeline.stageIndex + 1 }} / {{ pipeline.totalStages }}
-          <span v-if="pipelineCurrentStage" class="muted">
-            · {{ pipelineCurrentStage.shortTitle }}
-          </span>
-        </div>
-        <div class="row pipeline-row">
-          <button
-            class="primary wide"
-            :disabled="!pipelineNextStage"
-            @click="emit('pipeline-next')"
-          >
-            {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
-          </button>
-          <button class="danger" @click="emit('pipeline-abort')">Abort</button>
-        </div>
-      </div>
-      <p v-if="pipeline.state === 'completed'" class="hint ok">
-        ✓ Pipeline completed all 4 stages. Review each pane on the right.
-      </p>
-      <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
-        Pipeline aborted (paused). Agents are kept — Resume to continue, or Reset to clear.
-      </p>
-      <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
-        Provide task description + workspace, then start.
-      </p>
-      </template>
-    </section>
-
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ── Active agents ──────────────────────────────────────────────────── -->
+    <section class="block panel-section">
       <div class="row between">
         <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
         <div class="agent-header-actions">
@@ -954,7 +846,160 @@ function onTaskDrop(e: DragEvent): void {
       </template>
     </section>
 
-    </template><!-- end sidebarTab === 'pipeline' -->
+    </div><!-- /part-bottom -->
+    </template><!-- /sidebarView === 'list' -->
+
+    <!-- ══ DETAIL VIEW: no split, full-height scroll ══════════════════════════ -->
+    <div v-else class="pipeline-detail-scroll">
+      <section class="block pipeline-detail-header">
+        <div class="pipeline-detail-nav">
+          <button class="ghost back-btn" @click="backToList">← 返回</button>
+          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
+          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
+        </div>
+      </section>
+      <section class="block" :class="{ pipeline: pipelineOpen }">
+        <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
+          {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
+        </button>
+        <template v-if="pipelineOpen">
+        <div
+          v-if="
+            existingProject &&
+            pipeline.state !== 'running' &&
+            existingProject.state !== 'idle' &&
+            existingProject.nextStageIndex >= 0
+          "
+          class="resume-card"
+        >
+          <div class="resume-head">
+            <strong>↻ Resume existing pipeline</strong>
+            <span class="resume-state" :data-state="existingProject.state">{{ existingProject.state }}</span>
+          </div>
+          <div class="resume-meta">
+            <span>{{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages done</span>
+            <span class="dot">·</span>
+            <span>updated {{ existingProject.updatedAt }}</span>
+          </div>
+          <div v-if="existingProject.taskDescription" class="resume-task">
+            {{ existingProject.taskDescription.length > 200
+              ? existingProject.taskDescription.slice(0, 200) + '…'
+              : existingProject.taskDescription }}
+          </div>
+          <div class="row">
+            <button class="primary wide" @click="emit('pipeline-resume')">
+              ▶ Resume from Stage {{ String(existingProject.nextStageIndex + 1).padStart(2, '0') }}
+            </button>
+            <button
+              class="danger"
+              @click="confirmingRestart = true"
+              title="Discard all stage progress and re-run from Stage 01"
+            >
+              ↺ Start over
+            </button>
+          </div>
+        </div>
+        <div
+          v-else-if="existingProject && existingProject.nextStageIndex < 0 && openedPipelineId === activePipelineId"
+          class="resume-card done"
+        >
+          <div class="done-header">
+            <strong>✓ Project completed</strong>
+            <span class="resume-meta">
+              All {{ existingProject.totalStages }} stages done · {{ existingProject.updatedAt }}
+            </span>
+          </div>
+        </div>
+
+        <textarea
+          v-model="taskDescription"
+          :disabled="pipeline.state === 'running'"
+          :class="{ 'drag-over': isTaskDragOver }"
+          placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
+          rows="3"
+          spellcheck="false"
+          @dragover.prevent
+          @dragenter.prevent="isTaskDragOver = true"
+          @dragleave="isTaskDragOver = false"
+          @drop.prevent="onTaskDrop"
+        ></textarea>
+        <label class="checkbox-row">
+          <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />
+          <span>
+            <strong>🤖 Full auto</strong>
+            <span v-if="!analyzerStatus.available" class="muted-inline"> — needs Ollama</span>
+            <span v-else class="muted-inline"> — LLM auto-answers all agent questions</span>
+          </span>
+        </label>
+        <div v-if="analyzerStatus.available" class="analyzer-row">
+          <label class="lbl tiny">Model</label>
+          <select v-model="analyzerModelLocal">
+            <option v-for="m in filteredModels" :key="m.name" :value="m.name">
+              {{ m.name }} · {{ m.parameter_size || (m.size / 1e9).toFixed(1) + 'GB' }}
+            </option>
+          </select>
+          <button
+            class="ghost refresh"
+            @click="emit('refresh-analyzer')"
+            title="Refresh Ollama health + model list"
+          >
+            ↻
+          </button>
+        </div>
+        <div v-else class="analyzer-row">
+          <span class="muted-inline">Ollama unreachable.</span>
+          <button class="ghost refresh" @click="emit('refresh-analyzer')" title="Retry connection">
+            ↻ Retry
+          </button>
+        </div>
+        <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
+          <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
+            ▶ Run pipeline
+          </button>
+          <button
+            v-if="pipeline.state !== 'idle'"
+            class="ghost"
+            @click="emit('pipeline-reset')"
+            title="Clear pipeline state and close all agent panes"
+          >
+            Reset
+          </button>
+        </div>
+        <div v-else class="pipeline-running">
+          <div class="progress">
+            <div class="bar" :style="{ width: pipelineProgress + '%' }"></div>
+          </div>
+          <div class="pipeline-line">
+            Stage {{ pipeline.stageIndex + 1 }} / {{ pipeline.totalStages }}
+            <span v-if="pipelineCurrentStage" class="muted">
+              · {{ pipelineCurrentStage.shortTitle }}
+            </span>
+          </div>
+          <div class="row pipeline-row">
+            <button
+              class="primary wide"
+              :disabled="!pipelineNextStage"
+              @click="emit('pipeline-next')"
+            >
+              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
+            </button>
+            <button class="danger" @click="emit('pipeline-abort')">Abort</button>
+          </div>
+        </div>
+        <p v-if="pipeline.state === 'completed'" class="hint ok">
+          ✓ Pipeline completed all 4 stages. Review each pane on the right.
+        </p>
+        <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
+          Pipeline aborted (paused). Agents are kept — Resume to continue, or Reset to clear.
+        </p>
+        <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
+          Provide task description + workspace, then start.
+        </p>
+        </template>
+      </section>
+    </div><!-- /pipeline-detail-scroll -->
+
+    </div><!-- end sidebarTab === 'pipeline' / pipeline-split -->
 
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
@@ -994,7 +1039,7 @@ function onTaskDrop(e: DragEvent): void {
   border-right: 1px solid var(--border-muted);
   color: var(--text-primary);
   font-size: 12px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── Sidebar top-level tabs ─────────────────────────────────────── */
@@ -1880,5 +1925,64 @@ button.icon-btn.muted:hover {
 .warn-block .warn {
   color: var(--attention-fg);
   margin: 0;
+}
+
+/* ── Pipeline pane: split-scroll layout ─────────────────────────────────── */
+.pipeline-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* pull padding from sidebar so we control it ourselves */
+  margin: 0 -14px -14px;
+}
+.pipeline-split .part-top {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 8px;
+  min-height: 0;
+}
+.pipeline-split .part-bottom {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 14px 14px;
+  min-height: 0;
+}
+.pipeline-split .part-resize {
+  flex-shrink: 0;
+  height: 7px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.pipeline-split .part-resize-grip {
+  margin: 0 auto;
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-muted);
+  transition: height 0.1s, background 0.1s;
+}
+.pipeline-split .part-resize:hover .part-resize-grip {
+  height: 3px;
+  background: var(--accent-focus);
+}
+.pipeline-split .pipeline-detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+  min-height: 0;
 }
 </style>

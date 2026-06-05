@@ -17,7 +17,6 @@ let backend: BackendHandle | null = null
 let mainWindow: BrowserWindow | null = null
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
-let diffWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
@@ -125,37 +124,20 @@ function openStagesWindow(): void {
 }
 
 function openDiffWindow(params: Record<string, string>): void {
-  // If the editor window is open, show the diff as a tab there instead.
+  // Editor window already open — send IPC so it opens a diff tab without reload.
   if (editorWindow && !editorWindow.isDestroyed()) {
     editorWindow.webContents.send('editor:openDiff', params)
     editorWindow.focus()
     return
   }
-  // Fall back to the standalone diff window when no editor window exists.
-  const search = { window: 'diff', ...params }
-  if (diffWindow && !diffWindow.isDestroyed()) {
-    loadWindow(diffWindow, search)
-    diffWindow.focus()
-    return
-  }
-  const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    title: 'Agent-Team · Diff',
-    parent: mainWindow ?? undefined,
-    backgroundColor: '#0d1117',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false
-    }
+  // No editor window yet — open one with the diff pre-loaded via URL params.
+  // EditorWindowApp reads diff_filepath/diff_staged on startup and opens the tab.
+  openEditorWindow({
+    workspace_path: params.workspace_path,
+    diff_filepath: params.filepath,
+    diff_staged: params.staged,
+    diff_name: params.name ?? params.filepath,
   })
-  diffWindow = win
-  win.on('closed', () => {
-    if (diffWindow === win) diffWindow = null
-  })
-  loadWindow(win, search)
 }
 
 ipcMain.handle('window:openRoles', () => {
