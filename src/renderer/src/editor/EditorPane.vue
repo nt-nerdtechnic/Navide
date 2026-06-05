@@ -181,19 +181,24 @@ async function submitCmdK(): Promise<void> {
     return
   }
   cmdk.value.busy = true
-  const resp = await props.backend.send<AiResult>('editor.rewrite', {
-    code: cmdk.value.code,
-    instruction: cmdk.value.instruction,
-    language: lang.value,
-    model,
-  })
-  cmdk.value.busy = false
-  if (!resp.payload?.ok || !resp.payload.text) {
-    void alert(resp.payload?.error || 'Rewrite failed', { title: 'Cmd+K' })
-    return
+  try {
+    const resp = await props.backend.send<AiResult>('editor.rewrite', {
+      code: cmdk.value.code,
+      instruction: cmdk.value.instruction,
+      language: lang.value,
+      model,
+    })
+    if (!resp.payload?.ok || !resp.payload.text) {
+      void alert(resp.payload?.error || 'Rewrite failed', { title: 'Cmd+K' })
+      return
+    }
+    proposal.value = { range: cmdk.value.range, oldText: cmdk.value.code, newText: resp.payload.text }
+    cmdk.value.open = false
+  } catch {
+    void alert('Connection error', { title: 'Cmd+K' })
+  } finally {
+    cmdk.value.busy = false
   }
-  proposal.value = { range: cmdk.value.range, oldText: cmdk.value.code, newText: resp.payload.text }
-  cmdk.value.open = false
 }
 
 function acceptProposal(): void {
