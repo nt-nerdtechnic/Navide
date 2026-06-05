@@ -6,6 +6,13 @@ import { useNotify } from '../composables/useNotify'
 const props = defineProps<{
   workspacePath: string
   backend: ReturnType<typeof useBackend>
+  // When embedded inside the editor window, matches open in-place via `open-file`
+  // instead of spawning a separate editor window.
+  embedded?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'open-file', payload: { filepath: string; name: string; line: number }): void
 }>()
 
 const { confirm, toast, alert } = useNotify()
@@ -113,6 +120,10 @@ function parts(m: Match): { a: string; h: string; b: string } {
 
 // ── Open result in editor at line ────────────────────────────────────────────
 function openMatch(file: FileResult, m: Match): void {
+  if (props.embedded) {
+    emit('open-file', { filepath: file.rel_path, name: file.name, line: m.line })
+    return
+  }
   void window.agentTeam?.openEditorWindow({
     workspace_path: props.workspacePath,
     filepath: file.rel_path,

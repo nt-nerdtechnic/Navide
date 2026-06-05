@@ -11,12 +11,20 @@ const props = defineProps<{
   relPath: string
   name: string
   initialLine?: number
+  // Inside the IDE shell the file name is shown by the host tab strip, so the
+  // editor hides its own name chip and keeps only the action buttons.
+  embedded?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'dirty', value: boolean): void
 }>()
 
 const { toast, alert } = useNotify()
 
 const content = ref('')
 const dirty = ref(false)
+watch(dirty, (v) => emit('dirty', v))
 const loadError = ref('')
 const loaded = ref(false)
 const editorRef = ref<InstanceType<typeof EditorView> | null>(null)
@@ -172,7 +180,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   <div class="editor-pane">
     <!-- Tabs -->
     <div class="ep-tabs">
-      <div class="ep-tab active">
+      <div v-if="!embedded" class="ep-tab active">
         <span class="ep-tab-name">{{ name }}</span>
         <span v-if="dirty" class="ep-dirty" title="未存檔">●</span>
       </div>

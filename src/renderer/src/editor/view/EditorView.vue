@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { TextModel } from '../model/TextModel'
 import { UndoStack } from '../model/UndoStack'
 import { JsTokenizer } from '../tokenize/jsTokenizer'
@@ -335,14 +335,33 @@ function measureChar(): void {
 }
 
 function syncViewport(): void {
-  if (scrollEl.value) vs.viewportHeight.value = scrollEl.value.clientHeight
+  // Keep a sane fallback height when the element is momentarily collapsed
+  // (e.g. an inactive tab rendered with display:none) so lines still render
+  // until a ResizeObserver delivers the real height.
+  const h = scrollEl.value?.clientHeight ?? 0
+  if (h > 0) vs.viewportHeight.value = h
 }
+
+let ro: ResizeObserver | null = null
 
 onMounted(() => {
   measureChar()
   syncViewport()
+  // ResizeObserver fires when the scroll surface gains/changes size — including
+  // when an inactive (display:none) tab is first shown — so the viewport height
+  // stays correct without relying on window 'resize' events.
+  if (typeof ResizeObserver !== 'undefined' && scrollEl.value) {
+    ro = new ResizeObserver(syncViewport)
+    ro.observe(scrollEl.value)
+  }
   window.addEventListener('resize', syncViewport)
   window.addEventListener('mouseup', onMouseup)
+})
+
+onUnmounted(() => {
+  ro?.disconnect()
+  window.removeEventListener('resize', syncViewport)
+  window.removeEventListener('mouseup', onMouseup)
 })
 
 watch(() => props.modelValue, (v) => {

@@ -8,6 +8,13 @@ import { useNotify } from '../composables/useNotify'
 const props = defineProps<{
   workspacePath: string
   backend: ReturnType<typeof useBackend>
+  // When embedded inside the editor window, file opens are handled in-place via
+  // the `open-file` event instead of spawning a separate editor window.
+  embedded?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'open-file', payload: { filepath: string; name: string }): void
 }>()
 
 const wsRef = toRef(props, 'workspacePath')
@@ -101,6 +108,10 @@ function openDiff(entry: FsEntry): void {
 }
 
 function openInEditor(entry: FsEntry): void {
+  if (props.embedded) {
+    emit('open-file', { filepath: entry.rel_path, name: entry.name })
+    return
+  }
   void window.agentTeam?.openEditorWindow({
     workspace_path: props.workspacePath,
     filepath: entry.rel_path,
