@@ -809,22 +809,30 @@ function transformToPascalCase(): void {
 function transformToBase64(): void {
   const sel = selectionRange()
   if (!sel) return
-  try { applyEdit(sel, btoa(model.getValueInRange(sel))) } catch { /* non-latin chars */ }
+  const bytes = new TextEncoder().encode(model.getValueInRange(sel))
+  const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join('')
+  applyEdit(sel, btoa(binary))
 }
-function transformFromBase64(): void {
+function transformFromBase64(): boolean {
   const sel = selectionRange()
-  if (!sel) return
-  try { applyEdit(sel, atob(model.getValueInRange(sel))) } catch { /* invalid base64 */ }
+  if (!sel) return true
+  try {
+    const binary = atob(model.getValueInRange(sel).trim())
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+    applyEdit(sel, new TextDecoder().decode(bytes))
+    return true
+  } catch { return false }
 }
 function transformToUrlEncoded(): void {
   const sel = selectionRange()
   if (!sel) return
   applyEdit(sel, encodeURIComponent(model.getValueInRange(sel)))
 }
-function transformFromUrlEncoded(): void {
+function transformFromUrlEncoded(): boolean {
   const sel = selectionRange()
-  if (!sel) return
-  try { applyEdit(sel, decodeURIComponent(model.getValueInRange(sel))) } catch { /* invalid */ }
+  if (!sel) return true
+  try { applyEdit(sel, decodeURIComponent(model.getValueInRange(sel))); return true }
+  catch { return false }
 }
 function formatSelection(): void {
   const sel = selectionRange()
@@ -943,6 +951,54 @@ function sortLines(dir: 'asc' | 'desc'): void {
 }
 function sortLinesAscending(): void { sortLines('asc') }
 function sortLinesDescending(): void { sortLines('desc') }
+
+function reverseLines(): void {
+  const range = selectionRange()
+  const startL = range ? Math.min(range.start.line, range.end.line) : 0
+  const endL   = range ? Math.max(range.start.line, range.end.line) : model.lineCount() - 1
+  const lines  = []
+  for (let i = startL; i <= endL; i++) lines.push(model.getLine(i))
+  lines.reverse()
+  const newText = lines.join('\n')
+  applyEdit(
+    { start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } },
+    newText,
+  )
+  cursor.value = { line: startL, col: 0 }
+  anchor.value = null
+}
+
+function removeDuplicateLines(): void {
+  const range = selectionRange()
+  const startL = range ? Math.min(range.start.line, range.end.line) : 0
+  const endL   = range ? Math.max(range.start.line, range.end.line) : model.lineCount() - 1
+  const seen   = new Set<string>()
+  const unique: string[] = []
+  for (let i = startL; i <= endL; i++) {
+    const line = model.getLine(i)
+    if (!seen.has(line)) { seen.add(line); unique.push(line) }
+  }
+  applyEdit(
+    { start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } },
+    unique.join('\n'),
+  )
+  cursor.value = { line: startL, col: 0 }
+  anchor.value = null
+}
+
+function openLinkAtCursor(): boolean {
+  const line = model.getLine(cursor.value.line)
+  const col  = cursor.value.col
+  const urlRe = /https?:\/\/[^\s"'<>)\]]+/g
+  let m: RegExpExecArray | null
+  while ((m = urlRe.exec(line)) !== null) {
+    if (col >= m.index && col <= m.index + m[0].length) {
+      window.open(m[0], '_blank')
+      return true
+    }
+  }
+  return false
+}
 function selectLine(): void {
   ghost.value = null
   preferredCol = -1
@@ -1616,6 +1672,7 @@ defineExpose({
   trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
+  reverseLines, removeDuplicateLines, openLinkAtCursor,
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,

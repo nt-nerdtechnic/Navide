@@ -1539,10 +1539,10 @@ function onTextareaInput(e: Event): void {
 function selectSlashCommand(cmd: SlashCommand): void {
   showSlashMenu.value = false
   if (cmd.id === '/summarize') {
-    inputText.value = ''
     if (messages.value.length < 2) { showToast('Nothing to summarize yet'); return }
     const count = messages.value.length
-    void sendMessage(`Summarize our conversation so far (${count} messages) into 3-5 bullet points covering the main topics, decisions, and any code changes made. Be concise.`)
+    inputText.value = `Summarize our conversation so far (${count} messages) into 3-5 bullet points covering the main topics, decisions, and any code changes made. Be concise.`
+    void sendMessage()
     return
   }
   if (cmd.id === '/clear') {

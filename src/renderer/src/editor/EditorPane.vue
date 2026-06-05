@@ -650,9 +650,9 @@ function transformToCamelCase(): void { editorRef.value?.transformToCamelCase() 
 function transformToKebabCase(): void { editorRef.value?.transformToKebabCase() }
 function transformToPascalCase(): void { editorRef.value?.transformToPascalCase() }
 function transformToBase64(): void { editorRef.value?.transformToBase64() }
-function transformFromBase64(): void { editorRef.value?.transformFromBase64() }
+function transformFromBase64(): void { if (editorRef.value?.transformFromBase64() === false) toast('Invalid Base64', { type: 'error' }) }
 function transformToUrlEncoded(): void { editorRef.value?.transformToUrlEncoded() }
-function transformFromUrlEncoded(): void { editorRef.value?.transformFromUrlEncoded() }
+function transformFromUrlEncoded(): void { if (editorRef.value?.transformFromUrlEncoded() === false) toast('Invalid URL encoding', { type: 'error' }) }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 function formatDocument(): void { editorRef.value?.formatDocument() }
 function formatSelection(): void { editorRef.value?.formatSelection() }
@@ -661,6 +661,9 @@ function shrinkSelection(): void { editorRef.value?.shrinkSelection() }
 function joinLines(): void { editorRef.value?.joinLines() }
 function sortLinesAscending(): void { editorRef.value?.sortLinesAscending() }
 function sortLinesDescending(): void { editorRef.value?.sortLinesDescending() }
+function reverseLines(): void { editorRef.value?.reverseLines() }
+function removeDuplicateLines(): void { editorRef.value?.removeDuplicateLines() }
+function openLinkAtCursor(): boolean { return editorRef.value?.openLinkAtCursor() ?? false }
 function selectLine(): void { editorRef.value?.selectLine() }
 function transpose(): void { editorRef.value?.transpose() }
 function indentationToSpaces(): void { editorRef.value?.indentationToSpaces() }
@@ -732,6 +735,7 @@ defineExpose({
   transformToBase64, transformFromBase64, transformToUrlEncoded, transformFromUrlEncoded,
   trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines, sortLinesAscending, sortLinesDescending,
+  reverseLines, removeDuplicateLines, openLinkAtCursor,
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
