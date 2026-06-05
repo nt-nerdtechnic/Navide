@@ -11,6 +11,8 @@ interface UndoEntry {
 
 /** Max gap (ms) between consecutive typed chars that still merge into one undo. */
 const MERGE_WINDOW_MS = 300
+/** Hard cap on undo history depth to bound memory use. */
+const MAX_ENTRIES = 500
 
 /**
  * Undo/redo history for a {@link TextModel}.
@@ -59,6 +61,7 @@ export class UndoStack {
     }
 
     this.undoStack.push({ forward, inverse, time })
+    if (this.undoStack.length > MAX_ENTRIES) this.undoStack.shift()
     this.breakNext = false
   }
 

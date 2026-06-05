@@ -592,11 +592,12 @@ function onKeydown(e: KeyboardEvent): void {
 const AUTO_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' }
 const CLOSE_CHARS = new Set([')', ']', '}', '"', "'", '`'])
 
+const PASTE_CAP = 1_000_000 // 1 MB — prevent UI freeze on huge pastes
 function onInput(): void {
   const ta = textareaEl.value
   if (!ta || composing) return
-  const v = ta.value
-  if (!v) return
+  const v = ta.value.slice(0, PASTE_CAP)
+  if (!v) { ta.value = ''; return }
   ta.value = ''
 
   // Single-char auto-pair logic (skip for paste / multi-char input)
