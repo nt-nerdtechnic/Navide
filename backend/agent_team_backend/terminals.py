@@ -437,9 +437,18 @@ class TerminalService:
             return
 
         # Accumulate decoded bytes; schedule a flush if not already pending.
+        _BUF_CAP = 5 * 1024 * 1024  # 5 MB — force an immediate flush if exceeded
         decoded = chunk.decode("utf-8", errors="replace")
-        self._out_buffers.setdefault(session.id, []).append(decoded)
-        if session.id not in self._out_handles:
+        buf = self._out_buffers.setdefault(session.id, [])
+        buf.append(decoded)
+        buf_size = sum(len(s) for s in buf)
+        if buf_size >= _BUF_CAP:
+            # Cancel the pending debounce timer and flush now to avoid OOM.
+            existing = self._out_handles.pop(session.id, None)
+            if existing:
+                existing.cancel()
+            self._flush_output(session)
+        elif session.id not in self._out_handles:
             handle = self._loop.call_later(
                 _OUTPUT_BATCH_MS / 1000,
                 self._flush_output,
@@ -463,16 +472,21 @@ class TerminalService:
         # Cap individual WS messages at 64 KB to stay well below the point
         # where the Electron Network service becomes overwhelmed.
         _MAX_BYTES = 64 * 1024
-        encoded = combined.encode("utf-8", errors="replace")
+        encoded = combined.encode("utf-8")
         if len(encoded) <= _MAX_BYTES:
             self._send_chunk(session, combined)
         else:
-            # Split on byte boundary and re-decode in safe chunks.
+            # Split at valid UTF-8 character boundaries so multi-byte characters
+            # (emoji, CJK, etc.) are never cut in half and replaced with U+FFFD.
             pos = 0
             while pos < len(encoded):
-                slice_bytes = encoded[pos : pos + _MAX_BYTES]
-                self._send_chunk(session, slice_bytes.decode("utf-8", errors="replace"))
-                pos += _MAX_BYTES
+                end = min(pos + _MAX_BYTES, len(encoded))
+                # Walk back to the start of a multi-byte sequence if we landed
+                # inside one (continuation bytes have the form 10xxxxxx).
+                while end > pos and (encoded[end] & 0xC0) == 0x80:
+                    end -= 1
+                self._send_chunk(session, encoded[pos:end].decode("utf-8"))
+                pos = end
 
         # Persist cleaned output to the conversation log (if one was opened).
         if session.output_log_fp:
