@@ -210,7 +210,8 @@ async def _tool_read_file(input: dict, workspace_path: str) -> str:
     try:
         size = target.stat().st_size
         if size > _BYTE_CAP:
-            raw = target.read_bytes()[:_BYTE_CAP]
+            with target.open("rb") as fh:
+                raw = fh.read(_BYTE_CAP)
             content = raw.decode("utf-8", errors="replace")
             content += f"\n\n[Truncated: file is {size // 1024} KB; showing first 5 MB]"
             return content

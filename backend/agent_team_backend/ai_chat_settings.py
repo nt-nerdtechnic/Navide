@@ -68,6 +68,12 @@ class AIChatSettingsStore:
                 current[key] = value
         if current.get("provider") not in _VALID_PROVIDERS:
             current["provider"] = "ollama"
+        # Clamp max_tokens to a valid range (1–16 000) so callers can't
+        # accidentally trigger runaway API costs or send 0/negative values.
+        try:
+            current["max_tokens"] = max(1, min(int(current["max_tokens"]), 16_000))
+        except (TypeError, ValueError):
+            current["max_tokens"] = DEFAULTS["max_tokens"]
         # Persist without the computed `model` alias (it's derived on read)
         to_save = {k: v for k, v in current.items() if k != "model"}
         self._write(to_save)

@@ -189,11 +189,11 @@ export function useGit(
         workspace_path: ws,
         include_ignored: showIgnored.value,
       })
-      if (resp.ok && resp.payload) {
+      if (resp.ok && resp.payload && workspacePath() === ws) {
         gitStatus.value = resp.payload
       }
     } finally {
-      isLoadingStatus.value = false
+      if (workspacePath() === ws) isLoadingStatus.value = false
     }
   }
 
@@ -210,11 +210,11 @@ export function useGit(
         n: logLimit.value,
         all: logScope.value === 'all',
       })
-      if (resp.ok && resp.payload) {
+      if (resp.ok && resp.payload && workspacePath() === ws) {
         gitLog.value = resp.payload.commits ?? []
       }
     } finally {
-      isLoadingLog.value = false
+      if (workspacePath() === ws) isLoadingLog.value = false
     }
   }
 
