@@ -155,7 +155,6 @@ async function deleteSelected(): Promise<void> {
   })
   if (!ok) return
   const paths = [...selectedKeys.value]
-  let hasError = false
   for (const rel of paths) {
     const res = await props.backend.send<FsResult>('fs.delete', {
       workspace_path: props.workspacePath,
@@ -163,12 +162,10 @@ async function deleteSelected(): Promise<void> {
     })
     if (!res.payload?.ok) {
       void alert(res.payload?.error || `刪除「${rel}」失敗`, { title: '錯誤' })
-      hasError = true
     }
   }
   clearSelection()
-  if (!hasError) await explorer.refreshVisible()
-  else await explorer.refreshVisible()
+  await explorer.refreshVisible()
 }
 
 async function copyPathsSelected(): Promise<void> {
