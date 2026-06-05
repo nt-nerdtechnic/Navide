@@ -688,7 +688,8 @@ registerCommand('workbench.action.showCommands', openPalette)
 type QoFileItem   = { qoKind: 'file';   name: string; relPath: string }
 type QoLineItem   = { qoKind: 'line';   line: number }
 type QoSymbolItem = { qoKind: 'symbol'; name: string; line: number; kind: string }
-type QoItem = QoFileItem | QoLineItem | QoSymbolItem
+type QoHeaderItem = { qoKind: 'header'; label: string }
+type QoItem = QoFileItem | QoLineItem | QoSymbolItem | QoHeaderItem
 
 const qoOpen = ref(false)
 const qoQuery = ref('')
@@ -697,8 +698,9 @@ const qoInputEl = ref<HTMLInputElement | null>(null)
 const qoPlaceholder = computed(() => {
   const q = qoQuery.value
   if (q.startsWith(':')) return '輸入行號跳轉… (例: :42)'
-  if (q.startsWith('@')) return '輸入符號名稱… (例: @myFunction)'
-  return '搜尋開放的檔案… (:行號  @符號)'
+  if (q === '@:') return '顯示所有符號分組'
+  if (q.startsWith('@')) return '輸入符號名稱… (例: @myFunction  @:分組)'
+  return '搜尋開放的檔案… (:行號  @符號  >指令)'
 })
 const qoItems = computed((): QoItem[] => {
   const q = qoQuery.value
@@ -710,14 +712,25 @@ const qoItems = computed((): QoItem[] => {
   }
   // @name → filter symbols from active file
   if (q.startsWith('@')) {
-    const symQ = q.slice(1).toLowerCase()
+    const rest = q.slice(1)
+    const grouped = rest.startsWith(':')
+    const symQ = (grouped ? rest.slice(1) : rest).toLowerCase()
     const f = openFiles.value.find((f) => f.relPath === activeRel.value)
     if (!f || f.kind !== 'file') return []
     const content = activeEditor()?.getContent?.() ?? ''
     const ext = f.name.split('.').pop() ?? ''
     const all = _extractSymbols(content, ext)
     const filtered = symQ ? all.filter((s) => s.name.toLowerCase().includes(symQ)) : all
-    return filtered.map((s): QoSymbolItem => ({ qoKind: 'symbol', name: s.name, line: s.line ?? 1, kind: s.kind ?? '' }))
+    if (!grouped) return filtered.map((s): QoSymbolItem => ({ qoKind: 'symbol', name: s.name, line: s.line ?? 1, kind: s.kind ?? '' }))
+    // @: grouped mode: insert header items before each kind group
+    const groups = new Map<string, BcItem[]>()
+    for (const s of filtered) { const k = s.kind ?? 'other'; if (!groups.has(k)) groups.set(k, []); groups.get(k)!.push(s) }
+    const out: QoItem[] = []
+    for (const [kind, syms] of groups) {
+      out.push({ qoKind: 'header', label: kind })
+      out.push(...syms.map((s): QoSymbolItem => ({ qoKind: 'symbol', name: s.name, line: s.line ?? 1, kind: s.kind ?? '' })))
+    }
+    return out
   }
   // default: fuzzy-filter open files (subsequence match, prefer name hits)
   const ql = q.toLowerCase()
@@ -746,7 +759,7 @@ function openQuickOpen(): void {
 function closeQuickOpen(): void { qoOpen.value = false }
 function confirmQuickOpen(): void {
   const item = qoItems.value[qoIdx.value]
-  if (!item) { closeQuickOpen(); return }
+  if (!item || item.qoKind === 'header') { closeQuickOpen(); return }
   if (item.qoKind === 'file') { activeRel.value = item.relPath }
   else if (item.qoKind === 'line') { activeEditor()?.jumpToLine(item.line) }
   else if (item.qoKind === 'symbol') { activeEditor()?.jumpToLine(item.line) }
@@ -755,13 +768,20 @@ function confirmQuickOpen(): void {
 function qoItemKey(item: QoItem, i: number): string {
   if (item.qoKind === 'file') return item.relPath
   if (item.qoKind === 'line') return `line:${item.line}`
+  if (item.qoKind === 'header') return `hdr:${i}:${item.label}`
   return `sym:${i}:${item.name}`
+}
+// Skip over header items when navigating with arrow keys
+function _qoNextSelectable(from: number, dir: 1 | -1): number {
+  const items = qoItems.value; let idx = from + dir
+  while (idx >= 0 && idx < items.length && items[idx]?.qoKind === 'header') idx += dir
+  return idx >= 0 && idx < items.length ? idx : from
 }
 function onQoKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.stopPropagation(); closeQuickOpen(); return }
   if (e.key === 'Enter') { e.preventDefault(); confirmQuickOpen(); return }
-  if (e.key === 'ArrowDown') { e.preventDefault(); qoIdx.value = Math.min(qoIdx.value + 1, qoItems.value.length - 1); return }
-  if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = Math.max(0, qoIdx.value - 1); return }
+  if (e.key === 'ArrowDown') { e.preventDefault(); qoIdx.value = _qoNextSelectable(qoIdx.value, 1); return }
+  if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = _qoNextSelectable(qoIdx.value, -1); return }
 }
 watch(qoQuery, (q) => {
   qoIdx.value = 0
@@ -1290,26 +1310,31 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @keydown="onQoKeydown"
       />
       <ul v-if="qoItems.length" class="ide-palette-list">
-        <li
-          v-for="(item, i) in qoItems"
-          :key="qoItemKey(item, i)"
-          class="ide-palette-item"
-          :class="{ active: i === qoIdx }"
-          @mouseover="qoIdx = i"
-          @click="confirmQuickOpen"
-        >
-          <template v-if="item.qoKind === 'file'">
-            <span class="ide-palette-label">{{ item.name }}</span>
-            <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.relPath }}</span>
-          </template>
-          <template v-else-if="item.qoKind === 'line'">
-            <span class="ide-palette-label">跳到第 {{ item.line }} 行</span>
-          </template>
-          <template v-else-if="item.qoKind === 'symbol'">
-            <span class="ide-palette-label">{{ item.name }}</span>
-            <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.kind }} · 第 {{ item.line }} 行</span>
-          </template>
-        </li>
+        <template v-for="(item, i) in qoItems" :key="qoItemKey(item, i)">
+          <!-- section header for @: grouped mode -->
+          <li v-if="item.qoKind === 'header'" class="ide-palette-section-header">
+            {{ item.label }}
+          </li>
+          <li
+            v-else
+            class="ide-palette-item"
+            :class="{ active: i === qoIdx }"
+            @mouseover="qoIdx = i"
+            @click="confirmQuickOpen"
+          >
+            <template v-if="item.qoKind === 'file'">
+              <span class="ide-palette-label">{{ item.name }}</span>
+              <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.relPath }}</span>
+            </template>
+            <template v-else-if="item.qoKind === 'line'">
+              <span class="ide-palette-label">跳到第 {{ item.line }} 行</span>
+            </template>
+            <template v-else-if="item.qoKind === 'symbol'">
+              <span class="ide-palette-label">{{ item.name }}</span>
+              <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.kind }} · 第 {{ item.line }} 行</span>
+            </template>
+          </li>
+        </template>
       </ul>
       <div v-else class="ide-palette-empty">
         <template v-if="qoQuery.startsWith(':')">輸入有效行號</template>
@@ -1647,6 +1672,16 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   flex-shrink: 0;
 }
 .ide-palette-empty { padding: 12px 14px; color: var(--text-muted); font-size: 12px; }
+.ide-palette-section-header {
+  padding: 4px 14px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  opacity: .7;
+  user-select: none;
+}
 
 .ide-right-act {
   flex-shrink: 0;
