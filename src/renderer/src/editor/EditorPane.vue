@@ -274,7 +274,7 @@ function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void 
         if (!findWholeWord.value || !queryIsAllWord(q) || isWordBoundary(haystack, idx, q.length)) {
           matches.push({ line: li, startCol: idx, endCol: idx + q.length })
         }
-        start = idx + 1
+        start = idx + needle.length
       }
     }
   }
