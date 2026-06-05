@@ -456,6 +456,19 @@ function clearConversation(): void {
   localStorage.removeItem(historyKey.value)
 }
 
+// ── Edit a previous user message (truncate history from that point) ────────────
+function editMessage(idx: number): void {
+  if (sending.value) stopStreaming()
+  const msg = messages.value[idx]
+  if (!msg || msg.role !== 'user') return
+  // Put original display text back into the input box
+  inputText.value = msg.content
+  // Remove this message and everything after it
+  messages.value.splice(idx)
+  saveHistory()
+  nextTick(() => textareaEl.value?.focus())
+}
+
 // ── Copy message ───────────────────────────────────────────────────────────────
 // ── Export conversation ────────────────────────────────────────────────────────
 async function exportConversation(): Promise<void> {
@@ -1135,6 +1148,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <!-- Message action bar (copy / regenerate / model badge) -->
         <div class="ai-msg-actions" :class="msg.role">
           <span v-if="msg.role === 'assistant' && msg.model" class="ai-model-badge">{{ msg.model }}</span>
+          <button
+            v-if="msg.role === 'user' && !sending"
+            class="ai-msg-action-btn"
+            title="編輯並重送"
+            @click="editMessage(mi)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/></svg>
+          </button>
           <button class="ai-msg-action-btn" title="複製" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
