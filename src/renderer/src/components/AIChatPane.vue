@@ -1881,6 +1881,43 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-settings-btn:hover:not(:disabled) { color: var(--text-bright); }
 .ai-settings-btn:disabled { opacity: 0.3; cursor: default; }
 
+/* ── Search bar ─────────────────────────────────────────────────────────────── */
+.ai-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-muted);
+  flex-shrink: 0;
+}
+.ai-search-input {
+  flex: 1;
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-base);
+  color: var(--text-bright);
+  font-size: 12px;
+  outline: none;
+}
+.ai-search-input:focus { border-color: var(--accent-emphasis); }
+.ai-search-count { font-size: 11px; color: var(--text-muted); min-width: 52px; text-align: center; }
+.ai-search-nav {
+  background: none;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+}
+.ai-search-nav:hover { color: var(--text-bright); }
+.ai-search-close { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 13px; line-height: 1; padding: 2px 4px; }
+.ai-search-close:hover { color: var(--text-bright); }
+.ai-msg-wrap.search-match .ai-bubble { outline: 1px solid var(--accent-emphasis); opacity: 0.7; }
+.ai-msg-wrap.search-active .ai-bubble { outline: 2px solid var(--accent-emphasis); opacity: 1; }
+
 /* ── Settings panel ────────────────────────────────────────────────────────── */
 .ai-settings {
   position: absolute;
