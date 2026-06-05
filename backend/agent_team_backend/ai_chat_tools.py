@@ -306,14 +306,15 @@ async def _tool_edit_file(input: dict, workspace_path: str) -> str:
     except ValueError as exc:
         return f"Error: {exc}"
 
-    # Read existing content for diff; treat missing or oversized as empty
-    _EDIT_SIZE_CAP = 2 * 1024 * 1024  # 2 MB — skip diff for very large files
+    # Read existing content for diff; reject files too large to show a meaningful diff
+    _EDIT_SIZE_CAP = 2 * 1024 * 1024  # 2 MB
     if target.is_file():
         try:
-            if target.stat().st_size > _EDIT_SIZE_CAP:
-                old_content = ""
-            else:
-                old_content = target.read_text(encoding="utf-8")
+            size = target.stat().st_size
+            if size > _EDIT_SIZE_CAP:
+                return f"Error: existing file is too large to edit safely ({size // 1024} KB > 2 MB). " \
+                       "Read the file in sections and rewrite it with a targeted tool call instead."
+            old_content = target.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             old_content = ""
     else:

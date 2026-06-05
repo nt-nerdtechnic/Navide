@@ -96,4 +96,8 @@ class AIChatSettingsStore:
             os.write(fd, encoded)
         finally:
             os.close(fd)
-        os.replace(tmp, self._path)
+        try:
+            os.replace(tmp, self._path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise

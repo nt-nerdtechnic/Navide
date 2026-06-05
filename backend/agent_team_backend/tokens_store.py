@@ -107,8 +107,12 @@ class TokensStore:
     def _atomic_write(self, path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        try:
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _workspace_path(self, workspace_path: str) -> Path:
         return Path(workspace_path) / PROJECT_DIR_NAME / TOKENS_FILE
@@ -173,11 +177,15 @@ class TokensStore:
         try:
             self._recorded_keys_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._recorded_keys_path.with_suffix(self._recorded_keys_path.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(sorted(self._recorded_keys), separators=(",", ":")),
-                encoding="utf-8",
-            )
-            os.replace(tmp, self._recorded_keys_path)
+            try:
+                tmp.write_text(
+                    json.dumps(sorted(self._recorded_keys), separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, self._recorded_keys_path)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
         except OSError as err:
             log.warning("failed to write recorded-keys: %s", err)
 

@@ -97,8 +97,12 @@ def _write_settings(path: Path, data: dict[str, Any]) -> None:
         except OSError as err:
             log.warning("backup failed (%s); proceeding without backup", err)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str, Any]:
