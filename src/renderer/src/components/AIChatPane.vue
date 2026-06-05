@@ -816,6 +816,7 @@ function stopStreaming(): void {
 
 // ── Clear conversation (clear current thread) ──────────────────────────────────
 function clearConversation(): void {
+  if (messages.value.length > 0 && !window.confirm('Clear all messages in this chat?')) return
   if (sending.value) stopStreaming()
   messages.value = []
   // Also reset the title so it auto-updates on next message
