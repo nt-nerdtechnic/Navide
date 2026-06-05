@@ -116,6 +116,7 @@ export const defaults: KeybindingRule[] = [
 
   // ── AI Chat ──────────────────────────────────────────────────────────────────
   { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },
+  { key: 'ctrl+`',      command: 'workbench.action.toggleAIChat' },
 
   // ── Replace in files / editor utilities ──────────────────────────────────────
   { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },

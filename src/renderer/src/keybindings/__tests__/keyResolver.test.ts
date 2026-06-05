@@ -701,3 +701,17 @@ describe('openFileAtCursor shortcut (F12)', () => {
     expect(dr.resolve(mkEvent('F12'), {})).toBeNull()
   })
 })
+
+describe('toggleAIChat shortcut (Ctrl+`)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+` → toggleAIChat', () => {
+    expect(dr.resolve(mkEvent('`', { ctrlKey: true }), {})?.command)
+      .toBe('workbench.action.toggleAIChat')
+  })
+
+  it('backtick without ctrl does not trigger toggleAIChat', () => {
+    expect(dr.resolve(mkEvent('`'), {})?.command).not.toBe('workbench.action.toggleAIChat')
+  })
+})
