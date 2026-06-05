@@ -831,16 +831,29 @@ function formatSelection(): void {
   anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
 function formatDocument(): void {
-  const lc = model.lineCount()
-  const lines: string[] = []
-  for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
-  // Ensure single trailing newline, but only for non-empty documents.
-  // An empty document stays empty — adding '\n' would corrupt it.
-  if (lines.some(l => l !== '')) {
-    while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-    lines.push('')
+  let newText: string
+  // JSON: pretty-print with configured indent size
+  if (props.language === 'json') {
+    try {
+      const parsed = JSON.parse(model.getValue())
+      newText = JSON.stringify(parsed, null, INDENT.value) + '\n'
+    } catch {
+      // Invalid JSON — fall through to basic format
+      newText = ''
+    }
+  } else {
+    newText = ''
   }
-  const newText = lines.join('\n')
+  if (!newText) {
+    const lc = model.lineCount()
+    const lines: string[] = []
+    for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
+    if (lines.some(l => l !== '')) {
+      while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+      lines.push('')
+    }
+    newText = lines.join('\n')
+  }
   if (newText === model.getValue()) return
   const savedCursor = { ...cursor.value }
   const savedAnchor = anchor.value ? { ...anchor.value } : null
