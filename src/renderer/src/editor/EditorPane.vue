@@ -65,8 +65,13 @@ function onCursorChange(pos: Position): void {
   cursorCol.value = pos.col + 1
   const sel = editorRef.value?.getSelectionText() ?? ''
   if (sel) {
-    const lineCount = sel.split('\n').length
-    selectionInfo.value = lineCount > 1 ? `${lineCount} lines selected` : `${sel.length} chars selected`
+    const lines = sel.split('\n')
+    const words = sel.trim().split(/\s+/).filter(Boolean).length
+    if (lines.length > 1) {
+      selectionInfo.value = `${lines.length} 行  ${sel.length} 字元  ${words} 字`
+    } else {
+      selectionInfo.value = `${sel.length} 字元  ${words} 字`
+    }
   } else {
     selectionInfo.value = ''
   }
@@ -404,7 +409,13 @@ const gotoOpen = ref(false)
 const gotoLineInput = ref('')
 const gotoInputEl = ref<HTMLInputElement | null>(null)
 
+// Cursor position saved before goto opens; restored on Escape
+let _gotoSavedLine = 1
+let _gotoSavedCol = 0
+
 function openGoto(): void {
+  _gotoSavedLine = cursorLine.value
+  _gotoSavedCol = cursorCol.value - 1
   gotoOpen.value = true
   gotoLineInput.value = String(cursorLine.value)
   void nextTick(() => { gotoInputEl.value?.focus(); gotoInputEl.value?.select() })
@@ -413,7 +424,7 @@ function closeGoto(): void {
   gotoOpen.value = false
   editorRef.value?.focus()
 }
-function submitGoto(): void {
+function _applyGotoInput(): void {
   const parts = gotoLineInput.value.split(':')
   const line = parseInt(parts[0], 10)
   const col = parts[1] !== undefined ? parseInt(parts[1], 10) : NaN
@@ -421,12 +432,22 @@ function submitGoto(): void {
     if (!isNaN(col) && col > 0) editorRef.value?.revealPosition(line - 1, col - 1)
     else editorRef.value?.revealLine(line)
   }
+}
+function submitGoto(): void {
+  _applyGotoInput()
   closeGoto()
 }
 function onGotoKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') { e.preventDefault(); closeGoto() }
-  else if (e.key === 'Enter') { e.preventDefault(); submitGoto() }
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    editorRef.value?.revealPosition(_gotoSavedLine - 1, _gotoSavedCol)
+    closeGoto()
+  } else if (e.key === 'Enter') {
+    e.preventDefault(); submitGoto()
+  }
 }
+// Live preview: move editor view as user types line number
+watch(gotoLineInput, () => { if (gotoOpen.value) _applyGotoInput() })
 
 function onEditorBodyFocusin(e: FocusEvent): void {
   if (props.embedded && props.active === false) return
