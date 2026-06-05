@@ -810,7 +810,9 @@ function onQoKeydown(e: KeyboardEvent): void {
   if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = _qoNextSelectable(qoIdx.value, -1); return }
 }
 watch(qoQuery, (q) => {
-  qoIdx.value = 0
+  // If the first item is a non-selectable header (e.g. @: grouped mode), start at first real item
+  const firstIdx = qoItems.value[0]?.qoKind === 'header' ? _qoNextSelectable(-1, 1) : 0
+  qoIdx.value = firstIdx >= 0 ? firstIdx : 0
   // VS Code: typing '>' in Quick Open switches to command palette mode
   if (q.startsWith('>')) {
     const cmd = q.slice(1).trimStart()
