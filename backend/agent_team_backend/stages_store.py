@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import threading
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -396,8 +398,12 @@ sentinel 輸出規則：最後一行只有 ---VERIFY-DONE---
 
 
 class StagesStore:
+    # Pattern for safe stage IDs: alphanumeric, hyphens, underscores, dots.
+    _ID_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,62})?$")
+
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or (app_data_dir() / PIPELINES_FILE)
+        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
@@ -609,51 +615,57 @@ class StagesStore:
     def upsert(
         self, data: dict[str, Any], pipeline_id: str | None = None
     ) -> dict[str, Any]:
-        if not data.get("id"):
+        sid = data.get("id") or ""
+        if not sid:
             raise ValueError("stage id is required")
+        if not self._ID_RE.match(sid):
+            raise ValueError(f"invalid stage id {sid!r}: use alphanumeric, hyphen, underscore, dot only")
         if not data.get("slots"):
             raise ValueError("stage must have at least one slot")
-        doc = self._read_doc()
-        pipeline = self._get_pipeline(doc, pipeline_id)
-        stages: list[dict[str, Any]] = pipeline.setdefault("stages", [])
-        idx = next((i for i, s in enumerate(stages) if s.get("id") == data["id"]), -1)
-        if idx >= 0:
-            updated = {**stages[idx], **data}
-            stages[idx] = updated
+        with self._lock:
+            doc = self._read_doc()
+            pipeline = self._get_pipeline(doc, pipeline_id)
+            stages: list[dict[str, Any]] = pipeline.setdefault("stages", [])
+            idx = next((i for i, s in enumerate(stages) if s.get("id") == sid), -1)
+            if idx >= 0:
+                updated = {**stages[idx], **data}
+                stages[idx] = updated
+                self._write_doc(doc)
+                return updated
+            stages.append(data)
             self._write_doc(doc)
-            return updated
-        stages.append(data)
-        self._write_doc(doc)
-        return data
+            return data
 
     def reorder(
         self, ids: list[str], pipeline_id: str | None = None
     ) -> list[dict[str, Any]]:
-        doc = self._read_doc()
-        pipeline = self._get_pipeline(doc, pipeline_id)
-        stages: list[dict[str, Any]] = pipeline.get("stages", [])
-        by_id = {s["id"]: s for s in stages}
-        reordered = [by_id[sid] for sid in ids if sid in by_id]
-        mentioned = set(ids)
-        for s in stages:
-            if s["id"] not in mentioned:
-                reordered.append(s)
-        pipeline["stages"] = reordered
-        self._write_doc(doc)
-        return reordered
+        with self._lock:
+            doc = self._read_doc()
+            pipeline = self._get_pipeline(doc, pipeline_id)
+            stages: list[dict[str, Any]] = pipeline.get("stages", [])
+            by_id = {s["id"]: s for s in stages}
+            reordered = [by_id[sid] for sid in ids if sid in by_id]
+            mentioned = set(ids)
+            for s in stages:
+                if s["id"] not in mentioned:
+                    reordered.append(s)
+            pipeline["stages"] = reordered
+            self._write_doc(doc)
+            return reordered
 
     def delete(self, id: str, pipeline_id: str | None = None) -> list[dict[str, Any]]:
-        doc = self._read_doc()
-        pipeline = self._get_pipeline(doc, pipeline_id)
-        stages: list[dict[str, Any]] = pipeline.get("stages", [])
-        new_stages = [s for s in stages if s.get("id") != id]
-        if len(new_stages) == len(stages):
-            raise KeyError(f"stage not found: {id}")
-        if not new_stages:
-            raise ValueError("cannot delete the last remaining stage")
-        pipeline["stages"] = new_stages
-        self._write_doc(doc)
-        return new_stages
+        with self._lock:
+            doc = self._read_doc()
+            pipeline = self._get_pipeline(doc, pipeline_id)
+            stages: list[dict[str, Any]] = pipeline.get("stages", [])
+            new_stages = [s for s in stages if s.get("id") != id]
+            if len(new_stages) == len(stages):
+                raise KeyError(f"stage not found: {id}")
+            if not new_stages:
+                raise ValueError("cannot delete the last remaining stage")
+            pipeline["stages"] = new_stages
+            self._write_doc(doc)
+            return new_stages
 
     def reset(self, pipeline_id: str | None = None) -> list[dict[str, Any]]:
         doc = self._read_doc()

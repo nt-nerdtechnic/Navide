@@ -659,6 +659,7 @@ export function useGit(
   }
 
   async function commit(message: string, all = false): Promise<{ ok: boolean; error?: string }> {
+    if (!message.trim()) return { ok: false, error: 'Commit message cannot be empty' }
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     isCommitting.value = true
