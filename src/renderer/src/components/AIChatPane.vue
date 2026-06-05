@@ -812,19 +812,29 @@ function editMessage(idx: number): void {
 
 // ── Copy message ───────────────────────────────────────────────────────────────
 // ── Export conversation ────────────────────────────────────────────────────────
-async function exportConversation(): Promise<void> {
-  if (messages.value.filter((m) => !m.streaming).length === 0) {
+async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Promise<void> {
+  const msgs = messages.value.filter((m) => !m.streaming)
+  if (msgs.length === 0) {
     showToast('No messages to export')
     return
   }
-  let md = '# AI Chat Export\n\n'
-  for (const msg of messages.value) {
-    if (msg.streaming) continue
-    const roleLabel = msg.role === 'user' ? '**User**' : `**Assistant**${msg.model ? ` (${msg.model})` : ''}`
-    md += `### ${roleLabel}\n\n${msg.content}\n\n---\n\n`
+  let content: string
+  let defaultName: string
+  if (format === 'json') {
+    const data = msgs.map((m) => ({ role: m.role, content: m.content, model: m.model, timestamp: m.timestamp }))
+    content = JSON.stringify({ messages: data, exportedAt: new Date().toISOString() }, null, 2)
+    defaultName = 'ai-chat-export.json'
+  } else {
+    let md = '# AI Chat Export\n\n'
+    for (const msg of msgs) {
+      const roleLabel = msg.role === 'user' ? '**User**' : `**Assistant**${msg.model ? ` (${msg.model})` : ''}`
+      md += `### ${roleLabel}\n\n${msg.content}\n\n---\n\n`
+    }
+    content = md
+    defaultName = 'ai-chat-export.md'
   }
   try {
-    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: 'Export chat' })
+    const r = await window.agentTeam?.saveJson({ defaultName, content, title: 'Export chat' })
     if (r && !r.ok && !r.canceled) showToast('Export failed')
     else if (r?.ok) showToast('Chat exported')
   } catch { showToast('Export failed') }
@@ -1177,7 +1187,8 @@ function selectSlashCommand(cmd: SlashCommand): void {
   }
   if (cmd.id === '/export') {
     inputText.value = ''
-    void exportConversation()
+    const fmt = window.confirm('Export as Markdown?\n\nOK = Markdown (.md)\nCancel = JSON (.json)') ? 'markdown' : 'json'
+    void exportConversation(fmt as 'markdown' | 'json')
     return
   }
   // /commit: auto-add @git chip so AI sees the staged diff (falls back to unstaged)
