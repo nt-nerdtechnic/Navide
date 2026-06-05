@@ -1972,6 +1972,30 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "")
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        # ── Shell run (shell.run) ───────────────────────────────────────────
+        elif msg_type == "shell.run":
+            ws_path = payload.get("workspace_path") or ""
+            cmd = payload.get("command", "") or ""
+            if not cmd:
+                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
+            else:
+                try:
+                    proc = await asyncio.create_subprocess_shell(
+                        cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        cwd=ws_path or None,
+                    )
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    output = stdout.decode("utf-8", errors="replace")
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {
+                        "ok": True, "output": output[:8000], "exit_code": proc.returncode,
+                    }))
+                except asyncio.TimeoutError:
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout"}))
+                except Exception as exc:
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
+
         # ── Search (search.*) ───────────────────────────────────────────────
         elif msg_type == "search.find_in_files":
             result = await asyncio.to_thread(

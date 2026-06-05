@@ -514,6 +514,34 @@ function onMessagesClick(e: MouseEvent): void {
     } catch { showToast('Insert failed') }
   }
 
+  // Run shell code block
+  const runCodeBtn = target.closest<HTMLButtonElement>('.ai-code-run-btn')
+  if (runCodeBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(runCodeBtn.dataset.code ?? '')))
+      if (!window.confirm(`Run this command in workspace?\n\n${code.slice(0, 200)}${code.length > 200 ? '…' : ''}`)) return
+      runCodeBtn.textContent = '⏳ Running…'
+      runCodeBtn.disabled = true
+      interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: code,
+        workspace_path: props.workspacePath,
+      })
+      const r = resp.payload
+      const resultText = r?.ok
+        ? `\`\`\`\n${r.output ?? '(no output)'}\n\`\`\`\n_Exit code: ${r.exit_code ?? 0}_`
+        : `Error: ${r?.error ?? 'unknown'}`
+      messages.value.push({ role: 'assistant', content: resultText, timestamp: Date.now() })
+      runCodeBtn.textContent = '✓ Done'
+      window.setTimeout(() => { runCodeBtn.textContent = '▶ Run'; runCodeBtn.disabled = false }, 2000)
+    } catch {
+      runCodeBtn.textContent = '▶ Run'
+      runCodeBtn.disabled = false
+      showToast('Run failed')
+    }
+    return
+  }
+
   // Clickable file path in inline code
   const fileRef = target.closest<HTMLElement>('.ai-file-ref')
   if (fileRef) {
@@ -574,10 +602,15 @@ function renderMarkdownLite(rawText: string): string {
     const toggleBtn = isLong
       ? `<button class="ai-code-fold-btn" data-lines="${lineCount}">▶ Expand (${lineCount} lines)</button>`
       : ''
+    const isShell = ['sh', 'bash', 'zsh', 'fish', 'shell'].includes((lang ?? '').toLowerCase())
+    const runBtn = isShell
+      ? `<button class="ai-code-run-btn" data-code="${encoded}" title="Run in workspace">▶ Run</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
+      `${runBtn}` +
       `${insertBtn}` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
@@ -2332,6 +2365,13 @@ function getDateLabel(ts: number): string {
   letter-spacing: 0.02em;
 }
 .ai-text :deep(.ai-code-fold-btn:hover) { color: var(--text-bright); background: var(--bg-subtle); }
+.ai-text :deep(.ai-code-run-btn) {
+  background: none; border: 1px solid var(--warning-fg, #d29922);
+  border-radius: 4px; color: var(--warning-fg, #d29922);
+  cursor: pointer; font-size: 11px; padding: 2px 7px; margin-left: 2px;
+}
+.ai-text :deep(.ai-code-run-btn:hover) { background: var(--warning-fg, #d29922); color: #fff; }
+.ai-text :deep(.ai-code-run-btn:disabled) { opacity: 0.6; cursor: default; }
 .ai-text :deep(.ai-code-apply-btn),
 .ai-text :deep(.ai-code-insert-btn) {
   background: none;
