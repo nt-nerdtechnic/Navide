@@ -1652,6 +1652,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const savedTmuxName = /^[a-zA-Z0-9_:.-]{1,64}$/.test(rawSavedTmuxName) ? rawSavedTmuxName : ''
     const isTmuxAlive = savedTmuxName ? (tmuxAlive[savedTmuxName] ?? false) : false
 
+    // Preserve the original fallback command and session_id regardless of restore
+    // mode — if tmux later dies, the next restart needs them to fall back to
+    // memory-resume or command-resume.
+    const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
+
     let commandOverride: string
     let isResume: boolean
     let skipRoleInjection: boolean
@@ -1670,11 +1675,6 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       skipRoleInjection = isResume
       restoreMode = isResume ? 'memory-resume' : 'fresh'
     }
-
-    // Preserve the original fallback command and session_id regardless of restore
-    // mode — if tmux later dies, the next restart needs them to fall back to
-    // memory-resume or command-resume.
-    const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
 
     const paneId = await spawnPane({
       agentKey: saved.agent as AgentKey,

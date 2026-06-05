@@ -422,7 +422,14 @@ const lastClickKey = ref<string | null>(null)
 
 watch(gitStatus, (s) => {
   emit('changes-count', (s.staged?.length ?? 0) + (s.unstaged?.length ?? 0) + (s.untracked?.length ?? 0))
-  clearSelection()
+  // Prune selections that no longer exist instead of wiping them all.
+  // This preserves the user's selection across background status refreshes
+  // (e.g. auto-commit staging) while removing keys for files that disappeared.
+  const valid = new Set<string>()
+  for (const f of s.staged ?? []) valid.add('staged:' + f.path)
+  for (const f of [...(s.unstaged ?? []), ...(s.untracked ?? [])]) valid.add('changes:' + f.path)
+  const pruned = new Set([...selectedKeys.value].filter((k) => valid.has(k)))
+  if (pruned.size !== selectedKeys.value.size) selectedKeys.value = pruned
 }, { immediate: true })
 
 const STATUS_LABEL: Record<string, string> = { M: 'M', A: 'A', D: 'D', R: 'R', C: 'C', U: '!', '?': 'U' }

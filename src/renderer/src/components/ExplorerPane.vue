@@ -354,6 +354,55 @@ async function revealFile(relPath: string): Promise<void> {
   treeEl.value?.querySelector<HTMLElement>(`[data-rel="${relPath}"]`)?.scrollIntoView({ block: 'nearest' })
 }
 
+// ── Keyboard navigation ───────────────────────────────────────────────────────
+const focusedIdx = ref(-1)
+
+function onTreeKeydown(e: KeyboardEvent): void {
+  const list = rows.value
+  if (!list.length) return
+  if (focusedIdx.value < 0) { focusedIdx.value = 0; return }
+  const idx = focusedIdx.value
+  const entry = list[idx]?.entry
+  if (!entry) return
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    focusedIdx.value = Math.min(idx + 1, list.length - 1)
+    scrollFocusedIntoView()
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    focusedIdx.value = Math.max(idx - 1, 0)
+    scrollFocusedIntoView()
+  } else if (e.key === 'ArrowRight' && entry.is_dir) {
+    e.preventDefault()
+    if (!explorer.isExpanded(entry.rel_path)) void explorer.toggleDir(entry.rel_path)
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    if (entry.is_dir && explorer.isExpanded(entry.rel_path)) {
+      void explorer.toggleDir(entry.rel_path)
+    } else {
+      const parentRel = entry.rel_path.includes('/') ? entry.rel_path.slice(0, entry.rel_path.lastIndexOf('/')) : ''
+      const parentIdx = list.findIndex((r) => r.entry.rel_path === parentRel)
+      if (parentIdx >= 0) focusedIdx.value = parentIdx
+    }
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    if (entry.is_dir) void explorer.toggleDir(entry.rel_path)
+    else openInEditor(entry)
+  }
+}
+
+function scrollFocusedIntoView(): void {
+  void nextTick(() => {
+    const el = treeEl.value?.querySelectorAll<HTMLElement>('.exp-row')[focusedIdx.value]
+    el?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function onTreeFocus(): void {
+  if (focusedIdx.value < 0 && rows.value.length > 0) focusedIdx.value = 0
+}
+
 defineExpose({ revealFile })
 </script>
 
@@ -387,13 +436,13 @@ defineExpose({ revealFile })
     </div>
 
     <!-- Tree -->
-    <div ref="treeEl" class="exp-tree" @contextmenu="openCtx($event, null)">
+    <div ref="treeEl" class="exp-tree" tabindex="0" @contextmenu="openCtx($event, null)" @keydown="onTreeKeydown" @focus="onTreeFocus">
       <div
-        v-for="row in rows"
+        v-for="(row, rowIdx) in rows"
         :key="row.entry.rel_path"
         :data-rel="row.entry.rel_path"
         class="exp-row"
-        :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path) }"
+        :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
         :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
         @click.stop="handleRowClick($event, row.entry)"
         @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
@@ -417,7 +466,7 @@ defineExpose({ revealFile })
       </div>
       <div v-if="!workspacePath" class="exp-empty">先選擇一個 workspace</div>
 
-      <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
+      <div v-if="selectedKeys.size >= 2" class="selection-bar" @click.stop>
         <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
         <button class="sel-btn close" @click="clearSelection()">✕</button>
       </div>
@@ -650,6 +699,8 @@ defineExpose({ revealFile })
 /* Multi-select */
 .exp-row.row-selected { background: rgba(88, 166, 255, 0.12); }
 .exp-row.row-selected:hover { background: rgba(88, 166, 255, 0.18); }
+.exp-row.row-focused { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }
+.exp-tree:focus { outline: none; }
 
 .selection-bar {
   position: sticky;

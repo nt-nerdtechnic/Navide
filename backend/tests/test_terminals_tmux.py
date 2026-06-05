@@ -263,6 +263,37 @@ async def test_create_kills_orphan_session_when_attach_fails(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_skip_tmux_bypasses_tmux_even_when_use_tmux_true(tmp_path):
+    """When skip_tmux=True, create() must use plain PTY even if _use_tmux=True."""
+    svc = await _make_service(use_tmux=True)
+    popen_mock = _make_popen_mock()
+
+    with patch("agent_team_backend.terminals.shutil.which", return_value="/usr/bin/bash"), \
+         patch("agent_team_backend.terminals.pty.openpty", return_value=(10, 11)), \
+         patch("agent_team_backend.terminals.fcntl.fcntl"), \
+         patch("agent_team_backend.terminals.fcntl.ioctl"), \
+         patch("agent_team_backend.terminals.os.close"), \
+         patch("agent_team_backend.terminals.subprocess.run") as mock_run, \
+         patch("agent_team_backend.terminals.subprocess.Popen", return_value=popen_mock) as mock_popen, \
+         patch.object(svc._loop, "add_reader"):
+
+        session = svc.create(
+            pane_id="pane-skip",
+            agent_key="claude",
+            command=["bash", "-lc", "tmux attach-session -t at-abc123 -d"],
+            cwd=str(tmp_path),
+            skip_tmux=True,
+        )
+
+    # skip_tmux=True → no tmux_name assigned, no tmux subprocess called
+    assert session.tmux_name == ""
+    mock_run.assert_not_called()
+    # Popen called directly with the command, not a tmux attach wrapper
+    popen_args = mock_popen.call_args[0][0]
+    assert popen_args[0] != "tmux"
+
+
+@pytest.mark.asyncio
 async def test_kill_no_tmux_session_skips_kill_session(tmp_path):
     """kill() must NOT call tmux kill-session when tmux_name is empty."""
     svc = await _make_service(use_tmux=False)

@@ -44,6 +44,7 @@ interface ChatMessage {
   content: string
   rawContent?: string  // full content sent to AI (includes @chip file/git content)
   streaming?: boolean
+  thinking?: boolean   // true until first chunk arrives
   model?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
@@ -147,6 +148,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
   { id: '/review',  label: '/review',  description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
   { id: '/clear',   label: '/clear',   description: '清除對話',   template: '' },
+  { id: '/export',  label: '/export',  description: '匯出對話',   template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -320,7 +322,7 @@ async function sendMessage(): Promise<void> {
   history.push({ role: 'user', content: sentContent })
 
   // Push placeholder assistant message for streaming
-  messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value })
   await scrollBottom()
 
   try {
@@ -356,6 +358,25 @@ function clearConversation(): void {
 }
 
 // ── Copy message ───────────────────────────────────────────────────────────────
+// ── Export conversation ────────────────────────────────────────────────────────
+async function exportConversation(): Promise<void> {
+  if (messages.value.filter((m) => !m.streaming).length === 0) {
+    showToast('沒有對話可匯出')
+    return
+  }
+  let md = '# AI Chat Export\n\n'
+  for (const msg of messages.value) {
+    if (msg.streaming) continue
+    const roleLabel = msg.role === 'user' ? '**User**' : `**Assistant**${msg.model ? ` (${msg.model})` : ''}`
+    md += `### ${roleLabel}\n\n${msg.content}\n\n---\n\n`
+  }
+  try {
+    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: '匯出對話' })
+    if (r && !r.ok && !r.canceled) showToast('匯出失敗')
+    else if (r?.ok) showToast('對話已匯出')
+  } catch { showToast('匯出失敗') }
+}
+
 function copyMessage(content: string): void {
   const plain = content.replace(/```[\s\S]*?```/g, (m) => m).replace(/<[^>]+>/g, '')
   navigator.clipboard.writeText(plain).then(() => showToast('已複製')).catch(() => showToast('複製失敗'))
@@ -378,7 +399,7 @@ async function regenerate(): Promise<void> {
   currentSessionId.value = sessionId
 
   const history = messages.value.map((m) => ({ role: m.role, content: m.rawContent ?? m.content }))
-  messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value })
   await scrollBottom()
 
   try {
@@ -403,6 +424,15 @@ const lastAssistantIdx = computed(() => {
   return -1
 })
 
+const pendingEditsInLastMsg = computed<EditProposalCard[]>(() => {
+  const idx = lastAssistantIdx.value
+  if (idx === -1) return []
+  const msg = messages.value[idx]
+  return (msg.cards ?? []).filter((c): c is EditProposalCard =>
+    c.kind === 'edit_proposal' && !c.accepted && !c.discarded,
+  )
+})
+
 // ── Accept edit ────────────────────────────────────────────────────────────────
 async function acceptEdit(card: EditProposalCard): Promise<void> {
   try {
@@ -420,6 +450,18 @@ async function acceptEdit(card: EditProposalCard): Promise<void> {
 
 function discardEdit(card: EditProposalCard): void {
   card.discarded = true
+}
+
+async function acceptAllEdits(): Promise<void> {
+  for (const card of pendingEditsInLastMsg.value) {
+    await acceptEdit(card)
+  }
+}
+
+function discardAllEdits(): void {
+  for (const card of pendingEditsInLastMsg.value) {
+    card.discarded = true
+  }
 }
 
 // ── Command proposal ──────────────────────────────────────────────────────────
@@ -454,6 +496,7 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant' && last.streaming) {
+      last.thinking = false
       last.content += p.text
       void scrollBottom()
     }
@@ -648,6 +691,11 @@ function selectSlashCommand(cmd: SlashCommand): void {
   if (cmd.id === '/clear') {
     inputText.value = ''
     clearConversation()
+    return
+  }
+  if (cmd.id === '/export') {
+    inputText.value = ''
+    void exportConversation()
     return
   }
   inputText.value = cmd.template + ' '
@@ -958,7 +1006,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             </template>
           </template>
 
-          <span v-if="msg.streaming" class="ai-cursor">▍</span>
+          <!-- Thinking indicator (before first chunk) -->
+          <div v-if="msg.thinking" class="ai-thinking">
+            <span class="ai-thinking-dot" />
+            <span class="ai-thinking-dot" />
+            <span class="ai-thinking-dot" />
+          </div>
+          <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
+        </div>
+        <!-- Accept All / Reject All bar for last assistant message -->
+        <div
+          v-if="msg.role === 'assistant' && mi === lastAssistantIdx && pendingEditsInLastMsg.length >= 2"
+          class="ai-bulk-actions"
+        >
+          <button class="ai-bulk-btn accept" @click="acceptAllEdits">Accept All ({{ pendingEditsInLastMsg.length }})</button>
+          <button class="ai-bulk-btn discard" @click="discardAllEdits">Reject All</button>
         </div>
         <!-- Message action bar (copy / regenerate / model badge) -->
         <div class="ai-msg-actions" :class="msg.role">
@@ -1286,6 +1348,54 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   margin-left: 2px;
 }
 @keyframes blink { 50% { opacity: 0 } }
+
+/* ── Thinking indicator ───────────────────────────────────────────────────── */
+.ai-thinking {
+  display: flex;
+  gap: 4px;
+  padding: 4px 2px;
+  align-items: center;
+}
+.ai-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: ai-bounce 1.2s ease-in-out infinite;
+}
+.ai-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.ai-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes ai-bounce {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* ── Accept All / Reject All bar ─────────────────────────────────────────── */
+.ai-bulk-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 0 4px;
+}
+.ai-bulk-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-muted);
+  cursor: pointer;
+  background: var(--bg-subtle);
+  color: var(--text-bright);
+}
+.ai-bulk-btn.accept {
+  background: var(--success-emphasis, #1a7f37);
+  color: #fff;
+  border-color: transparent;
+}
+.ai-bulk-btn.discard {
+  background: var(--danger-emphasis, #cf222e);
+  color: #fff;
+  border-color: transparent;
+}
 
 /* ── Tool call card ────────────────────────────────────────────────────────── */
 .ai-tool-card {

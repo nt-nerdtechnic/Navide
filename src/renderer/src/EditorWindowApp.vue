@@ -11,6 +11,7 @@ import NotificationHost from './components/NotificationHost.vue'
 import AIChatPane from './components/AIChatPane.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
+import { useNotify } from './composables/useNotify'
 
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
@@ -24,6 +25,7 @@ const initialDiffStaged = params.get('diff_staged') === 'true'
 const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
 
 const backend = useBackend()
+const { confirm } = useNotify()
 
 // ── Sidebar resize ────────────────────────────────────────────────────────────
 const SIDEBAR_W_KEY = 'ide-sidebar-width'
@@ -220,9 +222,14 @@ function openConflict(p: { filepath: string; name?: string }): void {
 
 const closedHistory: Array<{ relPath: string; name: string }> = []
 
-function closeFile(relPath: string): void {
+async function closeFile(relPath: string): Promise<void> {
   const f = openFiles.value.find((x) => x.relPath === relPath)
-  if (f?.dirty && !window.confirm(`「${f.name}」有未存檔的變更，確定要關閉？`)) return
+  if (f?.dirty) {
+    const ok = await confirm(`「${f.name}」有未存檔的變更，確定要關閉？`, {
+      title: '關閉檔案', confirmText: '關閉',
+    })
+    if (!ok) return
+  }
   const i = openFiles.value.findIndex((x) => x.relPath === relPath)
   if (i === -1) return
   if (f?.kind === 'file') closedHistory.push({ relPath: f.relPath, name: f.name })
@@ -341,9 +348,9 @@ for (let _i = 1; _i <= 9; _i++) {
     if (f) activeRel.value = f.relPath
   })
 }
-registerCommand('workbench.action.closeActiveEditor', () => {
+registerCommand('workbench.action.closeActiveEditor', async () => {
   if (!activeRel.value) return
-  closeFile(activeRel.value)
+  await closeFile(activeRel.value)
 })
 registerCommand('workbench.action.saveAll', async () => {
   for (const [relPath, pane] of editorPaneRefs.entries()) {
@@ -351,35 +358,55 @@ registerCommand('workbench.action.saveAll', async () => {
     if (f?.kind === 'file' && f.dirty) await pane.save()
   }
 })
-registerCommand('workbench.action.closeAllEditors', () => {
+registerCommand('workbench.action.closeAllEditors', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要全部關閉？`)) return
+  if (dirty.length > 0) {
+    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要全部關閉？`, {
+      title: '關閉所有分頁', confirmText: '全部關閉',
+    })
+    if (!ok) return
+  }
   openFiles.value = []
   activeRel.value = ''
 })
-registerCommand('workbench.action.closeOtherEditors', () => {
+registerCommand('workbench.action.closeOtherEditors', async () => {
   const cur = activeRel.value
   if (!cur) return
   const others = openFiles.value.filter((f) => f.relPath !== cur && f.kind === 'file' && f.dirty)
-  if (others.length > 0 && !window.confirm(`有 ${others.length} 個未存檔的檔案，確定要關閉其他分頁？`)) return
+  if (others.length > 0) {
+    const ok = await confirm(`有 ${others.length} 個未存檔的檔案，確定要關閉其他分頁？`, {
+      title: '關閉其他分頁', confirmText: '關閉',
+    })
+    if (!ok) return
+  }
   openFiles.value = openFiles.value.filter((f) => f.relPath === cur)
 })
-registerCommand('workbench.action.closeEditorsToTheRight', () => {
+registerCommand('workbench.action.closeEditorsToTheRight', async () => {
   const cur = activeRel.value
   if (!cur) return
   const idx = openFiles.value.findIndex((f) => f.relPath === cur)
   if (idx < 0) return
   const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉右側分頁？`)) return
+  if (dirty.length > 0) {
+    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉右側分頁？`, {
+      title: '關閉右側分頁', confirmText: '關閉',
+    })
+    if (!ok) return
+  }
   openFiles.value = openFiles.value.slice(0, idx + 1)
 })
-registerCommand('workbench.action.closeEditorsToTheLeft', () => {
+registerCommand('workbench.action.closeEditorsToTheLeft', async () => {
   const cur = activeRel.value
   if (!cur) return
   const idx = openFiles.value.findIndex((f) => f.relPath === cur)
   if (idx <= 0) return
   const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉左側分頁？`)) return
+  if (dirty.length > 0) {
+    const ok = await confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉左側分頁？`, {
+      title: '關閉左側分頁', confirmText: '關閉',
+    })
+    if (!ok) return
+  }
   openFiles.value = openFiles.value.slice(idx)
 })
 registerCommand('workbench.action.openNextEditor', () => {

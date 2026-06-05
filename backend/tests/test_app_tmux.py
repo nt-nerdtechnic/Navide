@@ -1,59 +1,66 @@
 """Tests for /api/tmux/check logic (tested without importing the full FastAPI app
 to avoid the watchdog dependency that breaks the test environment).
 
-The endpoint logic is simple: call `tmux has-session -t {name}` per name and
-return a dict of {name: bool}. We verify this logic directly via subprocess mock.
+The endpoint now uses a single `tmux ls` call and set-membership lookup instead
+of N per-session `has-session` calls.  Tests here validate that logic directly
+via a standalone helper that mirrors the real implementation.
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
+# tmux session name regex — must match the one in app.py / projects.py.
+_TMUX_NAME_RE = re.compile(r"^at-[A-Za-z0-9]{1,32}$")
 
-# ── Standalone helper that replicates the endpoint logic ──────────────────────
-# Copied from app.py so tests are self-contained and don't trigger the watchdog
-# import chain.
+
+# ── Standalone helper that mirrors the real /api/tmux/check logic ─────────────
+# Uses tmux ls (one call) + set membership instead of per-session has-session.
 
 def _check_tmux_alive(names: list[str]) -> dict[str, bool]:
-    results: dict[str, bool] = {}
-    for name in names:
+    if not names:
+        return {}
+    invalid = {n: False for n in names if not _TMUX_NAME_RE.fullmatch(n)}
+    to_check = [n for n in names if _TMUX_NAME_RE.fullmatch(n)]
+    live: set[str] = set()
+    if to_check:
         try:
-            ret = subprocess.run(
-                ["tmux", "has-session", "-t", name],
+            result = subprocess.run(
+                ["tmux", "ls", "-F", "#{session_name}"],
                 capture_output=True,
+                text=True,
             )
-            results[name] = ret.returncode == 0
+            live = set(result.stdout.splitlines())
         except OSError:
-            results[name] = False
-    return results
+            pass
+    return {**invalid, **{n: n in live for n in to_check}}
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 def test_check_tmux_alive_returns_true():
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(returncode=0)
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="at-abc123\n", stderr="")
         result = _check_tmux_alive(["at-abc123"])
     assert result["at-abc123"] is True
 
 
 def test_check_tmux_dead_returns_false():
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(returncode=1)
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
         result = _check_tmux_alive(["at-dead"])
     assert result["at-dead"] is False
 
 
 def test_check_tmux_multiple_sessions():
-    def _side_effect(cmd, **kwargs):
-        name = cmd[-1]
-        return SimpleNamespace(returncode=0 if name == "at-alive" else 1)
-
-    with patch("subprocess.run", side_effect=_side_effect):
+    ls_output = "at-alive\n"
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout=ls_output, stderr="")
         result = _check_tmux_alive(["at-alive", "at-dead1", "at-dead2"])
 
     assert result["at-alive"] is True
@@ -70,19 +77,23 @@ def test_check_tmux_empty_list():
 
 def test_check_tmux_os_error_returns_false():
     with patch("subprocess.run", side_effect=OSError("tmux not found")):
-        result = _check_tmux_alive(["at-x"])
-    assert result["at-x"] is False
+        result = _check_tmux_alive(["at-xyz"])
+    assert result["at-xyz"] is False
 
 
-def test_check_tmux_calls_correct_command():
+def test_check_tmux_uses_single_ls_call_not_per_session():
+    """One tmux ls call for N sessions — NOT N has-session calls."""
+    names = [f"at-{'a' * 10}{i}" for i in range(5)]
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = SimpleNamespace(returncode=0)
-        _check_tmux_alive(["my-session"])
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="\n".join(names), stderr="")
+        result = _check_tmux_alive(names)
 
-    mock_run.assert_called_once_with(
-        ["tmux", "has-session", "-t", "my-session"],
-        capture_output=True,
-    )
+    # Exactly one subprocess call regardless of how many names
+    assert mock_run.call_count == 1
+    call_cmd = mock_run.call_args[0][0]
+    assert call_cmd == ["tmux", "ls", "-F", "#{session_name}"]
+    # All names present in ls output → all alive
+    assert all(result[n] for n in names)
 
 
 # ── Verify app.py response shape via module inspection ────────────────────────
