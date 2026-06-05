@@ -172,6 +172,18 @@ watch(settingsProvider, (provider) => {
 const inputCharCount = computed(() => inputText.value.length)
 const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
 
+// Context window usage estimate (assumes ~100k token limit)
+const CTX_MAX_TOKENS = 100_000
+const conversationTokenEstimate = computed(() =>
+  messages.value.reduce((sum, m) => sum + Math.ceil((m.rawContent ?? m.content).length / 4), 0)
+)
+const ctxUsagePct = computed(() => Math.min(100, Math.round((conversationTokenEstimate.value / CTX_MAX_TOKENS) * 100)))
+const ctxUsageLevel = computed(() => {
+  if (ctxUsagePct.value >= 90) return 'danger'
+  if (ctxUsagePct.value >= 60) return 'warn'
+  return 'ok'
+})
+
 // ── Conversation search ────────────────────────────────────────────────────────
 const showSearch = ref(false)
 const searchQuery = ref('')
@@ -1341,6 +1353,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         </div>
       </div>
 
+      <!-- Context window usage bar (shown when > 30%) -->
+      <div v-if="ctxUsagePct > 30" class="ai-ctx-bar" :class="ctxUsageLevel" :title="`~${conversationTokenEstimate.toLocaleString()} / ${CTX_MAX_TOKENS.toLocaleString()} tokens`">
+        <div class="ai-ctx-bar-track">
+          <div class="ai-ctx-bar-fill" :style="{ width: ctxUsagePct + '%' }" />
+        </div>
+        <span class="ai-ctx-label">context {{ ctxUsagePct }}%</span>
+      </div>
+
       <div class="ai-input-row">
         <div class="ai-textarea-wrap">
           <textarea
@@ -2026,6 +2046,33 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   font-family: ui-monospace, monospace;
 }
 .ai-char-count.warn { color: var(--danger-fg, #cf222e); }
+
+/* Context window bar */
+.ai-ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+}
+.ai-ctx-bar-track {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-muted);
+  overflow: hidden;
+}
+.ai-ctx-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-emphasis);
+  transition: width 0.3s ease;
+}
+.ai-ctx-bar.warn .ai-ctx-bar-fill { background: #d29922; }
+.ai-ctx-bar.danger .ai-ctx-bar-fill { background: var(--danger-fg, #cf222e); }
+.ai-ctx-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.ai-ctx-bar.warn .ai-ctx-label { color: #d29922; }
+.ai-ctx-bar.danger .ai-ctx-label { color: var(--danger-fg, #cf222e); }
+
 .ai-textarea {
   width: 100%;
   box-sizing: border-box;
