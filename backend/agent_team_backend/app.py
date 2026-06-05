@@ -157,6 +157,8 @@ class Session:
         # Token attribution now happens via log_readers (background log scan),
         # NOT via PTY output. TerminalService runs without a token sink.
         self.terminals = TerminalService(emit=self._send_event)
+        # Track background chat tasks so they can be cancelled on disconnect.
+        self._chat_tasks: set[asyncio.Task] = set()
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         try:
@@ -547,6 +549,8 @@ async def ws(websocket: WebSocket) -> None:
     finally:
         _SESSIONS.discard(session)
         session.terminals.shutdown()
+        for t in session._chat_tasks:
+            t.cancel()
 
 
 def _project_payload(project) -> dict[str, Any]:
@@ -2142,7 +2146,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 except Exception as e:
                     await broadcast(make_event("ai.chat.error", {"session_id": sid, "message": str(e)}))
 
-            asyncio.create_task(_run_chat())
+            task = asyncio.create_task(_run_chat())
+            session._chat_tasks.add(task)
+            task.add_done_callback(session._chat_tasks.discard)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "session_id": session_id}))
 
         elif msg_type == "ai.chat.accept_edit":

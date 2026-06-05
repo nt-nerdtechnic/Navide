@@ -136,22 +136,26 @@ function openMatch(file: FileResult, m: Match): void {
 
 // ── Replace ──────────────────────────────────────────────────────────────────
 async function replaceInFiles(files: string[]): Promise<void> {
-  const resp = await props.backend.send<ReplaceResult>('search.replace_in_files', {
-    workspace_path: props.workspacePath,
-    query: query.value,
-    replacement: replacement.value,
-    files,
-    is_regex: isRegex.value,
-    case_sensitive: caseSensitive.value,
-    whole_word: wholeWord.value,
-  }, 30_000)
-  const p = resp.payload
-  if (!p?.ok) {
-    void alert(p?.error || 'Replace failed', { title: 'Replace' })
-    return
+  try {
+    const resp = await props.backend.send<ReplaceResult>('search.replace_in_files', {
+      workspace_path: props.workspacePath,
+      query: query.value,
+      replacement: replacement.value,
+      files,
+      is_regex: isRegex.value,
+      case_sensitive: caseSensitive.value,
+      whole_word: wholeWord.value,
+    }, 30_000)
+    const p = resp.payload
+    if (!p?.ok) {
+      void alert(p?.error || 'Replace failed', { title: 'Replace' })
+      return
+    }
+    toast(`Replaced ${p.total ?? 0} occurrence(s)`, { type: 'success' })
+    await doSearch()
+  } catch (e) {
+    void alert(e instanceof Error ? e.message : 'Replace failed', { title: 'Replace' })
   }
-  toast(`Replaced ${p.total ?? 0} occurrence(s)`, { type: 'success' })
-  await doSearch()
 }
 
 async function replaceAll(): Promise<void> {
@@ -185,36 +189,40 @@ async function replaceFile(file: FileResult): Promise<void> {
 // Single-match replace (literal mode only — regex backrefs need backend semantics).
 async function replaceOne(file: FileResult, m: Match): Promise<void> {
   const r = replacement.value
-  const read = await props.backend.send<FsRead>('fs.read_file', {
-    workspace_path: props.workspacePath,
-    rel_path: file.rel_path,
-  })
-  if (!read.payload?.ok || read.payload.content == null) {
-    void alert(read.payload?.error || 'Failed to read file', { title: 'Replace' })
-    return
-  }
-  const lines = read.payload.content.split('\n')
-  const idx = m.line - 1
-  const line = lines[idx]
-  // Verify the matched text at (col, end) still matches what was found at search time.
-  // An empty check (=== '') misses cases where other content landed at those positions.
-  const expectedSnippet = m.text.slice(m.col, m.end)
-  if (line == null || line.slice(m.col, m.end) !== expectedSnippet) {
-    toast('Content has changed, please search again', { type: 'info' })
+  try {
+    const read = await props.backend.send<FsRead>('fs.read_file', {
+      workspace_path: props.workspacePath,
+      rel_path: file.rel_path,
+    })
+    if (!read.payload?.ok || read.payload.content == null) {
+      void alert(read.payload?.error || 'Failed to read file', { title: 'Replace' })
+      return
+    }
+    const lines = read.payload.content.split('\n')
+    const idx = m.line - 1
+    const line = lines[idx]
+    // Verify the matched text at (col, end) still matches what was found at search time.
+    // An empty check (=== '') misses cases where other content landed at those positions.
+    const expectedSnippet = m.text.slice(m.col, m.end)
+    if (line == null || line.slice(m.col, m.end) !== expectedSnippet) {
+      toast('Content has changed, please search again', { type: 'info' })
+      await doSearch()
+      return
+    }
+    lines[idx] = line.slice(0, m.col) + r + line.slice(m.end)
+    const write = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+      workspace_path: props.workspacePath,
+      rel_path: file.rel_path,
+      content: lines.join('\n'),
+    })
+    if (!write.payload?.ok) {
+      void alert(write.payload?.error || 'Write failed', { title: 'Replace' })
+      return
+    }
     await doSearch()
-    return
+  } catch (e) {
+    void alert(e instanceof Error ? e.message : 'Replace failed', { title: 'Replace' })
   }
-  lines[idx] = line.slice(0, m.col) + r + line.slice(m.end)
-  const write = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
-    workspace_path: props.workspacePath,
-    rel_path: file.rel_path,
-    content: lines.join('\n'),
-  })
-  if (!write.payload?.ok) {
-    void alert(write.payload?.error || 'Write failed', { title: 'Replace' })
-    return
-  }
-  await doSearch()
 }
 
 function toggleFile(rel: string): void {
