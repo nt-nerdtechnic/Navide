@@ -47,6 +47,8 @@ interface ChatMessage {
   thinking?: boolean   // true until first chunk arrives
   model?: string
   timestamp?: number   // ms since epoch
+  isError?: boolean    // true when last chunk was an error
+  errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
 
@@ -58,6 +60,7 @@ const currentSessionId = ref<string | null>(null)
 const messagesEl = ref<HTMLElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const showSettings = ref(false)
+const showShortcuts = ref(false)
 const autoScroll = ref(true)
 const toastMsg = ref('')
 let toastTimer: number | null = null
@@ -534,11 +537,21 @@ async function regenerate(): Promise<void> {
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
-    if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) { last.streaming = false; last.thinking = false }
+    if (last?.role === 'assistant') {
+      last.streaming = false; last.thinking = false
+      last.isError = true; last.errorMsg = '無法連線到後端'
+    }
     sending.value = false
     currentSessionId.value = null
   }
+}
+
+// ── Retry after error ──────────────────────────────────────────────────────────
+function retryAfterError(): void {
+  // Remove the error assistant message and regenerate
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'assistant' && last.isError) messages.value.pop()
+  void regenerate()
 }
 
 const lastAssistantIdx = computed(() => {
@@ -709,9 +722,10 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
-      last.content += `\n\n**錯誤：** ${p.message}`
       last.streaming = false
       last.thinking = false
+      last.isError = true
+      last.errorMsg = p.message
     }
     sending.value = false
     currentSessionId.value = null
@@ -1149,6 +1163,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             <span class="ai-thinking-dot" />
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
+
+          <!-- Error card -->
+          <div v-if="msg.isError" class="ai-error-card">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0">
+              <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
+            </svg>
+            <span class="ai-error-msg">{{ msg.errorMsg || '發生錯誤' }}</span>
+            <button class="ai-error-retry" @click="retryAfterError">重試</button>
+          </div>
         </div>
         <!-- Accept All / Reject All bar for last assistant message -->
         <div
@@ -1324,6 +1347,13 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
+            title="快捷鍵 (?)"
+            @click="showShortcuts = !showShortcuts"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM5 8.5H2.75a.75.75 0 0 1 0-1.5H5a.75.75 0 0 1 0 1.5Zm2.5 2h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm0-4h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm5.75 4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Zm0-4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
             title="設定"
             @click="showSettings = !showSettings"
           >
@@ -1390,6 +1420,25 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <button class="ai-settings-save" @click="saveSettings">儲存</button>
         </div>
       </div>
+    </div>
+
+    <!-- Keyboard shortcuts panel -->
+    <div v-if="showShortcuts" class="ai-shortcuts-panel">
+      <div class="ai-shortcuts-header">
+        <span>鍵盤快捷鍵</span>
+        <button class="ai-settings-close" @click="showShortcuts = false">✕</button>
+      </div>
+      <table class="ai-shortcuts-table">
+        <tbody>
+          <tr><td><kbd>Enter</kbd></td><td>送出訊息</td></tr>
+          <tr><td><kbd>Shift+Enter</kbd></td><td>換行</td></tr>
+          <tr><td><kbd>Ctrl+F</kbd></td><td>搜尋對話</td></tr>
+          <tr><td><kbd>@</kbd></td><td>插入 context（檔案、selection、git）</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Slash 指令（/explain、/fix…）</td></tr>
+          <tr><td><kbd>Escape</kbd></td><td>關閉選單 / 搜尋列</td></tr>
+          <tr><td>拖曳檔案</td><td>將檔案加入 context</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- Toast -->
@@ -1628,6 +1677,32 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
 }
+
+/* ── Error card ──────────────────────────────────────────────────────────── */
+.ai-error-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger-fg, #cf222e) 30%, transparent);
+  color: var(--danger-fg, #cf222e);
+  font-size: 12.5px;
+}
+.ai-error-msg { flex: 1; word-break: break-word; }
+.ai-error-retry {
+  background: var(--danger-fg, #cf222e);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ai-error-retry:hover { opacity: 0.85; }
 
 /* ── Accept All / Reject All bar ─────────────────────────────────────────── */
 .ai-bulk-actions {
@@ -2085,6 +2160,46 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-settings-save:hover { opacity: 0.85; }
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
+/* ── Shortcuts panel ─────────────────────────────────────────────────────── */
+.ai-shortcuts-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
+  z-index: 20;
+  padding: 0 0 8px;
+}
+.ai-shortcuts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-muted);
+}
+.ai-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ai-shortcuts-table td { padding: 3px 14px; }
+.ai-shortcuts-table td:first-child { width: 40%; }
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  background: var(--bg-muted);
+  color: var(--text-bright);
+  font-size: 11px;
+  font-family: monospace;
+}
+
 .ai-toast {
   position: absolute;
   bottom: 90px;
