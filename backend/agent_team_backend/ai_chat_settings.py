@@ -33,30 +33,51 @@ class AIChatSettingsStore:
 
     def get(self) -> dict[str, Any]:
         if not self._path.exists():
-            return dict(DEFAULTS)
-        try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict):
-                return dict(DEFAULTS)
-            merged = dict(DEFAULTS)
-            for k in DEFAULTS:
-                if k in raw:
-                    merged[k] = raw[k]
-            return merged
-        except Exception as err:
-            log.warning("ai_chat settings read error (%s); using defaults", err)
-            return dict(DEFAULTS)
+            result = dict(DEFAULTS)
+        else:
+            try:
+                raw = json.loads(self._path.read_text(encoding="utf-8"))
+                if not isinstance(raw, dict):
+                    result = dict(DEFAULTS)
+                else:
+                    result = dict(DEFAULTS)
+                    for k in DEFAULTS:
+                        if k in raw:
+                            result[k] = raw[k]
+            except Exception as err:
+                log.warning("ai_chat settings read error (%s); using defaults", err)
+                result = dict(DEFAULTS)
+        # Add computed `model` alias so the frontend receives a single key
+        if result.get("provider") == "anthropic":
+            result["model"] = result.get("anthropic_model", DEFAULTS["anthropic_model"])
+        else:
+            result["model"] = result.get("ollama_model", DEFAULTS["ollama_model"])
+        return result
 
     def set(self, updates: dict[str, Any]) -> dict[str, Any]:
         current = self.get()
+        # Handle generic `model` key from frontend — map to provider-specific key
+        if "model" in updates:
+            provider = updates.get("provider") or current.get("provider", "anthropic")
+            if provider == "anthropic":
+                current["anthropic_model"] = updates["model"]
+            else:
+                current["ollama_model"] = updates["model"]
         for key, value in updates.items():
             if key in DEFAULTS:
                 current[key] = value
         if current.get("provider") not in _VALID_PROVIDERS:
             current["provider"] = "ollama"
-        self._write(current)
+        # Persist without the computed `model` alias (it's derived on read)
+        to_save = {k: v for k, v in current.items() if k != "model"}
+        self._write(to_save)
+        # Recompute `model` alias so the return value is fresh (not the value from get() above)
+        if current.get("provider") == "anthropic":
+            current["model"] = current.get("anthropic_model", DEFAULTS["anthropic_model"])
+        else:
+            current["model"] = current.get("ollama_model", DEFAULTS["ollama_model"])
         log.info("ai_chat settings saved: provider=%s model=%s",
-                 current.get("provider"), current.get("anthropic_model") or current.get("ollama_model"))
+                 current.get("provider"), current.get("model"))
         return current
 
     def _write(self, data: dict[str, Any]) -> None:

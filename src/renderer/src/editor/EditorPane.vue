@@ -320,9 +320,20 @@ function openReplace(): void {
 function replaceNext(): void {
   if (findIdx.value < 0 || !findMatches.value.length) return
   const m = findMatches.value[findIdx.value]
+  let replacement = replaceQuery.value
+  if (findRegex.value) {
+    // Expand backreferences ($1, $& etc.) by applying the regex to the matched slice.
+    try {
+      const text = editorRef.value?.getValue() ?? content.value
+      const lineText = text.split('\n')[m.line] ?? ''
+      const flags = findCase.value ? '' : 'i'
+      const re = new RegExp(findQuery.value, flags)
+      replacement = lineText.slice(m.startCol, m.endCol).replace(re, replaceQuery.value)
+    } catch { /* invalid regex — use literal replacement */ }
+  }
   editorRef.value?.applyEditExternal(
     { start: { line: m.line, col: m.startCol }, end: { line: m.line, col: m.endCol } },
-    replaceQuery.value,
+    replacement,
   )
   dirty.value = true
   void nextTick(() => computeMatches({ navigate: true }))
