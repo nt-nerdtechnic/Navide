@@ -712,7 +712,6 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <!-- Text content -->
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div v-if="msg.content" class="ai-text" v-html="renderMarkdownLite(msg.content)" />
-          <span v-if="msg.streaming && !msg.content" class="ai-cursor" />
 
           <!-- Cards (tool calls / edit proposals) -->
           <template v-if="msg.cards">
