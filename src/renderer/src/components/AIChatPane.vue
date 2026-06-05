@@ -1,6 +1,50 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import css from 'highlight.js/lib/languages/css'
+import xml from 'highlight.js/lib/languages/xml'
+import rust from 'highlight.js/lib/languages/rust'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import cpp from 'highlight.js/lib/languages/cpp'
+import markdown from 'highlight.js/lib/languages/markdown'
+import sql from 'highlight.js/lib/languages/sql'
+import yaml from 'highlight.js/lib/languages/yaml'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('jsx', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('tsx', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('py', python)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('zsh', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('vue', xml)
+hljs.registerLanguage('rust', rust)
+hljs.registerLanguage('rs', rust)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('c', cpp)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('md', markdown)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('yml', yaml)
 
 const props = defineProps<{
   workspacePath: string
@@ -8,6 +52,7 @@ const props = defineProps<{
   embedded?: boolean
   active?: boolean
   getEditorContent?: () => string
+  getEditorSelection?: () => string
   getActiveRelPath?: () => string
 }>()
 
@@ -46,45 +91,138 @@ interface ChatMessage {
   streaming?: boolean
   thinking?: boolean   // true until first chunk arrives
   model?: string
+  timestamp?: number   // ms since epoch
+  isError?: boolean    // true when last chunk was an error
+  errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
 const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
+const inputHistory: string[] = []
+let historyIdx = -1
 const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
 const messagesEl = ref<HTMLElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const showSettings = ref(false)
+const showShortcuts = ref(false)
+const autoScroll = ref(true)
 const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
 
-// ── Conversation persistence (localStorage) ────────────────────────────────────
+// ── Conversation thread persistence ──────────────────────────────────────────
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number }
+const MAX_THREADS = 20
+const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
+const showThreads = ref(false)
+const threadSearchQuery = ref('')
+const filteredThreads = computed(() => {
+  const q = threadSearchQuery.value.trim().toLowerCase()
+  if (!q) return allThreads.value
+  return allThreads.value.filter((t) => t.title.toLowerCase().includes(q))
+})
+const currentThreadId = ref('')
+const allThreads = ref<ChatThread[]>([])
 
-function loadHistory(): void {
+function newThreadId(): string { return crypto.randomUUID() }
+
+function loadThreads(): void {
   try {
-    const raw = localStorage.getItem(historyKey.value)
-    if (!raw) return
-    const saved = JSON.parse(raw) as ChatMessage[]
-    // Drop any incomplete streaming messages from a previous session
-    messages.value = saved.filter((m) => !m.streaming).slice(-100)
-  } catch { /* ignore corrupt storage */ }
+    const raw = localStorage.getItem(threadsKey.value)
+    if (raw) {
+      allThreads.value = (JSON.parse(raw) as ChatThread[]).slice(0, MAX_THREADS)
+    } else {
+      // Migrate from old single-key format
+      const legacyRaw = localStorage.getItem(historyKey.value)
+      if (legacyRaw) {
+        const legacyMsgs = (JSON.parse(legacyRaw) as ChatMessage[]).filter((m) => !m.streaming)
+        if (legacyMsgs.length) {
+          const firstUser = legacyMsgs.find((m) => m.role === 'user')
+          const thread: ChatThread = {
+            id: newThreadId(),
+            title: firstUser ? firstUser.content.slice(0, 40) : 'Chat history',
+            messages: legacyMsgs,
+            updatedAt: Date.now(),
+          }
+          allThreads.value = [thread]
+          localStorage.removeItem(historyKey.value)
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  if (allThreads.value.length === 0) {
+    const id = newThreadId()
+    allThreads.value = [{ id, title: 'New chat', messages: [], updatedAt: Date.now() }]
+  }
+  const latest = allThreads.value[0]
+  currentThreadId.value = latest.id
+  messages.value = latest.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
 }
 
-function saveHistory(): void {
+function _doSave(): void {
+  const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
+  if (idx === -1) return
+  const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
+  allThreads.value[idx].messages = toSave
+  allThreads.value[idx].updatedAt = Date.now()
+  const firstUser = toSave.find((m) => m.role === 'user')
+  if (firstUser && (allThreads.value[idx].title === 'New chat' )) {
+    // Truncate at word boundary within 40 chars
+    const raw = firstUser.content.replace(/\s+/g, ' ').trim()
+    const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
+    allThreads.value[idx].title = cut
+  }
+  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value.slice(0, MAX_THREADS))) }
+  catch { /* quota */ }
+}
+
+function saveCurrentThread(): void {
   if (saveTimer !== null) clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => {
-    try {
-      const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
-      localStorage.setItem(historyKey.value, JSON.stringify(toSave))
-    } catch { /* quota or serialization error */ }
-  }, 1000)
+  saveTimer = window.setTimeout(() => { _doSave() }, 1000)
 }
 
-watch(messages, saveHistory, { deep: true })
+function newThread(): void {
+  if (sending.value) stopStreaming()
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  _doSave()
+  const id = newThreadId()
+  const thread: ChatThread = { id, title: 'New chat', messages: [], updatedAt: Date.now() }
+  allThreads.value.unshift(thread)
+  currentThreadId.value = id
+  messages.value = []
+  showThreads.value = false
+}
+
+function switchThread(id: string): void {
+  if (id === currentThreadId.value) { showThreads.value = false; return }
+  if (sending.value) stopStreaming()
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  _doSave()
+  const thread = allThreads.value.find((t) => t.id === id)
+  if (!thread) return
+  currentThreadId.value = id
+  messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
+  // Move selected thread to front
+  allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
+  showThreads.value = false
+}
+
+function deleteThread(id: string): void {
+  allThreads.value = allThreads.value.filter((t) => t.id !== id)
+  if (currentThreadId.value === id) {
+    if (allThreads.value.length === 0) newThread()
+    else switchThread(allThreads.value[0].id)
+  }
+  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
+  catch { /* quota */ }
+}
+
+watch(messages, saveCurrentThread, { deep: true })
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
@@ -119,8 +257,21 @@ watch(settingsProvider, (provider) => {
   }
 })
 
-// Input char counter (shown when > 200 chars)
+// Input char counter + token estimate (shown when > 200 chars)
 const inputCharCount = computed(() => inputText.value.length)
+const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
+
+// Context window usage estimate (assumes ~100k token limit)
+const CTX_MAX_TOKENS = 100_000
+const conversationTokenEstimate = computed(() =>
+  messages.value.reduce((sum, m) => sum + Math.ceil((m.rawContent ?? m.content).length / 4), 0)
+)
+const ctxUsagePct = computed(() => Math.min(100, Math.round((conversationTokenEstimate.value / CTX_MAX_TOKENS) * 100)))
+const ctxUsageLevel = computed(() => {
+  if (ctxUsagePct.value >= 90) return 'danger'
+  if (ctxUsagePct.value >= 60) return 'warn'
+  return 'ok'
+})
 
 // ── Conversation search ────────────────────────────────────────────────────────
 const showSearch = ref(false)
@@ -171,6 +322,18 @@ function isSearchActive(idx: number): boolean {
   return showSearch.value && searchMatches.value[searchMatchIdx.value] === idx
 }
 
+function renderWithSearchHighlight(content: string): string {
+  const html = renderMarkdownLite(content)
+  const q = searchQuery.value.trim()
+  if (!showSearch.value || !q) return html
+  // Only highlight in text nodes — skip content inside HTML tags
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return html.replace(
+    new RegExp(`(?![^<]*>)(${escaped})`, 'gi'),
+    '<mark class="ai-search-highlight">$1</mark>',
+  )
+}
+
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
   id: string
@@ -185,9 +348,10 @@ const atMenuEl = ref<HTMLElement | null>(null)
 
 interface AtOption { id: string; label: string }
 const AT_OPTIONS_STATIC: AtOption[] = [
-  { id: '@file', label: '@file — 目前開啟的檔案' },
-  { id: '@selection', label: '@selection — 編輯器選取內容' },
-  { id: '@git', label: '@git — 目前 git diff (unstaged)' },
+  { id: '@file', label: '@file — current open file' },
+  { id: '@selection', label: '@selection — editor selection' },
+  { id: '@git', label: '@git — current git diff (unstaged)' },
+  { id: '@codebase', label: '@codebase — search workspace code' },
 ]
 const atDirItems = ref<AtOption[]>([])
 
@@ -196,15 +360,17 @@ const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 // ── Slash commands ────────────────────────────────────────────────────────────
 interface SlashCommand { id: string; label: string; description: string; template: string }
 const SLASH_COMMANDS: SlashCommand[] = [
-  { id: '/explain', label: '/explain', description: '解釋程式碼', template: '請詳細解釋以下程式碼的功能與邏輯：' },
-  { id: '/fix',     label: '/fix',     description: '修復問題',   template: '請找出並修復以下程式碼中的問題：' },
-  { id: '/tests',   label: '/tests',   description: '生成測試',   template: '請為以下程式碼撰寫完整的單元測試：' },
-  { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
-  { id: '/review',   label: '/review',   description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
-  { id: '/optimize', label: '/optimize', description: '效能優化',   template: '請分析以下程式碼的效能瓶頸，並提供優化建議與改善版本：' },
-  { id: '/refactor', label: '/refactor', description: '重構程式碼', template: '請對以下程式碼進行重構，提升可讀性與維護性，保持功能不變：' },
-  { id: '/clear',    label: '/clear',    description: '清除對話',   template: '' },
-  { id: '/export',   label: '/export',   description: '匯出對話',   template: '' },
+  { id: '/explain', label: '/explain', description: 'Explain code',             template: 'Explain the following code in detail:' },
+  { id: '/fix',     label: '/fix',     description: 'Fix issue',               template: 'Find and fix the issues in the following code:' },
+  { id: '/tests',   label: '/tests',   description: 'Generate tests',          template: 'Write comprehensive unit tests for the following code:' },
+  { id: '/doc',     label: '/doc',     description: 'Write docs',              template: 'Write clear documentation for the following code:' },
+  { id: '/review',   label: '/review',   description: 'Code review',           template: 'Review the following code and point out potential issues and improvements:' },
+  { id: '/optimize', label: '/optimize', description: 'Performance optimization', template: 'Analyze performance bottlenecks in the following code and provide optimization suggestions:' },
+  { id: '/refactor', label: '/refactor', description: 'Refactor code',         template: 'Refactor the following code to improve readability and maintainability without changing functionality:' },
+  { id: '/new',       label: '/new',       description: 'Create new file',     template: 'Create a new file with the following content:' },
+  { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: 'Generate a concise git commit message (conventional commits format) for the following changes:\n\n' },
+  { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
+  { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -214,15 +380,60 @@ const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 
 // ── Code-block copy via event delegation ─────────────────────────────────────
 function onMessagesClick(e: MouseEvent): void {
-  const btn = (e.target as Element).closest<HTMLButtonElement>('.ai-code-copy-btn')
-  if (!btn) return
-  try {
-    const code = decodeURIComponent(escape(atob(btn.dataset.code ?? '')))
-    navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = 'Copied!'
-      window.setTimeout(() => { btn.textContent = 'Copy' }, 1500)
-    }).catch(() => {/* ignore */})
-  } catch {/* ignore */}
+  const target = e.target as Element
+  // Copy button
+  const copyBtn = target.closest<HTMLButtonElement>('.ai-code-copy-btn')
+  if (copyBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(copyBtn.dataset.code ?? '')))
+      navigator.clipboard.writeText(code).then(() => {
+        copyBtn.textContent = 'Copied!'
+        window.setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
+      }).catch(() => {/* ignore */})
+    } catch {/* ignore */}
+    return
+  }
+  // Code fold/expand toggle
+  const foldBtn = target.closest<HTMLButtonElement>('.ai-code-fold-btn')
+  if (foldBtn) {
+    const wrap = foldBtn.closest<HTMLElement>('.ai-code-wrap')
+    const pre = wrap?.querySelector<HTMLElement>('pre.ai-code-block')
+    if (!pre || !wrap) return
+    const folded = wrap.dataset.folded === 'true'
+    const lines = foldBtn.dataset.lines ?? '?'
+    if (folded) {
+      pre.style.display = ''
+      wrap.dataset.folded = 'false'
+      foldBtn.textContent = `▼ Collapse (${lines} lines)`
+    } else {
+      pre.style.display = 'none'
+      wrap.dataset.folded = 'true'
+      foldBtn.textContent = `▶ Expand (${lines} lines)`
+    }
+    return
+  }
+
+  // Apply to editor button
+  const applyBtn = target.closest<HTMLButtonElement>('.ai-code-apply-btn')
+  if (applyBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
+      const relPath = props.getActiveRelPath?.()
+      if (!relPath) { showToast('No file open'); return }
+      const lineCount = code.split('\n').length
+      if (!window.confirm(`Apply ${lineCount} lines of code to "${relPath}"?\n\nNote: This will overwrite the entire file.`)) return
+      props.backend.send('fs.write_file', {
+        workspace_path: props.workspacePath,
+        rel_path: relPath,
+        content: code,
+      }).then(() => {
+        applyBtn.textContent = 'Applied ✓'
+        applyBtn.style.color = 'var(--success-fg, #3fb950)'
+        window.setTimeout(() => { applyBtn.textContent = 'Apply'; applyBtn.style.color = '' }, 2000)
+        showToast(`Applied to ${relPath}`)
+      }).catch(() => showToast('Apply failed'))
+    } catch { showToast('Apply failed') }
+  }
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
@@ -230,18 +441,43 @@ function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
   let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const safe = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const langLabel = lang || 'code'
-    // Encode raw code for copy button (btoa with URI encode for unicode safety)
+    const langLabel = lang || 'text'
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
+    // Apply syntax highlighting; skip auto-detect for large blocks (> 3000 chars) to avoid slowdown
+    let highlighted: string
+    try {
+      let result
+      if (lang && hljs.getLanguage(lang)) {
+        result = hljs.highlight(code, { language: lang })
+      } else if (!lang && code.length < 3000) {
+        result = hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'bash', 'json', 'css', 'xml', 'sql', 'yaml'])
+      }
+      highlighted = result ? result.value : code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    } catch {
+      highlighted = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    }
     const i = blocks.length
+    // Only show Apply button when an active file path is available
+    const hasActiveFile = !!(props.getActiveRelPath?.())
+    const applyBtn = hasActiveFile
+      ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="Apply to current open file">Apply</button>`
+      : ''
+    // Collapse code blocks that exceed 30 lines
+    const lineCount = code.split('\n').length
+    const isLong = lineCount > 30
+    const foldAttr = isLong ? ' data-folded="true"' : ''
+    const toggleBtn = isLong
+      ? `<button class="ai-code-fold-btn" data-lines="${lineCount}">▶ Expand (${lineCount} lines)</button>`
+      : ''
     blocks.push(
-      `<div class="ai-code-wrap">` +
+      `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
       `<span class="ai-code-lang">${langLabel}</span>` +
+      `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
-      `<pre class="ai-code-block"><code>${safe}</code></pre>` +
+      `${toggleBtn}` +
+      `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code>${highlighted}</code></pre>` +
       `</div>`,
     )
     return `\x00B${i}\x00`
@@ -249,29 +485,93 @@ function renderMarkdownLite(rawText: string): string {
   // HTML-escape non-code-block content to prevent XSS via v-html
   text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-  // 2. Line-by-line: headings, lists, blank lines
+  // 2. Line-by-line: headings, lists, blockquotes, tables, blank lines
   const lines = text.split('\n')
   const parts: string[] = []
-  let inUl = false, inOl = false
+  let inUl = false, inOl = false, inBlockquote = false, inTable = false
+  const tableRows: string[][] = []
+  let tableHasHeader = false
+
   const flushList = () => {
     if (inUl) { parts.push('</ul>'); inUl = false }
     if (inOl) { parts.push('</ol>'); inOl = false }
   }
-  for (const line of lines) {
+  const flushBlockquote = () => {
+    if (inBlockquote) { parts.push('</blockquote>'); inBlockquote = false }
+  }
+  const flushTable = () => {
+    if (!inTable) return
+    inTable = false
+    if (tableRows.length === 0) { tableRows.length = 0; return }
+    let html = '<table class="ai-table"><tbody>'
+    tableRows.forEach((cells, ri) => {
+      const tag = (ri === 0 && tableHasHeader) ? 'th' : 'td'
+      if (ri === 1 && tableHasHeader) return // skip separator row
+      html += '<tr>' + cells.map((c) => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>'
+    })
+    html += '</tbody></table>'
+    parts.push(html)
+    tableRows.length = 0
+    tableHasHeader = false
+  }
+  const flushAll = () => { flushList(); flushBlockquote(); flushTable() }
+
+  const isTableRow = (l: string) => /^\|.+\|/.test(l.trim())
+  const isSepRow = (l: string) => /^\|[\s\-:|]+\|/.test(l.trim())
+  const splitCells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|')
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]
     // Code block placeholder (whole line)
     if (/^\x00B\d+\x00$/.test(line.trim())) {
-      flushList(); parts.push(line.trim()); continue
+      flushAll(); parts.push(line.trim()); continue
     }
     // Horizontal rule
     if (/^[-*_]{3,}$/.test(line.trim())) {
-      flushList(); parts.push('<hr class="ai-hr">'); continue
+      flushAll(); parts.push('<hr class="ai-hr">'); continue
     }
     // Heading: #, ##, ###, ####
     const hm = line.match(/^(#{1,4})\s+(.+)/)
     if (hm) {
-      flushList()
+      flushAll()
       const lvl = Math.min(hm[1].length + 1, 5)
       parts.push(`<h${lvl} class="ai-h">${hm[2]}</h${lvl}>`)
+      continue
+    }
+    // Table detection: current or next line is a separator row
+    if (isTableRow(line)) {
+      const nextLine = lines[li + 1] || ''
+      if (!inTable) {
+        flushList(); flushBlockquote()
+        inTable = true
+        tableRows.push(splitCells(line))
+        if (isSepRow(nextLine)) tableHasHeader = true
+      } else if (isSepRow(line)) {
+        // separator row — already marked, skip it
+        tableRows.push(splitCells(line))
+      } else {
+        tableRows.push(splitCells(line))
+      }
+      continue
+    }
+    if (inTable) { flushTable() }
+    // Blockquote
+    const bqm = line.match(/^>\s?(.*)/)
+    if (bqm) {
+      flushList()
+      if (!inBlockquote) { parts.push('<blockquote class="ai-blockquote">'); inBlockquote = true }
+      parts.push(bqm[1] === '' ? '<br>' : bqm[1] + '<br>')
+      continue
+    }
+    if (inBlockquote && line.trim() === '') { flushBlockquote(); parts.push('<br>'); continue }
+    flushBlockquote()
+    // Task list items: - [ ] or - [x]
+    const taskm = line.match(/^[*\-+]\s+\[([ xX])\]\s+(.+)/)
+    if (taskm) {
+      const checked = taskm[1].toLowerCase() === 'x'
+      if (inOl) { parts.push('</ol>'); inOl = false }
+      if (!inUl) { parts.push('<ul class="ai-ul ai-task-list">'); inUl = true }
+      parts.push(`<li class="ai-task-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled> ${taskm[2]}</li>`)
       continue
     }
     // Unordered list
@@ -293,7 +593,7 @@ function renderMarkdownLite(rawText: string): string {
     flushList()
     parts.push(line === '' ? '<br>' : line + '<br>')
   }
-  flushList()
+  flushAll()
 
   let html = parts.join('')
 
@@ -307,6 +607,10 @@ function renderMarkdownLite(rawText: string): string {
   // Inline code
   html = html.replace(/`([^`\n]+)`/g, (_, c) =>
     `<code class="ai-inline-code">${c.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`,
+  )
+  // Auto-link URLs (not inside existing tags)
+  html = html.replace(/(?<![="'])https?:\/\/[^\s<>"')\]]+/g,
+    (url) => `<a class="ai-link" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
   )
 
   // 4. Restore code blocks
@@ -342,11 +646,18 @@ function makeDiff(filePath: string, newContent: string): string {
 }
 
 // ── Scroll to bottom ───────────────────────────────────────────────────────────
-async function scrollBottom(): Promise<void> {
+async function scrollBottom(force = false): Promise<void> {
   await nextTick()
-  if (messagesEl.value) {
+  if (messagesEl.value && (autoScroll.value || force)) {
     messagesEl.value.scrollTop = messagesEl.value.scrollHeight
   }
+}
+
+function onMessagesScroll(): void {
+  if (!messagesEl.value) return
+  const el = messagesEl.value
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+  autoScroll.value = atBottom
 }
 
 // ── Tool call human-readable summary ─────────────────────────────────────────
@@ -385,7 +696,7 @@ function saveSettings(): void {
     system_prompt: settingsSystemPrompt.value,
   }).catch(() => {/* ignore */})
   showSettings.value = false
-  showToast('設定已儲存')
+  showToast('Settings saved')
 }
 
 // ── Send message ───────────────────────────────────────────────────────────────
@@ -405,8 +716,13 @@ async function sendMessage(): Promise<void> {
   const displayText = rawText || contextChips.value.map((c) => c.label).join(' ')
   const sentContent = fullContent || displayText
 
-  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent })
+  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now() })
   contextChips.value = []
+  if (rawText) {
+    inputHistory.push(rawText)
+    if (inputHistory.length > 50) inputHistory.shift()
+    historyIdx = -1
+  }
   inputText.value = ''
   sending.value = true
 
@@ -421,8 +737,9 @@ async function sendMessage(): Promise<void> {
   history.push({ role: 'user', content: sentContent })
 
   // Push placeholder assistant message for streaming
-  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value })
-  await scrollBottom()
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now() })
+  autoScroll.value = true
+  await scrollBottom(true)
 
   try {
     await props.backend.send('ai.chat.start', {
@@ -432,8 +749,10 @@ async function sendMessage(): Promise<void> {
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
-    if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) { last.streaming = false; last.thinking = false }
+    if (last?.role === 'assistant') {
+      last.streaming = false; last.thinking = false
+      last.isError = true; last.errorMsg = 'Unable to connect to backend'
+    }
     sending.value = false
     currentSessionId.value = null
   }
@@ -449,18 +768,34 @@ function stopStreaming(): void {
   currentSessionId.value = null
 }
 
-// ── Clear conversation ─────────────────────────────────────────────────────────
+// ── Clear conversation (clear current thread) ──────────────────────────────────
 function clearConversation(): void {
   if (sending.value) stopStreaming()
   messages.value = []
-  localStorage.removeItem(historyKey.value)
+  // Also reset the title so it auto-updates on next message
+  const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
+  if (idx !== -1) allThreads.value[idx].title = 'New chat'
+  saveCurrentThread()
+}
+
+// ── Edit a previous user message (truncate history from that point) ────────────
+function editMessage(idx: number): void {
+  if (sending.value) stopStreaming()
+  const msg = messages.value[idx]
+  if (!msg || msg.role !== 'user') return
+  // Put original display text back into the input box
+  inputText.value = msg.content
+  // Remove this message and everything after it
+  messages.value.splice(idx)
+  saveCurrentThread()
+  nextTick(() => textareaEl.value?.focus())
 }
 
 // ── Copy message ───────────────────────────────────────────────────────────────
 // ── Export conversation ────────────────────────────────────────────────────────
 async function exportConversation(): Promise<void> {
   if (messages.value.filter((m) => !m.streaming).length === 0) {
-    showToast('沒有對話可匯出')
+    showToast('No messages to export')
     return
   }
   let md = '# AI Chat Export\n\n'
@@ -470,15 +805,15 @@ async function exportConversation(): Promise<void> {
     md += `### ${roleLabel}\n\n${msg.content}\n\n---\n\n`
   }
   try {
-    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: '匯出對話' })
-    if (r && !r.ok && !r.canceled) showToast('匯出失敗')
-    else if (r?.ok) showToast('對話已匯出')
-  } catch { showToast('匯出失敗') }
+    const r = await window.agentTeam?.saveJson({ defaultName: 'ai-chat-export.md', content: md, title: 'Export chat' })
+    if (r && !r.ok && !r.canceled) showToast('Export failed')
+    else if (r?.ok) showToast('Chat exported')
+  } catch { showToast('Export failed') }
 }
 
 function copyMessage(content: string): void {
   const plain = content.replace(/```[\s\S]*?```/g, (m) => m).replace(/<[^>]+>/g, '')
-  navigator.clipboard.writeText(plain).then(() => showToast('已複製')).catch(() => showToast('複製失敗'))
+  navigator.clipboard.writeText(plain).then(() => showToast('Copied')).catch(() => showToast('Copy failed'))
 }
 
 // ── Regenerate last AI response ────────────────────────────────────────────────
@@ -498,8 +833,9 @@ async function regenerate(): Promise<void> {
   currentSessionId.value = sessionId
 
   const history = messages.value.map((m) => ({ role: m.role, content: m.rawContent ?? m.content }))
-  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value })
-  await scrollBottom()
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now() })
+  autoScroll.value = true
+  await scrollBottom(true)
 
   try {
     await props.backend.send('ai.chat.start', {
@@ -509,11 +845,21 @@ async function regenerate(): Promise<void> {
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
-    if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) { last.streaming = false; last.thinking = false }
+    if (last?.role === 'assistant') {
+      last.streaming = false; last.thinking = false
+      last.isError = true; last.errorMsg = 'Unable to connect to backend'
+    }
     sending.value = false
     currentSessionId.value = null
   }
+}
+
+// ── Retry after error ──────────────────────────────────────────────────────────
+function retryAfterError(): void {
+  // Remove the error assistant message and regenerate
+  const last = messages.value[messages.value.length - 1]
+  if (last?.role === 'assistant' && last.isError) messages.value.pop()
+  void regenerate()
 }
 
 const lastAssistantIdx = computed(() => {
@@ -541,9 +887,9 @@ async function acceptEdit(card: EditProposalCard): Promise<void> {
       new_content: card.new_content,
     })
     card.accepted = true
-    showToast(`已套用：${card.file_path}`)
+    showToast(`Applied: ${card.file_path}`)
   } catch {
-    showToast('套用失敗')
+    showToast('Apply failed')
   }
 }
 
@@ -684,9 +1030,10 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant') {
-      last.content += `\n\n**錯誤：** ${p.message}`
       last.streaming = false
       last.thinking = false
+      last.isError = true
+      last.errorMsg = p.message
     }
     sending.value = false
     currentSessionId.value = null
@@ -723,7 +1070,8 @@ function setupListeners(): void {
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
     if (p.model) settingsModel.value = p.model
     if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
-    if (p.system_prompt) settingsSystemPrompt.value = p.system_prompt
+    // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
+    if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
   })
 }
 
@@ -740,12 +1088,13 @@ function teardownListeners(): void {
 onMounted(() => {
   setupListeners()
   fetchSettings()
-  loadHistory()
+  loadThreads()
 })
 
 onUnmounted(() => {
   teardownListeners()
   if (toastTimer !== null) clearTimeout(toastTimer)
+  if (saveTimer !== null) clearTimeout(saveTimer)
 })
 
 // ── @context system ────────────────────────────────────────────────────────────
@@ -772,11 +1121,19 @@ function onTextareaInput(e: Event): void {
   if (atIdx === -1) { showAtMenu.value = false; return }
 
   const fragment = beforeCursor.slice(atIdx + 1)
-  if (fragment.includes(' ')) { showAtMenu.value = false; return }
+  // Allow spaces only inside @codebase <query>
+  const isCodebaseQuery = /^codebase\s+\S/i.test(fragment)
+  if (fragment.includes(' ') && !isCodebaseQuery) { showAtMenu.value = false; return }
 
   atMenuFilter.value = fragment
   atMenuIdx.value = 0
   showAtMenu.value = true
+
+  if (isCodebaseQuery) {
+    const cbQuery = fragment.slice(fragment.indexOf(' ') + 1).trim()
+    atOptions.value = [{ id: `@codebase:${cbQuery}`, label: `@codebase search: "${cbQuery}"` }]
+    return
+  }
 
   const lower = fragment.toLowerCase()
   const filtered: AtOption[] = AT_OPTIONS_STATIC.filter(
@@ -804,6 +1161,42 @@ function selectSlashCommand(cmd: SlashCommand): void {
     void exportConversation()
     return
   }
+  // /commit: auto-add @git chip so AI sees the staged diff (falls back to unstaged)
+  if (cmd.id === '/commit') {
+    inputText.value = cmd.template
+    void (async () => {
+      try {
+        interface DiffResp { ok: boolean; diff?: string }
+        // Prefer staged diff (what git commit will actually include); fall back to unstaged
+        let resp = await props.backend.send<DiffResp>('git.diff_all', {
+          workspace_path: props.workspacePath,
+          staged: true,
+        })
+        let diff = resp.payload?.diff
+        let label = '@git(staged)'
+        let header = '// git diff --staged'
+        if (!diff) {
+          resp = await props.backend.send<DiffResp>('git.diff_all', {
+            workspace_path: props.workspacePath,
+            staged: false,
+          })
+          diff = resp.payload?.diff
+          label = '@git(diff)'
+          header = '// git diff (unstaged)'
+        }
+        if (diff) {
+          contextChips.value.push({
+            id: crypto.randomUUID(),
+            label,
+            content: `${header}\n${diff}`,
+          })
+        }
+      } catch {/* ignore */}
+      await nextTick()
+      textareaEl.value?.focus()
+    })()
+    return
+  }
   inputText.value = cmd.template + ' '
   nextTick(() => {
     textareaEl.value?.focus()
@@ -814,26 +1207,16 @@ function selectSlashCommand(cmd: SlashCommand): void {
 
 async function searchFiles(query: string): Promise<void> {
   try {
-    interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
+    interface FlatResp { ok: boolean; files?: string[] }
     const lower = query.toLowerCase()
-    const found: AtOption[] = []
+    const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
+      workspace_path: props.workspacePath,
+      query,
+    })
+    const files: string[] = resp.payload?.files ?? []
+    const found: AtOption[] = files.map((f) => ({ id: f, label: `@${f}` }))
 
-    // BFS over directory tree up to 2 levels deep to find matching files
-    const dirsToVisit = ['', ...await _listSubdirs('')]
-    await Promise.all(dirsToVisit.map(async (dir) => {
-      const resp = await props.backend.send<LsResp>('fs.list_dir', {
-        workspace_path: props.workspacePath,
-        rel_path: dir,
-        show_hidden: false,
-      })
-      for (const e of resp.payload?.entries ?? []) {
-        if (!e.is_dir && e.name.toLowerCase().includes(lower)) {
-          found.push({ id: e.rel_path, label: `@${e.rel_path}` })
-        }
-      }
-    }))
-
-    atDirItems.value = found.slice(0, 12)
+    atDirItems.value = found.slice(0, 15)
     const filtered: AtOption[] = [
       ...AT_OPTIONS_STATIC.filter((o) => o.label.toLowerCase().includes(lower)),
       ...atDirItems.value,
@@ -841,22 +1224,6 @@ async function searchFiles(query: string): Promise<void> {
     atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
   } catch {
     // ignore
-  }
-}
-
-async function _listSubdirs(relPath: string): Promise<string[]> {
-  interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
-  try {
-    const resp = await props.backend.send<LsResp>('fs.list_dir', {
-      workspace_path: props.workspacePath,
-      rel_path: relPath,
-      show_hidden: false,
-    })
-    return (resp.payload?.entries ?? [])
-      .filter((e) => e.is_dir)
-      .map((e) => e.rel_path)
-  } catch {
-    return []
   }
 }
 
@@ -878,9 +1245,16 @@ async function selectAtOption(option: AtOption): Promise<void> {
     chipLabel = relPath ? `@${relPath.split('/').pop()}` : '@file'
     chipContent = relPath ? `// ${relPath}\n${content}` : content
   } else if (option.id === '@selection') {
-    const content = props.getEditorContent?.() ?? ''
+    const selected = props.getEditorSelection?.() ?? ''
+    const relPath = props.getActiveRelPath?.() ?? ''
     chipLabel = '@selection'
-    chipContent = content
+    if (selected) {
+      chipContent = relPath ? `// ${relPath} (selection)\n${selected}` : selected
+    } else {
+      // Fall back to full file content when nothing is selected
+      const content = props.getEditorContent?.() ?? ''
+      chipContent = relPath ? `// ${relPath}\n${content}` : content
+    }
   } else if (option.id === '@git') {
     chipLabel = '@git'
     try {
@@ -892,6 +1266,45 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = resp.payload?.diff ? `// git diff (unstaged)\n${resp.payload.diff}` : '// git diff: no changes'
     } catch {
       chipContent = '// git diff: unavailable'
+    }
+  } else if (option.id === '@codebase') {
+    // Static option selected without a query — replace with a prompt hint in input
+    const newVal = val.slice(0, atIdx) + '@codebase ' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    // Position cursor after '@codebase '
+    const pos = atIdx + '@codebase '.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@codebase:')) {
+    const query = option.id.slice('@codebase:'.length)
+    chipLabel = `@codebase:${query}`
+    try {
+      interface SearchMatch { line: number; col: number; text: string }
+      interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+      const resp = await props.backend.send<SearchResp>('search.find_in_files', {
+        workspace_path: props.workspacePath,
+        query,
+        is_regex: false,
+        case_sensitive: false,
+        max_results: 30,
+      })
+      const results = resp.payload?.results ?? []
+      if (results.length === 0) {
+        chipContent = `// @codebase search "${query}": no results`
+      } else {
+        chipContent = `// @codebase search "${query}" — ${results.length} files\n`
+        for (const r of results.slice(0, 8)) {
+          chipContent += `\n// ${r.rel_path}\n`
+          for (const m of r.matches.slice(0, 5)) {
+            chipContent += `${m.line}: ${m.text}\n`
+          }
+        }
+      }
+    } catch {
+      chipContent = `// @codebase search "${query}": unavailable`
     }
   } else {
     // It's a file path
@@ -960,7 +1373,7 @@ async function onDrop(e: DragEvent): Promise<void> {
         content: `// ${relPath}\n${resp.payload?.content ?? ''}`,
       })
     } catch {
-      showToast(`無法讀取：${relPath}`)
+      showToast(`Unable to read: ${relPath}`)
     }
   }
 }
@@ -1016,9 +1429,34 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     void sendMessage()
   }
+  // Prompt history: Up/Down arrow when not in menus
+  if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    const el = textareaEl.value
+    if (el && inputHistory.length > 0 && el.selectionStart === 0) {
+      e.preventDefault()
+      if (historyIdx === -1) historyIdx = inputHistory.length - 1
+      else if (historyIdx > 0) historyIdx--
+      inputText.value = inputHistory[historyIdx]
+      nextTick(() => { if (el) { el.selectionStart = el.selectionEnd = el.value.length } })
+    }
+  }
+  if (e.key === 'ArrowDown' && !e.shiftKey && !e.ctrlKey && !e.metaKey && historyIdx >= 0) {
+    e.preventDefault()
+    if (historyIdx < inputHistory.length - 1) {
+      historyIdx++
+      inputText.value = inputHistory[historyIdx]
+    } else {
+      historyIdx = -1
+      inputText.value = ''
+    }
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     e.preventDefault()
     openSearch()
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+    e.preventDefault()
+    newThread()
   }
 }
 
@@ -1048,12 +1486,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 <template>
   <div class="ai-chat">
     <!-- Messages list -->
-    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick">
+    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @scroll.passive="onMessagesScroll">
       <div v-if="messages.length === 0" class="ai-empty">
         <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="opacity:.35">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
         </svg>
-        <p>AI 助理就緒，輸入訊息或 @ 注入 context</p>
+        <p>AI assistant ready — type a message or use @ to insert context</p>
       </div>
 
       <div
@@ -1066,7 +1504,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <div class="ai-bubble" :class="msg.role">
           <!-- Text content -->
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <div v-if="msg.content" class="ai-text" v-html="renderMarkdownLite(msg.content)" />
+          <div v-if="msg.content" class="ai-text" v-html="renderWithSearchHighlight(msg.content)" />
 
           <!-- Cards (tool calls / edit proposals) -->
           <template v-if="msg.cards">
@@ -1080,7 +1518,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
                 <div v-if="!card.collapsed" class="ai-tool-body">
                   <pre class="ai-tool-pre">{{ JSON.stringify(card.tool_input, null, 2) }}</pre>
                   <div v-if="card.result != null" class="ai-tool-result">
-                    <span class="ai-tool-result-label">結果：</span>{{ card.result }}
+                    <span class="ai-tool-result-label">Result: </span>{{ card.result }}
                   </div>
                 </div>
               </div>
@@ -1089,12 +1527,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
               <div v-else-if="card.kind === 'command_proposal'" class="ai-cmd-card" :class="card.status">
                 <div class="ai-cmd-header">
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 1 1-1.06-1.06L5.44 8 3.72 6.28a.749.749 0 1 1 1.06-1.06l2.25 2.25c.141.14.22.331.22.53Zm1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5Z"/></svg>
-                  <span class="ai-cmd-label">執行命令</span>
-                  <span v-if="card.status === 'approved'" class="ai-cmd-status approved">已執行 ✓</span>
-                  <span v-else-if="card.status === 'rejected'" class="ai-cmd-status rejected">已拒絕 ✕</span>
+                  <span class="ai-cmd-label">Run command</span>
+                  <span v-if="card.status === 'approved'" class="ai-cmd-status approved">Executed ✓</span>
+                  <span v-else-if="card.status === 'rejected'" class="ai-cmd-status rejected">Rejected ✕</span>
                   <div v-else class="ai-cmd-actions">
-                    <button class="ai-cmd-btn approve" @click="approveCommand(card)">執行</button>
-                    <button class="ai-cmd-btn reject" @click="rejectCommand(card)">拒絕</button>
+                    <button class="ai-cmd-btn approve" @click="approveCommand(card)">Run</button>
+                    <button class="ai-cmd-btn reject" @click="rejectCommand(card)">Reject</button>
                   </div>
                 </div>
                 <pre class="ai-cmd-pre">$ {{ card.command }}{{ card.cwd ? `\n# cwd: ${card.cwd}` : '' }}</pre>
@@ -1109,7 +1547,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
                     <button class="ai-edit-btn accept" @click="acceptEdit(card)">Accept</button>
                     <button class="ai-edit-btn discard" @click="discardEdit(card)">Discard</button>
                   </div>
-                  <span v-else class="ai-edit-accepted">已套用 ✓</span>
+                  <span v-else class="ai-edit-accepted">Applied ✓</span>
                 </div>
                 <div class="ai-diff-view" v-html="renderDiff(card.diff)" />
               </div>
@@ -1123,6 +1561,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             <span class="ai-thinking-dot" />
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
+
+          <!-- Error card -->
+          <div v-if="msg.isError" class="ai-error-card">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0">
+              <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"/>
+            </svg>
+            <span class="ai-error-msg">{{ msg.errorMsg || 'An error occurred' }}</span>
+            <button class="ai-error-retry" @click="retryAfterError">Retry</button>
+          </div>
         </div>
         <!-- Accept All / Reject All bar for last assistant message -->
         <div
@@ -1135,20 +1582,41 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <!-- Message action bar (copy / regenerate / model badge) -->
         <div class="ai-msg-actions" :class="msg.role">
           <span v-if="msg.role === 'assistant' && msg.model" class="ai-model-badge">{{ msg.model }}</span>
-          <button class="ai-msg-action-btn" title="複製" @click="copyMessage(msg.content)">
+          <button
+            v-if="msg.role === 'user' && !sending"
+            class="ai-msg-action-btn"
+            title="Edit & resend"
+            @click="editMessage(mi)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/></svg>
+          </button>
+          <button class="ai-msg-action-btn" title="Copy" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
             v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
             class="ai-msg-action-btn"
-            title="重新生成"
+            title="Regenerate"
             @click="regenerate"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
           </button>
+          <span v-if="msg.timestamp" class="ai-msg-time">
+            {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+          </span>
         </div>
       </div>
     </div>
+
+    <!-- Scroll-to-bottom button (shown when user has scrolled up during streaming) -->
+    <button
+      v-if="sending && !autoScroll"
+      class="ai-scroll-to-bottom"
+      title="Scroll to bottom"
+      @click="autoScroll = true; scrollBottom(true)"
+    >
+      ↓ Scroll to bottom
+    </button>
 
     <!-- Search bar -->
     <div v-if="showSearch" class="ai-search-bar">
@@ -1156,15 +1624,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         ref="searchInput"
         v-model="searchQuery"
         class="ai-search-input"
-        placeholder="搜尋對話…"
+        placeholder="Search chat…"
         @keydown.escape="closeSearch"
         @keydown.enter.prevent="searchNav(1)"
       />
       <span class="ai-search-count">
-        {{ searchMatches.length ? `${searchMatchIdx + 1}/${searchMatches.length}` : '無結果' }}
+        {{ searchMatches.length ? `${searchMatchIdx + 1}/${searchMatches.length}` : 'No results' }}
       </span>
-      <button class="ai-search-nav" title="上一個" @click="searchNav(-1)">↑</button>
-      <button class="ai-search-nav" title="下一個" @click="searchNav(1)">↓</button>
+      <button class="ai-search-nav" title="Previous" @click="searchNav(-1)">↑</button>
+      <button class="ai-search-nav" title="Next" @click="searchNav(1)">↓</button>
       <button class="ai-search-close" @click="closeSearch">✕</button>
     </div>
 
@@ -1217,20 +1685,28 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         </div>
       </div>
 
+      <!-- Context window usage bar (shown when > 30%) -->
+      <div v-if="ctxUsagePct > 30" class="ai-ctx-bar" :class="ctxUsageLevel" :title="`~${conversationTokenEstimate.toLocaleString()} / ${CTX_MAX_TOKENS.toLocaleString()} tokens`">
+        <div class="ai-ctx-bar-track">
+          <div class="ai-ctx-bar-fill" :style="{ width: ctxUsagePct + '%' }" />
+        </div>
+        <span class="ai-ctx-label">context {{ ctxUsagePct }}%</span>
+      </div>
+
       <div class="ai-input-row">
         <div class="ai-textarea-wrap">
           <textarea
             ref="textareaEl"
             v-model="inputText"
             class="ai-textarea"
-            placeholder="輸入訊息… (@ 注入 context，Enter 送出，Shift+Enter 換行)"
+            placeholder="Type a message… (@ to insert context, Enter to send, Shift+Enter for new line)"
             :disabled="sending"
             rows="1"
             @input="onTextareaInput"
             @keydown="onTextareaKeydown"
           />
           <span v-if="inputCharCount > 200" class="ai-char-count" :class="{ warn: inputCharCount > 2000 }">
-            {{ inputCharCount.toLocaleString() }}
+            {{ inputCharCount.toLocaleString() }} chars · ~{{ inputTokenEstimate.toLocaleString() }} tokens
           </span>
         </div>
         <div class="ai-input-btns">
@@ -1238,7 +1714,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             v-if="!sending"
             class="ai-send-btn"
             :disabled="!inputText.trim() && contextChips.length === 0"
-            title="送出 (Enter)"
+            title="Send (Enter)"
             @click="sendMessage"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -1248,7 +1724,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <button
             v-else
             class="ai-stop-btn"
-            title="停止"
+            title="Stop"
             @click="stopStreaming"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -1257,7 +1733,22 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="搜尋對話 (Ctrl+F)"
+            title="New chat"
+            @click="newThread"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="Chat history"
+            :class="{ active: showThreads }"
+            @click="showThreads = !showThreads; if (!showThreads) threadSearchQuery = ''"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="Search chat (Ctrl+F)"
             :disabled="messages.length === 0"
             @click="openSearch"
           >
@@ -1267,7 +1758,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="清除對話"
+            title="Clear chat"
             :disabled="messages.length === 0"
             @click="clearConversation"
           >
@@ -1277,7 +1768,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </button>
           <button
             class="ai-settings-btn"
-            title="設定"
+            title="Keyboard shortcuts (?)"
+            @click="showShortcuts = !showShortcuts"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM5 8.5H2.75a.75.75 0 0 1 0-1.5H5a.75.75 0 0 1 0 1.5Zm2.5 2h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm0-4h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm5.75 4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Zm0-4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="Settings"
             @click="showSettings = !showSettings"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
@@ -1288,10 +1786,41 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
       </div>
     </div>
 
+    <!-- Thread list panel -->
+    <div v-if="showThreads" class="ai-threads-panel">
+      <div class="ai-threads-header">
+        <span>Chat history ({{ allThreads.length }})</span>
+        <button class="ai-settings-close" @click="showThreads = false; threadSearchQuery = ''">✕</button>
+      </div>
+      <div class="ai-threads-search">
+        <input
+          v-model="threadSearchQuery"
+          class="ai-search-input"
+          placeholder="Search chats…"
+          @keydown.escape="showThreads = false; threadSearchQuery = ''"
+        />
+      </div>
+      <div class="ai-threads-list">
+        <div v-if="!filteredThreads.length" class="ai-threads-empty">No results</div>
+        <div
+          v-for="t in filteredThreads"
+          :key="t.id"
+          class="ai-thread-item"
+          :class="{ active: t.id === currentThreadId }"
+          @click="switchThread(t.id)"
+        >
+          <span class="ai-thread-title">{{ t.title }}</span>
+          <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
+          <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
+          <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings panel -->
     <div v-if="showSettings" class="ai-settings">
       <div class="ai-settings-header">
-        <span>AI 設定</span>
+        <span>AI Settings</span>
         <button class="ai-settings-close" @click="showSettings = false">✕</button>
       </div>
       <div class="ai-settings-body">
@@ -1316,14 +1845,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           <label class="ai-settings-label">Model</label>
           <select v-model="selectedModelKey" class="ai-settings-select">
             <option v-for="m in currentModelOptions" :key="m" :value="m">{{ m }}</option>
-            <option value="custom">自訂…</option>
+            <option value="custom">Custom…</option>
           </select>
           <input
             v-if="modelIsCustom"
             v-model="settingsModel"
             type="text"
             class="ai-settings-input ai-settings-input--custom"
-            placeholder="輸入 model ID"
+            placeholder="Enter model ID"
           />
         </div>
         <div v-if="settingsProvider === 'ollama'" class="ai-settings-row">
@@ -1340,9 +1869,30 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           />
         </div>
         <div class="ai-settings-footer">
-          <button class="ai-settings-save" @click="saveSettings">儲存</button>
+          <button class="ai-settings-save" @click="saveSettings">Save</button>
         </div>
       </div>
+    </div>
+
+    <!-- Keyboard shortcuts panel -->
+    <div v-if="showShortcuts" class="ai-shortcuts-panel">
+      <div class="ai-shortcuts-header">
+        <span>Keyboard Shortcuts</span>
+        <button class="ai-settings-close" @click="showShortcuts = false">✕</button>
+      </div>
+      <table class="ai-shortcuts-table">
+        <tbody>
+          <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
+          <tr><td><kbd>Shift+Enter</kbd></td><td>New line</td></tr>
+          <tr><td><kbd>↑ / ↓</kbd></td><td>Browse input history</td></tr>
+          <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
+          <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
+          <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix…)</td></tr>
+          <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
+          <tr><td>Drag file</td><td>Add file to context</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- Toast -->
@@ -1430,6 +1980,30 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   background: var(--bg-subtle);
   color: var(--text-bright);
 }
+.ai-msg-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+.ai-msg-wrap:hover .ai-msg-time { opacity: 1; }
+.ai-scroll-to-bottom {
+  position: absolute;
+  bottom: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis, #fff);
+  border: none;
+  border-radius: 12px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.ai-scroll-to-bottom:hover { opacity: 0.85; }
 
 .ai-bubble {
   max-width: 90%;
@@ -1483,6 +2057,34 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   background: var(--bg-subtle);
   color: var(--text-bright);
 }
+.ai-text :deep(.ai-code-fold-btn) {
+  display: block;
+  width: 100%;
+  padding: 4px 10px;
+  background: var(--bg-muted);
+  border: none;
+  border-top: 1px solid var(--border-muted);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+  letter-spacing: 0.02em;
+}
+.ai-text :deep(.ai-code-fold-btn:hover) { color: var(--text-bright); background: var(--bg-subtle); }
+.ai-text :deep(.ai-code-apply-btn) {
+  background: none;
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 4px;
+  color: var(--accent-fg);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 7px;
+  margin-left: 2px;
+}
+.ai-text :deep(.ai-code-apply-btn:hover) {
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis, #fff);
+}
 .ai-text :deep(pre.ai-code-block) {
   background: var(--bg-muted);
   border-radius: 0;
@@ -1500,6 +2102,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
   font-size: 0.9em;
 }
+.ai-text :deep(a.ai-link) {
+  color: var(--accent-fg);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.ai-text :deep(a.ai-link:hover) { opacity: 0.8; }
 .ai-text :deep(ul.ai-ul),
 .ai-text :deep(ol.ai-ol) {
   margin: 4px 0 4px 18px;
@@ -1524,6 +2132,35 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border: none;
   border-top: 1px solid var(--border-muted);
   margin: 8px 0;
+}
+.ai-text :deep(ul.ai-task-list) { list-style: none; padding-left: 4px; }
+.ai-text :deep(li.ai-task-item) { display: flex; align-items: baseline; gap: 6px; }
+.ai-text :deep(li.ai-task-item input[type="checkbox"]) { margin: 0; flex-shrink: 0; }
+.ai-text :deep(blockquote.ai-blockquote) {
+  border-left: 3px solid var(--accent-fg);
+  margin: 4px 0;
+  padding: 2px 10px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.ai-text :deep(table.ai-table) {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.ai-text :deep(table.ai-table th),
+.ai-text :deep(table.ai-table td) {
+  border: 1px solid var(--border-muted);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+.ai-text :deep(table.ai-table th) {
+  background: var(--surface-1);
+  font-weight: 600;
 }
 
 .ai-cursor {
@@ -1557,6 +2194,32 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
 }
+
+/* ── Error card ──────────────────────────────────────────────────────────── */
+.ai-error-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger-fg, #cf222e) 30%, transparent);
+  color: var(--danger-fg, #cf222e);
+  font-size: 12.5px;
+}
+.ai-error-msg { flex: 1; word-break: break-word; }
+.ai-error-retry {
+  background: var(--danger-fg, #cf222e);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ai-error-retry:hover { opacity: 0.85; }
 
 /* ── Accept All / Reject All bar ─────────────────────────────────────────── */
 .ai-bulk-actions {
@@ -1826,6 +2489,33 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   font-family: ui-monospace, monospace;
 }
 .ai-char-count.warn { color: var(--danger-fg, #cf222e); }
+
+/* Context window bar */
+.ai-ctx-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+}
+.ai-ctx-bar-track {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-muted);
+  overflow: hidden;
+}
+.ai-ctx-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-emphasis);
+  transition: width 0.3s ease;
+}
+.ai-ctx-bar.warn .ai-ctx-bar-fill { background: #d29922; }
+.ai-ctx-bar.danger .ai-ctx-bar-fill { background: var(--danger-fg, #cf222e); }
+.ai-ctx-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.ai-ctx-bar.warn .ai-ctx-label { color: #d29922; }
+.ai-ctx-bar.danger .ai-ctx-label { color: var(--danger-fg, #cf222e); }
+
 .ai-textarea {
   width: 100%;
   box-sizing: border-box;
@@ -1880,6 +2570,52 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 }
 .ai-settings-btn:hover:not(:disabled) { color: var(--text-bright); }
 .ai-settings-btn:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Search bar ─────────────────────────────────────────────────────────────── */
+.ai-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-muted);
+  flex-shrink: 0;
+}
+.ai-search-input {
+  flex: 1;
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-base);
+  color: var(--text-bright);
+  font-size: 12px;
+  outline: none;
+}
+.ai-search-input:focus { border-color: var(--accent-emphasis); }
+.ai-search-count { font-size: 11px; color: var(--text-muted); min-width: 52px; text-align: center; }
+.ai-search-nav {
+  background: none;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+}
+.ai-search-nav:hover { color: var(--text-bright); }
+.ai-search-close { background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 13px; line-height: 1; padding: 2px 4px; }
+.ai-search-close:hover { color: var(--text-bright); }
+.ai-msg-wrap.search-match .ai-bubble { outline: 1px solid var(--accent-emphasis); opacity: 0.7; }
+.ai-msg-wrap.search-active .ai-bubble { outline: 2px solid var(--accent-emphasis); opacity: 1; }
+.ai-text :deep(mark.ai-search-highlight) {
+  background: rgba(255, 213, 0, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.ai-msg-wrap.search-active .ai-text :deep(mark.ai-search-highlight) {
+  background: rgba(255, 165, 0, 0.5);
+}
 
 /* ── Settings panel ────────────────────────────────────────────────────────── */
 .ai-settings {
@@ -1977,6 +2713,91 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-settings-save:hover { opacity: 0.85; }
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
+/* ── Shortcuts panel ─────────────────────────────────────────────────────── */
+/* ── Thread list panel ────────────────────────────────────────────────────── */
+.ai-threads-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 60%;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+}
+.ai-threads-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0;
+}
+.ai-threads-search { padding: 6px 10px 4px; flex-shrink: 0; }
+.ai-threads-empty { padding: 10px 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
+.ai-threads-list { overflow-y: auto; flex: 1; }
+.ai-thread-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.1s;
+}
+.ai-thread-item:hover { background: var(--bg-muted); }
+.ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
+.ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
+.ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
+.ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
+.ai-settings-btn.active { color: var(--accent-fg); }
+
+.ai-shortcuts-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
+  z-index: 20;
+  padding: 0 0 8px;
+}
+.ai-shortcuts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-muted);
+}
+.ai-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ai-shortcuts-table td { padding: 3px 14px; }
+.ai-shortcuts-table td:first-child { width: 40%; }
+kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  background: var(--bg-muted);
+  color: var(--text-bright);
+  font-size: 11px;
+  font-family: monospace;
+}
+
 .ai-toast {
   position: absolute;
   bottom: 90px;
@@ -1993,4 +2814,23 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   z-index: 30;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
+</style>
+
+<style>
+/* highlight.js GitHub Dark theme — token colours */
+.hljs { background: transparent; }
+.hljs-comment,.hljs-quote { color: #8b949e; font-style: italic; }
+.hljs-keyword,.hljs-selector-tag,.hljs-addition { color: #ff7b72; }
+.hljs-number,.hljs-string,.hljs-meta .hljs-meta-string,.hljs-literal,.hljs-doctag,.hljs-regexp { color: #a5d6ff; }
+.hljs-title,.hljs-section,.hljs-name,.hljs-selector-id,.hljs-selector-class { color: #d2a8ff; font-weight: 600; }
+.hljs-attribute,.hljs-attr,.hljs-variable,.hljs-template-variable,.hljs-class .hljs-title,.hljs-type { color: #ffa657; }
+.hljs-symbol,.hljs-bullet,.hljs-subst,.hljs-meta,.hljs-selector-attr,.hljs-selector-pseudo { color: #79c0ff; }
+.hljs-built_in,.hljs-deletion { color: #ffa657; }
+.hljs-formula { background: #161b22; }
+.hljs-strong { font-weight: bold; }
+.hljs-emphasis { font-style: italic; }
+.hljs-tag { color: #7ee787; }
+.hljs-punctuation { color: #8b949e; }
+.hljs-string { color: #a5d6ff; }
+.hljs-operator,.hljs-params { color: #e6edf3; }
 </style>

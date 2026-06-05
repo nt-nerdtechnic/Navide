@@ -10,10 +10,10 @@ const icon = computed(() =>
 )
 const btnLabel = computed(() =>
   props.installing === props.dep.id
-    ? '安裝中…'
+    ? 'Installing…'
     : props.dep.needs_terminal
-      ? '在終端機安裝'
-      : '安裝'
+      ? 'Install in terminal'
+      : 'Install'
 )
 </script>
 
@@ -23,9 +23,9 @@ const btnLabel = computed(() =>
     <div class="ob-dep-info">
       <div class="ob-dep-name">
         {{ dep.label }}
-        <span v-if="dep.optional" class="ob-dep-opt">選用</span>
+        <span v-if="dep.optional" class="ob-dep-opt">Optional</span>
         <span v-if="dep.version" class="ob-dep-ver">{{ dep.version }}</span>
-        <span v-if="dep.status === 'outdated'" class="ob-dep-warn">需 ≥ {{ dep.min_version }}</span>
+        <span v-if="dep.status === 'outdated'" class="ob-dep-warn">requires ≥ {{ dep.min_version }}</span>
       </div>
       <div class="ob-dep-desc">{{ dep.description }}</div>
     </div>

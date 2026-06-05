@@ -30,7 +30,7 @@ const {
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
-  createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+  createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage, checkStaged,
@@ -241,7 +241,7 @@ async function ctxOpenFileAtHead(): Promise<void> {
   if (!f) return
   const r = await showFile(f.path)
   if (r.ok) await window.agentTeam?.openTempFile(`${fileName(f.path)} (HEAD)`, r.content)
-  else { gitError.value = r.error || '無法讀取 HEAD 版本' }
+  else { gitError.value = r.error || 'Failed to read HEAD version' }
 }
 async function ctxReveal(): Promise<void> {
   const f = ctxMenu.value.file
@@ -314,12 +314,12 @@ async function ctxWhyIgnored(): Promise<void> {
   const r = await checkIgnore(p)
   let text: string
   if (!r.ok) {
-    text = r.error || 'check-ignore 失敗'
+    text = r.error || 'check-ignore failed'
   } else if (r.ignored) {
-    text = `被 ${r.source}:${r.line} 的規則「${r.pattern}」忽略`
-    if (r.tracked) text += '；但此檔已被 git 追蹤，規則暫不生效 — 用「Add to .gitignore」會自動 untrack。'
+    text = `Ignored by rule "${r.pattern}" at ${r.source}:${r.line}`
+    if (r.tracked) text += '; but this file is already tracked by git, so the rule has no effect — use "Add to .gitignore" to untrack it.'
   } else {
-    text = r.tracked ? '沒有任何忽略規則命中（檔案已被追蹤）。' : '沒有任何忽略規則命中。'
+    text = r.tracked ? 'No ignore rules matched (file is tracked).' : 'No ignore rules matched.'
   }
   ignoreResult.value = { path: p, text }
 }
@@ -335,7 +335,7 @@ const initError = ref('')
 async function doInit(createGitignore: boolean): Promise<void> {
   initError.value = ''
   const r = await initRepo(createGitignore)
-  if (!r.ok) initError.value = r.error || 'git init 失敗'
+  if (!r.ok) initError.value = r.error || 'git init failed'
   else commitMessage.value = 'Initial commit'
 }
 
@@ -352,13 +352,13 @@ async function pickCloneDir(): Promise<void> {
 }
 async function doClone(): Promise<void> {
   cloneError.value = ''
-  if (!cloneUrl.value.trim()) { cloneError.value = '請輸入倉庫 URL'; return }
-  if (!cloneParent.value.trim()) { cloneError.value = '請選擇目標資料夾'; return }
+  if (!cloneUrl.value.trim()) { cloneError.value = 'Enter repository URL'; return }
+  if (!cloneParent.value.trim()) { cloneError.value = 'Select a target folder'; return }
   const target = `${cloneParent.value.replace(/\/+$/, '')}/${repoNameFromUrl(cloneUrl.value)}`
   cloning.value = true
   try {
     const r = await cloneRepo(cloneUrl.value.trim(), target)
-    if (!r.ok) { cloneError.value = r.error || 'clone 失敗'; return }
+    if (!r.ok) { cloneError.value = r.error || 'Clone failed'; return }
     if (r.path) emit('open-workspace', r.path)
   } finally {
     cloning.value = false
@@ -369,11 +369,11 @@ async function doClone(): Promise<void> {
 const connectUrl = ref(''), connecting = ref(false), connectError = ref('')
 async function doConnect(): Promise<void> {
   connectError.value = ''
-  if (!connectUrl.value.trim()) { connectError.value = '請輸入倉庫 URL'; return }
+  if (!connectUrl.value.trim()) { connectError.value = 'Enter repository URL'; return }
   connecting.value = true
   try {
     const r = await connectToRemote(connectUrl.value.trim())
-    if (!r.ok) connectError.value = r.error || '連接失敗'
+    if (!r.ok) connectError.value = r.error || 'Connect failed'
   } finally {
     connecting.value = false
   }
@@ -390,7 +390,7 @@ async function doAbort(): Promise<void> {
   const op = opInProgress.value
   if (!op) return
   const r = await abortOperation(op)
-  if (!r.ok) notifyToast(r.error || 'abort 失敗', { type: 'error' })
+  if (!r.ok) notifyToast(r.error || 'Abort failed', { type: 'error' })
 }
 
 // ── 所有衝突解完後自動偵測並預填 commit message ──────────────────────────────────
@@ -546,7 +546,7 @@ async function runAutoCommit(): Promise<void> {
     autoCommitStep.value = 'checking'
     const lint = await checkStaged()
     if (!lint.ok) {
-      notifyToast(`Auto Commit 中止：偵測到 ${lint.errorCount} 個 lint 錯誤`, { type: 'error' })
+      notifyToast(`Auto Commit aborted: ${lint.errorCount} lint error(s) detected`, { type: 'error' })
       return
     }
 
@@ -606,7 +606,7 @@ onUnmounted(() => { _clearAutoTimer() })
 // ── remote actions ────────────────────────────────────────────────────────────
 const { toast: notifyToast, alert: notifyAlert } = useNotify()
 const remoteOpLabel: Record<string, string> = {
-  fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: '同步', publish: '發布'
+  fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: 'Sync', publish: 'Publish'
 }
 const remoteOutput = ref('')
 const remoteError = ref('')
@@ -623,8 +623,8 @@ async function runRemote(op: Exclude<typeof remoteBusy.value, ''>, fn: () => Pro
     // Surface the outcome through the modular notification system:
     // failures as a blocking alert (full git output), success as a toast.
     const label = remoteOpLabel[op] ?? op
-    if (remoteError.value) void notifyAlert(remoteError.value, { title: `${label} 失敗` })
-    else if (remoteOutput.value) notifyToast(`${label} 完成`, { type: 'success' })
+    if (remoteError.value) void notifyAlert(remoteError.value, { title: `${label} failed` })
+    else if (remoteOutput.value) notifyToast(`${label} done`, { type: 'success' })
   } finally {
     remoteBusy.value = ''
   }
@@ -699,6 +699,7 @@ const aheadBehind = computed(() => {
 
 // ── branches ──────────────────────────────────────────────────────────────────
 const branchExpanded = ref(false)
+const showRemoteBranches = ref(false)
 const newBranchName = ref('')
 const branchError = ref('')
 const branchCreating = ref(false)
@@ -713,6 +714,11 @@ async function doCreateBranch(): Promise<void> {
 async function doSwitch(name: string): Promise<void> {
   branchError.value = ''
   const r = await switchBranch(name); if (!r.ok) branchError.value = r.error || 'switch failed'
+}
+async function doCheckoutRemote(remoteRef: string): Promise<void> {
+  branchError.value = ''
+  const r = await checkoutRemoteBranch(remoteRef)
+  if (!r.ok) branchError.value = r.error || 'checkout failed'
 }
 async function doDeleteBranch(name: string): Promise<void> {
   branchError.value = ''
@@ -764,16 +770,20 @@ async function doMerge(branch: string): Promise<void> {
 async function doMergeInto(target: string): Promise<void> {
   mergeError.value = ''; mergeOutput.value = ''
   ctxMenu.value.show = false
-  const r = await mergeInto(target)
-  if (!r.ok && (r.conflict_files ?? []).length > 0) {
-    mergeConflictContext.value = `已切換至 ${target}，合併 ${(r as any).source_branch || ''} 時發生衝突`
+  try {
+    const r = await mergeInto(target)
+    if (!r.ok && (r.conflict_files ?? []).length > 0) {
+      mergeConflictContext.value = `Switched to ${target}, conflict occurred while merging ${(r as any).source_branch || ''}`
+    }
+    _handleMergeResult(r)
+  } catch (err) {
+    mergeError.value = err instanceof Error ? err.message : 'merge failed'
   }
-  _handleMergeResult(r)
 }
 
 async function doConflictAbort(): Promise<void> {
   const r = await abortOperation('merge')
-  if (!r.ok) notifyToast(r.error || 'abort 失敗', { type: 'error' })
+  if (!r.ok) notifyToast(r.error || 'Abort failed', { type: 'error' })
   showMergeConflictModal.value = false
   mergeConflictFiles.value = []
   mergeConflictContext.value = ''
@@ -1147,35 +1157,35 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 <template>
   <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; clearSelection()">
 
-    <div v-if="!workspacePath" class="empty-state">請先選擇 Workspace</div>
+    <div v-if="!workspacePath" class="empty-state">Select a workspace to get started</div>
 
     <!-- ── Init panel ─────────────────────────────────────── -->
     <div v-else-if="!gitStatus.is_git_repo" class="init-panel">
       <svg class="init-svg" width="32" height="32" viewBox="0 0 16 16" fill="#3fb950">
         <path d="M15.698 7.287 8.712.302a1.03 1.03 0 0 0-1.457 0l-1.45 1.45 1.84 1.84a1.223 1.223 0 0 1 1.55 1.56l1.773 1.774a1.224 1.224 0 0 1 1.267 2.025 1.226 1.226 0 0 1-2.002-1.334L8.58 5.965v4.233a1.226 1.226 0 0 1 .321 2.432 1.226 1.226 0 0 1-1.11-1.384 1.224 1.224 0 0 1 .787-1.03V5.926a1.224 1.224 0 0 1-.666-1.608L6.076 2.486 .302 8.26a1.03 1.03 0 0 0 0 1.456l6.986 6.986a1.03 1.03 0 0 0 1.456 0l6.953-6.953a1.031 1.031 0 0 0 0-1.462z"/>
       </svg>
-      <div class="init-title">尚未初始化 Git Repository</div>
-      <div class="init-desc">此目錄還沒有 <code>.git</code> 資料夾</div>
+      <div class="init-title">Not a Git repository</div>
+      <div class="init-desc">This folder does not have a <code>.git</code> directory</div>
       <button class="btn-primary w-full" :disabled="isInitializing" @click="doInit(true)">
-        {{ isInitializing ? '初始化中…' : 'Initialize Repository' }}
+        {{ isInitializing ? 'Initializing…' : 'Initialize Repository' }}
       </button>
       <button class="btn-ghost w-full" style="font-size:11px" :disabled="isInitializing" @click="doInit(false)">
-        Initialize (不建立 .gitignore)
+        Initialize (without .gitignore)
       </button>
       <p v-if="initError" class="err-text">{{ initError }}</p>
 
       <!-- Connect existing directory to a remote -->
       <div class="clone-box">
-        <div class="clone-title">或連接到既有遠端倉庫</div>
-        <div class="clone-hint">將目前目錄的檔案與遠端 repo 合併（不需要另外選資料夾）</div>
+        <div class="clone-title">Or connect to an existing remote repository</div>
+        <div class="clone-hint">Merge the current directory with a remote repo (no separate folder selection needed)</div>
         <input
           v-model="connectUrl"
           class="clone-input"
-          placeholder="Repository URL (https://… 或 git@…)"
+          placeholder="Repository URL (https://… or git@…)"
           :disabled="connecting"
         />
         <button class="btn-ghost w-full" :disabled="connecting" @click="doConnect">
-          {{ connecting ? '連接中…' : 'Connect to Remote' }}
+          {{ connecting ? 'Connecting…' : 'Connect to Remote' }}
         </button>
         <p v-if="connectError" class="err-text">{{ connectError }}</p>
       </div>
@@ -1237,14 +1247,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
       <!-- All-conflicts-resolved banner -->
       <div v-if="allConflictsResolved" class="op-banner op-banner-ready">
-        <span class="op-text">✓ 所有衝突已解決，請提交 merge commit</span>
-        <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">前往提交</button>
+        <span class="op-text">✓ All conflicts resolved — ready to commit merge</span>
+        <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">Go to commit</button>
       </div>
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
       <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': opInProgress === 'merge' && conflictFileCount > 0 }">
         <span class="op-text">
-          ⚠ {{ opInProgress }} 進行中
-          <template v-if="opInProgress === 'merge' && conflictFileCount > 0">・{{ conflictFileCount }} 個衝突檔案</template>
+          ⚠ {{ opInProgress }} in progress
+          <template v-if="opInProgress === 'merge' && conflictFileCount > 0">・{{ conflictFileCount }} conflict file(s)</template>
         </span>
         <button class="op-abort-btn" @click="doAbort">Abort {{ opInProgress }}</button>
       </div>
@@ -1266,7 +1276,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
           />
-          <button class="ai-btn" :class="{ generating: isGenerating, 'auto-active': autoCommit }" :disabled="isGenerating || !hasChanges" :title="autoCommit ? 'AI 自動 commit 已開啟' : 'AI 生成 commit message'" @click.stop="doGenerate">
+          <button class="ai-btn" :class="{ generating: isGenerating, 'auto-active': autoCommit }" :disabled="isGenerating || !hasChanges" :title="autoCommit ? 'Auto Commit enabled' : 'AI commit message'" @click.stop="doGenerate">
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
@@ -1296,7 +1306,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 ✦ Auto Commit
                 <span class="spacer" />
                 <span class="ac-badge">{{ autoCommit ? 'ON' : 'OFF' }}</span>
-                <span v-if="autoCommitPending" class="auto-pending-dot" title="排程中，60 秒後自動提交" />
+                <span v-if="autoCommitPending" class="auto-pending-dot" title="Scheduled — auto-commit in 60 seconds" />
               </button>
             </div>
           </Teleport>
@@ -1307,11 +1317,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span v-if="autoCommitStep" class="ac-status-spinner">⟳</span>
           <span v-else class="ac-status-dot" />
           <span class="ac-status-label">
-            <template v-if="autoCommitStep === 'staging'">暫存所有變更…</template>
-            <template v-else-if="autoCommitStep === 'checking'">Lint 檢查中…</template>
-            <template v-else-if="autoCommitStep === 'generating'">AI 生成 commit 訊息…</template>
-            <template v-else-if="autoCommitStep === 'committing'">提交中…</template>
-            <template v-else>Auto Commit 等待中，{{ autoCommitCountdown }} 秒後觸發</template>
+            <template v-if="autoCommitStep === 'staging'">Staging all changes…</template>
+            <template v-else-if="autoCommitStep === 'checking'">Running lint check…</template>
+            <template v-else-if="autoCommitStep === 'generating'">Generating AI commit message…</template>
+            <template v-else-if="autoCommitStep === 'committing'">Committing…</template>
+            <template v-else>Auto Commit waiting — triggers in {{ autoCommitCountdown }}s</template>
           </span>
         </div>
       </div>
@@ -1372,7 +1382,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </div>
               <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
                 <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
@@ -1380,14 +1390,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </div>
               <div v-if="diffBlamePath === row.file!.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
                 <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                <div v-else-if="!diffBlameHunks.length" class="loading-text">No changes to display</div>
                 <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
                   <div class="db-hunk-head">{{ dh.header }}</div>
                   <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
                     <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
                     <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
                     <code class="db-code">{{ dl.text }}</code>
-                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : 'uncommitted' }}</span>
                   </div>
                 </template>
               </div>
@@ -1419,7 +1429,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             </div>
             <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
               <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-              <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+              <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
               <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                 <code class="hash-tag">{{ hc.short_hash }}</code>
                 <span class="mini-msg">{{ hc.message }}</span>
@@ -1427,14 +1437,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             </div>
             <div v-if="diffBlamePath === f.path && diffBlameStaged" class="subpanel green-border diffblame-inline">
               <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
-              <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+              <div v-else-if="!diffBlameHunks.length" class="loading-text">No changes to display</div>
               <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
                 <div class="db-hunk-head">{{ dh.header }}</div>
                 <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
                   <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
                   <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
                   <code class="db-code">{{ dl.text }}</code>
-                  <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                  <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : 'uncommitted' }}</span>
                 </div>
               </template>
             </div>
@@ -1458,40 +1468,40 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Merge conflict modal -->
       <div v-if="showMergeConflictModal" class="merge-conflict-box">
-        <div class="clean-title">合併衝突（{{ mergeConflictFiles.length }} 個檔案）</div>
+        <div class="clean-title">Merge conflict ({{ mergeConflictFiles.length }} file(s))</div>
         <div v-if="mergeConflictContext" class="merge-conflict-context">{{ mergeConflictContext }}</div>
         <div v-for="f in mergeConflictFiles" :key="f" class="clean-file conflict-file">{{ f }}</div>
         <div class="merge-conflict-actions">
           <button class="btn-danger" @click="doConflictAbort">Abort merge</button>
-          <button class="btn-primary" @click="doConflictKeep">繼續解衝突</button>
+          <button class="btn-primary" @click="doConflictKeep">Resolve conflicts</button>
         </div>
       </div>
 
       <!-- Discard confirm (shared by Discard All + folder discard) -->
       <div v-if="showDiscardConfirm" class="clean-box">
-        <div class="clean-title">捨棄 {{ discardTargets.length }} 項變更？此動作無法復原</div>
+        <div class="clean-title">Discard {{ discardTargets.length }} change(s)? This cannot be undone.</div>
         <div v-for="f in discardTargets" :key="f" class="clean-file">{{ f }}</div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showDiscardConfirm = false">取消</button>
-          <button class="btn-danger" @click="doDiscardConfirm">確認捨棄</button>
+          <button class="btn-ghost" @click="showDiscardConfirm = false">Cancel</button>
+          <button class="btn-danger" @click="doDiscardConfirm">Discard</button>
         </div>
       </div>
 
       <!-- Stash with optional label -->
       <div v-if="showStashPrompt" class="stash-box">
-        <div class="stash-title">儲存為 Draft（標記可留空）</div>
+        <div class="stash-title">Save as Draft (label optional)</div>
         <div class="input-row">
           <input
             v-model="stashMessage"
             class="git-input"
             type="text"
-            placeholder="為這次 Draft 命名…（選填）"
+            placeholder="Name this draft… (optional)"
             @keydown.enter="doStash"
             @keydown.esc="showStashPrompt = false"
           />
         </div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showStashPrompt = false">取消</button>
+          <button class="btn-ghost" @click="showStashPrompt = false">Cancel</button>
           <button class="btn-primary" @click="doStash">Save Draft</button>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
@@ -1536,7 +1546,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
                 <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
                   <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-                  <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+                  <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
                   <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                     <code class="hash-tag">{{ hc.short_hash }}</code>
                     <span class="mini-msg">{{ hc.message }}</span>
@@ -1544,14 +1554,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
                 <div v-if="diffBlamePath === row.file!.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
                   <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
-                  <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                  <div v-else-if="!diffBlameHunks.length" class="loading-text">No changes to display</div>
                   <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
                     <div class="db-hunk-head">{{ dh.header }}</div>
                     <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
                       <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
                       <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
                       <code class="db-code">{{ dl.text }}</code>
-                      <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                      <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : 'uncommitted' }}</span>
                     </div>
                   </template>
                 </div>
@@ -1579,7 +1589,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </div>
               <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
                 <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!fileHistoryCommits.length" class="loading-text">尚無提交歷史</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
@@ -1587,14 +1597,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </div>
               <div v-if="diffBlamePath === f.path && !diffBlameStaged" class="subpanel green-border diffblame-inline">
                 <div v-if="diffBlameLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!diffBlameHunks.length" class="loading-text">沒有可顯示的變更</div>
+                <div v-else-if="!diffBlameHunks.length" class="loading-text">No changes to display</div>
                 <template v-else v-for="(dh, dhi) in diffBlameHunks" :key="dhi">
                   <div class="db-hunk-head">{{ dh.header }}</div>
                   <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
                     <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
                     <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
                     <code class="db-code">{{ dl.text }}</code>
-                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : '未提交' }}</span>
+                    <span class="db-annot">{{ dl.committed ? `${dl.author}, ${dl.date}` : 'uncommitted' }}</span>
                   </div>
                 </template>
               </div>
@@ -1625,14 +1635,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- ── selection action bar ──────────────────────────────── -->
       <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
-        <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
+        <span class="sel-count">{{ selectedKeys.size }} selected</span>
         <button class="sel-btn sel-clear" @click="clearSelection">✕</button>
       </div>
 
       <!-- ══════════════════════════════════════════════════════
            PART 2 — REMOTE / HISTORY
            ══════════════════════════════════════════════════════ -->
-      <div class="part-resize" title="拖曳調整上下比例" @mousedown="onGitDividerStart">
+      <div class="part-resize" title="Drag to resize" @mousedown="onGitDividerStart">
         <div class="part-resize-grip" />
       </div>
 
@@ -1691,10 +1701,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="input-row">
           <input v-model="newBranchName" class="git-input" placeholder="New branch name…" @keydown.enter="doCreateBranch" />
           <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim()" @click="doCreateBranch">＋</button>
+          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? 'Hide remote branches' : 'Show remote branches'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
-        <div v-for="b in gitBranches" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu.prevent="!b.is_current && openBranchCtxMenu($event, b.name)">
+        <!-- local branches -->
+        <div v-for="b in gitBranches.filter(x => !x.is_remote)" :key="b.name" class="branch-row" :class="{ current: b.is_current }" @contextmenu.prevent="!b.is_current && openBranchCtxMenu($event, b.name)">
           <span class="b-check">{{ b.is_current ? '✓' : '' }}</span>
           <span class="b-name">{{ b.name }}</span>
           <span v-if="b.tracking" class="b-track">→ {{ b.tracking }}</span>
@@ -1706,6 +1718,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="row-btn always" title="Switch" @click.stop="doSwitch(b.name)">↵</button>
           </template>
         </div>
+        <!-- remote branches (toggleable) -->
+        <template v-if="showRemoteBranches">
+          <div class="branch-section-label">Remote branches</div>
+          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">No remote branches</div>
+          <div
+            v-for="b in gitBranches.filter(x => x.is_remote)"
+            :key="b.name"
+            class="branch-row remote-branch-row"
+            :class="{ 'remote-has-local': b.has_local }"
+          >
+            <span class="b-check">{{ b.has_local ? '✓' : '' }}</span>
+            <span class="b-name remote">{{ b.name }}</span>
+            <div class="spacer" />
+            <button v-if="!b.has_local" class="row-btn always" title="Checkout locally" @click.stop="doCheckoutRemote(b.name)">⬇</button>
+          </div>
+        </template>
         <div v-if="comparingBranch && compareResult" class="compare-panel">
           <div class="compare-title">{{ comparingBranch }} ↔ {{ gitStatus.branch }}</div>
           <div class="compare-stat">{{ compareResult.stat }}</div>
@@ -1886,7 +1914,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
           <div class="input-row">
             <input v-model="newWtPath" class="git-input" placeholder="/path/to/worktree" style="flex:2" />
-            <button class="btn-ghost sm icon-only" title="瀏覽資料夾" @click="pickWorktreeDir">
+            <button class="btn-ghost sm icon-only" title="Browse folder" @click="pickWorktreeDir">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
             </button>
             <input v-if="newWtIsNew" v-model="newWtBranch" class="git-input" placeholder="new branch" style="flex:1" />
@@ -1969,9 +1997,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
       <!-- Multi-select menu -->
       <div v-if="ctxMenu.show && selectedKeys.size > 1" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} 個檔案</button>
-        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} 個檔案</button>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} 個檔案</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} file(s)</button>
+        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} file(s)</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} file(s)</button>
       </div>
       <!-- File menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
@@ -1993,10 +2021,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="menu-item has-sub">
           <span>Add to ignore</span><span class="sub-caret">▸</span>
           <div class="ctx-submenu">
-            <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore（專案根目錄）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore（所在資料夾）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('local')">.git/info/exclude（本機限定）</button>
-            <button class="menu-item" @click="ctxAddToGitignore('global')">全域 .gitignore</button>
+            <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore (project root)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore (current folder)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('local')">.git/info/exclude (local only)</button>
+            <button class="menu-item" @click="ctxAddToGitignore('global')">Global .gitignore</button>
           </div>
         </div>
         <button v-if="ctxIsIgnored" class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
@@ -2016,10 +2044,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div class="menu-item has-sub">
             <span>Add to ignore</span><span class="sub-caret">▸</span>
             <div class="ctx-submenu">
-              <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore（專案根目錄）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore（所在資料夾）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('local')">.git/info/exclude（本機限定）</button>
-              <button class="menu-item" @click="ctxFolderAddIgnore('global')">全域 .gitignore</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore (project root)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore (current folder)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('local')">.git/info/exclude (local only)</button>
+              <button class="menu-item" @click="ctxFolderAddIgnore('global')">Global .gitignore</button>
             </div>
           </div>
         </template>
@@ -2043,7 +2071,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ignoreResult" class="ignore-modal" @click.stop>
         <div class="ignore-modal-path" :title="ignoreResult.path">{{ ignoreResult.path }}</div>
         <div class="ignore-modal-text">{{ ignoreResult.text }}</div>
-        <button class="btn-ghost sm" @click="ignoreResult = null">關閉</button>
+        <button class="btn-ghost sm" @click="ignoreResult = null">Close</button>
       </div>
     </Teleport>
   </div>
@@ -2517,6 +2545,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .b-check { width: 14px; color: var(--success-bright); font-size: 10px; text-align: center; flex-shrink: 0; }
 .b-name { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 .b-track { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
+.b-name.remote { color: var(--text-muted); font-style: italic; }
+.branch-section-label { font-size: 10px; color: var(--text-muted); padding: 4px 0 2px; letter-spacing: 0.04em; text-transform: uppercase; }
+.remote-branch-row { opacity: 0.85; }
+.remote-branch-row.remote-has-local { opacity: 0.5; }
+.remote-branch-row.remote-has-local .b-check { color: var(--success-bright); }
+.btn-ghost.active { color: var(--accent-bright); }
 .compare-panel {
   margin: 4px 0; background: var(--bg-inset); border: 1px solid var(--border-muted);
   border-radius: 4px; padding: 6px 8px; font-size: 11px;

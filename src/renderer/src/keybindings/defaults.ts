@@ -14,7 +14,10 @@ export const defaults: KeybindingRule[] = [
 
   // ── Editor ───────────────────────────────────────────────────────────────
   { key: 'cmd+s', command: 'editor.action.save',          when: 'editorOpen && !terminalFocus' },
-  { key: 'cmd+k', command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
+  // cmd+k is a chord prefix; cmd+k cmd+k is the double-chord for inline rewrite
+  // (single cmd+k is blocked by chord mode in editorTextFocus context)
+  { key: 'cmd+k cmd+k',    command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
+  { key: 'ctrl+shift+i',   command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
   { key: 'cmd+i',   command: 'editor.action.triggerGhost',  when: 'editorTextFocus' },
   { key: 'ctrl+space', command: 'editor.action.triggerGhost', when: 'editorTextFocus' },
   { key: 'cmd+f', command: 'editor.action.openFind',      when: 'editorOpen && !terminalFocus' },
@@ -70,6 +73,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+k cmd+t', command: 'workbench.action.selectTheme' },
   { key: 'cmd+k cmd+z', command: 'workbench.action.toggleZenMode' },
   { key: 'cmd+k cmd+o', command: 'workbench.action.openFolder' },
+  { key: 'cmd+k cmd+e', command: 'workbench.action.focusActiveEditorGroup', when: 'editorOpen' },
   { key: 'cmd+=',       command: 'editor.action.fontZoomIn',    when: 'editorOpen' },
   { key: 'cmd+-',       command: 'editor.action.fontZoomOut',   when: 'editorOpen' },
   { key: 'cmd+0',       command: 'editor.action.fontZoomReset', when: 'editorOpen' },
@@ -117,4 +121,11 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },
   { key: 'ctrl+t',      command: 'editor.action.transpose',           when: 'editorTextFocus' },
   { key: 'ctrl+j',      command: 'editor.action.joinLines',           when: 'editorTextFocus' },
+
+  // ── Copy paths ────────────────────────────────────────────────────────────────
+  { key: 'cmd+shift+alt+c', command: 'workbench.action.copyRelativeFilePath', when: 'editorOpen' },
+
+  // ── Navigation ────────────────────────────────────────────────────────────────
+  { key: 'cmd+k cmd+q', command: 'editor.action.navigateToLastEditLocation', when: 'editorOpen' },
+  { key: 'cmd+k cmd+d', command: 'editor.action.moveSelectionToNextFindMatch', when: 'editorTextFocus' },
 ]

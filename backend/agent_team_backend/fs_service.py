@@ -9,6 +9,7 @@ contents are listed; git status is only an overlay decided elsewhere.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,44 @@ def list_dir(workspace_path: str, rel_path: str = "", show_hidden: bool = False)
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "entries": entries, "rel_path": str(target.relative_to(root)) if target != root else ""}
+
+
+def list_files_flat(
+    workspace_path: str,
+    query: str = "",
+    max_results: int = 100,
+) -> dict[str, Any]:
+    """Return a flat list of file rel_paths matching *query* (case-insensitive substring).
+
+    Skips noise directories, hidden files, and binary-ish extensions.
+    Used by the AI chat @file autocomplete.
+    """
+    root = Path(workspace_path).resolve()
+    if not root.is_dir():
+        return {"ok": False, "error": "workspace not found"}
+    lower_q = query.lower()
+    results: list[str] = []
+    _BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2",
+                   ".ttf", ".eot", ".mp4", ".mp3", ".zip", ".gz", ".tar", ".pdf", ".bin",
+                   ".lock", ".pyc"}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _NOISE_SEGMENTS and not d.startswith(".")]
+        for fn in sorted(filenames):
+            if fn.startswith("."):
+                continue
+            if Path(fn).suffix.lower() in _BINARY_EXT:
+                continue
+            if lower_q and lower_q not in fn.lower():
+                continue
+            fp = Path(dirpath) / fn
+            try:
+                rel = str(fp.relative_to(root))
+            except ValueError:
+                continue
+            results.append(rel)
+            if len(results) >= max_results:
+                return {"ok": True, "files": results, "truncated": True}
+    return {"ok": True, "files": results, "truncated": False}
 
 
 def mkdir(workspace_path: str, rel_path: str) -> dict[str, Any]:

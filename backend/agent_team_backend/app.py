@@ -1569,6 +1569,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
+        elif msg_type == "git.checkout_remote_branch":
+            ws_path = payload.get("workspace_path") or ""
+            remote_ref = payload.get("remote_ref") or ""
+            result = await git_service.checkout_remote_branch(ws_path, remote_ref)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
         elif msg_type == "git.delete_branch":
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
@@ -1910,6 +1918,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             rel = payload.get("rel_path", "") or ""
             show_hidden = bool(payload.get("show_hidden", False))
             result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "fs.list_files_flat":
+            ws_path = payload.get("workspace_path") or ""
+            query = payload.get("query", "") or ""
+            result = fs_service.list_files_flat(ws_path, query=query)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.mkdir":

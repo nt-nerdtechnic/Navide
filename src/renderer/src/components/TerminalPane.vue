@@ -79,7 +79,7 @@ onMounted(() => {
 
 <template>
   <div :class="['pane', { 'pane-focus': isFocus }]">
-    <button class="minimize-btn" @click.stop="emit('minimize')" title="最小化到 sidebar">⊟</button>
+    <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
     <header class="pane-header" @click="emit('set-focus')">
       <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
       <span class="title">{{ title }}</span>
@@ -87,11 +87,11 @@ onMounted(() => {
       <span
         class="status"
         :data-status="displayStatus"
-        :title="displayStatus === 'idle' ? '處理程序仍存活，但 agent 已完成上一輪、停在互動 prompt' : ''"
+        :title="displayStatus === 'idle' ? 'Process still alive, but agent has finished the last turn and is at an interactive prompt' : ''"
       >{{ displayStatus }}</span>
     </header>
     <div v-if="isCommander" class="manager-row">
-      <span class="manager-tag" title="全域指揮官 — 跨階段協調、決定 ---STAGE-DONE---">🎯 指揮官</span>
+      <span class="manager-tag" title="Global Commander — coordinates across stages, decides ---STAGE-DONE---">🎯 Commander</span>
     </div>
     <div
       ref="containerRef"

@@ -305,6 +305,7 @@ registerCommand('editor.action.transformToTitlecase',  () => activeEditor()?.tra
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
+registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
 registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
 registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
@@ -346,7 +347,8 @@ registerCommand('workbench.action.openFile', async () => {
   openFile({ filepath: relPath })
 })
 registerCommand('workbench.action.openSettings', openKeyboardShortcuts)
-registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
+registerCommand('editor.action.addSelectionToNextFindMatch',  () => activeEditor()?.selectNextOccurrence())
+registerCommand('editor.action.moveSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
 registerCommand('editor.action.selectAll', () => activeEditor()?.selectAll())
@@ -538,7 +540,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.closeAllEditors', label: '關閉所有編輯器', keys: '⌘K ⌘W' },
   { id: 'editor.action.nextMatch',         label: '下一個符合項',  keys: '⌘G' },
   { id: 'editor.action.prevMatch',       label: '上一個符合項',   keys: '⌘⇧G' },
-  { id: 'editor.action.inlineRewrite',   label: 'AI 改寫 (Cmd+K)',keys: '⌘K' },
+  { id: 'editor.action.inlineRewrite',   label: 'AI 改寫',        keys: '⌘K ⌘K' },
   { id: 'editor.action.triggerGhost',    label: 'AI 補全 (Cmd+I)',keys: '⌘I' },
   { id: 'workbench.action.toggleSidebar',label: '切換側邊欄',     keys: '⌘B' },
   { id: 'workbench.action.focusExplorer',label: '顯示檔案總管',   keys: '⌘⇧E' },
@@ -585,6 +587,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectLine',          label: '選取目前行',     keys: '⌃L' },
   { id: 'editor.action.indentationToSpaces', label: '縮排轉換為空格' },
   { id: 'editor.action.indentationToTabs',   label: '縮排轉換為 Tab' },
+  { id: 'editor.action.navigateToLastEditLocation', label: '跳到最後編輯位置', keys: '⌘K ⌘Q' },
+  { id: 'editor.action.moveSelectionToNextFindMatch', label: '移動選取到下一個符合', keys: '⌘K ⌘D' },
+  { id: 'workbench.action.copyRelativeFilePath', label: '複製相對路徑', keys: '⌘⇧⌥C' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -618,14 +623,45 @@ watch(paletteQuery, () => { paletteIdx.value = 0 })
 registerCommand('workbench.action.showCommands', openPalette)
 
 // ── Quick Open (⌘P) ─────────────────────────────────────────────────────────
+type QoFileItem   = { qoKind: 'file';   name: string; relPath: string }
+type QoLineItem   = { qoKind: 'line';   line: number }
+type QoSymbolItem = { qoKind: 'symbol'; name: string; line: number; kind: string }
+type QoItem = QoFileItem | QoLineItem | QoSymbolItem
+
 const qoOpen = ref(false)
 const qoQuery = ref('')
 const qoIdx = ref(0)
 const qoInputEl = ref<HTMLInputElement | null>(null)
-const qoItems = computed(() => {
-  const q = qoQuery.value.toLowerCase()
+const qoPlaceholder = computed(() => {
+  const q = qoQuery.value
+  if (q.startsWith(':')) return '輸入行號跳轉… (例: :42)'
+  if (q.startsWith('@')) return '輸入符號名稱… (例: @myFunction)'
+  return '搜尋開放的檔案… (:行號  @符號)'
+})
+const qoItems = computed((): QoItem[] => {
+  const q = qoQuery.value
+  // :N → jump to line in current file
+  if (q.startsWith(':')) {
+    const n = parseInt(q.slice(1).trim(), 10)
+    if (!isNaN(n) && n > 0) return [{ qoKind: 'line', line: n }]
+    return []
+  }
+  // @name → filter symbols from active file
+  if (q.startsWith('@')) {
+    const symQ = q.slice(1).toLowerCase()
+    const f = openFiles.value.find((f) => f.relPath === activeRel.value)
+    if (!f || f.kind !== 'file') return []
+    const content = activeEditor()?.getContent?.() ?? ''
+    const ext = f.name.split('.').pop() ?? ''
+    const all = _extractSymbols(content, ext)
+    const filtered = symQ ? all.filter((s) => s.name.toLowerCase().includes(symQ)) : all
+    return filtered.map((s): QoSymbolItem => ({ qoKind: 'symbol', name: s.name, line: s.line ?? 1, kind: s.kind ?? '' }))
+  }
+  // default: filter open files
+  const ql = q.toLowerCase()
   const files = openFiles.value.filter((f) => f.kind === 'file')
-  return q ? files.filter((f) => f.name.toLowerCase().includes(q) || f.relPath.toLowerCase().includes(q)) : files
+  const matching = ql ? files.filter((f) => f.name.toLowerCase().includes(ql) || f.relPath.toLowerCase().includes(ql)) : files
+  return matching.map((f): QoFileItem => ({ qoKind: 'file', name: f.name, relPath: f.relPath }))
 })
 function openQuickOpen(): void {
   qoQuery.value = ''
@@ -636,8 +672,16 @@ function openQuickOpen(): void {
 function closeQuickOpen(): void { qoOpen.value = false }
 function confirmQuickOpen(): void {
   const item = qoItems.value[qoIdx.value]
-  if (item) activeRel.value = item.relPath
+  if (!item) { closeQuickOpen(); return }
+  if (item.qoKind === 'file') { activeRel.value = item.relPath }
+  else if (item.qoKind === 'line') { activeEditor()?.jumpToLine(item.line) }
+  else if (item.qoKind === 'symbol') { activeEditor()?.jumpToLine(item.line) }
   closeQuickOpen()
+}
+function qoItemKey(item: QoItem, i: number): string {
+  if (item.qoKind === 'file') return item.relPath
+  if (item.qoKind === 'line') return `line:${item.line}`
+  return `sym:${i}:${item.name}`
 }
 function onQoKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.stopPropagation(); closeQuickOpen(); return }
@@ -645,8 +689,18 @@ function onQoKeydown(e: KeyboardEvent): void {
   if (e.key === 'ArrowDown') { e.preventDefault(); qoIdx.value = Math.min(qoIdx.value + 1, qoItems.value.length - 1); return }
   if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = Math.max(0, qoIdx.value - 1); return }
 }
-watch(qoQuery, () => { qoIdx.value = 0 })
+watch(qoQuery, (q) => {
+  qoIdx.value = 0
+  // VS Code: typing '>' in Quick Open switches to command palette mode
+  if (q.startsWith('>')) {
+    const cmd = q.slice(1).trimStart()
+    closeQuickOpen()
+    openPalette()
+    paletteQuery.value = cmd
+  }
+})
 registerCommand('workbench.action.quickOpen', openQuickOpen)
+registerCommand('workbench.action.focusActiveEditorGroup', () => { activeEditor()?.focus?.() })
 registerCommand('workbench.action.reopenClosedEditor', () => {
   const last = closedHistory.pop()
   if (last) openFile({ filepath: last.relPath, name: last.name })
@@ -1052,6 +1106,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         embedded
         :active="aiPanelOpen"
         :get-editor-content="() => activeEditor()?.getContent?.() ?? ''"
+        :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
       />
     </div>
@@ -1156,23 +1211,36 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="qoInputEl"
         v-model="qoQuery"
         class="ide-palette-input"
-        placeholder="搜尋開放的檔案…"
+        :placeholder="qoPlaceholder"
         @keydown="onQoKeydown"
       />
       <ul v-if="qoItems.length" class="ide-palette-list">
         <li
-          v-for="(f, i) in qoItems"
-          :key="f.relPath"
+          v-for="(item, i) in qoItems"
+          :key="qoItemKey(item, i)"
           class="ide-palette-item"
           :class="{ active: i === qoIdx }"
           @mouseover="qoIdx = i"
           @click="confirmQuickOpen"
         >
-          <span class="ide-palette-label">{{ f.name }}</span>
-          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ f.relPath }}</span>
+          <template v-if="item.qoKind === 'file'">
+            <span class="ide-palette-label">{{ item.name }}</span>
+            <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.relPath }}</span>
+          </template>
+          <template v-else-if="item.qoKind === 'line'">
+            <span class="ide-palette-label">跳到第 {{ item.line }} 行</span>
+          </template>
+          <template v-else-if="item.qoKind === 'symbol'">
+            <span class="ide-palette-label">{{ item.name }}</span>
+            <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.kind }} · 第 {{ item.line }} 行</span>
+          </template>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">無開放的檔案</div>
+      <div v-else class="ide-palette-empty">
+        <template v-if="qoQuery.startsWith(':')">輸入有效行號</template>
+        <template v-else-if="qoQuery.startsWith('@')">目前檔案沒有偵測到符號</template>
+        <template v-else>無開放的檔案</template>
+      </div>
     </div>
   </div>
   <div v-if="paletteOpen" class="ide-palette-overlay" @mousedown.self="closePalette">

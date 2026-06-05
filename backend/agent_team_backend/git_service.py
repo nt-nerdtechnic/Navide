@@ -1100,10 +1100,15 @@ class GitBranch:
     is_current: bool
     is_remote: bool
     tracking: str = ""
+    has_local: bool = False  # for remote entries: True if a local branch already tracks this ref
 
 
 async def list_branches(workspace_path: str) -> dict[str, Any]:
-    """Return local branches + current branch; also list remotes."""
+    """Return local branches (with tracking info) + all remote branches.
+
+    Remote branches carry ``has_local=True`` when a local branch already
+    tracks them, so the UI can distinguish "needs checkout" from "already local".
+    """
     rc, out, _ = await _run(
         ["git", "branch", "-vv", "--format=%(refname:short)\t%(HEAD)\t%(upstream:short)"],
         workspace_path,
@@ -1113,6 +1118,7 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
 
     branches: list[dict] = []
     current = ""
+    local_trackings: set[str] = set()
     for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) < 2:
@@ -1122,8 +1128,41 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
         is_cur = head == "*"
         if is_cur:
             current = name
+        if tracking:
+            local_trackings.add(tracking)
         branches.append(asdict(GitBranch(name=name, is_current=is_cur, is_remote=False, tracking=tracking)))
+
+    # Append ALL remote branches; mark those already checked out locally
+    rc2, out2, _ = await _run(
+        ["git", "branch", "-r", "--format=%(refname:short)"],
+        workspace_path,
+    )
+    if rc2 == 0:
+        for line in out2.splitlines():
+            name = line.strip()
+            # Skip empty, HEAD pointers, and bare remote names (no slash = not a branch)
+            if not name or "/" not in name or name.endswith("/HEAD"):
+                continue
+            branches.append(asdict(GitBranch(
+                name=name, is_current=False, is_remote=True,
+                tracking="", has_local=name in local_trackings,
+            )))
+
     return {"ok": True, "branches": branches, "current": current}
+
+
+async def checkout_remote_branch(workspace_path: str, remote_ref: str) -> dict[str, Any]:
+    """Create a local tracking branch from a remote ref (e.g. 'origin/feat/x').
+
+    Equivalent to: git checkout --track origin/feat/x
+    """
+    if err := _validate_ref_name(remote_ref, "remote ref"):
+        return {"ok": False, "error": err}
+    rc, _, stderr = await _run(
+        ["git", "checkout", "--track", remote_ref.strip()],
+        workspace_path,
+    )
+    return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
 _INVALID_REF_RE = re.compile(

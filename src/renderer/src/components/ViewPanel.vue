@@ -5,15 +5,15 @@ defineProps<{ modelValue: LayoutMode }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: LayoutMode): void }>()
 
 const modes: [LayoutMode, string, string][] = [
-  ['grid',       '⊞', '方格'],
-  ['auto',       '✦', '自動（動態調整）'],
-  ['spotlight',  '◎', '聚光燈'],
-  ['fullscreen', '⧉', '全螢幕 + 浮動視窗'],
+  ['grid',       '⊞', 'Grid'],
+  ['auto',       '✦', 'Auto (dynamic)'],
+  ['spotlight',  '◎', 'Spotlight'],
+  ['fullscreen', '⧉', 'Fullscreen + floating panel'],
 ]
 </script>
 
 <template>
-  <div class="view-panel" role="toolbar" aria-label="檢視畫面">
+  <div class="view-panel" role="toolbar" aria-label="View mode">
     <button
       v-for="[mode, icon, label] in modes"
       :key="mode"
