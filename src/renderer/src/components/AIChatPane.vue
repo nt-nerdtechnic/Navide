@@ -1693,6 +1693,18 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
 defineExpose({ focusInput: () => { textareaEl.value?.focus() } })
 
+// ── Copy all messages to clipboard ────────────────────────────────────────────
+function copyAllMessages(): void {
+  const msgs = messages.value.filter((m) => !m.streaming && m.content)
+  if (!msgs.length) { showToast('No messages to copy'); return }
+  let md = ''
+  for (const m of msgs) {
+    const label = m.role === 'user' ? '**You**' : `**AI**${m.model ? ` (${m.model})` : ''}`
+    md += `${label}:\n${m.content}\n\n---\n\n`
+  }
+  navigator.clipboard.writeText(md.trim()).then(() => showToast('Conversation copied')).catch(() => showToast('Copy failed'))
+}
+
 // ── Message bookmarks ─────────────────────────────────────────────────────────
 function toggleBookmark(mi: number): void {
   const msg = messages.value[mi]
@@ -2034,6 +2046,14 @@ function getDateLabel(ts: number): string {
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/>
             </svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="Copy conversation to clipboard"
+            :disabled="messages.length === 0"
+            @click="copyAllMessages"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
             class="ai-settings-btn"
