@@ -103,20 +103,65 @@ function _extractSymbols(text: string, ext: string): BcItem[] {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     let m: RegExpMatchArray | null
-    if ((m = raw.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
-    else if ((m = raw.match(/^\s*(?:export\s+)?class\s+(\w+)/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
-    else if ((m = raw.match(/^\s*(?:export\s+)?interface\s+(\w+)/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'interface' })
-    else if ((m = raw.match(/^\s*(?:export\s+)?type\s+(\w+)\s*=/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'type' })
-    else if ((m = raw.match(/^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\()/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
-    else if (ext === 'py' && (m = raw.match(/^(\s*)def\s+(\w+)/)))
-      out.push({ name: m[2], isDir: false, relPath: '', line: i + 1, kind: 'function' })
-    else if (ext === 'py' && (m = raw.match(/^class\s+(\w+)/)))
-      out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+    // ── TypeScript / JavaScript / Vue ──────────────────────────────────────
+    if (['ts', 'tsx', 'js', 'jsx', 'vue', 'mjs', 'cjs'].includes(ext)) {
+      if ((m = raw.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+      else if ((m = raw.match(/^\s*(?:export\s+)?class\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+      else if ((m = raw.match(/^\s*(?:export\s+)?interface\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'interface' })
+      else if ((m = raw.match(/^\s*(?:export\s+)?type\s+(\w+)\s*=/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'type' })
+      else if ((m = raw.match(/^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\()/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+      // Vue: computed: { name() {} } or methods: { name() {} }
+      else if ((m = raw.match(/^\s+(\w+)\s*(?:\([^)]*\))?\s*\{/)) && i > 0) {
+        const prev = lines[i - 1]?.trimEnd()
+        if (/computed:|methods:|setup\s*\(/.test(prev ?? ''))
+          out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'method' })
+      }
+    // ── Python ──────────────────────────────────────────────────────────────
+    } else if (ext === 'py') {
+      if ((m = raw.match(/^(\s*)def\s+(\w+)/)))
+        out.push({ name: m[2], isDir: false, relPath: '', line: i + 1, kind: m[1] ? 'method' : 'function' })
+      else if ((m = raw.match(/^class\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+    // ── Go ──────────────────────────────────────────────────────────────────
+    } else if (ext === 'go') {
+      if ((m = raw.match(/^func\s+(?:\([^)]+\)\s+)?(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+      else if ((m = raw.match(/^type\s+(\w+)\s+(?:struct|interface)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: ext === 'go' ? 'struct' : 'interface' })
+    // ── Rust ─────────────────────────────────────────────────────────────────
+    } else if (ext === 'rs') {
+      if ((m = raw.match(/^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'function' })
+      else if ((m = raw.match(/^\s*(?:pub\s+)?struct\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'struct' })
+      else if ((m = raw.match(/^\s*(?:pub\s+)?(?:trait|enum)\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'type' })
+      else if ((m = raw.match(/^\s*impl\s+(?:<[^>]+>\s+)?(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'impl' })
+    // ── Java / Kotlin ────────────────────────────────────────────────────────
+    } else if (ext === 'java' || ext === 'kt') {
+      if ((m = raw.match(/^\s*(?:public|private|protected|override)?\s*(?:static\s+)?(?:\w+\s+)?(?:fun\s+)?(\w+)\s*\([^)]*\)\s*(?:throws\s+\w+\s*)?\{/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'method' })
+      else if ((m = raw.match(/^\s*(?:public\s+)?(?:abstract\s+)?class\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'class' })
+      else if ((m = raw.match(/^\s*(?:public\s+)?interface\s+(\w+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'interface' })
+    // ── CSS / SCSS ───────────────────────────────────────────────────────────
+    } else if (ext === 'css' || ext === 'scss' || ext === 'less') {
+      if ((m = raw.match(/^([.#@][\w-]+(?:\s+[\w.#:[\]>~]+)*)\s*\{/)))
+        out.push({ name: m[1].trim(), isDir: false, relPath: '', line: i + 1, kind: 'rule' })
+      else if (ext === 'scss' && (m = raw.match(/^@mixin\s+([\w-]+)/)))
+        out.push({ name: m[1], isDir: false, relPath: '', line: i + 1, kind: 'mixin' })
+    // ── Markdown ─────────────────────────────────────────────────────────────
+    } else if (ext === 'md' || ext === 'mdx') {
+      if ((m = raw.match(/^(#{1,3})\s+(.+)/)))
+        out.push({ name: m[2].trim(), isDir: false, relPath: '', line: i + 1, kind: `h${m[1].length}` })
+    }
   }
   return out
 }
