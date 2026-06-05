@@ -487,7 +487,19 @@ function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
   let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const langLabel = lang || 'text'
+    const LANG_DISPLAY: Record<string, string> = {
+      ts: 'TypeScript', tsx: 'TSX', js: 'JavaScript', jsx: 'JSX',
+      py: 'Python', python: 'Python', rb: 'Ruby', go: 'Go',
+      rs: 'Rust', java: 'Java', kt: 'Kotlin', swift: 'Swift',
+      cpp: 'C++', c: 'C', cs: 'C#', php: 'PHP', scala: 'Scala',
+      sh: 'Shell', bash: 'Bash', zsh: 'Zsh', fish: 'Fish',
+      json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
+      html: 'HTML', css: 'CSS', scss: 'SCSS', sass: 'Sass',
+      sql: 'SQL', md: 'Markdown', xml: 'XML', vue: 'Vue',
+      svelte: 'Svelte', graphql: 'GraphQL', dockerfile: 'Dockerfile',
+      makefile: 'Makefile', r: 'R', lua: 'Lua', dart: 'Dart',
+    }
+    const langLabel = lang ? (LANG_DISPLAY[lang.toLowerCase()] ?? lang) : 'text'
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
     // Apply syntax highlighting; skip auto-detect for large blocks (> 3000 chars) to avoid slowdown
     let highlighted: string
@@ -1639,6 +1651,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             <span class="ai-thinking-dot" />
             <span class="ai-thinking-dot" />
             <span class="ai-thinking-dot" />
+            <span class="ai-thinking-label">Thinking…</span>
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
 
@@ -2311,6 +2324,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 }
 .ai-thinking-dot:nth-child(2) { animation-delay: 0.2s; }
 .ai-thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+.ai-thinking-label { font-size: 11px; color: var(--text-muted); font-style: italic; margin-left: 4px; }
 @keyframes ai-bounce {
   0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
