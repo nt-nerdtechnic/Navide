@@ -188,7 +188,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           class="ob-btn primary"
           :disabled="!ob.allRequiredReady.value"
           :title="ob.allRequiredReady.value ? '' : 'Some required items are not yet ready'"
-          @click="ob.markComplete().then(() => emit('complete'))"
+          @click="ob.markComplete().then(() => emit('complete')).catch(() => emit('complete'))"
         >Open Agent-Team</button>
       </footer>
     </div>
