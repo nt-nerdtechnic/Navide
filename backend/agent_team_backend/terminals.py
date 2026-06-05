@@ -188,6 +188,7 @@ class TerminalService:
         tmux_name = ""
         if self._use_tmux:
             tmux_name = _make_tmux_name(pane_id)
+            _session_created = False
             try:
                 subprocess.run(
                     ["tmux", "new-session", "-d", "-s", tmux_name,
@@ -197,6 +198,7 @@ class TerminalService:
                     check=True,
                     capture_output=True,
                 )
+                _session_created = True
                 proc = subprocess.Popen(
                     ["tmux", "attach-session", "-t", tmux_name, "-d"],
                     stdin=slave,
@@ -209,6 +211,12 @@ class TerminalService:
                 )
             except (subprocess.CalledProcessError, OSError) as err:
                 log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
+                if _session_created:
+                    # new-session 成功但 attach 失敗 → 補償清理避免孤兒 session
+                    subprocess.run(
+                        ["tmux", "kill-session", "-t", tmux_name],
+                        capture_output=True, check=False,
+                    )
                 tmux_name = ""
                 proc = subprocess.Popen(
                     argv,

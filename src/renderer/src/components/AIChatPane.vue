@@ -104,6 +104,7 @@ interface AtOption { id: string; label: string }
 const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@file', label: '@file — 目前開啟的檔案' },
   { id: '@selection', label: '@selection — 編輯器選取內容' },
+  { id: '@git', label: '@git — 目前 git diff (unstaged)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 
@@ -583,6 +584,18 @@ async function selectAtOption(option: AtOption): Promise<void> {
     const content = props.getEditorContent?.() ?? ''
     chipLabel = '@selection'
     chipContent = content
+  } else if (option.id === '@git') {
+    chipLabel = '@git'
+    try {
+      interface DiffResp { ok: boolean; diff?: string }
+      const resp = await props.backend.send<DiffResp>('git.diff_all', {
+        workspace_path: props.workspacePath,
+        staged: false,
+      })
+      chipContent = resp.payload?.diff ? `// git diff (unstaged)\n${resp.payload.diff}` : '// git diff: no changes'
+    } catch {
+      chipContent = '// git diff: unavailable'
+    }
   } else {
     // It's a file path
     chipLabel = `@${option.id.split('/').pop()}`

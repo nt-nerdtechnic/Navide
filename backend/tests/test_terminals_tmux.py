@@ -218,6 +218,51 @@ async def test_kill_calls_tmux_kill_session(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_create_kills_orphan_session_when_attach_fails(tmp_path):
+    """If new-session succeeds but Popen(attach) raises, the orphan session must be killed."""
+    import subprocess as _sp
+
+    svc = await _make_service(use_tmux=True)
+    popen_call_count = 0
+
+    def _popen_side_effect(cmd, **kwargs):
+        nonlocal popen_call_count
+        popen_call_count += 1
+        if "attach-session" in cmd:
+            raise OSError("attach failed")
+        return _make_popen_mock()
+
+    kill_calls = []
+
+    def _run_side_effect(cmd, **kwargs):
+        if "kill-session" in cmd:
+            kill_calls.append(cmd)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch("agent_team_backend.terminals.shutil.which", return_value="/usr/bin/bash"), \
+         patch("agent_team_backend.terminals.pty.openpty", return_value=(10, 11)), \
+         patch("agent_team_backend.terminals.fcntl.fcntl"), \
+         patch("agent_team_backend.terminals.fcntl.ioctl"), \
+         patch("agent_team_backend.terminals.os.close"), \
+         patch("agent_team_backend.terminals.subprocess.run", side_effect=_run_side_effect), \
+         patch("agent_team_backend.terminals.subprocess.Popen", side_effect=_popen_side_effect), \
+         patch.object(svc._loop, "add_reader"):
+
+        session = svc.create(
+            pane_id="pane-6",
+            agent_key="claude",
+            command=["bash", "-lc", "claude"],
+            cwd=str(tmp_path),
+        )
+
+    # Fell back to plain PTY — tmux_name cleared
+    assert session.tmux_name == ""
+    # kill-session must have been called to clean up the orphaned session
+    assert any("kill-session" in str(c) for c in kill_calls), \
+        "Expected tmux kill-session to compensate for failed attach"
+
+
+@pytest.mark.asyncio
 async def test_kill_no_tmux_session_skips_kill_session(tmp_path):
     """kill() must NOT call tmux kill-session when tmux_name is empty."""
     svc = await _make_service(use_tmux=False)

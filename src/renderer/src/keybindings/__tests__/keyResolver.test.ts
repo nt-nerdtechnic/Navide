@@ -435,6 +435,76 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
   })
 })
 
+describe('reveal file in OS shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('shift+alt+r → revealFileInOS (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('r', { shiftKey: true, altKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.revealFileInOS')
+  })
+
+  it('revealFileInOS requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('r', { shiftKey: true, altKey: true }), {})).toBeNull()
+  })
+})
+
+describe('new window shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+shift+n → newWindow', () => {
+    expect(dr.resolve(mkEvent('n', { metaKey: true, shiftKey: true }), {})?.command)
+      .toBe('workbench.action.newWindow')
+  })
+
+  it('cmd+k cmd+o → openFolder', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('o', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.openFolder')
+  })
+})
+
+describe('block comment shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+alt+/ → blockComment (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('/', { metaKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.blockComment')
+  })
+
+  it('blockComment requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('/', { metaKey: true, altKey: true }), {})).toBeNull()
+  })
+})
+
+describe('select all occurrences aliases', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+f2 → selectHighlights (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('F2', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.selectHighlights')
+  })
+
+  it('ctrl+space → triggerGhost (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent(' ', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.triggerGhost')
+  })
+})
+
+describe('zen mode shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+k cmd+z → toggleZenMode', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('z', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.toggleZenMode')
+  })
+})
+
 describe('navigation history shortcuts', () => {
   let dr: KeyResolver
   beforeEach(() => { dr = new KeyResolver(defaults) })

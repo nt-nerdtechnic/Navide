@@ -75,7 +75,7 @@ def test_record_slot_tmux_name_missing_slot_is_noop(tmp_path):
     store.save(project)
 
     # Should return without error even when slot does not exist.
-    result = store.record_slot_tmux_name(ws, stage_index=0, slot_label="nonexistent", tmux_name="x")
+    result = store.record_slot_tmux_name(ws, stage_index=0, slot_label="nonexistent", tmux_name="at-abc123")
     assert result is not None
 
 
@@ -85,7 +85,7 @@ def test_record_slot_tmux_name_invalid_index(tmp_path):
     store.load_or_create(ws, name="test")
 
     with pytest.raises(IndexError):
-        store.record_slot_tmux_name(ws, stage_index=99, slot_label="A", tmux_name="x")
+        store.record_slot_tmux_name(ws, stage_index=99, slot_label="A", tmux_name="at-abc123")
 
 
 # ── record_manual_pane_tmux_name ───────────────────────────────────────────────
@@ -108,8 +108,93 @@ def test_record_manual_pane_tmux_name_missing_pane_is_noop(tmp_path):
     ws = str(tmp_path)
     store.load_or_create(ws, name="test")
 
-    result = store.record_manual_pane_tmux_name(ws, pane_id="ghost", tmux_name="x")
+    result = store.record_manual_pane_tmux_name(ws, pane_id="ghost", tmux_name="at-abc123")
     assert result is not None
+
+
+# ── tmux_name format validation ───────────────────────────────────────────────
+
+def test_record_slot_tmux_name_rejects_invalid_format(tmp_path):
+    store = ProjectStore()
+    ws = str(tmp_path)
+    project = store.load_or_create(ws, name="test")
+    from agent_team_backend.projects import StageRecord
+    project.stages = [StageRecord(stage_id="01", title="Stage 1")]
+    project.stages[0].slots = [SlotRecord(label="A", agent="claude", spawn_status="spawned")]
+    store.save(project)
+
+    with pytest.raises(ValueError, match="invalid tmux_name"):
+        store.record_slot_tmux_name(ws, stage_index=0, slot_label="A", tmux_name="evil; rm -rf /")
+
+
+def test_record_manual_pane_tmux_name_rejects_invalid_format(tmp_path):
+    store = ProjectStore()
+    ws = str(tmp_path)
+    project = store.load_or_create(ws, name="test")
+    project.manual_panes = [ManualPaneRecord(pane_id="p1", agent="claude", spawn_status="spawned")]
+    store.save(project)
+
+    with pytest.raises(ValueError, match="invalid tmux_name"):
+        store.record_manual_pane_tmux_name(ws, pane_id="p1", tmux_name="../../../etc/passwd")
+
+
+def test_record_slot_tmux_name_allows_empty_string(tmp_path):
+    """Empty string (clearing) must bypass format validation."""
+    store = ProjectStore()
+    ws = str(tmp_path)
+    project = store.load_or_create(ws, name="test")
+    from agent_team_backend.projects import StageRecord
+    project.stages = [StageRecord(stage_id="01", title="Stage 1")]
+    project.stages[0].slots = [SlotRecord(label="A", agent="claude", spawn_status="spawned", tmux_name="at-abc123")]
+    store.save(project)
+
+    store.record_slot_tmux_name(ws, stage_index=0, slot_label="A", tmux_name="")
+    reloaded = store.load_or_create(ws)
+    assert reloaded.stages[0].slots[0].tmux_name == ""
+
+
+# ── clear_tmux_name_by_value ───────────────────────────────────────────────────
+
+def test_clear_tmux_name_clears_manual_pane(tmp_path):
+    store = ProjectStore()
+    ws = str(tmp_path)
+    project = store.load_or_create(ws, name="test")
+    project.manual_panes = [ManualPaneRecord(pane_id="p1", agent="claude", tmux_name="at-aabbcc")]
+    store.save(project)
+
+    store.clear_tmux_name_by_value(ws, "at-aabbcc")
+
+    reloaded = store.load_or_create(ws)
+    assert reloaded.manual_panes[0].tmux_name == ""
+
+
+def test_clear_tmux_name_clears_slot(tmp_path):
+    store = ProjectStore()
+    ws = str(tmp_path)
+    project = store.load_or_create(ws, name="test")
+    from agent_team_backend.projects import StageRecord
+    project.stages = [StageRecord(stage_id="01", title="Stage 1")]
+    project.stages[0].slots = [SlotRecord(label="A", agent="claude", tmux_name="at-xxyyzz")]
+    store.save(project)
+
+    store.clear_tmux_name_by_value(ws, "at-xxyyzz")
+
+    reloaded = store.load_or_create(ws)
+    assert reloaded.stages[0].slots[0].tmux_name == ""
+
+
+def test_clear_tmux_name_noop_for_unknown_workspace(tmp_path):
+    store = ProjectStore()
+    # Should not raise even when workspace has no project.json
+    store.clear_tmux_name_by_value(str(tmp_path / "nonexistent"), "at-abc123")
+
+
+def test_clear_tmux_name_noop_for_empty_string(tmp_path):
+    store = ProjectStore()
+    ws = str(tmp_path)
+    store.load_or_create(ws, name="test")
+    # Empty tmux_name should be a no-op (no save triggered)
+    store.clear_tmux_name_by_value(ws, "")
 
 
 def test_record_manual_pane_tmux_name_roundtrip(tmp_path):

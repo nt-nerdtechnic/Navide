@@ -254,6 +254,10 @@ registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch()
 registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
 registerCommand('workbench.action.findInFiles', () => { sidebarHidden.value = false; sidebarView.value = 'search' })
 registerCommand('workbench.action.toggleSidebar', () => { sidebarHidden.value = !sidebarHidden.value })
+registerCommand('workbench.action.toggleZenMode', () => {
+  zenMode.value = !zenMode.value
+  if (zenMode.value) sidebarHidden.value = true
+})
 registerCommand('workbench.action.focusExplorer', () => { sidebarHidden.value = false; sidebarView.value = 'explorer' })
 registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
 registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !aiPanelOpen.value })
@@ -268,6 +272,7 @@ registerCommand('editor.action.moveLineUp',       () => activeEditor()?.moveLine
 registerCommand('editor.action.moveLineDown',     () => activeEditor()?.moveLineDown())
 registerCommand('editor.action.selectHighlights',  () => activeEditor()?.selectAllOccurrences())
 registerCommand('editor.action.jumpToBracket',     () => activeEditor()?.jumpToBracket())
+registerCommand('editor.action.selectToBracket',   () => activeEditor()?.selectToBracket())
 registerCommand('editor.action.duplicateLineDown',  () => activeEditor()?.duplicateLineDown())
 registerCommand('editor.action.duplicateLineUp',    () => activeEditor()?.duplicateLineUp())
 registerCommand('editor.action.indentLines',         () => activeEditor()?.indentLine())
@@ -276,8 +281,11 @@ registerCommand('editor.action.cursorTop',            () => activeEditor()?.curs
 registerCommand('editor.action.cursorBottom',         () => activeEditor()?.cursorBottom())
 registerCommand('editor.action.scrollLineUp',         () => activeEditor()?.scrollLineUp())
 registerCommand('editor.action.scrollLineDown',       () => activeEditor()?.scrollLineDown())
-registerCommand('editor.action.transformToUppercase', () => activeEditor()?.transformToUppercase())
-registerCommand('editor.action.transformToLowercase', () => activeEditor()?.transformToLowercase())
+registerCommand('editor.action.transformToUppercase',   () => activeEditor()?.transformToUppercase())
+registerCommand('editor.action.transformToLowercase',   () => activeEditor()?.transformToLowercase())
+registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
+registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
+registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
 registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
 registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
@@ -293,6 +301,19 @@ registerCommand('workbench.action.revealInExplorer', () => {
   sidebarView.value = 'explorer'
   if (activeRel.value) void nextTick(() => explorerRef.value?.revealFile(activeRel.value))
 })
+registerCommand('workbench.action.revealFileInOS', async () => {
+  if (!activeRel.value) return
+  const absPath = `${workspacePath.replace(/\/+$/, '')}/${activeRel.value}`
+  await window.agentTeam?.revealPath(absPath)
+})
+registerCommand('workbench.action.newWindow', async () => {
+  await window.agentTeam?.openEditorWindow({ workspace_path: workspacePath })
+})
+registerCommand('workbench.action.openFolder', async () => {
+  const path = await window.agentTeam?.pickWorkspace()
+  if (path) await window.agentTeam?.openEditorWindow({ workspace_path: path })
+})
+registerCommand('workbench.action.reloadWindow', () => { window.location.reload() })
 registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
@@ -399,6 +420,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.moveLineDown',    label: '向下移動行',     keys: '⌥↓' },
   { id: 'editor.action.selectHighlights',  label: '選取所有出現',   keys: '⌘⇧L' },
   { id: 'editor.action.jumpToBracket',     label: '跳到配對括號' },
+  { id: 'editor.action.selectToBracket',  label: '選取到配對括號' },
   { id: 'editor.action.duplicateLineDown', label: '向下複製行',   keys: '⇧⌥↓' },
   { id: 'editor.action.duplicateLineUp',   label: '向上複製行',   keys: '⇧⌥↑' },
   { id: 'editor.action.indentLines',       label: '縮排行',        keys: '⌘]' },
@@ -410,8 +432,12 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.addSelectionToNextFindMatch', label: '選取下一個出現', keys: '⌘D' },
   { id: 'editor.action.addLineComment',       label: '加入行注釋',       keys: '⌘K ⌘C' },
   { id: 'editor.action.removeLineComment',    label: '移除行注釋',       keys: '⌘K ⌘U' },
-  { id: 'editor.action.transformToUppercase', label: '轉換為大寫' },
-  { id: 'editor.action.transformToLowercase', label: '轉換為小寫' },
+  { id: 'editor.action.blockComment',         label: '切換區塊注釋',     keys: '⌘⌥/' },
+  { id: 'editor.action.transformToUppercase',  label: '轉換為大寫' },
+  { id: 'editor.action.transformToLowercase',  label: '轉換為小寫' },
+  { id: 'editor.action.joinLines',              label: '合併行' },
+  { id: 'editor.action.sortLinesAscending',    label: '行遞增排序' },
+  { id: 'editor.action.sortLinesDescending',   label: '行遞減排序' },
   { id: 'editor.action.trimTrailingWhitespace', label: '移除行尾空白',   keys: '⌘K ⌘X' },
   { id: 'workbench.action.gotoSymbol',         label: '前往符號',     keys: '⌘⇧O' },
   { id: 'workbench.action.changeLanguageMode', label: '變更語言模式', keys: '⌘K ⌘M' },
@@ -442,6 +468,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.smartSelect.shrink',          label: '縮小選取範圍',   keys: '⇧⌥←' },
   { id: 'workbench.action.copyFilePath',    label: '複製檔案路徑',      keys: '⌘K ⌘P' },
   { id: 'workbench.action.revealInExplorer',label: '在檔案總管中顯示', keys: '⌘K ⌘R' },
+  { id: 'workbench.action.revealFileInOS',  label: '在 Finder 中顯示',  keys: '⇧⌥R' },
+  { id: 'workbench.action.newWindow',       label: '新增編輯器視窗',    keys: '⌘⇧N' },
   { id: 'workbench.action.openEditorAtIndex1', label: '切換到第 1 個分頁', keys: '⌘1' },
   { id: 'workbench.action.openEditorAtIndex2', label: '切換到第 2 個分頁', keys: '⌘2' },
   { id: 'workbench.action.openEditorAtIndex3', label: '切換到第 3 個分頁', keys: '⌘3' },
@@ -451,6 +479,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
   { id: 'workbench.action.navigateBack',    label: '返回上一個位置', keys: '⌃-' },
   { id: 'workbench.action.navigateForward', label: '前往下一個位置', keys: '⌃⇧-' },
+  { id: 'workbench.action.toggleZenMode',  label: '切換禪模式',    keys: '⌘K ⌘Z' },
+  { id: 'workbench.action.openFolder',    label: '開啟資料夾',    keys: '⌘K ⌘O' },
+  { id: 'workbench.action.reloadWindow',  label: '重新載入視窗' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -521,6 +552,7 @@ registerCommand('workbench.action.reopenClosedEditor', () => {
 // ── Line comment ─────────────────────────────────────────────────────────────
 registerCommand('editor.action.addLineComment',    () => activeEditor()?.addLineComment())
 registerCommand('editor.action.removeLineComment', () => activeEditor()?.removeLineComment())
+registerCommand('editor.action.blockComment',      () => activeEditor()?.toggleBlockComment())
 
 // ── Font zoom (⌘=/⌘-/⌘0) ─────────────────────────────────────────────────────
 registerCommand('editor.action.fontZoomIn',    () => activeEditor()?.zoomIn())
@@ -761,7 +793,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 <template>
   <div class="ide">
     <!-- Activity bar -->
-    <div class="ide-activity">
+    <div v-show="!zenMode" class="ide-activity">
       <button
         class="ide-act-btn"
         :class="{ active: sidebarView === 'explorer' }"
@@ -821,7 +853,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 
     <!-- Editor area -->
     <div class="ide-main">
-      <div v-if="openFiles.length" ref="tabsEl" class="ide-tabs">
+      <div v-if="openFiles.length && !zenMode" ref="tabsEl" class="ide-tabs">
         <div
           v-for="f in openFiles"
           :key="f.relPath"

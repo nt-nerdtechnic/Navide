@@ -882,6 +882,17 @@ async def diff_file(workspace_path: str, filepath: str, staged: bool = False) ->
     return {"ok": True, "diff": out}
 
 
+async def diff_all(workspace_path: str, staged: bool = False) -> dict[str, Any]:
+    """Return the full diff for the entire working tree (or staging area)."""
+    args = ["git", "-c", "core.quotePath=false", "diff"]
+    if staged:
+        args.append("--staged")
+    rc, out, stderr = await _run(args, workspace_path)
+    if rc != 0:
+        return {"ok": False, "diff": "", "error": stderr.strip()}
+    return {"ok": True, "diff": out}
+
+
 async def apply_patch(
     workspace_path: str, patch: str, reverse: bool = False, cached: bool = True
 ) -> dict[str, Any]:

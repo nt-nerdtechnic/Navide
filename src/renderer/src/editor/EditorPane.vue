@@ -440,6 +440,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
 function addLineComment(): void { editorRef.value?.addLineComment() }
 function removeLineComment(): void { editorRef.value?.removeLineComment() }
+function toggleBlockComment(): void { editorRef.value?.toggleBlockComment() }
 function jumpToLine(n: number): void { editorRef.value?.revealLine(n); editorRef.value?.focus() }
 function deleteLine(): void { editorRef.value?.deleteLine() }
 function deleteLineLeft(): void { editorRef.value?.deleteLineLeft() }
@@ -449,6 +450,7 @@ function insertLineAbove(): void { editorRef.value?.insertLineAbove() }
 function moveLineUp(): void { editorRef.value?.moveLineUp() }
 function moveLineDown(): void { editorRef.value?.moveLineDown() }
 function jumpToBracket(): void { editorRef.value?.jumpToBracket() }
+function selectToBracket(): void { editorRef.value?.selectToBracket() }
 function duplicateLineDown(): void { editorRef.value?.duplicateLineDown() }
 function duplicateLineUp(): void { editorRef.value?.duplicateLineUp() }
 function indentLine(): void { editorRef.value?.indentLine() }
@@ -464,6 +466,9 @@ function formatDocument(): void { editorRef.value?.formatDocument() }
 function formatSelection(): void { editorRef.value?.formatSelection() }
 function expandSelection(): void { editorRef.value?.expandSelection() }
 function shrinkSelection(): void { editorRef.value?.shrinkSelection() }
+function joinLines(): void { editorRef.value?.joinLines() }
+function sortLinesAscending(): void { editorRef.value?.sortLinesAscending() }
+function sortLinesDescending(): void { editorRef.value?.sortLinesDescending() }
 
 function selectNextOccurrence(): void {
   const curSel = editorRef.value?.getSelectionText() ?? ''
@@ -516,11 +521,12 @@ function selectAll(): void { editorRef.value?.selectAll() }
 
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
-  toggleLineComment, addLineComment, removeLineComment, jumpToLine,
+  toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
   deleteLine, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
-  moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
+  moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
+  joinLines, sortLinesAscending, sortLinesDescending,
   expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,
   setLanguage, zoomIn, zoomOut, zoomReset,

@@ -801,6 +801,49 @@ function trimTrailingWhitespace(): void {
   cursor.value = clampPos(savedCursor)
   anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
+function joinLines(): void {
+  const line = cursor.value.line
+  if (line >= model.lineCount() - 1) return
+  const curText = model.getLine(line)
+  const nextText = model.getLine(line + 1)
+  const isEmpty = curText.trim() === ''
+  const leadingWs = isEmpty ? 0 : nextText.length - nextText.trimStart().length
+  const separator = isEmpty || nextText.trim() === '' ? '' : ' '
+  applyEdit({ start: { line, col: curText.length }, end: { line: line + 1, col: leadingWs } }, separator)
+  cursor.value = { line, col: curText.length }
+  anchor.value = null
+}
+function sortLines(dir: 'asc' | 'desc'): void {
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : 0
+  const endLine = sel ? sel.end.line : model.lineCount() - 1
+  const lines: string[] = []
+  for (let i = startLine; i <= endLine; i++) lines.push(model.getLine(i))
+  lines.sort((a, b) => dir === 'asc' ? a.localeCompare(b) : b.localeCompare(a))
+  applyEdit(
+    { start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
+    lines.join('\n'),
+  )
+  cursor.value = { line: startLine, col: 0 }
+  anchor.value = null
+}
+function sortLinesAscending(): void { sortLines('asc') }
+function sortLinesDescending(): void { sortLines('desc') }
+function toggleBlockComment(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  const text = model.getValueInRange(sel)
+  const stripped = text.startsWith('/* ') && text.endsWith(' */') ? text.slice(3, -3)
+    : text.startsWith('/*') && text.endsWith('*/') ? text.slice(2, -2).trim()
+    : null
+  if (stripped !== null) {
+    applyEdit(sel, stripped)
+  } else {
+    applyEdit(sel, `/* ${text} */`)
+    cursor.value = { line: sel.start.line, col: sel.start.col }
+    anchor.value = null
+  }
+}
 function deleteLine(): void {
   const sel = selectionRange()
   const startLine = sel ? sel.start.line : cursor.value.line
@@ -988,6 +1031,40 @@ function jumpToBracket(): void {
   }
 }
 
+function selectToBracket(): void {
+  const { line, col } = cursor.value
+  const lineText = model.getLine(line)
+  let bCol = -1; let bChar = ''
+  for (let c = col; c < lineText.length; c++) {
+    const ch = lineText[c]
+    if (BRACKET_OPEN.has(ch) || BRACKET_CLOSE.has(ch)) { bCol = c; bChar = ch; break }
+  }
+  if (bCol === -1) return
+  const isOpen = BRACKET_OPEN.has(bChar)
+  const matchChar = BRACKET_MATCH[bChar]
+  let depth = 0
+  if (isOpen) {
+    for (let l = line; l < model.lineCount(); l++) {
+      const text = model.getLine(l)
+      const startC = l === line ? bCol : 0
+      for (let c = startC; c < text.length; c++) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { anchor.value = { line, col: bCol }; cursor.value = { line: l, col: c + 1 }; void nextTick(scrollCursorIntoView); return } }
+      }
+    }
+  } else {
+    for (let l = line; l >= 0; l--) {
+      const text = model.getLine(l)
+      const endC = l === line ? bCol : text.length - 1
+      for (let c = endC; c >= 0; c--) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { anchor.value = { line: l, col: c }; cursor.value = { line, col: bCol + 1 }; void nextTick(scrollCursorIntoView); return } }
+      }
+    }
+  }
+}
 function duplicateLineDown(): void {
   const sel = selectionRange()
   const startLine = sel ? sel.start.line : cursor.value.line
@@ -1323,14 +1400,16 @@ function zoomReset(): void { fontZoom.value = 1.0 }
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
-  toggleLineComment, addLineComment, removeLineComment,
+  toggleLineComment, addLineComment, removeLineComment, toggleBlockComment,
   deleteLine, insertLineBelow, insertLineAbove,
   deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight,
   moveLineUp, moveLineDown, getWordAtCursor,
-  jumpToBracket, duplicateLineDown, duplicateLineUp,
+  jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
+  joinLines,
+  sortLinesAscending, sortLinesDescending,
   expandSelection, shrinkSelection,
   setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,
