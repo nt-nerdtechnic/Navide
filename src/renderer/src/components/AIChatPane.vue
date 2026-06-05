@@ -571,7 +571,8 @@ function renderMarkdownLite(rawText: string): string {
       svelte: 'Svelte', graphql: 'GraphQL', dockerfile: 'Dockerfile',
       makefile: 'Makefile', r: 'R', lua: 'Lua', dart: 'Dart',
     }
-    const langLabel = lang ? (LANG_DISPLAY[lang.toLowerCase()] ?? lang) : 'text'
+    const langLabelRaw = lang ? (LANG_DISPLAY[lang.toLowerCase()] ?? lang) : 'text'
+    const langLabel = langLabelRaw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
     // Apply syntax highlighting; skip auto-detect for large blocks (> 3000 chars) to avoid slowdown
     let highlighted: string
@@ -1942,6 +1943,7 @@ function getDateLabel(ts: number): string {
           <div class="ai-ctx-bar-fill" :style="{ width: ctxUsagePct + '%' }" />
         </div>
         <span class="ai-ctx-label">context {{ ctxUsagePct }}%</span>
+        <button v-if="ctxUsagePct >= 80" class="ai-ctx-new-btn" title="Start new chat to free context" @click="newThread">+ New chat</button>
       </div>
 
       <div class="ai-input-row">
@@ -2857,6 +2859,12 @@ function getDateLabel(ts: number): string {
 .ai-ctx-label { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-ctx-bar.warn .ai-ctx-label { color: #d29922; }
 .ai-ctx-bar.danger .ai-ctx-label { color: var(--danger-fg, #cf222e); }
+.ai-ctx-new-btn {
+  margin-left: auto; padding: 1px 6px; font-size: 10px;
+  background: none; border: 1px solid currentColor; border-radius: 3px;
+  color: inherit; cursor: pointer; white-space: nowrap;
+}
+.ai-ctx-new-btn:hover { background: color-mix(in srgb, currentColor 15%, transparent); }
 
 .ai-textarea {
   width: 100%;
