@@ -1246,6 +1246,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
         :insert-text-at-cursor="(text: string) => activeEditor()?.insertTextAtCursor?.(text)"
+        :open-file="(relPath: string) => openFile({ filepath: relPath })"
       />
     </div>
   </div>

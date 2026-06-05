@@ -5,6 +5,7 @@ import { UndoStack } from '../model/UndoStack'
 import { tokenizerFor } from '../tokenize/index'
 import { useVirtualScroll } from './useVirtualScroll'
 import type { Position, Range, Token, Decoration } from '../types'
+import { toSnakeCase, toCamelCase, toKebabCase, toPascalCase } from '../textTransforms'
 
 const props = withDefaults(defineProps<{ modelValue?: string; readonly?: boolean; language?: string }>(), {
   modelValue: '',
@@ -62,15 +63,15 @@ const sizerMinWidth = computed(() => {
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
 })
 
-// Column ruler at 80 chars (VS Code-compatible guide line)
-const RULER_COL = 80
-const rulerLeft = computed(() => gutterWidth.value + PAD_LEFT + RULER_COL * charWidth.value - scrollLeftVal.value)
-
 const vs = useVirtualScroll(lineCount, lineHeightPx)
 const scrollEl = ref<HTMLElement | null>(null)
 const scrollLeftVal = ref(0)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const charWidth = ref(8)
+
+// Column ruler at 80 chars (VS Code-compatible guide line)
+const RULER_COL = 80
+const rulerLeft = computed(() => gutterWidth.value + PAD_LEFT + RULER_COL * charWidth.value - scrollLeftVal.value)
 let composing = false
 
 // ── Tokenization (whole-doc; fine for typical source files) ──────────────────
@@ -779,6 +780,26 @@ function transformToTitleCase(): void {
   if (!sel) return
   const titled = model.getValueInRange(sel).replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
   applyEdit(sel, titled)
+}
+function transformToSnakeCase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, toSnakeCase(model.getValueInRange(sel)))
+}
+function transformToCamelCase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, toCamelCase(model.getValueInRange(sel)))
+}
+function transformToKebabCase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, toKebabCase(model.getValueInRange(sel)))
+}
+function transformToPascalCase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, toPascalCase(model.getValueInRange(sel)))
 }
 function formatSelection(): void {
   const sel = selectionRange()
@@ -1523,7 +1544,9 @@ defineExpose({
   jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, transformToTitleCase, trimTrailingWhitespace, formatDocument, formatSelection,
+  transformToUppercase, transformToLowercase, transformToTitleCase,
+  transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
+  trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
   selectLine,

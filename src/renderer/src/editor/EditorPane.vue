@@ -555,6 +555,10 @@ function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
 function transformToUppercase(): void { editorRef.value?.transformToUppercase() }
 function transformToLowercase(): void { editorRef.value?.transformToLowercase() }
 function transformToTitleCase(): void { editorRef.value?.transformToTitleCase() }
+function transformToSnakeCase(): void { editorRef.value?.transformToSnakeCase() }
+function transformToCamelCase(): void { editorRef.value?.transformToCamelCase() }
+function transformToKebabCase(): void { editorRef.value?.transformToKebabCase() }
+function transformToPascalCase(): void { editorRef.value?.transformToPascalCase() }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 function formatDocument(): void { editorRef.value?.formatDocument() }
 function formatSelection(): void { editorRef.value?.formatSelection() }
@@ -626,7 +630,9 @@ defineExpose({
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, transformToTitleCase, trimTrailingWhitespace, formatDocument, formatSelection,
+  transformToUppercase, transformToLowercase, transformToTitleCase,
+  transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
+  trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines, sortLinesAscending, sortLinesDescending,
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,

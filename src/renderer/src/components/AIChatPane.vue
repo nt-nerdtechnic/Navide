@@ -55,6 +55,7 @@ const props = defineProps<{
   getEditorSelection?: () => string
   getActiveRelPath?: () => string
   insertTextAtCursor?: (text: string) => void
+  openFile?: (relPath: string) => void
 }>()
 
 // ── Message types ──────────────────────────────────────────────────────────────
@@ -497,6 +498,17 @@ function onMessagesClick(e: MouseEvent): void {
       showToast('Inserted at cursor')
     } catch { showToast('Insert failed') }
   }
+
+  // Clickable file path in inline code
+  const fileRef = target.closest<HTMLElement>('.ai-file-ref')
+  if (fileRef) {
+    const relPath = fileRef.dataset.path ?? ''
+    if (relPath && props.openFile) {
+      props.openFile(relPath)
+    } else if (relPath) {
+      showToast(`File: ${relPath}`)
+    }
+  }
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
@@ -683,10 +695,15 @@ function renderMarkdownLite(rawText: string): string {
   html = html.replace(/(?<!\*)\*([^*<\n]+)\*(?!\*)/g, '<em>$1</em>')
   // Strikethrough
   html = html.replace(/~~([^~<\n]+)~~/g, '<del>$1</del>')
-  // Inline code
-  html = html.replace(/`([^`\n]+)`/g, (_, c) =>
-    `<code class="ai-inline-code">${c.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>`,
-  )
+  // Inline code — file paths become clickable links
+  const FILE_PATH_RE = /^(?:\.{0,2}\/)?[\w.\-/ ]+\.(?:ts|tsx|js|jsx|vue|py|go|rs|rb|java|kt|swift|c|cpp|cs|php|sh|md|json|yaml|yml|toml|html|css|scss|sql)$/
+  html = html.replace(/`([^`\n]+)`/g, (_, c) => {
+    const escaped = c.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    if (FILE_PATH_RE.test(c.trim()) && c.includes('/')) {
+      return `<code class="ai-inline-code ai-file-ref" data-path="${c.trim()}">${escaped}</code>`
+    }
+    return `<code class="ai-inline-code">${escaped}</code>`
+  })
   // Auto-link URLs (not inside existing tags)
   html = html.replace(/(?<![="'])https?:\/\/[^\s<>"')\]]+/g,
     (url) => `<a class="ai-link" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
@@ -2335,6 +2352,13 @@ function getDateLabel(ts: number): string {
   word-break: break-all;
 }
 .ai-text :deep(a.ai-link:hover) { opacity: 0.8; }
+.ai-text :deep(code.ai-file-ref) {
+  cursor: pointer;
+  color: var(--accent-fg, #58a6ff);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.ai-text :deep(code.ai-file-ref:hover) { background: var(--bg-subtle); }
 .ai-text :deep(ul.ai-ul),
 .ai-text :deep(ol.ai-ol) {
   margin: 4px 0 4px 18px;
