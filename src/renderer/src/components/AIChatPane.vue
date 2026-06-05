@@ -116,6 +116,12 @@ const MAX_THREADS = 20
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
 const showThreads = ref(false)
+const threadSearchQuery = ref('')
+const filteredThreads = computed(() => {
+  const q = threadSearchQuery.value.trim().toLowerCase()
+  if (!q) return allThreads.value
+  return allThreads.value.filter((t) => t.title.toLowerCase().includes(q))
+})
 const currentThreadId = ref('')
 const allThreads = ref<ChatThread[]>([])
 
@@ -429,9 +435,9 @@ function renderMarkdownLite(rawText: string): string {
       } else if (!lang && code.length < 3000) {
         result = hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'bash', 'json', 'css', 'xml', 'sql', 'yaml'])
       }
-      highlighted = result ? result.value : code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      highlighted = result ? result.value : code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     } catch {
-      highlighted = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      highlighted = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
     const i = blocks.length
     // Only show Apply button when an active file path is available
@@ -1344,6 +1350,10 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     openSearch()
   }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+    e.preventDefault()
+    newThread()
+  }
 }
 
 // Auto-resize textarea
@@ -1628,7 +1638,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             class="ai-settings-btn"
             title="對話記錄"
             :class="{ active: showThreads }"
-            @click="showThreads = !showThreads"
+            @click="showThreads = !showThreads; if (!showThreads) threadSearchQuery = ''"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/></svg>
           </button>
@@ -1675,12 +1685,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     <!-- Thread list panel -->
     <div v-if="showThreads" class="ai-threads-panel">
       <div class="ai-threads-header">
-        <span>對話記錄</span>
-        <button class="ai-settings-close" @click="showThreads = false">✕</button>
+        <span>對話記錄 ({{ allThreads.length }})</span>
+        <button class="ai-settings-close" @click="showThreads = false; threadSearchQuery = ''">✕</button>
+      </div>
+      <div class="ai-threads-search">
+        <input
+          v-model="threadSearchQuery"
+          class="ai-search-input"
+          placeholder="搜尋對話…"
+          @keydown.escape="showThreads = false; threadSearchQuery = ''"
+        />
       </div>
       <div class="ai-threads-list">
+        <div v-if="!filteredThreads.length" class="ai-threads-empty">無符合結果</div>
         <div
-          v-for="t in allThreads"
+          v-for="t in filteredThreads"
           :key="t.id"
           class="ai-thread-item"
           :class="{ active: t.id === currentThreadId }"
@@ -2569,6 +2588,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
+.ai-threads-search { padding: 6px 10px 4px; flex-shrink: 0; }
+.ai-threads-empty { padding: 10px 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .ai-threads-list { overflow-y: auto; flex: 1; }
 .ai-thread-item {
   display: flex;
