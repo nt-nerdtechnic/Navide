@@ -143,7 +143,7 @@ function loadThreads(): void {
           const firstUser = legacyMsgs.find((m) => m.role === 'user')
           const thread: ChatThread = {
             id: newThreadId(),
-            title: firstUser ? firstUser.content.slice(0, 40) : '對話記錄',
+            title: firstUser ? firstUser.content.slice(0, 40) : 'Chat history',
             messages: legacyMsgs,
             updatedAt: Date.now(),
           }
@@ -156,7 +156,7 @@ function loadThreads(): void {
 
   if (allThreads.value.length === 0) {
     const id = newThreadId()
-    allThreads.value = [{ id, title: '新對話', messages: [], updatedAt: Date.now() }]
+    allThreads.value = [{ id, title: 'New chat', messages: [], updatedAt: Date.now() }]
   }
   const latest = allThreads.value[0]
   currentThreadId.value = latest.id
@@ -170,7 +170,7 @@ function _doSave(): void {
   allThreads.value[idx].messages = toSave
   allThreads.value[idx].updatedAt = Date.now()
   const firstUser = toSave.find((m) => m.role === 'user')
-  if (firstUser && allThreads.value[idx].title === '新對話') {
+  if (firstUser && allThreads.value[idx].title === 'New chat') {
     // Truncate at word boundary within 40 chars
     const raw = firstUser.content.replace(/\s+/g, ' ').trim()
     const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
@@ -190,7 +190,7 @@ function newThread(): void {
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
   _doSave()
   const id = newThreadId()
-  const thread: ChatThread = { id, title: '新對話', messages: [], updatedAt: Date.now() }
+  const thread: ChatThread = { id, title: 'New chat', messages: [], updatedAt: Date.now() }
   allThreads.value.unshift(thread)
   currentThreadId.value = id
   messages.value = []
@@ -335,10 +335,10 @@ const atMenuEl = ref<HTMLElement | null>(null)
 
 interface AtOption { id: string; label: string }
 const AT_OPTIONS_STATIC: AtOption[] = [
-  { id: '@file', label: '@file — 目前開啟的檔案' },
-  { id: '@selection', label: '@selection — 編輯器選取內容' },
-  { id: '@git', label: '@git — 目前 git diff (unstaged)' },
-  { id: '@codebase', label: '@codebase — 搜尋工作區程式碼' },
+  { id: '@file', label: '@file — current open file' },
+  { id: '@selection', label: '@selection — editor selection' },
+  { id: '@git', label: '@git — current git diff (unstaged)' },
+  { id: '@codebase', label: '@codebase — search workspace code' },
 ]
 const atDirItems = ref<AtOption[]>([])
 
@@ -407,6 +407,8 @@ function onMessagesClick(e: MouseEvent): void {
       const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
       const relPath = props.getActiveRelPath?.()
       if (!relPath) { showToast('沒有開啟中的檔案'); return }
+      const lineCount = code.split('\n').length
+      if (!window.confirm(`套用 ${lineCount} 行程式碼到「${relPath}」？\n\n注意：這將覆蓋整個檔案內容。`)) return
       props.backend.send('fs.write_file', {
         workspace_path: props.workspacePath,
         rel_path: relPath,
@@ -759,7 +761,7 @@ function clearConversation(): void {
   messages.value = []
   // Also reset the title so it auto-updates on next message
   const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
-  if (idx !== -1) allThreads.value[idx].title = '新對話'
+  if (idx !== -1) allThreads.value[idx].title = 'New chat'
   saveCurrentThread()
 }
 
