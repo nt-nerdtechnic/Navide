@@ -117,4 +117,11 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },
   { key: 'ctrl+t',      command: 'editor.action.transpose',           when: 'editorTextFocus' },
   { key: 'ctrl+j',      command: 'editor.action.joinLines',           when: 'editorTextFocus' },
+
+  // ── Copy paths ────────────────────────────────────────────────────────────────
+  { key: 'cmd+shift+alt+c', command: 'workbench.action.copyRelativeFilePath', when: 'editorOpen' },
+
+  // ── Navigation ────────────────────────────────────────────────────────────────
+  { key: 'cmd+k cmd+q', command: 'editor.action.navigateToLastEditLocation', when: 'editorOpen' },
+  { key: 'cmd+k cmd+d', command: 'editor.action.moveSelectionToNextFindMatch', when: 'editorTextFocus' },
 ]

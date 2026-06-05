@@ -620,3 +620,34 @@ describe('join lines shortcut', () => {
     expect(dr.resolve(mkEvent('j', { ctrlKey: true }), {})).toBeNull()
   })
 })
+
+describe('navigate to last edit and move selection shortcuts', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+k cmd+q → navigateToLastEditLocation (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true }) // enter chord
+    expect(dr.resolve(mkEvent('q', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.navigateToLastEditLocation')
+  })
+
+  it('cmd+k cmd+d → moveSelectionToNextFindMatch (editorTextFocus)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true }) // enter chord
+    expect(dr.resolve(mkEvent('d', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.moveSelectionToNextFindMatch')
+  })
+})
+
+describe('copy relative path shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+shift+alt+c → copyRelativeFilePath (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('c', { metaKey: true, shiftKey: true, altKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.copyRelativeFilePath')
+  })
+
+  it('cmd+shift+alt+c requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('c', { metaKey: true, shiftKey: true, altKey: true }), {})).toBeNull()
+  })
+})

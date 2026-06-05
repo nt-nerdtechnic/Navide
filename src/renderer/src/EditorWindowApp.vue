@@ -305,6 +305,7 @@ registerCommand('editor.action.transformToTitlecase',  () => activeEditor()?.tra
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
+registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
 registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
 registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
@@ -346,7 +347,8 @@ registerCommand('workbench.action.openFile', async () => {
   openFile({ filepath: relPath })
 })
 registerCommand('workbench.action.openSettings', openKeyboardShortcuts)
-registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
+registerCommand('editor.action.addSelectionToNextFindMatch',  () => activeEditor()?.selectNextOccurrence())
+registerCommand('editor.action.moveSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
 registerCommand('editor.action.redo',      () => activeEditor()?.redo())
 registerCommand('editor.action.selectAll', () => activeEditor()?.selectAll())
@@ -585,6 +587,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectLine',          label: '選取目前行',     keys: '⌃L' },
   { id: 'editor.action.indentationToSpaces', label: '縮排轉換為空格' },
   { id: 'editor.action.indentationToTabs',   label: '縮排轉換為 Tab' },
+  { id: 'editor.action.navigateToLastEditLocation', label: '跳到最後編輯位置', keys: '⌘K ⌘Q' },
+  { id: 'editor.action.moveSelectionToNextFindMatch', label: '移動選取到下一個符合', keys: '⌘K ⌘D' },
+  { id: 'workbench.action.copyRelativeFilePath', label: '複製相對路徑', keys: '⌘⇧⌥C' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')

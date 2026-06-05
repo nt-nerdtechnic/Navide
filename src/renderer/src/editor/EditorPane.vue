@@ -96,9 +96,20 @@ async function load(): Promise<void> {
   }
 }
 
+// Track last edit position so cmd+k cmd+q can navigate back to it.
+const lastEditLine = ref<number | null>(null)
+const lastEditCol = ref<number | null>(null)
+
 function onChange(v: string): void {
   content.value = v
   dirty.value = true
+  const cur = editorRef.value?.getCursor()
+  if (cur) { lastEditLine.value = cur.line; lastEditCol.value = cur.col }
+}
+
+function navigateToLastEdit(): void {
+  if (lastEditLine.value === null) return
+  editorRef.value?.revealPosition(lastEditLine.value, lastEditCol.value ?? 0)
 }
 
 async function save(): Promise<void> {
@@ -597,6 +608,7 @@ defineExpose({
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,
+  navigateToLastEdit,
   setLanguage, zoomIn, zoomOut, zoomReset,
   undo, redo, selectAll,
   openReplace,

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { useGit } from '../useGit'
 import { createMockBackend, withScope, flush } from './mockBackend'
 
@@ -150,21 +150,27 @@ describe('useGit', () => {
   })
 
   it('refreshes on git.changed broadcast', async () => {
-    const mock = createMockBackend('connected')
-    mock.setResponse('git.status', mockStatus)
-    mock.setResponse('git.log', { commits: [] })
+    vi.useFakeTimers()
+    try {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
 
-    const { scope } = withScope(() => useGit(() => WS, mock.backend))
-    await flush()
+      const { scope } = withScope(() => useGit(() => WS, mock.backend))
+      await vi.runAllTimersAsync()
 
-    const countBefore = mock.sent.filter(s => s.type === 'git.status').length
+      const countBefore = mock.sent.filter(s => s.type === 'git.status').length
 
-    mock.emit('git.changed', { workspace_path: WS })
-    await flush()
+      mock.emit('git.changed', { workspace_path: WS })
+      // Advance past the 300 ms debounce the handler uses
+      await vi.runAllTimersAsync()
 
-    const countAfter = mock.sent.filter(s => s.type === 'git.status').length
-    expect(countAfter).toBeGreaterThan(countBefore)
-    scope.stop()
+      const countAfter = mock.sent.filter(s => s.type === 'git.status').length
+      expect(countAfter).toBeGreaterThan(countBefore)
+      scope.stop()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('re-syncs status on backend reconnect', async () => {
