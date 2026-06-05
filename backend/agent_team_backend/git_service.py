@@ -1568,7 +1568,14 @@ def _append_ignore_pattern(file_path: Path, pattern: str) -> bool:
         return False
     file_path.parent.mkdir(parents=True, exist_ok=True)
     prefix = "" if (not existing or existing.endswith("\n")) else "\n"
-    file_path.write_text(existing + prefix + pattern + "\n", encoding="utf-8")
+    new_content = (existing + prefix + pattern + "\n").encode("utf-8")
+    tmp = file_path.with_suffix(file_path.suffix + ".tmp")
+    try:
+        tmp.write_bytes(new_content)
+        os.replace(tmp, file_path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return True
 
 
