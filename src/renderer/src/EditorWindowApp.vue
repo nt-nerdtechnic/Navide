@@ -572,6 +572,23 @@ registerCommand('editor.action.selectLine',          () => activeEditor()?.selec
 registerCommand('editor.action.transpose',           () => activeEditor()?.transpose())
 registerCommand('editor.action.indentationToSpaces', () => activeEditor()?.indentationToSpaces())
 registerCommand('editor.action.indentationToTabs',   () => activeEditor()?.indentationToTabs())
+registerCommand('editor.action.detectIndentation', () => {
+  const content = activeEditor()?.getContent() ?? ''
+  const lines = content.split('\n').slice(0, 200).filter((l) => l.match(/^\s+\S/))
+  const tabCount = lines.filter((l) => l.startsWith('\t')).length
+  const spaceLines = lines.filter((l) => l.startsWith(' '))
+  if (lines.length === 0) { toast('No indented lines detected'); return }
+  if (tabCount > spaceLines.length) {
+    toast('Detected indentation: Tabs')
+  } else if (spaceLines.length > 0) {
+    const sizes: Record<number, number> = {}
+    for (const l of spaceLines) { const n = l.match(/^( +)/)?.[1].length ?? 0; if (n > 0) sizes[n] = (sizes[n] ?? 0) + 1 }
+    const size = Object.entries(sizes).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '2'
+    toast(`Detected indentation: ${size} Spaces`)
+  } else {
+    toast('Detected indentation: Spaces')
+  }
+})
 
 // ── Tab bar: auto-scroll active tab into view ─────────────────────────────────
 const tabsEl = ref<HTMLElement | null>(null)
@@ -684,7 +701,10 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
   { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
   { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
-  { id: 'editor.action.openFileAtCursor', label: 'Open File at Cursor', keys: 'F12' },
+  { id: 'editor.action.openFileAtCursor',     label: 'Open File at Cursor',       keys: 'F12' },
+  { id: 'editor.action.detectIndentation',    label: 'Detect Indentation' },
+  { id: 'editor.action.indentationToSpaces',  label: 'Convert Indentation to Spaces' },
+  { id: 'editor.action.indentationToTabs',    label: 'Convert Indentation to Tabs' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
