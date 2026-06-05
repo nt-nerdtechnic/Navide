@@ -235,6 +235,9 @@ watch(wsRef, (v) => {
         <button class="exp-icon-btn" title="新增檔案" @click.stop="startNew('new-file', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 1H3.75A1.75 1.75 0 0 0 2 2.75v10.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1ZM12.5 13.25a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25V2.75a.25.25 0 0 1 .25-.25H9v3.5h3.5v7.25ZM8 7.5h1.5V9H11v1.5H9.5V12H8v-1.5H6.5V9H8V7.5Z"/></svg>
         </button>
+        <button class="exp-icon-btn" title="新增資料夾" @click.stop="startNew('new-folder', null)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7A1.75 1.75 0 0 0 14.25 3.5H7.5l-1.2-1.2A1.75 1.75 0 0 0 5.06 2H1.75Zm6.5 5.5h1.75V9h1.5v1.5h-1.5V12H8.25v-1.5h-1.5V9h1.5V7.5Z"/></svg>
+        </button>
       </div>
     </div>
 
@@ -252,7 +255,7 @@ watch(wsRef, (v) => {
         <span class="exp-chevron" :class="{ open: explorer.isExpanded(row.entry.rel_path) }">
           <svg v-if="row.entry.is_dir" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M6 4l4 4-4 4V4Z"/></svg>
         </span>
-        <span class="exp-glyph">
+        <span class="exp-glyph" :class="row.entry.is_dir ? 'is-dir' : 'is-file'">
           <svg v-if="row.entry.is_dir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1H3.75ZM9 2.5 12.5 6H9V2.5Z"/></svg>
         </span>
@@ -378,7 +381,8 @@ watch(wsRef, (v) => {
 }
 .exp-chevron.open { transform: rotate(90deg); }
 .exp-glyph { display: inline-flex; align-items: center; color: var(--text-secondary); flex-shrink: 0; }
-.exp-row .exp-glyph svg { color: var(--accent-fg); }
+.exp-glyph.is-dir svg { color: var(--accent-fg); }
+.exp-glyph.is-file svg { color: var(--text-muted); }
 .exp-name {
   flex: 1;
   overflow: hidden;

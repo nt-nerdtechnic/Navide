@@ -35,9 +35,10 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
   const showHidden = ref<boolean>(
     (() => {
       try {
-        return sessionStorage.getItem(SHOW_HIDDEN_KEY) === '1'
+        // Default to showing hidden files; only off when user explicitly disabled it.
+        return sessionStorage.getItem(SHOW_HIDDEN_KEY) !== '0'
       } catch {
-        return false
+        return true
       }
     })()
   )
