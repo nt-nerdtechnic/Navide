@@ -313,6 +313,21 @@ function toggleMsgFold(mi: number): void {
   expandedMsgIdxs.value = new Set(expandedMsgIdxs.value)
 }
 
+// Response length preference — prepended to system prompt when sending
+const responseLengths = ['normal', 'concise', 'detailed'] as const
+type ResponseLength = typeof responseLengths[number]
+const responseLength = ref<ResponseLength>('normal')
+const RESPONSE_LENGTH_LABELS: Record<ResponseLength, string> = { normal: 'Normal', concise: 'Concise', detailed: 'Detailed' }
+const RESPONSE_LENGTH_HINTS: Record<ResponseLength, string> = {
+  normal: '',
+  concise: 'Be concise. Keep responses short and to the point.',
+  detailed: 'Be thorough and detailed. Include examples and explanations.',
+}
+function cycleResponseLength(): void {
+  const idx = responseLengths.indexOf(responseLength.value)
+  responseLength.value = responseLengths[(idx + 1) % responseLengths.length]
+}
+
 // Input char counter + token estimate (shown when > 200 chars)
 const inputCharCount = computed(() => inputText.value.length)
 const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
@@ -896,10 +911,12 @@ async function sendMessage(): Promise<void> {
   await scrollBottom(true)
 
   try {
+    const lengthHint = RESPONSE_LENGTH_HINTS[responseLength.value]
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
+      ...(lengthHint ? { system_suffix: lengthHint } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -2066,6 +2083,11 @@ function getDateLabel(ts: number): string {
             </svg>
           </button>
           <button
+            class="ai-response-length-btn"
+            :title="`Response length: ${RESPONSE_LENGTH_LABELS[responseLength]} (click to cycle)`"
+            @click="cycleResponseLength"
+          >{{ RESPONSE_LENGTH_LABELS[responseLength] }}</button>
+          <button
             class="ai-settings-btn"
             title="Keyboard shortcuts (?)"
             @click="showShortcuts = !showShortcuts"
@@ -2979,6 +3001,21 @@ function getDateLabel(ts: number): string {
 }
 .ai-settings-btn:hover:not(:disabled) { color: var(--text-bright); }
 .ai-settings-btn:disabled { opacity: 0.3; cursor: default; }
+
+.ai-response-length-btn {
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 3px;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  height: 22px;
+}
+.ai-response-length-btn:hover { color: var(--accent-fg); }
 
 /* ── Search bar ─────────────────────────────────────────────────────────────── */
 .ai-search-bar {

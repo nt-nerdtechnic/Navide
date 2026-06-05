@@ -2427,6 +2427,7 @@ async function onPipelineReset(): Promise<void> {
   activeQuestion.value = null
   clearStageStallAutoTimer()
   stageStallPrompt.value = null
+  if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
   // Reset is the destructive action: tear down ALL panes (pipeline + manual) so
   // the workspace returns to a clean slate. onKill handles each pane's
   // watcher/timer/session teardown and removes it from the view.
@@ -4758,8 +4759,8 @@ function paneIsCommander(p: ActivePane): boolean {
             </p>
           </div>
           <footer>
-            <button class="stall-btn primary" @click="confirmCloseWorkspace = false">取消</button>
-            <button class="stall-btn danger" @click="doCloseWorkspace">中止並切換</button>
+            <button class="stall-btn primary" @click="confirmCloseWorkspace = false">Cancel</button>
+            <button class="stall-btn danger" @click="doCloseWorkspace">Abort &amp; Switch</button>
           </footer>
         </div>
       </div>

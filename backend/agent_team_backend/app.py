@@ -2094,7 +2094,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             session_id = payload.get("session_id", "") or str(__import__("uuid").uuid4())
             messages = payload.get("messages", []) or []
             workspace_path = payload.get("workspace_path", "") or ""
-            settings = ai_chat_settings_store.get()
+            system_suffix = payload.get("system_suffix", "") or ""
+            settings = {**ai_chat_settings_store.get()}
+            if system_suffix:
+                base_sys = settings.get("system_prompt", "You are a helpful AI coding assistant.")
+                settings["system_prompt"] = f"{base_sys}\n\n{system_suffix}"
 
             async def _run_chat(sid=session_id, msgs=messages, ws_path=workspace_path, s=settings):
                 from .ai_chat_tools import run_agent_loop
