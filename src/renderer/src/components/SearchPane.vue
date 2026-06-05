@@ -158,6 +158,9 @@ async function replaceAll(): Promise<void> {
   if (!total.value) return
   const q = query.value
   const r = replacement.value
+  // Capture the file list before the async confirm() so a concurrent search
+  // triggered while the dialog is open can't change results.value under us.
+  const filePaths = results.value.map((f) => f.rel_path)
   const ok = await confirm(
     `Replace "${q}" with "${r}" — ${total.value} occurrence(s) across ${fileCount.value} file(s). This will modify files directly.`,
     { title: 'Replace All', confirmText: 'Replace All' }
@@ -165,7 +168,7 @@ async function replaceAll(): Promise<void> {
   if (!ok) return
   query.value = q
   replacement.value = r
-  await replaceInFiles(results.value.map((f) => f.rel_path))
+  await replaceInFiles(filePaths)
 }
 
 async function replaceFile(file: FileResult): Promise<void> {

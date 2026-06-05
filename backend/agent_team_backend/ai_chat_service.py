@@ -86,8 +86,14 @@ async def _stream_anthropic(
                     # input arrives incrementally; collect it via input_json_stream
                     pass  # handled below via raw_stream accumulation
 
-        # Retrieve the final message to emit any tool_use blocks fully formed
-        final = await stream.get_final_message()
+        # Retrieve the final message to emit any tool_use blocks fully formed.
+        # get_final_message() can raise if the stream ended abnormally; guard it
+        # so the exception doesn't propagate as an unhandled generator crash.
+        try:
+            final = await stream.get_final_message()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("get_final_message failed: %s", exc)
+            return
         for block in final.content:
             if getattr(block, "type", None) == "tool_use":
                 yield "\x00TOOL:" + json.dumps({
