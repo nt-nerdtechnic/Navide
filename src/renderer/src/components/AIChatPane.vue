@@ -736,7 +736,8 @@ function setupListeners(): void {
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
     if (p.model) settingsModel.value = p.model
     if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
-    if (p.system_prompt) settingsSystemPrompt.value = p.system_prompt
+    // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
+    if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
   })
 }
 
