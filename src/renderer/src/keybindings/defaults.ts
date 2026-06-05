@@ -74,6 +74,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+k cmd+z', command: 'workbench.action.toggleZenMode' },
   { key: 'cmd+k cmd+o', command: 'workbench.action.openFolder' },
   { key: 'cmd+k cmd+e', command: 'workbench.action.focusActiveEditorGroup', when: 'editorOpen' },
+  { key: 'cmd+k cmd+l', command: 'editor.action.toggleLineNumbers',          when: 'editorOpen' },
   { key: 'cmd+=',       command: 'editor.action.fontZoomIn',    when: 'editorOpen' },
   { key: 'cmd+-',       command: 'editor.action.fontZoomOut',   when: 'editorOpen' },
   { key: 'cmd+0',       command: 'editor.action.fontZoomReset', when: 'editorOpen' },

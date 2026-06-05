@@ -715,3 +715,19 @@ describe('toggleAIChat shortcut (Ctrl+`)', () => {
     expect(dr.resolve(mkEvent('`'), {})?.command).not.toBe('workbench.action.toggleAIChat')
   })
 })
+
+describe('toggleLineNumbers shortcut (cmd+k cmd+l)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+k cmd+l → toggleLineNumbers (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true })
+    expect(dr.resolve(mkEvent('l', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.toggleLineNumbers')
+  })
+
+  it('cmd+k cmd+l requires editorOpen', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('l', { metaKey: true }), {})).toBeNull()
+  })
+})
