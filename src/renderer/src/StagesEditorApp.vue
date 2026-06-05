@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import { useNotify } from './composables/useNotify'
+import { useKeybindings } from './keybindings/useKeybindings'
 import NotificationHost from './components/NotificationHost.vue'
 import { useStages } from './composables/useStages'
 import { stageToBackend, type AgentKey, type Stage, type StageSlot } from './data/stages'
@@ -9,6 +10,7 @@ import { stageToBackend, type AgentKey, type Stage, type StageSlot } from './dat
 const backend = useBackend()
 const stagesApi = useStages(backend)
 const notify = useNotify()
+useKeybindings()
 
 const AGENT_OPTIONS: { key: AgentKey; label: string }[] = [
   { key: 'claude', label: 'Claude Code' },

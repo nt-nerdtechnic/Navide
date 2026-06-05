@@ -420,11 +420,21 @@ export function useGit(
     return resp.ok && resp.payload?.ok ? (resp.payload.hunks ?? []) : []
   }
 
-  async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.merge', { workspace_path: ws, branch })
+    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch })
     if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function mergeInto(target: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[]; source_branch?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
+    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
@@ -697,9 +707,27 @@ export function useGit(
       if (resp.ok && resp.payload?.ok) {
         return { ok: true, message: resp.payload.message }
       }
-      return { ok: false, message: '', error: resp.payload?.error || resp.error || 'generation failed' }
+      return { ok: false, message: '', error: resp.payload?.error || resp.error?.message || 'generation failed' }
     } finally {
       isGenerating.value = false
+    }
+  }
+
+  async function checkStaged(): Promise<{ ok: boolean; errorCount: number; summary: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: true, errorCount: 0, summary: '' }
+    try {
+      const resp = await send<{ ok: boolean; error_count: number; summary: string }>(
+        'git.check_staged',
+        { workspace_path: ws },
+        35_000,
+      )
+      if (resp.payload) {
+        return { ok: resp.payload.ok, errorCount: resp.payload.error_count, summary: resp.payload.summary }
+      }
+      return { ok: true, errorCount: 0, summary: '' }
+    } catch {
+      return { ok: true, errorCount: 0, summary: '' }
     }
   }
 
@@ -719,6 +747,19 @@ export function useGit(
       cached,
     })
     if (resp.ok && resp.payload?.ok) await loadStatus()
+    return resp.payload ?? { ok: false, error: 'no response' }
+  }
+
+  async function connectToRemote(
+    url: string,
+  ): Promise<{ ok: boolean; branch?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    const resp = await send<{ ok: boolean; branch?: string; error?: string }>(
+      'git.connect_to_remote',
+      { workspace_path: ws, url },
+      60_000,
+    )
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
@@ -874,7 +915,7 @@ export function useGit(
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
     addRemote, removeRemote,
     // branches
-    createBranch, switchBranch, deleteBranch, mergeBranch, rebaseOn,
+    createBranch, switchBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
     compareBranches, restoreFileFromBranch,
     // stash
     stashPush, stashPop, stashDrop,
@@ -886,9 +927,10 @@ export function useGit(
     gitConfigAllowedKeys, setGitConfig,
     // commit
     commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
+    checkStaged,
     showCommit,
     // vscode-parity additions
-    applyPatch, cloneRepo, addToGitignore, checkIgnore, abortOperation, stashApply,
+    applyPatch, cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
     pullRebase, pushForce,
   }
 }

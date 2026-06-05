@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, toRef } from 'vue'
+import { ref, computed, onMounted, watch, toRef, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useExplorer, type FsEntry } from '../composables/useExplorer'
 import { useGit } from '../composables/useGit'
@@ -89,11 +89,92 @@ function statusClassFor(entry: FsEntry): string {
   return st ? STATUS_CLASS[st.letter] || 'st-mod' : ''
 }
 
-function onRowClick(entry: FsEntry): void {
-  if (entry.is_dir) {
-    void explorer.toggleDir(entry.rel_path)
-  } else {
-    openInEditor(entry)
+// ── Multi-select ──────────────────────────────────────────────────────────────
+const selectedKeys = ref(new Set<string>())
+const lastClickKey = ref<string | null>(null)
+
+const selectedFilePaths = computed<string[]>(() => {
+  const fileRels = new Set(rows.value.filter(r => !r.entry.is_dir).map(r => r.entry.rel_path))
+  return [...selectedKeys.value].filter(k => fileRels.has(k))
+})
+
+function clearSelection(): void {
+  selectedKeys.value = new Set()
+  lastClickKey.value = null
+}
+
+function rangeSelect(toKey: string): void {
+  const keys = rows.value.map(r => r.entry.rel_path)
+  const from = lastClickKey.value ? keys.indexOf(lastClickKey.value) : -1
+  const to = keys.indexOf(toKey)
+  if (from < 0 || to < 0) {
+    selectedKeys.value = new Set([toKey])
+    lastClickKey.value = toKey
+    return
+  }
+  const [start, end] = from <= to ? [from, to] : [to, from]
+  const next = new Set(selectedKeys.value)
+  for (let i = start; i <= end; i++) next.add(keys[i])
+  selectedKeys.value = next
+  lastClickKey.value = toKey
+}
+
+function handleRowClick(e: MouseEvent, entry: FsEntry): void {
+  const key = entry.rel_path
+  if (e.ctrlKey || e.metaKey) {
+    const next = new Set(selectedKeys.value)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    selectedKeys.value = next
+    lastClickKey.value = key
+    return
+  }
+  if (e.shiftKey) {
+    rangeSelect(key)
+    return
+  }
+  // plain click
+  selectedKeys.value = new Set([key])
+  lastClickKey.value = key
+  if (entry.is_dir) void explorer.toggleDir(key)
+  else openInEditor(entry)
+}
+
+function openSelected(): void {
+  for (const rel of selectedFilePaths.value) {
+    const entry = rows.value.find(r => r.entry.rel_path === rel)?.entry
+    if (entry) openInEditor(entry)
+  }
+}
+
+async function deleteSelected(): Promise<void> {
+  const count = selectedKeys.value.size
+  const ok = await confirm(`確定刪除已選的 ${count} 個項目？此操作無法復原。`, {
+    title: '刪除',
+    confirmText: '刪除',
+  })
+  if (!ok) return
+  const paths = [...selectedKeys.value]
+  for (const rel of paths) {
+    const res = await props.backend.send<FsResult>('fs.delete', {
+      workspace_path: props.workspacePath,
+      rel_path: rel,
+    })
+    if (!res.payload?.ok) {
+      void alert(res.payload?.error || `刪除「${rel}」失敗`, { title: '錯誤' })
+    }
+  }
+  clearSelection()
+  await explorer.refreshVisible()
+}
+
+async function copyPathsSelected(): Promise<void> {
+  const text = [...selectedKeys.value].map(rel => absPath(rel)).join('\n')
+  try {
+    await navigator.clipboard.writeText(text)
+    toast(`已複製 ${selectedKeys.value.size} 個路徑`, { type: 'success' })
+  } catch {
+    toast('複製失敗', { type: 'error' })
   }
 }
 
@@ -236,22 +317,106 @@ async function copyPath(entry: FsEntry): Promise<void> {
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
+function doInitialLoad(): void {
+  if (!props.workspacePath) return
+  void explorer.loadDir('')
+  void git.loadStatus()
+}
+
 onMounted(() => {
-  if (props.workspacePath) {
-    void explorer.loadDir('')
-    void git.loadStatus()
+  if (props.backend.status.value === 'connected') {
+    doInitialLoad()
   }
+  // If backend isn't connected yet (fresh editor window), wait for it.
+  watch(
+    () => props.backend.status.value,
+    (s) => {
+      if (s === 'connected' && explorer.childrenCache.value.size === 0) doInitialLoad()
+    },
+  )
 })
 watch(wsRef, (v) => {
-  if (v) {
-    void explorer.loadDir('')
-    void git.loadStatus()
-  }
+  if (v) { clearSelection(); doInitialLoad() }
 })
+
+// ── Reveal file ──────────────────────────────────────────────────────────────
+const treeEl = ref<HTMLElement | null>(null)
+
+async function revealFile(relPath: string): Promise<void> {
+  const segments = relPath.split('/')
+  segments.pop()
+  let current = ''
+  for (const seg of segments) {
+    current = current ? `${current}/${seg}` : seg
+    if (!explorer.isExpanded(current)) await explorer.toggleDir(current)
+  }
+  await nextTick()
+  treeEl.value?.querySelector<HTMLElement>(`[data-rel="${relPath}"]`)?.scrollIntoView({ block: 'nearest' })
+}
+
+// ── Keyboard navigation ───────────────────────────────────────────────────────
+// Track by rel_path so expanding/collapsing folders doesn't shift the focused item.
+const focusedRelPath = ref<string | null>(null)
+const focusedIdx = computed(() =>
+  focusedRelPath.value === null
+    ? -1
+    : rows.value.findIndex((r) => r.entry.rel_path === focusedRelPath.value),
+)
+
+function onTreeKeydown(e: KeyboardEvent): void {
+  const list = rows.value
+  if (!list.length) return
+  if (focusedRelPath.value === null) { focusedRelPath.value = list[0].entry.rel_path; return }
+  const idx = focusedIdx.value
+  if (idx === -1) { focusedRelPath.value = list[0].entry.rel_path; return }
+  const entry = list[idx].entry
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    focusedRelPath.value = list[Math.min(idx + 1, list.length - 1)].entry.rel_path
+    scrollFocusedIntoView()
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    focusedRelPath.value = list[Math.max(idx - 1, 0)].entry.rel_path
+    scrollFocusedIntoView()
+  } else if (e.key === 'ArrowRight' && entry.is_dir) {
+    e.preventDefault()
+    if (!explorer.isExpanded(entry.rel_path)) void explorer.toggleDir(entry.rel_path)
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault()
+    if (entry.is_dir && explorer.isExpanded(entry.rel_path)) {
+      void explorer.toggleDir(entry.rel_path)
+    } else {
+      const parentRel = entry.rel_path.includes('/') ? entry.rel_path.slice(0, entry.rel_path.lastIndexOf('/')) : ''
+      const parentRow = list.find((r) => r.entry.rel_path === parentRel)
+      if (parentRow) focusedRelPath.value = parentRow.entry.rel_path
+    }
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    if (entry.is_dir) void explorer.toggleDir(entry.rel_path)
+    else openInEditor(entry)
+  }
+}
+
+function scrollFocusedIntoView(): void {
+  void nextTick(() => {
+    const el = treeEl.value?.querySelectorAll<HTMLElement>('.exp-row')[focusedIdx.value]
+    el?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function onTreeFocus(): void {
+  if (focusedRelPath.value === null && rows.value.length > 0) focusedRelPath.value = rows.value[0].entry.rel_path
+}
+
+function focusTree(): void {
+  treeEl.value?.focus()
+}
+defineExpose({ revealFile, focusTree })
 </script>
 
 <template>
-  <div class="explorer" @click="closeCtx">
+  <div class="explorer" @click="closeCtx(); clearSelection()">
     <!-- Header -->
     <div class="exp-header">
       <span class="exp-ws" :title="workspacePath">{{ wsName || 'No workspace' }}</span>
@@ -273,18 +438,23 @@ watch(wsRef, (v) => {
         <button class="exp-icon-btn" title="新增資料夾" @click.stop="startNew('new-folder', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v1.5"/><path d="M13.5 7.5V12a1 1 0 0 1-1 1H7"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
+        <button class="exp-icon-btn" title="收縮所有資料夾" @click="explorer.expanded.value = new Set()">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-surface)"/><path d="M4 9.5h5"/></svg>
+        </button>
       </div>
     </div>
 
     <!-- Tree -->
-    <div class="exp-tree" @contextmenu="openCtx($event, null)">
+    <div ref="treeEl" class="exp-tree" tabindex="0" @contextmenu="openCtx($event, null)" @keydown="onTreeKeydown" @focus="onTreeFocus">
       <div
-        v-for="row in rows"
+        v-for="(row, rowIdx) in rows"
         :key="row.entry.rel_path"
+        :data-rel="row.entry.rel_path"
         class="exp-row"
-        :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden }"
+        :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
         :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
-        @click.stop="onRowClick(row.entry)"
+        @click.stop="handleRowClick($event, row.entry)"
+        @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
         @contextmenu.stop="openCtx($event, row.entry)"
       >
         <span class="exp-chevron" :class="{ open: explorer.isExpanded(row.entry.rel_path) }">
@@ -304,6 +474,11 @@ watch(wsRef, (v) => {
         {{ explorer.error.value || '此目錄沒有可顯示的項目' }}
       </div>
       <div v-if="!workspacePath" class="exp-empty">先選擇一個 workspace</div>
+
+      <div v-if="selectedKeys.size >= 2" class="selection-bar" @click.stop>
+        <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
+        <button class="sel-btn close" @click="clearSelection()">✕</button>
+      </div>
     </div>
 
     <!-- Inline prompt -->
@@ -329,17 +504,31 @@ watch(wsRef, (v) => {
 
     <!-- Context menu -->
     <div v-if="ctx" class="exp-ctx" :style="{ left: ctx.x + 'px', top: ctx.y + 'px' }" @click.stop>
-      <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">新增檔案</button>
-      <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">新增資料夾</button>
-      <template v-if="ctx.entry">
+      <!-- Multi-select context menu -->
+      <template v-if="selectedKeys.size > 1">
+        <button
+          v-if="selectedFilePaths.length > 0"
+          class="exp-ctx-item"
+          @click="openSelected(); closeCtx()"
+        >開啟 {{ selectedFilePaths.length }} 個檔案</button>
+        <button class="exp-ctx-item danger" @click="deleteSelected(); closeCtx()">刪除 {{ selectedKeys.size }} 個項目</button>
         <div class="exp-ctx-sep" />
-        <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
-        <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">在編輯器開啟</button>
-        <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">重新命名</button>
-        <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">刪除</button>
-        <div class="exp-ctx-sep" />
-        <button class="exp-ctx-item" @click="reveal(ctx.entry!); closeCtx()">Reveal in Finder</button>
-        <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">複製路徑</button>
+        <button class="exp-ctx-item" @click="copyPathsSelected(); closeCtx()">複製路徑</button>
+      </template>
+      <!-- Single-item context menu -->
+      <template v-else>
+        <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">新增檔案</button>
+        <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">新增資料夾</button>
+        <template v-if="ctx.entry">
+          <div class="exp-ctx-sep" />
+          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
+          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">在編輯器開啟</button>
+          <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">重新命名</button>
+          <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">刪除</button>
+          <div class="exp-ctx-sep" />
+          <button class="exp-ctx-item" @click="reveal(ctx.entry!); closeCtx()">Reveal in Finder</button>
+          <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">複製路徑</button>
+        </template>
       </template>
     </div>
   </div>
@@ -515,4 +704,44 @@ watch(wsRef, (v) => {
 .exp-ctx-item:hover { background: var(--bg-muted); }
 .exp-ctx-item.danger:hover { color: var(--danger-fg); }
 .exp-ctx-sep { height: 1px; background: var(--border-muted); margin: 4px 0; }
+
+/* Multi-select */
+.exp-row.row-selected { background: rgba(88, 166, 255, 0.12); }
+.exp-row.row-selected:hover { background: rgba(88, 166, 255, 0.18); }
+.exp-row.row-focused { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }
+.exp-tree:focus { outline: none; }
+
+.selection-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-default);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sel-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.sel-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.sel-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-bright); }
+.sel-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.sel-btn.danger:hover:not(:disabled) { color: var(--danger-fg); border-color: var(--danger-fg); }
+.sel-btn.close { margin-left: auto; }
 </style>

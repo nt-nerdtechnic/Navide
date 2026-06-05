@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell } from 'electron'
 import { join } from 'node:path'
-import { writeFile, mkdir } from 'node:fs/promises'
+import { writeFile, readFile, mkdir } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
@@ -17,7 +18,6 @@ let backend: BackendHandle | null = null
 let mainWindow: BrowserWindow | null = null
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
-let diffWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
@@ -125,32 +125,20 @@ function openStagesWindow(): void {
 }
 
 function openDiffWindow(params: Record<string, string>): void {
-  const search = { window: 'diff', ...params }
-  if (diffWindow && !diffWindow.isDestroyed()) {
-    // Reuse the window: reload it with the new file's params and focus.
-    loadWindow(diffWindow, search)
-    diffWindow.focus()
+  // Editor window already open — send IPC so it opens a diff tab without reload.
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    editorWindow.webContents.send('editor:openDiff', params)
+    editorWindow.focus()
     return
   }
-  const win = new BrowserWindow({
-    width: 1100,
-    height: 760,
-    title: 'Agent-Team · Diff',
-    parent: mainWindow ?? undefined,
-    // Match the renderer's dark theme so reopening/reloading doesn't flash white.
-    backgroundColor: '#0d1117',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false
-    }
+  // No editor window yet — open one with the diff pre-loaded via URL params.
+  // EditorWindowApp reads diff_filepath/diff_staged on startup and opens the tab.
+  openEditorWindow({
+    workspace_path: params.workspace_path,
+    diff_filepath: params.filepath,
+    diff_staged: params.staged,
+    diff_name: params.name ?? params.filepath,
   })
-  diffWindow = win
-  win.on('closed', () => {
-    if (diffWindow === win) diffWindow = null
-  })
-  loadWindow(win, search)
 }
 
 ipcMain.handle('window:openRoles', () => {
@@ -171,6 +159,12 @@ ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
 function openEditorWindow(params: Record<string, string>): void {
   const search = { window: 'editor', ...params }
   if (editorWindow && !editorWindow.isDestroyed()) {
+    // If only switching sidebar (no new file), avoid reload — just focus + notify sidebar.
+    if (!params.filepath && params.sidebar) {
+      editorWindow.webContents.send('editor:switchSidebar', params.sidebar)
+      editorWindow.focus()
+      return
+    }
     loadWindow(editorWindow, search)
     editorWindow.focus()
     return
@@ -206,11 +200,19 @@ ipcMain.handle(
     _event,
     args: { defaultName?: string; content: string; title?: string }
   ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => {
+    const defaultName = args?.defaultName ?? 'export.json'
+    const ext = defaultName.includes('.') ? defaultName.slice(defaultName.lastIndexOf('.') + 1) : 'json'
+    const extFilters: Record<string, { name: string; extensions: string[] }> = {
+      md:   { name: 'Markdown', extensions: ['md'] },
+      json: { name: 'JSON',     extensions: ['json'] },
+      txt:  { name: 'Text',     extensions: ['txt'] },
+    }
+    const primaryFilter = extFilters[ext] ?? { name: ext.toUpperCase(), extensions: [ext] }
     const opts: Electron.SaveDialogOptions = {
-      title: args?.title ?? 'Export JSON',
-      defaultPath: args?.defaultName ?? 'export.json',
+      title: args?.title ?? 'Export',
+      defaultPath: defaultName,
       filters: [
-        { name: 'JSON', extensions: ['json'] },
+        primaryFilter,
         { name: 'All Files', extensions: ['*'] }
       ]
     }
@@ -339,6 +341,27 @@ ipcMain.handle('shell:openTempFile', async (_event, filename: string, content: s
 // Read bytes from a file starting at a given offset. Used by the stage watcher
 // to scan the outputLogFile for sentinel strings — more reliable than cleanBuffer
 // which can be truncated or have scanFrom issues from Q&A injections.
+ipcMain.handle('keybindings:read', async () => {
+  const filePath = join(app.getPath('userData'), 'keybindings.json')
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    return { ok: true, content }
+  } catch {
+    return { ok: true, content: '[]' }
+  }
+})
+
+ipcMain.handle('keybindings:write', async (_event, content: string) => {
+  if (typeof content !== 'string') return { ok: false, error: 'invalid content' }
+  const filePath = join(app.getPath('userData'), 'keybindings.json')
+  try {
+    await writeFile(filePath, content, 'utf-8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number) => {
   if (!filePath || typeof filePath !== 'string') return { ok: false, content: '' }
   try {
@@ -366,6 +389,24 @@ app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 
 app.whenReady().then(async () => {
+  // In dev mode, inject the per-session random token into every renderer →
+  // dev-server request so browsers without the token get 403.
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+  if (rendererUrl) {
+    try {
+      const devToken = readFileSync(join(tmpdir(), 'agent-team-dev-token'), 'utf-8').trim()
+      const origin = new URL(rendererUrl).origin
+      session.defaultSession.webRequest.onBeforeSendHeaders(
+        { urls: [`${origin}/*`] },
+        (details, callback) => {
+          callback({ requestHeaders: { ...details.requestHeaders, 'x-electron-token': devToken } })
+        }
+      )
+    } catch {
+      // Token file missing — dev server may not be running yet, proceed anyway.
+    }
+  }
+
   try {
     backend = await startBackend()
     console.log(`[main] backend ready at ${backend.host}:${backend.port}`)

@@ -136,7 +136,7 @@ export function buildPatch(
   })
 
   const header = `@@ -${hunk.oldStart},${oldCount} +${hunk.oldStart},${newCount} @@`
-  const parts = [parsed.fileHeader, header, ...body]
+  const parts = parsed.fileHeader ? [parsed.fileHeader, header, ...body] : [header, ...body]
   return parts.join('\n') + '\n'
 }
 

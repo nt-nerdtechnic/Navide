@@ -119,6 +119,24 @@ describe('UndoStack group merging', () => {
     expect(m.getValue()).toBe('')
   })
 
+  it('redo restores text correctly when typing in the middle of existing content', () => {
+    // Regression: merged forward.range.end was set to the second insert position
+    // in the *post-insert* model, causing redo to delete surrounding chars.
+    const m = new TextModel('hello world')
+    let t = 0
+    const s = new UndoStack(() => (t += 50)) // within merge window
+
+    typeChar(m, s, { line: 0, col: 5 }, 'a') // 'helloa world'
+    typeChar(m, s, { line: 0, col: 6 }, 'b') // 'helloab world'
+    expect(m.getValue()).toBe('helloab world')
+
+    s.undo(m)
+    expect(m.getValue()).toBe('hello world')
+
+    s.redo(m)
+    expect(m.getValue()).toBe('helloab world') // must not delete the space
+  })
+
   it('beginGroup forces a new undo unit', () => {
     const m = new TextModel('')
     let t = 0

@@ -190,7 +190,9 @@ const rIsDirty = computed(() => {
 const rCanSave = computed(() => {
   if (!rDraft.value) return false
   if (!rDraft.value.key.trim() || !rDraft.value.label.trim() || !rDraft.value.system_prompt.trim()) return false
-  if (rDraft.value.isNew && props.rolesApi.find(rDraft.value.key.trim())) return false
+  // Block if the target key is already taken by a DIFFERENT role (covers both new and rename).
+  const existing = props.rolesApi.find(rDraft.value.key.trim())
+  if (existing && existing.key !== rDraft.value.originalKey) return false
   return rIsDirty.value
 })
 

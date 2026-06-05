@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import subprocess
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,7 @@ from .analyzer_ollama import (
     delete_model as _ollama_delete_model,
 )
 from .analyzer_settings import AnalyzerSettingsStore
+from .ai_chat_settings import AIChatSettingsStore
 from .applog import backend_log_path, backend_port_file
 from .claude_hooks import install_hooks as install_claude_hooks
 from .ipc import make_error, make_event, make_response
@@ -61,6 +64,7 @@ from .git_watcher import GitWatcher
 log = logging.getLogger("agent_team_backend")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat()
+_TMUX_NAME_RE = re.compile(r"^at-[A-Za-z0-9]{1,32}$")
 
 app = FastAPI(title="agent-team-backend", version=__version__)
 
@@ -73,6 +77,7 @@ history_store = HistoryStore()
 mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
 analyzer_settings_store = AnalyzerSettingsStore()
+ai_chat_settings_store = AIChatSettingsStore()
 
 # ─── Analyzer backend routing ────────────────────────────────────────────────
 
@@ -294,6 +299,53 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         _log_watcher.force_rescan()
 
 
+def _reap_orphan_tmux_sessions() -> None:
+    """啟動時清除不屬於任何 workspace 的孤兒 at-* tmux session。
+
+    比對 tmux ls 的 at-* sessions 與所有已知 workspace 的 project.json 記錄，
+    凡不在任何 project.json 中的 session 一律 kill。
+    """
+    try:
+        result = subprocess.run(
+            ["tmux", "ls", "-F", "#{session_name}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return
+    except OSError:
+        return
+
+    live = {s for s in result.stdout.splitlines() if _TMUX_NAME_RE.fullmatch(s)}
+    if not live:
+        return
+
+    known: set[str] = set()
+    for entry in recent_workspaces_store.list():
+        ws_path = entry.get("path", "")
+        if not ws_path:
+            continue
+        project = project_store.peek(ws_path)
+        if not project:
+            continue
+        for pane in project.manual_panes:
+            if pane.tmux_name:
+                known.add(pane.tmux_name)
+        for stage in project.stages:
+            for slot in stage.slots:
+                if slot.tmux_name:
+                    known.add(slot.tmux_name)
+
+    for orphan in live - known:
+        log.info("reaping orphan tmux session: %s", orphan)
+        try:
+            subprocess.run(
+                ["tmux", "kill-session", "-t", orphan],
+                capture_output=True, check=False,
+            )
+        except OSError:
+            pass
+
+
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
     global _log_watcher
@@ -327,6 +379,12 @@ async def _start_log_watcher() -> None:
     except Exception as err:  # noqa: BLE001
         log.warning("claude hooks install failed: %s", err)
 
+    # 清除上次 App 崩潰後殘留的孤兒 tmux session
+    try:
+        _reap_orphan_tmux_sessions()
+    except Exception as err:  # noqa: BLE001
+        log.warning("orphan tmux reap failed: %s", err)
+
 
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
@@ -338,6 +396,41 @@ async def _stop_log_watcher() -> None:
     await mcp_manager.shutdown()
     _log_watcher = None
     _git_watcher = None
+
+
+@app.get("/api/tmux/check")
+async def tmux_check(request: Request) -> dict[str, Any]:
+    """Check which tmux sessions are still alive.
+
+    Query param: names=session1,session2,...
+    Returns: { "results": { "session1": true, "session2": false, ... } }
+    """
+    names_raw = request.query_params.get("names", "")
+    names = [n.strip() for n in names_raw.split(",") if n.strip()]
+    if not names:
+        return {"results": {}}
+
+    # Reject invalid names immediately without a subprocess call.
+    invalid = {n: False for n in names if not _TMUX_NAME_RE.fullmatch(n)}
+    to_check = [n for n in names if _TMUX_NAME_RE.fullmatch(n)]
+
+    live: set[str] = set()
+    if to_check:
+        try:
+            # One tmux ls call instead of N has-session calls — avoids blocking
+            # the asyncio event loop N times.
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["tmux", "ls", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True,
+            )
+            live = set(result.stdout.splitlines())
+        except OSError:
+            pass
+
+    results = {**invalid, **{n: n in live for n in to_check}}
+    return {"results": results}
 
 
 @app.get("/health")
@@ -535,6 +628,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 env=payload.get("env"),
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
+                skip_tmux=bool(payload.get("skip_tmux", False)),
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
@@ -564,6 +658,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         "pane_id": term.pane_id,
                         "pid": term.proc.pid,
                         "command": term.command,
+                        "tmux_name": term.tmux_name,
                     },
                 )
             )
@@ -595,13 +690,23 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             # release the attribution registration.
             term_session_id = payload["terminal_session_id"]
             pane_id_for_unreg = ""
+            killed_tmux_name = ""
+            killed_ws_path = ""
             for sess in session.terminals._sessions.values():  # noqa: SLF001
                 if sess.id == term_session_id:
                     pane_id_for_unreg = sess.pane_id
+                    killed_tmux_name = sess.tmux_name
+                    killed_ws_path = str(sess.metadata.get("workspace_path") or "")
                     break
             session.terminals.kill(term_session_id)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
+            # 使用者主動 kill → 同步清除 project.json 中的 stale tmux_name
+            if killed_tmux_name and killed_ws_path:
+                try:
+                    project_store.clear_tmux_name_by_value(killed_ws_path, killed_tmux_name)
+                except Exception as err:  # noqa: BLE001
+                    log.warning("clear tmux_name after kill failed: %s", err)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         # -------- project / pipeline --------
@@ -749,6 +854,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload["workspace_path"],
                 pane_id=payload["pane_id"],
                 session_id=payload.get("session_id", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "pipeline.slot_tmux":
+            project = project_store.record_slot_tmux_name(
+                payload["workspace_path"],
+                stage_index=int(payload["stage_index"]),
+                slot_label=payload["slot_label"],
+                tmux_name=payload.get("tmux_name", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
+        elif msg_type == "manual_pane.tmux":
+            project = project_store.record_manual_pane_tmux_name(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+                tmux_name=payload.get("tmux_name", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
@@ -1365,6 +1489,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.stage_all(ws_path)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.check_staged":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.check_staged(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.commit":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
@@ -1508,10 +1637,24 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.diff_blame(ws_path, filepath, staged=staged)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.diff_all":
+            ws_path = payload.get("workspace_path") or ""
+            staged = bool(payload.get("staged", False))
+            result = await git_service.diff_all(ws_path, staged=staged)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.merge":
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""
             result = await git_service.merge_branch(ws_path, branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.merge_into":
+            ws_path = payload.get("workspace_path") or ""
+            target = payload.get("target") or ""
+            result = await git_service.merge_into(ws_path, target)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1535,6 +1678,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             url = payload.get("url") or ""
             result = await git_service.add_remote(ws_path, name, url)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.connect_to_remote":
+            ws_path = payload.get("workspace_path") or ""
+            url = payload.get("url") or ""
+            result = await git_service.connect_to_remote(ws_path, url)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.remove_remote":
             ws_path = payload.get("workspace_path") or ""
@@ -1877,6 +2028,59 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "onboarding.complete":
             onboarding_deps.set_complete(bool(payload.get("complete", True)))
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        # ── AI Chat ──────────────────────────────────────────────────────────────
+        elif msg_type == "ai.chat.settings.get":
+            await session.websocket.send_json(make_response(msg_id, msg_type, ai_chat_settings_store.get()))
+
+        elif msg_type == "ai.chat.settings.set":
+            updated = ai_chat_settings_store.set(payload)
+            await session.websocket.send_json(make_response(msg_id, msg_type, updated))
+
+        elif msg_type == "ai.chat.start":
+            session_id = payload.get("session_id", "") or str(__import__("uuid").uuid4())
+            messages = payload.get("messages", []) or []
+            workspace_path = payload.get("workspace_path", "") or ""
+            settings = ai_chat_settings_store.get()
+
+            async def _run_chat(sid=session_id, msgs=messages, ws_path=workspace_path, s=settings):
+                from .ai_chat_tools import run_agent_loop
+                async def _emit(event_type, data):
+                    await broadcast(make_event(event_type, data))
+                try:
+                    await run_agent_loop(s, msgs, ws_path, sid, _emit)
+                except Exception as e:
+                    await broadcast(make_event("ai.chat.error", {"session_id": sid, "message": str(e)}))
+
+            asyncio.create_task(_run_chat())
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "session_id": session_id}))
+
+        elif msg_type == "ai.chat.accept_edit":
+            ws_path = payload.get("workspace_path", "") or ""
+            file_path = payload.get("file_path", "") or ""
+            new_content = payload.get("new_content", "") or ""
+            result = fs_service.write_file(ws_path, file_path, new_content)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "ai.chat.approve_command":
+            from .ai_chat_tools import approve_command
+            approve_command(
+                str(payload.get("session_id", "")),
+                str(payload.get("tool_id", "")),
+                approved=True,
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        elif msg_type == "ai.chat.reject_command":
+            from .ai_chat_tools import approve_command
+            approve_command(
+                str(payload.get("session_id", "")),
+                str(payload.get("tool_id", "")),
+                approved=False,
+            )
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         else:

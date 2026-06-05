@@ -142,6 +142,22 @@ describe('JsTokenizer cross-line block comments', () => {
   })
 })
 
+describe('JsTokenizer TypeScript-specific keywords', () => {
+  const TS_KEYWORDS = [
+    'abstract', 'declare', 'namespace', 'override',
+    'infer', 'keyof', 'asserts', 'accessor', 'using',
+    'never', 'unknown', 'any', 'object', 'symbol', 'bigint',
+  ]
+  for (const kw of TS_KEYWORDS) {
+    it(`tags "${kw}" as keyword`, () => {
+      const line = `${kw} foo`
+      const tokens = lex(line)
+      const t = find(line, tokens, kw)!
+      expect(t?.type).toBe('keyword')
+    })
+  }
+})
+
 describe('JsTokenizer empty lines', () => {
   it('returns no tokens and preserves clean state', () => {
     const r = JsTokenizer.tokenizeLine('', JsTokenizer.initialState())

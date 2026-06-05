@@ -11,11 +11,10 @@ import './styles/tokens/themes/high-contrast.css'
 import App from './App.vue'
 import RolesManagerApp from './RolesManagerApp.vue'
 import StagesEditorApp from './StagesEditorApp.vue'
-import DiffWindowApp from './DiffWindowApp.vue'
 import EditorWindowApp from './EditorWindowApp.vue'
 
 // Window-type dispatcher: Electron main appends `?window=roles`, `?window=stages`,
-// `?window=diff` or `?window=editor` for secondary windows. Default is the main shell.
+// or `?window=editor` for secondary windows. Default is the main shell.
 const params = new URLSearchParams(window.location.search)
 const which = params.get('window') ?? 'main'
 
@@ -24,11 +23,9 @@ const Root =
     ? RolesManagerApp
     : which === 'stages'
       ? StagesEditorApp
-      : which === 'diff'
-        ? DiffWindowApp
-        : which === 'editor'
-          ? EditorWindowApp
-          : App
+      : which === 'editor'
+        ? EditorWindowApp
+        : App
 
 // ── Fail-loud diagnostics ─────────────────────────────────────────────────────
 // Secondary windows render into their own renderer; if mount throws the window

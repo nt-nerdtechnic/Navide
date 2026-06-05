@@ -43,11 +43,11 @@ export class UndoStack {
 
     const prev = this.undoStack[this.undoStack.length - 1]
     if (!this.breakNext && prev && this.canMerge(prev, forward, time)) {
-      // Extend the existing unit. The inverse's range covers all inserted text
-      // so far; grow its end to swallow the new char, and grow the forward range
-      // to span both keystrokes. Inverse text stays '' (pure typing).
+      // Extend the existing unit. The forward stays a pure insert (range.start ===
+      // range.end) so that redo inserts at the correct position in the pre-insert
+      // document. Only grow the inverse's end to cover all inserted chars.
       prev.forward = {
-        range: { start: { ...prev.forward.range.start }, end: { ...forward.range.end } },
+        range: { start: { ...prev.forward.range.start }, end: { ...prev.forward.range.start } },
         text: prev.forward.text + forward.text,
       }
       prev.inverse = {

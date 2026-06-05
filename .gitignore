@@ -37,6 +37,8 @@ backend/.ruff_cache/
 
 # Cursor editor config (ignore contents), but keep plans/ for plan-driven workflow
 .cursor/
+!.cursor/plans/
+!.cursor/plans/*.plan.md
 
 # ─── Claude Code ────────────────────────────────────────────────────────────
 .claude/

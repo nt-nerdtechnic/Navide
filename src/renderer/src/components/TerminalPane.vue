@@ -54,6 +54,7 @@ defineExpose({
   status: terminal.status,
   displayStatus,
   sessionId: terminal.sessionId,
+  tmuxName: terminal.tmuxName,
   error: terminal.error,
   lastCommand: terminal.lastCommand,
   cleanBuffer: terminal.cleanBuffer,

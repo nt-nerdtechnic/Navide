@@ -11,6 +11,7 @@ this is the "adaptive style" behaviour Cursor is known for.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 # System prompt: 7-step chain-of-thought. No Conventional Commits prefix is
 # mandated — step 4 learns format/style from the repo's recent commits instead.
@@ -30,7 +31,11 @@ SYSTEM_PROMPT = (
     "format and style only (e.g. prefixes, casing, language, length). Do NOT "
     "treat them as content to reuse.\n"
     "5. Generate a thoughtful and succinct commit message that matches those "
-    "conventions and describes the CODE CHANGES.\n"
+    "conventions and describes the CODE CHANGES. If the CHANGE GROUPS show "
+    "changes across multiple independent modules, you may use a multi-scope "
+    "format (e.g. `feat(A): X; fix(B): Y`) — but only when the scopes are "
+    "genuinely independent. If all changes serve one unified purpose, use a "
+    "single-scope message.\n"
     "6. Remove any meta information such as issue references, tags, or author "
     "names.\n"
     "7. Output ONLY the commit message inside a single ```text code block. Do "
@@ -42,6 +47,17 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "\n... (truncated)"
+
+
+def _module_name(path: str) -> str:
+    """Return a short module label from a file path.
+
+    e.g. src/renderer/src/components/Foo.vue → components
+         backend/agent_team_backend/git_service.py → agent_team_backend
+    """
+    parts = Path(path).parts
+    dirs = [p for p in parts[:-1] if p not in (".", "..", "src", "renderer", "backend")]
+    return dirs[-1] if dirs else (parts[-2] if len(parts) >= 2 else "root")
 
 
 def build_user_prompt(context: dict, recent: dict, per_file_budget: int) -> str:
@@ -70,8 +86,20 @@ def build_user_prompt(context: dict, recent: dict, per_file_budget: int) -> str:
         lines.extend(f"- {m}" for m in repo_commits)
         lines.append("")
 
+    # Group files by module so the AI can reason about multi-scope messages.
+    changes = context.get("changes") or []
+    if len(changes) > 1:
+        groups: dict[str, list[str]] = {}
+        for change in changes:
+            mod = _module_name(change.get("path", ""))
+            groups.setdefault(mod, []).append(Path(change["path"]).name)
+        lines.append("# CHANGE GROUPS (by module):")
+        for mod, files in groups.items():
+            lines.append(f"- {mod}: {', '.join(files)}")
+        lines.append("")
+
     half = max(1, per_file_budget // 2)
-    for change in context.get("changes", []):
+    for change in changes:
         lines.append(f"# FILE: {change.get('path', '')}")
         original = change.get("original") or ""
         if original.strip():

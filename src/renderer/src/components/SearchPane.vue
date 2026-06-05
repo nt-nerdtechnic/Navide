@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 
@@ -9,6 +9,8 @@ const props = defineProps<{
   // When embedded inside the editor window, matches open in-place via `open-file`
   // instead of spawning a separate editor window.
   embedded?: boolean
+  // When the pane is shown (activity bar click), auto-focus the search input.
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -184,7 +186,10 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
   const lines = read.payload.content.split('\n')
   const idx = m.line - 1
   const line = lines[idx]
-  if (line == null || line.slice(m.col, m.end) === '') {
+  // Verify the matched text at (col, end) still matches what was found at search time.
+  // An empty check (=== '') misses cases where other content landed at those positions.
+  const expectedSnippet = m.text.slice(m.col, m.end)
+  if (line == null || line.slice(m.col, m.end) !== expectedSnippet) {
     toast('內容已變動，請重新搜尋', { type: 'info' })
     await doSearch()
     return
@@ -212,10 +217,25 @@ function clearSearch(): void {
   total.value = 0
 }
 
+// Auto-focus when pane becomes active (e.g. clicking Search in the activity bar).
+// v-show keeps the component mounted, so onMounted only fires once; watch handles later activations.
+watch(() => props.active, (v) => {
+  if (v) void nextTick(() => queryInput.value?.focus())
+})
+
 onMounted(() => {
   void Promise.resolve().then(() => queryInput.value?.focus())
 })
 onUnmounted(() => { if (debounce) clearTimeout(debounce) })
+
+function openReplace(): void {
+  showReplace.value = true
+  void nextTick(() => queryInput.value?.focus())
+}
+function focusInput(): void {
+  void nextTick(() => queryInput.value?.focus())
+}
+defineExpose({ openReplace, focusInput })
 </script>
 
 <template>

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,9 @@ from agent_team_backend import commit_message_prompt
 log = logging.getLogger("agent_team_backend.git_service")
 
 _MAX_DIFF_CHARS = 8_000  # truncate staged diff before sending to Ollama
+
+# Only allow https/http and SSH-style URLs; block git pseudo-protocols (ext::, fd::, file://, etc.)
+_SAFE_GIT_URL = re.compile(r"^(https?://|ssh://|git@[\w.\-]+:)")
 
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
@@ -882,6 +886,17 @@ async def diff_file(workspace_path: str, filepath: str, staged: bool = False) ->
     return {"ok": True, "diff": out}
 
 
+async def diff_all(workspace_path: str, staged: bool = False) -> dict[str, Any]:
+    """Return the full diff for the entire working tree (or staging area)."""
+    args = ["git", "-c", "core.quotePath=false", "diff"]
+    if staged:
+        args.append("--staged")
+    rc, out, stderr = await _run(args, workspace_path)
+    if rc != 0:
+        return {"ok": False, "diff": "", "error": stderr.strip()}
+    return {"ok": True, "diff": out}
+
+
 async def apply_patch(
     workspace_path: str, patch: str, reverse: bool = False, cached: bool = True
 ) -> dict[str, Any]:
@@ -908,13 +923,56 @@ async def apply_patch(
     return {"ok": True}
 
 
+def _parse_conflict_files(output: str) -> list[str]:
+    """Extract conflicted filenames from git merge output."""
+    import re
+    files = []
+    for line in output.splitlines():
+        m = re.search(r"CONFLICT.*Merge conflict in (.+)", line)
+        if m:
+            files.append(m.group(1).strip())
+    return files
+
+
 async def merge_branch(workspace_path: str, branch: str) -> dict[str, Any]:
     """Merge *branch* into the current branch (--no-ff to always create a merge commit)."""
     if err := _validate_ref_name(branch, "branch name"):
-        return {"ok": False, "output": "", "error": err}
+        return {"ok": False, "output": "", "error": err, "conflict_files": []}
     rc, out, stderr = await _run(["git", "merge", "--no-ff", "--", branch.strip()], workspace_path)
     output = (out + stderr).strip()
-    return {"ok": rc == 0, "output": output, "error": stderr.strip() if rc != 0 else ""}
+    conflict_files = _parse_conflict_files(output) if rc != 0 else []
+    return {
+        "ok": rc == 0,
+        "output": output,
+        "error": stderr.strip() if rc != 0 else "",
+        "conflict_files": conflict_files,
+    }
+
+
+async def merge_into(workspace_path: str, target: str) -> dict[str, Any]:
+    """Switch to *target*, merge current branch into it, stay on *target*.
+
+    On conflict the merge is left in-progress so the caller can decide whether
+    to abort or resolve manually.  The original source branch is returned so
+    the UI can inform the user of the branch switch that already occurred.
+    """
+    if err := _validate_branch_name(target):
+        return {"ok": False, "output": "", "error": err, "conflict_files": [], "source_branch": ""}
+    rc, out, _ = await _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "output": "", "error": "could not determine current branch", "conflict_files": [], "source_branch": ""}
+    source = out.strip()
+    if source == target:
+        return {"ok": False, "output": "", "error": "already on target branch", "conflict_files": [], "source_branch": source}
+    rc, _, stderr = await _run(["git", "switch", "--", target], workspace_path)
+    if rc != 0:
+        return {"ok": False, "output": "", "error": stderr.strip(), "conflict_files": [], "source_branch": source}
+    rc, out, stderr = await _run(["git", "merge", "--no-ff", "--", source], workspace_path)
+    output = (out + stderr).strip()
+    conflict_files = _parse_conflict_files(output) if rc != 0 else []
+    if rc != 0:
+        return {"ok": False, "output": output, "error": stderr.strip(), "conflict_files": conflict_files, "source_branch": source}
+    return {"ok": True, "output": output, "error": "", "conflict_files": [], "source_branch": source}
 
 
 async def abort_operation(workspace_path: str, op: str) -> dict[str, Any]:
@@ -975,10 +1033,57 @@ async def add_remote(workspace_path: str, name: str, url: str) -> dict[str, Any]
     """Add a new remote."""
     if err := _validate_ref_name(name, "remote name"):
         return {"ok": False, "error": err}
-    if not url.strip():
+    url = url.strip()
+    if not url:
         return {"ok": False, "error": "url is required"}
-    rc, _, stderr = await _run(["git", "remote", "add", name.strip(), url.strip()], workspace_path)
+    if not _SAFE_GIT_URL.match(url):
+        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+    rc, _, stderr = await _run(["git", "remote", "add", name.strip(), url], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin") -> dict[str, Any]:
+    """git init → remote add → fetch → checkout, connecting an existing directory to a remote repo."""
+    url = url.strip()
+    if not url:
+        return {"ok": False, "error": "url is required"}
+    if not _SAFE_GIT_URL.match(url):
+        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+
+    rc, _, stderr = await _run(["git", "init"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git init 失敗: {stderr.strip()}"}
+
+    # Add remote (if already exists, update its URL)
+    rc, _, _ = await _run(["git", "remote", "add", remote, url.strip()], workspace_path)
+    if rc != 0:
+        rc2, _, stderr2 = await _run(["git", "remote", "set-url", remote, url.strip()], workspace_path)
+        if rc2 != 0:
+            return {"ok": False, "error": f"無法設定 remote: {stderr2.strip()}"}
+
+    rc, _, stderr = await _run(["git", "fetch", remote], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git fetch 失敗: {stderr.strip()}"}
+
+    # Detect default branch
+    rc, out, _ = await _run(["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"], workspace_path)
+    if rc == 0:
+        branch = out.strip().split("/")[-1]
+    else:
+        branch = ""
+        for b in ("main", "master"):
+            rc2, _, _ = await _run(["git", "rev-parse", "--verify", f"{remote}/{b}"], workspace_path)
+            if rc2 == 0:
+                branch = b
+                break
+        if not branch:
+            return {"ok": False, "error": "無法偵測預設分支（嘗試過 main / master），請確認 URL 正確"}
+
+    rc, _, stderr = await _run(["git", "checkout", "-B", branch, f"{remote}/{branch}"], workspace_path)
+    if rc != 0:
+        return {"ok": False, "error": f"git checkout 失敗: {stderr.strip()}"}
+
+    return {"ok": True, "branch": branch}
 
 
 async def remove_remote(workspace_path: str, name: str) -> dict[str, Any]:
@@ -1167,6 +1272,63 @@ async def unstage_files(workspace_path: str, files: list[str]) -> dict[str, Any]
 async def stage_all(workspace_path: str) -> dict[str, Any]:
     rc, _, stderr = await _run(["git", "add", "-A"], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+async def _run_with_timeout(
+    args: list[str], cwd: str, timeout: float = 30.0
+) -> tuple[int, str, str]:
+    try:
+        return await asyncio.wait_for(_run(args, cwd), timeout=timeout)
+    except asyncio.TimeoutError:
+        return 1, "", f"timed out after {int(timeout)}s"
+
+
+async def check_staged(workspace_path: str) -> dict[str, Any]:
+    """Lint staged files with available tools. ok=False only when lint errors are found.
+    Tool unavailability is silently skipped so missing linters never block auto-commit."""
+    if not workspace_path:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    rc, stdout, _ = await _run(["git", "diff", "--cached", "--name-only"], workspace_path)
+    if rc != 0:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    staged = [f.strip() for f in stdout.splitlines() if f.strip()]
+    if not staged:
+        return {"ok": True, "error_count": 0, "summary": ""}
+
+    ws = Path(workspace_path)
+    findings: list[str] = []
+
+    # ── ESLint ────────────────────────────────────────────────────────────────
+    ts_exts = {".ts", ".tsx", ".js", ".jsx", ".vue"}
+    ts_files = [f for f in staged if Path(f).suffix in ts_exts]
+    eslint_bin = ws / "node_modules" / ".bin" / "eslint"
+    if ts_files and eslint_bin.exists():
+        rc, out, _ = await _run_with_timeout(
+            [str(eslint_bin), "--max-warnings", "0", "--format", "compact", *ts_files],
+            workspace_path,
+        )
+        # rc=1 → lint errors; rc=2 → config/internal error (skip)
+        if rc == 1 and out.strip():
+            findings.append(f"ESLint: {out.strip()[:400]}")
+
+    # ── Ruff ─────────────────────────────────────────────────────────────────
+    py_files = [f for f in staged if f.endswith(".py")]
+    if py_files:
+        venv_ruff = ws / ".venv" / "bin" / "ruff"
+        ruff_bin = str(venv_ruff) if venv_ruff.exists() else shutil.which("ruff")
+        if ruff_bin:
+            rc, out, _ = await _run_with_timeout(
+                [ruff_bin, "check", "--output-format", "concise", *py_files],
+                workspace_path,
+            )
+            if rc == 1 and out.strip():
+                findings.append(f"Ruff: {out.strip()[:400]}")
+
+    if findings:
+        return {"ok": False, "error_count": len(findings), "summary": "\n".join(findings)}
+    return {"ok": True, "error_count": 0, "summary": ""}
 
 
 async def commit(workspace_path: str, message: str, all: bool = False) -> dict[str, Any]:

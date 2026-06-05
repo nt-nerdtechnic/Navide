@@ -159,13 +159,21 @@ def _find_rg(
             rel = abs_path
         line_no = data.get("line_number", 0)
         text = ((data.get("lines") or {}).get("text") or "").rstrip("\n")
+        # rg submatches report byte offsets in the UTF-8-encoded line.
+        # The frontend (JS) uses character-index `.slice()`, so convert here.
+        text_bytes = text.encode("utf-8")
         for sm in data.get("submatches", []):
             if total >= max_results:
                 truncated = True
                 break
+            byte_start = sm.get("start", 0)
+            byte_end = sm.get("end", 0)
+            col_char = len(text_bytes[:byte_start].decode("utf-8", errors="replace"))
+            end_char = col_char + len(
+                text_bytes[byte_start:byte_end].decode("utf-8", errors="replace")
+            )
             _grouped_append(grouped, order, rel, {
-                "line": line_no, "col": sm.get("start", 0),
-                "end": sm.get("end", 0), "text": text,
+                "line": line_no, "col": col_char, "end": end_char, "text": text,
             })
             total += 1
 

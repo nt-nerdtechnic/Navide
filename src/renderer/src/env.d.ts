@@ -37,9 +37,10 @@ declare global {
       }) => Promise<{ ok: boolean }>
       openEditorWindow: (args: {
         workspace_path: string
-        filepath: string
+        filepath?: string
         name?: string
         line?: number
+        sidebar?: 'explorer' | 'search' | 'git'
       }) => Promise<{ ok: boolean }>
       saveJson: (args: {
         defaultName?: string

@@ -2,12 +2,14 @@
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import { useNotify } from './composables/useNotify'
+import { useKeybindings } from './keybindings/useKeybindings'
 import NotificationHost from './components/NotificationHost.vue'
 import { useRoles, type Role } from './composables/useRoles'
 
 const backend = useBackend()
 const rolesApi = useRoles(backend)
 const notify = useNotify()
+useKeybindings()
 
 interface DraftRole {
   key: string

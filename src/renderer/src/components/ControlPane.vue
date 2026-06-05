@@ -4,7 +4,6 @@ import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import GitPane from './GitPane.vue'
 import ExplorerPane from './ExplorerPane.vue'
-import SearchPane from './SearchPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
@@ -291,13 +290,13 @@ const pickedRole = ref<RoleKey>('')
 
 // ── Top-level tab: pipeline | git ─────────────────────────────────────────────
 const _TAB_KEY = 'agentTeam.sidebarTab'
-type SidebarTab = 'explorer' | 'search' | 'pipeline' | 'git'
+type SidebarTab = 'explorer' | 'pipeline' | 'git'
 const sidebarTab = ref<SidebarTab>(
   (() => {
     try {
       const v = sessionStorage.getItem(_TAB_KEY) as SidebarTab | null
       // Backward-compat: unknown / legacy values fall back to 'pipeline'.
-      return v === 'explorer' || v === 'search' || v === 'pipeline' || v === 'git' ? v : 'pipeline'
+      return v === 'explorer' || v === 'pipeline' || v === 'git' ? v : 'pipeline'
     } catch { return 'pipeline' }
   })()
 )
@@ -518,6 +517,70 @@ function onTaskDrop(e: DragEvent): void {
   taskDescription.value =
     taskDescription.value.slice(0, start) + text + taskDescription.value.slice(start)
 }
+
+// ── pipeline pane: draggable split (top = controls, bottom = agents) ─────────
+const pipelineTopEl = ref<HTMLElement | null>(null)
+const pipelineTopRatio = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.pipelineTopRatio') ?? '') || 0.55 } catch { return 0.55 } })()
+)
+watch(pipelineTopRatio, (v) => { try { localStorage.setItem('agentTeam.pipelineTopRatio', String(v)) } catch {} })
+
+let _plDragStartY = 0, _plDragStartTopPx = 0, _plDragContainerPx = 0
+function onPipelineDividerStart(e: MouseEvent): void {
+  const top = pipelineTopEl.value
+  if (!top) return
+  _plDragStartY = e.clientY
+  _plDragStartTopPx = top.getBoundingClientRect().height
+  _plDragContainerPx = top.parentElement?.getBoundingClientRect().height || 0
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onPipelineDividerMove)
+  document.addEventListener('mouseup', onPipelineDividerEnd)
+  e.preventDefault()
+}
+function onPipelineDividerMove(e: MouseEvent): void {
+  if (!_plDragContainerPx) return
+  const ratio = (_plDragStartTopPx + e.clientY - _plDragStartY) / _plDragContainerPx
+  pipelineTopRatio.value = Math.max(0.15, Math.min(0.85, ratio))
+}
+function onPipelineDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onPipelineDividerMove)
+  document.removeEventListener('mouseup', onPipelineDividerEnd)
+}
+
+// ── explorer pane: same split pattern ────────────────────────────────────────
+const explorerTopEl = ref<HTMLElement | null>(null)
+const explorerTopRatio = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.explorerTopRatio') ?? '') || 0.60 } catch { return 0.60 } })()
+)
+watch(explorerTopRatio, (v) => { try { localStorage.setItem('agentTeam.explorerTopRatio', String(v)) } catch {} })
+
+let _exDragStartY = 0, _exDragStartTopPx = 0, _exDragContainerPx = 0
+function onExplorerDividerStart(e: MouseEvent): void {
+  const top = explorerTopEl.value
+  if (!top) return
+  _exDragStartY = e.clientY
+  _exDragStartTopPx = top.getBoundingClientRect().height
+  _exDragContainerPx = top.parentElement?.getBoundingClientRect().height || 0
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onExplorerDividerMove)
+  document.addEventListener('mouseup', onExplorerDividerEnd)
+  e.preventDefault()
+}
+function onExplorerDividerMove(e: MouseEvent): void {
+  if (!_exDragContainerPx) return
+  const ratio = (_exDragStartTopPx + e.clientY - _exDragStartY) / _exDragContainerPx
+  explorerTopRatio.value = Math.max(0.15, Math.min(0.85, ratio))
+}
+function onExplorerDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onExplorerDividerMove)
+  document.removeEventListener('mouseup', onExplorerDividerEnd)
+}
 </script>
 
 <template>
@@ -539,9 +602,7 @@ function onTaskDrop(e: DragEvent): void {
       <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer" @click="sidebarTab = 'explorer'">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
       </button>
-      <button :class="['tab-btn', { active: sidebarTab === 'search' }]" title="搜尋（跨檔）" @click="sidebarTab = 'search'">
-        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg>
-      </button>
+
       <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline" @click="sidebarTab = 'pipeline'">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
       </button>
@@ -552,18 +613,113 @@ function onTaskDrop(e: DragEvent): void {
     </div>
 
     <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
-    <ExplorerPane
-      v-if="sidebarTab === 'explorer' && backend"
-      :workspace-path="workspace ?? ''"
-      :backend="backend"
-    />
+    <div v-if="sidebarTab === 'explorer'" class="pane-split">
+      <div class="part-top" ref="explorerTopEl" :style="{ height: (explorerTopRatio * 100) + '%' }">
+        <ExplorerPane
+          v-if="backend"
+          :workspace-path="workspace ?? ''"
+          :backend="backend"
+        />
+      </div>
+      <div class="part-resize" title="拖曳調整上下比例" @mousedown="onExplorerDividerStart">
+        <div class="part-resize-grip" />
+      </div>
+      <div class="part-bottom">
+        <section class="block panel-section">
+          <div class="row between">
+            <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
+            <div class="agent-header-actions">
+              <ViewPanel
+                :model-value="layoutMode ?? 'auto'"
+                @update:model-value="emit('update:layoutMode', $event)"
+              />
+              <button class="history-btn" @click="emit('open-history')">📋 History</button>
+            </div>
+          </div>
+          <div v-if="panes.length === 0" class="empty">No agents running.</div>
+          <ul v-else class="agent-list">
+            <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
+              <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
+                <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
+                <span class="badge">{{ p.agentLabel }}</span>
+                <span class="badge role">{{ p.roleLabel }}</span>
+                <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
+                <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
+              </div>
+              <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
+                <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+              </div>
+              <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
+                stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+              </div>
+              <div v-else-if="!p.isMinimized" class="stage-line">
+                manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+              </div>
+              <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
+              <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
+                🔖 session: <code>{{ p.sessionId }}</code>
+              </div>
+              <div v-if="p.error" class="err">{{ p.error }}</div>
+              <div class="row tight">
+                <template v-if="p.isMinimized">
+                  <button class="ghost" @click="emit('restore', p.id)">↑ 還原</button>
+                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                </template>
+                <template v-else>
+                  <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">Interrupt</button>
+                  <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">Reapply role</button>
+                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                </template>
+              </div>
+            </li>
+          </ul>
 
-    <!-- ── Search tab ─────────────────────────────────────────────────────── -->
-    <SearchPane
-      v-if="sidebarTab === 'search' && backend"
-      :workspace-path="workspace ?? ''"
-      :backend="backend"
-    />
+          <div class="spawn-card">
+            <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
+              <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
+              <span>Manual spawn</span>
+            </div>
+            <div v-if="manualSpawnOpen" class="spawn-card-body">
+              <div class="row two-col">
+                <select v-model="pickedAgent">
+                  <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+                    {{ spec.label }}
+                  </option>
+                </select>
+                <select v-model="pickedRole">
+                  <option value="">Select role…</option>
+                  <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
+                </select>
+              </div>
+              <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+              <p v-if="!canSpawn" class="hint warn">
+                {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
+              </p>
+              <div v-if="currentRole" class="prompt-block">
+                <div class="prompt-head">
+                  <button class="link" @click="previewOpen = !previewOpen">
+                    {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
+                  </button>
+                  <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
+                    ⚙ Settings
+                  </button>
+                </div>
+                <p class="role-line">{{ currentRole.one_line }}</p>
+                <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
+              </div>
+              <div v-else class="prompt-block warn-block">
+                <p class="warn">
+                  {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+                </p>
+                <div v-if="roles.length === 0" class="row tight">
+                  <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
 
     <!-- ── Git tab ────────────────────────────────────────────────────────── -->
     <GitPane
@@ -575,10 +731,14 @@ function onTaskDrop(e: DragEvent): void {
       @open-workspace="$emit('workspace-browse', $event)"
     />
 
-    <!-- ── Pipeline tab (all existing content) ───────────────────────────── -->
-    <template v-if="sidebarTab === 'pipeline'">
+    <!-- ── Pipeline tab ──────────────────────────────────────────────────── -->
+    <div v-if="sidebarTab === 'pipeline'" class="pipeline-split">
 
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ══ LIST VIEW: top (controls) / divider / bottom (agents) ═══════════ -->
+    <template v-if="sidebarView === 'list'">
+    <div class="part-top" ref="pipelineTopEl" :style="{ height: (pipelineTopRatio * 100) + '%' }">
+
+    <section class="block panel-section">
       <label class="lbl">Workspace</label>
       <div class="row workspace-row">
         <input
@@ -616,8 +776,8 @@ function onTaskDrop(e: DragEvent): void {
       </label>
     </section>
 
-    <!-- ── Pipeline list (list view only) ───────────────────────────────── -->
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ── Pipeline list ────────────────────────────────────────────────── -->
+    <section class="block panel-section">
       <label class="lbl">Pipelines</label>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
@@ -716,158 +876,14 @@ function onTaskDrop(e: DragEvent): void {
       </template>
     </section>
 
-    <!-- ── Pipeline detail header (back + name only) ─────────────────────── -->
-    <template v-if="sidebarView === 'pipeline'">
-      <section class="block pipeline-detail-header">
-        <div class="pipeline-detail-nav">
-          <button class="ghost back-btn" @click="backToList">← 返回</button>
-          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
-          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
-        </div>
-      </section>
-    </template>
+    </div><!-- /part-top -->
+    <div class="part-resize" title="拖曳調整上下比例" @mousedown="onPipelineDividerStart">
+      <div class="part-resize-grip" />
+    </div>
+    <div class="part-bottom">
 
-    <section v-if="sidebarView === 'pipeline'" class="block" :class="{ pipeline: pipelineOpen }">
-      <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
-        {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
-      </button>
-      <template v-if="pipelineOpen">
-      <div
-        v-if="
-          existingProject &&
-          pipeline.state !== 'running' &&
-          existingProject.state !== 'idle' &&
-          existingProject.nextStageIndex >= 0
-        "
-        class="resume-card"
-      >
-        <div class="resume-head">
-          <strong>↻ Resume existing pipeline</strong>
-          <span class="resume-state" :data-state="existingProject.state">{{ existingProject.state }}</span>
-        </div>
-        <div class="resume-meta">
-          <span>{{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages done</span>
-          <span class="dot">·</span>
-          <span>updated {{ existingProject.updatedAt }}</span>
-        </div>
-        <div v-if="existingProject.taskDescription" class="resume-task">
-          {{ existingProject.taskDescription.length > 200
-            ? existingProject.taskDescription.slice(0, 200) + '…'
-            : existingProject.taskDescription }}
-        </div>
-        <div class="row">
-          <button class="primary wide" @click="emit('pipeline-resume')">
-            ▶ Resume from Stage {{ String(existingProject.nextStageIndex + 1).padStart(2, '0') }}
-          </button>
-          <button
-            class="danger"
-            @click="confirmingRestart = true"
-            title="Discard all stage progress and re-run from Stage 01"
-          >
-            ↺ Start over
-          </button>
-        </div>
-      </div>
-      <div
-        v-else-if="existingProject && existingProject.nextStageIndex < 0 && openedPipelineId === activePipelineId"
-        class="resume-card done"
-      >
-        <div class="done-header">
-          <strong>✓ Project completed</strong>
-          <span class="resume-meta">
-            All {{ existingProject.totalStages }} stages done · {{ existingProject.updatedAt }}
-          </span>
-        </div>
-      </div>
-
-      <textarea
-        v-model="taskDescription"
-        :disabled="pipeline.state === 'running'"
-        :class="{ 'drag-over': isTaskDragOver }"
-        placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
-        rows="3"
-        spellcheck="false"
-        @dragover.prevent
-        @dragenter.prevent="isTaskDragOver = true"
-        @dragleave="isTaskDragOver = false"
-        @drop.prevent="onTaskDrop"
-      ></textarea>
-      <label class="checkbox-row">
-        <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />
-        <span>
-          <strong>🤖 Full auto</strong>
-          <span v-if="!analyzerStatus.available" class="muted-inline"> — needs Ollama</span>
-          <span v-else class="muted-inline"> — LLM auto-answers all agent questions</span>
-        </span>
-      </label>
-      <div v-if="analyzerStatus.available" class="analyzer-row">
-        <label class="lbl tiny">Model</label>
-        <select v-model="analyzerModelLocal">
-          <option v-for="m in filteredModels" :key="m.name" :value="m.name">
-            {{ m.name }} · {{ m.parameter_size || (m.size / 1e9).toFixed(1) + 'GB' }}
-          </option>
-        </select>
-        <button
-          class="ghost refresh"
-          @click="emit('refresh-analyzer')"
-          title="Refresh Ollama health + model list"
-        >
-          ↻
-        </button>
-      </div>
-      <div v-else class="analyzer-row">
-        <span class="muted-inline">Ollama unreachable.</span>
-        <button class="ghost refresh" @click="emit('refresh-analyzer')" title="Retry connection">
-          ↻ Retry
-        </button>
-      </div>
-      <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
-        <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
-          ▶ Run pipeline
-        </button>
-        <button
-          v-if="pipeline.state !== 'idle'"
-          class="ghost"
-          @click="emit('pipeline-reset')"
-          title="Clear pipeline state and close all agent panes"
-        >
-          Reset
-        </button>
-      </div>
-      <div v-else class="pipeline-running">
-        <div class="progress">
-          <div class="bar" :style="{ width: pipelineProgress + '%' }"></div>
-        </div>
-        <div class="pipeline-line">
-          Stage {{ pipeline.stageIndex + 1 }} / {{ pipeline.totalStages }}
-          <span v-if="pipelineCurrentStage" class="muted">
-            · {{ pipelineCurrentStage.shortTitle }}
-          </span>
-        </div>
-        <div class="row pipeline-row">
-          <button
-            class="primary wide"
-            :disabled="!pipelineNextStage"
-            @click="emit('pipeline-next')"
-          >
-            {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
-          </button>
-          <button class="danger" @click="emit('pipeline-abort')">Abort</button>
-        </div>
-      </div>
-      <p v-if="pipeline.state === 'completed'" class="hint ok">
-        ✓ Pipeline completed all 4 stages. Review each pane on the right.
-      </p>
-      <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
-        Pipeline aborted (paused). Agents are kept — Resume to continue, or Reset to clear.
-      </p>
-      <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
-        Provide task description + workspace, then start.
-      </p>
-      </template>
-    </section>
-
-    <section v-if="sidebarView === 'list'" class="block panel-section">
+    <!-- ── Active agents ──────────────────────────────────────────────────── -->
+    <section class="block panel-section">
       <div class="row between">
         <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
         <div class="agent-header-actions">
@@ -920,51 +936,206 @@ function onTaskDrop(e: DragEvent): void {
         </li>
       </ul>
 
-      <hr class="section-divider" />
-      <button class="lbl collapsible-header" @click="manualSpawnOpen = !manualSpawnOpen">
-        {{ manualSpawnOpen ? '▾' : '▸' }} Manual spawn
-      </button>
-      <template v-if="manualSpawnOpen">
-        <div class="row two-col">
-          <select v-model="pickedAgent">
-            <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
-              {{ spec.label }}
-            </option>
-          </select>
-          <select v-model="pickedRole">
-            <option value="">Select role…</option>
-            <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
-          </select>
+      <div class="spawn-card">
+        <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
+          <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
+          <span>Manual spawn</span>
         </div>
-        <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
-        <p v-if="!canSpawn" class="hint warn">
-          {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
-        </p>
-
-        <div v-if="currentRole" class="prompt-block">
-          <div class="prompt-head">
-            <button class="link" @click="previewOpen = !previewOpen">
-              {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
-            </button>
-            <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
-              ⚙ Settings
-            </button>
+        <div v-if="manualSpawnOpen" class="spawn-card-body">
+          <div class="row two-col">
+            <select v-model="pickedAgent">
+              <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+                {{ spec.label }}
+              </option>
+            </select>
+            <select v-model="pickedRole">
+              <option value="">Select role…</option>
+              <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
+            </select>
           </div>
-          <p class="role-line">{{ currentRole.one_line }}</p>
-          <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
-        </div>
-        <div v-else class="prompt-block warn-block">
-          <p class="warn">
-            {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+          <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+          <p v-if="!canSpawn" class="hint warn">
+            {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
           </p>
-          <div v-if="roles.length === 0" class="row tight">
-            <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+
+          <div v-if="currentRole" class="prompt-block">
+            <div class="prompt-head">
+              <button class="link" @click="previewOpen = !previewOpen">
+                {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
+              </button>
+              <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
+                ⚙ Settings
+              </button>
+            </div>
+            <p class="role-line">{{ currentRole.one_line }}</p>
+            <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
+          </div>
+          <div v-else class="prompt-block warn-block">
+            <p class="warn">
+              {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+            </p>
+            <div v-if="roles.length === 0" class="row tight">
+              <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+            </div>
           </div>
         </div>
-      </template>
+      </div>
     </section>
 
-    </template><!-- end sidebarTab === 'pipeline' -->
+    </div><!-- /part-bottom -->
+    </template><!-- /sidebarView === 'list' -->
+
+    <!-- ══ DETAIL VIEW: no split, full-height scroll ══════════════════════════ -->
+    <div v-else class="pipeline-detail-scroll">
+      <section class="block pipeline-detail-header">
+        <div class="pipeline-detail-nav">
+          <button class="ghost back-btn" @click="backToList">← 返回</button>
+          <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
+          <span v-if="openedPipelineId === activePipelineId" class="active-tag">預設</span>
+        </div>
+      </section>
+      <section class="block" :class="{ pipeline: pipelineOpen }">
+        <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
+          {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
+        </button>
+        <template v-if="pipelineOpen">
+        <div
+          v-if="
+            existingProject &&
+            pipeline.state !== 'running' &&
+            existingProject.state !== 'idle' &&
+            existingProject.nextStageIndex >= 0
+          "
+          class="resume-card"
+        >
+          <div class="resume-head">
+            <strong>↻ Resume existing pipeline</strong>
+            <span class="resume-state" :data-state="existingProject.state">{{ existingProject.state }}</span>
+          </div>
+          <div class="resume-meta">
+            <span>{{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages done</span>
+            <span class="dot">·</span>
+            <span>updated {{ existingProject.updatedAt }}</span>
+          </div>
+          <div v-if="existingProject.taskDescription" class="resume-task">
+            {{ existingProject.taskDescription.length > 200
+              ? existingProject.taskDescription.slice(0, 200) + '…'
+              : existingProject.taskDescription }}
+          </div>
+          <div class="row">
+            <button class="primary wide" @click="emit('pipeline-resume')">
+              ▶ Resume from Stage {{ String(existingProject.nextStageIndex + 1).padStart(2, '0') }}
+            </button>
+            <button
+              class="danger"
+              @click="confirmingRestart = true"
+              title="Discard all stage progress and re-run from Stage 01"
+            >
+              ↺ Start over
+            </button>
+          </div>
+        </div>
+        <div
+          v-else-if="existingProject && existingProject.nextStageIndex < 0 && openedPipelineId === activePipelineId"
+          class="resume-card done"
+        >
+          <div class="done-header">
+            <strong>✓ Project completed</strong>
+            <span class="resume-meta">
+              All {{ existingProject.totalStages }} stages done · {{ existingProject.updatedAt }}
+            </span>
+          </div>
+        </div>
+
+        <textarea
+          v-model="taskDescription"
+          :disabled="pipeline.state === 'running'"
+          :class="{ 'drag-over': isTaskDragOver }"
+          placeholder="Describe the task to drive through all 4 stages. e.g. &#10;&quot;為門市建立內部簽核系統，紙本流程數位化…&quot;"
+          rows="3"
+          spellcheck="false"
+          @dragover.prevent
+          @dragenter.prevent="isTaskDragOver = true"
+          @dragleave="isTaskDragOver = false"
+          @drop.prevent="onTaskDrop"
+        ></textarea>
+        <label class="checkbox-row">
+          <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />
+          <span>
+            <strong>🤖 Full auto</strong>
+            <span v-if="!analyzerStatus.available" class="muted-inline"> — needs Ollama</span>
+            <span v-else class="muted-inline"> — LLM auto-answers all agent questions</span>
+          </span>
+        </label>
+        <div v-if="analyzerStatus.available" class="analyzer-row">
+          <label class="lbl tiny">Model</label>
+          <select v-model="analyzerModelLocal">
+            <option v-for="m in filteredModels" :key="m.name" :value="m.name">
+              {{ m.name }} · {{ m.parameter_size || (m.size / 1e9).toFixed(1) + 'GB' }}
+            </option>
+          </select>
+          <button
+            class="ghost refresh"
+            @click="emit('refresh-analyzer')"
+            title="Refresh Ollama health + model list"
+          >
+            ↻
+          </button>
+        </div>
+        <div v-else class="analyzer-row">
+          <span class="muted-inline">Ollama unreachable.</span>
+          <button class="ghost refresh" @click="emit('refresh-analyzer')" title="Retry connection">
+            ↻ Retry
+          </button>
+        </div>
+        <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
+          <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
+            ▶ Run pipeline
+          </button>
+          <button
+            v-if="pipeline.state !== 'idle'"
+            class="ghost"
+            @click="emit('pipeline-reset')"
+            title="Clear pipeline state and close all agent panes"
+          >
+            Reset
+          </button>
+        </div>
+        <div v-else class="pipeline-running">
+          <div class="progress">
+            <div class="bar" :style="{ width: pipelineProgress + '%' }"></div>
+          </div>
+          <div class="pipeline-line">
+            Stage {{ pipeline.stageIndex + 1 }} / {{ pipeline.totalStages }}
+            <span v-if="pipelineCurrentStage" class="muted">
+              · {{ pipelineCurrentStage.shortTitle }}
+            </span>
+          </div>
+          <div class="row pipeline-row">
+            <button
+              class="primary wide"
+              :disabled="!pipelineNextStage"
+              @click="emit('pipeline-next')"
+            >
+              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
+            </button>
+            <button class="danger" @click="emit('pipeline-abort')">Abort</button>
+          </div>
+        </div>
+        <p v-if="pipeline.state === 'completed'" class="hint ok">
+          ✓ Pipeline completed all 4 stages. Review each pane on the right.
+        </p>
+        <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
+          Pipeline aborted (paused). Agents are kept — Resume to continue, or Reset to clear.
+        </p>
+        <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
+          Provide task description + workspace, then start.
+        </p>
+        </template>
+      </section>
+    </div><!-- /pipeline-detail-scroll -->
+
+    </div><!-- end sidebarTab === 'pipeline' / pipeline-split -->
 
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
@@ -1004,7 +1175,7 @@ function onTaskDrop(e: DragEvent): void {
   border-right: 1px solid var(--border-muted);
   color: var(--text-primary);
   font-size: 12px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 /* ── Sidebar top-level tabs ─────────────────────────────────────── */
@@ -1106,30 +1277,60 @@ function onTaskDrop(e: DragEvent): void {
   flex-direction: column;
   gap: 6px;
 }
+
+/* ── Flat section style (VS Code / GitPane) ──────────────────────────────── */
 .panel-section {
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: var(--bg-subtle);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 0 10px;
+  border-top: 1px solid var(--border-muted);
 }
+/* first visible section in each scroll area: no top divider */
+.part-top > .block:first-child,
+.part-bottom > .block:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+
 .section-divider {
   border: none;
-  border-top: 1px solid var(--border-default);
-  margin: 8px 0;
+  border-top: 1px solid var(--border-muted);
+  margin: 6px 0;
 }
+
+/* Section header label (matches GitPane sec-label) */
 .lbl {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.2px;
+  text-transform: none;
   color: var(--text-secondary);
+  padding: 2px 0;
+  display: block;
 }
+.lbl.tiny {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+/* Section header row with actions (matches GitPane sec-hdr layout) */
+.panel-section > .row.between {
+  min-height: 22px;
+  align-items: center;
+  padding: 0;
+}
+
 button.collapsible-header {
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
   text-align: left;
+}
+button.collapsible-header:hover {
+  color: var(--text-bright);
 }
 button.collapsible-header:hover {
   color: var(--text-bright);
@@ -1890,5 +2091,109 @@ button.icon-btn.muted:hover {
 .warn-block .warn {
   color: var(--attention-fg);
   margin: 0;
+}
+
+/* ── Manual spawn card (matches GitPane git-card / History style) ─────────── */
+.spawn-card {
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.spawn-card-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  min-height: 28px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.spawn-card-hdr:hover { background: var(--bg-elevated); }
+.spawn-caret {
+  font-size: 9px;
+  color: var(--text-muted);
+  width: 10px;
+  flex-shrink: 0;
+}
+.spawn-card-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border-muted);
+}
+
+/* ── Shared split-scroll layout (pipeline + explorer) ───────────────────── */
+.pane-split,
+.pipeline-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 0 -14px -14px; /* compensate sidebar padding */
+}
+.pane-split .part-top,
+.pipeline-split .part-top {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0; /* sections use border-top as divider, no inter-section gap needed */
+  padding: 0 14px 4px;
+  min-height: 0;
+}
+.pane-split .part-bottom,
+.pipeline-split .part-bottom {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 14px 14px;
+  min-height: 0;
+}
+.pane-split .part-resize,
+.pipeline-split .part-resize {
+  flex-shrink: 0;
+  height: 7px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.pane-split .part-resize-grip,
+.pipeline-split .part-resize-grip {
+  margin: 0 auto;
+  width: 32px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-muted);
+  transition: height 0.1s, background 0.1s;
+}
+.pane-split .part-resize:hover .part-resize-grip,
+.pipeline-split .part-resize:hover .part-resize-grip {
+  height: 3px;
+  background: var(--accent-focus);
+}
+.pipeline-split .pipeline-detail-scroll {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+  min-height: 0;
+}
+/* ExplorerPane fills its part-top container */
+.pane-split .part-top > * {
+  flex: 1;
+  min-height: 0;
 }
 </style>

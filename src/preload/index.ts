@@ -38,16 +38,23 @@ contextBridge.exposeInMainWorld('agentTeam', {
     }),
   openEditorWindow: (args: {
     workspace_path: string
-    filepath: string
+    filepath?: string
     name?: string
     line?: number
+    sidebar?: 'explorer' | 'search' | 'git'
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:openEditor', {
       workspace_path: args.workspace_path,
-      filepath: args.filepath,
-      name: args.name ?? args.filepath,
+      ...(args.filepath ? { filepath: args.filepath, name: args.name ?? args.filepath } : {}),
       ...(args.line ? { line: String(args.line) } : {}),
+      ...(args.sidebar ? { sidebar: args.sidebar } : {}),
     }),
+  onSwitchEditorSidebar: (cb: (sidebar: string) => void): void => {
+    ipcRenderer.on('editor:switchSidebar', (_event, sidebar: string) => cb(sidebar))
+  },
+  onOpenEditorDiff: (cb: (params: Record<string, string>) => void): void => {
+    ipcRenderer.on('editor:openDiff', (_event, params: Record<string, string>) => cb(params))
+  },
   saveJson: (args: {
     defaultName?: string
     content: string
@@ -67,4 +74,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
   }): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('dialog:pickFile', args),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  readKeybindings: (): Promise<{ ok: boolean; content?: string }> =>
+    ipcRenderer.invoke('keybindings:read'),
+  writeKeybindings: (content: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('keybindings:write', content),
 })

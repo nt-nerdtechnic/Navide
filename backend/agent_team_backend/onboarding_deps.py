@@ -74,6 +74,9 @@ DEPS: list[Dep] = [
     Dep("ollama", "Ollama", "本地 LLM runtime（Analyzer 必要）", "analyzer",
         ["ollama", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install ollama", docs_url="https://ollama.com"),
+    Dep("tmux", "tmux", "Terminal multiplexer（CLI process survival）", "foundation",
+        ["tmux", "-V"], r"tmux (\d+\.\d+(?:\.\d+)?)", min_version="3.0",
+        install_cmd="brew install tmux", optional=False, docs_url="https://github.com/tmux/tmux"),
 ]
 
 DEPS_BY_ID: dict[str, Dep] = {d.id: d for d in DEPS}
@@ -181,7 +184,7 @@ def compute_gate(dep_statuses: list[dict[str, Any]], models: list[str]) -> dict[
     for s in dep_statuses:
         by_group.get(s["group"], []).append(s)
 
-    foundation_ready = all(s["status"] == "ok" for s in by_group["foundation"])
+    foundation_ready = all(s["status"] == "ok" for s in by_group["foundation"] if not s.get("optional"))
     has_any_cli = any(s["status"] == "ok" for s in by_group["agent_cli"])
     ollama_ok = any(s["id"] == "ollama" and s["status"] == "ok" for s in by_group["analyzer"])
     analyzer_ready = ollama_ok and len(models) > 0
