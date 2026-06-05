@@ -409,8 +409,16 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@codebase', label: '@codebase — search workspace code' },
 ]
 const atDirItems = ref<AtOption[]>([])
+const recentAtFiles = ref<string[]>([])
 
 const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
+
+watch(() => props.getActiveRelPath?.(), (path) => {
+  if (path && !recentAtFiles.value.includes(path)) {
+    recentAtFiles.value.unshift(path)
+    if (recentAtFiles.value.length > 8) recentAtFiles.value.pop()
+  }
+})
 
 // ── Slash commands ────────────────────────────────────────────────────────────
 interface SlashCommand { id: string; label: string; description: string; template: string }
@@ -1269,7 +1277,16 @@ function onTextareaInput(e: Event): void {
   for (const item of atDirItems.value) {
     if (item.label.toLowerCase().includes(lower)) filtered.push(item)
   }
-  atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
+  // Prepend recent files when no query (or just '@')
+  if (!lower || lower === '@') {
+    const recent: AtOption[] = recentAtFiles.value
+      .filter((f) => !filtered.some((d) => d.id === f))
+      .map((f) => ({ id: f, label: `@${f.split('/').pop()} · recent` }))
+      .slice(0, 5)
+    atOptions.value = [...filtered, ...recent]
+  } else {
+    atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
+  }
 
   if (fragment.length >= 1 && !fragment.startsWith('@')) {
     void searchFiles(fragment)
