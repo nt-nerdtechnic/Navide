@@ -351,6 +351,7 @@ registerCommand('editor.action.insertLineBefore', () => activeEditor()?.insertLi
 registerCommand('editor.action.moveLineUp',       () => activeEditor()?.moveLineUp())
 registerCommand('editor.action.moveLineDown',     () => activeEditor()?.moveLineDown())
 registerCommand('editor.action.selectHighlights',  () => activeEditor()?.selectAllOccurrences())
+registerCommand('editor.action.renameSymbol',      () => activeEditor()?.selectAllOccurrences())
 registerCommand('editor.action.jumpToBracket',     () => activeEditor()?.jumpToBracket())
 registerCommand('editor.action.selectToBracket',   () => activeEditor()?.selectToBracket())
 registerCommand('editor.action.duplicateLineDown',  () => activeEditor()?.duplicateLineDown())
@@ -720,8 +721,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
   { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
   { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
-  { id: 'editor.action.openFileAtCursor',  label: 'Open File at Cursor',      keys: 'F12' },
-  { id: 'editor.action.findReferences',   label: 'Find References in Files', keys: '⇧F12' },
+  { id: 'editor.action.openFileAtCursor',  label: 'Open File at Cursor',           keys: 'F12' },
+  { id: 'editor.action.findReferences',   label: 'Find References in Files',      keys: '⇧F12' },
+  { id: 'editor.action.renameSymbol',     label: 'Rename Symbol (Select All)',    keys: 'F2' },
   { id: 'editor.action.detectIndentation',    label: 'Detect Indentation' },
   { id: 'editor.action.indentationToSpaces',  label: 'Convert Indentation to Spaces' },
   { id: 'editor.action.indentationToTabs',    label: 'Convert Indentation to Tabs' },

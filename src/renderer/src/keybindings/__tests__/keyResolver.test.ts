@@ -787,3 +787,17 @@ describe('find references (shift+f12)', () => {
     expect(dr.resolve(mkEvent('F12', { shiftKey: true }), {})).toBeNull()
   })
 })
+
+describe('rename symbol (F2)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('f2 → renameSymbol (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('F2'), { editorTextFocus: true })?.command)
+      .toBe('editor.action.renameSymbol')
+  })
+
+  it('f2 requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('F2'), {})).toBeNull()
+  })
+})

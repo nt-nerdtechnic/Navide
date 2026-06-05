@@ -136,4 +136,5 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+k cmd+d', command: 'editor.action.moveSelectionToNextFindMatch', when: 'editorTextFocus' },
   { key: 'f12',         command: 'editor.action.openFileAtCursor',  when: 'editorTextFocus' },
   { key: 'shift+f12',  command: 'editor.action.findReferences',   when: 'editorTextFocus' },
+  { key: 'f2',          command: 'editor.action.renameSymbol',     when: 'editorTextFocus' },
 ]
