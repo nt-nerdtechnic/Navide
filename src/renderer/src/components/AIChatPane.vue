@@ -368,13 +368,16 @@ function renderMarkdownLite(rawText: string): string {
   let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const langLabel = lang || 'text'
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
-    // Apply syntax highlighting if we have a matching language
+    // Apply syntax highlighting; skip auto-detect for large blocks (> 3000 chars) to avoid slowdown
     let highlighted: string
     try {
-      const result = lang && hljs.getLanguage(lang)
-        ? hljs.highlight(code, { language: lang })
-        : hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'bash', 'json', 'css', 'xml', 'sql', 'yaml'])
-      highlighted = result.value
+      let result
+      if (lang && hljs.getLanguage(lang)) {
+        result = hljs.highlight(code, { language: lang })
+      } else if (!lang && code.length < 3000) {
+        result = hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'bash', 'json', 'css', 'xml', 'sql', 'yaml'])
+      }
+      highlighted = result ? result.value : code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
     } catch {
       highlighted = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
@@ -1546,6 +1549,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           @click="switchThread(t.id)"
         >
           <span class="ai-thread-title">{{ t.title }}</span>
+          <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
           <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
           <button class="ai-thread-del" title="刪除" @click.stop="deleteThread(t.id)">✕</button>
         </div>
@@ -2412,6 +2416,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-thread-item:hover { background: var(--bg-muted); }
 .ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
 .ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
 .ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
