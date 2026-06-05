@@ -595,7 +595,10 @@ onMounted(() => {
     { immediate: true },
   )
 })
-onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
+})
 
 function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
 function addLineComment(): void { editorRef.value?.addLineComment() }

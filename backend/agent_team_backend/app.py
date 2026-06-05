@@ -2116,7 +2116,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     _rp = Path(workspace_path) / _rf
                     if _rp.is_file():
                         try:
-                            _rules = _rp.read_text(encoding="utf-8", errors="replace").strip()
+                            _rules = _rp.read_text(encoding="utf-8", errors="replace")[:8_000].strip()
                             if _rules:
                                 system_suffix = f"{_rules}\n\n{system_suffix}".strip()
                         except OSError:
