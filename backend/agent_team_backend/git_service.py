@@ -1037,7 +1037,7 @@ async def add_remote(workspace_path: str, name: str, url: str) -> dict[str, Any]
     if not url:
         return {"ok": False, "error": "url is required"}
     if not _SAFE_GIT_URL.match(url):
-        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+        return {"ok": False, "error": "Invalid URL scheme; use https:// or git@host:path"}
     rc, _, stderr = await _run(["git", "remote", "add", name.strip(), url], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
@@ -1048,22 +1048,22 @@ async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin
     if not url:
         return {"ok": False, "error": "url is required"}
     if not _SAFE_GIT_URL.match(url):
-        return {"ok": False, "error": "URL scheme 不合法，請使用 https:// 或 git@host:path"}
+        return {"ok": False, "error": "Invalid URL scheme; use https:// or git@host:path"}
 
     rc, _, stderr = await _run(["git", "init"], workspace_path)
     if rc != 0:
-        return {"ok": False, "error": f"git init 失敗: {stderr.strip()}"}
+        return {"ok": False, "error": f"git init failed: {stderr.strip()}"}
 
     # Add remote (if already exists, update its URL)
     rc, _, _ = await _run(["git", "remote", "add", remote, url.strip()], workspace_path)
     if rc != 0:
         rc2, _, stderr2 = await _run(["git", "remote", "set-url", remote, url.strip()], workspace_path)
         if rc2 != 0:
-            return {"ok": False, "error": f"無法設定 remote: {stderr2.strip()}"}
+            return {"ok": False, "error": f"Failed to set remote: {stderr2.strip()}"}
 
     rc, _, stderr = await _run(["git", "fetch", remote], workspace_path)
     if rc != 0:
-        return {"ok": False, "error": f"git fetch 失敗: {stderr.strip()}"}
+        return {"ok": False, "error": f"git fetch failed: {stderr.strip()}"}
 
     # Detect default branch
     rc, out, _ = await _run(["git", "symbolic-ref", f"refs/remotes/{remote}/HEAD"], workspace_path)
@@ -1077,11 +1077,11 @@ async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin
                 branch = b
                 break
         if not branch:
-            return {"ok": False, "error": "無法偵測預設分支（嘗試過 main / master），請確認 URL 正確"}
+            return {"ok": False, "error": "Cannot detect default branch (tried main/master); check the URL"}
 
     rc, _, stderr = await _run(["git", "checkout", "-B", branch, f"{remote}/{branch}"], workspace_path)
     if rc != 0:
-        return {"ok": False, "error": f"git checkout 失敗: {stderr.strip()}"}
+        return {"ok": False, "error": f"git checkout failed: {stderr.strip()}"}
 
     return {"ok": True, "branch": branch}
 
