@@ -99,7 +99,9 @@ function _ensureTokensUpTo(lastLine: number): void {
       // Continue to ensure lines between here and lastLine are computed too.
       stateIn = cached.stateOut
     } else {
-      const { tokens, endState } = tok.tokenizeLine(text, stateIn)
+      // Skip tokenizing extremely long lines (minified files) to avoid UI freeze.
+      const safeText = text.length > 10_000 ? '' : text
+      const { tokens, endState } = tok.tokenizeLine(safeText, stateIn)
       _tokCache[i] = { text, stateIn, tokens, stateOut: endState }
       stateIn = endState
     }

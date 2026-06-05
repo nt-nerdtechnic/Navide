@@ -91,6 +91,8 @@ def _validate_ref_name(value: str, label: str = "name") -> str | None:
         return f"{label} is required"
     if v.startswith("-"):
         return f"invalid {label}: must not start with '-'"
+    if ".." in v:
+        return f"invalid {label}: must not contain '..'"
     if not _REF_RE.match(v):
         return f"invalid {label}: contains disallowed characters"
     return None
