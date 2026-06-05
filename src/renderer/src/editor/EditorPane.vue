@@ -318,7 +318,16 @@ function replaceAll(): void {
   // Escape $ in replacement so it's always treated as a literal string,
   // not a regex backreference ($&, $`, $', $1, etc.).
   const literalReplace = replaceQuery.value.replace(/\$/g, '$$$$')
-  content.value = content.value.replace(re, literalReplace)
+  const oldText = editorRef.value?.getValue() ?? content.value
+  const newText = oldText.replace(re, literalReplace)
+  if (newText === oldText) return
+  const lines = oldText.split('\n')
+  const lastLine = lines.length - 1
+  // Route through applyEditExternal so the change is registered in UndoStack.
+  editorRef.value?.applyEditExternal(
+    { start: { line: 0, col: 0 }, end: { line: lastLine, col: lines[lastLine].length } },
+    newText,
+  )
   dirty.value = true
   void nextTick(() => computeMatches({ navigate: false }))
 }
