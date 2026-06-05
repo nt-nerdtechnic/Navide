@@ -1789,6 +1789,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
     }
   }
 
+  if (contextChips.value.some((c) => c.label === chipLabel)) return
   contextChips.value.push({ id: crypto.randomUUID(), label: chipLabel, content: chipContent })
 
   // Remove @fragment from textarea
@@ -1835,7 +1836,8 @@ async function onDrop(e: DragEvent): Promise<void> {
       })
       const label = `@${relPath.split('/').pop()}`
       const ext = relPath.split('.').pop() ?? ''
-      const fileContent = resp.payload?.content ?? ''
+      if (contextChips.value.some((c) => c.label === label)) continue
+      const fileContent = (resp.payload?.content ?? '').slice(0, 50_000)
       contextChips.value.push({
         id: crypto.randomUUID(),
         label,
