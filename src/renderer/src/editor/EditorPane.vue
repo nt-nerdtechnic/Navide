@@ -596,8 +596,11 @@ function undo(): void { editorRef.value?.undo() }
 function redo(): void { editorRef.value?.redo() }
 function selectAll(): void { editorRef.value?.selectAll() }
 
+function focusEditor(): void { editorRef.value?.focus() }
+
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
+  focus: focusEditor,
   toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
@@ -614,6 +617,7 @@ defineExpose({
   openReplace,
   getContent: () => content.value,
   getSelection: () => editorRef.value?.getSelectionText() ?? '',
+  insertTextAtCursor: (text: string) => editorRef.value?.insertText(text),
 })
 </script>
 
