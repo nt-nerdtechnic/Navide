@@ -623,6 +623,7 @@ function doRedo(): void {
 }
 function selectAll(): void {
   preferredCol = -1
+  ghost.value = null
   const last = model.lineCount() - 1
   anchor.value = { line: 0, col: 0 }
   cursor.value = { line: last, col: model.getLine(last).length }
@@ -1172,6 +1173,7 @@ function posFromMouse(e: MouseEvent): Position {
 // ── Smart expand / shrink selection (⇧⌥→ / ⇧⌥←) ──────────────────────────
 const _selStack: Array<{ anchor: Position | null; cursor: Position }> = []
 function expandSelection(): void {
+  ghost.value = null
   const cur = cursor.value
   const anc = anchor.value
   const noSel = !anc || (anc.line === cur.line && anc.col === cur.col)
@@ -1208,6 +1210,7 @@ function expandSelection(): void {
   cursor.value = { line: last, col: model.getLine(last).length }
 }
 function shrinkSelection(): void {
+  ghost.value = null
   if (_selStack.length > 0) {
     const prev = _selStack.pop()!
     anchor.value = prev.anchor ? clampPos(prev.anchor) : null

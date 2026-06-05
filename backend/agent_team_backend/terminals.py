@@ -166,6 +166,7 @@ class TerminalService:
         env: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
+        skip_tmux: bool = False,
     ) -> TerminalSession:
         argv = self._resolve_command(command)
         if not os.path.isdir(cwd):
@@ -186,7 +187,7 @@ class TerminalService:
             final_env.update(env)
 
         tmux_name = ""
-        if self._use_tmux:
+        if self._use_tmux and not skip_tmux:
             tmux_name = _make_tmux_name(pane_id)
             _session_created = False
             try:

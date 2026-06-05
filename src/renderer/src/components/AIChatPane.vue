@@ -42,6 +42,7 @@ interface CommandProposalCard {
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  rawContent?: string  // full content sent to AI (includes @chip file/git content)
   streaming?: boolean
   model?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
@@ -301,8 +302,9 @@ async function sendMessage(): Promise<void> {
     fullContent += `[User]: ${rawText}`
   }
   const displayText = rawText || contextChips.value.map((c) => c.label).join(' ')
+  const sentContent = fullContent || displayText
 
-  messages.value.push({ role: 'user', content: displayText })
+  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent })
   contextChips.value = []
   inputText.value = ''
   sending.value = true
@@ -310,12 +312,12 @@ async function sendMessage(): Promise<void> {
   const sessionId = crypto.randomUUID()
   currentSessionId.value = sessionId
 
-  // Build messages history for backend
+  // Build messages history for backend — use rawContent so AI sees actual @chip content
   const history = messages.value.slice(0, -1).map((m) => ({
     role: m.role,
-    content: m.content,
+    content: m.rawContent ?? m.content,
   }))
-  history.push({ role: 'user', content: fullContent || displayText })
+  history.push({ role: 'user', content: sentContent })
 
   // Push placeholder assistant message for streaming
   messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
@@ -375,7 +377,7 @@ async function regenerate(): Promise<void> {
   const sessionId = crypto.randomUUID()
   currentSessionId.value = sessionId
 
-  const history = messages.value.map((m) => ({ role: m.role, content: m.content }))
+  const history = messages.value.map((m) => ({ role: m.role, content: m.rawContent ?? m.content }))
   messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
   await scrollBottom()
 

@@ -39,4 +39,27 @@ describe('evaluateWhen', () => {
   it('empty string returns true', () => {
     expect(evaluateWhen('', ctx)).toBe(true)
   })
+
+  it('disjunction: first branch true', () => {
+    expect(evaluateWhen('editorTextFocus || modalOpen', ctx)).toBe(true)
+  })
+
+  it('disjunction: second branch true', () => {
+    expect(evaluateWhen('modalOpen || editorTextFocus', ctx)).toBe(true)
+  })
+
+  it('disjunction: both false gives false', () => {
+    expect(evaluateWhen('modalOpen || terminalFocus', ctx)).toBe(false)
+  })
+
+  it('disjunction with negation', () => {
+    expect(evaluateWhen('!editorTextFocus || !terminalFocus', ctx)).toBe(true)
+  })
+
+  it('mixed || and &&: && has higher precedence', () => {
+    // (editorTextFocus && !modalOpen) || terminalFocus → true || false → true
+    expect(evaluateWhen('editorTextFocus && !modalOpen || terminalFocus', ctx)).toBe(true)
+    // (modalOpen && editorTextFocus) || !terminalFocus → false || true → true
+    expect(evaluateWhen('modalOpen && editorTextFocus || !terminalFocus', ctx)).toBe(true)
+  })
 })

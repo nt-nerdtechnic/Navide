@@ -407,19 +407,29 @@ async def tmux_check(request: Request) -> dict[str, Any]:
     """
     names_raw = request.query_params.get("names", "")
     names = [n.strip() for n in names_raw.split(",") if n.strip()]
-    results: dict[str, bool] = {}
-    for name in names:
-        if not _TMUX_NAME_RE.fullmatch(name):
-            results[name] = False
-            continue
+    if not names:
+        return {"results": {}}
+
+    # Reject invalid names immediately without a subprocess call.
+    invalid = {n: False for n in names if not _TMUX_NAME_RE.fullmatch(n)}
+    to_check = [n for n in names if _TMUX_NAME_RE.fullmatch(n)]
+
+    live: set[str] = set()
+    if to_check:
         try:
-            ret = subprocess.run(
-                ["tmux", "has-session", "-t", name],
+            # One tmux ls call instead of N has-session calls — avoids blocking
+            # the asyncio event loop N times.
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["tmux", "ls", "-F", "#{session_name}"],
                 capture_output=True,
+                text=True,
             )
-            results[name] = ret.returncode == 0
+            live = set(result.stdout.splitlines())
         except OSError:
-            results[name] = False
+            pass
+
+    results = {**invalid, **{n: n in live for n in to_check}}
     return {"results": results}
 
 
@@ -618,6 +628,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 env=payload.get("env"),
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
+                skip_tmux=bool(payload.get("skip_tmux", False)),
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.

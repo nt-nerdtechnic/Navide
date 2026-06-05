@@ -358,6 +358,24 @@ registerCommand('workbench.action.closeOtherEditors', () => {
   if (others.length > 0 && !window.confirm(`有 ${others.length} 個未存檔的檔案，確定要關閉其他分頁？`)) return
   openFiles.value = openFiles.value.filter((f) => f.relPath === cur)
 })
+registerCommand('workbench.action.closeEditorsToTheRight', () => {
+  const cur = activeRel.value
+  if (!cur) return
+  const idx = openFiles.value.findIndex((f) => f.relPath === cur)
+  if (idx < 0) return
+  const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉右側分頁？`)) return
+  openFiles.value = openFiles.value.slice(0, idx + 1)
+})
+registerCommand('workbench.action.closeEditorsToTheLeft', () => {
+  const cur = activeRel.value
+  if (!cur) return
+  const idx = openFiles.value.findIndex((f) => f.relPath === cur)
+  if (idx <= 0) return
+  const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length > 0 && !window.confirm(`有 ${dirty.length} 個未存檔的檔案，確定要關閉左側分頁？`)) return
+  openFiles.value = openFiles.value.slice(idx)
+})
 registerCommand('workbench.action.openNextEditor', () => {
   const files = openFiles.value
   if (!files.length) return
@@ -507,6 +525,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.deleteAllLeft',              label: '刪除到行首',       keys: '⌘⌫' },
   { id: 'editor.action.deleteAllRight',             label: '刪除到行尾',       keys: '⌘⌦' },
   { id: 'workbench.action.closeOtherEditors',       label: '關閉其他編輯器' },
+  { id: 'workbench.action.closeEditorsToTheRight', label: '關閉右側的編輯器' },
+  { id: 'workbench.action.closeEditorsToTheLeft',  label: '關閉左側的編輯器' },
   { id: 'workbench.action.moveEditorRightInGroup',  label: '將分頁向右移動',   keys: '⌘⇧]' },
   { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
   { id: 'workbench.action.navigateBack',    label: '返回上一個位置', keys: '⌃-' },
