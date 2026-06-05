@@ -71,6 +71,8 @@ async function loadDiff(): Promise<void> {
     } else {
       loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
     }
+  } catch (err) {
+    if (seq === _loadSeq) loadError.value = err instanceof Error ? err.message : 'Failed to load diff'
   } finally {
     if (seq === _loadSeq) loading.value = false
   }
