@@ -811,9 +811,15 @@ function joinLines(): void {
   if (line >= model.lineCount() - 1) return
   const curText = model.getLine(line)
   const nextText = model.getLine(line + 1)
-  const isEmpty = curText.trim() === ''
-  const leadingWs = isEmpty ? 0 : nextText.length - nextText.trimStart().length
-  const separator = isEmpty || nextText.trim() === '' ? '' : ' '
+  if (curText.trim() === '') {
+    // Blank line: delete the entire line (col 0 → start of next line col 0)
+    applyEdit({ start: { line, col: 0 }, end: { line: line + 1, col: 0 } }, '')
+    cursor.value = { line, col: 0 }
+    anchor.value = null
+    return
+  }
+  const leadingWs = nextText.length - nextText.trimStart().length
+  const separator = nextText.trim() === '' ? '' : ' '
   applyEdit({ start: { line, col: curText.length }, end: { line: line + 1, col: leadingWs } }, separator)
   cursor.value = { line, col: curText.length }
   anchor.value = null
