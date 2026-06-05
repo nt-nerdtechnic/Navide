@@ -1599,6 +1599,25 @@ function onClickOutside(e: MouseEvent): void {
 
 onMounted(() => document.addEventListener('click', onClickOutside))
 onUnmounted(() => document.removeEventListener('click', onClickOutside))
+
+// ── Message date separators ────────────────────────────────────────────────────
+function showDateSep(mi: number): boolean {
+  const ts = messages.value[mi]?.timestamp
+  if (!ts) return false
+  if (mi === 0) return true
+  const prevTs = messages.value[mi - 1]?.timestamp
+  if (!prevTs) return true
+  return new Date(ts).toDateString() !== new Date(prevTs).toDateString()
+}
+function getDateLabel(ts: number): string {
+  const d = new Date(ts)
+  const now = new Date()
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (d.toDateString() === now.toDateString()) return 'Today'
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
 </script>
 
 <template>
@@ -1612,9 +1631,12 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
         <p>AI assistant ready — type a message or use @ to insert context</p>
       </div>
 
+      <template v-for="(msg, mi) in messages" :key="mi">
+        <!-- Date separator -->
+        <div v-if="msg.timestamp && showDateSep(mi)" class="ai-date-sep">
+          <span class="ai-date-sep-label">{{ getDateLabel(msg.timestamp) }}</span>
+        </div>
       <div
-        v-for="(msg, mi) in messages"
-        :key="mi"
         class="ai-msg-wrap ai-msg"
         :class="[msg.role, { 'search-match': isSearchMatch(mi), 'search-active': isSearchActive(mi) }]"
       >
@@ -1690,6 +1712,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             <span class="ai-thinking-label">Thinking…</span>
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
+          <span v-if="msg.streaming && msg.content.length > 0" class="ai-stream-tokens">~{{ Math.ceil(msg.content.length / 4) }} tokens</span>
 
           <!-- Error card -->
           <div v-if="msg.isError" class="ai-error-card">
@@ -1736,6 +1759,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           </span>
         </div>
       </div>
+      </template>
     </div>
 
     <!-- Scroll-to-bottom button (shown when user has scrolled up during streaming) -->
@@ -2187,6 +2211,15 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-bottom-left-radius: 3px;
 }
 
+.ai-date-sep {
+  display: flex; align-items: center; gap: 8px; margin: 12px 8px 4px;
+  color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+}
+.ai-date-sep::before, .ai-date-sep::after {
+  content: ''; flex: 1; height: 1px; background: var(--border-muted);
+}
+.ai-date-sep-label { white-space: nowrap; user-select: none; }
+.ai-stream-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; margin-left: 4px; user-select: none; }
 .ai-text-folded { max-height: 320px; overflow: hidden; position: relative; }
 .ai-text-folded::after {
   content: '';
