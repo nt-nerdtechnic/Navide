@@ -666,6 +666,11 @@ function renderMarkdownLite(rawText: string): string {
     const saveBtn = window.agentTeam?.saveJson
       ? `<button class="ai-code-save-btn" data-code="${encoded}" data-ext="${ext}" title="Save to file">Save</button>`
       : ''
+    // Wrap each line in a span for CSS line-number counters
+    const numberedLines = highlighted
+      .split('\n')
+      .map((line) => `<span class="code-ln">${line}</span>`)
+      .join('\n')
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
@@ -677,7 +682,7 @@ function renderMarkdownLite(rawText: string): string {
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
       `${toggleBtn}` +
-      `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code>${highlighted}</code></pre>` +
+      `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code class="has-line-numbers">${numberedLines}</code></pre>` +
       `</div>`,
     )
     return `\x00B${i}\x00`
@@ -2032,8 +2037,10 @@ function getDateLabel(ts: number): string {
           v-for="chip in contextChips"
           :key="chip.id"
           class="ai-chip"
+          :title="`~${Math.ceil(chip.content.length / 4).toLocaleString()} tokens`"
         >
           {{ chip.label }}
+          <span class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
           <button class="ai-chip-remove" @click="removeChip(chip.id)">×</button>
         </span>
       </div>
@@ -2593,6 +2600,24 @@ function getDateLabel(ts: number): string {
   font-family: ui-monospace, Menlo, 'Courier New', monospace;
   white-space: pre;
 }
+.ai-text :deep(code.has-line-numbers) {
+  counter-reset: code-line;
+}
+.ai-text :deep(code.has-line-numbers .code-ln) {
+  counter-increment: code-line;
+  display: block;
+}
+.ai-text :deep(code.has-line-numbers .code-ln::before) {
+  content: counter(code-line);
+  display: inline-block;
+  width: 2.5ch;
+  margin-right: 12px;
+  color: var(--text-muted);
+  opacity: 0.4;
+  text-align: right;
+  user-select: none;
+  font-size: 0.9em;
+}
 .ai-text :deep(code.ai-inline-code) {
   background: var(--bg-muted);
   border-radius: 3px;
@@ -2939,6 +2964,7 @@ function getDateLabel(ts: number): string {
   opacity: 0.7;
 }
 .ai-chip-remove:hover { opacity: 1; }
+.ai-chip-tokens { font-size: 9px; opacity: 0.55; margin: 0 3px 0 1px; letter-spacing: 0.02em; }
 
 .ai-at-menu {
   position: absolute;
