@@ -283,8 +283,9 @@ registerCommand('editor.action.cursorTop',            () => activeEditor()?.curs
 registerCommand('editor.action.cursorBottom',         () => activeEditor()?.cursorBottom())
 registerCommand('editor.action.scrollLineUp',         () => activeEditor()?.scrollLineUp())
 registerCommand('editor.action.scrollLineDown',       () => activeEditor()?.scrollLineDown())
-registerCommand('editor.action.transformToUppercase',   () => activeEditor()?.transformToUppercase())
-registerCommand('editor.action.transformToLowercase',   () => activeEditor()?.transformToLowercase())
+registerCommand('editor.action.transformToUppercase',  () => activeEditor()?.transformToUppercase())
+registerCommand('editor.action.transformToLowercase',  () => activeEditor()?.transformToLowercase())
+registerCommand('editor.action.transformToTitlecase',  () => activeEditor()?.transformToTitleCase())
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
@@ -294,6 +295,11 @@ registerCommand('editor.action.formatSelection',        () => activeEditor()?.fo
 registerCommand('editor.action.smartSelect.expand',     () => activeEditor()?.expandSelection())
 registerCommand('editor.action.smartSelect.shrink',     () => activeEditor()?.shrinkSelection())
 registerCommand('workbench.action.copyFilePath', async () => {
+  const path = activeRel.value
+  if (!path) return
+  await navigator.clipboard.writeText(`${workspacePath.replace(/\/+$/, '')}/${path}`)
+})
+registerCommand('workbench.action.copyRelativeFilePath', async () => {
   const path = activeRel.value
   if (!path) return
   await navigator.clipboard.writeText(path)
@@ -482,6 +488,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.blockComment',         label: '切換區塊注釋',     keys: '⌘⌥/' },
   { id: 'editor.action.transformToUppercase',  label: '轉換為大寫' },
   { id: 'editor.action.transformToLowercase',  label: '轉換為小寫' },
+  { id: 'editor.action.transformToTitlecase',  label: '轉換為標題大小寫' },
   { id: 'editor.action.joinLines',              label: '合併行' },
   { id: 'editor.action.sortLinesAscending',    label: '行遞增排序' },
   { id: 'editor.action.sortLinesDescending',   label: '行遞減排序' },
@@ -513,7 +520,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.toggleAIChat',            label: '切換 AI 對話',    keys: '⌘⇧A' },
   { id: 'editor.action.smartSelect.expand',          label: '擴展選取範圍',   keys: '⇧⌥→' },
   { id: 'editor.action.smartSelect.shrink',          label: '縮小選取範圍',   keys: '⇧⌥←' },
-  { id: 'workbench.action.copyFilePath',    label: '複製檔案路徑',      keys: '⌘K ⌘P' },
+  { id: 'workbench.action.copyFilePath',         label: '複製絕對路徑',      keys: '⌘K ⌘P' },
+  { id: 'workbench.action.copyRelativeFilePath', label: '複製相對路徑' },
   { id: 'workbench.action.revealInExplorer',label: '在檔案總管中顯示', keys: '⌘K ⌘R' },
   { id: 'workbench.action.revealFileInOS',  label: '在 Finder 中顯示',  keys: '⇧⌥R' },
   { id: 'workbench.action.newWindow',       label: '新增編輯器視窗',    keys: '⌘⇧N' },

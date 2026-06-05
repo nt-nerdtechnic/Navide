@@ -770,6 +770,47 @@ function removeChip(id: string): void {
   contextChips.value = contextChips.value.filter((c) => c.id !== id)
 }
 
+// ── Drag & drop file → context chip ──────────────────────────────────────────
+const isDraggingOver = ref(false)
+
+function onDragover(e: DragEvent): void {
+  if (e.dataTransfer?.types.includes('Files')) {
+    e.preventDefault()
+    isDraggingOver.value = true
+  }
+}
+function onDragleave(): void { isDraggingOver.value = false }
+
+async function onDrop(e: DragEvent): Promise<void> {
+  e.preventDefault()
+  isDraggingOver.value = false
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  for (const file of files.slice(0, 5)) {
+    // Electron exposes the real absolute path via getPathForFile
+    const absPath = window.agentTeam?.getPathForFile(file) ?? ''
+    // Compute path relative to workspace
+    const sep = props.workspacePath.endsWith('/') ? '' : '/'
+    const prefix = props.workspacePath + sep
+    const relPath = absPath.startsWith(prefix) ? absPath.slice(prefix.length) : absPath
+    if (!relPath) continue
+    try {
+      interface ReadResp { ok: boolean; content?: string }
+      const resp = await props.backend.send<ReadResp>('fs.read_file', {
+        workspace_path: props.workspacePath,
+        rel_path: relPath,
+      })
+      const label = `@${relPath.split('/').pop()}`
+      contextChips.value.push({
+        id: crypto.randomUUID(),
+        label,
+        content: `// ${relPath}\n${resp.payload?.content ?? ''}`,
+      })
+    } catch {
+      showToast(`無法讀取：${relPath}`)
+    }
+  }
+}
+
 function onTextareaKeydown(e: KeyboardEvent): void {
   if (showSlashMenu.value) {
     if (e.key === 'ArrowDown') {
@@ -938,7 +979,13 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
     </div>
 
     <!-- Input area -->
-    <div class="ai-input-area">
+    <div
+      class="ai-input-area"
+      :class="{ 'ai-drop-active': isDraggingOver }"
+      @dragover="onDragover"
+      @dragleave="onDragleave"
+      @drop="onDrop"
+    >
       <!-- Context chips -->
       <div v-if="contextChips.length" class="ai-chips">
         <span
@@ -1386,6 +1433,11 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border-top: 1px solid var(--border-muted);
   background: var(--bg-subtle);
   position: relative;
+  transition: box-shadow 0.12s;
+}
+.ai-input-area.ai-drop-active {
+  box-shadow: inset 0 0 0 2px var(--accent-emphasis);
+  background: color-mix(in srgb, var(--accent-emphasis) 6%, var(--bg-subtle));
 }
 
 .ai-chips {

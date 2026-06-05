@@ -741,6 +741,12 @@ function transformToLowercase(): void {
   if (!sel) return
   applyEdit(sel, model.getValueInRange(sel).toLowerCase())
 }
+function transformToTitleCase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  const titled = model.getValueInRange(sel).replace(/\S+/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+  applyEdit(sel, titled)
+}
 function formatSelection(): void {
   const sel = selectionRange()
   if (!sel) { formatDocument(); return }
@@ -1221,6 +1227,7 @@ function shrinkSelection(): void {
 }
 function selectWordAt(pos: Position): void {
   preferredCol = -1
+  ghost.value = null
   const text = model.getLine(pos.line)
   let start = Math.min(pos.col, text.length)
   let end = start
@@ -1234,6 +1241,7 @@ function selectWordAt(pos: Position): void {
 
 function selectLineAt(lineNum: number): void {
   preferredCol = -1
+  ghost.value = null
   anchor.value = { line: lineNum, col: 0 }
   cursor.value = { line: lineNum, col: model.getLine(lineNum).length }
 }
@@ -1472,7 +1480,7 @@ defineExpose({
   jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
+  transformToUppercase, transformToLowercase, transformToTitleCase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
   selectLine,

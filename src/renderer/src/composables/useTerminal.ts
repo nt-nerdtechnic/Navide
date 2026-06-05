@@ -12,6 +12,7 @@ export interface SpawnOptions {
   agentKey?: string
   metadata?: Record<string, unknown>
   outputLogFile?: string  // if set, backend writes ANSI-stripped output to this path
+  skipTmux?: boolean      // bypass tmux wrapping (e.g. when command is already tmux attach-session)
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -230,7 +231,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         cols: term.cols,
         rows: term.rows,
         metadata: opts.metadata ?? null,
-        output_log_file: opts.outputLogFile ?? null
+        output_log_file: opts.outputLogFile ?? null,
+        skip_tmux: opts.skipTmux ?? false,
       })
       if (!resp.ok || !resp.payload) {
         status.value = 'error'
