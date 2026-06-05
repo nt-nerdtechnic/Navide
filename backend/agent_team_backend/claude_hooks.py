@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any
@@ -57,9 +58,10 @@ def _build_curl_command(port_file: str, event_kind: str) -> str:
     Hard-caps at 2s + `|| true` so a slow/offline backend never blocks the
     agent's main work. `--data-binary @-` preserves the JSON stdin verbatim.
     """
+    safe_port_file = shlex.quote(port_file)
     return (
         f"{_AGENT_TEAM_MARKER} kind={event_kind}\n"
-        f"PORT=$(cat '{port_file}' 2>/dev/null); "
+        f"PORT=$(cat {safe_port_file} 2>/dev/null); "
         f"[ -n \"$PORT\" ] && curl -fsS -m 2 -X POST "
         f"-H 'Content-Type: application/json' "
         f"-H 'X-Agent-Team-Event: {event_kind}' "
