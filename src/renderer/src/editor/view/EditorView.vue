@@ -53,8 +53,11 @@ const lineCount = computed(() => {
   version.value // track
   return model.lineCount()
 })
+const showLineNumbers = ref(true)
 // Gutter grows to accommodate the widest line number (e.g. ≥1000 lines needs 4 digits).
-const gutterWidth = computed(() => Math.max(48, String(lineCount.value).length * 9 + 12))
+const gutterWidth = computed(() =>
+  showLineNumbers.value ? Math.max(48, String(lineCount.value).length * 9 + 12) : 0
+)
 // Sizer minimum width ensures long lines are horizontally scrollable.
 // Uses cached max-length: O(1) on pure inserts, O(N) only when cache is invalid.
 const sizerMinWidth = computed(() => {
@@ -1533,6 +1536,7 @@ function acceptGhost(): void {
 function zoomIn(): void { fontZoom.value = Math.min(2.0, Math.round((fontZoom.value + 0.1) * 10) / 10) }
 function zoomOut(): void { fontZoom.value = Math.max(0.5, Math.round((fontZoom.value - 0.1) * 10) / 10) }
 function zoomReset(): void { fontZoom.value = 1.0 }
+function toggleLineNumbers(): void { showLineNumbers.value = !showLineNumbers.value }
 
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
@@ -1552,7 +1556,7 @@ defineExpose({
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
-  setSelection, zoomIn, zoomOut, zoomReset,
+  setSelection, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
   undo: doUndo, redo: doRedo, selectAll,
   insertText,
 })
@@ -1599,7 +1603,7 @@ defineExpose({
             class="ev-line"
             :style="{ top: (rl.index * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
           >
-            <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
+            <span v-if="showLineNumbers" class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
             <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px' }"><span
               v-for="(s, si) in rl.segments"
               :key="si"

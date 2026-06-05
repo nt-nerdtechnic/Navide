@@ -626,6 +626,7 @@ function setLanguage(l: string): void { langOverride.value = l || null }
 function zoomIn(): void { editorRef.value?.zoomIn() }
 function zoomOut(): void { editorRef.value?.zoomOut() }
 function zoomReset(): void { editorRef.value?.zoomReset() }
+function toggleLineNumbers(): void { editorRef.value?.toggleLineNumbers() }
 function undo(): void { editorRef.value?.undo() }
 function redo(): void { editorRef.value?.redo() }
 function selectAll(): void { editorRef.value?.selectAll() }
@@ -648,7 +649,7 @@ defineExpose({
   expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,
   navigateToLastEdit,
-  setLanguage, zoomIn, zoomOut, zoomReset,
+  setLanguage, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
   undo, redo, selectAll,
   openReplace,
   getContent: () => content.value,

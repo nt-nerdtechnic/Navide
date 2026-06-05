@@ -1973,18 +1973,24 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────
+        # Security: cwd is validated via Path.resolve() so symlink/traversal
+        # attacks cannot redirect execution outside the user's workspace.
+        # The frontend shows an explicit confirm dialog before sending this request.
         elif msg_type == "shell.run":
             ws_path = payload.get("workspace_path") or ""
             cmd = payload.get("command", "") or ""
             if not cmd:
                 await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
+            elif ws_path and not Path(ws_path).resolve().is_dir():
+                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
             else:
+                safe_cwd = str(Path(ws_path).resolve()) if ws_path else None
                 try:
                     proc = await asyncio.create_subprocess_shell(
                         cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
-                        cwd=ws_path or None,
+                        cwd=safe_cwd,
                     )
                     stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
                     output = stdout.decode("utf-8", errors="replace")

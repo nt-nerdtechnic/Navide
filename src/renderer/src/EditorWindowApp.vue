@@ -623,6 +623,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.sortLinesAscending',    label: 'Sort Lines Ascending' },
   { id: 'editor.action.sortLinesDescending',   label: 'Sort Lines Descending' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
+  { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol',     keys: '⌘⇧O' },
   { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
   { id: 'editor.action.fontZoomIn',    label: 'Increase Font Size',     keys: '⌘=' },
@@ -849,6 +850,7 @@ registerCommand('editor.action.blockComment',      () => activeEditor()?.toggleB
 registerCommand('editor.action.fontZoomIn',    () => activeEditor()?.zoomIn())
 registerCommand('editor.action.fontZoomOut',   () => activeEditor()?.zoomOut())
 registerCommand('editor.action.fontZoomReset', () => activeEditor()?.zoomReset())
+registerCommand('editor.action.toggleLineNumbers', () => activeEditor()?.toggleLineNumbers())
 
 // ── Go to Symbol (⌘⇧O) ──────────────────────────────────────────────────────
 const symOpen = ref(false)
