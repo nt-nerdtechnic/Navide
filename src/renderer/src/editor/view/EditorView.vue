@@ -363,6 +363,11 @@ function getSelectionText(): string {
   return sel ? model.getValueInRange(sel) : ''
 }
 function getCursor(): Position { return cursor.value }
+function revealLine(line: number): void {
+  // `line` is 1-based (search results / external callers); cursor is 0-based.
+  cursor.value = clampPos({ line: Math.max(0, line - 1), col: 0 })
+  void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
+}
 function applyEditExternal(range: Range, text: string): void { applyEdit(range, text) }
 function setDecorations(d: Decoration[]): void { decorations.value = d }
 function setGhost(text: string | null): void {
@@ -377,7 +382,7 @@ function acceptGhost(): void {
 
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
-  applyEditExternal, setDecorations, setGhost, acceptGhost,
+  revealLine, applyEditExternal, setDecorations, setGhost, acceptGhost,
 })
 </script>
 

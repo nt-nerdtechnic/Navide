@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import EditorView from './view/EditorView.vue'
@@ -10,6 +10,7 @@ const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   relPath: string
   name: string
+  initialLine?: number
 }>()
 
 const { toast, alert } = useNotify()
@@ -38,6 +39,10 @@ async function load(): Promise<void> {
     }
     content.value = resp.payload.content ?? ''
     loaded.value = true
+    if (props.initialLine && props.initialLine > 0) {
+      await nextTick()
+      editorRef.value?.revealLine(props.initialLine)
+    }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '讀取檔案失敗'
   }

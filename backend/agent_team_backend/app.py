@@ -53,6 +53,7 @@ from .tokens_store import TokensStore
 from .history_store import HistoryStore
 from . import git_service
 from . import fs_service
+from . import search_service
 from . import editor_service
 from . import onboarding_deps
 from .git_watcher import GitWatcher
@@ -1801,6 +1802,36 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "")
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        # ── Search (search.*) ───────────────────────────────────────────────
+        elif msg_type == "search.find_in_files":
+            result = await asyncio.to_thread(
+                search_service.find_in_files,
+                payload.get("workspace_path") or "",
+                payload.get("query", "") or "",
+                is_regex=bool(payload.get("is_regex")),
+                case_sensitive=bool(payload.get("case_sensitive")),
+                whole_word=bool(payload.get("whole_word")),
+                includes=payload.get("includes", "") or "",
+                excludes=payload.get("excludes", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "search.replace_in_files":
+            ws_path = payload.get("workspace_path") or ""
+            result = await asyncio.to_thread(
+                search_service.replace_in_files,
+                ws_path,
+                payload.get("query", "") or "",
+                payload.get("replacement", "") or "",
+                payload.get("files", []) or [],
+                is_regex=bool(payload.get("is_regex")),
+                case_sensitive=bool(payload.get("case_sensitive")),
+                whole_word=bool(payload.get("whole_word")),
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok") and result.get("total"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         # ── Editor AI (editor.*) ────────────────────────────────────────────
         elif msg_type == "editor.rewrite":

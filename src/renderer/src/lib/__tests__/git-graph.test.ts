@@ -32,6 +32,14 @@ describe('computeGraph — branch + merge', () => {
     expect(diagonal).toBeDefined()
   })
 
+  it('merge row has no stray vertical stub on the freshly branched lane', () => {
+    // The second parent's lane is born on this row, so its only bottom segment
+    // must be the incoming diagonal — never a floating {1->1} vertical.
+    const mRow = layout.rows[0]
+    const stub = mRow.segments.find((s) => s.half === 'bottom' && s.fromLane === 1 && s.toLane === 1)
+    expect(stub).toBeUndefined()
+  })
+
   it('shared ancestor row routes both incoming lanes into the dot', () => {
     const cRow = layout.rows[3]
     const tops = cRow.segments.filter((s) => s.half === 'top').map((s) => `${s.fromLane}->${s.toLane}`)

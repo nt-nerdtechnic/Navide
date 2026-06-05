@@ -4850,7 +4850,7 @@ function paneIsCommander(p: ActivePane): boolean {
   position: absolute;
   z-index: 30;
   min-width: 160px;
-  background: #0d1117ee;
+  background: var(--bg-overlay);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   overflow: hidden;

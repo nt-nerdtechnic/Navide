@@ -103,14 +103,18 @@ export function computeGraph(commits: GraphCommit[]): GraphLayout {
       parentLanes.push(pl)
     })
 
-    // Lower half: active lanes continue straight; the dot connects to any
-    // parent that sits on a different lane (branch/merge diagonal).
-    for (let l = 0; l < lanes.length; l++) {
-      if (lanes[l] === null) continue
-      segments.push({ fromLane: l, toLane: l, half: 'bottom' })
-    }
+    // Lower half: every parent connects from the dot to its lane — a vertical
+    // for the first parent (same lane) and a diagonal for each branch/merge
+    // parent. Every OTHER active lane is an unrelated pass-through and falls
+    // straight down. A parent lane is drawn ONLY via its diagonal here; drawing
+    // a vertical for it too would leave a stray stub (the lane has nothing above
+    // it on a fresh branch-out), which reads as a spurious fork.
     for (const pl of parentLanes) {
-      if (pl !== commitLane) segments.push({ fromLane: commitLane, toLane: pl, half: 'bottom' })
+      segments.push({ fromLane: commitLane, toLane: pl, half: 'bottom' })
+    }
+    for (let l = 0; l < lanes.length; l++) {
+      if (lanes[l] === null || l === commitLane || parentLanes.includes(l)) continue
+      segments.push({ fromLane: l, toLane: l, half: 'bottom' })
     }
 
     const laneCount = Math.max(before.length, lanes.length)

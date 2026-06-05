@@ -33,7 +33,7 @@ const modes: [LayoutMode, string, string][] = [
   z-index: 10;
   display: flex;
   gap: 2px;
-  background: #161b22cc;
+  background: var(--bg-overlay);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 3px;

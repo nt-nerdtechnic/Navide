@@ -19,6 +19,7 @@ let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let diffWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
+let searchWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   const qs = new URLSearchParams(params).toString()
@@ -197,6 +198,38 @@ function openEditorWindow(params: Record<string, string>): void {
 
 ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
   openEditorWindow(args ?? {})
+  return { ok: true }
+})
+
+function openSearchWindow(params: Record<string, string>): void {
+  const search = { window: 'search', ...params }
+  if (searchWindow && !searchWindow.isDestroyed()) {
+    loadWindow(searchWindow, search)
+    searchWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 760,
+    height: 820,
+    title: 'Agent-Team · Search',
+    parent: mainWindow ?? undefined,
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  searchWindow = win
+  win.on('closed', () => {
+    if (searchWindow === win) searchWindow = null
+  })
+  loadWindow(win, search)
+}
+
+ipcMain.handle('window:openSearch', (_event, args: Record<string, string>) => {
+  openSearchWindow(args ?? {})
   return { ok: true }
 })
 

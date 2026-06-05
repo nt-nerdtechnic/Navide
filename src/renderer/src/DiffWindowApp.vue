@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
+import { useNotify } from './composables/useNotify'
+import NotificationHost from './components/NotificationHost.vue'
 import { parseHunks, buildPatch, hunkHasChanges, toSideBySide, type Hunk } from './lib/git-diff'
 
 // ── window params ───────────────────────────────────────────────────────────────
@@ -12,12 +14,12 @@ const name = params.get('name') ?? filepath
 document.title = `Diff · ${name}`
 
 const backend = useBackend()
+const notify = useNotify()
 
 // ── diff state ────────────────────────────────────────────────────────────────
 const rawDiff = ref<string | null>(null)
 const loading = ref(false)
 const loadError = ref('')
-const applyError = ref('')
 const selected = ref<Record<number, Set<number>>>({})
 
 const parsed = computed(() => (rawDiff.value ? parseHunks(rawDiff.value) : { fileHeader: '', hunks: [] }))
@@ -74,7 +76,6 @@ function selectedCount(hunkIdx: number): number {
 
 // ── staging via git.apply_patch ───────────────────────────────────────────────
 async function apply(patch: string, reverse: boolean, cached: boolean): Promise<void> {
-  applyError.value = ''
   const resp = await backend.send<{ ok: boolean; error?: string }>('git.apply_patch', {
     workspace_path: workspacePath,
     patch,
@@ -82,7 +83,7 @@ async function apply(patch: string, reverse: boolean, cached: boolean): Promise<
     cached,
   })
   if (!(resp.ok && resp.payload?.ok)) {
-    applyError.value = resp.payload?.error || resp.error?.message || 'apply patch 失敗'
+    notify.toast(resp.payload?.error || resp.error?.message || 'apply patch 失敗', { type: 'error' })
     return
   }
   await loadDiff() // refresh; backend broadcasts git.changed so the main window updates too
@@ -120,8 +121,6 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
       <span class="dw-status" :class="backend.status.value">● {{ backend.status.value }}</span>
       <button class="dw-refresh" title="Reload diff" @click="loadDiff">⟳</button>
     </header>
-
-    <p v-if="applyError" class="dw-err">{{ applyError }}</p>
 
     <div class="dw-body">
       <div v-if="loading" class="dw-msg">Loading…</div>
@@ -186,6 +185,7 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
         </div>
       </div>
     </div>
+    <NotificationHost />
   </div>
 </template>
 
@@ -211,7 +211,6 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
 .dw-status.disconnected, .dw-status.error { color: #f85149; }
 .dw-refresh { background: transparent; border: 1px solid #30363d; color: #8b949e; border-radius: 4px; cursor: pointer; padding: 2px 7px; }
 .dw-refresh:hover { color: #c9d1d9; border-color: #6e7681; }
-.dw-err { color: #f85149; font-size: 12px; margin: 0; padding: 6px 12px; background: #3d1d1d; }
 .dw-body { flex: 1; overflow: auto; }
 .dw-msg { padding: 24px; text-align: center; color: #8b949e; font-size: 12px; }
 .dw-msg.err { color: #f85149; }

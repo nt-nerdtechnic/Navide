@@ -58,6 +58,30 @@ const STATUS_CLASS: Record<string, string> = {
   R: 'st-mod', C: 'st-mod', '?': 'st-untracked',
 }
 
+// Folders inheriting the status of any descendant change (VS Code-style):
+// a tracked change (M/A/D/R/C) tints the folder yellow, untracked-only green.
+const dirStatusMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const [path, info] of statusMap.value) {
+    const cls = info.letter === 'U' ? 'st-untracked' : 'st-mod'
+    let idx = path.lastIndexOf('/')
+    while (idx > 0) {
+      const dir = path.slice(0, idx)
+      if (map.get(dir) !== 'st-mod') map.set(dir, cls) // tracked wins over untracked
+      idx = dir.lastIndexOf('/')
+    }
+  }
+  return map
+})
+
+// Status class for an entry, applied to the filename (VS Code-style tint) and
+// the trailing letter badge. Folders inherit from descendants; '' = clean.
+function statusClassFor(entry: FsEntry): string {
+  if (entry.is_dir) return dirStatusMap.value.get(entry.rel_path) || ''
+  const st = statusFor(entry.rel_path)
+  return st ? STATUS_CLASS[st.letter] || 'st-mod' : ''
+}
+
 function onRowClick(entry: FsEntry): void {
   if (entry.is_dir) {
     void explorer.toggleDir(entry.rel_path)
@@ -259,8 +283,8 @@ watch(wsRef, (v) => {
           <svg v-if="row.entry.is_dir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
           <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1H3.75ZM9 2.5 12.5 6H9V2.5Z"/></svg>
         </span>
-        <span class="exp-name">{{ row.entry.name }}</span>
-        <span v-if="statusFor(row.entry.rel_path)" class="exp-status" :class="STATUS_CLASS[statusFor(row.entry.rel_path)!.letter] || 'st-mod'">
+        <span class="exp-name" :class="statusClassFor(row.entry)">{{ row.entry.name }}</span>
+        <span v-if="statusFor(row.entry.rel_path)" class="exp-status" :class="statusClassFor(row.entry)">
           {{ statusFor(row.entry.rel_path)!.letter }}
         </span>
       </div>

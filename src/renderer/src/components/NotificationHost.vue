@@ -96,13 +96,13 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
   font-weight: 700;
 }
 .toast.success .toast-icon {
-  color: #3fb950;
+  color: var(--success-fg);
 }
 .toast.error .toast-icon {
-  color: #f85149;
+  color: var(--danger-fg);
 }
 .toast.info .toast-icon {
-  color: #58a6ff;
+  color: var(--accent-fg);
 }
 .toast-msg {
   flex: 1;
@@ -123,51 +123,51 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 2100;
 }
 .card {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-left: 4px solid #58a6ff;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-left: 4px solid var(--accent-fg);
   border-radius: 8px;
   width: min(520px, 92vw);
   max-height: 80vh;
   display: flex;
   flex-direction: column;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 12px 48px var(--shadow-overlay);
   overflow: hidden;
 }
 .card.confirm {
-  border-left-color: #d29922;
+  border-left-color: var(--attention-fg);
 }
 header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 14px 18px;
-  border-bottom: 1px solid #21262d;
-  background: #161b22;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
 }
 .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #58a6ff;
+  background: var(--accent-fg);
   box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.2);
 }
 .card.confirm .dot {
-  background: #d29922;
+  background: var(--attention-fg);
   box-shadow: 0 0 0 4px rgba(210, 153, 34, 0.2);
 }
 header strong {
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .body {
   flex: 1;
@@ -181,20 +181,20 @@ header strong {
   font-family: Menlo, Monaco, monospace;
   font-size: 12px;
   line-height: 1.5;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 18px;
-  border-top: 1px solid #21262d;
-  background: #0d1117;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-base);
 }
 button {
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #e6edf3;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-bright);
   font-size: 12px;
   padding: 7px 14px;
   border-radius: 4px;
@@ -202,18 +202,18 @@ button {
   font-family: inherit;
 }
 button.primary {
-  background: #238636;
-  border-color: #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border-color: var(--success-strong);
+  color: var(--text-on-emphasis);
   font-weight: 600;
 }
 button.primary:hover {
-  background: #2ea043;
+  background: var(--success-strong);
 }
 button.ghost {
   background: transparent;
 }
 button.ghost:hover {
-  background: #21262d;
+  background: var(--bg-muted);
 }
 </style>
