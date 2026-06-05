@@ -291,6 +291,7 @@ function resolveCommand(agentKey: string, override: string): string {
 
 type InjectionStatus = 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
 type KickoffStatus = 'none' | 'pending' | 'sent' | 'failed'
+type PreparationStatus = 'starting' | 'checking-dialog' | 'settling' | 'injecting-role' | 'waiting-agent' | 'ready' | 'failed'
 
 interface ActivePane {
   id: string
@@ -305,6 +306,7 @@ interface ActivePane {
   workspacePath: string
   origin: 'manual' | 'pipeline'
   injectionStatus: InjectionStatus
+  preparationStatus: PreparationStatus
   injectionTimer: number | null
   kickoffStatus: KickoffStatus
   kickoffPrompt: string
@@ -365,6 +367,7 @@ function syncViews(): void {
       status: (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
       error: ref?.error as string | undefined,
       injectionStatus: p.injectionStatus,
+      preparationStatus: p.preparationStatus,
       kickoffStatus: p.kickoffStatus,
       origin: p.origin,
       isCommander: paneIsCommander(p),
@@ -735,6 +738,7 @@ async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<
 
 function scheduleInjection(pane: ActivePane): void {
   pane.injectionStatus = 'scheduled'
+  pane.preparationStatus = 'checking-dialog'
   syncViews()
   const tag = `[pane ${pane.id.slice(0, 8)}]`
   ;(async () => {
@@ -758,6 +762,8 @@ function scheduleInjection(pane: ActivePane): void {
     //    finish rendering their first screen. Shorter after a known dismiss
     //    since the CLI usually transitions to a stable prompt immediately.
     const settleMs = dismissed ? 2500 : ROLE_PROMPT_DELAY_MS
+    pane.preparationStatus = 'settling'
+    syncViews()
     await sleep(settleMs)
     if (!paneAlive(pane.id)) return
 
@@ -765,6 +771,7 @@ function scheduleInjection(pane: ActivePane): void {
     //    will receive role + kickoff together at activation time.
     if (!pane.roleKey) {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
       syncViews()
       pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
       if (pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
@@ -774,6 +781,7 @@ function scheduleInjection(pane: ActivePane): void {
     }
     if (pane.skipRoleInjection) {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
       syncViews()
       pipelineLog(`${tag} ⏸ role deferred (pre-spawn — will inject at stage activation)`)
       return
@@ -781,6 +789,7 @@ function scheduleInjection(pane: ActivePane): void {
     const role = rolesApi.find(pane.roleKey)
     if (!role) {
       pane.injectionStatus = 'failed'
+      pane.preparationStatus = 'failed'
       syncViews()
       pipelineLog(`${tag} ✕ role '${pane.roleKey}' not found in registry`)
       return
@@ -791,6 +800,8 @@ function scheduleInjection(pane: ActivePane): void {
     // for this slot's stage to activate (which for late stages is much later).
     const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting role '${role.label}' (${roleContent.length} chars)`)
+    pane.preparationStatus = 'injecting-role'
+    syncViews()
     await acquireInjectionSlot()
     let ok: boolean
     try {
@@ -802,6 +813,7 @@ function scheduleInjection(pane: ActivePane): void {
       releaseInjectionSlot()
     }
     pane.injectionStatus = ok ? 'sent' : 'failed'
+    pane.preparationStatus = ok ? 'ready' : 'failed'
     syncViews()
     if (ok && pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
       void persistPaneSession(pane, pane.pinnedSessionId)
@@ -821,6 +833,8 @@ function scheduleInjection(pane: ActivePane): void {
     //    the agent's role-acknowledgement output.
     if (pane.kickoffStatus === 'pending') {
       pipelineLog(`${tag} waiting for agent to acknowledge role (up to 30s)`)
+      pane.preparationStatus = 'waiting-agent'
+      syncViews()
       const result = await waitForActivityThenSettle(pane.id, 2500, 30_000)
       if (!paneAlive(pane.id)) return
       if (result === 'no-activity') {
@@ -846,6 +860,7 @@ function scheduleInjection(pane: ActivePane): void {
         }
       }
       pane.kickoffStatus = ok2 ? 'sent' : 'failed'
+      pane.preparationStatus = ok2 ? 'ready' : 'failed'
       syncViews()
       if (!ok2) {
         pipelineLog(`${tag} ✕ kickoff injection failed after ${MAX_KICKOFF_ATTEMPTS} attempts — arming watcher anyway`)
@@ -930,6 +945,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     workspacePath: opts.workspacePath,
     origin: opts.origin,
     injectionStatus: 'pending',
+    preparationStatus: 'starting',
     injectionTimer: null,
     kickoffStatus: opts.kickoffPrompt ? 'pending' : 'none',
     kickoffPrompt: opts.kickoffPrompt ?? '',
@@ -991,9 +1007,19 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       outputLogFile
     })
     if ((ref.status as unknown as string) === 'running') {
+      if (pane.origin === 'manual' && !pane.roleKey && !pane.kickoffPrompt) {
+        pane.injectionStatus = 'skipped'
+        pane.preparationStatus = 'ready'
+        syncViews()
+        if (pane.agentKey === 'claude' && pane.pinnedSessionId) {
+          void persistPaneSession(pane, pane.pinnedSessionId)
+        }
+        return id
+      }
       scheduleInjection(pane)
     } else {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'failed'
     }
   } finally {
     syncViews()
@@ -4133,11 +4159,31 @@ const latestPipelineLog = computed<string>(() => {
 })
 
 function paneSubtitle(p: ActivePane): string {
-  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual`
+  const preparationLabel = panePreparationLabel(p)
+  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual · ${preparationLabel}`
   const stage = stagesApi.stageById.value[p.stageId] ?? { shortTitle: p.stageId }
   const prefix = p.origin === 'pipeline' ? `P${p.stageId} · ` : ''
   const stageLabel = stage.shortTitle || 'manual'
-  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel}`
+  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel} · ${preparationLabel}`
+}
+
+function panePreparationLabel(p: ActivePane): string {
+  switch (p.preparationStatus) {
+    case 'starting':
+      return 'starting CLI'
+    case 'checking-dialog':
+      return 'checking startup dialog'
+    case 'settling':
+      return 'waiting for CLI prompt'
+    case 'injecting-role':
+      return 'injecting role'
+    case 'waiting-agent':
+      return 'waiting for agent'
+    case 'ready':
+      return 'ready'
+    case 'failed':
+      return 'setup failed'
+  }
 }
 
 /** The effective Commander slot for a stage, or null. Commander mode only applies

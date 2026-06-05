@@ -27,6 +27,7 @@ export interface ActivePaneView {
   status: string
   error?: string
   injectionStatus: 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
+  preparationStatus?: 'starting' | 'checking-dialog' | 'settling' | 'injecting-role' | 'waiting-agent' | 'ready' | 'failed'
   kickoffStatus?: 'none' | 'pending' | 'sent' | 'failed'
   origin: 'manual' | 'pipeline'
   /** True when this pane corresponds to a slot marked is_commander=true in
@@ -474,6 +475,27 @@ function injectionLabel(status: ActivePaneView['injectionStatus']): string {
   }
 }
 
+function preparationLabel(status: ActivePaneView['preparationStatus']): string {
+  switch (status) {
+    case 'starting':
+      return 'setup: starting CLI'
+    case 'checking-dialog':
+      return 'setup: checking dialog'
+    case 'settling':
+      return 'setup: waiting prompt'
+    case 'injecting-role':
+      return 'setup: injecting role'
+    case 'waiting-agent':
+      return 'setup: waiting agent'
+    case 'ready':
+      return 'setup: ready'
+    case 'failed':
+      return 'setup: failed'
+    default:
+      return ''
+  }
+}
+
 function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   if (!status || status === 'none') return ''
   switch (status) {
@@ -869,10 +891,10 @@ function onTaskDrop(e: DragEvent): void {
             <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
           </div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-else-if="!p.isMinimized" class="stage-line">
-            manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
           <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
