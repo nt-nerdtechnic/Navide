@@ -18,6 +18,9 @@ const emit = defineEmits<{
 
 const LINE_HEIGHT = 19
 const PAD_LEFT = 8
+const fontZoom = ref(1.0)
+const fontSizePx = computed(() => Math.round(13 * fontZoom.value))
+const lineHeightPx = computed(() => Math.round(LINE_HEIGHT * fontZoom.value))
 
 const model = new TextModel(props.modelValue)
 const undo = new UndoStack()
@@ -59,7 +62,7 @@ const sizerMinWidth = computed(() => {
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
 })
 
-const vs = useVirtualScroll(lineCount, LINE_HEIGHT)
+const vs = useVirtualScroll(lineCount, lineHeightPx)
 const scrollEl = ref<HTMLElement | null>(null)
 const scrollLeftVal = ref(0)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
@@ -84,12 +87,14 @@ function _ensureTokensUpTo(lastLine: number): void {
     const text = i < model.lineCount() ? model.getLine(i) : ''
     const cached = _tokCache[i]
     if (cached && cached.text === text && cached.stateIn === stateIn) {
-      _tokInvalidFrom = model.lineCount() // all subsequent lines are still valid
-      return
+      // Cache hit: propagate state without re-tokenizing this line.
+      // Continue to ensure lines between here and lastLine are computed too.
+      stateIn = cached.stateOut
+    } else {
+      const { tokens, endState } = tok.tokenizeLine(text, stateIn)
+      _tokCache[i] = { text, stateIn, tokens, stateOut: endState }
+      stateIn = endState
     }
-    const { tokens, endState } = tok.tokenizeLine(text, stateIn)
-    _tokCache[i] = { text, stateIn, tokens, stateOut: endState }
-    stateIn = endState
   }
   _tokInvalidFrom = lastLine + 1
 }
@@ -152,7 +157,9 @@ function applyEdit(range: Range, text: string): void {
   // Everything else (delete, multi-line edit, newline) → invalidate for lazy rescan.
   if (isPureInsert && text.indexOf('\n') === -1) {
     const newLen = model.getLine(caret.line).length
-    if (newLen > _maxLineLenCache) _maxLineLenCache = newLen
+    // Only update incrementally when cache is valid; if -1 (invalidated), leave it
+    // so the next sizerMinWidth read triggers a full rescan via _scanMaxLineLen().
+    if (_maxLineLenCache >= 0 && newLen > _maxLineLenCache) _maxLineLenCache = newLen
   } else {
     _maxLineLenCache = -1
   }
@@ -175,8 +182,9 @@ function deleteBackward(): void {
   const c = cursor.value
   if (c.col > 0) {
     const lineText = model.getLine(c.line)
-    // Delete both brackets when cursor is between an auto-inserted pair
-    if (AUTO_PAIRS[lineText[c.col - 1]] === lineText[c.col]) {
+    // Delete both brackets when cursor is between an auto-inserted pair.
+    // Guard c.col < lineText.length prevents undefined===undefined false-positive at EOL.
+    if (c.col < lineText.length && AUTO_PAIRS[lineText[c.col - 1]] === lineText[c.col]) {
       applyEdit({ start: { line: c.line, col: c.col - 1 }, end: { line: c.line, col: c.col + 1 } }, '')
       return
     }
@@ -204,12 +212,37 @@ function afterChange(): void {
   emit('update:modelValue', model.getValue())
   void nextTick(scrollCursorIntoView)
 }
+// Like afterChange() but does NOT emit update:modelValue.
+// Used when the content arrives from the parent prop — emitting back would
+// cause EditorPane.onChange() to fire and mark the file dirty on load.
+function afterExternalChange(): void {
+  version.value++
+  void nextTick(scrollCursorIntoView)
+}
 
 // ── Cursor movement ──────────────────────────────────────────────────────────
 function clampPos(p: Position): Position {
   const line = Math.max(0, Math.min(p.line, model.lineCount() - 1))
   const col = Math.max(0, Math.min(p.col, model.getLine(line).length))
   return { line, col }
+}
+
+// Adjusts a cursor/anchor position after a comment add/remove operation.
+// colDeltas[i] > 0: chars added to line (startLine+i) after indent; < 0: chars removed.
+// Positions inside the indent zone are not shifted.
+function _adjCommentPos(
+  p: Position,
+  startLine: number,
+  indentLens: number[],
+  colDeltas: number[],
+): Position {
+  const li = p.line - startLine
+  if (li < 0 || li >= colDeltas.length || colDeltas[li] === 0) return clampPos(p)
+  const delta = colDeltas[li]
+  const iLen = indentLens[li]
+  if (p.col <= iLen) return clampPos(p)
+  const newCol = delta > 0 ? p.col + delta : Math.max(iLen, p.col + delta)
+  return clampPos({ line: p.line, col: newCol })
 }
 
 function moveCursor(dLine: number, dCol: number, extend: boolean): void {
@@ -236,6 +269,7 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
 
 function moveTo(pos: Position, extend: boolean): void {
   preferredCol = -1
+  ghost.value = null
   startOrClearSelection(extend)
   cursor.value = clampPos(pos)
   void nextTick(scrollCursorIntoView)
@@ -251,6 +285,7 @@ function startOrClearSelection(extend: boolean): void {
 
 function homeKey(extend: boolean): void {
   preferredCol = -1
+  ghost.value = null
   startOrClearSelection(extend)
   const line = model.getLine(cursor.value.line)
   let indent = 0
@@ -259,6 +294,7 @@ function homeKey(extend: boolean): void {
 }
 function endKey(extend: boolean): void {
   preferredCol = -1
+  ghost.value = null
   startOrClearSelection(extend)
   const line = cursor.value.line
   cursor.value = { line, col: model.getLine(line).length }
@@ -330,26 +366,6 @@ function deleteWordRight(): void {
   if (comparePos(start, end) !== 0) applyEdit({ start, end }, '')
 }
 
-function moveLineUpDown(dir: -1 | 1): void {
-  preferredCol = -1
-  const lineNum = cursor.value.line
-  const savedCol = cursor.value.col
-  const targetLine = lineNum + dir
-  if (targetLine < 0 || targetLine >= model.lineCount()) return
-  const curContent = model.getLine(lineNum)
-  const targetContent = model.getLine(targetLine)
-  const minLine = Math.min(lineNum, targetLine)
-  const swapped = dir === -1
-    ? curContent + '\n' + targetContent
-    : targetContent + '\n' + curContent
-  applyEdit(
-    { start: { line: minLine, col: 0 }, end: { line: minLine + 1, col: model.getLine(minLine + 1).length } },
-    swapped,
-  )
-  cursor.value = { line: targetLine, col: Math.min(savedCol, model.getLine(targetLine).length) }
-}
-
-
 // ── Indent / dedent selected lines ───────────────────────────────────────────
 const INDENT = '  '
 
@@ -360,11 +376,12 @@ function indentLines(startLine: number, endLine: number): void {
     INDENT + model.getLine(startLine + i),
   ).join('\n')
   applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, newContent)
-  // Restore selection shifted by INDENT.length on each affected line
-  anchor.value = savedAnchor && savedAnchor.line <= endLine
+  // Restore selection shifted by INDENT.length on each affected line.
+  // Guard: only shift positions within [startLine, endLine], matching dedentLines' anchorIdx logic.
+  anchor.value = savedAnchor && savedAnchor.line >= startLine && savedAnchor.line <= endLine
     ? { line: savedAnchor.line, col: savedAnchor.col + INDENT.length }
     : savedAnchor
-  cursor.value = savedCursor.line <= endLine
+  cursor.value = savedCursor.line >= startLine && savedCursor.line <= endLine
     ? { line: savedCursor.line, col: savedCursor.col + INDENT.length }
     : savedCursor
 }
@@ -377,6 +394,8 @@ function dedentLines(startLine: number, endLine: number): void {
     const line = model.getLine(startLine + i)
     let removed = 0
     while (removed < INDENT.length && line[removed] === ' ') removed++
+    // Tab-indented files: if no spaces found, remove one leading tab
+    if (removed === 0 && line[0] === '\t') removed = 1
     removals.push(removed)
     return line.slice(removed)
   }).join('\n')
@@ -451,9 +470,10 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     e.preventDefault()
     const up = e.key === 'ArrowUp'
-    if (e.altKey && !mod) { moveLineUpDown(up ? -1 : 1) }
+    if (e.altKey && !mod) { if (up) moveLineUp(); else moveLineDown() }
     else if (mod) {
       // Shift+Cmd+Up/Down: select to file start/end (Cmd-only is handled by keybindings)
+      ghost.value = null
       startOrClearSelection(shift)
       preferredCol = -1
       if (up) cursor.value = { line: 0, col: 0 }
@@ -468,7 +488,7 @@ function onKeydown(e: KeyboardEvent): void {
     case 'Home': e.preventDefault(); homeKey(shift); break
     case 'PageUp': case 'PageDown': {
       e.preventDefault()
-      const pageLines = Math.max(1, Math.floor(vs.viewportHeight.value / LINE_HEIGHT) - 1)
+      const pageLines = Math.max(1, Math.floor(vs.viewportHeight.value / lineHeightPx.value) - 1)
       moveCursor(e.key === 'PageUp' ? -pageLines : pageLines, 0, shift)
       break
     }
@@ -486,7 +506,7 @@ function onKeydown(e: KeyboardEvent): void {
       }
       // Smart bracket expansion: pressing Enter between {|}, [|], (|) adds indented inner line
       const EXPAND_PAIRS: Record<string, string> = { '{': '}', '[': ']', '(': ')' }
-      if (!selectionRange() && c.col > 0 && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
+      if (!selectionRange() && c.col > 0 && c.col < curLine.length && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
         applyEdit({ start: c, end: c }, '\n' + indent + INDENT + '\n' + indent)
         cursor.value = { line: c.line + 1, col: indent.length + INDENT.length }
         break
@@ -616,25 +636,29 @@ function toggleLineComment(): void {
   const savedCursor = { ...cursor.value }
   const savedAnchor = anchor.value ? { ...anchor.value } : null
 
+  const indentLens: number[] = []
+  const colDeltas: number[] = []
   const lines: string[] = []
   for (let i = 0; i <= endLine - startLine; i++) {
     const line = model.getLine(startLine + i)
     const indent = line.match(/^(\s*)/)?.[1] ?? ''
     const rest = line.slice(indent.length)
+    indentLens.push(indent.length)
     if (allCommented) {
-      if (rest.startsWith(prefixFull)) lines.push(indent + rest.slice(prefixFull.length))
-      else if (rest === token || rest.startsWith(token + '\t')) lines.push(indent + rest.slice(token.length))
-      else lines.push(line)
+      if (rest.startsWith(prefixFull)) { lines.push(indent + rest.slice(prefixFull.length)); colDeltas.push(-prefixFull.length) }
+      else if (rest === token || rest.startsWith(token + '\t')) { lines.push(indent + rest.slice(token.length)); colDeltas.push(-token.length) }
+      else { lines.push(line); colDeltas.push(0) }
     } else {
       lines.push(rest ? indent + prefixFull + rest : line)
+      colDeltas.push(rest ? prefixFull.length : 0)
     }
   }
   applyEdit(
     { start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
     lines.join('\n'),
   )
-  cursor.value = clampPos(savedCursor)
-  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
+  cursor.value = _adjCommentPos(savedCursor, startLine, indentLens, colDeltas)
+  anchor.value = savedAnchor ? _adjCommentPos(savedAnchor, startLine, indentLens, colDeltas) : null
 }
 
 function addLineComment(): void {
@@ -645,17 +669,21 @@ function addLineComment(): void {
   const endLine = sel ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1)) : cursor.value.line
   const savedCursor = { ...cursor.value }
   const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const indentLens: number[] = []
+  const colDeltas: number[] = []
   const lines: string[] = []
   for (let i = 0; i <= endLine - startLine; i++) {
     const line = model.getLine(startLine + i)
     const indent = line.match(/^(\s*)/)?.[1] ?? ''
     const rest = line.slice(indent.length)
     const isCommented = rest.startsWith(prefixFull) || rest === token || rest.startsWith(token + '\t')
-    lines.push(rest && !isCommented ? indent + prefixFull + rest : line)
+    indentLens.push(indent.length)
+    if (rest && !isCommented) { lines.push(indent + prefixFull + rest); colDeltas.push(prefixFull.length) }
+    else { lines.push(line); colDeltas.push(0) }
   }
   applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, lines.join('\n'))
-  cursor.value = clampPos(savedCursor)
-  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
+  cursor.value = _adjCommentPos(savedCursor, startLine, indentLens, colDeltas)
+  anchor.value = savedAnchor ? _adjCommentPos(savedAnchor, startLine, indentLens, colDeltas) : null
 }
 
 function removeLineComment(): void {
@@ -666,20 +694,55 @@ function removeLineComment(): void {
   const endLine = sel ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1)) : cursor.value.line
   const savedCursor = { ...cursor.value }
   const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const indentLens: number[] = []
+  const colDeltas: number[] = []
   const lines: string[] = []
   for (let i = 0; i <= endLine - startLine; i++) {
     const line = model.getLine(startLine + i)
     const indent = line.match(/^(\s*)/)?.[1] ?? ''
     const rest = line.slice(indent.length)
-    if (rest.startsWith(prefixFull)) lines.push(indent + rest.slice(prefixFull.length))
-    else if (rest === token || rest.startsWith(token + '\t')) lines.push(indent + rest.slice(token.length))
-    else lines.push(line)
+    indentLens.push(indent.length)
+    if (rest.startsWith(prefixFull)) { lines.push(indent + rest.slice(prefixFull.length)); colDeltas.push(-prefixFull.length) }
+    else if (rest === token || rest.startsWith(token + '\t')) { lines.push(indent + rest.slice(token.length)); colDeltas.push(-token.length) }
+    else { lines.push(line); colDeltas.push(0) }
   }
   applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, lines.join('\n'))
+  cursor.value = _adjCommentPos(savedCursor, startLine, indentLens, colDeltas)
+  anchor.value = savedAnchor ? _adjCommentPos(savedAnchor, startLine, indentLens, colDeltas) : null
+}
+
+function transformToUppercase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, model.getValueInRange(sel).toUpperCase())
+}
+function transformToLowercase(): void {
+  const sel = selectionRange()
+  if (!sel) return
+  applyEdit(sel, model.getValueInRange(sel).toLowerCase())
+}
+function trimTrailingWhitespace(): void {
+  const lc = model.lineCount()
+  const lines: string[] = []
+  let changed = false
+  for (let i = 0; i < lc; i++) {
+    const line = model.getLine(i)
+    const trimmed = line.trimEnd()
+    lines.push(trimmed)
+    if (trimmed.length < line.length) changed = true
+  }
+  if (!changed) return
+  // Apply as one edit → one undo entry; cursor clamped to trimmed length if it was in trailing whitespace.
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const last = lc - 1
+  applyEdit(
+    { start: { line: 0, col: 0 }, end: { line: last, col: model.getLine(last).length } },
+    lines.join('\n'),
+  )
   cursor.value = clampPos(savedCursor)
   anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
-
 function deleteLine(): void {
   const sel = selectionRange()
   const startLine = sel ? sel.start.line : cursor.value.line
@@ -698,13 +761,17 @@ function deleteLine(): void {
   if (endLine < total - 1) {
     applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine + 1, col: 0 } }, '')
     cursor.value = clampPos({ line: startLine, col: 0 })
-  } else {
+  } else if (startLine > 0) {
     const prevLen = model.getLine(startLine - 1).length
     applyEdit(
       { start: { line: startLine - 1, col: prevLen }, end: { line: endLine, col: model.getLine(endLine).length } },
       '',
     )
     cursor.value = { line: startLine - 1, col: prevLen }
+  } else {
+    // Deleting all lines from line 0 to end: clear content, leave one empty line.
+    applyEdit({ start: { line: 0, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, '')
+    cursor.value = { line: 0, col: 0 }
   }
   anchor.value = null
 }
@@ -804,6 +871,7 @@ function dedentLine(): void {
 
 function cursorTop(): void {
   anchor.value = null
+  ghost.value = null
   cursor.value = { line: 0, col: 0 }
   preferredCol = -1
   void nextTick(scrollCursorIntoView)
@@ -811,6 +879,7 @@ function cursorTop(): void {
 
 function cursorBottom(): void {
   anchor.value = null
+  ghost.value = null
   const lastLine = model.lineCount() - 1
   cursor.value = { line: lastLine, col: model.getLine(lastLine).length }
   preferredCol = -1
@@ -902,7 +971,7 @@ function posFromMouse(e: MouseEvent): Position {
   const rect = el.getBoundingClientRect()
   const y = e.clientY - rect.top + el.scrollTop
   const x = e.clientX - rect.left + el.scrollLeft - gutterWidth.value - PAD_LEFT
-  const line = Math.max(0, Math.min(Math.floor(y / LINE_HEIGHT), model.lineCount() - 1))
+  const line = Math.max(0, Math.min(Math.floor(y / lineHeightPx.value), model.lineCount() - 1))
   const col = Math.max(0, Math.min(Math.round(x / charWidth.value), model.getLine(line).length))
   return { line, col }
 }
@@ -951,11 +1020,15 @@ function scrollCursorIntoView(): void {
   const el = scrollEl.value
   if (!el) return
   // Vertical
-  const top = cursor.value.line * LINE_HEIGHT
+  const top = cursor.value.line * lineHeightPx.value
   if (top < el.scrollTop) el.scrollTop = top
-  else if (top + LINE_HEIGHT > el.scrollTop + el.clientHeight) {
-    el.scrollTop = top + LINE_HEIGHT - el.clientHeight
+  else if (top + lineHeightPx.value > el.scrollTop + el.clientHeight) {
+    el.scrollTop = top + lineHeightPx.value - el.clientHeight
   }
+  // Keep vs.scrollTop in sync so the virtual-scroll window updates immediately
+  // (scrollLine{Up,Down} do the same explicit assignment; relying solely on the
+  // async 'scroll' event risks a one-frame paint with stale virtual rows).
+  vs.scrollTop.value = el.scrollTop
   // Horizontal: keep caret within the visible content area
   const caretX = xFor(cursor.value.col)
   const MARGIN = 40
@@ -972,7 +1045,7 @@ function xFor(col: number): number {
 }
 const caretStyle = computed(() => ({
   left: xFor(cursor.value.col) + 'px',
-  height: LINE_HEIGHT + 'px',
+  height: lineHeightPx.value + 'px',
 }))
 
 interface SelRect { left: number; top: number; width: number }
@@ -982,13 +1055,17 @@ const selectionRects = computed<SelRect[]>(() => {
   const vStart = vs.startLine.value
   const vEnd = vs.endLine.value
   const rects: SelRect[] = []
-  for (let line = Math.max(sel.start.line, vStart); line <= Math.min(sel.end.line, vEnd - 1); line++) {
+  // When selection ends at col 0 of a line, that line has no highlighted content.
+  // Use sel.end.line - 1 as the last highlighted line to avoid a misleading 2px sliver.
+  const lastHighlightLine = sel.end.col === 0 ? sel.end.line - 1 : sel.end.line
+  for (let line = Math.max(sel.start.line, vStart); line <= Math.min(lastHighlightLine, vEnd - 1); line++) {
     const lineLen = model.getLine(line).length
     const startCol = line === sel.start.line ? sel.start.col : 0
+    // endCol: when sel.end.col===0, lastHighlightLine < sel.end.line so this always yields lineLen ✓
     const endCol = line === sel.end.line ? sel.end.col : lineLen
     const left = xFor(startCol)
-    const width = Math.max(2, (endCol - startCol) * charWidth.value + (line < sel.end.line ? charWidth.value : 0))
-    rects.push({ left, top: line * LINE_HEIGHT, width })
+    const width = Math.max(2, (endCol - startCol) * charWidth.value + (line < lastHighlightLine ? charWidth.value : 0))
+    rects.push({ left, top: line * lineHeightPx.value, width })
   }
   return rects
 })
@@ -1001,13 +1078,15 @@ const decorationRects = computed<DecRect[]>(() => {
     if (d.type !== 'highlight') continue
     const vStart = vs.startLine.value
     const vEnd = vs.endLine.value
-    for (let line = Math.max(d.range.start.line, vStart); line <= Math.min(d.range.end.line, vEnd - 1); line++) {
+    // Same fix as selectionRects: a range ending at col=0 has no content on that last line.
+    const lastHL = d.range.end.col === 0 ? d.range.end.line - 1 : d.range.end.line
+    for (let line = Math.max(d.range.start.line, vStart); line <= Math.min(lastHL, vEnd - 1); line++) {
       const startCol = line === d.range.start.line ? d.range.start.col : 0
       const endCol = line === d.range.end.line ? d.range.end.col : model.getLine(line).length
       rects.push({
         id: `${d.id}:${line}`,
         left: xFor(startCol),
-        top: line * LINE_HEIGHT,
+        top: line * lineHeightPx.value,
         width: Math.max(4, (endCol - startCol) * charWidth.value),
         className: d.className,
       })
@@ -1024,12 +1103,14 @@ const ghostStyle = computed(() => {
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 function measureChar(): void {
   const probe = document.createElement('span')
-  probe.style.cssText = 'position:absolute;visibility:hidden;font:13px/19px ui-monospace,Menlo,monospace;white-space:pre'
+  probe.style.cssText = `position:absolute;visibility:hidden;font-size:${fontSizePx.value}px;font-family:ui-monospace,Menlo,monospace;white-space:pre`
   probe.textContent = '0'.repeat(50)
   document.body.appendChild(probe)
   charWidth.value = probe.getBoundingClientRect().width / 50
   probe.remove()
 }
+
+watch(fontZoom, () => void nextTick(measureChar))
 
 function onScroll(e: Event): void {
   vs.onScroll(e)
@@ -1074,7 +1155,7 @@ watch(() => props.modelValue, (v) => {
     _tokInvalidFrom = 0
     cursor.value = clampPos(cursor.value)
     anchor.value = null
-    afterChange()
+    afterExternalChange()
   }
 })
 
@@ -1083,7 +1164,7 @@ watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
 function getValue(): string { return model.getValue() }
-function setValue(v: string): void { model.setValue(v); _maxLineLenCache = -1; _tokCache = []; _tokInvalidFrom = 0; cursor.value = { line: 0, col: 0 }; anchor.value = null; afterChange() }
+function setValue(v: string): void { model.setValue(v); _maxLineLenCache = -1; _tokCache = []; _tokInvalidFrom = 0; cursor.value = { line: 0, col: 0 }; anchor.value = null; afterExternalChange() }
 function getSelectionRange(): Range | null { return selectionRange() }
 function getSelectionText(): string {
   const sel = selectionRange()
@@ -1092,13 +1173,27 @@ function getSelectionText(): string {
 function getCursor(): Position { return cursor.value }
 function revealLine(line: number): void {
   // `line` is 1-based (search results / external callers); cursor is 0-based.
+  ghost.value = null
   cursor.value = clampPos({ line: Math.max(0, line - 1), col: 0 })
   void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
 }
 function revealPosition(line: number, col: number): void {
   // 0-based; used internally by find navigation.
+  ghost.value = null
   cursor.value = clampPos({ line, col })
   void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
+}
+function scrollLineUp(): void {
+  const el = scrollEl.value
+  if (!el) return
+  el.scrollTop = Math.max(0, el.scrollTop - lineHeightPx.value)
+  vs.scrollTop.value = el.scrollTop
+}
+function scrollLineDown(): void {
+  const el = scrollEl.value
+  if (!el) return
+  el.scrollTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + lineHeightPx.value)
+  vs.scrollTop.value = el.scrollTop
 }
 function setSelection(start: Position, end: Position): void {
   anchor.value = clampPos(start)
@@ -1118,6 +1213,10 @@ function acceptGhost(): void {
   insertText(text)
 }
 
+function zoomIn(): void { fontZoom.value = Math.min(2.0, Math.round((fontZoom.value + 0.1) * 10) / 10) }
+function zoomOut(): void { fontZoom.value = Math.max(0.5, Math.round((fontZoom.value - 0.1) * 10) / 10) }
+function zoomReset(): void { fontZoom.value = 1.0 }
+
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
@@ -1126,16 +1225,19 @@ defineExpose({
   moveLineUp, moveLineDown, getWordAtCursor,
   jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
-  setSelection,
+  scrollLineUp, scrollLineDown,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace,
+  setSelection, zoomIn, zoomOut, zoomReset,
+  undo: doUndo, redo: doRedo, selectAll,
 })
 </script>
 
 <template>
-  <div class="editor-view" @mousedown="onMousedown" @mousemove="onMousemove">
+  <div class="editor-view" :style="{ '--ev-fs': fontSizePx + 'px', '--ev-lh': lineHeightPx + 'px' }" @mousedown="onMousedown" @mousemove="onMousemove">
     <textarea
       ref="textareaEl"
       class="ev-input"
-      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: cursor.line * LINE_HEIGHT - vs.scrollTop.value + 'px' }"
+      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: cursor.line * lineHeightPx - vs.scrollTop.value + 'px' }"
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
@@ -1152,7 +1254,7 @@ defineExpose({
             v-for="(r, i) in selectionRects"
             :key="'sel' + i"
             class="ev-sel"
-            :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: LINE_HEIGHT + 'px' }"
+            :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: lineHeightPx + 'px' }"
           />
           <!-- find / decoration highlights -->
           <div
@@ -1160,14 +1262,14 @@ defineExpose({
             :key="r.id"
             class="ev-dec-highlight"
             :class="r.className"
-            :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: LINE_HEIGHT + 'px' }"
+            :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: lineHeightPx + 'px' }"
           />
           <!-- lines -->
           <div
             v-for="rl in visibleLines"
             :key="rl.index"
             class="ev-line"
-            :style="{ top: (rl.index * LINE_HEIGHT - vs.offsetY.value) + 'px', height: LINE_HEIGHT + 'px' }"
+            :style="{ top: (rl.index * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
           >
             <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
             <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px' }"><span
@@ -1177,12 +1279,12 @@ defineExpose({
             >{{ s.text }}</span></span>
           </div>
           <!-- caret -->
-          <div class="ev-caret" :style="{ left: caretStyle.left, top: (cursor.line * LINE_HEIGHT - vs.offsetY.value) + 'px', height: caretStyle.height }" />
+          <div class="ev-caret" :style="{ left: caretStyle.left, top: (cursor.line * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }" />
           <!-- ghost text -->
           <div
             v-if="ghost && ghostStyle"
             class="ev-ghost"
-            :style="{ left: ghostStyle.left, top: (ghost.pos.line * LINE_HEIGHT - vs.offsetY.value) + 'px' }"
+            :style="{ left: ghostStyle.left, top: (ghost.pos.line * lineHeightPx - vs.offsetY.value) + 'px' }"
           >{{ ghost.text }}</div>
         </div>
       </div>
@@ -1198,7 +1300,9 @@ defineExpose({
   overflow: hidden;
   background: var(--bg-base);
   color: var(--text-primary);
-  font: 13px/19px ui-monospace, Menlo, Consolas, monospace;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--ev-fs, 13px);
+  line-height: var(--ev-lh, 19px);
 }
 .ev-scroll {
   position: absolute;

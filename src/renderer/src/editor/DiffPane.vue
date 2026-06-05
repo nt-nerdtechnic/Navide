@@ -29,7 +29,7 @@ function jumpToHunk(idx: number): void {
   if (!els.length) return
   const clamped = Math.max(0, Math.min(idx, els.length - 1))
   currentHunkIdx.value = clamped
-  els[clamped]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  els[clamped]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function prevHunk(): void { jumpToHunk(currentHunkIdx.value <= 0 ? 0 : currentHunkIdx.value - 1) }
@@ -160,7 +160,7 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
         <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">重新載入</button>
       </div>
       <div v-else class="dp-hunks">
-        <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dp-hunk">
+        <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dp-hunk" :class="{ active: hi === currentHunkIdx }">
           <div class="dp-hunk-head">
             <span class="dp-range">{{ hunk.header }}</span>
             <span class="dp-actions">
@@ -259,6 +259,7 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
 .dp-msg.err { color: var(--danger-fg, #f85149); }
 
 .dp-hunk { border-bottom: 1px solid var(--border-muted); }
+.dp-hunk.active { outline: 1px solid var(--accent-emphasis, #1f6feb); outline-offset: -1px; }
 .dp-hunk-head {
   display: flex;
   align-items: center;

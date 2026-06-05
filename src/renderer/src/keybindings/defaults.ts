@@ -8,7 +8,8 @@ export const defaults: KeybindingRule[] = [
   // ── Workbench ────────────────────────────────────────────────────────────
   { key: 'cmd+shift+f', command: 'workbench.action.findInFiles' },
   { key: 'cmd+,',       command: 'workbench.action.openSettings' },
-  { key: 'cmd+w',       command: 'workbench.action.closeWindow' },
+  { key: 'cmd+w',       command: 'workbench.action.closeActiveEditor', when: 'editorOpen && !modalOpen' },
+  { key: 'cmd+shift+s', command: 'workbench.action.saveAll',             when: 'editorOpen' },
   { key: 'escape',      command: 'workbench.action.closeModal', when: 'modalOpen' },
 
   // ── Editor ───────────────────────────────────────────────────────────────
@@ -41,10 +42,22 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+[',          command: 'editor.action.outdentLines',       when: 'editorTextFocus' },
   { key: 'cmd+up',         command: 'editor.action.cursorTop',          when: 'editorTextFocus' },
   { key: 'cmd+down',       command: 'editor.action.cursorBottom',       when: 'editorTextFocus' },
+  { key: 'ctrl+up',        command: 'editor.action.scrollLineUp',       when: 'editorTextFocus' },
+  { key: 'ctrl+down',      command: 'editor.action.scrollLineDown',     when: 'editorTextFocus' },
 
-  { key: 'cmd+k cmd+c', command: 'editor.action.addLineComment',    when: 'editorTextFocus' },
-  { key: 'cmd+k cmd+u', command: 'editor.action.removeLineComment', when: 'editorTextFocus' },
+  { key: 'cmd+k cmd+c', command: 'editor.action.addLineComment',         when: 'editorTextFocus' },
+  { key: 'cmd+k cmd+u', command: 'editor.action.removeLineComment',      when: 'editorTextFocus' },
+  { key: 'cmd+k cmd+x', command: 'editor.action.trimTrailingWhitespace', when: 'editorTextFocus' },
+  { key: 'cmd+k cmd+m', command: 'workbench.action.changeLanguageMode',    when: 'editorOpen' },
+  { key: 'cmd+k cmd+s', command: 'workbench.action.openKeyboardShortcuts' },
+  { key: 'cmd+k cmd+t', command: 'workbench.action.selectTheme' },
+  { key: 'cmd+=',       command: 'editor.action.fontZoomIn',    when: 'editorOpen' },
+  { key: 'cmd+-',       command: 'editor.action.fontZoomOut',   when: 'editorOpen' },
+  { key: 'cmd+0',       command: 'editor.action.fontZoomReset', when: 'editorOpen' },
+  { key: 'f3',          command: 'editor.action.nextMatch',          when: 'findOpen' },
+  { key: 'shift+f3',    command: 'editor.action.prevMatch',          when: 'findOpen' },
 
+  { key: 'cmd+n',       command: 'workbench.action.newFile' },
   { key: 'cmd+shift+o', command: 'workbench.action.gotoSymbol', when: 'editorOpen' },
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
   { key: 'f1',          command: 'workbench.action.showCommands' },
@@ -60,4 +73,7 @@ export const defaults: KeybindingRule[] = [
   // ── Editor tabs ──────────────────────────────────────────────────────────────
   { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },
   { key: 'ctrl+shift+tab', command: 'workbench.action.openPreviousEditor' },
+
+  // ── AI Chat ──────────────────────────────────────────────────────────────────
+  { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },
 ]

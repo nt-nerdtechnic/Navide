@@ -908,35 +908,56 @@ async def apply_patch(
     return {"ok": True}
 
 
+def _parse_conflict_files(output: str) -> list[str]:
+    """Extract conflicted filenames from git merge output."""
+    import re
+    files = []
+    for line in output.splitlines():
+        m = re.search(r"CONFLICT.*Merge conflict in (.+)", line)
+        if m:
+            files.append(m.group(1).strip())
+    return files
+
+
 async def merge_branch(workspace_path: str, branch: str) -> dict[str, Any]:
     """Merge *branch* into the current branch (--no-ff to always create a merge commit)."""
     if err := _validate_ref_name(branch, "branch name"):
-        return {"ok": False, "output": "", "error": err}
+        return {"ok": False, "output": "", "error": err, "conflict_files": []}
     rc, out, stderr = await _run(["git", "merge", "--no-ff", "--", branch.strip()], workspace_path)
     output = (out + stderr).strip()
-    return {"ok": rc == 0, "output": output, "error": stderr.strip() if rc != 0 else ""}
+    conflict_files = _parse_conflict_files(output) if rc != 0 else []
+    return {
+        "ok": rc == 0,
+        "output": output,
+        "error": stderr.strip() if rc != 0 else "",
+        "conflict_files": conflict_files,
+    }
 
 
 async def merge_into(workspace_path: str, target: str) -> dict[str, Any]:
-    """Switch to *target*, merge current branch into it, stay on *target*."""
+    """Switch to *target*, merge current branch into it, stay on *target*.
+
+    On conflict the merge is left in-progress so the caller can decide whether
+    to abort or resolve manually.  The original source branch is returned so
+    the UI can inform the user of the branch switch that already occurred.
+    """
     if err := _validate_branch_name(target):
-        return {"ok": False, "output": "", "error": err}
+        return {"ok": False, "output": "", "error": err, "conflict_files": [], "source_branch": ""}
     rc, out, _ = await _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], workspace_path)
     if rc != 0:
-        return {"ok": False, "output": "", "error": "could not determine current branch"}
+        return {"ok": False, "output": "", "error": "could not determine current branch", "conflict_files": [], "source_branch": ""}
     source = out.strip()
     if source == target:
-        return {"ok": False, "output": "", "error": "already on target branch"}
+        return {"ok": False, "output": "", "error": "already on target branch", "conflict_files": [], "source_branch": source}
     rc, _, stderr = await _run(["git", "switch", "--", target], workspace_path)
     if rc != 0:
-        return {"ok": False, "output": "", "error": stderr.strip()}
+        return {"ok": False, "output": "", "error": stderr.strip(), "conflict_files": [], "source_branch": source}
     rc, out, stderr = await _run(["git", "merge", "--no-ff", "--", source], workspace_path)
     output = (out + stderr).strip()
+    conflict_files = _parse_conflict_files(output) if rc != 0 else []
     if rc != 0:
-        await _run(["git", "merge", "--abort"], workspace_path)
-        await _run(["git", "switch", "--", source], workspace_path)
-        return {"ok": False, "output": output, "error": stderr.strip()}
-    return {"ok": True, "output": output, "error": ""}
+        return {"ok": False, "output": output, "error": stderr.strip(), "conflict_files": conflict_files, "source_branch": source}
+    return {"ok": True, "output": output, "error": "", "conflict_files": [], "source_branch": source}
 
 
 async def abort_operation(workspace_path: str, op: str) -> dict[str, Any]:

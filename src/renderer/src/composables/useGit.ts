@@ -420,19 +420,21 @@ export function useGit(
     return resp.ok && resp.payload?.ok ? (resp.payload.hunks ?? []) : []
   }
 
-  async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.merge', { workspace_path: ws, branch })
+    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch })
     if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
-  async function mergeInto(target: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function mergeInto(target: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[]; source_branch?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.merge_into', { workspace_path: ws, target })
+    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
     if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 

@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (e: 'changes-count', n: number): void
   (e: 'open-workspace', path: string): void
   (e: 'open-file', payload: { filepath: string; name: string }): void
+  (e: 'open-conflict', payload: { filepath: string; name: string }): void
 }>()
 
 const {
@@ -376,12 +377,35 @@ async function doClone(): Promise<void> {
 
 // ── abort in-progress operation ──────────────────────────────────────────────────
 const opInProgress = computed(() => gitStatus.value?.operation_in_progress ?? '')
+const conflictFileCount = computed(() => {
+  const staged = gitStatus.value?.staged ?? []
+  const unstaged = gitStatus.value?.unstaged ?? []
+  return [...staged, ...unstaged].filter((f) => f.status === 'U').length
+})
 async function doAbort(): Promise<void> {
   const op = opInProgress.value
   if (!op) return
   const r = await abortOperation(op)
   if (!r.ok) notifyToast(r.error || 'abort 失敗', { type: 'error' })
 }
+
+// ── 所有衝突解完後自動偵測並預填 commit message ──────────────────────────────────
+// Only stage check removed: accepting "ours" resolves conflicts without adding staged diff vs HEAD
+const allConflictsResolved = computed(() =>
+  opInProgress.value === 'merge' && conflictFileCount.value === 0,
+)
+
+watch(allConflictsResolved, async (val) => {
+  if (!val || commitMessage.value) return
+  // 讀 .git/MERGE_MSG 預填
+  const resp = await props.backend.send<{ ok: boolean; content: string }>(
+    'fs.read_file',
+    { workspace_path: props.workspacePath, rel_path: '.git/MERGE_MSG' },
+  )
+  if (resp.ok && resp.payload?.ok && resp.payload.content) {
+    commitMessage.value = resp.payload.content.trim()
+  }
+})
 
 // ── commit graph (DAG lane layout) ───────────────────────────────────────────────
 const GRAPH_LANE_W = 14 // px per lane column
@@ -414,7 +438,13 @@ const commitMessage = ref('')
 const commitError = ref('')
 const amendMode = ref(false)
 const showCommitMenu = ref(false)
-const canCommit = computed(() => hasCommittable.value && commitMessage.value.trim().length > 0 && !isCommitting.value)
+// During a merge where all conflicts are resolved, git commit works even with
+// empty staged diff (e.g. "Accept Ours" keeps HEAD content, no diff to show).
+const canCommit = computed(() =>
+  (hasCommittable.value || allConflictsResolved.value) &&
+  commitMessage.value.trim().length > 0 &&
+  !isCommitting.value,
+)
 
 const commitInputEl = ref<HTMLTextAreaElement | null>(null)
 function autoGrowCommit(): void {
@@ -591,17 +621,51 @@ async function doRebase(branch: string): Promise<void> {
 }
 
 const mergeError = ref(''), mergeOutput = ref('')
+const showMergeConflictModal = ref(false)
+const mergeConflictFiles = ref<string[]>([])
+const mergeConflictContext = ref('')  // describes which branch was merged into which
+
+function _handleMergeResult(r: { ok: boolean; output?: string; error?: string; conflict_files?: string[] }): void {
+  mergeOutput.value = r.output || ''
+  if (!r.ok) {
+    const files = r.conflict_files ?? []
+    if (files.length > 0) {
+      mergeConflictFiles.value = files
+      showMergeConflictModal.value = true
+    } else {
+      mergeError.value = r.error || 'merge failed'
+    }
+  }
+}
+
 async function doMerge(branch: string): Promise<void> {
   mergeError.value = ''; mergeOutput.value = ''
   const r = await mergeBranch(branch)
-  mergeOutput.value = r.output || ''; if (!r.ok) mergeError.value = r.error || 'merge failed'
+  _handleMergeResult(r)
 }
 
 async function doMergeInto(target: string): Promise<void> {
   mergeError.value = ''; mergeOutput.value = ''
   ctxMenu.value.show = false
   const r = await mergeInto(target)
-  mergeOutput.value = r.output || ''; if (!r.ok) mergeError.value = r.error || 'merge failed'
+  if (!r.ok && (r.conflict_files ?? []).length > 0) {
+    mergeConflictContext.value = `已切換至 ${target}，合併 ${(r as any).source_branch || ''} 時發生衝突`
+  }
+  _handleMergeResult(r)
+}
+
+async function doConflictAbort(): Promise<void> {
+  const r = await abortOperation('merge')
+  if (!r.ok) notifyToast(r.error || 'abort 失敗', { type: 'error' })
+  showMergeConflictModal.value = false
+  mergeConflictFiles.value = []
+  mergeConflictContext.value = ''
+}
+
+function doConflictKeep(): void {
+  showMergeConflictModal.value = false
+  mergeConflictFiles.value = []
+  mergeConflictContext.value = ''
 }
 
 // ── stash ─────────────────────────────────────────────────────────────────────
@@ -739,9 +803,24 @@ function toggleDiff(path: string, staged: boolean): void {
 // File-name interaction: single click toggles inline blame; double click opens
 // the standalone diff window. A short timer distinguishes the two (a dblclick
 // also fires two clicks, so the pending single-click action is cancelled).
+function isConflictFile(path: string): boolean {
+  const allFiles = [
+    ...(gitStatus.value?.staged ?? []),
+    ...(gitStatus.value?.unstaged ?? []),
+  ]
+  return allFiles.some((f) => f.path === path && f.status === 'U')
+}
+
 let fileClickTimer: ReturnType<typeof setTimeout> | null = null
 function onFileClick(path: string, staged: boolean): void {
-  if (props.embedded) { toggleDiff(path, staged); return }
+  if (props.embedded) {
+    if (isConflictFile(path)) {
+      emit('open-conflict', { filepath: path, name: fileName(path) })
+      return
+    }
+    toggleDiff(path, staged)
+    return
+  }
   if (fileClickTimer) return
   fileClickTimer = setTimeout(() => {
     fileClickTimer = null
@@ -1001,8 +1080,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
 
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
-      <div v-if="opInProgress" class="op-banner">
-        <span class="op-text">⚠ {{ opInProgress }} 進行中</span>
+      <!-- All-conflicts-resolved banner -->
+      <div v-if="allConflictsResolved" class="op-banner op-banner-ready">
+        <span class="op-text">✓ 所有衝突已解決，請提交 merge commit</span>
+        <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">前往提交</button>
+      </div>
+      <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
+      <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': opInProgress === 'merge' && conflictFileCount > 0 }">
+        <span class="op-text">
+          ⚠ {{ opInProgress }} 進行中
+          <template v-if="opInProgress === 'merge' && conflictFileCount > 0">・{{ conflictFileCount }} 個衝突檔案</template>
+        </span>
         <button class="op-abort-btn" @click="doAbort">Abort {{ opInProgress }}</button>
       </div>
 
@@ -1200,6 +1288,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
           <button v-if="hasChanges" class="sec-btn" title="Save Draft" @click="openStashPrompt">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
+        </div>
+      </div>
+
+      <!-- Merge conflict modal -->
+      <div v-if="showMergeConflictModal" class="merge-conflict-box">
+        <div class="clean-title">合併衝突（{{ mergeConflictFiles.length }} 個檔案）</div>
+        <div v-if="mergeConflictContext" class="merge-conflict-context">{{ mergeConflictContext }}</div>
+        <div v-for="f in mergeConflictFiles" :key="f" class="clean-file conflict-file">{{ f }}</div>
+        <div class="merge-conflict-actions">
+          <button class="btn-danger" @click="doConflictAbort">Abort merge</button>
+          <button class="btn-primary" @click="doConflictKeep">繼續解衝突</button>
         </div>
       </div>
 
@@ -1846,6 +1945,15 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; text-transform: capitalize;
 }
 .op-abort-btn:hover { background: #f8514933; }
+.op-banner-conflict { background: #1a0f00; border-bottom-color: #d2922633; }
+.op-banner-conflict .op-text { color: var(--warning-fg, #d29922); }
+.op-banner-ready { background: #0d1f12; border-bottom-color: #3fb95033; }
+.op-banner-ready .op-text { color: var(--success-fg, #3fb950); font-weight: 600; }
+.op-commit-btn {
+  background: #3fb95022; color: var(--success-fg, #3fb950); border: 1px solid var(--success-fg, #3fb950);
+  border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; margin-left: auto;
+}
+.op-commit-btn:hover { background: #3fb95033; }
 .btn-primary {
   background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);
   border-radius: 5px; font-size: 12px; padding: 5px 10px; cursor: pointer;
@@ -2271,6 +2379,16 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .config-val.clickable { cursor: pointer; border-radius: 3px; padding: 1px 4px; margin: -1px -4px; }
 .config-val.clickable:hover { background: #1c2330; color: var(--text-on-emphasis); }
 .config-inline-input { flex: 1; min-width: 0; }
+
+/* ── Merge conflict modal ───────────────────────────────────────────────────── */
+.merge-conflict-box {
+  margin: 4px 8px; background: #1a0f00; border: 1px solid var(--warning-fg, #d29922);
+  border-radius: 4px; padding: 8px 10px; font-size: 11px;
+}
+.merge-conflict-box .clean-title { color: var(--warning-fg, #d29922); }
+.merge-conflict-context { color: var(--text-muted); font-size: 10px; margin-bottom: 4px; }
+.conflict-file { color: var(--warning-fg, #d29922) !important; opacity: 0.9; }
+.merge-conflict-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
 
 /* ── Clean confirm ──────────────────────────────────────────────────────────── */
 .clean-box {

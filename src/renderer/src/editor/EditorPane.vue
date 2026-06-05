@@ -44,7 +44,8 @@ const loaded = ref(false)
 const editorRef = ref<InstanceType<typeof EditorView> | null>(null)
 
 const model = 'llama3.2' // analyzer's default; rewrite/complete proxy to local LLM
-const lang = computed(() => props.name.split('.').pop() ?? '')
+const langOverride = ref<string | null>(null)
+const lang = computed(() => langOverride.value ?? (props.name.split('.').pop() ?? ''))
 
 const LANG_MAP: Record<string, string> = {
   ts: 'TypeScript', tsx: 'TypeScript JSX', js: 'JavaScript', jsx: 'JavaScript JSX',
@@ -102,16 +103,18 @@ function onChange(v: string): void {
 
 async function save(): Promise<void> {
   if (!dirty.value) return
+  const snapshot = content.value
   const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
     workspace_path: props.workspacePath,
     rel_path: props.relPath,
-    content: content.value,
+    content: snapshot,
   })
   if (!resp.payload?.ok) {
     void alert(resp.payload?.error || '存檔失敗', { title: '存檔錯誤' })
     return
   }
-  dirty.value = false
+  // Only clear dirty when no further edits landed while the request was in-flight.
+  if (content.value === snapshot) dirty.value = false
   toast('已存檔', { type: 'success' })
 }
 
@@ -190,7 +193,9 @@ function isWordBoundary(haystack: string, matchStart: number, matchLen: number):
 function queryIsAllWord(q: string): boolean { return /^[a-zA-Z0-9_]+$/.test(q) }
 
 watch([findQuery, findCase, findWholeWord], () => { if (findOpen.value) computeMatches() })
-watch(content, () => { if (findOpen.value && findQuery.value) computeMatches() })
+// Content changed while find is open → recompute highlights but don't scroll/steal focus.
+// The user may be editing in the editor itself; navigating to a match would be disruptive.
+watch(content, () => { if (findOpen.value && findQuery.value) computeMatches({ navigate: false }) })
 
 // Sync findOpen/editorTextFocus to keybinding context so when-clauses work.
 watch(findOpen, (v) => {
@@ -202,8 +207,10 @@ watch(() => props.active, (active) => {
     setContext('findOpen', false)
     setContext('editorTextFocus', false)
   } else {
-    // Restore find context when this tab becomes active again
-    setContext('findOpen', findOpen.value)
+    // Restore find context in nextTick so the deactivating tab's synchronous
+    // context clear (above) always runs before the new tab's restore, regardless
+    // of Vue watcher order (which depends on component mount order).
+    void nextTick(() => setContext('findOpen', findOpen.value))
   }
 })
 
@@ -223,7 +230,7 @@ function closeFind(): void {
   editorRef.value?.setDecorations([])
   editorRef.value?.focus()
 }
-function computeMatches(): void {
+function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void {
   const q = findQuery.value
   if (!q) {
     findMatches.value = []
@@ -250,7 +257,7 @@ function computeMatches(): void {
   findMatches.value = matches
   if (findIdx.value < 0 || findIdx.value >= matches.length) findIdx.value = matches.length > 0 ? 0 : -1
   updateFindDecorations()
-  if (findIdx.value >= 0) goToMatch(findIdx.value)
+  if (navigate && findIdx.value >= 0) goToMatch(findIdx.value)
 }
 function updateFindDecorations(): void {
   editorRef.value?.setDecorations(findMatches.value.map((m, i) => ({
@@ -264,7 +271,13 @@ function goToMatch(idx: number): void {
   findIdx.value = idx
   updateFindDecorations()
   const m = findMatches.value[idx]
-  if (m) editorRef.value?.revealPosition(m.line, m.startCol)
+  if (m) {
+    editorRef.value?.revealPosition(m.line, m.startCol)
+    // revealPosition schedules an async focus() on the editor textarea.
+    // Queue a later microtask to give focus back to the find input so the user
+    // can keep pressing Enter/Shift+Enter without re-clicking the search box.
+    if (findOpen.value) void Promise.resolve().then(() => findInputEl.value?.focus())
+  }
 }
 function nextMatch(): void {
   if (!findMatches.value.length) return
@@ -336,6 +349,10 @@ async function requestGhost(): Promise<void> {
   })
   ghostBusy.value = false
   if (resp.payload?.ok && resp.payload.text) {
+    // Guard: cursor may have moved while waiting for the AI response.
+    // Showing ghost text at a different position than where it was computed is wrong.
+    const newCur = editorRef.value?.getCursor()
+    if (!newCur || newCur.line !== cur.line || newCur.col !== cur.col) return
     editorRef.value?.setGhost(resp.payload.text)
     editorRef.value?.focus()
   } else {
@@ -393,6 +410,11 @@ function indentLine(): void { editorRef.value?.indentLine() }
 function dedentLine(): void { editorRef.value?.dedentLine() }
 function cursorTop(): void { editorRef.value?.cursorTop() }
 function cursorBottom(): void { editorRef.value?.cursorBottom() }
+function scrollLineUp(): void { editorRef.value?.scrollLineUp() }
+function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
+function transformToUppercase(): void { editorRef.value?.transformToUppercase() }
+function transformToLowercase(): void { editorRef.value?.transformToLowercase() }
+function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 
 function selectNextOccurrence(): void {
   const curSel = editorRef.value?.getSelectionText() ?? ''
@@ -435,13 +457,24 @@ function selectAllOccurrences(): void {
   void nextTick(() => { findInputEl.value?.focus(); findInputEl.value?.select() })
 }
 
+function setLanguage(l: string): void { langOverride.value = l || null }
+function zoomIn(): void { editorRef.value?.zoomIn() }
+function zoomOut(): void { editorRef.value?.zoomOut() }
+function zoomReset(): void { editorRef.value?.zoomReset() }
+function undo(): void { editorRef.value?.undo() }
+function redo(): void { editorRef.value?.redo() }
+function selectAll(): void { editorRef.value?.selectAll() }
+
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
   toggleLineComment, addLineComment, removeLineComment, jumpToLine,
   deleteLine, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
-  indentLine, dedentLine, cursorTop, cursorBottom,
+  indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
+  transformToUppercase, transformToLowercase, trimTrailingWhitespace,
   selectNextOccurrence, selectAllOccurrences,
+  setLanguage, zoomIn, zoomOut, zoomReset,
+  undo, redo, selectAll,
   getContent: () => content.value,
 })
 </script>

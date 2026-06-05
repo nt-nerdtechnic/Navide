@@ -85,6 +85,21 @@ describe('KeyResolver – chord', () => {
     const next = resolver.resolve(mkEvent('s', { metaKey: true }), {})
     expect(next?.command).toBe('editor.save')
   })
+
+  it('does not enter chord mode when all chord when-clauses fail', () => {
+    // Resolver with ONLY a when-gated chord — no unconditional chord.
+    const gated = new KeyResolver([
+      { key: 'ctrl+k ctrl+c', command: 'editor.comment', when: 'editorFocus' },
+      { key: 'ctrl+s', command: 'editor.save' },
+    ])
+    // ctx has editorFocus=false — chord should NOT be entered
+    const first = gated.resolve(mkEvent('k', { ctrlKey: true }), { editorFocus: false })
+    // Returns null because neither chord nor single matches
+    expect(first).toBeNull()
+    // Next ctrl+s should resolve as a normal single key (chord state was not set)
+    const second = gated.resolve(mkEvent('s', { ctrlKey: true }), { editorFocus: false })
+    expect(second?.command).toBe('editor.save')
+  })
 })
 
 describe('KeyResolver – priority (later rule wins)', () => {
@@ -196,9 +211,120 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
   })
 
   it('addLineComment chord null without editorTextFocus when clause', () => {
-    // cmd+k enters chord mode regardless of context (chord leader detection ignores when-clause)
+    // cmd+k enters chord mode because cmd+k cmd+w has no when-clause (always eligible).
     dr.resolve(mkEvent('k', { metaKey: true }), {})
     // cmd+k cmd+c resolves to null because editorTextFocus is false
     expect(dr.resolve(mkEvent('c', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('f3 → nextMatch (findOpen)', () => {
+    expect(dr.resolve(mkEvent('F3'), { findOpen: true })?.command)
+      .toBe('editor.action.nextMatch')
+  })
+
+  it('shift+f3 → prevMatch (findOpen)', () => {
+    expect(dr.resolve(mkEvent('F3', { shiftKey: true }), { findOpen: true })?.command)
+      .toBe('editor.action.prevMatch')
+  })
+
+  it('f3/shift+f3 require findOpen', () => {
+    expect(dr.resolve(mkEvent('F3'), {})).toBeNull()
+    expect(dr.resolve(mkEvent('F3', { shiftKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+n → newFile (no when clause)', () => {
+    expect(dr.resolve(mkEvent('n', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.newFile')
+  })
+
+  it('escape → closeModal (modalOpen)', () => {
+    expect(dr.resolve(mkEvent('Escape'), { modalOpen: true })?.command)
+      .toBe('workbench.action.closeModal')
+  })
+
+  it('escape does nothing without modalOpen', () => {
+    expect(dr.resolve(mkEvent('Escape'), {})).toBeNull()
+  })
+
+  it('ctrl+up → scrollLineUp (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowUp', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.scrollLineUp')
+  })
+
+  it('ctrl+down → scrollLineDown (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowDown', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.scrollLineDown')
+  })
+
+  it('ctrl+up/down require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowUp', { ctrlKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowDown', { ctrlKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+k cmd+m → changeLanguageMode chord (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true })
+    expect(dr.resolve(mkEvent('m', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.changeLanguageMode')
+  })
+
+  it('changeLanguageMode chord null without editorOpen when-clause', () => {
+    // cmd+k enters chord because cmd+k cmd+w (closeAllEditors) has no when-clause
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('m', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+= → fontZoomIn (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('=', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.fontZoomIn')
+  })
+
+  it('cmd+- → fontZoomOut (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('-', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.fontZoomOut')
+  })
+
+  it('cmd+0 → fontZoomReset (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('0', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('editor.action.fontZoomReset')
+  })
+
+  it('zoom shortcuts require editorOpen', () => {
+    expect(dr.resolve(mkEvent('=', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('-', { metaKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('0', { metaKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+k cmd+s → openKeyboardShortcuts chord (no when)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('s', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.openKeyboardShortcuts')
+  })
+
+  it('cmd+k cmd+t → selectTheme chord (no when)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    expect(dr.resolve(mkEvent('t', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.selectTheme')
+  })
+
+  it('cmd+w → closeActiveEditor (editorOpen && !modalOpen)', () => {
+    expect(dr.resolve(mkEvent('w', { metaKey: true }), { editorOpen: true, modalOpen: false })?.command)
+      .toBe('workbench.action.closeActiveEditor')
+  })
+
+  it('cmd+w blocked when modalOpen', () => {
+    expect(dr.resolve(mkEvent('w', { metaKey: true }), { editorOpen: true, modalOpen: true })).toBeNull()
+  })
+
+  it('cmd+w blocked when editorOpen false', () => {
+    expect(dr.resolve(mkEvent('w', { metaKey: true }), { editorOpen: false })).toBeNull()
+  })
+
+  it('cmd+shift+s → saveAll (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('S', { metaKey: true, shiftKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.saveAll')
+  })
+
+  it('cmd+shift+s requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('S', { metaKey: true, shiftKey: true }), {})).toBeNull()
   })
 })

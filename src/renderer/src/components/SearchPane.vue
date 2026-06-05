@@ -186,7 +186,10 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
   const lines = read.payload.content.split('\n')
   const idx = m.line - 1
   const line = lines[idx]
-  if (line == null || line.slice(m.col, m.end) === '') {
+  // Verify the matched text at (col, end) still matches what was found at search time.
+  // An empty check (=== '') misses cases where other content landed at those positions.
+  const expectedSnippet = m.text.slice(m.col, m.end)
+  if (line == null || line.slice(m.col, m.end) !== expectedSnippet) {
     toast('內容已變動，請重新搜尋', { type: 'info' })
     await doSearch()
     return

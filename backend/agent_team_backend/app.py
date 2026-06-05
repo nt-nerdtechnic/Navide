@@ -29,6 +29,7 @@ from .analyzer_ollama import (
     delete_model as _ollama_delete_model,
 )
 from .analyzer_settings import AnalyzerSettingsStore
+from .ai_chat_settings import AIChatSettingsStore
 from .applog import backend_log_path, backend_port_file
 from .claude_hooks import install_hooks as install_claude_hooks
 from .ipc import make_error, make_event, make_response
@@ -73,6 +74,7 @@ history_store = HistoryStore()
 mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
 analyzer_settings_store = AnalyzerSettingsStore()
+ai_chat_settings_store = AIChatSettingsStore()
 
 # ─── Analyzer backend routing ────────────────────────────────────────────────
 
@@ -1886,6 +1888,41 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "onboarding.complete":
             onboarding_deps.set_complete(bool(payload.get("complete", True)))
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        # ── AI Chat ──────────────────────────────────────────────────────────────
+        elif msg_type == "ai.chat.settings.get":
+            await session.websocket.send_json(make_response(msg_id, msg_type, ai_chat_settings_store.get()))
+
+        elif msg_type == "ai.chat.settings.set":
+            updated = ai_chat_settings_store.set(payload)
+            await session.websocket.send_json(make_response(msg_id, msg_type, updated))
+
+        elif msg_type == "ai.chat.start":
+            session_id = payload.get("session_id", "") or str(__import__("uuid").uuid4())
+            messages = payload.get("messages", []) or []
+            workspace_path = payload.get("workspace_path", "") or ""
+            settings = ai_chat_settings_store.get()
+
+            async def _run_chat(sid=session_id, msgs=messages, ws_path=workspace_path, s=settings):
+                from .ai_chat_tools import run_agent_loop
+                async def _emit(event_type, data):
+                    await broadcast(make_event(event_type, data))
+                try:
+                    await run_agent_loop(s, msgs, ws_path, sid, _emit)
+                except Exception as e:
+                    await broadcast(make_event("ai.chat.error", {"session_id": sid, "message": str(e)}))
+
+            asyncio.create_task(_run_chat())
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "session_id": session_id}))
+
+        elif msg_type == "ai.chat.accept_edit":
+            ws_path = payload.get("workspace_path", "") or ""
+            file_path = payload.get("file_path", "") or ""
+            new_content = payload.get("new_content", "") or ""
+            result = fs_service.write_file(ws_path, file_path, new_content)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         else:
             await session.websocket.send_json(

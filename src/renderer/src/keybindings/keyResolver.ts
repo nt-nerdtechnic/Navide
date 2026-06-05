@@ -32,9 +32,12 @@ export class KeyResolver {
       return this.resolveChord(first, e, ctx)
     }
 
-    // Check if this key starts any chord.
+    // Check if this key starts any chord that is eligible in the current context.
     const startsChord = this.bindings.some(
-      (b) => b.keys.length === 2 && matchesEvent(b.keys[0], e),
+      (b) =>
+        b.keys.length === 2 &&
+        matchesEvent(b.keys[0], e) &&
+        (!b.rule.when || evaluateWhen(b.rule.when, ctx)),
     )
     if (startsChord) {
       this.chordState = eventToParsedKey(e)

@@ -115,7 +115,6 @@ class CssTokenizerImpl implements Tokenizer {
       if (/[a-zA-Z_-]/.test(ch)) {
         let j = i
         while (j < len && /[a-zA-Z0-9_-]/.test(line[j])) j++
-        const word = line.slice(i, j)
         // Look ahead past whitespace to see if followed by ':'
         let k = j
         while (k < len && (line[k] === ' ' || line[k] === '\t')) k++
