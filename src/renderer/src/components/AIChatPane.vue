@@ -201,6 +201,7 @@ function newThread(): void {
   allThreads.value.unshift(thread)
   currentThreadId.value = id
   messages.value = []
+  expandedMsgIdxs.value = new Set()
   showThreads.value = false
 }
 
@@ -213,6 +214,7 @@ function switchThread(id: string): void {
   if (!thread) return
   currentThreadId.value = id
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
+  expandedMsgIdxs.value = new Set()
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   showThreads.value = false
@@ -858,6 +860,7 @@ function clearConversation(): void {
   if (messages.value.length > 0 && !window.confirm('Clear all messages in this chat?')) return
   if (sending.value) stopStreaming()
   messages.value = []
+  expandedMsgIdxs.value = new Set()
   // Also reset the title so it auto-updates on next message
   const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
   if (idx !== -1) allThreads.value[idx].title = 'New chat'
@@ -1600,6 +1603,8 @@ function onClickOutside(e: MouseEvent): void {
 onMounted(() => document.addEventListener('click', onClickOutside))
 onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
+defineExpose({ focusInput: () => { textareaEl.value?.focus() } })
+
 // ── Message date separators ────────────────────────────────────────────────────
 function showDateSep(mi: number): boolean {
   const ts = messages.value[mi]?.timestamp
@@ -2071,6 +2076,7 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
           <tr><td><kbd>Shift+Enter</kbd></td><td>New line</td></tr>
           <tr><td><kbd>↑ / ↓</kbd></td><td>Browse input history</td></tr>
+          <tr><td><kbd>Ctrl+L</kbd></td><td>Focus AI chat input</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
           <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>

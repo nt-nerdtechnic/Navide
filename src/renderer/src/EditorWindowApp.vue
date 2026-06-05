@@ -50,6 +50,7 @@ function onResizeEnd(): void {
 
 // ── AI Panel resize ───────────────────────────────────────────────────────────
 const AI_PANEL_W_KEY = 'ide-ai-panel-width'
+const aiChatRef = ref<InstanceType<typeof AIChatPane> | null>(null)
 const aiPanelOpen = ref(false)
 const aiPanelWidth = ref(Math.max(280, Math.min(600, parseInt(localStorage.getItem(AI_PANEL_W_KEY) ?? '320', 10))))
 let aiResizing = false
@@ -363,6 +364,10 @@ registerCommand('editor.action.scrollLineDown',       () => activeEditor()?.scro
 registerCommand('editor.action.transformToUppercase',  () => activeEditor()?.transformToUppercase())
 registerCommand('editor.action.transformToLowercase',  () => activeEditor()?.transformToLowercase())
 registerCommand('editor.action.transformToTitlecase',  () => activeEditor()?.transformToTitleCase())
+registerCommand('editor.action.transformToSnakeCase',  () => activeEditor()?.transformToSnakeCase())
+registerCommand('editor.action.transformToCamelCase',  () => activeEditor()?.transformToCamelCase())
+registerCommand('editor.action.transformToKebabCase',  () => activeEditor()?.transformToKebabCase())
+registerCommand('editor.action.transformToPascalCase', () => activeEditor()?.transformToPascalCase())
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
@@ -607,6 +612,10 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.transformToUppercase',  label: 'Transform to Uppercase' },
   { id: 'editor.action.transformToLowercase',  label: 'Transform to Lowercase' },
   { id: 'editor.action.transformToTitlecase',  label: 'Transform to Title Case' },
+  { id: 'editor.action.transformToSnakeCase',  label: 'Transform to Snake Case' },
+  { id: 'editor.action.transformToCamelCase',  label: 'Transform to Camel Case' },
+  { id: 'editor.action.transformToKebabCase',  label: 'Transform to Kebab Case' },
+  { id: 'editor.action.transformToPascalCase', label: 'Transform to Pascal Case' },
   { id: 'editor.action.joinLines',              label: 'Join Lines',         keys: '⌃J' },
   { id: 'editor.action.sortLinesAscending',    label: 'Sort Lines Ascending' },
   { id: 'editor.action.sortLinesDescending',   label: 'Sort Lines Descending' },
@@ -1015,6 +1024,11 @@ function onAppKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     closeFile(activeRel.value)
   }
+  if (mod && e.key === 'l') {
+    e.preventDefault()
+    if (!aiPanelOpen.value) aiPanelOpen.value = true
+    nextTick(() => aiChatRef.value?.focusInput())
+  }
 }
 
 onMounted(() => {
@@ -1223,6 +1237,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     <div v-show="aiPanelOpen" class="ide-ai-resize-handle" @mousedown.prevent="onAiResizeStart" />
     <div v-show="aiPanelOpen" class="ide-ai-panel" :style="{ width: aiPanelWidth + 'px' }">
       <AIChatPane
+        ref="aiChatRef"
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
