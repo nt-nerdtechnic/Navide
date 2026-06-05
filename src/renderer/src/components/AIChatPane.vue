@@ -470,31 +470,86 @@ function renderMarkdownLite(rawText: string): string {
   // HTML-escape non-code-block content to prevent XSS via v-html
   text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-  // 2. Line-by-line: headings, lists, blank lines
+  // 2. Line-by-line: headings, lists, blockquotes, tables, blank lines
   const lines = text.split('\n')
   const parts: string[] = []
-  let inUl = false, inOl = false
+  let inUl = false, inOl = false, inBlockquote = false, inTable = false
+  const tableRows: string[][] = []
+  let tableHasHeader = false
+
   const flushList = () => {
     if (inUl) { parts.push('</ul>'); inUl = false }
     if (inOl) { parts.push('</ol>'); inOl = false }
   }
-  for (const line of lines) {
+  const flushBlockquote = () => {
+    if (inBlockquote) { parts.push('</blockquote>'); inBlockquote = false }
+  }
+  const flushTable = () => {
+    if (!inTable) return
+    inTable = false
+    if (tableRows.length === 0) { tableRows.length = 0; return }
+    let html = '<table class="ai-table"><tbody>'
+    tableRows.forEach((cells, ri) => {
+      const tag = (ri === 0 && tableHasHeader) ? 'th' : 'td'
+      if (ri === 1 && tableHasHeader) return // skip separator row
+      html += '<tr>' + cells.map((c) => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>'
+    })
+    html += '</tbody></table>'
+    parts.push(html)
+    tableRows.length = 0
+    tableHasHeader = false
+  }
+  const flushAll = () => { flushList(); flushBlockquote(); flushTable() }
+
+  const isTableRow = (l: string) => /^\|.+\|/.test(l.trim())
+  const isSepRow = (l: string) => /^\|[\s\-:|]+\|/.test(l.trim())
+  const splitCells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|')
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]
     // Code block placeholder (whole line)
     if (/^\x00B\d+\x00$/.test(line.trim())) {
-      flushList(); parts.push(line.trim()); continue
+      flushAll(); parts.push(line.trim()); continue
     }
     // Horizontal rule
     if (/^[-*_]{3,}$/.test(line.trim())) {
-      flushList(); parts.push('<hr class="ai-hr">'); continue
+      flushAll(); parts.push('<hr class="ai-hr">'); continue
     }
     // Heading: #, ##, ###, ####
     const hm = line.match(/^(#{1,4})\s+(.+)/)
     if (hm) {
-      flushList()
+      flushAll()
       const lvl = Math.min(hm[1].length + 1, 5)
       parts.push(`<h${lvl} class="ai-h">${hm[2]}</h${lvl}>`)
       continue
     }
+    // Table detection: current or next line is a separator row
+    if (isTableRow(line)) {
+      const nextLine = lines[li + 1] || ''
+      if (!inTable) {
+        flushList(); flushBlockquote()
+        inTable = true
+        tableRows.push(splitCells(line))
+        if (isSepRow(nextLine)) tableHasHeader = true
+      } else if (isSepRow(line)) {
+        // separator row — already marked, skip it
+        tableRows.push(splitCells(line))
+      } else {
+        tableRows.push(splitCells(line))
+      }
+      continue
+    }
+    if (inTable) { flushTable() }
+    // Blockquote
+    const bqm = line.match(/^>\s?(.*)/)
+    if (bqm) {
+      flushList()
+      if (!inBlockquote) { parts.push('<blockquote class="ai-blockquote">'); inBlockquote = true }
+      parts.push(bqm[1] === '' ? '<br>' : bqm[1] + '<br>')
+      continue
+    }
+    if (inBlockquote && line.trim() === '') { flushBlockquote(); parts.push('<br>'); continue }
+    flushBlockquote()
     // Unordered list
     const ulm = line.match(/^[*\-+]\s+(.+)/)
     if (ulm) {
@@ -514,7 +569,7 @@ function renderMarkdownLite(rawText: string): string {
     flushList()
     parts.push(line === '' ? '<br>' : line + '<br>')
   }
-  flushList()
+  flushAll()
 
   let html = parts.join('')
 
@@ -2048,6 +2103,32 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   border: none;
   border-top: 1px solid var(--border-muted);
   margin: 8px 0;
+}
+.ai-text :deep(blockquote.ai-blockquote) {
+  border-left: 3px solid var(--accent-fg);
+  margin: 4px 0;
+  padding: 2px 10px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.ai-text :deep(table.ai-table) {
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0;
+  max-width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.ai-text :deep(table.ai-table th),
+.ai-text :deep(table.ai-table td) {
+  border: 1px solid var(--border-muted);
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+.ai-text :deep(table.ai-table th) {
+  background: var(--surface-1);
+  font-weight: 600;
 }
 
 .ai-cursor {
