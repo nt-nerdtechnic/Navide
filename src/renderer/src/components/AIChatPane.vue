@@ -103,6 +103,7 @@ const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const inputHistory: string[] = []
 let historyIdx = -1
+let historySavedDraft = ''  // input text saved before first ArrowUp
 const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
 const messagesEl = ref<HTMLElement | null>(null)
@@ -396,6 +397,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/optimize', label: '/optimize', description: 'Performance optimization', template: 'Analyze performance bottlenecks in the following code and provide optimization suggestions:' },
   { id: '/refactor', label: '/refactor', description: 'Refactor code',         template: 'Refactor the following code to improve readability and maintainability without changing functionality:' },
   { id: '/new',       label: '/new',       description: 'Create new file',     template: 'Create a new file with the following content:' },
+  { id: '/debug',     label: '/debug',     description: 'Find bugs',            template: 'Analyze the following code for bugs, edge cases, and potential runtime errors. Be specific about line numbers and root causes:\n\n' },
+  { id: '/improve',   label: '/improve',   description: 'Suggest improvements', template: 'Suggest concrete improvements for the following code in terms of readability, maintainability, and best practices:\n\n' },
   { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: 'Generate a concise git commit message (conventional commits format) for the following changes:\n\n' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
@@ -768,6 +771,7 @@ async function sendMessage(): Promise<void> {
     inputHistory.push(rawText)
     if (inputHistory.length > 50) inputHistory.shift()
     historyIdx = -1
+    historySavedDraft = ''
   }
   inputText.value = ''
   sending.value = true
@@ -1502,8 +1506,10 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     const el = textareaEl.value
     if (el && inputHistory.length > 0 && el.selectionStart === 0) {
       e.preventDefault()
-      if (historyIdx === -1) historyIdx = inputHistory.length - 1
-      else if (historyIdx > 0) historyIdx--
+      if (historyIdx === -1) {
+        historySavedDraft = inputText.value  // save draft before first navigation
+        historyIdx = inputHistory.length - 1
+      } else if (historyIdx > 0) historyIdx--
       inputText.value = inputHistory[historyIdx]
       nextTick(() => { if (el) { el.selectionStart = el.selectionEnd = el.value.length } })
     }
@@ -1515,7 +1521,8 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       inputText.value = inputHistory[historyIdx]
     } else {
       historyIdx = -1
-      inputText.value = ''
+      inputText.value = historySavedDraft  // restore the draft that was in progress
+      historySavedDraft = ''
     }
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
