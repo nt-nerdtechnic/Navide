@@ -1135,7 +1135,8 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
     if rc2 == 0:
         for line in out2.splitlines():
             name = line.strip()
-            if not name or name.endswith("/HEAD"):
+            # Skip empty, HEAD pointers, and entries without a slash (e.g. bare "origin")
+            if not name or "/" not in name or name.endswith("/HEAD"):
                 continue
             if name not in local_trackings:
                 branches.append(asdict(GitBranch(name=name, is_current=False, is_remote=True, tracking="")))

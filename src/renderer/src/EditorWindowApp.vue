@@ -540,7 +540,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.closeAllEditors', label: '關閉所有編輯器', keys: '⌘K ⌘W' },
   { id: 'editor.action.nextMatch',         label: '下一個符合項',  keys: '⌘G' },
   { id: 'editor.action.prevMatch',       label: '上一個符合項',   keys: '⌘⇧G' },
-  { id: 'editor.action.inlineRewrite',   label: 'AI 改寫 (Cmd+K)',keys: '⌘K' },
+  { id: 'editor.action.inlineRewrite',   label: 'AI 改寫',        keys: '⌘K ⌘K' },
   { id: 'editor.action.triggerGhost',    label: 'AI 補全 (Cmd+I)',keys: '⌘I' },
   { id: 'workbench.action.toggleSidebar',label: '切換側邊欄',     keys: '⌘B' },
   { id: 'workbench.action.focusExplorer',label: '顯示檔案總管',   keys: '⌘⇧E' },

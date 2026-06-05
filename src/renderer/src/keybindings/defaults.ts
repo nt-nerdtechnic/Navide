@@ -14,7 +14,10 @@ export const defaults: KeybindingRule[] = [
 
   // ── Editor ───────────────────────────────────────────────────────────────
   { key: 'cmd+s', command: 'editor.action.save',          when: 'editorOpen && !terminalFocus' },
-  { key: 'cmd+k', command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
+  // cmd+k is a chord prefix; cmd+k cmd+k is the double-chord for inline rewrite
+  // (single cmd+k is blocked by chord mode in editorTextFocus context)
+  { key: 'cmd+k cmd+k',    command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
+  { key: 'ctrl+shift+i',   command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
   { key: 'cmd+i',   command: 'editor.action.triggerGhost',  when: 'editorTextFocus' },
   { key: 'ctrl+space', command: 'editor.action.triggerGhost', when: 'editorTextFocus' },
   { key: 'cmd+f', command: 'editor.action.openFind',      when: 'editorOpen && !terminalFocus' },

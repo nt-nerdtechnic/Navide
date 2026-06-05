@@ -99,6 +99,8 @@ interface ChatMessage {
 // ── State ──────────────────────────────────────────────────────────────────────
 const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
+const inputHistory: string[] = []
+let historyIdx = -1
 const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
 const messagesEl = ref<HTMLElement | null>(null)
@@ -633,6 +635,11 @@ async function sendMessage(): Promise<void> {
 
   messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now() })
   contextChips.value = []
+  if (rawText) {
+    inputHistory.push(rawText)
+    if (inputHistory.length > 50) inputHistory.shift()
+    historyIdx = -1
+  }
   inputText.value = ''
   sending.value = true
 
@@ -1345,6 +1352,27 @@ function onTextareaKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     void sendMessage()
+  }
+  // Prompt history: Up/Down arrow when not in menus
+  if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+    const el = textareaEl.value
+    if (el && inputHistory.length > 0 && el.selectionStart === 0) {
+      e.preventDefault()
+      if (historyIdx === -1) historyIdx = inputHistory.length - 1
+      else if (historyIdx > 0) historyIdx--
+      inputText.value = inputHistory[historyIdx]
+      nextTick(() => { if (el) { el.selectionStart = el.selectionEnd = el.value.length } })
+    }
+  }
+  if (e.key === 'ArrowDown' && !e.shiftKey && !e.ctrlKey && !e.metaKey && historyIdx >= 0) {
+    e.preventDefault()
+    if (historyIdx < inputHistory.length - 1) {
+      historyIdx++
+      inputText.value = inputHistory[historyIdx]
+    } else {
+      historyIdx = -1
+      inputText.value = ''
+    }
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     e.preventDefault()
