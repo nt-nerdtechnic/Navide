@@ -530,7 +530,12 @@ async def ws(websocket: WebSocket) -> None:
     _SESSIONS.add(session)
     try:
         while True:
-            msg = await websocket.receive_json()
+            try:
+                msg = await websocket.receive_json()
+            except (ValueError, KeyError) as parse_err:
+                # Malformed JSON frame — log and continue; don't crash the session.
+                log.warning("ws malformed message (ignored): %s", parse_err)
+                continue
             # Dispatch each message as a concurrent task so long-running handlers
             # (e.g. analyzer.classify that takes 10-60s for LLM inference) never
             # block the receive loop.  Without this, a classify in flight would
