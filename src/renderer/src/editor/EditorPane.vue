@@ -378,6 +378,9 @@ onMounted(() => {
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
+function addLineComment(): void { editorRef.value?.addLineComment() }
+function removeLineComment(): void { editorRef.value?.removeLineComment() }
+function jumpToLine(n: number): void { editorRef.value?.revealLine(n); editorRef.value?.focus() }
 function deleteLine(): void { editorRef.value?.deleteLine() }
 function insertLineBelow(): void { editorRef.value?.insertLineBelow() }
 function insertLineAbove(): void { editorRef.value?.insertLineAbove() }
@@ -434,7 +437,8 @@ function selectAllOccurrences(): void {
 
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
-  toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
+  toggleLineComment, addLineComment, removeLineComment, jumpToLine,
+  deleteLine, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   selectNextOccurrence, selectAllOccurrences,

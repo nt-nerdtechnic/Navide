@@ -173,4 +173,32 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
   it('f1 → showCommands', () => {
     expect(dr.resolve(mkEvent('F1'), {})?.command).toBe('workbench.action.showCommands')
   })
+
+  it('cmd+shift+o → gotoSymbol (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('O', { metaKey: true, shiftKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.gotoSymbol')
+  })
+
+  it('gotoSymbol requires editorOpen', () => {
+    expect(dr.resolve(mkEvent('O', { metaKey: true, shiftKey: true }), {})).toBeNull()
+  })
+
+  it('cmd+k cmd+c → addLineComment chord (editorTextFocus)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true })
+    expect(dr.resolve(mkEvent('c', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.addLineComment')
+  })
+
+  it('cmd+k cmd+u → removeLineComment chord (editorTextFocus)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorTextFocus: true })
+    expect(dr.resolve(mkEvent('u', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.removeLineComment')
+  })
+
+  it('addLineComment chord null without editorTextFocus when clause', () => {
+    // cmd+k enters chord mode regardless of context (chord leader detection ignores when-clause)
+    dr.resolve(mkEvent('k', { metaKey: true }), {})
+    // cmd+k cmd+c resolves to null because editorTextFocus is false
+    expect(dr.resolve(mkEvent('c', { metaKey: true }), {})).toBeNull()
+  })
 })

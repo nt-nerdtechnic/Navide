@@ -32,6 +32,18 @@ const ghost = ref<{ pos: Position; text: string } | null>(null)
 // Remembered target column for vertical navigation (arrow up/down).
 // -1 = not set; preserved across consecutive vertical moves, cleared on any other action.
 let preferredCol = -1
+// Incremental max-line-length cache. -1 means invalid (needs full rescan).
+// Typing inserts only increase the max → O(1) update.
+// Deletions/multi-line edits may shrink the max → mark invalid, rescan lazily.
+let _maxLineLenCache = -1
+function _scanMaxLineLen(): number {
+  let m = 0
+  for (let i = 0; i < model.lineCount(); i++) {
+    const l = model.getLine(i).length
+    if (l > m) m = l
+  }
+  return (_maxLineLenCache = m)
+}
 
 const lineCount = computed(() => {
   version.value // track
@@ -40,13 +52,10 @@ const lineCount = computed(() => {
 // Gutter grows to accommodate the widest line number (e.g. ≥1000 lines needs 4 digits).
 const gutterWidth = computed(() => Math.max(48, String(lineCount.value).length * 9 + 12))
 // Sizer minimum width ensures long lines are horizontally scrollable.
+// Uses cached max-length: O(1) on pure inserts, O(N) only when cache is invalid.
 const sizerMinWidth = computed(() => {
   version.value // track edits
-  let max = 0
-  for (let i = 0; i < model.lineCount(); i++) {
-    const len = model.getLine(i).length
-    if (len > max) max = len
-  }
+  const max = _maxLineLenCache >= 0 ? _maxLineLenCache : _scanMaxLineLen()
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
 })
 
@@ -58,18 +67,34 @@ const charWidth = ref(8)
 let composing = false
 
 // ── Tokenization (whole-doc; fine for typical source files) ──────────────────
-const lineTokens = computed<Token[][]>(() => {
-  version.value // track
+// ── Incremental token cache ───────────────────────────────────────────────────
+// Re-tokenizes only from the first edited line forward.
+// When a line's text and incoming state are unchanged, propagation stops early.
+interface TokEntry { text: string; stateIn: number; tokens: Token[]; stateOut: number }
+let _tokCache: TokEntry[] = []
+let _tokInvalidFrom = 0
+
+function _ensureTokensUpTo(lastLine: number): void {
+  if (_tokInvalidFrom > lastLine) return
   const tok = tokenizer.value
-  const out: Token[][] = []
-  let state = tok.initialState()
-  for (let i = 0; i < model.lineCount(); i++) {
-    const { tokens, endState } = tok.tokenizeLine(model.getLine(i), state)
-    out.push(tokens)
-    state = endState
+  let stateIn = _tokInvalidFrom === 0
+    ? tok.initialState()
+    : (_tokCache[_tokInvalidFrom - 1]?.stateOut ?? tok.initialState())
+  for (let i = _tokInvalidFrom; i <= lastLine; i++) {
+    const text = i < model.lineCount() ? model.getLine(i) : ''
+    const cached = _tokCache[i]
+    if (cached && cached.text === text && cached.stateIn === stateIn) {
+      _tokInvalidFrom = model.lineCount() // all subsequent lines are still valid
+      return
+    }
+    const { tokens, endState } = tok.tokenizeLine(text, stateIn)
+    _tokCache[i] = { text, stateIn, tokens, stateOut: endState }
+    stateIn = endState
   }
-  return out
-})
+  _tokInvalidFrom = lastLine + 1
+}
+
+watch(tokenizer, () => { _tokCache = []; _tokInvalidFrom = 0 })
 
 interface RenderLine {
   index: number
@@ -77,6 +102,7 @@ interface RenderLine {
 }
 
 const visibleLines = computed<RenderLine[]>(() => {
+  version.value // re-render on every edit
   const res: RenderLine[] = []
   for (let i = vs.startLine.value; i < vs.endLine.value; i++) {
     res.push({ index: i, segments: segmentsFor(i) })
@@ -85,8 +111,9 @@ const visibleLines = computed<RenderLine[]>(() => {
 })
 
 function segmentsFor(line: number): { text: string; cls: string }[] {
+  _ensureTokensUpTo(line)
   const text = model.getLine(line)
-  const toks = lineTokens.value[line] ?? []
+  const toks = _tokCache[line]?.tokens ?? []
   if (toks.length === 0) return text ? [{ text, cls: 'tok-text' }] : []
   const segs: { text: string; cls: string }[] = []
   let col = 0
@@ -116,9 +143,20 @@ function comparePos(a: Position, b: Position): number {
 function applyEdit(range: Range, text: string): void {
   if (props.readonly) return
   preferredCol = -1
+  const isPureInsert = range.start.line === range.end.line && range.start.col === range.end.col
   const op = { range, text }
   const { inverse, caret } = model.applyEdit(op)
   undo.push(op, inverse)
+  // Update max-line-length cache incrementally.
+  // Pure single-line insert (typing) can only increase the max → O(1) check.
+  // Everything else (delete, multi-line edit, newline) → invalidate for lazy rescan.
+  if (isPureInsert && text.indexOf('\n') === -1) {
+    const newLen = model.getLine(caret.line).length
+    if (newLen > _maxLineLenCache) _maxLineLenCache = newLen
+  } else {
+    _maxLineLenCache = -1
+  }
+  if (range.start.line < _tokInvalidFrom) _tokInvalidFrom = range.start.line
   cursor.value = caret
   anchor.value = null
   ghost.value = null
@@ -537,12 +575,12 @@ function onCompositionEnd(): void {
 function doUndo(): void {
   preferredCol = -1
   const p = undo.undo(model)
-  if (p) { cursor.value = p; anchor.value = null; afterChange() }
+  if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
 function doRedo(): void {
   preferredCol = -1
   const p = undo.redo(model)
-  if (p) { cursor.value = p; anchor.value = null; afterChange() }
+  if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
 function selectAll(): void {
   preferredCol = -1
@@ -595,6 +633,49 @@ function toggleLineComment(): void {
     { start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
     lines.join('\n'),
   )
+  cursor.value = clampPos(savedCursor)
+  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
+}
+
+function addLineComment(): void {
+  const token = COMMENT_MAP[props.language ?? ''] ?? '//'
+  const prefixFull = token + ' '
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1)) : cursor.value.line
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const lines: string[] = []
+  for (let i = 0; i <= endLine - startLine; i++) {
+    const line = model.getLine(startLine + i)
+    const indent = line.match(/^(\s*)/)?.[1] ?? ''
+    const rest = line.slice(indent.length)
+    const isCommented = rest.startsWith(prefixFull) || rest === token || rest.startsWith(token + '\t')
+    lines.push(rest && !isCommented ? indent + prefixFull + rest : line)
+  }
+  applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, lines.join('\n'))
+  cursor.value = clampPos(savedCursor)
+  anchor.value = savedAnchor ? clampPos(savedAnchor) : null
+}
+
+function removeLineComment(): void {
+  const token = COMMENT_MAP[props.language ?? ''] ?? '//'
+  const prefixFull = token + ' '
+  const sel = selectionRange()
+  const startLine = sel ? sel.start.line : cursor.value.line
+  const endLine = sel ? (sel.end.col > 0 ? sel.end.line : Math.max(startLine, sel.end.line - 1)) : cursor.value.line
+  const savedCursor = { ...cursor.value }
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const lines: string[] = []
+  for (let i = 0; i <= endLine - startLine; i++) {
+    const line = model.getLine(startLine + i)
+    const indent = line.match(/^(\s*)/)?.[1] ?? ''
+    const rest = line.slice(indent.length)
+    if (rest.startsWith(prefixFull)) lines.push(indent + rest.slice(prefixFull.length))
+    else if (rest === token || rest.startsWith(token + '\t')) lines.push(indent + rest.slice(token.length))
+    else lines.push(line)
+  }
+  applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, lines.join('\n'))
   cursor.value = clampPos(savedCursor)
   anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
@@ -988,6 +1069,9 @@ onUnmounted(() => {
 watch(() => props.modelValue, (v) => {
   if (v !== model.getValue()) {
     model.setValue(v)
+    _maxLineLenCache = -1
+    _tokCache = []
+    _tokInvalidFrom = 0
     cursor.value = clampPos(cursor.value)
     anchor.value = null
     afterChange()
@@ -999,7 +1083,7 @@ watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
 function getValue(): string { return model.getValue() }
-function setValue(v: string): void { model.setValue(v); cursor.value = { line: 0, col: 0 }; anchor.value = null; afterChange() }
+function setValue(v: string): void { model.setValue(v); _maxLineLenCache = -1; _tokCache = []; _tokInvalidFrom = 0; cursor.value = { line: 0, col: 0 }; anchor.value = null; afterChange() }
 function getSelectionRange(): Range | null { return selectionRange() }
 function getSelectionText(): string {
   const sel = selectionRange()
@@ -1037,7 +1121,8 @@ function acceptGhost(): void {
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
   revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
-  toggleLineComment, deleteLine, insertLineBelow, insertLineAbove,
+  toggleLineComment, addLineComment, removeLineComment,
+  deleteLine, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, getWordAtCursor,
   jumpToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,

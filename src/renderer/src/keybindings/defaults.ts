@@ -42,6 +42,10 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+up',         command: 'editor.action.cursorTop',          when: 'editorTextFocus' },
   { key: 'cmd+down',       command: 'editor.action.cursorBottom',       when: 'editorTextFocus' },
 
+  { key: 'cmd+k cmd+c', command: 'editor.action.addLineComment',    when: 'editorTextFocus' },
+  { key: 'cmd+k cmd+u', command: 'editor.action.removeLineComment', when: 'editorTextFocus' },
+
+  { key: 'cmd+shift+o', command: 'workbench.action.gotoSymbol', when: 'editorOpen' },
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
   { key: 'f1',          command: 'workbench.action.showCommands' },
   { key: 'cmd+k cmd+w', command: 'workbench.action.closeAllEditors' },

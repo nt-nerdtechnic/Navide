@@ -673,6 +673,50 @@ function onExplorerDividerEnd(): void {
               </div>
             </li>
           </ul>
+
+          <div class="spawn-card">
+            <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
+              <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
+              <span>Manual spawn</span>
+            </div>
+            <div v-if="manualSpawnOpen" class="spawn-card-body">
+              <div class="row two-col">
+                <select v-model="pickedAgent">
+                  <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+                    {{ spec.label }}
+                  </option>
+                </select>
+                <select v-model="pickedRole">
+                  <option value="">Select role…</option>
+                  <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
+                </select>
+              </div>
+              <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+              <p v-if="!canSpawn" class="hint warn">
+                {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
+              </p>
+              <div v-if="currentRole" class="prompt-block">
+                <div class="prompt-head">
+                  <button class="link" @click="previewOpen = !previewOpen">
+                    {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
+                  </button>
+                  <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
+                    ⚙ Settings
+                  </button>
+                </div>
+                <p class="role-line">{{ currentRole.one_line }}</p>
+                <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
+              </div>
+              <div v-else class="prompt-block warn-block">
+                <p class="warn">
+                  {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+                </p>
+                <div v-if="roles.length === 0" class="row tight">
+                  <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </div>
@@ -892,48 +936,50 @@ function onExplorerDividerEnd(): void {
         </li>
       </ul>
 
-      <hr class="section-divider" />
-      <button class="lbl collapsible-header" @click="manualSpawnOpen = !manualSpawnOpen">
-        {{ manualSpawnOpen ? '▾' : '▸' }} Manual spawn
-      </button>
-      <template v-if="manualSpawnOpen">
-        <div class="row two-col">
-          <select v-model="pickedAgent">
-            <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
-              {{ spec.label }}
-            </option>
-          </select>
-          <select v-model="pickedRole">
-            <option value="">Select role…</option>
-            <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
-          </select>
+      <div class="spawn-card">
+        <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
+          <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
+          <span>Manual spawn</span>
         </div>
-        <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
-        <p v-if="!canSpawn" class="hint warn">
-          {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
-        </p>
-
-        <div v-if="currentRole" class="prompt-block">
-          <div class="prompt-head">
-            <button class="link" @click="previewOpen = !previewOpen">
-              {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
-            </button>
-            <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
-              ⚙ Settings
-            </button>
+        <div v-if="manualSpawnOpen" class="spawn-card-body">
+          <div class="row two-col">
+            <select v-model="pickedAgent">
+              <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+                {{ spec.label }}
+              </option>
+            </select>
+            <select v-model="pickedRole">
+              <option value="">Select role…</option>
+              <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
+            </select>
           </div>
-          <p class="role-line">{{ currentRole.one_line }}</p>
-          <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
-        </div>
-        <div v-else class="prompt-block warn-block">
-          <p class="warn">
-            {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+          <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+          <p v-if="!canSpawn" class="hint warn">
+            {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
           </p>
-          <div v-if="roles.length === 0" class="row tight">
-            <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+
+          <div v-if="currentRole" class="prompt-block">
+            <div class="prompt-head">
+              <button class="link" @click="previewOpen = !previewOpen">
+                {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
+              </button>
+              <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
+                ⚙ Settings
+              </button>
+            </div>
+            <p class="role-line">{{ currentRole.one_line }}</p>
+            <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
+          </div>
+          <div v-else class="prompt-block warn-block">
+            <p class="warn">
+              {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+            </p>
+            <div v-if="roles.length === 0" class="row tight">
+              <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+            </div>
           </div>
         </div>
-      </template>
+      </div>
     </section>
 
     </div><!-- /part-bottom -->
@@ -1231,30 +1277,60 @@ function onExplorerDividerEnd(): void {
   flex-direction: column;
   gap: 6px;
 }
+
+/* ── Flat section style (VS Code / GitPane) ──────────────────────────────── */
 .panel-section {
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: var(--bg-subtle);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 0 10px;
+  border-top: 1px solid var(--border-muted);
 }
+/* first visible section in each scroll area: no top divider */
+.part-top > .block:first-child,
+.part-bottom > .block:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+
 .section-divider {
   border: none;
-  border-top: 1px solid var(--border-default);
-  margin: 8px 0;
+  border-top: 1px solid var(--border-muted);
+  margin: 6px 0;
 }
+
+/* Section header label (matches GitPane sec-label) */
 .lbl {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.2px;
+  text-transform: none;
   color: var(--text-secondary);
+  padding: 2px 0;
+  display: block;
 }
+.lbl.tiny {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+/* Section header row with actions (matches GitPane sec-hdr layout) */
+.panel-section > .row.between {
+  min-height: 22px;
+  align-items: center;
+  padding: 0;
+}
+
 button.collapsible-header {
   background: transparent;
   border: none;
   cursor: pointer;
   padding: 0;
   text-align: left;
+}
+button.collapsible-header:hover {
+  color: var(--text-bright);
 }
 button.collapsible-header:hover {
   color: var(--text-bright);
@@ -2017,6 +2093,41 @@ button.icon-btn.muted:hover {
   margin: 0;
 }
 
+/* ── Manual spawn card (matches GitPane git-card / History style) ─────────── */
+.spawn-card {
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.spawn-card-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  min-height: 28px;
+  background: var(--bg-subtle);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.spawn-card-hdr:hover { background: var(--bg-elevated); }
+.spawn-caret {
+  font-size: 9px;
+  color: var(--text-muted);
+  width: 10px;
+  flex-shrink: 0;
+}
+.spawn-card-body {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border-muted);
+}
+
 /* ── Shared split-scroll layout (pipeline + explorer) ───────────────────── */
 .pane-split,
 .pipeline-split {
@@ -2032,8 +2143,8 @@ button.icon-btn.muted:hover {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 0 14px 8px;
+  gap: 0; /* sections use border-top as divider, no inter-section gap needed */
+  padding: 0 14px 4px;
   min-height: 0;
 }
 .pane-split .part-bottom,
@@ -2042,8 +2153,8 @@ button.icon-btn.muted:hover {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 6px 14px 14px;
+  gap: 0;
+  padding: 0 14px 14px;
   min-height: 0;
 }
 .pane-split .part-resize,

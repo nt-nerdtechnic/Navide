@@ -65,6 +65,7 @@ const activePath = computed(() => {
 interface BcItem { name: string; isDir: boolean; relPath: string; line?: number; kind?: string }
 interface BcDropdown { segIdx: number; items: BcItem[]; x: number; y: number }
 const bcDropdown = ref<BcDropdown | null>(null)
+const bcActiveIdx = ref(-1)
 
 function _extractSymbols(text: string, ext: string): BcItem[] {
   const lines = text.split('\n')
@@ -100,6 +101,7 @@ async function openBcDropdown(segIdx: number, e: MouseEvent): Promise<void> {
     const ext = activePath.value[segIdx].split('.').pop() ?? ''
     const symbols = _extractSymbols(fileContent, ext)
     bcDropdown.value = { segIdx, items: symbols, x: rect.left, y: rect.bottom }
+    bcActiveIdx.value = -1
   } else {
     const parentPath = activePath.value.slice(0, segIdx).join('/')
     interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
@@ -111,6 +113,7 @@ async function openBcDropdown(segIdx: number, e: MouseEvent): Promise<void> {
         x: rect.left,
         y: rect.bottom,
       }
+      bcActiveIdx.value = -1
     }
   }
 }
@@ -125,7 +128,31 @@ function onBcItemClick(item: BcItem): void {
   }
 }
 
-function closeBcDropdown(): void { bcDropdown.value = null }
+function closeBcDropdown(): void { bcDropdown.value = null; bcActiveIdx.value = -1 }
+
+function onBcCaptureKeydown(e: KeyboardEvent): void {
+  const dd = bcDropdown.value
+  if (!dd) return
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.stopImmediatePropagation()
+    e.preventDefault()
+    const n = dd.items.length
+    if (!n) return
+    bcActiveIdx.value = e.key === 'ArrowDown'
+      ? (bcActiveIdx.value + 1) % n
+      : (bcActiveIdx.value - 1 + n) % n
+  } else if (e.key === 'Enter') {
+    e.stopImmediatePropagation()
+    e.preventDefault()
+    const item = dd.items[bcActiveIdx.value]
+    if (item) onBcItemClick(item)
+    else closeBcDropdown()
+  } else if (e.key === 'Escape') {
+    e.stopImmediatePropagation()
+    e.preventDefault()
+    closeBcDropdown()
+  }
+}
 
 function openFile(p: { filepath: string; name?: string; line?: number }): void {
   const relPath = p.filepath
@@ -253,6 +280,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.cursorTop',         label: '跳到檔案開頭',  keys: '⌘↑' },
   { id: 'editor.action.cursorBottom',      label: '跳到檔案結尾',  keys: '⌘↓' },
   { id: 'editor.action.addSelectionToNextFindMatch', label: '選取下一個出現', keys: '⌘D' },
+  { id: 'editor.action.addLineComment',    label: '加入行注釋',   keys: '⌘K ⌘C' },
+  { id: 'editor.action.removeLineComment', label: '移除行注釋',   keys: '⌘K ⌘U' },
+  { id: 'workbench.action.gotoSymbol',     label: '前往符號',     keys: '⌘⇧O' },
   { id: 'workbench.action.closeAllEditors', label: '關閉所有編輯器', keys: '⌘K ⌘W' },
   { id: 'editor.action.nextMatch',         label: '下一個符合項',  keys: '⌘G' },
   { id: 'editor.action.prevMatch',       label: '上一個符合項',   keys: '⌘⇧G' },
@@ -334,6 +364,45 @@ registerCommand('workbench.action.reopenClosedEditor', () => {
   if (last) openFile({ filepath: last.relPath, name: last.name })
 })
 
+// ── Line comment ─────────────────────────────────────────────────────────────
+registerCommand('editor.action.addLineComment',    () => activeEditor()?.addLineComment())
+registerCommand('editor.action.removeLineComment', () => activeEditor()?.removeLineComment())
+
+// ── Go to Symbol (⌘⇧O) ──────────────────────────────────────────────────────
+const symOpen = ref(false)
+const symQuery = ref('')
+const symIdx = ref(0)
+const symInputEl = ref<HTMLInputElement | null>(null)
+const symItems = computed(() => {
+  const f = openFiles.value.find((f) => f.relPath === activeRel.value)
+  if (!f || f.kind !== 'file') return []
+  const content = activeEditor()?.getContent?.() ?? ''
+  const ext = f.name.split('.').pop() ?? ''
+  const all = _extractSymbols(content, ext)
+  const q = symQuery.value.toLowerCase()
+  return q ? all.filter((s) => s.name.toLowerCase().includes(q)) : all
+})
+function openGotoSymbol(): void {
+  symOpen.value = true
+  symQuery.value = ''
+  symIdx.value = 0
+  void nextTick(() => symInputEl.value?.focus())
+}
+function closeGotoSymbol(): void { symOpen.value = false }
+function confirmGotoSymbol(): void {
+  const item = symItems.value[symIdx.value]
+  if (item?.line != null) activeEditor()?.jumpToLine(item.line)
+  closeGotoSymbol()
+}
+function onSymKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.stopPropagation(); closeGotoSymbol() }
+  else if (e.key === 'Enter') { e.preventDefault(); confirmGotoSymbol() }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); symIdx.value = Math.min(symIdx.value + 1, symItems.value.length - 1) }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); symIdx.value = Math.max(0, symIdx.value - 1) }
+}
+watch(symQuery, () => { symIdx.value = 0 })
+registerCommand('workbench.action.gotoSymbol', openGotoSymbol)
+
 function onAppKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && bcDropdown.value) { bcDropdown.value = null; return }
   const mod = e.metaKey || e.ctrlKey
@@ -348,6 +417,7 @@ function onAppKeydown(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onAppKeydown)
+  window.addEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.addEventListener('click', closeBcDropdown)
   const api = (window as Window & {
     agentTeam?: {
@@ -370,6 +440,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onAppKeydown)
+  window.removeEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.removeEventListener('click', closeBcDropdown)
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
@@ -518,6 +589,31 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     </div>
   </div>
   <!-- Command Palette -->
+  <div v-if="symOpen" class="ide-palette-overlay" @mousedown.self="closeGotoSymbol">
+    <div class="ide-palette">
+      <input
+        ref="symInputEl"
+        v-model="symQuery"
+        class="ide-palette-input"
+        placeholder="前往符號…"
+        @keydown="onSymKeydown"
+      />
+      <ul v-if="symItems.length" class="ide-palette-list">
+        <li
+          v-for="(s, i) in symItems"
+          :key="s.name + s.line"
+          class="ide-palette-item"
+          :class="{ active: i === symIdx }"
+          @mouseover="symIdx = i"
+          @click="confirmGotoSymbol"
+        >
+          <span class="ide-palette-label">{{ s.name }}</span>
+          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · 第 {{ s.line }} 行</span>
+        </li>
+      </ul>
+      <div v-else class="ide-palette-empty">目前檔案沒有偵測到符號</div>
+    </div>
+  </div>
   <div v-if="qoOpen" class="ide-palette-overlay" @mousedown.self="closeQuickOpen">
     <div class="ide-palette">
       <input
@@ -580,10 +676,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     >
       <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">（空）</div>
       <div
-        v-for="item in bcDropdown.items"
+        v-for="(item, i) in bcDropdown.items"
         :key="(item.relPath || '') + (item.line ?? 0)"
         class="ide-bc-dd-item"
-        :class="{ 'is-dir': item.isDir, 'is-sym': !!item.line }"
+        :class="{ 'is-dir': item.isDir, 'is-sym': !!item.line, 'is-active': i === bcActiveIdx }"
+        @mouseover="bcActiveIdx = i"
         @click="onBcItemClick(item)"
       >
         <span class="ide-bc-dd-icon">
@@ -775,7 +872,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   white-space: nowrap;
   overflow: hidden;
 }
-.ide-bc-dd-item:hover { background: var(--bg-muted); }
+.ide-bc-dd-item:hover, .ide-bc-dd-item.is-active { background: var(--bg-muted); }
 .ide-bc-dd-item.is-dir { color: var(--accent-fg); }
 .ide-bc-dd-icon { flex-shrink: 0; display: flex; align-items: center; width: 16px; }
 .ide-bc-dd-sym-badge {
