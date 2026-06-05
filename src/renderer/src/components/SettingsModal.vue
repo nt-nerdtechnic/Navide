@@ -328,50 +328,66 @@ async function sSave() {
     sSelectedId.value = sDraft.value.id.trim()
     sIsNew.value = false
     if (plView.value === 'detail') await plReloadStages()
+  } catch (err) {
+    sError.value = err instanceof Error ? err.message : 'Save failed'
   } finally { sSaving.value = false }
 }
 async function sDoDelete() {
   if (!sDraft.value || sIsNew.value) { sConfirmDelete.value = false; return }
-  const resp = await props.backend.send<{ stages: unknown[] }>(
-    'stages.delete', { id: sDraft.value.id, ...sPipelineIdParam() }
-  )
-  sConfirmDelete.value = false
-  if (!resp.ok) { sError.value = resp.error?.message ?? 'Delete failed'; return }
-  sSummary.value = `Deleted "${sDraft.value.id}"`
-  if (plView.value === 'detail') {
-    await plReloadStages()
-    sSelectStage(plStages.value[0]?.id ?? null)
-  } else {
-    sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  try {
+    const resp = await props.backend.send<{ stages: unknown[] }>(
+      'stages.delete', { id: sDraft.value.id, ...sPipelineIdParam() }
+    )
+    sConfirmDelete.value = false
+    if (!resp.ok) { sError.value = resp.error?.message ?? 'Delete failed'; return }
+    sSummary.value = `Deleted "${sDraft.value.id}"`
+    if (plView.value === 'detail') {
+      await plReloadStages()
+      sSelectStage(plStages.value[0]?.id ?? null)
+    } else {
+      sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+    }
+  } catch (err) {
+    sConfirmDelete.value = false
+    sError.value = err instanceof Error ? err.message : 'Delete failed'
   }
 }
 async function sDoReset() {
-  const resp = await props.backend.send<{ stages: unknown[] }>(
-    'stages.reset', { ...sPipelineIdParam() }
-  )
-  sConfirmReset.value = false
-  if (!resp.ok) { sError.value = resp.error?.message ?? 'Reset failed'; return }
-  sSummary.value = 'Reset to factory defaults'
-  if (plView.value === 'detail') {
-    await plReloadStages()
-    sSelectStage(plStages.value[0]?.id ?? null)
-  } else {
-    sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+  try {
+    const resp = await props.backend.send<{ stages: unknown[] }>(
+      'stages.reset', { ...sPipelineIdParam() }
+    )
+    sConfirmReset.value = false
+    if (!resp.ok) { sError.value = resp.error?.message ?? 'Reset failed'; return }
+    sSummary.value = 'Reset to factory defaults'
+    if (plView.value === 'detail') {
+      await plReloadStages()
+      sSelectStage(plStages.value[0]?.id ?? null)
+    } else {
+      sSelectStage(props.stagesApi.stages.value[0]?.id ?? null)
+    }
+  } catch (err) {
+    sConfirmReset.value = false
+    sError.value = err instanceof Error ? err.message : 'Reset failed'
   }
 }
 async function sMoveUp(index: number) {
   if (index <= 0) return
   const ids = sActiveStages.value.map(s => s.id)
   ;[ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]
-  await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
-  if (plView.value === 'detail') await plReloadStages()
+  try {
+    await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
+    if (plView.value === 'detail') await plReloadStages()
+  } catch { /* ignore transient WS errors for reorder */ }
 }
 async function sMoveDown(index: number) {
   if (index >= sActiveStages.value.length - 1) return
   const ids = sActiveStages.value.map(s => s.id)
   ;[ids[index], ids[index + 1]] = [ids[index + 1], ids[index]]
-  await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
-  if (plView.value === 'detail') await plReloadStages()
+  try {
+    await props.backend.send('stages.reorder', { ids, ...sPipelineIdParam() })
+    if (plView.value === 'detail') await plReloadStages()
+  } catch { /* ignore transient WS errors for reorder */ }
 }
 const sEditingSlotIndex = ref<number | null>(null)
 
@@ -594,6 +610,8 @@ async function plEnterDetail(id: string) {
       plStages.value = resp.payload.stages.map(stageDefToFrontend)
       if (plStages.value.length > 0) sSelectStage(plStages.value[0].id)
     }
+  } catch (err) {
+    sError.value = err instanceof Error ? err.message : 'Load failed'
   } finally {
     plStagesLoading.value = false
   }
@@ -609,12 +627,14 @@ function plBackToList() {
 
 async function plReloadStages() {
   if (!plEditingId.value) return
-  const resp = await props.backend.send<{ stages: Record<string, unknown>[] }>(
-    'stages.list', { pipeline_id: plEditingId.value }
-  )
-  if (resp.ok && resp.payload) {
-    plStages.value = resp.payload.stages.map(stageDefToFrontend)
-  }
+  try {
+    const resp = await props.backend.send<{ stages: Record<string, unknown>[] }>(
+      'stages.list', { pipeline_id: plEditingId.value }
+    )
+    if (resp.ok && resp.payload) {
+      plStages.value = resp.payload.stages.map(stageDefToFrontend)
+    }
+  } catch { /* ignore transient WS errors */ }
 }
 
 async function plCreate() {
