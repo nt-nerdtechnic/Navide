@@ -122,6 +122,55 @@ watch(settingsProvider, (provider) => {
 // Input char counter (shown when > 200 chars)
 const inputCharCount = computed(() => inputText.value.length)
 
+// ── Conversation search ────────────────────────────────────────────────────────
+const showSearch = ref(false)
+const searchQuery = ref('')
+const searchMatchIdx = ref(0)
+const searchInput = ref<HTMLInputElement | null>(null)
+
+const searchMatches = computed<number[]>(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return []
+  return messages.value.reduce<number[]>((acc, m, i) => {
+    if (m.content.toLowerCase().includes(q)) acc.push(i)
+    return acc
+  }, [])
+})
+
+function openSearch(): void {
+  showSearch.value = true
+  searchQuery.value = ''
+  searchMatchIdx.value = 0
+  nextTick(() => searchInput.value?.focus())
+}
+
+function closeSearch(): void {
+  showSearch.value = false
+  searchQuery.value = ''
+}
+
+function searchNav(delta: number): void {
+  const len = searchMatches.value.length
+  if (!len) return
+  searchMatchIdx.value = (searchMatchIdx.value + delta + len) % len
+  const msgIdx = searchMatches.value[searchMatchIdx.value]
+  const el = messagesEl.value?.querySelectorAll('.ai-msg')[msgIdx] as HTMLElement | undefined
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
+watch(searchQuery, () => {
+  searchMatchIdx.value = 0
+  if (searchMatches.value.length) searchNav(0)
+})
+
+function isSearchMatch(idx: number): boolean {
+  return showSearch.value && searchMatches.value.includes(idx)
+}
+
+function isSearchActive(idx: number): boolean {
+  return showSearch.value && searchMatches.value[searchMatchIdx.value] === idx
+}
+
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
   id: string
@@ -967,6 +1016,10 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     void sendMessage()
   }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault()
+    openSearch()
+  }
 }
 
 // Auto-resize textarea
@@ -1006,8 +1059,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
       <div
         v-for="(msg, mi) in messages"
         :key="mi"
-        class="ai-msg-wrap"
-        :class="msg.role"
+        class="ai-msg-wrap ai-msg"
+        :class="[msg.role, { 'search-match': isSearchMatch(mi), 'search-active': isSearchActive(mi) }]"
       >
         <!-- Bubble -->
         <div class="ai-bubble" :class="msg.role">
@@ -1097,6 +1150,24 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
       </div>
     </div>
 
+    <!-- Search bar -->
+    <div v-if="showSearch" class="ai-search-bar">
+      <input
+        ref="searchInput"
+        v-model="searchQuery"
+        class="ai-search-input"
+        placeholder="搜尋對話…"
+        @keydown.escape="closeSearch"
+        @keydown.enter.prevent="searchNav(1)"
+      />
+      <span class="ai-search-count">
+        {{ searchMatches.length ? `${searchMatchIdx + 1}/${searchMatches.length}` : '無結果' }}
+      </span>
+      <button class="ai-search-nav" title="上一個" @click="searchNav(-1)">↑</button>
+      <button class="ai-search-nav" title="下一個" @click="searchNav(1)">↓</button>
+      <button class="ai-search-close" @click="closeSearch">✕</button>
+    </div>
+
     <!-- Input area -->
     <div
       class="ai-input-area"
@@ -1182,6 +1253,16 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M4 3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H4Z"/>
+            </svg>
+          </button>
+          <button
+            class="ai-settings-btn"
+            title="搜尋對話 (Ctrl+F)"
+            :disabled="messages.length === 0"
+            @click="openSearch"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/>
             </svg>
           </button>
           <button
