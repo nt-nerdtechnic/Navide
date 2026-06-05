@@ -192,6 +192,8 @@ class ProjectStore:
         if not pf.exists():
             return None
         try:
+            if pf.stat().st_size > 524_288:  # 512 KB sanity cap
+                raise ValueError("project.json exceeds size limit")
             data = json.loads(pf.read_text(encoding="utf-8"))
             project = Project.from_dict(data)
             project.workspace_path = ws
@@ -209,6 +211,8 @@ class ProjectStore:
         pf = self.project_file(ws)
         if pf.exists():
             try:
+                if pf.stat().st_size > 524_288:
+                    raise ValueError("project.json exceeds size limit")
                 data = json.loads(pf.read_text(encoding="utf-8"))
                 project = Project.from_dict(data)
                 # Keep workspace_path canonical in case the user moved the folder.

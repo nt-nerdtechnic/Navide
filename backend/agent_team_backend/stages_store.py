@@ -419,6 +419,8 @@ class StagesStore:
             self._write_doc(doc)
             return doc
         try:
+            if self._path.stat().st_size > 2_097_152:  # 2 MB sanity cap
+                raise ValueError("pipelines.json exceeds size limit")
             data = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 # File was somehow written as a flat list — wrap it

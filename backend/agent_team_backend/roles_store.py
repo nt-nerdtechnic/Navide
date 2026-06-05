@@ -101,6 +101,8 @@ class RolesStore:
             self._write(seed)
             return seed
         try:
+            if self._path.stat().st_size > 1_048_576:  # 1 MB sanity cap
+                raise ValueError("roles.json exceeds size limit")
             data = json.loads(self._path.read_text(encoding="utf-8"))
             if not isinstance(data, list):
                 raise ValueError("roles.json must contain a JSON array")
