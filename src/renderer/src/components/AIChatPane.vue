@@ -121,6 +121,8 @@ const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
 const showThreads = ref(false)
 const threadSearchQuery = ref('')
+const renamingThreadId = ref('')
+const renamingTitle = ref('')
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
   if (!q) return allThreads.value
@@ -221,6 +223,31 @@ function deleteThread(id: string): void {
   }
   try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
   catch { /* quota */ }
+}
+
+function startRenameThread(id: string, title: string, e: Event): void {
+  e.stopPropagation()
+  renamingThreadId.value = id
+  renamingTitle.value = title
+  nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>('.ai-thread-rename-input')
+    el?.focus()
+    el?.select()
+  })
+}
+function finishRenameThread(): void {
+  const id = renamingThreadId.value
+  const title = renamingTitle.value.trim()
+  if (id && title) {
+    const t = allThreads.value.find((t) => t.id === id)
+    if (t) { t.title = title; saveCurrentThread() }
+  }
+  renamingThreadId.value = ''
+  renamingTitle.value = ''
+}
+function cancelRenameThread(): void {
+  renamingThreadId.value = ''
+  renamingTitle.value = ''
 }
 
 watch(messages, saveCurrentThread, { deep: true })
@@ -1849,7 +1876,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           :class="{ active: t.id === currentThreadId }"
           @click="switchThread(t.id)"
         >
-          <span class="ai-thread-title">{{ t.title }}</span>
+          <input
+            v-if="renamingThreadId === t.id"
+            v-model="renamingTitle"
+            class="ai-thread-rename-input"
+            @click.stop
+            @keydown.enter.prevent="finishRenameThread"
+            @keydown.escape.prevent="cancelRenameThread"
+            @blur="finishRenameThread"
+          />
+          <span
+            v-else
+            class="ai-thread-title"
+            title="Double-click to rename"
+            @dblclick.stop="startRenameThread(t.id, t.title, $event)"
+          >{{ t.title }}</span>
           <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
           <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
           <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
@@ -2801,7 +2842,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 }
 .ai-thread-item:hover { background: var(--bg-muted); }
 .ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
-.ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ai-thread-rename-input { flex: 1; font-size: 12.5px; background: var(--bg-input); border: 1px solid var(--accent-emphasis); border-radius: 3px; color: var(--text-bright); padding: 1px 4px; outline: none; min-width: 0; }
 .ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
