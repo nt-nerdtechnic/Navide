@@ -165,6 +165,8 @@ def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
         dst = _resolve_safe(workspace_path, dst_rel)
         if src == Path(workspace_path).resolve():
             raise FsError("cannot rename the workspace root")
+        if src == dst:
+            raise FsError("source and destination are the same path")
         if not src.exists():
             raise FsError("source not found")
         if dst.exists():

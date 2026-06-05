@@ -605,6 +605,10 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
+  // Clear keybinding contexts so a closed tab's stale state can't block
+  // shortcuts in other panes.
+  setContext('findOpen', false)
+  setContext('editorTextFocus', false)
 })
 
 function toggleLineComment(): void { editorRef.value?.toggleLineComment() }
