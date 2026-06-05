@@ -751,10 +751,6 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.findReferences',   label: 'Find References in Files',      keys: '⇧F12' },
   { id: 'editor.action.renameSymbol',     label: 'Rename Symbol (Select All)',    keys: 'F2' },
   { id: 'editor.action.detectIndentation',    label: 'Detect Indentation' },
-  { id: 'editor.action.indentationToSpaces',  label: 'Convert Indentation to Spaces' },
-  { id: 'editor.action.indentationToTabs',    label: 'Convert Indentation to Tabs' },
-  { id: 'editor.action.changeEOLtoCRLF',      label: 'Change Line Ending to CRLF' },
-  { id: 'editor.action.changeEOLtoLF',        label: 'Change Line Ending to LF' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')

@@ -182,7 +182,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       <footer class="ob-footer">
         <button v-if="step > 1" class="ob-btn ghost" @click="step--">Back</button>
         <span class="ob-spacer" />
-        <button v-if="step < 3" class="ob-btn primary" @click="step++">Next</button>
+        <button v-if="step < 3" class="ob-btn primary" :disabled="!!ob.installing.value" @click="step++">Next</button>
         <button
           v-else
           class="ob-btn primary"
