@@ -446,8 +446,10 @@ async function sendMessage(): Promise<void> {
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
-    if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
-    if (last) { last.streaming = false; last.thinking = false }
+    if (last?.role === 'assistant') {
+      last.streaming = false; last.thinking = false
+      last.isError = true; last.errorMsg = '無法連線到後端'
+    }
     sending.value = false
     currentSessionId.value = null
   }
