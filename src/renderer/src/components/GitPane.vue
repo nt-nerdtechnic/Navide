@@ -824,7 +824,7 @@ async function doStash(): Promise<void> {
   stashError.value = ''
   const r = await stashPush(stashMessage.value)
   if (r.ok) { stashMessage.value = ''; showStashPrompt.value = false }
-  else stashError.value = r.error || 'draft failed'
+  else stashError.value = r.error || 'stash failed'
 }
 async function doStashApply(i: number): Promise<void> {
   stashError.value = ''
