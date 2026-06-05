@@ -393,7 +393,7 @@ async function doAbort(): Promise<void> {
   if (!r.ok) notifyToast(r.error || 'Abort failed', { type: 'error' })
 }
 
-// ── 所有衝突解完後自動偵測並預填 commit message ──────────────────────────────────
+// ── Auto-detect and pre-fill commit message once all conflicts are resolved ────
 // Only stage check removed: accepting "ours" resolves conflicts without adding staged diff vs HEAD
 const allConflictsResolved = computed(() =>
   opInProgress.value === 'merge' && conflictFileCount.value === 0,
@@ -401,7 +401,7 @@ const allConflictsResolved = computed(() =>
 
 watch(allConflictsResolved, async (val) => {
   if (!val || commitMessage.value) return
-  // 讀 .git/MERGE_MSG 預填
+  // Read .git/MERGE_MSG to pre-populate commit message
   const resp = await props.backend.send<{ ok: boolean; content: string }>(
     'fs.read_file',
     { workspace_path: props.workspacePath, rel_path: '.git/MERGE_MSG' },
@@ -601,7 +601,11 @@ watch(autoCommit, (val) => {
   }
 })
 
-onUnmounted(() => { _clearAutoTimer() })
+onUnmounted(() => {
+  _clearAutoTimer()
+  document.removeEventListener('mousemove', onGitDividerMove)
+  document.removeEventListener('mouseup', onGitDividerEnd)
+})
 
 // ── remote actions ────────────────────────────────────────────────────────────
 const { toast: notifyToast, alert: notifyAlert } = useNotify()

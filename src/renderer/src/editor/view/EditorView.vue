@@ -58,6 +58,7 @@ const showLineNumbers = ref(true)
 const gutterWidth = computed(() =>
   showLineNumbers.value ? Math.max(48, String(lineCount.value).length * 9 + 12) : 0
 )
+const charWidth = ref(8)
 // Sizer minimum width ensures long lines are horizontally scrollable.
 // Uses cached max-length: O(1) on pure inserts, O(N) only when cache is invalid.
 const sizerMinWidth = computed(() => {
@@ -70,7 +71,6 @@ const vs = useVirtualScroll(lineCount, lineHeightPx)
 const scrollEl = ref<HTMLElement | null>(null)
 const scrollLeftVal = ref(0)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
-const charWidth = ref(8)
 
 // Column ruler at 80 chars (VS Code-compatible guide line)
 const RULER_COL = 80

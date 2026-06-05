@@ -46,12 +46,14 @@ const rawDiff = ref<string | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const selected = ref<Record<number, Set<number>>>({})
+let _loadSeq = 0
 
 const parsed = computed(() => (rawDiff.value ? parseHunks(rawDiff.value) : { fileHeader: '', hunks: [] }))
 const isBinary = computed(() => rawDiff.value !== null && /^Binary files /m.test(rawDiff.value ?? ''))
 const isEmpty = computed(() => rawDiff.value !== null && !isBinary.value && parsed.value.hunks.length === 0)
 
 async function loadDiff(): Promise<void> {
+  const seq = ++_loadSeq
   loading.value = true
   loadError.value = ''
   try {
@@ -60,6 +62,7 @@ async function loadDiff(): Promise<void> {
       filepath: props.filepath,
       staged: props.staged,
     })
+    if (seq !== _loadSeq) return
     if (resp.ok && resp.payload?.ok) {
       rawDiff.value = resp.payload.diff ?? ''
       selected.value = {}
@@ -68,7 +71,7 @@ async function loadDiff(): Promise<void> {
       loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
     }
   } finally {
-    loading.value = false
+    if (seq === _loadSeq) loading.value = false
   }
 }
 

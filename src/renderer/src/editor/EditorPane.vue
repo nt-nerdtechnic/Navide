@@ -68,9 +68,9 @@ function onCursorChange(pos: Position): void {
     const lines = sel.split('\n')
     const words = sel.trim().split(/\s+/).filter(Boolean).length
     if (lines.length > 1) {
-      selectionInfo.value = `${lines.length} 行  ${sel.length} 字元  ${words} 字`
+      selectionInfo.value = `${lines.length} lines  ${sel.length} chars  ${words} words`
     } else {
-      selectionInfo.value = `${sel.length} 字元  ${words} 字`
+      selectionInfo.value = `${sel.length} chars  ${words} words`
     }
   } else {
     selectionInfo.value = ''
