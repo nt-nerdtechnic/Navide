@@ -954,8 +954,10 @@ function sortLinesDescending(): void { sortLines('desc') }
 
 function reverseLines(): void {
   const range = selectionRange()
-  const startL = range ? Math.min(range.start.line, range.end.line) : 0
-  const endL   = range ? Math.max(range.start.line, range.end.line) : model.lineCount() - 1
+  const startL = range ? range.start.line : 0
+  const endL   = range
+    ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1))
+    : model.lineCount() - 1
   const lines  = []
   for (let i = startL; i <= endL; i++) lines.push(model.getLine(i))
   lines.reverse()
@@ -970,8 +972,10 @@ function reverseLines(): void {
 
 function removeDuplicateLines(): void {
   const range = selectionRange()
-  const startL = range ? Math.min(range.start.line, range.end.line) : 0
-  const endL   = range ? Math.max(range.start.line, range.end.line) : model.lineCount() - 1
+  const startL = range ? range.start.line : 0
+  const endL   = range
+    ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1))
+    : model.lineCount() - 1
   const seen   = new Set<string>()
   const unique: string[] = []
   for (let i = startL; i <= endL; i++) {
