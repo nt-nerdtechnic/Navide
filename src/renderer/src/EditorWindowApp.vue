@@ -372,7 +372,7 @@ registerCommand('editor.action.joinLines',               () => activeEditor()?.j
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
 registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
-registerCommand('editor.action.openFileAtCursor', () => {
+registerCommand('editor.action.openFileAtCursor', async () => {
   const lineText = activeEditor()?.getCursorLineText?.() ?? ''
   if (!lineText) return
   const m = lineText.match(/from\s+['"`]([^'"`]+)['"`]/)
@@ -388,7 +388,10 @@ registerCommand('editor.action.openFileAtCursor', () => {
   for (const p of parts) { if (p === '..') resolved.pop(); else if (p !== '.') resolved.push(p) }
   const base = resolved.join('/')
   for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '/index.ts', '/index.js']) {
-    const path = base + ext; if (path) { openFile({ filepath: path }); return }
+    const path = base + ext
+    if (!path) continue
+    const resp = await backend.send<{ content?: string }>('fs.read_file', { workspace_path: workspacePath, rel_path: path })
+    if (resp.payload?.content !== undefined) { openFile({ filepath: path }); return }
   }
 })
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
