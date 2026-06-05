@@ -101,17 +101,21 @@ function selectedCount(hunkIdx: number): number {
 }
 
 async function apply(patch: string, reverse: boolean, cached: boolean): Promise<void> {
-  const resp = await props.backend.send<{ ok: boolean; error?: string }>('git.apply_patch', {
-    workspace_path: props.workspacePath,
-    patch,
-    reverse,
-    cached,
-  })
-  if (!(resp.ok && resp.payload?.ok)) {
-    notify.toast(resp.payload?.error || resp.error?.message || 'Failed to apply patch', { type: 'error' })
-    return
+  try {
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>('git.apply_patch', {
+      workspace_path: props.workspacePath,
+      patch,
+      reverse,
+      cached,
+    })
+    if (!(resp.ok && resp.payload?.ok)) {
+      notify.toast(resp.payload?.error || resp.error?.message || 'Failed to apply patch', { type: 'error' })
+      return
+    }
+    await loadDiff()
+  } catch (e) {
+    notify.toast(e instanceof Error ? e.message : 'Failed to apply patch', { type: 'error' })
   }
-  await loadDiff()
 }
 
 function stageHunk(hunk: Hunk): void { void apply(buildPatch(parsed.value, hunk), false, true) }

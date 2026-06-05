@@ -65,6 +65,8 @@ async function loadFile(): Promise<void> {
     } else {
       loadError.value = resp.payload?.error || resp.error?.message || 'Failed to read file'
     }
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : 'Failed to read file'
   } finally {
     loading.value = false
   }
@@ -164,6 +166,8 @@ async function applyAndStage(): Promise<void> {
     }
     notify.toast(`${props.name} conflicts resolved`, { type: 'success' })
     emit('resolved')
+  } catch (e) {
+    notify.toast(e instanceof Error ? e.message : 'Apply failed', { type: 'error' })
   } finally {
     applying.value = false
   }

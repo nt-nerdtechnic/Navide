@@ -284,6 +284,8 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
         if any(p in {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"} for p in parts):
             continue
         try:
+            if candidate.stat().st_size > 5 * 1024 * 1024:
+                continue
             text = candidate.read_text(encoding="utf-8", errors="ignore")
             if query in text:
                 results.append(str(candidate.relative_to(root)))

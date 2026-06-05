@@ -160,14 +160,18 @@ async function deleteSelected(): Promise<void> {
   for (const rel of paths) {
     const parentDeleted = [...deleted].some(d => rel.startsWith(d + '/'))
     if (parentDeleted) continue
-    const res = await props.backend.send<FsResult>('fs.delete', {
-      workspace_path: props.workspacePath,
-      rel_path: rel,
-    })
-    if (!res.payload?.ok) {
-      void alert(res.payload?.error || `Failed to delete "${rel}"`, { title: 'Error' })
-    } else {
-      deleted.add(rel)
+    try {
+      const res = await props.backend.send<FsResult>('fs.delete', {
+        workspace_path: props.workspacePath,
+        rel_path: rel,
+      })
+      if (!res.payload?.ok) {
+        void alert(res.payload?.error || `Failed to delete "${rel}"`, { title: 'Error' })
+      } else {
+        deleted.add(rel)
+      }
+    } catch (err) {
+      void alert(err instanceof Error ? err.message : `Failed to delete "${rel}"`, { title: 'Error' })
     }
   }
   clearSelection()
