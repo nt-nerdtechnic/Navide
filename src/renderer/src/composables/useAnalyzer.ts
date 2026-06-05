@@ -274,23 +274,23 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   }
 
   // ── Backend push events ───────────────────────────────────────────────────
-  backend.on('analyzer.benchmark_progress', (payload) => {
+  const _offBenchmarkProgress = backend.on('analyzer.benchmark_progress', (payload) => {
     benchmarkProgress.value = payload as BenchmarkProgress
   })
-  backend.on('analyzer.benchmark_done', (payload) => {
+  const _offBenchmarkDone = backend.on('analyzer.benchmark_done', (payload) => {
     const p = payload as { results: BenchmarkModelResult[] }
     benchmarkResults.value = p.results ?? []
     localStorage.setItem(BENCHMARK_STORAGE_KEY, JSON.stringify(benchmarkResults.value))
     benchmarking.value = false
     benchmarkProgress.value = null
   })
-  backend.on('analyzer.settings_changed', (payload) => {
+  const _offSettingsChanged = backend.on('analyzer.settings_changed', (payload) => {
     analyzerSettings.value = payload as AnalyzerSettings
   })
-  backend.on('analyzer.pull_progress', (payload) => {
+  const _offPullProgress = backend.on('analyzer.pull_progress', (payload) => {
     pullProgress.value = payload as PullProgress
   })
-  backend.on('analyzer.pull_done', (payload) => {
+  const _offPullDone = backend.on('analyzer.pull_done', (payload) => {
     const p = payload as { name: string; ok: boolean; error?: string }
     pulling.value = false
     pullProgress.value = null
@@ -327,6 +327,8 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
 
   onScopeDispose(() => {
     if (pollHandle !== null) window.clearInterval(pollHandle)
+    _offBenchmarkProgress(); _offBenchmarkDone()
+    _offSettingsChanged(); _offPullProgress(); _offPullDone()
   })
 
   return {
