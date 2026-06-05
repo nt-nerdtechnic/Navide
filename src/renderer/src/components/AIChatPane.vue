@@ -443,6 +443,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@selection', label: '@selection — editor selection' },
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
+  { id: '@folder', label: '@folder — all files in a directory' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1386,6 +1387,7 @@ function onTextareaInput(e: Event): void {
   const fragment = beforeCursor.slice(atIdx + 1)
   // Allow spaces only inside @codebase <query>
   const isCodebaseQuery = /^codebase\s+\S/i.test(fragment)
+  const isFolderPath = /^folder:/i.test(fragment)
   if (fragment.includes(' ') && !isCodebaseQuery) { showAtMenu.value = false; return }
 
   atMenuFilter.value = fragment
@@ -1395,6 +1397,12 @@ function onTextareaInput(e: Event): void {
   if (isCodebaseQuery) {
     const cbQuery = fragment.slice(fragment.indexOf(' ') + 1).trim()
     atOptions.value = [{ id: `@codebase:${cbQuery}`, label: `@codebase search: "${cbQuery}"` }]
+    return
+  }
+
+  if (isFolderPath) {
+    const folderPath = fragment.slice('folder:'.length).trim()
+    atOptions.value = [{ id: `@folder:${folderPath}`, label: `@folder: "${folderPath}" (add all files)` }]
     return
   }
 
@@ -1586,6 +1594,48 @@ async function selectAtOption(option: AtOption): Promise<void> {
       }
     } catch {
       chipContent = `// @codebase search "${query}": unavailable`
+    }
+  } else if (option.id === '@folder') {
+    // Prompt user to specify a sub-directory by rewriting textarea
+    const newVal = val.slice(0, atIdx) + '@folder:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@folder:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@folder:')) {
+    const folderPath = option.id.slice('@folder:'.length).trim()
+    chipLabel = `@folder:${folderPath}`
+    try {
+      interface FlatResp { ok: boolean; files?: string[] }
+      const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
+        workspace_path: props.workspacePath,
+        query: '',
+      })
+      const allFiles = resp.payload?.files ?? []
+      // Filter to files under the specified folder
+      const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/'
+      const matching = allFiles.filter((f) => f.startsWith(prefix) || f.startsWith(folderPath + '/') || f === folderPath)
+      if (matching.length === 0) {
+        chipContent = `// @folder:${folderPath}: no files found`
+      } else {
+        const MAX_FILES = 10
+        const taken = matching.slice(0, MAX_FILES)
+        const results: string[] = []
+        for (const filePath of taken) {
+          try {
+            interface ReadResp { ok: boolean; content?: string }
+            const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
+            const ext = filePath.split('.').pop() ?? ''
+            results.push(`// ${filePath}\n\`\`\`${ext}\n${(fr.payload?.content ?? '').slice(0, 2000)}\n\`\`\``)
+          } catch { /* skip unreadable files */ }
+        }
+        chipContent = `// @folder:${folderPath} (${taken.length} files${matching.length > MAX_FILES ? `, showing ${MAX_FILES}` : ''})\n\n${results.join('\n\n')}`
+      }
+    } catch {
+      chipContent = `// @folder:${folderPath}: unavailable`
     }
   } else {
     // It's a file path
