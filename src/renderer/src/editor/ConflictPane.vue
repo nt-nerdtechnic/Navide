@@ -79,6 +79,10 @@ watch([() => props.filepath], () => {
 
 function choose(conflictIdx: number, choice: ConflictChoice): void {
   if (choice === 'manual') {
+    // Auto-save current in-progress edit before switching to another conflict's textarea
+    if (editingIdx.value !== null && editingIdx.value !== conflictIdx) {
+      manualEdits.value = new Map(manualEdits.value).set(editingIdx.value, editBuf.value)
+    }
     const sec = sections.value.filter((s) => s.kind === 'conflict')[conflictIdx]
     if (sec?.kind === 'conflict') {
       editBuf.value = manualEdits.value.get(conflictIdx) ?? sec.ours.join('\n')
@@ -108,6 +112,11 @@ function cancelManual(conflictIdx: number): void {
 
 async function applyAndStage(): Promise<void> {
   if (!allResolved.value || applying.value) return
+  // Flush any in-progress textarea edit before applying
+  if (editingIdx.value !== null) {
+    manualEdits.value = new Map(manualEdits.value).set(editingIdx.value, editBuf.value)
+    editingIdx.value = null
+  }
   applying.value = true
   try {
     const resolved = buildResolved(sections.value, choices.value, manualEdits.value)

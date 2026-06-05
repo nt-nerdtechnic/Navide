@@ -434,3 +434,23 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
     expect(dr.resolve(mkEvent('[', { metaKey: true, shiftKey: true }), {})).toBeNull()
   })
 })
+
+describe('navigation history shortcuts', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+- → navigateBack (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('-', { ctrlKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.navigateBack')
+  })
+
+  it('ctrl+shift+- → navigateForward (editorOpen)', () => {
+    expect(dr.resolve(mkEvent('-', { ctrlKey: true, shiftKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.navigateForward')
+  })
+
+  it('navigateBack/Forward require editorOpen', () => {
+    expect(dr.resolve(mkEvent('-', { ctrlKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('-', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
+  })
+})

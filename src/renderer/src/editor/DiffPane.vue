@@ -20,8 +20,8 @@ const notify = useNotify()
 const bodyRef = ref<HTMLElement | null>(null)
 const currentHunkIdx = ref(-1)
 
-function hunkEls(): NodeListOf<Element> {
-  return bodyRef.value?.querySelectorAll('.dp-hunk') ?? (document.querySelectorAll('') as NodeListOf<Element>)
+function hunkEls() {
+  return bodyRef.value?.querySelectorAll('.dp-hunk') ?? ([] as Element[])
 }
 
 function jumpToHunk(idx: number): void {
@@ -62,6 +62,7 @@ async function loadDiff(): Promise<void> {
     if (resp.ok && resp.payload?.ok) {
       rawDiff.value = resp.payload.diff ?? ''
       selected.value = {}
+      currentHunkIdx.value = -1
     } else {
       loadError.value = resp.payload?.error || resp.error?.message || '無法載入 diff'
     }

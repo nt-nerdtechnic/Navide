@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, toRef } from 'vue'
+import { ref, computed, onMounted, watch, toRef, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useExplorer, type FsEntry } from '../composables/useExplorer'
 import { useGit } from '../composables/useGit'
@@ -341,6 +341,23 @@ onMounted(() => {
 watch(wsRef, (v) => {
   if (v) { clearSelection(); doInitialLoad() }
 })
+
+// ── Reveal file ──────────────────────────────────────────────────────────────
+const treeEl = ref<HTMLElement | null>(null)
+
+async function revealFile(relPath: string): Promise<void> {
+  const segments = relPath.split('/')
+  segments.pop()
+  let current = ''
+  for (const seg of segments) {
+    current = current ? `${current}/${seg}` : seg
+    if (!explorer.isExpanded(current)) await explorer.toggleDir(current)
+  }
+  await nextTick()
+  treeEl.value?.querySelector<HTMLElement>(`[data-rel="${relPath}"]`)?.scrollIntoView({ block: 'nearest' })
+}
+
+defineExpose({ revealFile })
 </script>
 
 <template>
@@ -373,10 +390,11 @@ watch(wsRef, (v) => {
     </div>
 
     <!-- Tree -->
-    <div class="exp-tree" @contextmenu="openCtx($event, null)">
+    <div ref="treeEl" class="exp-tree" @contextmenu="openCtx($event, null)">
       <div
         v-for="row in rows"
         :key="row.entry.rel_path"
+        :data-rel="row.entry.rel_path"
         class="exp-row"
         :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path) }"
         :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"

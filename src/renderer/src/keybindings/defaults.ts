@@ -15,7 +15,8 @@ export const defaults: KeybindingRule[] = [
   // ── Editor ───────────────────────────────────────────────────────────────
   { key: 'cmd+s', command: 'editor.action.save',          when: 'editorOpen && !terminalFocus' },
   { key: 'cmd+k', command: 'editor.action.inlineRewrite', when: 'editorTextFocus' },
-  { key: 'cmd+i', command: 'editor.action.triggerGhost',  when: 'editorTextFocus' },
+  { key: 'cmd+i',   command: 'editor.action.triggerGhost',  when: 'editorTextFocus' },
+  { key: 'ctrl+space', command: 'editor.action.triggerGhost', when: 'editorTextFocus' },
   { key: 'cmd+f', command: 'editor.action.openFind',      when: 'editorOpen && !terminalFocus' },
   { key: 'cmd+h', command: 'editor.action.openReplace',  when: 'editorOpen && !terminalFocus' },
   { key: 'cmd+g', command: 'editor.action.nextMatch',     when: 'findOpen' },
@@ -93,6 +94,10 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+7', command: 'workbench.action.openEditorAtIndex7', when: 'editorOpen' },
   { key: 'cmd+8', command: 'workbench.action.openEditorAtIndex8', when: 'editorOpen' },
   { key: 'cmd+9', command: 'workbench.action.openEditorAtIndex9', when: 'editorOpen' },
+
+  // ── Navigation history ────────────────────────────────────────────────────────
+  { key: 'ctrl+-',       command: 'workbench.action.navigateBack',    when: 'editorOpen' },
+  { key: 'ctrl+shift+-', command: 'workbench.action.navigateForward', when: 'editorOpen' },
 
   // ── AI Chat ──────────────────────────────────────────────────────────────────
   { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },

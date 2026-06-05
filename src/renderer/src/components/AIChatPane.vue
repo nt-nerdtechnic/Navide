@@ -109,6 +109,21 @@ const atDirItems = ref<AtOption[]>([])
 
 const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 
+// ── Slash commands ────────────────────────────────────────────────────────────
+interface SlashCommand { id: string; label: string; description: string; template: string }
+const SLASH_COMMANDS: SlashCommand[] = [
+  { id: '/explain', label: '/explain', description: '解釋程式碼', template: '請詳細解釋以下程式碼的功能與邏輯：' },
+  { id: '/fix',     label: '/fix',     description: '修復問題',   template: '請找出並修復以下程式碼中的問題：' },
+  { id: '/tests',   label: '/tests',   description: '生成測試',   template: '請為以下程式碼撰寫完整的單元測試：' },
+  { id: '/doc',     label: '/doc',     description: '撰寫文件',   template: '請為以下程式碼撰寫清晰的文件與說明：' },
+  { id: '/review',  label: '/review',  description: '程式碼審查', template: '請對以下程式碼進行 code review，指出潛在問題與改善建議：' },
+]
+const showSlashMenu = ref(false)
+const slashMenuFilter = ref('')
+const slashMenuIdx = ref(0)
+const slashMenuEl = ref<HTMLElement | null>(null)
+const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
+
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
 function renderMarkdownLite(text: string): string {
   // code blocks
@@ -450,52 +465,77 @@ function onTextareaInput(e: Event): void {
   const el = e.target as HTMLTextAreaElement
   const val = el.value
   const cur = el.selectionStart ?? val.length
-
-  // Find the last '@' before cursor that isn't followed by a space
   const beforeCursor = val.slice(0, cur)
+
+  // ── Slash command menu (/command at start of input) ───────────────────────
+  if (val.startsWith('/') && !val.includes(' ')) {
+    showAtMenu.value = false
+    const fragment = val.slice(1).toLowerCase()
+    slashMenuFilter.value = fragment
+    slashMenuIdx.value = 0
+    slashOptions.value = SLASH_COMMANDS.filter((c) => c.id.slice(1).startsWith(fragment))
+    showSlashMenu.value = slashOptions.value.length > 0
+    return
+  }
+  showSlashMenu.value = false
+
+  // ── @ context menu ────────────────────────────────────────────────────────
   const atIdx = beforeCursor.lastIndexOf('@')
   if (atIdx === -1) { showAtMenu.value = false; return }
 
   const fragment = beforeCursor.slice(atIdx + 1)
   if (fragment.includes(' ')) { showAtMenu.value = false; return }
 
-  // Show the @ menu
   atMenuFilter.value = fragment
   atMenuIdx.value = 0
   showAtMenu.value = true
 
-  // Filter options
   const lower = fragment.toLowerCase()
   const filtered: AtOption[] = AT_OPTIONS_STATIC.filter(
     (o) => o.label.toLowerCase().includes(lower) || o.id.toLowerCase().includes(lower),
   )
-  // Also add dir items if user typed a path
   for (const item of atDirItems.value) {
     if (item.label.toLowerCase().includes(lower)) filtered.push(item)
   }
   atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
 
-  // Search filesystem if fragment looks like a path
   if (fragment.length >= 1 && !fragment.startsWith('@')) {
     void searchFiles(fragment)
   }
 }
 
+function selectSlashCommand(cmd: SlashCommand): void {
+  inputText.value = cmd.template + ' '
+  showSlashMenu.value = false
+  nextTick(() => {
+    textareaEl.value?.focus()
+    const len = inputText.value.length
+    textareaEl.value?.setSelectionRange(len, len)
+  })
+}
+
 async function searchFiles(query: string): Promise<void> {
   try {
     interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
-    const resp = await props.backend.send<LsResp>('fs.list_dir', {
-      workspace_path: props.workspacePath,
-      rel_path: '',
-      show_hidden: false,
-    })
-    const entries = resp.payload?.entries ?? []
     const lower = query.toLowerCase()
-    atDirItems.value = entries
-      .filter((e) => !e.is_dir && e.name.toLowerCase().includes(lower))
-      .slice(0, 10)
-      .map((e) => ({ id: e.rel_path, label: `@${e.rel_path}` }))
-    // Recompute options
+    const found: AtOption[] = []
+
+    // BFS over directory tree up to 2 levels deep to find matching files
+    const dirsToVisit = ['', ...await _listSubdirs('')]
+    await Promise.all(dirsToVisit.map(async (dir) => {
+      const resp = await props.backend.send<LsResp>('fs.list_dir', {
+        workspace_path: props.workspacePath,
+        rel_path: dir,
+        show_hidden: false,
+      })
+      for (const e of resp.payload?.entries ?? []) {
+        if (!e.is_dir && e.name.toLowerCase().includes(lower)) {
+          found.push({ id: e.rel_path, label: `@${e.rel_path}` })
+        }
+      }
+    }))
+
+    atDirItems.value = found.slice(0, 12)
     const filtered: AtOption[] = [
       ...AT_OPTIONS_STATIC.filter((o) => o.label.toLowerCase().includes(lower)),
       ...atDirItems.value,
@@ -503,6 +543,22 @@ async function searchFiles(query: string): Promise<void> {
     atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
   } catch {
     // ignore
+  }
+}
+
+async function _listSubdirs(relPath: string): Promise<string[]> {
+  interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
+  try {
+    const resp = await props.backend.send<LsResp>('fs.list_dir', {
+      workspace_path: props.workspacePath,
+      rel_path: relPath,
+      show_hidden: false,
+    })
+    return (resp.payload?.entries ?? [])
+      .filter((e) => e.is_dir)
+      .map((e) => e.rel_path)
+  } catch {
+    return []
   }
 }
 
@@ -559,6 +615,29 @@ function removeChip(id: string): void {
 }
 
 function onTextareaKeydown(e: KeyboardEvent): void {
+  if (showSlashMenu.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      slashMenuIdx.value = (slashMenuIdx.value + 1) % slashOptions.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      slashMenuIdx.value = (slashMenuIdx.value - 1 + slashOptions.value.length) % slashOptions.value.length
+      return
+    }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault()
+      const cmd = slashOptions.value[slashMenuIdx.value]
+      if (cmd) selectSlashCommand(cmd)
+      return
+    }
+    if (e.key === 'Escape') {
+      showSlashMenu.value = false
+      return
+    }
+  }
+
   if (showAtMenu.value) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
@@ -597,10 +676,13 @@ watch(inputText, async () => {
   el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 })
 
-// Close @ menu on click outside
+// Close @ / slash menus on click outside
 function onClickOutside(e: MouseEvent): void {
   if (atMenuEl.value && !atMenuEl.value.contains(e.target as Node)) {
     showAtMenu.value = false
+  }
+  if (slashMenuEl.value && !slashMenuEl.value.contains(e.target as Node)) {
+    showSlashMenu.value = false
   }
 }
 
@@ -697,6 +779,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           {{ chip.label }}
           <button class="ai-chip-remove" @click="removeChip(chip.id)">×</button>
         </span>
+      </div>
+
+      <!-- Slash command menu -->
+      <div v-if="showSlashMenu" ref="slashMenuEl" class="ai-at-menu ai-slash-menu">
+        <div
+          v-for="(cmd, i) in slashOptions"
+          :key="cmd.id"
+          class="ai-at-item ai-slash-item"
+          :class="{ active: i === slashMenuIdx }"
+          @mousedown.prevent="selectSlashCommand(cmd)"
+          @mouseover="slashMenuIdx = i"
+        >
+          <span class="ai-slash-name">{{ cmd.label }}</span>
+          <span class="ai-slash-desc">{{ cmd.description }}</span>
+        </div>
       </div>
 
       <!-- @ menu -->
@@ -1107,6 +1204,24 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   color: var(--text-bright);
 }
 .ai-at-item:hover, .ai-at-item.active { background: var(--bg-muted); }
+
+.ai-slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+.ai-slash-name {
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--accent-fg);
+  font-weight: 600;
+  font-size: 12px;
+  min-width: 80px;
+}
+.ai-slash-desc {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
 
 .ai-input-row {
   display: flex;

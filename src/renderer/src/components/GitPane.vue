@@ -482,11 +482,13 @@ async function doGenerate(): Promise<void> {
 }
 
 // ── auto-commit (background patrol) ──────────────────────────────────────────
-// When enabled, watches for stable uncommitted changes and auto-commits locally
-// using an AI-generated message. Never pushes to remote.
+// Replicates the manual flow: Stage All → AI Generate → Commit (local only).
+// Never pushes to remote.
 const autoCommit = ref(false)
 const autoCommitPending = ref(false)
-const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes before committing
+// '' = idle, 'staging' | 'generating' | 'committing' = active step
+const autoCommitStep = ref<'' | 'staging' | 'generating' | 'committing'>('')
+const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes
 let _autoCommitTimer: ReturnType<typeof setTimeout> | null = null
 
 function _clearAutoTimer(): void {
@@ -498,18 +500,35 @@ async function runAutoCommit(): Promise<void> {
   _autoCommitTimer = null
   autoCommitPending.value = false
   if (!autoCommit.value) return
-  // Guard: skip during merge/rebase/conflicts, or if nothing to commit
+  // Guard: skip during merge/rebase/conflicts or when already busy
   if (opInProgress.value || conflictFileCount.value > 0) return
-  if (!hasCommittable.value || isCommitting.value || isGenerating.value) return
-  const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
-  if (!r.ok || !r.message) return
-  const cr = await commit(r.message, !hasStaged.value)
-  if (cr.ok) notifyToast(`Auto-committed: ${r.message}`, { type: 'success' })
+  if (!hasChanges.value || isCommitting.value || isGenerating.value) return
+
+  try {
+    // Step 1: Stage All (same as clicking the + button in Changes)
+    autoCommitStep.value = 'staging'
+    await stageAll()
+
+    // After staging, check there's actually something staged
+    if (!hasStaged.value) { autoCommitStep.value = ''; return }
+
+    // Step 2: AI Generate commit message (same as clicking ✦)
+    autoCommitStep.value = 'generating'
+    const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
+    if (!r.ok || !r.message) { autoCommitStep.value = ''; return }
+
+    // Step 3: Commit staged files (no -a; staging was done explicitly)
+    autoCommitStep.value = 'committing'
+    const cr = await commit(r.message, false)
+    if (cr.ok) notifyToast(`Auto-committed: ${r.message}`, { type: 'success' })
+  } finally {
+    autoCommitStep.value = ''
+  }
 }
 
 function scheduleAutoCommit(): void {
   _clearAutoTimer()
-  if (!autoCommit.value || !hasCommittable.value) return
+  if (!autoCommit.value || !hasChanges.value) return
   autoCommitPending.value = true
   _autoCommitTimer = setTimeout(runAutoCommit, AUTO_COMMIT_DELAY_MS)
 }
@@ -517,13 +536,13 @@ function scheduleAutoCommit(): void {
 // Reset the timer whenever the change list shifts while auto-commit is active.
 watch(
   () => [gitStatus.value.staged, gitStatus.value.unstaged, gitStatus.value.untracked],
-  () => { if (autoCommit.value) scheduleAutoCommit() },
+  () => { if (autoCommit.value && !autoCommitStep.value) scheduleAutoCommit() },
   { deep: true },
 )
 
 watch(autoCommit, (val) => {
-  if (!val) _clearAutoTimer()
-  else if (hasCommittable.value) scheduleAutoCommit()
+  if (!val) { _clearAutoTimer(); autoCommitStep.value = '' }
+  else if (hasChanges.value) scheduleAutoCommit()
 })
 
 onUnmounted(_clearAutoTimer)
@@ -1211,7 +1230,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </button>
               <div class="menu-sep" />
               <button class="menu-item auto-commit-btn" :class="{ 'on': autoCommit }" @click="autoCommit = !autoCommit; showCommitMenu = false">
-                <span class="ac-check">{{ autoCommit ? '✓' : '' }}</span>
                 ✦ Auto Commit
                 <span class="spacer" />
                 <span class="ac-badge">{{ autoCommit ? 'ON' : 'OFF' }}</span>
@@ -1252,6 +1270,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
               <span class="folder-name" :title="row.dir">{{ row.name }}</span>
               <span class="folder-count">{{ row.fileCount }}</span>
+              <div class="row-actions">
+                <button class="row-btn" title="Unstage folder" @click.stop="unstageFiles(filesUnderDir(row.dir!, true))">−</button>
+              </div>
             </div>
             <template v-else>
               <div
@@ -1355,7 +1376,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div class="spacer" />
         <div class="sec-actions" @click.stop>
           <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
-          <button v-if="hasChanges" class="sec-btn" title="Save Draft" @click="openStashPrompt">⊙</button>
           <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
         </div>
       </div>
@@ -1418,6 +1438,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <svg class="folder-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
                 <span class="folder-name" :title="row.dir">{{ row.name }}</span>
                 <span class="folder-count">{{ row.fileCount }}</span>
+                <div class="row-actions">
+                  <button class="row-btn danger shrink" title="Discard folder" @click.stop="discardTargets = filesUnderDir(row.dir!, false); showDiscardConfirm = true">↩</button>
+                  <button class="row-btn primary" title="Stage folder" @click.stop="stageFiles(filesUnderDir(row.dir!, false))">＋</button>
+                </div>
               </div>
               <template v-else>
                 <div
@@ -2116,7 +2140,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   animation: auto-pulse 1.2s ease-in-out infinite;
 }
 .auto-commit-btn { gap: 4px; }
-.auto-commit-btn .ac-check { width: 14px; text-align: center; font-size: 11px; flex-shrink: 0; color: var(--accent-fg); }
 .auto-commit-btn .ac-badge {
   font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
   padding: 1px 5px; border-radius: 10px; flex-shrink: 0;
@@ -2244,7 +2267,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .row-actions {
   display: none; align-items: center; gap: 1px; flex-shrink: 0; margin-left: 4px;
 }
-.file-row:hover .row-actions { display: flex; }
+.file-row:hover .row-actions,
+.folder-row:hover .row-actions { display: flex; }
 .row-actions.always { display: flex; }
 .row-btn {
   display: flex; align-items: center; justify-content: center;

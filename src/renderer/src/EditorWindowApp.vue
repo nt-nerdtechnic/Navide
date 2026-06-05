@@ -81,6 +81,7 @@ const initialSidebar = (['explorer', 'search', 'git'] as const).find(
 ) ?? 'explorer'
 const sidebarView = ref<'explorer' | 'search' | 'git'>(initialSidebar)
 const sidebarHidden = ref(false)
+const zenMode = ref(false)
 const changesCount = ref(0)
 const activePath = computed(() => {
   const f = openFiles.value.find((x) => x.relPath === activeRel.value)
@@ -290,6 +291,7 @@ registerCommand('workbench.action.copyFilePath', async () => {
 registerCommand('workbench.action.revealInExplorer', () => {
   sidebarHidden.value = false
   sidebarView.value = 'explorer'
+  if (activeRel.value) void nextTick(() => explorerRef.value?.revealFile(activeRel.value))
 })
 registerCommand('editor.action.addSelectionToNextFindMatch', () => activeEditor()?.selectNextOccurrence())
 registerCommand('editor.action.undo',      () => activeEditor()?.undo())
@@ -343,7 +345,33 @@ registerCommand('workbench.action.moveEditorLeftInGroup', () => {
   ;[files[idx], files[idx - 1]] = [files[idx - 1], files[idx]]
 })
 
+// ── Navigation history (⌃- / ⌃⇧-) ──────────────────────────────────────────
+const _navHistory: string[] = []
+let _navIdx = -1
+let _navIgnore = false
+watch(activeRel, (v) => {
+  if (!v || _navIgnore) return
+  if (_navIdx < _navHistory.length - 1) _navHistory.splice(_navIdx + 1)
+  _navHistory.push(v)
+  _navIdx = _navHistory.length - 1
+})
+registerCommand('workbench.action.navigateBack', () => {
+  if (_navIdx <= 0) return
+  _navIgnore = true
+  activeRel.value = _navHistory[--_navIdx]
+  void nextTick(() => { _navIgnore = false })
+})
+registerCommand('workbench.action.navigateForward', () => {
+  if (_navIdx >= _navHistory.length - 1) return
+  _navIgnore = true
+  activeRel.value = _navHistory[++_navIdx]
+  void nextTick(() => { _navIgnore = false })
+})
+
 watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
+
+// ── Explorer pane ref (for revealFile) ───────────────────────────────────────
+const explorerRef = ref<{ revealFile: (path: string) => Promise<void> } | null>(null)
 
 // ── Tab bar: auto-scroll active tab into view ─────────────────────────────────
 const tabsEl = ref<HTMLElement | null>(null)
@@ -421,6 +449,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.deleteAllRight',             label: '刪除到行尾',       keys: '⌘⌦' },
   { id: 'workbench.action.moveEditorRightInGroup',  label: '將分頁向右移動',   keys: '⌘⇧]' },
   { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
+  { id: 'workbench.action.navigateBack',    label: '返回上一個位置', keys: '⌃-' },
+  { id: 'workbench.action.navigateForward', label: '前往下一個位置', keys: '⌃⇧-' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -762,6 +792,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     <!-- Sidebar -->
     <div v-show="!sidebarHidden" class="ide-sidebar" :style="{ width: sidebarWidth + 'px' }">
       <ExplorerPane
+        ref="explorerRef"
         v-show="sidebarView === 'explorer'"
         :workspace-path="workspacePath"
         :backend="backend"
