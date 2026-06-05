@@ -24,12 +24,30 @@
   "build": {
     "appId": "com.nerdtechnic.agent-team",
     "productName": "Agent-Team",
-    "directories": { "output": "dist-release" },
-    "files": ["out/**/*"],
-    "extraResources": [{ "from": "resources/", "to": "resources/" }],
-    "mac": { "target": "dmg", "icon": "resources/icon.icns" },
-    "win": { "target": "nsis", "icon": "resources/icon.png" },
-    "linux": { "target": "AppImage", "icon": "resources/icon.png" }
+    "directories": {
+      "output": "dist-release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/",
+        "to": "resources/"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "icon": "resources/icon.icns"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "resources/icon.png"
+    }
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
@@ -52,6 +70,7 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0"
+    "@xterm/xterm": "^6.0.0",
+    "highlight.js": "^11.11.1"
   }
 }

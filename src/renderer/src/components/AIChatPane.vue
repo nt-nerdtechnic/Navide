@@ -1,6 +1,50 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
+import hljs from 'highlight.js/lib/core'
+import javascript from 'highlight.js/lib/languages/javascript'
+import typescript from 'highlight.js/lib/languages/typescript'
+import python from 'highlight.js/lib/languages/python'
+import bash from 'highlight.js/lib/languages/bash'
+import json from 'highlight.js/lib/languages/json'
+import css from 'highlight.js/lib/languages/css'
+import xml from 'highlight.js/lib/languages/xml'
+import rust from 'highlight.js/lib/languages/rust'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import cpp from 'highlight.js/lib/languages/cpp'
+import markdown from 'highlight.js/lib/languages/markdown'
+import sql from 'highlight.js/lib/languages/sql'
+import yaml from 'highlight.js/lib/languages/yaml'
+
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('js', javascript)
+hljs.registerLanguage('jsx', javascript)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('ts', typescript)
+hljs.registerLanguage('tsx', typescript)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('py', python)
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('sh', bash)
+hljs.registerLanguage('shell', bash)
+hljs.registerLanguage('zsh', bash)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('xml', xml)
+hljs.registerLanguage('html', xml)
+hljs.registerLanguage('vue', xml)
+hljs.registerLanguage('rust', rust)
+hljs.registerLanguage('rs', rust)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('c', cpp)
+hljs.registerLanguage('markdown', markdown)
+hljs.registerLanguage('md', markdown)
+hljs.registerLanguage('sql', sql)
+hljs.registerLanguage('yaml', yaml)
+hljs.registerLanguage('yml', yaml)
 
 const props = defineProps<{
   workspacePath: string
@@ -236,10 +280,18 @@ function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
   let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const safe = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const langLabel = lang || 'code'
-    // Encode raw code for copy button (btoa with URI encode for unicode safety)
+    const langLabel = lang || 'text'
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
+    // Apply syntax highlighting if we have a matching language
+    let highlighted: string
+    try {
+      const result = lang && hljs.getLanguage(lang)
+        ? hljs.highlight(code, { language: lang })
+        : hljs.highlightAuto(code, ['javascript', 'typescript', 'python', 'bash', 'json', 'css', 'xml', 'sql', 'yaml'])
+      highlighted = result.value
+    } catch {
+      highlighted = code.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    }
     const i = blocks.length
     blocks.push(
       `<div class="ai-code-wrap">` +
@@ -247,7 +299,7 @@ function renderMarkdownLite(rawText: string): string {
       `<span class="ai-code-lang">${langLabel}</span>` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
-      `<pre class="ai-code-block"><code>${safe}</code></pre>` +
+      `<pre class="ai-code-block hljs"><code>${highlighted}</code></pre>` +
       `</div>`,
     )
     return `\x00B${i}\x00`
@@ -2218,4 +2270,23 @@ kbd {
   z-index: 30;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
+</style>
+
+<style>
+/* highlight.js GitHub Dark theme — token colours */
+.hljs { background: transparent; }
+.hljs-comment,.hljs-quote { color: #8b949e; font-style: italic; }
+.hljs-keyword,.hljs-selector-tag,.hljs-addition { color: #ff7b72; }
+.hljs-number,.hljs-string,.hljs-meta .hljs-meta-string,.hljs-literal,.hljs-doctag,.hljs-regexp { color: #a5d6ff; }
+.hljs-title,.hljs-section,.hljs-name,.hljs-selector-id,.hljs-selector-class { color: #d2a8ff; font-weight: 600; }
+.hljs-attribute,.hljs-attr,.hljs-variable,.hljs-template-variable,.hljs-class .hljs-title,.hljs-type { color: #ffa657; }
+.hljs-symbol,.hljs-bullet,.hljs-subst,.hljs-meta,.hljs-selector-attr,.hljs-selector-pseudo { color: #79c0ff; }
+.hljs-built_in,.hljs-deletion { color: #ffa657; }
+.hljs-formula { background: #161b22; }
+.hljs-strong { font-weight: bold; }
+.hljs-emphasis { font-style: italic; }
+.hljs-tag { color: #7ee787; }
+.hljs-punctuation { color: #8b949e; }
+.hljs-string { color: #a5d6ff; }
+.hljs-operator,.hljs-params { color: #e6edf3; }
 </style>
