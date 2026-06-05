@@ -1708,7 +1708,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="branchExpanded" class="collapsible-body">
         <div class="input-row">
           <input v-model="newBranchName" class="git-input" placeholder="New branch name…" @keydown.enter="doCreateBranch" />
-          <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim()" @click="doCreateBranch">＋</button>
+          <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim() || /\s|\.\./.test(newBranchName.trim()) || newBranchName.trim().startsWith('-')" @click="doCreateBranch">＋</button>
           <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? 'Hide remote branches' : 'Show remote branches'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>

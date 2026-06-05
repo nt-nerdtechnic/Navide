@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,7 @@ def default_roles() -> list[dict[str, Any]]:
 class RolesStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or (app_data_dir() / ROLES_FILE)
+        self._lock = threading.Lock()
 
     @property
     def path(self) -> Path:
@@ -139,44 +141,46 @@ class RolesStore:
         if not system_prompt.strip():
             raise ValueError("system_prompt is required")
 
-        roles = self._read()
-        now = _now_iso()
-        idx = next((i for i, r in enumerate(roles) if r.get("key") == key), -1)
-        if idx >= 0:
-            existing = roles[idx]
-            updated = {
-                **existing,
-                "label": label,
-                "one_line": one_line,
-                "system_prompt": system_prompt,
-                "updated_at": now,
-            }
-            roles[idx] = updated
-            self._write(roles)
-            return updated
-        else:
-            created = {
-                "key": key,
-                "label": label,
-                "one_line": one_line,
-                "system_prompt": system_prompt,
-                "is_default": False,
-                "created_at": now,
-                "updated_at": now,
-            }
-            roles.append(created)
-            self._write(roles)
-            return created
+        with self._lock:
+            roles = self._read()
+            now = _now_iso()
+            idx = next((i for i, r in enumerate(roles) if r.get("key") == key), -1)
+            if idx >= 0:
+                existing = roles[idx]
+                updated = {
+                    **existing,
+                    "label": label,
+                    "one_line": one_line,
+                    "system_prompt": system_prompt,
+                    "updated_at": now,
+                }
+                roles[idx] = updated
+                self._write(roles)
+                return updated
+            else:
+                created = {
+                    "key": key,
+                    "label": label,
+                    "one_line": one_line,
+                    "system_prompt": system_prompt,
+                    "is_default": False,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                roles.append(created)
+                self._write(roles)
+                return created
 
     def delete(self, key: str) -> list[dict[str, Any]]:
-        roles = self._read()
-        new_roles = [r for r in roles if r.get("key") != key]
-        if len(new_roles) == len(roles):
-            raise KeyError(f"role not found: {key}")
-        if not new_roles:
-            raise ValueError("cannot delete the last remaining role")
-        self._write(new_roles)
-        return new_roles
+        with self._lock:
+            roles = self._read()
+            new_roles = [r for r in roles if r.get("key") != key]
+            if len(new_roles) == len(roles):
+                raise KeyError(f"role not found: {key}")
+            if not new_roles:
+                raise ValueError("cannot delete the last remaining role")
+            self._write(new_roles)
+            return new_roles
 
     def reset(self) -> list[dict[str, Any]]:
         seed = default_roles()
