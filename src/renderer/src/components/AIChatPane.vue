@@ -269,7 +269,7 @@ function renderDiff(diff: string): string {
   return diff
     .split('\n')
     .map((line) => {
-      const escaped = line.replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       if (line.startsWith('+') && !line.startsWith('+++')) {
         return `<div class="diff-add">${escaped}</div>`
       } else if (line.startsWith('-') && !line.startsWith('---')) {
