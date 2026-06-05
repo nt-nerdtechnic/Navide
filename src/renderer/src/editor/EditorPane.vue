@@ -470,10 +470,12 @@ function showContextMenu(e: MouseEvent): void {
   ctxY.value = e.clientY - container.top
 }
 function closeContextMenu(): void { ctxOpen.value = false }
+let _ctxEscHandler: ((e: KeyboardEvent) => void) | null = null
 watch(ctxOpen, (open) => {
+  if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
   if (!open) return
-  function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') { closeContextMenu(); document.removeEventListener('keydown', onEsc, true) } }
-  document.addEventListener('keydown', onEsc, true)
+  _ctxEscHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') closeContextMenu() }
+  document.addEventListener('keydown', _ctxEscHandler, true)
 })
 async function ctxPaste(): Promise<void> {
   closeContextMenu()
