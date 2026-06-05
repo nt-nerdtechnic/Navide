@@ -242,36 +242,59 @@ export function useGit(
   async function compareBranches(base: string, compare: string): Promise<{ ok: boolean; stat: string; files: string[]; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, stat: '', files: [], error: 'no workspace' }
-    const resp = await send<{ ok: boolean; stat: string; files: string[]; error?: string }>(
-      'git.compare_branches', { workspace_path: ws, base, compare }
-    )
-    return resp.payload ?? { ok: false, stat: '', files: [], error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; stat: string; files: string[]; error?: string }>(
+        'git.compare_branches', { workspace_path: ws, base, compare }
+      )
+      return resp.payload ?? { ok: false, stat: '', files: [], error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { ok: false, stat: '', files: [], error: msg }
+    }
   }
 
   async function rebaseOn(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.rebase', { workspace_path: ws, branch })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.rebase', { workspace_path: ws, branch })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `rebaseOn: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function restoreFileFromBranch(branch: string, filepath: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.restore_from_branch', { workspace_path: ws, branch, filepath })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.restore_from_branch', { workspace_path: ws, branch, filepath })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `restoreFileFromBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function cleanUntracked(dry_run: boolean): Promise<{ ok: boolean; files: string[]; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, files: [], error: 'no workspace' }
-    const resp = await send<{ ok: boolean; files: string[]; dry_run: boolean; error?: string }>(
-      'git.clean', { workspace_path: ws, dry_run }
-    )
-    if (resp.ok && resp.payload?.ok && !dry_run) await loadStatus()
-    return resp.payload ? { ok: resp.payload.ok, files: resp.payload.files ?? [], error: resp.payload.error } : { ok: false, files: [], error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; files: string[]; dry_run: boolean; error?: string }>(
+        'git.clean', { workspace_path: ws, dry_run }
+      )
+      if (resp.ok && resp.payload?.ok && !dry_run) await loadStatus()
+      return resp.payload ? { ok: resp.payload.ok, files: resp.payload.files ?? [], error: resp.payload.error } : { ok: false, files: [], error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `cleanUntracked: ${msg}`
+      return { ok: false, files: [], error: msg }
+    }
   }
 
   async function showCommit(commit_hash: string): Promise<GitCommitDetail | null> {
@@ -289,11 +312,17 @@ export function useGit(
   async function pushUpstream(branch: string, remote = 'origin'): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>(
-      'git.push_upstream', { workspace_path: ws, branch, remote }, 30_000
-    )
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>(
+        'git.push_upstream', { workspace_path: ws, branch, remote }, 30_000
+      )
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pushUpstream: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function loadWorktrees(): Promise<void> {
@@ -308,19 +337,31 @@ export function useGit(
   async function addWorktree(worktree_path: string, branch: string, new_branch = false): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>(
-      'git.add_worktree', { workspace_path: ws, worktree_path, branch, new_branch }
-    )
-    if (resp.ok && resp.payload?.ok) await loadWorktrees()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>(
+        'git.add_worktree', { workspace_path: ws, worktree_path, branch, new_branch }
+      )
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `addWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function removeWorktree(worktree_path: string, force = false): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error: string }>('git.remove_worktree', { workspace_path: ws, worktree_path, force })
-    if (resp.ok && resp.payload?.ok) await loadWorktrees()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error: string }>('git.remove_worktree', { workspace_path: ws, worktree_path, force })
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `removeWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   const gitConfigAllowedKeys = ref<string[]>([])
@@ -340,16 +381,26 @@ export function useGit(
   async function setGitConfig(key: string, value: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.config_set', { workspace_path: ws, key, value })
-    if (resp.ok && resp.payload?.ok) await loadGitConfig()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.config_set', { workspace_path: ws, key, value })
+      if (resp.ok && resp.payload?.ok) await loadGitConfig()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `setGitConfig: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function blameFile(filepath: string): Promise<BlameEntry[]> {
     const ws = workspacePath()
     if (!ws) return []
-    const resp = await send<{ ok: boolean; lines: BlameEntry[] }>('git.blame', { workspace_path: ws, filepath })
-    return resp.ok && resp.payload?.ok ? resp.payload.lines ?? [] : []
+    try {
+      const resp = await send<{ ok: boolean; lines: BlameEntry[] }>('git.blame', { workspace_path: ws, filepath })
+      return resp.ok && resp.payload?.ok ? resp.payload.lines ?? [] : []
+    } catch {
+      return []
+    }
   }
 
   async function loadTags(): Promise<void> {
@@ -364,55 +415,94 @@ export function useGit(
   async function createTag(name: string, message = '', commit_hash = ''): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.create_tag', { workspace_path: ws, name, message, commit_hash })
-    if (resp.ok && resp.payload?.ok) await loadTags()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.create_tag', { workspace_path: ws, name, message, commit_hash })
+      if (resp.ok && resp.payload?.ok) await loadTags()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `createTag: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function deleteTag(name: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.delete_tag', { workspace_path: ws, name })
-    if (resp.ok && resp.payload?.ok) await loadTags()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.delete_tag', { workspace_path: ws, name })
+      if (resp.ok && resp.payload?.ok) await loadTags()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `deleteTag: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function cherryPick(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.cherry_pick', { workspace_path: ws, commit_hash })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.cherry_pick', { workspace_path: ws, commit_hash })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `cherryPick: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function fileLog(filepath: string, n = 15): Promise<GitCommit[]> {
     const ws = workspacePath()
     if (!ws) return []
-    const resp = await send<{ commits: GitCommit[] }>('git.file_log', { workspace_path: ws, filepath, n })
-    return resp.ok && resp.payload ? resp.payload.commits ?? [] : []
+    try {
+      const resp = await send<{ commits: GitCommit[] }>('git.file_log', { workspace_path: ws, filepath, n })
+      return resp.ok && resp.payload ? resp.payload.commits ?? [] : []
+    } catch {
+      return []
+    }
   }
 
   async function showFile(filepath: string, rev = 'HEAD'): Promise<{ ok: boolean; content: string; error: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, content: '', error: 'no workspace' }
-    const resp = await send<{ ok: boolean; content: string; error: string }>('git.show_file', { workspace_path: ws, filepath, rev })
-    return resp.payload ?? { ok: false, content: '', error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; content: string; error: string }>('git.show_file', { workspace_path: ws, filepath, rev })
+      return resp.payload ?? { ok: false, content: '', error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { ok: false, content: '', error: msg }
+    }
   }
 
   async function resolveConflictOurs(filepath: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.resolve_ours', { workspace_path: ws, filepath })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.resolve_ours', { workspace_path: ws, filepath })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `resolveConflictOurs: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function resolveConflictTheirs(filepath: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.resolve_theirs', { workspace_path: ws, filepath })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.resolve_theirs', { workspace_path: ws, filepath })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `resolveConflictTheirs: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function loadRemotes(): Promise<void> {
@@ -427,58 +517,96 @@ export function useGit(
   async function diffFile(filepath: string, staged = false): Promise<string> {
     const ws = workspacePath()
     if (!ws) return ''
-    const resp = await send<{ ok: boolean; diff: string }>('git.diff_file', { workspace_path: ws, filepath, staged })
-    return resp.ok && resp.payload?.ok ? (resp.payload.diff ?? '') : ''
+    try {
+      const resp = await send<{ ok: boolean; diff: string }>('git.diff_file', { workspace_path: ws, filepath, staged })
+      return resp.ok && resp.payload?.ok ? (resp.payload.diff ?? '') : ''
+    } catch {
+      return ''
+    }
   }
 
   async function diffBlame(filepath: string, staged = false): Promise<DiffBlameHunk[]> {
     const ws = workspacePath()
     if (!ws) return []
-    const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[] }>('git.diff_blame', { workspace_path: ws, filepath, staged })
-    return resp.ok && resp.payload?.ok ? (resp.payload.hunks ?? []) : []
+    try {
+      const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[] }>('git.diff_blame', { workspace_path: ws, filepath, staged })
+      return resp.ok && resp.payload?.ok ? (resp.payload.hunks ?? []) : []
+    } catch {
+      return []
+    }
   }
 
   async function mergeBranch(branch: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
-    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
+      else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `mergeBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function mergeInto(target: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[]; source_branch?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
-    // git.changed broadcast from the backend handles all reloads on success;
-    // on conflict we still need a status refresh to show the dirty files.
-    if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
+      // git.changed broadcast from the backend handles all reloads on success;
+      // on conflict we still need a status refresh to show the dirty files.
+      if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `mergeInto: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function revertCommit(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.revert', { workspace_path: ws, commit_hash })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.revert', { workspace_path: ws, commit_hash })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `revertCommit: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function addRemote(name: string, url: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.add_remote', { workspace_path: ws, name, url })
-    if (resp.ok && resp.payload?.ok) await loadRemotes()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.add_remote', { workspace_path: ws, name, url })
+      if (resp.ok && resp.payload?.ok) await loadRemotes()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `addRemote: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function removeRemote(name: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.remove_remote', { workspace_path: ws, name })
-    if (resp.ok && resp.payload?.ok) await loadRemotes()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.remove_remote', { workspace_path: ws, name })
+      if (resp.ok && resp.payload?.ok) await loadRemotes()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `removeRemote: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function loadBranches(): Promise<void> {
@@ -515,6 +643,10 @@ export function useGit(
       await loadStatus()
       await loadBranches()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `fetchRemote: ${msg}`
+      return { ok: false, output: '', error: msg }
     } finally {
       isFetching.value = false
     }
@@ -523,89 +655,155 @@ export function useGit(
   async function pullOnly(): Promise<{ ok: boolean; output: string; error: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', { workspace_path: ws }, 30_000)
-    await loadStatus()
-    return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', { workspace_path: ws }, 30_000)
+      await loadStatus()
+      return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pullOnly: ${msg}`
+      return { ok: false, output: '', error: msg }
+    }
   }
 
   async function pushOnly(remote = '', branch = ''): Promise<{ ok: boolean; output: string; error: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws, remote, branch }, 30_000)
-    await loadStatus()
-    return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws, remote, branch }, 30_000)
+      await loadStatus()
+      return resp.payload ?? { ok: false, output: '', error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pushOnly: ${msg}`
+      return { ok: false, output: '', error: msg }
+    }
   }
 
   async function createBranch(name: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `createBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function switchBranch(name: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.switch_branch', { workspace_path: ws, name })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.switch_branch', { workspace_path: ws, name })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `switchBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function checkoutRemoteBranch(remote_ref: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.checkout_remote_branch', { workspace_path: ws, remote_ref })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.checkout_remote_branch', { workspace_path: ws, remote_ref })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `checkoutRemoteBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function deleteBranch(name: string, force = false): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.delete_branch', { workspace_path: ws, name, force })
-    if (resp.ok && resp.payload?.ok) await loadBranches()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.delete_branch', { workspace_path: ws, name, force })
+      if (resp.ok && resp.payload?.ok) await loadBranches()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `deleteBranch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function stashPush(message = '', paths?: string[]): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message, paths })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message, paths })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `stashPush: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function stashPop(index = 0): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.stash_pop', { workspace_path: ws, index })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash_pop', { workspace_path: ws, index })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `stashPop: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function stashDrop(index: number): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.stash_drop', { workspace_path: ws, index })
-    if (resp.ok && resp.payload?.ok) await loadStashes()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash_drop', { workspace_path: ws, index })
+      if (resp.ok && resp.payload?.ok) await loadStashes()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `stashDrop: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function amendCommit(message = ''): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.amend', { workspace_path: ws, message })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.amend', { workspace_path: ws, message })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `amendCommit: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function undoLastCommit(): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.undo_commit', { workspace_path: ws })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.undo_commit', { workspace_path: ws })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `undoLastCommit: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   const isInitializing = ref(false)
@@ -625,6 +823,10 @@ export function useGit(
         return { ok: true, gitignore_created: resp.payload.gitignore_created }
       }
       return { ok: false, error: resp.payload?.error || resp.error?.message || 'git init failed' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `initRepo: ${msg}`
+      return { ok: false, error: msg }
     } finally {
       isInitializing.value = false
     }
@@ -694,6 +896,10 @@ export function useGit(
         return { ok: true }
       }
       return { ok: false, error: resp.payload?.error || resp.error?.message || 'commit failed' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `commit: ${msg}`
+      return { ok: false, error: msg }
     } finally {
       isCommitting.value = false
     }
@@ -718,6 +924,8 @@ export function useGit(
         await loadStatus()
         await loadLog()
       }
+    } catch (e) {
+      syncError.value = e instanceof Error ? e.message : String(e)
     } finally {
       isSyncing.value = false
     }
@@ -740,6 +948,10 @@ export function useGit(
         return { ok: true, message: resp.payload.message }
       }
       return { ok: false, message: '', error: resp.payload?.error || resp.error?.message || 'generation failed' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `generateMessage: ${msg}`
+      return { ok: false, message: '', error: msg }
     } finally {
       isGenerating.value = false
     }
@@ -772,14 +984,20 @@ export function useGit(
   ): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.apply_patch', {
-      workspace_path: ws,
-      patch,
-      reverse,
-      cached,
-    })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.apply_patch', {
+        workspace_path: ws,
+        patch,
+        reverse,
+        cached,
+      })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `applyPatch: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function connectToRemote(
@@ -787,23 +1005,35 @@ export function useGit(
   ): Promise<{ ok: boolean; branch?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; branch?: string; error?: string }>(
-      'git.connect_to_remote',
-      { workspace_path: ws, url },
-      60_000,
-    )
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; branch?: string; error?: string }>(
+        'git.connect_to_remote',
+        { workspace_path: ws, url },
+        60_000,
+      )
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `connectToRemote: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function cloneRepo(
     url: string,
     target_dir: string,
   ): Promise<{ ok: boolean; path?: string; error?: string }> {
-    const resp = await send<{ ok: boolean; path: string; error?: string }>('git.clone', {
-      url,
-      target_dir,
-    })
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; path: string; error?: string }>('git.clone', {
+        url,
+        target_dir,
+      })
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `cloneRepo: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function addToGitignore(
@@ -813,67 +1043,102 @@ export function useGit(
   ): Promise<{ ok: boolean; error?: string; target_file?: string; untracked?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string; target_file?: string; untracked?: string[] }>(
-      'git.ignore',
-      { workspace_path: ws, pattern, target, untrack },
-    )
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string; target_file?: string; untracked?: string[] }>(
+        'git.ignore',
+        { workspace_path: ws, pattern, target, untrack },
+      )
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `addToGitignore: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function checkIgnore(filepath: string): Promise<CheckIgnoreResult> {
     const ws = workspacePath()
     if (!ws) return { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: 'no workspace' }
-    const resp = await send<CheckIgnoreResult>('git.check_ignore', { workspace_path: ws, filepath })
-    return resp.payload ?? { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: 'no response' }
+    try {
+      const resp = await send<CheckIgnoreResult>('git.check_ignore', { workspace_path: ws, filepath })
+      return resp.payload ?? { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { ok: false, ignored: false, tracked: false, source: '', line: 0, pattern: '', error: msg }
+    }
   }
 
   async function abortOperation(op: string): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.abort', {
-      workspace_path: ws,
-      op,
-    })
-    if (resp.ok && resp.payload?.ok) {
-      await loadStatus()
-      await loadLog()
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.abort', {
+        workspace_path: ws,
+        op,
+      })
+      if (resp.ok && resp.payload?.ok) {
+        await loadStatus()
+        await loadLog()
+      }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `abortOperation: ${msg}`
+      return { ok: false, error: msg }
     }
-    return resp.payload ?? { ok: false, error: 'no response' }
   }
 
   async function stashApply(index: number): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; error?: string }>('git.stash_apply', {
-      workspace_path: ws,
-      index,
-    })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash_apply', {
+        workspace_path: ws,
+        index,
+      })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `stashApply: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   async function pullRebase(): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', {
-      workspace_path: ws,
-    })
-    if (resp.ok && resp.payload?.ok) {
-      await loadStatus()
-      await loadLog()
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', {
+        workspace_path: ws,
+      })
+      if (resp.ok && resp.payload?.ok) {
+        await loadStatus()
+        await loadLog()
+      }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pullRebase: ${msg}`
+      return { ok: false, error: msg }
     }
-    return resp.payload ?? { ok: false, error: 'no response' }
   }
 
   async function pushForce(remote = '', branch = ''): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', {
-      workspace_path: ws, remote, branch,
-    })
-    if (resp.ok && resp.payload?.ok) await loadStatus()
-    return resp.payload ?? { ok: false, error: 'no response' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', {
+        workspace_path: ws, remote, branch,
+      })
+      if (resp.ok && resp.payload?.ok) await loadStatus()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pushForce: ${msg}`
+      return { ok: false, error: msg }
+    }
   }
 
   // Refresh when workspace changes
