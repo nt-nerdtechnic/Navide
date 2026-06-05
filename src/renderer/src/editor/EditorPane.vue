@@ -470,6 +470,11 @@ function showContextMenu(e: MouseEvent): void {
   ctxY.value = e.clientY - container.top
 }
 function closeContextMenu(): void { ctxOpen.value = false }
+watch(ctxOpen, (open) => {
+  if (!open) return
+  function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') { closeContextMenu(); document.removeEventListener('keydown', onEsc, true) } }
+  document.addEventListener('keydown', onEsc, true)
+})
 async function ctxPaste(): Promise<void> {
   closeContextMenu()
   try {
@@ -713,7 +718,7 @@ defineExpose({
     </div>
 
     <!-- Editor -->
-    <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout">
+    <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout" @contextmenu="showContextMenu">
       <div v-if="loadError" class="ep-error">{{ loadError }}</div>
       <EditorView
         v-else-if="loaded"
@@ -724,6 +729,20 @@ defineExpose({
         @cursor-change="onCursorChange"
       />
       <div v-else class="ep-loading">Loading…</div>
+
+      <!-- Context menu -->
+      <div v-if="ctxOpen" class="ep-ctx-backdrop" @mousedown.self="closeContextMenu">
+        <div class="ep-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
+          <button class="ep-ctx-item" @click="ctxCut">Cut</button>
+          <button class="ep-ctx-item" @click="ctxCopy">Copy</button>
+          <button class="ep-ctx-item" @click="ctxPaste">Paste</button>
+          <div class="ep-ctx-sep" />
+          <button class="ep-ctx-item" @click="() => { closeContextMenu(); toggleLineComment() }">Toggle Comment</button>
+          <button class="ep-ctx-item" @click="() => { closeContextMenu(); openFind() }">Find</button>
+          <div class="ep-ctx-sep" />
+          <button class="ep-ctx-item" @click="() => { closeContextMenu(); editorRef?.selectAll() }">Select All</button>
+        </div>
+      </div>
 
       <!-- Go-to-line overlay -->
       <div v-if="gotoOpen" class="ep-goto-overlay">
@@ -1037,6 +1056,28 @@ defineExpose({
 .ep-goto-input:focus { border-color: var(--accent-emphasis); }
 .ep-goto-input::-webkit-inner-spin-button,
 .ep-goto-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+.ep-ctx-backdrop {
+  position: absolute; inset: 0; z-index: 200;
+}
+.ep-ctx-menu {
+  position: absolute;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.28);
+  padding: 4px 0;
+  min-width: 160px;
+  z-index: 201;
+}
+.ep-ctx-item {
+  display: block; width: 100%; text-align: left;
+  padding: 5px 14px; font-size: 12px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-primary);
+}
+.ep-ctx-item:hover { background: var(--accent-muted); }
+.ep-ctx-sep { height: 1px; background: var(--border-default); margin: 3px 0; }
 
 .ep-statusbar {
   display: flex;
