@@ -235,7 +235,11 @@ function openReplace(): void {
 function focusInput(): void {
   void nextTick(() => queryInput.value?.focus())
 }
-defineExpose({ openReplace, focusInput })
+function setQuery(q: string): void {
+  query.value = q
+  void nextTick(() => { queryInput.value?.focus(); queryInput.value?.select() })
+}
+defineExpose({ openReplace, focusInput, setQuery })
 </script>
 
 <template>

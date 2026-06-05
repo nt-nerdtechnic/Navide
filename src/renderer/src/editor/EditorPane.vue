@@ -701,6 +701,7 @@ defineExpose({
   undo, redo, selectAll,
   openReplace,
   getContent: () => content.value,
+  getWordAtCursor: () => editorRef.value?.getWordAtCursor() ?? '',
   getSelection: () => editorRef.value?.getSelectionText() ?? '',
   insertTextAtCursor: (text: string) => editorRef.value?.insertText(text),
   getCursorLineText: (): string => {

@@ -773,3 +773,17 @@ describe('select to file start/end (cmd+shift+up/down)', () => {
     expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true, shiftKey: true }), {})).toBeNull()
   })
 })
+
+describe('find references (shift+f12)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('shift+f12 → findReferences (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('F12', { shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.findReferences')
+  })
+
+  it('shift+f12 requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('F12', { shiftKey: true }), {})).toBeNull()
+  })
+})

@@ -567,12 +567,19 @@ watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
 // ── Explorer pane ref (for revealFile) ───────────────────────────────────────
 const explorerRef = ref<{ revealFile: (path: string) => Promise<void>; focusTree: () => void } | null>(null)
 
-// ── Search pane ref (for openReplace / focusInput) ───────────────────────────
-const searchRef = ref<{ openReplace: () => void; focusInput: () => void } | null>(null)
+// ── Search pane ref (for openReplace / focusInput / setQuery) ───────────────
+const searchRef = ref<{ openReplace: () => void; focusInput: () => void; setQuery: (q: string) => void } | null>(null)
 registerCommand('workbench.action.findInFilesReplace', () => {
   sidebarHidden.value = false
   sidebarView.value = 'search'
   void nextTick(() => searchRef.value?.openReplace())
+})
+registerCommand('editor.action.findReferences', () => {
+  const word = activeEditor()?.getWordAtCursor?.() ?? ''
+  if (!word) return
+  sidebarHidden.value = false
+  sidebarView.value = 'search'
+  void nextTick(() => searchRef.value?.setQuery(word))
 })
 registerCommand('editor.action.selectLine',          () => activeEditor()?.selectLine())
 registerCommand('editor.action.transpose',           () => activeEditor()?.transpose())
@@ -713,7 +720,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
   { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
   { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
-  { id: 'editor.action.openFileAtCursor',     label: 'Open File at Cursor',       keys: 'F12' },
+  { id: 'editor.action.openFileAtCursor',  label: 'Open File at Cursor',      keys: 'F12' },
+  { id: 'editor.action.findReferences',   label: 'Find References in Files', keys: '⇧F12' },
   { id: 'editor.action.detectIndentation',    label: 'Detect Indentation' },
   { id: 'editor.action.indentationToSpaces',  label: 'Convert Indentation to Spaces' },
   { id: 'editor.action.indentationToTabs',    label: 'Convert Indentation to Tabs' },
@@ -1283,7 +1291,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
         :insert-text-at-cursor="(text: string) => activeEditor()?.insertTextAtCursor?.(text)"
-        :open-file="(relPath: string) => openFile({ filepath: relPath })"
+        :open-file="(relPath: string, line?: number) => openFile({ filepath: relPath, line })"
       />
     </div>
   </div>
