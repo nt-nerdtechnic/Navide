@@ -1039,7 +1039,7 @@ async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Pro
 }
 
 function copyMessage(content: string): void {
-  const plain = content.replace(/```[\s\S]*?```/g, (m) => m).replace(/<[^>]+>/g, '')
+  const plain = content.replace(/<[^>]+>/g, '')
   navigator.clipboard.writeText(plain).then(() => showToast('Copied')).catch(() => showToast('Copy failed'))
 }
 
@@ -1726,6 +1726,18 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     clearConversation()
   }
+  // Ctrl+Shift+A — add current file as @file context chip
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+    e.preventDefault()
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('No file open'); return }
+    const content = props.getEditorContent?.() ?? ''
+    const fileName = relPath.split('/').pop() ?? relPath
+    if (content && !contextChips.value.some((c) => c.label.includes(fileName))) {
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@${fileName}`, content: `// File: ${relPath}\n${content}` })
+      showToast(`Added @${fileName} to context`)
+    }
+  }
   // Ctrl+Enter — regenerate last AI response (when not sending)
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !sending.value && !e.shiftKey) {
     if (inputText.value.trim() === '' && lastAssistantIdx.value >= 0) {
@@ -2313,6 +2325,7 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Ctrl+L</kbd></td><td>Focus AI chat input</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
           <tr><td><kbd>Ctrl+Shift+K</kbd></td><td>Clear current conversation</td></tr>
+          <tr><td><kbd>Ctrl+Shift+A</kbd></td><td>Add current file to context</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
           <tr><td><kbd>Ctrl+Enter</kbd></td><td>Regenerate last response (empty input)</td></tr>
           <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>
