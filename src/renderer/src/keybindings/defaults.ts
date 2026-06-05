@@ -45,6 +45,8 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
   { key: 'f1',          command: 'workbench.action.showCommands' },
   { key: 'cmd+k cmd+w', command: 'workbench.action.closeAllEditors' },
+  { key: 'cmd+p',       command: 'workbench.action.quickOpen' },
+  { key: 'cmd+shift+t', command: 'workbench.action.reopenClosedEditor' },
 
   // ── Workbench: sidebar & view ────────────────────────────────────────────────
   { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },

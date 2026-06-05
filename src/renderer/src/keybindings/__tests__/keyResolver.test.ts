@@ -154,4 +154,23 @@ describe('KeyResolver – defaults integration (new shortcuts)', () => {
     expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true }), {})).toBeNull()
     expect(dr.resolve(mkEvent('ArrowDown', { metaKey: true }), {})).toBeNull()
   })
+
+  it('cmd+d → addSelectionToNextFindMatch (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('d', { metaKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.addSelectionToNextFindMatch')
+  })
+
+  it('cmd+p → quickOpen (no when clause)', () => {
+    expect(dr.resolve(mkEvent('p', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.quickOpen')
+  })
+
+  it('cmd+shift+t → reopenClosedEditor (no when clause)', () => {
+    expect(dr.resolve(mkEvent('T', { metaKey: true, shiftKey: true }), {})?.command)
+      .toBe('workbench.action.reopenClosedEditor')
+  })
+
+  it('f1 → showCommands', () => {
+    expect(dr.resolve(mkEvent('F1'), {})?.command).toBe('workbench.action.showCommands')
+  })
 })

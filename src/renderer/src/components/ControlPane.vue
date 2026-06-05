@@ -549,6 +549,38 @@ function onPipelineDividerEnd(): void {
   document.removeEventListener('mousemove', onPipelineDividerMove)
   document.removeEventListener('mouseup', onPipelineDividerEnd)
 }
+
+// ── explorer pane: same split pattern ────────────────────────────────────────
+const explorerTopEl = ref<HTMLElement | null>(null)
+const explorerTopRatio = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.explorerTopRatio') ?? '') || 0.60 } catch { return 0.60 } })()
+)
+watch(explorerTopRatio, (v) => { try { localStorage.setItem('agentTeam.explorerTopRatio', String(v)) } catch {} })
+
+let _exDragStartY = 0, _exDragStartTopPx = 0, _exDragContainerPx = 0
+function onExplorerDividerStart(e: MouseEvent): void {
+  const top = explorerTopEl.value
+  if (!top) return
+  _exDragStartY = e.clientY
+  _exDragStartTopPx = top.getBoundingClientRect().height
+  _exDragContainerPx = top.parentElement?.getBoundingClientRect().height || 0
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onExplorerDividerMove)
+  document.addEventListener('mouseup', onExplorerDividerEnd)
+  e.preventDefault()
+}
+function onExplorerDividerMove(e: MouseEvent): void {
+  if (!_exDragContainerPx) return
+  const ratio = (_exDragStartTopPx + e.clientY - _exDragStartY) / _exDragContainerPx
+  explorerTopRatio.value = Math.max(0.15, Math.min(0.85, ratio))
+}
+function onExplorerDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onExplorerDividerMove)
+  document.removeEventListener('mouseup', onExplorerDividerEnd)
+}
 </script>
 
 <template>
@@ -581,11 +613,69 @@ function onPipelineDividerEnd(): void {
     </div>
 
     <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
-    <ExplorerPane
-      v-if="sidebarTab === 'explorer' && backend"
-      :workspace-path="workspace ?? ''"
-      :backend="backend"
-    />
+    <div v-if="sidebarTab === 'explorer'" class="pane-split">
+      <div class="part-top" ref="explorerTopEl" :style="{ height: (explorerTopRatio * 100) + '%' }">
+        <ExplorerPane
+          v-if="backend"
+          :workspace-path="workspace ?? ''"
+          :backend="backend"
+        />
+      </div>
+      <div class="part-resize" title="拖曳調整上下比例" @mousedown="onExplorerDividerStart">
+        <div class="part-resize-grip" />
+      </div>
+      <div class="part-bottom">
+        <section class="block panel-section">
+          <div class="row between">
+            <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
+            <div class="agent-header-actions">
+              <ViewPanel
+                :model-value="layoutMode ?? 'auto'"
+                @update:model-value="emit('update:layoutMode', $event)"
+              />
+              <button class="history-btn" @click="emit('open-history')">📋 History</button>
+            </div>
+          </div>
+          <div v-if="panes.length === 0" class="empty">No agents running.</div>
+          <ul v-else class="agent-list">
+            <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
+              <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
+                <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
+                <span class="badge">{{ p.agentLabel }}</span>
+                <span class="badge role">{{ p.roleLabel }}</span>
+                <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
+                <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
+              </div>
+              <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
+                <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
+              </div>
+              <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
+                stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+              </div>
+              <div v-else-if="!p.isMinimized" class="stage-line">
+                manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+              </div>
+              <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
+              <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
+                🔖 session: <code>{{ p.sessionId }}</code>
+              </div>
+              <div v-if="p.error" class="err">{{ p.error }}</div>
+              <div class="row tight">
+                <template v-if="p.isMinimized">
+                  <button class="ghost" @click="emit('restore', p.id)">↑ 還原</button>
+                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                </template>
+                <template v-else>
+                  <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">Interrupt</button>
+                  <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">Reapply role</button>
+                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                </template>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </div>
 
     <!-- ── Git tab ────────────────────────────────────────────────────────── -->
     <GitPane
@@ -1927,16 +2017,17 @@ button.icon-btn.muted:hover {
   margin: 0;
 }
 
-/* ── Pipeline pane: split-scroll layout ─────────────────────────────────── */
+/* ── Shared split-scroll layout (pipeline + explorer) ───────────────────── */
+.pane-split,
 .pipeline-split {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* pull padding from sidebar so we control it ourselves */
-  margin: 0 -14px -14px;
+  margin: 0 -14px -14px; /* compensate sidebar padding */
 }
+.pane-split .part-top,
 .pipeline-split .part-top {
   overflow-y: auto;
   display: flex;
@@ -1945,6 +2036,7 @@ button.icon-btn.muted:hover {
   padding: 0 14px 8px;
   min-height: 0;
 }
+.pane-split .part-bottom,
 .pipeline-split .part-bottom {
   flex: 1;
   overflow-y: auto;
@@ -1954,6 +2046,7 @@ button.icon-btn.muted:hover {
   padding: 6px 14px 14px;
   min-height: 0;
 }
+.pane-split .part-resize,
 .pipeline-split .part-resize {
   flex-shrink: 0;
   height: 7px;
@@ -1964,6 +2057,7 @@ button.icon-btn.muted:hover {
   border-top: 1px solid var(--border-muted);
   border-bottom: 1px solid var(--border-muted);
 }
+.pane-split .part-resize-grip,
 .pipeline-split .part-resize-grip {
   margin: 0 auto;
   width: 32px;
@@ -1972,6 +2066,7 @@ button.icon-btn.muted:hover {
   background: var(--border-muted);
   transition: height 0.1s, background 0.1s;
 }
+.pane-split .part-resize:hover .part-resize-grip,
 .pipeline-split .part-resize:hover .part-resize-grip {
   height: 3px;
   background: var(--accent-focus);
@@ -1983,6 +2078,11 @@ button.icon-btn.muted:hover {
   flex-direction: column;
   gap: 12px;
   padding: 0 14px 14px;
+  min-height: 0;
+}
+/* ExplorerPane fills its part-top container */
+.pane-split .part-top > * {
+  flex: 1;
   min-height: 0;
 }
 </style>

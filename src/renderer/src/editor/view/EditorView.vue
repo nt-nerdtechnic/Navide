@@ -228,44 +228,68 @@ function endKey(extend: boolean): void {
 
 function isWordChar(ch: string): boolean { return /[a-zA-Z0-9_]/.test(ch) }
 
+function _wordLeftPos(pos: Position): Position {
+  let { line, col } = pos
+  if (col === 0) {
+    if (line > 0) { line--; col = model.getLine(line).length }
+    return { line, col }
+  }
+  const text = model.getLine(line)
+  col--
+  while (col > 0 && (text[col] === ' ' || text[col] === '\t')) col--
+  if (isWordChar(text[col])) {
+    while (col > 0 && isWordChar(text[col - 1])) col--
+  } else {
+    while (col > 0 && !isWordChar(text[col - 1]) && text[col - 1] !== ' ' && text[col - 1] !== '\t') col--
+  }
+  return { line, col }
+}
+
+function _wordRightPos(pos: Position): Position {
+  let { line, col } = pos
+  const text = model.getLine(line)
+  if (col >= text.length) {
+    if (line < model.lineCount() - 1) { line++; col = 0 }
+    return { line, col }
+  }
+  if (isWordChar(text[col])) {
+    while (col < text.length && isWordChar(text[col])) col++
+  } else if (text[col] === ' ' || text[col] === '\t') {
+    while (col < text.length && (text[col] === ' ' || text[col] === '\t')) col++
+  } else {
+    while (col < text.length && !isWordChar(text[col]) && text[col] !== ' ' && text[col] !== '\t') col++
+  }
+  return { line, col }
+}
+
 function moveWordLeft(extend: boolean): void {
   preferredCol = -1
   startOrClearSelection(extend)
-  let { line, col } = cursor.value
-  if (col === 0) {
-    if (line > 0) { line--; col = model.getLine(line).length }
-  } else {
-    const text = model.getLine(line)
-    col--
-    while (col > 0 && (text[col] === ' ' || text[col] === '\t')) col--
-    if (isWordChar(text[col])) {
-      while (col > 0 && isWordChar(text[col - 1])) col--
-    } else {
-      while (col > 0 && !isWordChar(text[col - 1]) && text[col - 1] !== ' ' && text[col - 1] !== '\t') col--
-    }
-  }
-  cursor.value = { line, col }
+  cursor.value = _wordLeftPos(cursor.value)
   void nextTick(scrollCursorIntoView)
 }
 
 function moveWordRight(extend: boolean): void {
   preferredCol = -1
   startOrClearSelection(extend)
-  let { line, col } = cursor.value
-  const text = model.getLine(line)
-  if (col >= text.length) {
-    if (line < model.lineCount() - 1) { line++; col = 0 }
-  } else {
-    if (isWordChar(text[col])) {
-      while (col < text.length && isWordChar(text[col])) col++
-    } else if (text[col] === ' ' || text[col] === '\t') {
-      while (col < text.length && (text[col] === ' ' || text[col] === '\t')) col++
-    } else {
-      while (col < text.length && !isWordChar(text[col]) && text[col] !== ' ' && text[col] !== '\t') col++
-    }
-  }
-  cursor.value = { line, col }
+  cursor.value = _wordRightPos(cursor.value)
   void nextTick(scrollCursorIntoView)
+}
+
+function deleteWordLeft(): void {
+  const sel = selectionRange()
+  if (sel) { applyEdit(sel, ''); return }
+  const end = { ...cursor.value }
+  const start = _wordLeftPos(end)
+  if (comparePos(start, end) !== 0) applyEdit({ start, end }, '')
+}
+
+function deleteWordRight(): void {
+  const sel = selectionRange()
+  if (sel) { applyEdit(sel, ''); return }
+  const start = { ...cursor.value }
+  const end = _wordRightPos(start)
+  if (comparePos(start, end) !== 0) applyEdit({ start, end }, '')
 }
 
 function moveLineUpDown(dir: -1 | 1): void {
@@ -411,8 +435,8 @@ function onKeydown(e: KeyboardEvent): void {
       break
     }
     case 'End': e.preventDefault(); endKey(shift); break
-    case 'Backspace': e.preventDefault(); deleteBackward(); break
-    case 'Delete': e.preventDefault(); deleteForward(); break
+    case 'Backspace': e.preventDefault(); e.altKey ? deleteWordLeft() : deleteBackward(); break
+    case 'Delete': e.preventDefault(); e.altKey ? deleteWordRight() : deleteForward(); break
     case 'Enter': {
       e.preventDefault()
       const c = cursor.value

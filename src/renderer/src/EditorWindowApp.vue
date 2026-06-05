@@ -152,11 +152,14 @@ function openDiff(p: { filepath: string; staged: boolean; name?: string }): void
   activeRel.value = tabKey
 }
 
+const closedHistory: Array<{ relPath: string; name: string }> = []
+
 function closeFile(relPath: string): void {
   const f = openFiles.value.find((x) => x.relPath === relPath)
   if (f?.dirty && !window.confirm(`「${f.name}」有未存檔的變更，確定要關閉？`)) return
   const i = openFiles.value.findIndex((x) => x.relPath === relPath)
   if (i === -1) return
+  if (f?.kind === 'file') closedHistory.push({ relPath: f.relPath, name: f.name })
   openFiles.value.splice(i, 1)
   if (activeRel.value === relPath) {
     activeRel.value = openFiles.value[Math.min(i, openFiles.value.length - 1)]?.relPath ?? ''
@@ -259,8 +262,11 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.focusExplorer',label: '顯示檔案總管',   keys: '⌘⇧E' },
   { id: 'workbench.action.focusSourceControl', label: '顯示原始碼控制', keys: '⌘⇧G' },
   { id: 'workbench.action.findInFiles',  label: '在檔案中搜尋',   keys: '⌘⇧F' },
-  { id: 'workbench.action.openNextEditor',     label: '切換下一分頁', keys: '⌃Tab' },
-  { id: 'workbench.action.openPreviousEditor', label: '切換上一分頁', keys: '⌃⇧Tab' },
+  { id: 'workbench.action.openNextEditor',      label: '切換下一分頁',   keys: '⌃Tab' },
+  { id: 'workbench.action.openPreviousEditor',  label: '切換上一分頁',   keys: '⌃⇧Tab' },
+  { id: 'workbench.action.quickOpen',           label: '快速開啟檔案',   keys: '⌘P' },
+  { id: 'workbench.action.reopenClosedEditor',  label: '重開最後關閉的分頁', keys: '⌘⇧T' },
+  { id: 'workbench.action.closeAllEditors',     label: '關閉所有編輯器', keys: '⌘K ⌘W' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -292,6 +298,41 @@ function onPaletteKeydown(e: KeyboardEvent): void {
 }
 watch(paletteQuery, () => { paletteIdx.value = 0 })
 registerCommand('workbench.action.showCommands', openPalette)
+
+// ── Quick Open (⌘P) ─────────────────────────────────────────────────────────
+const qoOpen = ref(false)
+const qoQuery = ref('')
+const qoIdx = ref(0)
+const qoInputEl = ref<HTMLInputElement | null>(null)
+const qoItems = computed(() => {
+  const q = qoQuery.value.toLowerCase()
+  const files = openFiles.value.filter((f) => f.kind === 'file')
+  return q ? files.filter((f) => f.name.toLowerCase().includes(q) || f.relPath.toLowerCase().includes(q)) : files
+})
+function openQuickOpen(): void {
+  qoQuery.value = ''
+  qoIdx.value = 0
+  qoOpen.value = true
+  void nextTick(() => qoInputEl.value?.focus())
+}
+function closeQuickOpen(): void { qoOpen.value = false }
+function confirmQuickOpen(): void {
+  const item = qoItems.value[qoIdx.value]
+  if (item) activeRel.value = item.relPath
+  closeQuickOpen()
+}
+function onQoKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.stopPropagation(); closeQuickOpen(); return }
+  if (e.key === 'Enter') { e.preventDefault(); confirmQuickOpen(); return }
+  if (e.key === 'ArrowDown') { e.preventDefault(); qoIdx.value = Math.min(qoIdx.value + 1, qoItems.value.length - 1); return }
+  if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = Math.max(0, qoIdx.value - 1); return }
+}
+watch(qoQuery, () => { qoIdx.value = 0 })
+registerCommand('workbench.action.quickOpen', openQuickOpen)
+registerCommand('workbench.action.reopenClosedEditor', () => {
+  const last = closedHistory.pop()
+  if (last) openFile({ filepath: last.relPath, name: last.name })
+})
 
 function onAppKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && bcDropdown.value) { bcDropdown.value = null; return }
@@ -477,6 +518,31 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     </div>
   </div>
   <!-- Command Palette -->
+  <div v-if="qoOpen" class="ide-palette-overlay" @mousedown.self="closeQuickOpen">
+    <div class="ide-palette">
+      <input
+        ref="qoInputEl"
+        v-model="qoQuery"
+        class="ide-palette-input"
+        placeholder="搜尋開放的檔案…"
+        @keydown="onQoKeydown"
+      />
+      <ul v-if="qoItems.length" class="ide-palette-list">
+        <li
+          v-for="(f, i) in qoItems"
+          :key="f.relPath"
+          class="ide-palette-item"
+          :class="{ active: i === qoIdx }"
+          @mouseover="qoIdx = i"
+          @click="confirmQuickOpen"
+        >
+          <span class="ide-palette-label">{{ f.name }}</span>
+          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ f.relPath }}</span>
+        </li>
+      </ul>
+      <div v-else class="ide-palette-empty">無開放的檔案</div>
+    </div>
+  </div>
   <div v-if="paletteOpen" class="ide-palette-overlay" @mousedown.self="closePalette">
     <div class="ide-palette">
       <input
