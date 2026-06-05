@@ -23,6 +23,7 @@ from .fs_service import _NOISE_SEGMENTS, FsError, _resolve_safe
 
 _MAX_RESULTS = 2000
 _TIMEOUT_S = 30
+_REPLACE_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB — skip files larger than this
 
 
 def _rg_bin() -> str | None:
@@ -262,6 +263,8 @@ def replace_in_files(
         except FsError:
             continue
         if not target.is_file():
+            continue
+        if target.stat().st_size > _REPLACE_SIZE_LIMIT:
             continue
         try:
             content = target.read_text(encoding="utf-8")
