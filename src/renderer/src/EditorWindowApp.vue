@@ -689,8 +689,18 @@ function onQoKeydown(e: KeyboardEvent): void {
   if (e.key === 'ArrowDown') { e.preventDefault(); qoIdx.value = Math.min(qoIdx.value + 1, qoItems.value.length - 1); return }
   if (e.key === 'ArrowUp') { e.preventDefault(); qoIdx.value = Math.max(0, qoIdx.value - 1); return }
 }
-watch(qoQuery, () => { qoIdx.value = 0 })
+watch(qoQuery, (q) => {
+  qoIdx.value = 0
+  // VS Code: typing '>' in Quick Open switches to command palette mode
+  if (q.startsWith('>')) {
+    const cmd = q.slice(1).trimStart()
+    closeQuickOpen()
+    openPalette()
+    paletteQuery.value = cmd
+  }
+})
 registerCommand('workbench.action.quickOpen', openQuickOpen)
+registerCommand('workbench.action.focusActiveEditorGroup', () => { activeEditor()?.focus?.() })
 registerCommand('workbench.action.reopenClosedEditor', () => {
   const last = closedHistory.pop()
   if (last) openFile({ filepath: last.relPath, name: last.name })
