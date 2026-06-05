@@ -540,3 +540,4 @@ class TerminalService:
             },
         )
         asyncio.create_task(self._emit(event))
+        self._sessions.pop(session.id, None)

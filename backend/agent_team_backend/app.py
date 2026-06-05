@@ -1467,7 +1467,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.log":
             ws_path = payload.get("workspace_path") or ""
-            n = int(payload.get("n", 20))
+            n = min(int(payload.get("n", 20)), 500)
             all_branches = bool(payload.get("all", False))
             result = await git_service.get_log(ws_path, n, all_branches)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": result}))
