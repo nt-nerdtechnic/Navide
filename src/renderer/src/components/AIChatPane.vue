@@ -119,7 +119,7 @@ let toastTimer: number | null = null
 let saveTimer: number | null = null
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
 const MAX_THREADS = 20
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
@@ -129,9 +129,16 @@ const renamingThreadId = ref('')
 const renamingTitle = ref('')
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
-  if (!q) return allThreads.value
-  return allThreads.value.filter((t) => t.title.toLowerCase().includes(q))
+  const list = q ? allThreads.value.filter((t) => t.title.toLowerCase().includes(q)) : allThreads.value
+  // Pinned threads always at top, then by updatedAt desc (array is already sorted that way)
+  return [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]
 })
+
+function togglePinThread(id: string, e: Event): void {
+  e.stopPropagation()
+  const t = allThreads.value.find((th) => th.id === id)
+  if (t) { t.pinned = !t.pinned; saveCurrentThread() }
+}
 const currentThreadId = ref('')
 const allThreads = ref<ChatThread[]>([])
 
@@ -2018,8 +2025,10 @@ function getDateLabel(ts: number): string {
             title="Double-click to rename"
             @dblclick.stop="startRenameThread(t.id, t.title, $event)"
           >{{ t.title }}</span>
+          <span v-if="t.pinned" class="ai-thread-pin-indicator" title="Pinned">📌</span>
           <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
           <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
+          <button class="ai-thread-pin" :title="t.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(t.id, $event)">{{ t.pinned ? '📌' : '⊙' }}</button>
           <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
         </div>
       </div>
@@ -3034,6 +3043,10 @@ function getDateLabel(ts: number): string {
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
 .ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
+.ai-thread-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.ai-thread-item:hover .ai-thread-pin { opacity: 1; }
+.ai-thread-pin:hover { color: var(--accent-fg); }
+.ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
 .ai-settings-btn.active { color: var(--accent-fg); }
 
 .ai-shortcuts-panel {
