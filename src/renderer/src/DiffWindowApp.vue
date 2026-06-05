@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import { useNotify } from './composables/useNotify'
+import { useKeybindings } from './keybindings/useKeybindings'
 import NotificationHost from './components/NotificationHost.vue'
 import { parseHunks, buildPatch, hunkHasChanges, toSideBySide, type Hunk } from './lib/git-diff'
 
@@ -15,6 +16,7 @@ document.title = `Diff · ${name}`
 
 const backend = useBackend()
 const notify = useNotify()
+useKeybindings()
 
 // ── diff state ────────────────────────────────────────────────────────────────
 const rawDiff = ref<string | null>(null)

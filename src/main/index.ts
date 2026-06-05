@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
-import { writeFile, mkdir } from 'node:fs/promises'
+import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
@@ -171,6 +171,12 @@ ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
 function openEditorWindow(params: Record<string, string>): void {
   const search = { window: 'editor', ...params }
   if (editorWindow && !editorWindow.isDestroyed()) {
+    // If only switching sidebar (no new file), avoid reload — just focus + notify sidebar.
+    if (!params.filepath && params.sidebar) {
+      editorWindow.webContents.send('editor:switchSidebar', params.sidebar)
+      editorWindow.focus()
+      return
+    }
     loadWindow(editorWindow, search)
     editorWindow.focus()
     return
@@ -339,6 +345,27 @@ ipcMain.handle('shell:openTempFile', async (_event, filename: string, content: s
 // Read bytes from a file starting at a given offset. Used by the stage watcher
 // to scan the outputLogFile for sentinel strings — more reliable than cleanBuffer
 // which can be truncated or have scanFrom issues from Q&A injections.
+ipcMain.handle('keybindings:read', async () => {
+  const filePath = join(app.getPath('userData'), 'keybindings.json')
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    return { ok: true, content }
+  } catch {
+    return { ok: true, content: '[]' }
+  }
+})
+
+ipcMain.handle('keybindings:write', async (_event, content: string) => {
+  if (typeof content !== 'string') return { ok: false, error: 'invalid content' }
+  const filePath = join(app.getPath('userData'), 'keybindings.json')
+  try {
+    await writeFile(filePath, content, 'utf-8')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number) => {
   if (!filePath || typeof filePath !== 'string') return { ok: false, content: '' }
   try {

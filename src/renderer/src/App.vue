@@ -44,6 +44,7 @@ import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
+import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 const backend = useBackend()
 const rolesApi = useRoles(backend)
@@ -1279,6 +1280,21 @@ const showCompletionModal = ref(false)
 const showSettings = ref(false)
 const showHistory = ref(false)
 const confirmKillAll = ref(false)
+
+// ── Keybinding system ─────────────────────────────────────────────────────────
+useKeybindings()
+registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
+registerCommand('workbench.action.closeModal', () => {
+  if (showSettings.value) showSettings.value = false
+  else if (showCompletionModal.value) showCompletionModal.value = false
+})
+registerCommand('workbench.action.findInFiles', async () => {
+  const api = (window as Window & { agentTeam?: { openEditorWindow?: (args: { workspace_path: string; sidebar: 'search' }) => Promise<{ ok: boolean }> } }).agentTeam
+  if (currentWorkspace.value && api?.openEditorWindow) {
+    await api.openEditorWindow({ workspace_path: currentWorkspace.value, sidebar: 'search' })
+  }
+})
+watch([showSettings, showCompletionModal], ([s, c]) => setContext('modalOpen', s || c))
 
 function onFocusPane(paneId: string): void {
   focusPaneId.value = paneId

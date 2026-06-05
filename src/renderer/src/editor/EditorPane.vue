@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import EditorView from './view/EditorView.vue'
-import type { Range } from './types'
+import type { Range, Position } from './types'
 
 const props = defineProps<{
   workspacePath: string
@@ -17,6 +17,10 @@ const props = defineProps<{
   // Multiple EditorPanes stay mounted (v-show) in the IDE; only the active one
   // should respond to global keyboard shortcuts. Defaults true for standalone use.
   active?: boolean
+  // When an already-open file needs to navigate to a new line (e.g. search result),
+  // the host bumps revealSeq so the watch fires even when revealAt is unchanged.
+  revealAt?: number
+  revealSeq?: number
 }>()
 
 const emit = defineEmits<{
@@ -28,12 +32,35 @@ const { toast, alert } = useNotify()
 const content = ref('')
 const dirty = ref(false)
 watch(dirty, (v) => emit('dirty', v))
+// Navigate to a specific line when the host signals a new target (e.g. search results
+// clicking an already-open file). revealSeq ensures the watch fires even when revealAt
+// is the same line number as before.
+watch([() => props.revealAt, () => props.revealSeq] as const, ([line]) => {
+  if (line && line > 0) editorRef.value?.revealLine(line)
+})
 const loadError = ref('')
 const loaded = ref(false)
 const editorRef = ref<InstanceType<typeof EditorView> | null>(null)
 
 const model = 'llama3.2' // analyzer's default; rewrite/complete proxy to local LLM
 const lang = computed(() => props.name.split('.').pop() ?? '')
+
+const LANG_MAP: Record<string, string> = {
+  ts: 'TypeScript', tsx: 'TypeScript JSX', js: 'JavaScript', jsx: 'JavaScript JSX',
+  vue: 'Vue', py: 'Python', json: 'JSON', md: 'Markdown', html: 'HTML',
+  css: 'CSS', scss: 'SCSS', sh: 'Shell', go: 'Go', rs: 'Rust', rb: 'Ruby',
+  java: 'Java', kt: 'Kotlin', swift: 'Swift', cpp: 'C++', c: 'C', yaml: 'YAML',
+  toml: 'TOML', xml: 'XML', sql: 'SQL',
+}
+const langDisplay = computed(() => LANG_MAP[lang.value] ?? (lang.value ? lang.value.toUpperCase() : 'Text'))
+
+// ── Status bar cursor position ─────────────────────────────────────────────────
+const cursorLine = ref(1)
+const cursorCol = ref(1)
+function onCursorChange(pos: Position): void {
+  cursorLine.value = pos.line + 1
+  cursorCol.value = pos.col + 1
+}
 
 interface FsRead { ok: boolean; content?: string; error?: string }
 interface AiResult { ok: boolean; text?: string; error?: string }
@@ -216,6 +243,30 @@ function onFindKeydown(e: KeyboardEvent): void {
   else if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? prevMatch() : nextMatch() }
 }
 
+// ── Go-to-line overlay (⌘L) ──────────────────────────────────────────────────
+const gotoOpen = ref(false)
+const gotoLineInput = ref('')
+const gotoInputEl = ref<HTMLInputElement | null>(null)
+
+function openGoto(): void {
+  gotoOpen.value = true
+  gotoLineInput.value = String(cursorLine.value)
+  void nextTick(() => { gotoInputEl.value?.focus(); gotoInputEl.value?.select() })
+}
+function closeGoto(): void {
+  gotoOpen.value = false
+  editorRef.value?.focus()
+}
+function submitGoto(): void {
+  const n = parseInt(gotoLineInput.value, 10)
+  if (!isNaN(n) && n > 0) editorRef.value?.revealLine(n)
+  closeGoto()
+}
+function onGotoKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.preventDefault(); closeGoto() }
+  else if (e.key === 'Enter') { e.preventDefault(); submitGoto() }
+}
+
 async function requestGhost(): Promise<void> {
   const cur = editorRef.value?.getCursor()
   const value = editorRef.value?.getValue() ?? ''
@@ -250,6 +301,7 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     e.shiftKey ? prevMatch() : nextMatch()
   }
+  else if (mod && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); openGoto() }
 }
 
 onMounted(() => {
@@ -268,6 +320,8 @@ onMounted(() => {
   )
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
+
+defineExpose({ save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto })
 </script>
 
 <template>
@@ -293,9 +347,28 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
         v-else-if="loaded"
         ref="editorRef"
         :model-value="content"
+        :language="lang"
         @update:model-value="onChange"
+        @cursor-change="onCursorChange"
       />
       <div v-else class="ep-loading">載入中…</div>
+
+      <!-- Go-to-line overlay -->
+      <div v-if="gotoOpen" class="ep-goto-overlay">
+        <div class="ep-goto-box">
+          <span class="ep-goto-label">跳到行</span>
+          <input
+            ref="gotoInputEl"
+            v-model="gotoLineInput"
+            type="number"
+            class="ep-goto-input"
+            placeholder="行號"
+            min="1"
+            @keydown="onGotoKeydown"
+          />
+          <button class="ep-act" @click="submitGoto">跳</button>
+        </div>
+      </div>
     </div>
 
     <!-- Cmd+K bar -->
@@ -351,6 +424,16 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <button class="ep-find-nav" title="下一個 (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
       <button class="ep-find-close" title="關閉 (Esc)" @click="closeFind">✕</button>
     </div>
+
+    <!-- Status bar -->
+    <div class="ep-statusbar">
+      <span class="ep-status-pos">Ln {{ cursorLine }}, Col {{ cursorCol }}</span>
+      <span class="ep-status-right">
+        <span class="ep-status-lang">{{ langDisplay }}</span>
+        <span class="ep-status-sep">·</span>
+        <span class="ep-status-enc">UTF-8</span>
+      </span>
+    </div>
   </div>
 </template>
 
@@ -358,7 +441,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 .editor-pane {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   background: var(--bg-base);
   color: var(--text-primary);
 }
@@ -507,4 +590,59 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   cursor: pointer;
 }
 .ep-find-close:hover { color: var(--text-primary); }
+
+.ep-goto-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 20;
+}
+.ep-goto-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  pointer-events: all;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.ep-goto-label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.ep-goto-input {
+  width: 72px;
+  padding: 4px 8px;
+  font-size: 13px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+  text-align: center;
+}
+.ep-goto-input:focus { border-color: var(--accent-emphasis); }
+.ep-goto-input::-webkit-inner-spin-button,
+.ep-goto-input::-webkit-outer-spin-button { -webkit-appearance: none; }
+
+.ep-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  height: 20px;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-size: 11px;
+  flex-shrink: 0;
+  user-select: none;
+  opacity: 0.9;
+}
+.ep-status-pos { font-variant-numeric: tabular-nums; }
+.ep-status-right { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
+.ep-status-sep { opacity: 0.5; }
 </style>

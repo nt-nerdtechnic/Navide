@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBackend } from './composables/useBackend'
 import ExplorerPane from './components/ExplorerPane.vue'
 import SearchPane from './components/SearchPane.vue'
 import GitPane from './components/GitPane.vue'
 import EditorPane from './editor/EditorPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
+import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
@@ -16,31 +17,124 @@ const initialLine = Number(params.get('line')) || 0
 
 const backend = useBackend()
 
+// ── Sidebar resize ────────────────────────────────────────────────────────────
+const SIDEBAR_W_KEY = 'ide-sidebar-width'
+const sidebarWidth = ref(Math.max(120, Math.min(500, parseInt(localStorage.getItem(SIDEBAR_W_KEY) ?? '260', 10))))
+let resizing = false
+function onResizeStart(): void {
+  resizing = true
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', onResizeEnd)
+}
+function onResizeMove(e: MouseEvent): void {
+  if (!resizing) return
+  sidebarWidth.value = Math.max(120, Math.min(500, e.clientX - 48))
+}
+function onResizeEnd(): void {
+  if (!resizing) return
+  resizing = false
+  localStorage.setItem(SIDEBAR_W_KEY, String(sidebarWidth.value))
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+}
+
 // ── Open files (VS Code-style tabs); each EditorPane stays mounted (v-show) so
 //    edits/undo survive tab switches. ──────────────────────────────────────────
-interface OpenFile { relPath: string; name: string; line: number; dirty: boolean }
+interface OpenFile { relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
-const sidebarView = ref<'explorer' | 'search' | 'git'>('explorer')
+const initialSidebar = (['explorer', 'search', 'git'] as const).find(
+  (v) => v === params.get('sidebar'),
+) ?? 'explorer'
+const sidebarView = ref<'explorer' | 'search' | 'git'>(initialSidebar)
 const changesCount = ref(0)
+const activePath = computed(() => activeRel.value.split('/').filter(Boolean))
 
 function openFile(p: { filepath: string; name?: string; line?: number }): void {
   const relPath = p.filepath
   if (!relPath) return
   const name = p.name ?? (relPath.split('/').pop() || relPath)
   const existing = openFiles.value.find((f) => f.relPath === relPath)
-  if (!existing) openFiles.value.push({ relPath, name, line: p.line ?? 0, dirty: false })
+  if (existing) {
+    // File already open — navigate to the requested line (if any) by bumping revealSeq
+    // so the EditorPane watch fires even when line is the same value as before.
+    if (p.line && p.line > 0) {
+      existing.revealAt = p.line
+      existing.revealSeq = (existing.revealSeq ?? 0) + 1
+    }
+  } else {
+    openFiles.value.push({ relPath, name, line: p.line ?? 0, dirty: false, revealSeq: 0 })
+  }
   activeRel.value = relPath
 }
 
 function closeFile(relPath: string): void {
-  const i = openFiles.value.findIndex((f) => f.relPath === relPath)
+  const f = openFiles.value.find((x) => x.relPath === relPath)
+  if (f?.dirty && !window.confirm(`「${f.name}」有未存檔的變更，確定要關閉？`)) return
+  const i = openFiles.value.findIndex((x) => x.relPath === relPath)
   if (i === -1) return
   openFiles.value.splice(i, 1)
   if (activeRel.value === relPath) {
     activeRel.value = openFiles.value[Math.min(i, openFiles.value.length - 1)]?.relPath ?? ''
   }
 }
+
+// ── EditorPane ref tracking (for command delegation) ─────────────────────────
+const editorPaneRefs = new Map<string, InstanceType<typeof EditorPane>>()
+function setEditorRef(relPath: string, el: unknown): void {
+  if (el) editorPaneRefs.set(relPath, el as InstanceType<typeof EditorPane>)
+  else editorPaneRefs.delete(relPath)
+}
+function activeEditor(): InstanceType<typeof EditorPane> | undefined {
+  return editorPaneRefs.get(activeRel.value)
+}
+
+// ── Keybinding system ─────────────────────────────────────────────────────────
+useKeybindings()
+registerCommand('editor.action.save',          () => activeEditor()?.save())
+registerCommand('editor.action.inlineRewrite', () => activeEditor()?.openCmdK())
+registerCommand('editor.action.triggerGhost',  () => activeEditor()?.requestGhost())
+registerCommand('editor.action.openFind',      () => activeEditor()?.openFind())
+registerCommand('editor.action.nextMatch',     () => activeEditor()?.nextMatch())
+registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch())
+registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
+registerCommand('workbench.action.findInFiles', () => { sidebarView.value = 'search' })
+
+watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
+
+// ── Tab bar: auto-scroll active tab into view ─────────────────────────────────
+const tabsEl = ref<HTMLElement | null>(null)
+watch(activeRel, async () => {
+  await nextTick()
+  tabsEl.value?.querySelector<HTMLElement>('.ide-tab.active')?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+})
+
+function onAppKeydown(e: KeyboardEvent): void {
+  const mod = e.metaKey || e.ctrlKey
+  if (mod && (e.key === 'w' || e.key === 'W') && activeRel.value) {
+    // Don't close the tab while the user is typing in a find/goto/cmdk input.
+    const tag = (document.activeElement as HTMLElement | null)?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    e.preventDefault()
+    closeFile(activeRel.value)
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onAppKeydown)
+  // Allow the main window to switch the sidebar via IPC without reloading this window.
+  const api = (window as Window & { agentTeam?: { onSwitchEditorSidebar?: (cb: (s: string) => void) => void } }).agentTeam
+  api?.onSwitchEditorSidebar?.((sidebar) => {
+    if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
+      sidebarView.value = sidebar
+    }
+  })
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onAppKeydown)
+  document.removeEventListener('mousemove', onResizeMove)
+  document.removeEventListener('mouseup', onResizeEnd)
+})
 
 function markDirty(relPath: string, v: boolean): void {
   const f = openFiles.value.find((x) => x.relPath === relPath)
@@ -92,7 +186,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
     </div>
 
     <!-- Sidebar -->
-    <div class="ide-sidebar">
+    <div class="ide-sidebar" :style="{ width: sidebarWidth + 'px' }">
       <ExplorerPane
         v-show="sidebarView === 'explorer'"
         :workspace-path="workspacePath"
@@ -105,6 +199,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
+        :active="sidebarView === 'search'"
         @open-file="openFile"
       />
       <GitPane
@@ -116,10 +211,11 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         @changes-count="changesCount = $event"
       />
     </div>
+    <div class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
 
     <!-- Editor area -->
     <div class="ide-main">
-      <div v-if="openFiles.length" class="ide-tabs">
+      <div v-if="openFiles.length" ref="tabsEl" class="ide-tabs">
         <div
           v-for="f in openFiles"
           :key="f.relPath"
@@ -134,16 +230,27 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         </div>
       </div>
 
+      <!-- Breadcrumb -->
+      <div v-if="activeRel" class="ide-breadcrumb">
+        <template v-for="(seg, i) in activePath" :key="i">
+          <span v-if="i > 0" class="ide-bc-sep">›</span>
+          <span class="ide-bc-seg" :class="{ 'ide-bc-file': i === activePath.length - 1 }">{{ seg }}</span>
+        </template>
+      </div>
+
       <div class="ide-editors">
         <EditorPane
           v-for="f in openFiles"
           v-show="f.relPath === activeRel"
           :key="f.relPath"
+          :ref="(el) => setEditorRef(f.relPath, el)"
           :workspace-path="workspacePath"
           :backend="backend"
           :rel-path="f.relPath"
           :name="f.name"
           :initial-line="f.line"
+          :reveal-at="f.revealAt"
+          :reveal-seq="f.revealSeq"
           embedded
           :active="f.relPath === activeRel"
           @dirty="(v) => markDirty(f.relPath, v)"
@@ -209,13 +316,21 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
 
 .ide-sidebar {
   flex-shrink: 0;
-  width: 260px;
-  min-width: 180px;
+  min-width: 120px;
+  max-width: 500px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-muted);
   overflow: hidden;
 }
+.ide-resize-handle {
+  flex-shrink: 0;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  border-right: 1px solid var(--border-muted);
+  transition: background 0.15s;
+}
+.ide-resize-handle:hover { background: var(--accent-emphasis); }
 .ide-sidebar > * { flex: 1; min-height: 0; }
 
 .ide-main {
@@ -232,7 +347,9 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
   border-bottom: 1px solid var(--border-muted);
   overflow-x: auto;
   flex-shrink: 0;
+  scrollbar-width: none;
 }
+.ide-tabs::-webkit-scrollbar { display: none; }
 .ide-tab {
   display: flex;
   align-items: center;
@@ -264,6 +381,22 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
   border-radius: 3px;
 }
 .ide-tab-close:hover { background: var(--bg-muted); color: var(--text-bright); }
+
+.ide-breadcrumb {
+  display: flex;
+  align-items: center;
+  padding: 2px 12px;
+  height: 22px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-muted);
+  font-size: 11.5px;
+  flex-shrink: 0;
+  gap: 4px;
+  overflow: hidden;
+}
+.ide-bc-sep { color: var(--text-muted); opacity: 0.6; font-size: 10px; }
+.ide-bc-seg { color: var(--text-secondary); white-space: nowrap; }
+.ide-bc-file { color: var(--text-primary); font-weight: 500; }
 
 .ide-editors { flex: 1; position: relative; min-height: 0; }
 .ide-editors > * { height: 100%; }

@@ -9,6 +9,8 @@ const props = defineProps<{
   // When embedded inside the editor window, matches open in-place via `open-file`
   // instead of spawning a separate editor window.
   embedded?: boolean
+  // When the pane is shown (activity bar click), auto-focus the search input.
+  active?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -211,6 +213,12 @@ function clearSearch(): void {
   results.value = []
   total.value = 0
 }
+
+// Auto-focus when pane becomes active (e.g. clicking Search in the activity bar).
+// v-show keeps the component mounted, so onMounted only fires once; watch handles later activations.
+watch(() => props.active, (v) => {
+  if (v) void nextTick(() => queryInput.value?.focus())
+})
 
 onMounted(() => {
   void Promise.resolve().then(() => queryInput.value?.focus())

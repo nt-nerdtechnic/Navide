@@ -2,15 +2,19 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { TextModel } from '../model/TextModel'
 import { UndoStack } from '../model/UndoStack'
-import { JsTokenizer } from '../tokenize/jsTokenizer'
+import { tokenizerFor } from '../tokenize/index'
 import { useVirtualScroll } from './useVirtualScroll'
 import type { Position, Range, Token, Decoration } from '../types'
 
-const props = withDefaults(defineProps<{ modelValue?: string; readonly?: boolean }>(), {
+const props = withDefaults(defineProps<{ modelValue?: string; readonly?: boolean; language?: string }>(), {
   modelValue: '',
   readonly: false,
+  language: '',
 })
-const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
+const emit = defineEmits<{
+  (e: 'update:modelValue', v: string): void
+  (e: 'cursor-change', pos: Position): void
+}>()
 
 const LINE_HEIGHT = 19
 const PAD_LEFT = 8
@@ -18,7 +22,7 @@ const GUTTER_W = 48
 
 const model = new TextModel(props.modelValue)
 const undo = new UndoStack()
-const tokenizer = JsTokenizer
+const tokenizer = computed(() => tokenizerFor(props.language ?? ''))
 
 // Bumped on every edit to re-derive rendered state.
 const version = ref(0)
@@ -41,10 +45,11 @@ let composing = false
 // ── Tokenization (whole-doc; fine for typical source files) ──────────────────
 const lineTokens = computed<Token[][]>(() => {
   version.value // track
+  const tok = tokenizer.value
   const out: Token[][] = []
-  let state = tokenizer.initialState()
+  let state = tok.initialState()
   for (let i = 0; i < model.lineCount(); i++) {
-    const { tokens, endState } = tokenizer.tokenizeLine(model.getLine(i), state)
+    const { tokens, endState } = tok.tokenizeLine(model.getLine(i), state)
     out.push(tokens)
     state = endState
   }
@@ -183,12 +188,56 @@ function startOrClearSelection(extend: boolean): void {
 
 function homeKey(extend: boolean): void {
   startOrClearSelection(extend)
-  cursor.value = { line: cursor.value.line, col: 0 }
+  const line = model.getLine(cursor.value.line)
+  let indent = 0
+  while (indent < line.length && (line[indent] === ' ' || line[indent] === '\t')) indent++
+  cursor.value = { line: cursor.value.line, col: cursor.value.col === indent ? 0 : indent }
 }
 function endKey(extend: boolean): void {
   startOrClearSelection(extend)
   const line = cursor.value.line
   cursor.value = { line, col: model.getLine(line).length }
+}
+
+// ── Indent / dedent selected lines ───────────────────────────────────────────
+const INDENT = '  '
+
+function indentLines(startLine: number, endLine: number): void {
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const savedCursor = { ...cursor.value }
+  const newContent = Array.from({ length: endLine - startLine + 1 }, (_, i) =>
+    INDENT + model.getLine(startLine + i),
+  ).join('\n')
+  applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, newContent)
+  // Restore selection shifted by INDENT.length on each affected line
+  anchor.value = savedAnchor && savedAnchor.line <= endLine
+    ? { line: savedAnchor.line, col: savedAnchor.col + INDENT.length }
+    : savedAnchor
+  cursor.value = savedCursor.line <= endLine
+    ? { line: savedCursor.line, col: savedCursor.col + INDENT.length }
+    : savedCursor
+}
+
+function dedentLines(startLine: number, endLine: number): void {
+  const savedAnchor = anchor.value ? { ...anchor.value } : null
+  const savedCursor = { ...cursor.value }
+  const removals: number[] = []
+  const newContent = Array.from({ length: endLine - startLine + 1 }, (_, i) => {
+    const line = model.getLine(startLine + i)
+    let removed = 0
+    while (removed < INDENT.length && line[removed] === ' ') removed++
+    removals.push(removed)
+    return line.slice(removed)
+  }).join('\n')
+  applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, newContent)
+  const anchorIdx = savedAnchor ? savedAnchor.line - startLine : -1
+  anchor.value = savedAnchor && anchorIdx >= 0 && anchorIdx < removals.length
+    ? { line: savedAnchor.line, col: Math.max(0, savedAnchor.col - removals[anchorIdx]) }
+    : savedAnchor
+  const cursorIdx = savedCursor.line - startLine
+  cursor.value = cursorIdx >= 0 && cursorIdx < removals.length
+    ? { line: savedCursor.line, col: Math.max(0, savedCursor.col - removals[cursorIdx]) }
+    : savedCursor
 }
 
 // ── Keyboard ─────────────────────────────────────────────────────────────────
@@ -226,8 +275,32 @@ function onKeydown(e: KeyboardEvent): void {
     case 'End': e.preventDefault(); endKey(shift); break
     case 'Backspace': e.preventDefault(); deleteBackward(); break
     case 'Delete': e.preventDefault(); deleteForward(); break
-    case 'Enter': e.preventDefault(); insertText('\n'); break
-    case 'Tab': e.preventDefault(); insertText('  '); break
+    case 'Enter': {
+      e.preventDefault()
+      const curLine = model.getLine(cursor.value.line)
+      let indent = ''
+      for (const ch of curLine) {
+        if (ch === ' ' || ch === '\t') indent += ch
+        else break
+      }
+      insertText('\n' + indent)
+      break
+    }
+    case 'Tab': {
+      e.preventDefault()
+      const sel = selectionRange()
+      if (shift) {
+        const ln = sel ? sel.start.line : cursor.value.line
+        const endLn = sel ? (sel.end.col > 0 ? sel.end.line : Math.max(ln, sel.end.line - 1)) : ln
+        dedentLines(ln, endLn)
+      } else if (sel && sel.start.line !== sel.end.line) {
+        const endLn = sel.end.col > 0 ? sel.end.line : Math.max(sel.start.line, sel.end.line - 1)
+        indentLines(sel.start.line, endLn)
+      } else {
+        insertText(INDENT)
+      }
+      break
+    }
     case 'Escape': ghost.value = null; break
     default: break
   }
@@ -394,6 +467,8 @@ watch(() => props.modelValue, (v) => {
     afterChange()
   }
 })
+
+watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
