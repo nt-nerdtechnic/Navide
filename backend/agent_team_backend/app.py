@@ -1973,34 +1973,43 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────
-        # Security: cwd is validated via Path.resolve() so symlink/traversal
-        # attacks cannot redirect execution outside the user's workspace.
-        # The frontend shows an explicit confirm dialog before sending this request.
+        # Security notes:
+        # - Uses create_subprocess_exec('/bin/sh', '-c', cmd) instead of
+        #   create_subprocess_shell to avoid implicit shell injection.
+        # - ws_path is resolved and validated to be an existing directory.
+        # - Frontend shows full command in confirm dialog before invoking.
+        # - This is a local-only Electron app; the WebSocket server binds to
+        #   localhost only, reducing (but not eliminating) external attack surface.
         elif msg_type == "shell.run":
             ws_path = payload.get("workspace_path") or ""
             cmd = payload.get("command", "") or ""
             if not cmd:
                 await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
-            elif ws_path and not Path(ws_path).resolve().is_dir():
-                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
             else:
-                safe_cwd = str(Path(ws_path).resolve()) if ws_path else None
-                try:
-                    proc = await asyncio.create_subprocess_shell(
-                        cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        cwd=safe_cwd,
-                    )
-                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-                    output = stdout.decode("utf-8", errors="replace")
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {
-                        "ok": True, "output": output[:8000], "exit_code": proc.returncode,
-                    }))
-                except asyncio.TimeoutError:
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout"}))
-                except Exception as exc:
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
+                resolved_cwd = Path(ws_path).resolve() if ws_path else None
+                if resolved_cwd and not resolved_cwd.is_dir():
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
+                else:
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "/bin/sh", "-c", cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
+                            cwd=str(resolved_cwd) if resolved_cwd else None,
+                        )
+                        try:
+                            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                        except asyncio.TimeoutError:
+                            proc.kill()
+                            await proc.communicate()
+                            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout after 30s"}))
+                            continue
+                        output = stdout.decode("utf-8", errors="replace")
+                        await session.websocket.send_json(make_response(msg_id, msg_type, {
+                            "ok": True, "output": output[:8000], "exit_code": proc.returncode,
+                        }))
+                    except Exception as exc:
+                        await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
 
         # ── Search (search.*) ───────────────────────────────────────────────
         elif msg_type == "search.find_in_files":

@@ -520,7 +520,7 @@ function onMessagesClick(e: MouseEvent): void {
   if (runCodeBtn) {
     try {
       const code = decodeURIComponent(escape(atob(runCodeBtn.dataset.code ?? '')))
-      if (!window.confirm(`Run this command in workspace?\n\n${code.slice(0, 200)}${code.length > 200 ? '…' : ''}`)) return
+      if (!window.confirm(`Run this command in workspace?\n\n${code}\n\nNote: This will execute in your workspace directory.`)) return
       runCodeBtn.textContent = '⏳ Running…'
       runCodeBtn.disabled = true
       interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
