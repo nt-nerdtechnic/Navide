@@ -433,8 +433,9 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
-    if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
-    else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
+    // git.changed broadcast from the backend handles all reloads on success;
+    // on conflict we still need a status refresh to show the dirty files.
+    if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
@@ -887,18 +888,29 @@ export function useGit(
   )
   onScopeDispose(_stopReconnect)
 
-  // Refresh on backend git.changed broadcast
-  on('git.changed', (payload: unknown) => {
+  // Refresh on backend git.changed broadcast.
+  // Debounce at 300 ms so rapid-fire events (e.g. GitWatcher fires once AND
+  // app.py broadcasts once for the same operation) collapse into a single reload.
+  let _gitChangedTimer: ReturnType<typeof setTimeout> | null = null
+  const _offGitChanged = on('git.changed', (payload: unknown) => {
     const p = payload as { workspace_path?: string }
     if (!p?.workspace_path || p.workspace_path === workspacePath()) {
-      void loadStatus()
-      void loadLog()
-      void loadBranches()
-      void loadStashes()
-      void loadRemotes()
-      void loadTags()
-      void loadWorktrees()
+      if (_gitChangedTimer !== null) clearTimeout(_gitChangedTimer)
+      _gitChangedTimer = setTimeout(() => {
+        _gitChangedTimer = null
+        void loadStatus()
+        void loadLog()
+        void loadBranches()
+        void loadStashes()
+        void loadRemotes()
+        void loadTags()
+        void loadWorktrees()
+      }, 300)
     }
+  })
+  onScopeDispose(() => {
+    _offGitChanged()
+    if (_gitChangedTimer !== null) { clearTimeout(_gitChangedTimer); _gitChangedTimer = null }
   })
 
   return {

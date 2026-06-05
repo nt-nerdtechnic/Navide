@@ -770,11 +770,15 @@ async function doMerge(branch: string): Promise<void> {
 async function doMergeInto(target: string): Promise<void> {
   mergeError.value = ''; mergeOutput.value = ''
   ctxMenu.value.show = false
-  const r = await mergeInto(target)
-  if (!r.ok && (r.conflict_files ?? []).length > 0) {
-    mergeConflictContext.value = `已切換至 ${target}，合併 ${(r as any).source_branch || ''} 時發生衝突`
+  try {
+    const r = await mergeInto(target)
+    if (!r.ok && (r.conflict_files ?? []).length > 0) {
+      mergeConflictContext.value = `已切換至 ${target}，合併 ${(r as any).source_branch || ''} 時發生衝突`
+    }
+    _handleMergeResult(r)
+  } catch (err) {
+    mergeError.value = err instanceof Error ? err.message : 'merge failed'
   }
-  _handleMergeResult(r)
 }
 
 async function doConflictAbort(): Promise<void> {
