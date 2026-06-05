@@ -497,8 +497,12 @@ class StagesStore:
     def _write_doc(self, doc: dict[str, Any]) -> None:
         self._ensure_dir()
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
-        tmp.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self._path)
+        try:
+            tmp.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self._path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def _get_pipeline(
         self, doc: dict[str, Any], pipeline_id: str | None = None
