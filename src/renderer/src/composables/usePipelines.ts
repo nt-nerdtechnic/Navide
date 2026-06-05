@@ -87,63 +87,73 @@ export function usePipelines(backend: ReturnType<typeof useBackend>) {
   )
 
   async function createPipeline(name: string): Promise<PipelineSummary | null> {
-    const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
-      'pipelines.create',
-      { name }
-    )
-    if (!resp.ok || !resp.payload) return null
-    pipelines.value = resp.payload.pipelines
-    return resp.payload.pipeline
+    try {
+      const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
+        'pipelines.create',
+        { name }
+      )
+      if (!resp.ok || !resp.payload) return null
+      pipelines.value = resp.payload.pipelines
+      return resp.payload.pipeline
+    } catch { return null }
   }
 
   async function renamePipeline(pipelineId: string, name: string): Promise<boolean> {
-    const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
-      'pipelines.rename',
-      { pipeline_id: pipelineId, name }
-    )
-    if (!resp.ok || !resp.payload) return false
-    pipelines.value = resp.payload.pipelines
-    return true
+    try {
+      const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
+        'pipelines.rename',
+        { pipeline_id: pipelineId, name }
+      )
+      if (!resp.ok || !resp.payload) return false
+      pipelines.value = resp.payload.pipelines
+      return true
+    } catch { return false }
   }
 
   async function deletePipeline(
     pipelineId: string,
     workspacePath?: string
   ): Promise<boolean> {
-    const resp = await backend.send<{ pipelines: PipelineSummary[] }>('pipelines.delete', {
-      pipeline_id: pipelineId,
-      workspace_path: workspacePath ?? '',
-    })
-    if (!resp.ok || !resp.payload) return false
-    pipelines.value = resp.payload.pipelines
-    return true
+    try {
+      const resp = await backend.send<{ pipelines: PipelineSummary[] }>('pipelines.delete', {
+        pipeline_id: pipelineId,
+        workspace_path: workspacePath ?? '',
+      })
+      if (!resp.ok || !resp.payload) return false
+      pipelines.value = resp.payload.pipelines
+      return true
+    } catch { return false }
   }
 
   async function setActivePipeline(
     pipelineId: string,
     workspacePath?: string
   ): Promise<boolean> {
-    const resp = await backend.send<{
-      active_pipeline_id: string
-      pipelines: PipelineSummary[]
-    }>('pipelines.set_active', {
-      pipeline_id: pipelineId,
-      workspace_path: workspacePath ?? '',
-    })
-    if (!resp.ok || !resp.payload) return false
-    activePipelineId.value = resp.payload.active_pipeline_id
-    pipelines.value = resp.payload.pipelines
-    return true
+    try {
+      const resp = await backend.send<{
+        active_pipeline_id: string
+        pipelines: PipelineSummary[]
+      }>('pipelines.set_active', {
+        pipeline_id: pipelineId,
+        workspace_path: workspacePath ?? '',
+      })
+      if (!resp.ok || !resp.payload) return false
+      activePipelineId.value = resp.payload.active_pipeline_id
+      pipelines.value = resp.payload.pipelines
+      return true
+    } catch { return false }
   }
 
   async function resetBuiltin(pipelineId: string): Promise<boolean> {
-    const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
-      'pipelines.reset_builtin',
-      { pipeline_id: pipelineId }
-    )
-    if (!resp.ok || !resp.payload) return false
-    pipelines.value = resp.payload.pipelines
-    return true
+    try {
+      const resp = await backend.send<{ pipeline: PipelineSummary; pipelines: PipelineSummary[] }>(
+        'pipelines.reset_builtin',
+        { pipeline_id: pipelineId }
+      )
+      if (!resp.ok || !resp.payload) return false
+      pipelines.value = resp.payload.pipelines
+      return true
+    } catch { return false }
   }
 
   return {

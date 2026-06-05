@@ -48,18 +48,23 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
   }
 
   async function fetchDir(rel: string): Promise<FsEntry[]> {
-    const resp = await backend.send<ListDirResult>('fs.list_dir', {
-      workspace_path: ws(),
-      rel_path: rel,
-      show_hidden: showHidden.value,
-    })
-    const payload = resp.payload
-    if (!payload?.ok) {
-      error.value = payload?.error || resp.error?.message || 'failed to list directory'
+    try {
+      const resp = await backend.send<ListDirResult>('fs.list_dir', {
+        workspace_path: ws(),
+        rel_path: rel,
+        show_hidden: showHidden.value,
+      })
+      const payload = resp.payload
+      if (!payload?.ok) {
+        error.value = payload?.error || resp.error?.message || 'failed to list directory'
+        return []
+      }
+      error.value = ''
+      return payload.entries ?? []
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'failed to list directory'
       return []
     }
-    error.value = ''
-    return payload.entries ?? []
   }
 
   /** Load (and cache) the children of `rel`. Returns the cached list. */

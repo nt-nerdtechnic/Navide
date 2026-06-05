@@ -51,38 +51,53 @@ export function useRoles(backend: ReturnType<typeof useBackend>) {
     one_line: string
     system_prompt: string
   }): Promise<Role | null> {
-    const resp = await backend.send<{ role: Role; roles: Role[] }>('roles.upsert', {
-      key: input.key,
-      label: input.label,
-      one_line: input.one_line,
-      system_prompt: input.system_prompt
-    })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'upsert failed'
+    try {
+      const resp = await backend.send<{ role: Role; roles: Role[] }>('roles.upsert', {
+        key: input.key,
+        label: input.label,
+        one_line: input.one_line,
+        system_prompt: input.system_prompt
+      })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'upsert failed'
+        return null
+      }
+      roles.value = resp.payload.roles
+      return resp.payload.role
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'upsert failed'
       return null
     }
-    roles.value = resp.payload.roles
-    return resp.payload.role
   }
 
   async function remove(key: string): Promise<boolean> {
-    const resp = await backend.send<{ roles: Role[] }>('roles.delete', { key })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'delete failed'
+    try {
+      const resp = await backend.send<{ roles: Role[] }>('roles.delete', { key })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'delete failed'
+        return false
+      }
+      roles.value = resp.payload.roles
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'delete failed'
       return false
     }
-    roles.value = resp.payload.roles
-    return true
   }
 
   async function reset(): Promise<boolean> {
-    const resp = await backend.send<{ roles: Role[] }>('roles.reset', {})
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'reset failed'
+    try {
+      const resp = await backend.send<{ roles: Role[] }>('roles.reset', {})
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'reset failed'
+        return false
+      }
+      roles.value = resp.payload.roles
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'reset failed'
       return false
     }
-    roles.value = resp.payload.roles
-    return true
   }
 
   function find(key: string): Role | undefined {

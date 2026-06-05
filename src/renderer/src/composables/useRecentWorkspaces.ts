@@ -51,47 +51,67 @@ export function useRecentWorkspaces(backend: ReturnType<typeof useBackend>) {
   }
 
   async function touch(p: string, state = '', task = ''): Promise<boolean> {
-    const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.touch', {
-      path: p,
-      state,
-      task
-    })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'touch failed'
+    try {
+      const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.touch', {
+        path: p,
+        state,
+        task
+      })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'touch failed'
+        return false
+      }
+      recent.value = resp.payload.recent
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'touch failed'
       return false
     }
-    recent.value = resp.payload.recent
-    return true
   }
 
   async function pin(p: string): Promise<boolean> {
-    const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.pin', { path: p })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'pin failed'
+    try {
+      const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.pin', { path: p })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'pin failed'
+        return false
+      }
+      recent.value = resp.payload.recent
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'pin failed'
       return false
     }
-    recent.value = resp.payload.recent
-    return true
   }
 
   async function unpin(p: string): Promise<boolean> {
-    const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.unpin', { path: p })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'unpin failed'
+    try {
+      const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.unpin', { path: p })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'unpin failed'
+        return false
+      }
+      recent.value = resp.payload.recent
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'unpin failed'
       return false
     }
-    recent.value = resp.payload.recent
-    return true
   }
 
   async function remove(p: string): Promise<boolean> {
-    const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.remove', { path: p })
-    if (!resp.ok || !resp.payload) {
-      error.value = resp.error?.message ?? 'remove failed'
+    try {
+      const resp = await backend.send<{ recent: RecentWorkspace[] }>('workspace.remove', { path: p })
+      if (!resp.ok || !resp.payload) {
+        error.value = resp.error?.message ?? 'remove failed'
+        return false
+      }
+      recent.value = resp.payload.recent
+      return true
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'remove failed'
       return false
     }
-    recent.value = resp.payload.recent
-    return true
   }
 
   // Keep the cache in sync across windows.
