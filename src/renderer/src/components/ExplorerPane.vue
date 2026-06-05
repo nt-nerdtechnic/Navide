@@ -233,10 +233,10 @@ watch(wsRef, (v) => {
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 1 0 4.546 2.914.75.75 0 0 1 1.364-.626A6.5 6.5 0 1 1 8 1.5V0l3 2-3 2V3Z"/></svg>
         </button>
         <button class="exp-icon-btn" title="新增檔案" @click.stop="startNew('new-file', null)">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 1H3.75A1.75 1.75 0 0 0 2 2.75v10.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1ZM12.5 13.25a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25V2.75a.25.25 0 0 1 .25-.25H9v3.5h3.5v7.25ZM8 7.5h1.5V9H11v1.5H9.5V12H8v-1.5H6.5V9H8V7.5Z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H6.5a1 1 0 0 0-1 1v3.5"/><path d="M8.5 14H12a1 1 0 0 0 1-1V5l-3-3"/><path d="M10 2v3h3"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
         <button class="exp-icon-btn" title="新增資料夾" @click.stop="startNew('new-folder', null)">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7A1.75 1.75 0 0 0 14.25 3.5H7.5l-1.2-1.2A1.75 1.75 0 0 0 5.06 2H1.75Zm6.5 5.5h1.75V9h1.5v1.5h-1.5V12H8.25v-1.5h-1.5V9h1.5V7.5Z"/></svg>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v1.5"/><path d="M13.5 7.5V12a1 1 0 0 1-1 1H7"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
       </div>
     </div>
