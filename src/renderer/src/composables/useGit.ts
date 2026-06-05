@@ -203,18 +203,19 @@ export function useGit(
       gitLog.value = []
       return
     }
+    const scope = logScope.value  // capture before await to detect scope changes
     isLoadingLog.value = true
     try {
       const resp = await send<{ commits: GitCommit[] }>('git.log', {
         workspace_path: ws,
         n: logLimit.value,
-        all: logScope.value === 'all',
+        all: scope === 'all',
       })
-      if (resp.ok && resp.payload && workspacePath() === ws) {
+      if (resp.ok && resp.payload && workspacePath() === ws && logScope.value === scope) {
         gitLog.value = resp.payload.commits ?? []
       }
     } finally {
-      if (workspacePath() === ws) isLoadingLog.value = false
+      if (workspacePath() === ws && logScope.value === scope) isLoadingLog.value = false
     }
   }
 

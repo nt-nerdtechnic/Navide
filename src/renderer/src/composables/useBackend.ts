@@ -40,11 +40,13 @@ export function useBackend() {
   const httpUrl = ref<string>('')
   const lastError = ref<string>('')
   const ws = shallowRef<WebSocket | null>(null)
-  const pending = new Map<string, (resp: WsResponse) => void>()
+  interface PendingEntry { resolve: (resp: WsResponse) => void; reject: (err: Error) => void }
+  const pending = new Map<string, PendingEntry>()
   const listeners = new Map<string, Set<(payload: unknown) => void>>()
 
   let pingTimer: number | null = null
   let reconnectTimer: number | null = null
+  let reconnectAttempts = 0
   let disposed = false
 
   function emit(type: string, payload: unknown): void {
@@ -79,12 +81,13 @@ export function useBackend() {
         return
       }
       const req: WsRequest = { id: uuid(), type, payload, timestamp: nowIso() }
-      pending.set(req.id, resolve as (resp: WsResponse) => void)
+      pending.set(req.id, { resolve: resolve as (resp: WsResponse) => void, reject })
       socket.send(JSON.stringify(req))
       setTimeout(() => {
-        if (pending.has(req.id)) {
+        const entry = pending.get(req.id)
+        if (entry) {
           pending.delete(req.id)
-          reject(new Error(`request ${type} timeout`))
+          entry.reject(new Error(`request ${type} timeout`))
         }
       }, timeoutMs)
     })
@@ -99,6 +102,7 @@ export function useBackend() {
     socket.addEventListener('open', () => {
       status.value = 'connected'
       lastError.value = ''
+      reconnectAttempts = 0
       if (pingTimer !== null) window.clearInterval(pingTimer)
       pingTimer = window.setInterval(() => {
         send('ping', { t: Date.now() }).catch((err) => {
@@ -116,9 +120,9 @@ export function useBackend() {
         return
       }
       if ('ok' in msg && msg.ok !== undefined && pending.has(msg.id)) {
-        const resolve = pending.get(msg.id)!
+        const entry = pending.get(msg.id)!
         pending.delete(msg.id)
-        resolve(msg)
+        entry.resolve(msg)
         return
       }
       emit(msg.type, (msg as WsRequest).payload)
@@ -130,9 +134,17 @@ export function useBackend() {
         window.clearInterval(pingTimer)
         pingTimer = null
       }
+      // Immediately reject all pending requests so callers aren't left hanging.
+      for (const [, entry] of pending) {
+        entry.reject(new Error('WebSocket closed'))
+      }
+      pending.clear()
       if (!disposed) {
         status.value = 'disconnected'
-        reconnectTimer = window.setTimeout(connect, 1500)
+        // Exponential backoff: 1.5 s → 3 s → 6 s → … capped at 30 s.
+        const delay = Math.min(1500 * Math.pow(2, reconnectAttempts), 30_000)
+        reconnectAttempts++
+        reconnectTimer = window.setTimeout(connect, delay)
       }
     })
 
