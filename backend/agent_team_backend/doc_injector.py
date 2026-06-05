@@ -273,9 +273,9 @@ async def _llm_select_relevant(
     part_summaries: list[str] = []
     for i, (lib_name, doc_text) in enumerate(doc_parts):
         preview = doc_text[:500].replace("\n", " ")
-        part_summaries.append(f"段落 {i} [{lib_name}]: {preview}…")
+        part_summaries.append(f"Section {i} [{lib_name}]: {preview}…")
 
-    user_msg = f"任務：{task}\n\n" + "\n\n".join(part_summaries)
+    user_msg = f"Task: {task}\n\n" + "\n\n".join(part_summaries)
     raw = await _llm_call(_RELEVANCE_SYSTEM, user_msg, gguf_path,
                           n_predict=64, timeout=timeout)
     if not raw:
