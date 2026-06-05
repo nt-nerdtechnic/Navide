@@ -339,6 +339,14 @@ registerCommand('workbench.action.focusExplorer', () => {
 })
 registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
 registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !aiPanelOpen.value })
+registerCommand('workbench.action.addSelectionToChat', () => {
+  const sel = activeEditor()?.getSelection() || activeEditor()?.getWordAtCursor?.() || ''
+  if (!sel) return
+  aiPanelOpen.value = true
+  const rel = activeRel.value
+  const label = rel ? `@${rel.split('/').pop()}` : '@selection'
+  void nextTick(() => aiChatRef.value?.addContextChip(label, sel))
+})
 function getActiveRelPath(): string { return activeRel.value }
 registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
 registerCommand('editor.action.deleteLines',      () => activeEditor()?.deleteLine())
@@ -1239,6 +1247,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             embedded
             :active="f.relPath === activeRel"
             @dirty="(v) => markDirty(f.relPath, v)"
+            @add-to-chat="(sel: string) => { aiPanelOpen = true; nextTick(() => aiChatRef?.addContextChip(`@${f.relPath.split('/').pop()}(selection)`, sel)) }"
           />
           <DiffPane
             v-else-if="f.kind === 'diff'"
