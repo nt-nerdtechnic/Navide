@@ -48,7 +48,8 @@ const loadError = ref('')
 const selected = ref<Record<number, Set<number>>>({})
 
 const parsed = computed(() => (rawDiff.value ? parseHunks(rawDiff.value) : { fileHeader: '', hunks: [] }))
-const isEmpty = computed(() => rawDiff.value !== null && parsed.value.hunks.length === 0)
+const isBinary = computed(() => rawDiff.value !== null && /^Binary files /m.test(rawDiff.value ?? ''))
+const isEmpty = computed(() => rawDiff.value !== null && !isBinary.value && parsed.value.hunks.length === 0)
 
 async function loadDiff(): Promise<void> {
   loading.value = true
@@ -155,7 +156,8 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
     <div ref="bodyRef" class="dp-body">
       <div v-if="loading" class="dp-msg">Loading…</div>
       <div v-else-if="loadError" class="dp-msg err">{{ loadError }}</div>
-      <div v-else-if="isEmpty" class="dp-msg">No changes to display (may be a binary file or no diff)</div>
+      <div v-else-if="isBinary" class="dp-msg">Binary file — diff not available</div>
+      <div v-else-if="isEmpty" class="dp-msg">No changes</div>
       <div v-else-if="rawDiff === null" class="dp-msg">
         Diff not loaded
         <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">Reload</button>
