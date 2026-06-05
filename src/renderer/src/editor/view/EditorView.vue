@@ -1440,6 +1440,7 @@ function scrollLineDown(): void {
   vs.scrollTop.value = el.scrollTop
 }
 function setSelection(start: Position, end: Position): void {
+  ghost.value = null
   anchor.value = clampPos(start)
   cursor.value = clampPos(end)
   preferredCol = -1
