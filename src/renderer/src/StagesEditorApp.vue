@@ -103,8 +103,10 @@ function startNew(): void {
 async function save(): Promise<void> {
   if (!draft.value || !canSave.value) return
   saving.value = true
+  const savedTitle = draft.value.title
+  const savedId = draft.value.id.trim()
   try {
-    const payload = stageToBackend({ ...draft.value, id: draft.value.id.trim() })
+    const payload = stageToBackend({ ...draft.value, id: savedId })
     const resp = await backend.send<{ stage: Record<string, unknown> }>('stages.upsert', {
       stage: payload
     })
@@ -112,9 +114,9 @@ async function save(): Promise<void> {
       notify.toast(resp.error?.message ?? 'Save failed', { type: 'error' })
       return
     }
-    notify.toast(`Saved stage "${draft.value.title}"`, { type: 'success' })
+    notify.toast(`Saved stage "${savedTitle}"`, { type: 'success' })
     isNew.value = false
-    selectStage(draft.value.id.trim())
+    selectStage(savedId)
   } finally {
     saving.value = false
   }
