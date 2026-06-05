@@ -2076,26 +2076,32 @@ function getDateLabel(ts: number): string {
           :class="{ active: t.id === currentThreadId }"
           @click="switchThread(t.id)"
         >
-          <input
-            v-if="renamingThreadId === t.id"
-            v-model="renamingTitle"
-            class="ai-thread-rename-input"
-            @click.stop
-            @keydown.enter.prevent="finishRenameThread"
-            @keydown.escape.prevent="cancelRenameThread"
-            @blur="finishRenameThread"
-          />
-          <span
-            v-else
-            class="ai-thread-title"
-            title="Double-click to rename"
-            @dblclick.stop="startRenameThread(t.id, t.title, $event)"
-          >{{ t.title }}</span>
-          <span v-if="t.pinned" class="ai-thread-pin-indicator" title="Pinned">📌</span>
-          <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
-          <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
-          <button class="ai-thread-pin" :title="t.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(t.id, $event)">{{ t.pinned ? '📌' : '⊙' }}</button>
-          <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
+          <div class="ai-thread-main">
+            <input
+              v-if="renamingThreadId === t.id"
+              v-model="renamingTitle"
+              class="ai-thread-rename-input"
+              @click.stop
+              @keydown.enter.prevent="finishRenameThread"
+              @keydown.escape.prevent="cancelRenameThread"
+              @blur="finishRenameThread"
+            />
+            <span
+              v-else
+              class="ai-thread-title"
+              title="Double-click to rename"
+              @dblclick.stop="startRenameThread(t.id, t.title, $event)"
+            >{{ t.pinned ? '📌 ' : '' }}{{ t.title }}</span>
+          </div>
+          <div class="ai-thread-meta">
+            <span v-if="t.messages.length" class="ai-thread-count">{{ t.messages.length }}</span>
+            <span class="ai-thread-time">{{ new Date(t.updatedAt).toLocaleDateString() }}</span>
+            <button class="ai-thread-pin" :title="t.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(t.id, $event)">{{ t.pinned ? '📌' : '⊙' }}</button>
+            <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(t.id)">✕</button>
+          </div>
+          <div v-if="t.messages.length && renamingThreadId !== t.id" class="ai-thread-preview">
+            {{ t.messages[t.messages.length - 1]?.content.replace(/[#`*_~>]/g, '').trim().slice(0, 60) }}
+          </div>
         </div>
       </div>
     </div>
@@ -3112,16 +3118,19 @@ function getDateLabel(ts: number): string {
 .ai-threads-list { overflow-y: auto; flex: 1; }
 .ai-thread-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
   padding: 7px 14px;
   cursor: pointer;
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.1s;
 }
+.ai-thread-main { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ai-thread-meta { display: flex; align-items: center; gap: 4px; }
 .ai-thread-item:hover { background: var(--bg-muted); }
 .ai-thread-item.active { background: color-mix(in srgb, var(--accent-emphasis) 12%, transparent); }
 .ai-thread-title { flex: 1; font-size: 12.5px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ai-thread-preview { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 0; }
 .ai-thread-rename-input { flex: 1; font-size: 12.5px; background: var(--bg-input); border: 1px solid var(--accent-emphasis); border-radius: 3px; color: var(--text-bright); padding: 1px 4px; outline: none; min-width: 0; }
 .ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
