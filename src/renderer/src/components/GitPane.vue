@@ -996,9 +996,13 @@ async function toggleHistoryPanel(path: string, staged: boolean): Promise<void> 
   diffBlamePath.value = ''; diffBlameHunks.value = []
   if (isOpen) return
   fileHistoryPath.value = path; fileHistoryLoading.value = true
-  fileHistoryCommits.value = await fileLog(path); fileHistoryLoading.value = false
+  fileHistoryCommits.value = await fileLog(path)
+  if (fileHistoryPath.value !== path) return // user toggled the panel closed while waiting
+  fileHistoryLoading.value = false
   diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
-  diffBlameHunks.value = await diffBlame(path, staged); diffBlameLoading.value = false
+  diffBlameHunks.value = await diffBlame(path, staged)
+  if (diffBlamePath.value !== path) return
+  diffBlameLoading.value = false
 }
 
 // ── conflict ──────────────────────────────────────────────────────────────────
