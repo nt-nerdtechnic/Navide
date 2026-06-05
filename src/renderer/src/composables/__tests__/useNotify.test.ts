@@ -92,4 +92,28 @@ describe('useNotify', () => {
     n.resolveDialog(false)
     await expect(p).resolves.toBe(false)
   })
+
+  it('caps toasts at MAX_TOASTS (6) by evicting the oldest', () => {
+    for (let i = 0; i < 7; i++) {
+      n.toast(`toast-${i}`)
+    }
+    expect(n.toasts.value).toHaveLength(6)
+    const messages = n.toasts.value.map((t) => t.message)
+    expect(messages).toEqual(['toast-1', 'toast-2', 'toast-3', 'toast-4', 'toast-5', 'toast-6'])
+  })
+
+  it('clears timer when dismissing a toast so auto-dismiss does not re-fire', () => {
+    vi.useFakeTimers()
+    try {
+      n.toast('timed', { duration: 5000 })
+      const toastId = n.toasts.value[0].id
+      expect(n.toasts.value).toHaveLength(1)
+      n.dismissToast(toastId)
+      expect(n.toasts.value).toHaveLength(0)
+      vi.advanceTimersByTime(5000)
+      expect(n.toasts.value).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

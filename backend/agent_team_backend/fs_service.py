@@ -195,6 +195,9 @@ def read_file(workspace_path: str, rel_path: str) -> dict[str, Any]:
     return {"ok": True, "content": content}
 
 
+_WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool
+
+
 def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, Any]:
     """Overwrite (or create) a text file with `content`."""
     try:
@@ -203,8 +206,19 @@ def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, An
             raise FsError("invalid path")
         if target.exists() and target.is_dir():
             raise FsError("path is a directory")
+        encoded = content.encode("utf-8")
+        if len(encoded) > _WRITE_SIZE_LIMIT:
+            raise FsError(f"content too large ({len(encoded) // 1024} KB; limit 50 MB)")
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        # Atomic write: write to a temp file then rename so a crash can't
+        # leave the target half-written/truncated.
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        try:
+            tmp.write_bytes(encoded)
+            os.replace(tmp, target)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": True}
