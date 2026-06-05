@@ -176,12 +176,17 @@ def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
     return {"ok": True}
 
 
+_READ_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
+
+
 def read_file(workspace_path: str, rel_path: str) -> dict[str, Any]:
     """Read a UTF-8 text file. Binary / undecodable files return an error."""
     try:
         target = _resolve_safe(workspace_path, rel_path)
         if not target.is_file():
             raise FsError("not a file")
+        if target.stat().st_size > _READ_SIZE_LIMIT:
+            return {"ok": False, "error": "file too large (> 10 MB)"}
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return {"ok": False, "error": "binary or non-UTF-8 file"}
