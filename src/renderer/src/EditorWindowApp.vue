@@ -359,6 +359,12 @@ registerCommand('editor.action.indentLines',         () => activeEditor()?.inden
 registerCommand('editor.action.outdentLines',        () => activeEditor()?.dedentLine())
 registerCommand('editor.action.cursorTop',            () => activeEditor()?.cursorTop())
 registerCommand('editor.action.cursorBottom',         () => activeEditor()?.cursorBottom())
+registerCommand('editor.action.cursorTopSelect',      () => activeEditor()?.cursorTopSelect())
+registerCommand('editor.action.cursorBottomSelect',   () => activeEditor()?.cursorBottomSelect())
+registerCommand('editor.action.cursorWordLeft',       () => activeEditor()?.cursorWordLeft())
+registerCommand('editor.action.cursorWordRight',      () => activeEditor()?.cursorWordRight())
+registerCommand('editor.action.cursorWordLeftSelect', () => activeEditor()?.cursorWordLeftSelect())
+registerCommand('editor.action.cursorWordRightSelect',() => activeEditor()?.cursorWordRightSelect())
 registerCommand('editor.action.scrollLineUp',         () => activeEditor()?.scrollLineUp())
 registerCommand('editor.action.scrollLineDown',       () => activeEditor()?.scrollLineDown())
 registerCommand('editor.action.transformToUppercase',  () => activeEditor()?.transformToUppercase())
@@ -621,10 +627,16 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.duplicateLineUp',   label: 'Copy Line Up',   keys: '⇧⌥↑' },
   { id: 'editor.action.indentLines',       label: 'Indent Line',        keys: '⌘]' },
   { id: 'editor.action.outdentLines',      label: 'Outdent Line',    keys: '⌘[' },
-  { id: 'editor.action.cursorTop',         label: 'Go to Beginning of File',  keys: '⌘↑' },
-  { id: 'editor.action.cursorBottom',      label: 'Go to End of File',  keys: '⌘↓' },
-  { id: 'editor.action.scrollLineUp',      label: 'Scroll Line Up',  keys: '⌃↑' },
-  { id: 'editor.action.scrollLineDown',    label: 'Scroll Line Down',  keys: '⌃↓' },
+  { id: 'editor.action.cursorTop',              label: 'Go to Beginning of File',         keys: '⌘↑' },
+  { id: 'editor.action.cursorBottom',           label: 'Go to End of File',               keys: '⌘↓' },
+  { id: 'editor.action.cursorTopSelect',        label: 'Select to Beginning of File',     keys: '⌘⇧↑' },
+  { id: 'editor.action.cursorBottomSelect',     label: 'Select to End of File',           keys: '⌘⇧↓' },
+  { id: 'editor.action.cursorWordLeft',         label: 'Move Cursor Word Left',           keys: '⌥←' },
+  { id: 'editor.action.cursorWordRight',        label: 'Move Cursor Word Right',          keys: '⌥→' },
+  { id: 'editor.action.cursorWordLeftSelect',   label: 'Select Word Left',                keys: '⌥⇧←' },
+  { id: 'editor.action.cursorWordRightSelect',  label: 'Select Word Right',               keys: '⌥⇧→' },
+  { id: 'editor.action.scrollLineUp',           label: 'Scroll Line Up',                  keys: '⌃↑' },
+  { id: 'editor.action.scrollLineDown',         label: 'Scroll Line Down',                keys: '⌃↓' },
   { id: 'editor.action.addSelectionToNextFindMatch', label: 'Select Next Occurrence', keys: '⌘D' },
   { id: 'editor.action.addLineComment',       label: 'Add Line Comment',       keys: '⌘K ⌘C' },
   { id: 'editor.action.removeLineComment',    label: 'Remove Line Comment',       keys: '⌘K ⌘U' },

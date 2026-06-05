@@ -55,6 +55,10 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+[',          command: 'editor.action.outdentLines',       when: 'editorTextFocus' },
   { key: 'cmd+up',         command: 'editor.action.cursorTop',          when: 'editorTextFocus' },
   { key: 'cmd+down',       command: 'editor.action.cursorBottom',       when: 'editorTextFocus' },
+  { key: 'cmd+shift+up',   command: 'editor.action.cursorTopSelect',    when: 'editorTextFocus' },
+  { key: 'cmd+shift+down', command: 'editor.action.cursorBottomSelect', when: 'editorTextFocus' },
+  { key: 'alt+left',       command: 'editor.action.cursorWordLeft',     when: 'editorTextFocus' },
+  { key: 'alt+right',      command: 'editor.action.cursorWordRight',    when: 'editorTextFocus' },
   { key: 'ctrl+up',        command: 'editor.action.scrollLineUp',       when: 'editorTextFocus' },
   { key: 'ctrl+down',      command: 'editor.action.scrollLineDown',     when: 'editorTextFocus' },
 

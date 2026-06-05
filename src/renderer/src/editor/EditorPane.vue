@@ -599,6 +599,12 @@ function indentLine(): void { editorRef.value?.indentLine() }
 function dedentLine(): void { editorRef.value?.dedentLine() }
 function cursorTop(): void { editorRef.value?.cursorTop() }
 function cursorBottom(): void { editorRef.value?.cursorBottom() }
+function cursorTopSelect(): void { editorRef.value?.cursorTopSelect() }
+function cursorBottomSelect(): void { editorRef.value?.cursorBottomSelect() }
+function cursorWordLeft(): void { editorRef.value?.cursorWordLeft() }
+function cursorWordRight(): void { editorRef.value?.cursorWordRight() }
+function cursorWordLeftSelect(): void { editorRef.value?.cursorWordLeftSelect() }
+function cursorWordRightSelect(): void { editorRef.value?.cursorWordRightSelect() }
 function scrollLineUp(): void { editorRef.value?.scrollLineUp() }
 function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
 function transformToUppercase(): void { editorRef.value?.transformToUppercase() }
@@ -679,7 +685,9 @@ defineExpose({
   toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
-  indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
+  indentLine, dedentLine, cursorTop, cursorBottom, cursorTopSelect, cursorBottomSelect,
+  cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
+  scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, transformToTitleCase,
   transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
   trimTrailingWhitespace, formatDocument, formatSelection,

@@ -1111,6 +1111,28 @@ function cursorBottom(): void {
   void nextTick(scrollCursorIntoView)
 }
 
+function cursorTopSelect(): void {
+  ghost.value = null
+  startOrClearSelection(true)
+  cursor.value = { line: 0, col: 0 }
+  preferredCol = -1
+  void nextTick(scrollCursorIntoView)
+}
+
+function cursorBottomSelect(): void {
+  ghost.value = null
+  startOrClearSelection(true)
+  const lastLine = model.lineCount() - 1
+  cursor.value = { line: lastLine, col: model.getLine(lastLine).length }
+  preferredCol = -1
+  void nextTick(scrollCursorIntoView)
+}
+
+function cursorWordLeft(): void { moveWordLeft(false) }
+function cursorWordRight(): void { moveWordRight(false) }
+function cursorWordLeftSelect(): void { moveWordLeft(true) }
+function cursorWordRightSelect(): void { moveWordRight(true) }
+
 const BRACKET_OPEN = new Set(['(', '[', '{'])
 const BRACKET_CLOSE = new Set([')', ']', '}'])
 const BRACKET_MATCH: Record<string, string> = { '(': ')', '[': ']', '{': '}', ')': '(', ']': '[', '}': '{' }
@@ -1559,6 +1581,8 @@ defineExpose({
   setSelection, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
   undo: doUndo, redo: doRedo, selectAll,
   insertText,
+  cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
+  cursorTopSelect, cursorBottomSelect,
 })
 </script>
 

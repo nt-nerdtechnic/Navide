@@ -731,3 +731,45 @@ describe('toggleLineNumbers shortcut (cmd+k cmd+l)', () => {
     expect(dr.resolve(mkEvent('l', { metaKey: true }), {})).toBeNull()
   })
 })
+
+describe('word cursor movement (alt+left/right)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('alt+left → cursorWordLeft (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowLeft', { altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorWordLeft')
+  })
+
+  it('alt+right → cursorWordRight (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowRight', { altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorWordRight')
+  })
+
+  it('alt+left requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowLeft', { altKey: true }), {})).toBeNull()
+  })
+
+  it('alt+right requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowRight', { altKey: true }), {})).toBeNull()
+  })
+})
+
+describe('select to file start/end (cmd+shift+up/down)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+shift+up → cursorTopSelect (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorTopSelect')
+  })
+
+  it('cmd+shift+down → cursorBottomSelect (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowDown', { metaKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorBottomSelect')
+  })
+
+  it('cmd+shift+up requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowUp', { metaKey: true, shiftKey: true }), {})).toBeNull()
+  })
+})
