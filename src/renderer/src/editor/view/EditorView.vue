@@ -319,6 +319,29 @@ const selectionRects = computed<SelRect[]>(() => {
   return rects
 })
 
+interface DecRect { id: string; left: number; top: number; width: number; className?: string }
+const decorationRects = computed<DecRect[]>(() => {
+  version.value // track
+  const rects: DecRect[] = []
+  for (const d of decorations.value) {
+    if (d.type !== 'highlight') continue
+    const vStart = vs.startLine.value
+    const vEnd = vs.endLine.value
+    for (let line = Math.max(d.range.start.line, vStart); line <= Math.min(d.range.end.line, vEnd - 1); line++) {
+      const startCol = line === d.range.start.line ? d.range.start.col : 0
+      const endCol = line === d.range.end.line ? d.range.end.col : model.getLine(line).length
+      rects.push({
+        id: `${d.id}:${line}`,
+        left: xFor(startCol),
+        top: line * LINE_HEIGHT,
+        width: Math.max(4, (endCol - startCol) * charWidth.value),
+        className: d.className,
+      })
+    }
+  }
+  return rects
+})
+
 const ghostStyle = computed(() => {
   if (!ghost.value) return null
   return { left: xFor(ghost.value.pos.col) + 'px', top: ghost.value.pos.line * LINE_HEIGHT + 'px' }
@@ -387,6 +410,11 @@ function revealLine(line: number): void {
   cursor.value = clampPos({ line: Math.max(0, line - 1), col: 0 })
   void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
 }
+function revealPosition(line: number, col: number): void {
+  // 0-based; used internally by find navigation.
+  cursor.value = clampPos({ line, col })
+  void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
+}
 function applyEditExternal(range: Range, text: string): void { applyEdit(range, text) }
 function setDecorations(d: Decoration[]): void { decorations.value = d }
 function setGhost(text: string | null): void {
@@ -401,7 +429,7 @@ function acceptGhost(): void {
 
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
-  revealLine, applyEditExternal, setDecorations, setGhost, acceptGhost,
+  revealLine, revealPosition, applyEditExternal, setDecorations, setGhost, acceptGhost,
 })
 </script>
 
@@ -427,6 +455,14 @@ defineExpose({
             v-for="(r, i) in selectionRects"
             :key="'sel' + i"
             class="ev-sel"
+            :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: LINE_HEIGHT + 'px' }"
+          />
+          <!-- find / decoration highlights -->
+          <div
+            v-for="r in decorationRects"
+            :key="r.id"
+            class="ev-dec-highlight"
+            :class="r.className"
             :style="{ left: r.left + 'px', top: (r.top - vs.offsetY.value) + 'px', width: r.width + 'px', height: LINE_HEIGHT + 'px' }"
           />
           <!-- lines -->
@@ -500,6 +536,18 @@ defineExpose({
   position: absolute;
   background: var(--bg-selected);
   pointer-events: none;
+}
+.ev-dec-highlight {
+  position: absolute;
+  background: rgba(255, 200, 0, 0.18);
+  border: 1px solid rgba(255, 200, 0, 0.4);
+  border-radius: 2px;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.ev-dec-current {
+  background: rgba(255, 140, 0, 0.38);
+  border-color: rgba(255, 140, 0, 0.7);
 }
 .ev-ghost {
   position: absolute;

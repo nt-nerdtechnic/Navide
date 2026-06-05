@@ -134,6 +134,88 @@ function rejectProposal(): void {
 
 // ── Ghost completion (Cmd/Ctrl+I) ────────────────────────────────────────────
 const ghostBusy = ref(false)
+
+// ── Find bar (⌘F) ─────────────────────────────────────────────────────────────
+const findOpen = ref(false)
+const findQuery = ref('')
+const findCase = ref(false)
+const findMatches = ref<Array<{ line: number; startCol: number; endCol: number }>>([])
+const findIdx = ref(-1)
+const findInputEl = ref<HTMLInputElement | null>(null)
+
+watch([findQuery, findCase], () => { if (findOpen.value) computeMatches() })
+watch(content, () => { if (findOpen.value && findQuery.value) computeMatches() })
+
+function openFind(): void {
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  if (!findOpen.value) {
+    findOpen.value = true
+    if (sel) findQuery.value = sel
+  }
+  void nextTick(() => { findInputEl.value?.focus(); findInputEl.value?.select() })
+  if (findQuery.value) computeMatches()
+}
+function closeFind(): void {
+  findOpen.value = false
+  findMatches.value = []
+  findIdx.value = -1
+  editorRef.value?.setDecorations([])
+  editorRef.value?.focus()
+}
+function computeMatches(): void {
+  const q = findQuery.value
+  if (!q) {
+    findMatches.value = []
+    findIdx.value = -1
+    editorRef.value?.setDecorations([])
+    return
+  }
+  const text = editorRef.value?.getValue() ?? content.value
+  const lines = text.split('\n')
+  const needle = findCase.value ? q : q.toLowerCase()
+  const matches: Array<{ line: number; startCol: number; endCol: number }> = []
+  for (let li = 0; li < lines.length; li++) {
+    const haystack = findCase.value ? lines[li] : lines[li].toLowerCase()
+    let start = 0
+    while (true) {
+      const idx = haystack.indexOf(needle, start)
+      if (idx === -1) break
+      matches.push({ line: li, startCol: idx, endCol: idx + q.length })
+      start = idx + 1
+    }
+  }
+  findMatches.value = matches
+  if (findIdx.value < 0 || findIdx.value >= matches.length) findIdx.value = matches.length > 0 ? 0 : -1
+  updateFindDecorations()
+  if (findIdx.value >= 0) goToMatch(findIdx.value)
+}
+function updateFindDecorations(): void {
+  editorRef.value?.setDecorations(findMatches.value.map((m, i) => ({
+    id: `find-${i}`,
+    type: 'highlight' as const,
+    range: { start: { line: m.line, col: m.startCol }, end: { line: m.line, col: m.endCol } },
+    className: i === findIdx.value ? 'ev-dec-current' : undefined,
+  })))
+}
+function goToMatch(idx: number): void {
+  findIdx.value = idx
+  updateFindDecorations()
+  const m = findMatches.value[idx]
+  if (m) editorRef.value?.revealPosition(m.line, m.startCol)
+}
+function nextMatch(): void {
+  if (!findMatches.value.length) return
+  goToMatch((findIdx.value + 1) % findMatches.value.length)
+}
+function prevMatch(): void {
+  if (!findMatches.value.length) return
+  goToMatch((findIdx.value - 1 + findMatches.value.length) % findMatches.value.length)
+}
+function onFindKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.preventDefault(); closeFind() }
+  else if (e.key === 'Enter') { e.preventDefault(); e.shiftKey ? prevMatch() : nextMatch() }
+}
+
 async function requestGhost(): Promise<void> {
   const cur = editorRef.value?.getCursor()
   const value = editorRef.value?.getValue() ?? ''
@@ -163,6 +245,11 @@ function onKeydown(e: KeyboardEvent): void {
   if (mod && (e.key === 's' || e.key === 'S')) { e.preventDefault(); void save() }
   else if (mod && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openCmdK() }
   else if (mod && (e.key === 'i' || e.key === 'I')) { e.preventDefault(); void requestGhost() }
+  else if (mod && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openFind() }
+  else if (mod && (e.key === 'g' || e.key === 'G') && findOpen.value) {
+    e.preventDefault()
+    e.shiftKey ? prevMatch() : nextMatch()
+  }
 }
 
 onMounted(() => {
@@ -239,6 +326,30 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
         <pre class="ep-old">{{ proposal.oldText }}</pre>
         <pre class="ep-new">{{ proposal.newText }}</pre>
       </div>
+    </div>
+
+    <!-- Find bar (⌘F / ⌘G / Esc) -->
+    <div v-if="findOpen" class="ep-find">
+      <input
+        ref="findInputEl"
+        v-model="findQuery"
+        class="ep-find-input"
+        placeholder="搜尋…"
+        @keydown="onFindKeydown"
+      />
+      <button
+        class="ep-find-btn"
+        :class="{ active: findCase }"
+        title="區分大小寫"
+        @click="findCase = !findCase"
+      >Aa</button>
+      <span class="ep-find-count">
+        <template v-if="findQuery && findMatches.length === 0">無結果</template>
+        <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
+      </span>
+      <button class="ep-find-nav" title="上一個 (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
+      <button class="ep-find-nav" title="下一個 (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
+      <button class="ep-find-close" title="關閉 (Esc)" @click="closeFind">✕</button>
     </div>
   </div>
 </template>
@@ -342,4 +453,58 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 }
 .ep-old { color: var(--diff-del-fg); background: var(--diff-del-bg); }
 .ep-new { color: var(--diff-add-fg); background: var(--diff-add-bg); }
+
+.ep-find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+}
+.ep-find-input {
+  flex: 1;
+  max-width: 240px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+}
+.ep-find-input:focus { border-color: var(--accent-emphasis); }
+.ep-find-btn {
+  padding: 3px 7px;
+  font-size: 11px;
+  font-family: inherit;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ep-find-btn.active { background: var(--accent-muted); color: var(--accent-fg); border-color: var(--accent-emphasis); }
+.ep-find-count { font-size: 11px; color: var(--text-muted); min-width: 52px; text-align: center; }
+.ep-find-nav {
+  padding: 3px 8px;
+  font-size: 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ep-find-nav:hover:not(:disabled) { background: var(--bg-muted); }
+.ep-find-nav:disabled { opacity: 0.4; cursor: default; }
+.ep-find-close {
+  padding: 3px 7px;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.ep-find-close:hover { color: var(--text-primary); }
 </style>
