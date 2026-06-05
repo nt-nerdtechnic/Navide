@@ -140,18 +140,22 @@ function navigateToLastEdit(): void {
 async function save(): Promise<void> {
   if (!dirty.value) return
   const snapshot = convertToEOL(content.value, eol.value)
-  const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
-    workspace_path: props.workspacePath,
-    rel_path: props.relPath,
-    content: snapshot,
-  })
-  if (!resp.payload?.ok) {
-    void alert(resp.payload?.error || 'Save failed', { title: 'Save error' })
-    return
+  try {
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+      workspace_path: props.workspacePath,
+      rel_path: props.relPath,
+      content: snapshot,
+    })
+    if (!resp.payload?.ok) {
+      void alert(resp.payload?.error || 'Save failed', { title: 'Save error' })
+      return
+    }
+    // Only clear dirty when no further edits landed while the request was in-flight.
+    if (content.value === snapshot) dirty.value = false
+    toast('Saved', { type: 'success' })
+  } catch (err) {
+    void alert(err instanceof Error ? err.message : 'Save failed', { title: 'Save error' })
   }
-  // Only clear dirty when no further edits landed while the request was in-flight.
-  if (content.value === snapshot) dirty.value = false
-  toast('Saved', { type: 'success' })
 }
 
 // ── Cmd+K rewrite ─────────────────────────────────────────────────────────────
