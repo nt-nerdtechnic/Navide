@@ -1051,6 +1051,7 @@ const BRACKET_CLOSE = new Set([')', ']', '}'])
 const BRACKET_MATCH: Record<string, string> = { '(': ')', '[': ']', '{': '}', ')': '(', ']': '[', '}': '{' }
 
 function jumpToBracket(): void {
+  ghost.value = null
   const { line, col } = cursor.value
   const lineText = model.getLine(line)
 
@@ -1091,6 +1092,7 @@ function jumpToBracket(): void {
 }
 
 function selectToBracket(): void {
+  ghost.value = null
   const { line, col } = cursor.value
   const lineText = model.getLine(line)
   let bCol = -1; let bChar = ''
