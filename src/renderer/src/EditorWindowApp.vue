@@ -735,6 +735,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.detectIndentation',    label: 'Detect Indentation' },
   { id: 'editor.action.indentationToSpaces',  label: 'Convert Indentation to Spaces' },
   { id: 'editor.action.indentationToTabs',    label: 'Convert Indentation to Tabs' },
+  { id: 'editor.action.changeEOLtoCRLF',      label: 'Change Line Ending to CRLF' },
+  { id: 'editor.action.changeEOLtoLF',        label: 'Change Line Ending to LF' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')

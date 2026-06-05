@@ -81,6 +81,23 @@ function onCursorChange(pos: Position): void {
 interface FsRead { ok: boolean; content?: string; error?: string }
 interface AiResult { ok: boolean; text?: string; error?: string }
 
+// ── Line ending (EOL) detection ───────────────────────────────────────────────
+type EOL = 'LF' | 'CRLF'
+const eol = ref<EOL>('LF')
+function detectEOL(text: string): EOL {
+  return text.includes('\r\n') ? 'CRLF' : 'LF'
+}
+function convertToEOL(text: string, target: EOL): string {
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  return target === 'CRLF' ? normalized.replace(/\n/g, '\r\n') : normalized
+}
+function changeEOL(target: EOL): void {
+  if (eol.value === target) return
+  content.value = convertToEOL(content.value, target)
+  eol.value = target
+  dirty.value = true
+}
+
 async function load(): Promise<void> {
   try {
     const resp = await props.backend.send<FsRead>('fs.read_file', {
@@ -91,7 +108,9 @@ async function load(): Promise<void> {
       loadError.value = resp.payload?.error || 'Unable to read file'
       return
     }
-    content.value = resp.payload.content ?? ''
+    const raw = resp.payload.content ?? ''
+    eol.value = detectEOL(raw)
+    content.value = raw
     loaded.value = true
     if (props.initialLine && props.initialLine > 0) {
       await nextTick()
@@ -120,7 +139,7 @@ function navigateToLastEdit(): void {
 
 async function save(): Promise<void> {
   if (!dirty.value) return
-  const snapshot = content.value
+  const snapshot = convertToEOL(content.value, eol.value)
   const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
     workspace_path: props.workspacePath,
     rel_path: props.relPath,
@@ -702,6 +721,7 @@ defineExpose({
   undo, redo, selectAll,
   openReplace,
   getContent: () => content.value,
+  changeEOL,
   getWordAtCursor: () => editorRef.value?.getWordAtCursor() ?? '',
   getSelection: () => editorRef.value?.getSelectionText() ?? '',
   insertTextAtCursor: (text: string) => editorRef.value?.insertText(text),
@@ -866,6 +886,8 @@ defineExpose({
       <span class="ep-status-pos">Ln {{ cursorLine }}, Col {{ cursorCol }}</span>
       <span v-if="selectionInfo" class="ep-status-sel">{{ selectionInfo }}</span>
       <span class="ep-status-right">
+        <button class="ep-status-eol" :title="`Line Ending: ${eol} — click to toggle`" @click="changeEOL(eol === 'LF' ? 'CRLF' : 'LF')">{{ eol }}</button>
+        <span class="ep-status-sep">·</span>
         <span class="ep-status-lang">{{ langDisplay }}</span>
         <span class="ep-status-sep">·</span>
         <span class="ep-status-enc">UTF-8</span>
@@ -1110,4 +1132,10 @@ defineExpose({
 .ep-status-sel { color: var(--accent-fg); font-variant-numeric: tabular-nums; padding-left: 8px; }
 .ep-status-right { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
 .ep-status-sep { opacity: 0.5; }
+.ep-status-eol {
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+  color: inherit; font-size: inherit; font-family: inherit;
+  opacity: 0.85;
+}
+.ep-status-eol:hover { color: var(--accent-fg); opacity: 1; }
 </style>
