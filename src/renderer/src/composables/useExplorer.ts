@@ -64,10 +64,13 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
 
   /** Load (and cache) the children of `rel`. Returns the cached list. */
   async function loadDir(rel: string): Promise<FsEntry[]> {
-    if (!ws()) return []
+    const currentWs = ws()
+    if (!currentWs) return []
     loadingDirs.value = new Set(loadingDirs.value).add(rel)
     try {
       const entries = await fetchDir(rel)
+      // Discard results if the workspace changed while the request was in flight.
+      if (ws() !== currentWs) return entries
       const next = new Map(childrenCache.value)
       next.set(rel, entries)
       childrenCache.value = next
