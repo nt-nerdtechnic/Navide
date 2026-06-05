@@ -274,7 +274,14 @@ def replace_in_files(
         if n <= 0:
             continue
         try:
-            target.write_text(new_content, encoding="utf-8")
+            encoded = new_content.encode("utf-8")
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            try:
+                tmp.write_bytes(encoded)
+                os.replace(tmp, target)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
         except OSError as e:
             return {"ok": False, "error": f"Write failed {rel}: {e}"}
         changed.append({"rel_path": rel, "count": n})
