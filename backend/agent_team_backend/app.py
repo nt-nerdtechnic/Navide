@@ -1986,8 +1986,16 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if not cmd:
                 await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
             else:
-                resolved_cwd = Path(ws_path).resolve() if ws_path else None
-                if resolved_cwd and not resolved_cwd.is_dir():
+                resolved_cwd = Path(_os.path.realpath(ws_path)) if ws_path else None
+                # Validate that cwd is a known registered workspace (or its subdirectory)
+                known_roots = [Path(_os.path.realpath(w)) for w in attribution.known_workspaces()]
+                cwd_allowed = resolved_cwd is None or any(
+                    resolved_cwd == r or resolved_cwd.is_relative_to(r)
+                    for r in known_roots
+                )
+                if not cwd_allowed:
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "workspace path not registered"}))
+                elif resolved_cwd and not resolved_cwd.is_dir():
                     await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
                 else:
                     try:
