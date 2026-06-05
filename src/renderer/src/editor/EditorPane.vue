@@ -680,6 +680,7 @@ defineExpose({ save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, ope
   opacity: 0.9;
 }
 .ep-status-pos { font-variant-numeric: tabular-nums; }
+.ep-status-sel { color: var(--accent-fg); font-variant-numeric: tabular-nums; padding-left: 8px; }
 .ep-status-right { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
 .ep-status-sep { opacity: 0.5; }
 </style>
