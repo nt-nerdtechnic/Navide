@@ -321,6 +321,17 @@ ipcMain.handle('shell:revealPath', async (_event, target: string) => {
   }
 })
 
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  if (!url || typeof url !== 'string') return { ok: false, error: 'invalid url' }
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: 'only http/https allowed' }
+  try {
+    await shell.openExternal(url)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 // Write read-only content (e.g. a file's HEAD version) to a temp file and open
 // it with the OS default app — the equivalent of Cursor's "Open File (HEAD)".
 ipcMain.handle('shell:openTempFile', async (_event, filename: string, content: string) => {

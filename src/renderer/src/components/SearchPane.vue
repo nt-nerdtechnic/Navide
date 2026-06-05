@@ -169,16 +169,19 @@ async function replaceAll(): Promise<void> {
 }
 
 async function replaceFile(file: FileResult): Promise<void> {
+  const r = replacement.value
   const ok = await confirm(
-    `Replace ${file.matches.length} occurrence(s) in "${file.name}" with "${replacement.value}"?`,
+    `Replace ${file.matches.length} occurrence(s) in "${file.name}" with "${r}"?`,
     { title: 'Replace in File', confirmText: 'Replace' }
   )
   if (!ok) return
+  replacement.value = r
   await replaceInFiles([file.rel_path])
 }
 
 // Single-match replace (literal mode only — regex backrefs need backend semantics).
 async function replaceOne(file: FileResult, m: Match): Promise<void> {
+  const r = replacement.value
   const read = await props.backend.send<FsRead>('fs.read_file', {
     workspace_path: props.workspacePath,
     rel_path: file.rel_path,
@@ -198,7 +201,7 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
     await doSearch()
     return
   }
-  lines[idx] = line.slice(0, m.col) + replacement.value + line.slice(m.end)
+  lines[idx] = line.slice(0, m.col) + r + line.slice(m.end)
   const write = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
     workspace_path: props.workspacePath,
     rel_path: file.rel_path,

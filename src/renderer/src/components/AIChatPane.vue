@@ -330,6 +330,7 @@ const settingsApiKey = ref('')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
+const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const showModelPicker = ref(false)
 
 const ANTHROPIC_MODELS = [
@@ -988,6 +989,7 @@ function saveSettings(): void {
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
   }).catch(() => {/* ignore */})
+  localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -1333,6 +1335,10 @@ function setupListeners(): void {
               discarded: false,
             }
             last.cards.splice(idx, 1, editCard)
+            // Auto-accept mode: apply edit immediately without user confirmation
+            if (settingsAutoAccept.value) {
+              void acceptEdit(editCard)
+            }
           } else {
             card.result = resultStr.slice(0, 200) + (resultStr.length > 200 ? '…' : '')
             card.collapsed = true
@@ -1464,6 +1470,7 @@ watch(() => props.workspacePath, () => { void detectWorkspaceRules() })
 
 onUnmounted(() => {
   teardownListeners()
+  if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
   if (toastTimer !== null) clearTimeout(toastTimer)
   if (saveTimer !== null) clearTimeout(saveTimer)
 })
@@ -2556,6 +2563,13 @@ function getDateLabel(ts: number): string {
             rows="4"
             placeholder="You are a helpful AI coding assistant."
           />
+        </div>
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Agent mode</label>
+          <label class="ai-toggle-label">
+            <input v-model="settingsAutoAccept" type="checkbox" />
+            Auto-accept file edits
+          </label>
         </div>
         <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
           <span class="ai-rules-icon">✦</span>

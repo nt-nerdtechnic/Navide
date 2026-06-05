@@ -993,7 +993,12 @@ function openLinkAtCursor(): boolean {
   let m: RegExpExecArray | null
   while ((m = urlRe.exec(line)) !== null) {
     if (col >= m.index && col <= m.index + m[0].length) {
-      window.open(m[0], '_blank')
+      const url = m[0]
+      if (window.agentTeam?.openExternal) {
+        void window.agentTeam.openExternal(url)
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
       return true
     }
   }
@@ -1223,6 +1228,16 @@ function cursorWordLeft(): void { moveWordLeft(false) }
 function cursorWordRight(): void { moveWordRight(false) }
 function cursorWordLeftSelect(): void { moveWordLeft(true) }
 function cursorWordRightSelect(): void { moveWordRight(true) }
+
+function cursorLineStart(): void { homeKey(false) }
+function cursorLineEnd(): void { endKey(false) }
+function cursorLineStartSelect(): void { homeKey(true) }
+function cursorLineEndSelect(): void { endKey(true) }
+
+function selectCurrentWord(): void {
+  ghost.value = null
+  selectWordAt(cursor.value)
+}
 
 function setTabSize(size: number): void { tabSize.value = Math.max(1, Math.min(8, size)) }
 function setUseSpaces(spaces: boolean): void { useSpaces.value = spaces }
@@ -1681,6 +1696,8 @@ defineExpose({
   insertText,
   cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
   cursorTopSelect, cursorBottomSelect,
+  cursorLineStart, cursorLineEnd, cursorLineStartSelect, cursorLineEndSelect,
+  selectCurrentWord,
   setTabSize, setUseSpaces, getTabSize, getUseSpaces,
 })
 </script>
