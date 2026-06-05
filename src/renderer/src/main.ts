@@ -13,11 +13,9 @@ import RolesManagerApp from './RolesManagerApp.vue'
 import StagesEditorApp from './StagesEditorApp.vue'
 import DiffWindowApp from './DiffWindowApp.vue'
 import EditorWindowApp from './EditorWindowApp.vue'
-import SearchWindowApp from './SearchWindowApp.vue'
 
 // Window-type dispatcher: Electron main appends `?window=roles`, `?window=stages`,
-// `?window=diff`, `?window=editor` or `?window=search` for secondary windows.
-// Default is the main shell.
+// `?window=diff` or `?window=editor` for secondary windows. Default is the main shell.
 const params = new URLSearchParams(window.location.search)
 const which = params.get('window') ?? 'main'
 
@@ -30,7 +28,5 @@ const Root =
         ? DiffWindowApp
         : which === 'editor'
           ? EditorWindowApp
-          : which === 'search'
-            ? SearchWindowApp
-            : App
+          : App
 createApp(Root).mount('#app')

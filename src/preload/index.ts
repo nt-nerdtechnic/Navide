@@ -48,8 +48,6 @@ contextBridge.exposeInMainWorld('agentTeam', {
       name: args.name ?? args.filepath,
       ...(args.line ? { line: String(args.line) } : {}),
     }),
-  openSearchWindow: (args: { workspace_path: string }): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('window:openSearch', { workspace_path: args.workspace_path }),
   saveJson: (args: {
     defaultName?: string
     content: string

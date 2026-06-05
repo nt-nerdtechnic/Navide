@@ -366,14 +366,12 @@ async function doClone(): Promise<void> {
 }
 
 // ── abort in-progress operation ──────────────────────────────────────────────────
-const abortError = ref('')
 const opInProgress = computed(() => gitStatus.value?.operation_in_progress ?? '')
 async function doAbort(): Promise<void> {
-  abortError.value = ''
   const op = opInProgress.value
   if (!op) return
   const r = await abortOperation(op)
-  if (!r.ok) abortError.value = r.error || 'abort 失敗'
+  if (!r.ok) notifyToast(r.error || 'abort 失敗', { type: 'error' })
 }
 
 // ── commit graph (DAG lane layout) ───────────────────────────────────────────────
@@ -491,10 +489,11 @@ async function doPull(): Promise<void> {
     showRemoteOutput.value = !!(r.output || r.error)
   })
 }
-async function doPush(): Promise<void> {
+async function doPush(remote = ''): Promise<void> {
+  const branch = remote ? (gitStatus.value?.branch ?? '') : ''
   await runRemote('push', async () => {
     remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
-    const r = await pushOnly()
+    const r = await pushOnly(remote, branch)
     remoteOutput.value = r.output; remoteError.value = r.error
     showRemoteOutput.value = !!(r.output || r.error)
   })
@@ -508,11 +507,12 @@ async function doPullRebase(): Promise<void> {
     showRemoteOutput.value = !!(r.output || r.error)
   })
 }
-async function doPushForce(): Promise<void> {
+async function doPushForce(remote = ''): Promise<void> {
   showRemoteMenu.value = false
+  const branch = remote ? (gitStatus.value?.branch ?? '') : ''
   await runRemote('push', async () => {
     remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
-    const r = await pushForce()
+    const r = await pushForce(remote, branch)
     remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
     showRemoteOutput.value = !!(r.output || r.error)
   })
@@ -565,14 +565,13 @@ async function doDeleteBranch(name: string): Promise<void> {
 
 const comparingBranch = ref('')
 const compareResult = ref<{ stat: string; files: string[] } | null>(null)
-const compareError = ref('')
 async function doCompareBranch(branch: string): Promise<void> {
   if (comparingBranch.value === branch) { comparingBranch.value = ''; compareResult.value = null; return }
-  comparingBranch.value = branch; compareResult.value = null; compareError.value = ''
+  comparingBranch.value = branch; compareResult.value = null
   const current = gitStatus.value?.branch; if (!current) return
   const r = await compareBranches(branch, current)
   if (r.ok) compareResult.value = { stat: r.stat, files: r.files }
-  else compareError.value = r.error || 'compare failed'
+  else notifyToast(r.error || 'compare failed', { type: 'error' })
 }
 
 const rebaseError = ref(''), rebaseOutput = ref('')
@@ -803,14 +802,11 @@ async function toggleCommitDetail(hash: string): Promise<void> {
 }
 
 // ── cherry-pick / revert ──────────────────────────────────────────────────────
-const cherryPickError = ref(''), revertError = ref('')
 async function doCherryPick(hash: string): Promise<void> {
-  cherryPickError.value = ''
-  const r = await cherryPick(hash); if (!r.ok) cherryPickError.value = r.error || 'cherry-pick failed'
+  const r = await cherryPick(hash); if (!r.ok) notifyToast(r.error || 'cherry-pick failed', { type: 'error' })
 }
 async function doRevert(hash: string): Promise<void> {
-  revertError.value = ''
-  const r = await revertCommit(hash); if (!r.ok) revertError.value = r.error || 'revert failed'
+  const r = await revertCommit(hash); if (!r.ok) notifyToast(r.error || 'revert failed', { type: 'error' })
 }
 
 // ── history ───────────────────────────────────────────────────────────────────
@@ -991,7 +987,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="opInProgress" class="op-banner">
         <span class="op-text">⚠ {{ opInProgress }} 進行中</span>
         <button class="op-abort-btn" @click="doAbort">Abort {{ opInProgress }}</button>
-        <span v-if="abortError" class="op-err">{{ abortError }}</span>
       </div>
 
       <!-- ── PART 1 scroll region ──────────────────────────────── -->
@@ -1392,7 +1387,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" title="Pull" :disabled="!!remoteBusy" @click="doPull">
           <span v-if="remoteBusy === 'pull'" class="spinner">⟳</span><template v-else>↓</template>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush()">
           <span v-if="remoteBusy === 'push'" class="spinner">⟳</span><template v-else>↑<span v-if="gitStatus.ahead" class="ahead-num">{{ gitStatus.ahead }}</span></template>
         </button>
         <button class="remote-btn" :class="{ busy: remoteBusy === 'sync' }" title="Sync (pull --rebase + push)" :disabled="!!remoteBusy" @click="doSync">
@@ -1406,7 +1401,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="menu-item" @click="doPullRebase">↓ Pull (Rebase)</button>
             <div class="menu-sep" />
             <button class="menu-item" @click="doPush(); showRemoteMenu = false">↑ Push</button>
-            <button class="menu-item danger" @click="doPushForce">↑ Push (Force with lease)</button>
+            <button class="menu-item danger" @click="doPushForce()">↑ Push (Force with lease)</button>
+            <template v-if="gitRemotes.length > 1">
+              <div class="menu-sep" />
+              <div class="menu-group-label">Push to remote</div>
+              <button
+                v-for="r in gitRemotes"
+                :key="r.name"
+                class="menu-item"
+                @click="doPush(r.name); showRemoteMenu = false"
+              >↑ {{ r.name }}</button>
+            </template>
           </div>
         </Teleport>
       </div>
@@ -1454,7 +1459,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <button class="scope-btn" :class="{ active: logScope === 'all' }" :disabled="isLoadingLog" @click="setLogScope('all')">All branches</button>
           <button class="scope-btn" :class="{ active: logScope === 'current' }" :disabled="isLoadingLog" @click="setLogScope('current')">Current</button>
         </div>
-        <p v-if="revertError || cherryPickError" class="err-text" style="padding:2px 16px">{{ revertError || cherryPickError }}</p>
         <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? 'No matches' : 'No commits yet' }}</div>
         <div v-else class="commit-list">
           <div v-for="{ c, gi } in pagedLog" :key="c.hash">
@@ -1818,7 +1822,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; text-transform: capitalize;
 }
 .op-abort-btn:hover { background: #f8514933; }
-.op-err { color: var(--danger-fg); }
 .btn-primary {
   background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);
   border-radius: 5px; font-size: 12px; padding: 5px 10px; cursor: pointer;

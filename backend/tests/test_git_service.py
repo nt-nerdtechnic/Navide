@@ -1478,6 +1478,29 @@ class TestRemoteVariants:
         assert set(["ok", "output", "error"]).issubset(r.keys())
         assert r["ok"] is False  # no remote configured
 
+    @pytest.mark.asyncio
+    async def test_push_only_targets_named_remote(self, tmp_path):
+        """`push_only(remote, branch)` pushes to a specific remote by name."""
+        init_repo(tmp_path)
+        bare = tmp_path.parent / "bare.git"
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "backup", str(bare)], cwd=tmp_path, check=True, capture_output=True)
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=tmp_path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+        r = await git_service.push_only(str(tmp_path), "backup", branch)
+        assert r["ok"] is True
+        # the named remote now has the branch
+        ls = subprocess.run(["git", "ls-remote", str(bare)], check=True, capture_output=True, text=True)
+        assert branch in ls.stdout
+
+    @pytest.mark.asyncio
+    async def test_push_only_rejects_invalid_remote_name(self, tmp_path):
+        init_repo(tmp_path)
+        r = await git_service.push_only(str(tmp_path), "bad name; rm -rf", "main")
+        assert r["ok"] is False
+        assert r["error"]
+
 
 # ── get_log parents (graph data) ──────────────────────────────────────────────────
 

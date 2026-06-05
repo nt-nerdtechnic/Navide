@@ -41,7 +41,6 @@ declare global {
         name?: string
         line?: number
       }) => Promise<{ ok: boolean }>
-      openSearchWindow: (args: { workspace_path: string }) => Promise<{ ok: boolean }>
       saveJson: (args: {
         defaultName?: string
         content: string

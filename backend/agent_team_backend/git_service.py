@@ -804,9 +804,18 @@ async def pull_only(workspace_path: str) -> dict[str, Any]:
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
-async def push_only(workspace_path: str) -> dict[str, Any]:
-    """Run `git push`."""
-    rc, out, stderr = await _run(["git", "push"], workspace_path)
+async def push_only(workspace_path: str, remote: str = "", branch: str = "") -> dict[str, Any]:
+    """Run `git push`, or `git push <remote> <branch>` when a remote is given."""
+    cmd = ["git", "push"]
+    if remote:
+        if err := _validate_ref_name(remote, "remote name"):
+            return {"ok": False, "output": "", "error": err}
+        cmd.append(remote.strip())
+        if branch:
+            if err := _validate_ref_name(branch, "branch name"):
+                return {"ok": False, "output": "", "error": err}
+            cmd.append(branch.strip())
+    rc, out, stderr = await _run(cmd, workspace_path)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -816,9 +825,21 @@ async def pull_rebase(workspace_path: str) -> dict[str, Any]:
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
-async def push_force(workspace_path: str) -> dict[str, Any]:
-    """Run `git push --force-with-lease` (safe force: aborts if remote moved)."""
-    rc, out, stderr = await _run(["git", "push", "--force-with-lease"], workspace_path)
+async def push_force(workspace_path: str, remote: str = "", branch: str = "") -> dict[str, Any]:
+    """Run `git push --force-with-lease` (safe force: aborts if remote moved).
+
+    When a remote is given, targets `git push --force-with-lease <remote> <branch>`.
+    """
+    cmd = ["git", "push", "--force-with-lease"]
+    if remote:
+        if err := _validate_ref_name(remote, "remote name"):
+            return {"ok": False, "output": "", "error": err}
+        cmd.append(remote.strip())
+        if branch:
+            if err := _validate_ref_name(branch, "branch name"):
+                return {"ok": False, "output": "", "error": err}
+            cmd.append(branch.strip())
+    rc, out, stderr = await _run(cmd, workspace_path)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 

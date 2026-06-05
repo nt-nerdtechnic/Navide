@@ -495,10 +495,10 @@ export function useGit(
     return resp.payload ?? { ok: false, output: '', error: 'no response' }
   }
 
-  async function pushOnly(): Promise<{ ok: boolean; output: string; error: string }> {
+  async function pushOnly(remote = '', branch = ''): Promise<{ ok: boolean; output: string; error: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
-    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws }, 30_000)
+    const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws, remote, branch }, 30_000)
     await loadStatus()
     return resp.payload ?? { ok: false, output: '', error: 'no response' }
   }
@@ -793,11 +793,11 @@ export function useGit(
     return resp.payload ?? { ok: false, error: 'no response' }
   }
 
-  async function pushForce(): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function pushForce(remote = '', branch = ''): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', {
-      workspace_path: ws,
+      workspace_path: ws, remote, branch,
     })
     if (resp.ok && resp.payload?.ok) await loadStatus()
     return resp.payload ?? { ok: false, error: 'no response' }

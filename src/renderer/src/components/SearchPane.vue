@@ -202,7 +202,6 @@ function clearSearch(): void {
 }
 
 onMounted(() => {
-  document.title = '搜尋'
   void Promise.resolve().then(() => queryInput.value?.focus())
 })
 onUnmounted(() => { if (debounce) clearTimeout(debounce) })
@@ -321,7 +320,8 @@ onUnmounted(() => { if (debounce) clearTimeout(debounce) })
 .search-pane {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
+  min-height: 0;
   background: var(--bg-base);
   color: var(--text-primary);
   font-size: 12.5px;

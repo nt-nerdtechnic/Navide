@@ -1411,7 +1411,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.push":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.push_only(ws_path)
+            remote = payload.get("remote") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.push_only(ws_path, remote, branch)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1744,7 +1746,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.push_force":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.push_force(ws_path)
+            remote = payload.get("remote") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.push_force(ws_path, remote, branch)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
