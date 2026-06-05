@@ -367,6 +367,25 @@ registerCommand('editor.action.joinLines',               () => activeEditor()?.j
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
 registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
+registerCommand('editor.action.openFileAtCursor', () => {
+  const lineText = activeEditor()?.getCursorLineText?.() ?? ''
+  if (!lineText) return
+  const m = lineText.match(/from\s+['"`]([^'"`]+)['"`]/)
+    || lineText.match(/require\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/)
+    || lineText.match(/import\s+['"`]([^'"`]+)['"`]/)
+    || lineText.match(/['"`]([./][^'"`]+)['"`]/)
+  if (!m) return
+  const raw = m[1]
+  const activeDir = activeRel.value.split('/').slice(0, -1).join('/')
+  const joined = activeDir ? activeDir + '/' + raw : raw
+  const parts = joined.split('/').filter(Boolean)
+  const resolved: string[] = []
+  for (const p of parts) { if (p === '..') resolved.pop(); else if (p !== '.') resolved.push(p) }
+  const base = resolved.join('/')
+  for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '/index.ts', '/index.js']) {
+    const path = base + ext; if (path) { openFile({ filepath: path }); return }
+  }
+})
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
 registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
 registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
@@ -556,102 +575,102 @@ watch(activeRel, async () => {
 // ── Command Palette ──────────────────────────────────────────────────────────
 interface PaletteCmd { id: string; label: string; keys?: string }
 const PALETTE_COMMANDS: PaletteCmd[] = [
-  { id: 'editor.action.save',                     label: '儲存檔案',     keys: '⌘S' },
-  { id: 'workbench.action.saveAll',               label: '全部儲存',     keys: '⌘⇧S' },
-  { id: 'workbench.action.closeActiveEditor',     label: '關閉編輯器',   keys: '⌘W' },
-  { id: 'editor.action.undo',      label: '復原',       keys: '⌘Z' },
-  { id: 'editor.action.redo',      label: '重做',       keys: '⌘⇧Z' },
-  { id: 'editor.action.selectAll', label: '全選',       keys: '⌘A' },
-  { id: 'editor.action.openFind',  label: '尋找',       keys: '⌘F' },
-  { id: 'editor.action.gotoLine',  label: '跳到行',     keys: '⌘L' },
-  { id: 'editor.action.toggleComment',   label: '切換行註解',     keys: '⌘/' },
-  { id: 'editor.action.deleteLines',     label: '刪除行',         keys: '⌘⇧K' },
-  { id: 'editor.action.insertLineAfter', label: '在下方插入行',   keys: '⌘↵' },
-  { id: 'editor.action.insertLineBefore',label: '在上方插入行',   keys: '⌘⇧↵' },
-  { id: 'editor.action.moveLineUp',      label: '向上移動行',     keys: '⌥↑' },
-  { id: 'editor.action.moveLineDown',    label: '向下移動行',     keys: '⌥↓' },
-  { id: 'editor.action.selectHighlights',  label: '選取所有出現',   keys: '⌘⇧L' },
-  { id: 'editor.action.jumpToBracket',     label: '跳到配對括號' },
-  { id: 'editor.action.selectToBracket',  label: '選取到配對括號' },
-  { id: 'editor.action.duplicateLineDown', label: '向下複製行',   keys: '⇧⌥↓' },
-  { id: 'editor.action.duplicateLineUp',   label: '向上複製行',   keys: '⇧⌥↑' },
-  { id: 'editor.action.indentLines',       label: '縮排行',        keys: '⌘]' },
-  { id: 'editor.action.outdentLines',      label: '取消縮排行',    keys: '⌘[' },
-  { id: 'editor.action.cursorTop',         label: '跳到檔案開頭',  keys: '⌘↑' },
-  { id: 'editor.action.cursorBottom',      label: '跳到檔案結尾',  keys: '⌘↓' },
-  { id: 'editor.action.scrollLineUp',      label: '向上捲動一行',  keys: '⌃↑' },
-  { id: 'editor.action.scrollLineDown',    label: '向下捲動一行',  keys: '⌃↓' },
-  { id: 'editor.action.addSelectionToNextFindMatch', label: '選取下一個出現', keys: '⌘D' },
-  { id: 'editor.action.addLineComment',       label: '加入行注釋',       keys: '⌘K ⌘C' },
-  { id: 'editor.action.removeLineComment',    label: '移除行注釋',       keys: '⌘K ⌘U' },
-  { id: 'editor.action.blockComment',         label: '切換區塊注釋',     keys: '⌘⌥/' },
-  { id: 'editor.action.transformToUppercase',  label: '轉換為大寫' },
-  { id: 'editor.action.transformToLowercase',  label: '轉換為小寫' },
-  { id: 'editor.action.transformToTitlecase',  label: '轉換為標題大小寫' },
-  { id: 'editor.action.joinLines',              label: '合併行',         keys: '⌃J' },
-  { id: 'editor.action.sortLinesAscending',    label: '行遞增排序' },
-  { id: 'editor.action.sortLinesDescending',   label: '行遞減排序' },
-  { id: 'editor.action.trimTrailingWhitespace', label: '移除行尾空白',   keys: '⌘K ⌘X' },
-  { id: 'workbench.action.gotoSymbol',         label: '前往符號',     keys: '⌘⇧O' },
-  { id: 'workbench.action.changeLanguageMode', label: '變更語言模式', keys: '⌘K ⌘M' },
-  { id: 'editor.action.fontZoomIn',    label: '放大字體',     keys: '⌘=' },
-  { id: 'editor.action.fontZoomOut',   label: '縮小字體',     keys: '⌘-' },
-  { id: 'editor.action.fontZoomReset', label: '重設字體大小', keys: '⌘0' },
-  { id: 'workbench.action.newFile',            label: '新增檔案',     keys: '⌘N' },
-  { id: 'workbench.action.closeAllEditors', label: '關閉所有編輯器', keys: '⌘K ⌘W' },
-  { id: 'editor.action.nextMatch',         label: '下一個符合項',  keys: '⌘G' },
-  { id: 'editor.action.prevMatch',       label: '上一個符合項',   keys: '⌘⇧G' },
-  { id: 'editor.action.inlineRewrite',   label: 'AI 改寫',        keys: '⌘K ⌘K' },
-  { id: 'editor.action.triggerGhost',    label: 'AI 補全 (Cmd+I)',keys: '⌘I' },
-  { id: 'workbench.action.toggleSidebar',label: '切換側邊欄',     keys: '⌘B' },
-  { id: 'workbench.action.focusExplorer',label: '顯示檔案總管',   keys: '⌘⇧E' },
-  { id: 'workbench.action.focusSourceControl', label: '顯示原始碼控制', keys: '⌘⇧G' },
-  { id: 'workbench.action.focusActiveEditorGroup', label: '聚焦編輯器', keys: '⌘K ⌘E' },
-  { id: 'workbench.action.findInFiles',  label: '在檔案中搜尋',   keys: '⌘⇧F' },
-  { id: 'workbench.action.openNextEditor',      label: '切換下一分頁',   keys: '⌃Tab' },
-  { id: 'workbench.action.openPreviousEditor',  label: '切換上一分頁',   keys: '⌃⇧Tab' },
-  { id: 'workbench.action.quickOpen',             label: '快速開啟檔案',     keys: '⌘P' },
-  { id: 'workbench.action.reopenClosedEditor',    label: '重開最後關閉的分頁', keys: '⌘⇧T' },
-  { id: 'workbench.action.openKeyboardShortcuts', label: '顯示快捷鍵',       keys: '⌘K ⌘S' },
-  { id: 'workbench.action.selectTheme',           label: '選擇顏色主題',     keys: '⌘K ⌘T' },
-  { id: 'editor.action.openReplace',    label: '尋找並取代',       keys: '⌘H' },
-  { id: 'editor.action.formatDocument', label: '格式化文件',       keys: '⌥⇧F' },
-  { id: 'editor.action.formatSelection',label: '格式化選取範圍',   keys: '⌘K ⌘F' },
-  { id: 'workbench.action.toggleAIChat',            label: '切換 AI 對話',    keys: '⌘⇧A' },
-  { id: 'editor.action.smartSelect.expand',          label: '擴展選取範圍',   keys: '⇧⌥→' },
-  { id: 'editor.action.smartSelect.shrink',          label: '縮小選取範圍',   keys: '⇧⌥←' },
-  { id: 'workbench.action.copyFilePath',         label: '複製絕對路徑',      keys: '⌘K ⌘P' },
-  { id: 'workbench.action.copyRelativeFilePath', label: '複製相對路徑' },
-  { id: 'workbench.action.revealInExplorer',label: '在檔案總管中顯示', keys: '⌘K ⌘R' },
-  { id: 'workbench.action.revealFileInOS',  label: '在 Finder 中顯示',  keys: '⇧⌥R' },
-  { id: 'workbench.action.newWindow',       label: '新增編輯器視窗',    keys: '⌘⇧N' },
-  { id: 'workbench.action.openEditorAtIndex1', label: '切換到第 1 個分頁', keys: '⌘1' },
-  { id: 'workbench.action.openEditorAtIndex2', label: '切換到第 2 個分頁', keys: '⌘2' },
-  { id: 'workbench.action.openEditorAtIndex3', label: '切換到第 3 個分頁', keys: '⌘3' },
-  { id: 'editor.action.deleteWordLeft',              label: '刪除前一個字詞',   keys: '⌥⌫' },
-  { id: 'editor.action.deleteWordRight',             label: '刪除後一個字詞',   keys: '⌥⌦' },
-  { id: 'editor.action.deleteAllLeft',              label: '刪除到行首',       keys: '⌘⌫' },
-  { id: 'editor.action.deleteAllRight',             label: '刪除到行尾',       keys: '⌘⌦' },
-  { id: 'workbench.action.closeOtherEditors',       label: '關閉其他編輯器' },
-  { id: 'workbench.action.closeEditorsToTheRight', label: '關閉右側的編輯器' },
-  { id: 'workbench.action.closeEditorsToTheLeft',  label: '關閉左側的編輯器' },
-  { id: 'workbench.action.moveEditorRightInGroup',  label: '將分頁向右移動',   keys: '⌘⇧]' },
-  { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
-  { id: 'workbench.action.navigateBack',    label: '返回上一個位置', keys: '⌃-' },
-  { id: 'workbench.action.navigateForward', label: '前往下一個位置', keys: '⌃⇧-' },
-  { id: 'workbench.action.toggleZenMode',  label: '切換禪模式',    keys: '⌘K ⌘Z' },
-  { id: 'workbench.action.openFolder',    label: '開啟資料夾',    keys: '⌘K ⌘O' },
-  { id: 'workbench.action.reloadWindow',  label: '重新載入視窗' },
-  { id: 'workbench.action.openFile',      label: '開啟檔案',     keys: '⌘O' },
-  { id: 'workbench.action.openSettings',  label: '開啟設定',     keys: '⌘,' },
-  { id: 'workbench.action.findInFilesReplace', label: '在檔案中取代', keys: '⌘⇧H' },
-  { id: 'editor.action.transpose',           label: '轉置字元',     keys: '⌃T' },
-  { id: 'editor.action.selectLine',          label: '選取目前行',     keys: '⌃L' },
-  { id: 'editor.action.indentationToSpaces', label: '縮排轉換為空格' },
-  { id: 'editor.action.indentationToTabs',   label: '縮排轉換為 Tab' },
-  { id: 'editor.action.navigateToLastEditLocation', label: '跳到最後編輯位置', keys: '⌘K ⌘Q' },
-  { id: 'editor.action.moveSelectionToNextFindMatch', label: '移動選取到下一個符合', keys: '⌘K ⌘D' },
-  { id: 'workbench.action.copyRelativeFilePath', label: '複製相對路徑', keys: '⌘⇧⌥C' },
+  { id: 'editor.action.save',                     label: 'Save File',     keys: '⌘S' },
+  { id: 'workbench.action.saveAll',               label: 'Save All',     keys: '⌘⇧S' },
+  { id: 'workbench.action.closeActiveEditor',     label: 'Close Editor',   keys: '⌘W' },
+  { id: 'editor.action.undo',      label: 'Undo',       keys: '⌘Z' },
+  { id: 'editor.action.redo',      label: 'Redo',       keys: '⌘⇧Z' },
+  { id: 'editor.action.selectAll', label: 'Select All',       keys: '⌘A' },
+  { id: 'editor.action.openFind',  label: 'Find',       keys: '⌘F' },
+  { id: 'editor.action.gotoLine',  label: 'Go to Line',     keys: '⌘L' },
+  { id: 'editor.action.toggleComment',   label: 'Toggle Line Comment',     keys: '⌘/' },
+  { id: 'editor.action.deleteLines',     label: 'Delete Line',         keys: '⌘⇧K' },
+  { id: 'editor.action.insertLineAfter', label: 'Insert Line Below',   keys: '⌘↵' },
+  { id: 'editor.action.insertLineBefore',label: 'Insert Line Above',   keys: '⌘⇧↵' },
+  { id: 'editor.action.moveLineUp',      label: 'Move Line Up',     keys: '⌥↑' },
+  { id: 'editor.action.moveLineDown',    label: 'Move Line Down',     keys: '⌥↓' },
+  { id: 'editor.action.selectHighlights',  label: 'Select All Occurrences',   keys: '⌘⇧L' },
+  { id: 'editor.action.jumpToBracket',     label: 'Jump to Matching Bracket' },
+  { id: 'editor.action.selectToBracket',  label: 'Select to Matching Bracket' },
+  { id: 'editor.action.duplicateLineDown', label: 'Copy Line Down',   keys: '⇧⌥↓' },
+  { id: 'editor.action.duplicateLineUp',   label: 'Copy Line Up',   keys: '⇧⌥↑' },
+  { id: 'editor.action.indentLines',       label: 'Indent Line',        keys: '⌘]' },
+  { id: 'editor.action.outdentLines',      label: 'Outdent Line',    keys: '⌘[' },
+  { id: 'editor.action.cursorTop',         label: 'Go to Beginning of File',  keys: '⌘↑' },
+  { id: 'editor.action.cursorBottom',      label: 'Go to End of File',  keys: '⌘↓' },
+  { id: 'editor.action.scrollLineUp',      label: 'Scroll Line Up',  keys: '⌃↑' },
+  { id: 'editor.action.scrollLineDown',    label: 'Scroll Line Down',  keys: '⌃↓' },
+  { id: 'editor.action.addSelectionToNextFindMatch', label: 'Select Next Occurrence', keys: '⌘D' },
+  { id: 'editor.action.addLineComment',       label: 'Add Line Comment',       keys: '⌘K ⌘C' },
+  { id: 'editor.action.removeLineComment',    label: 'Remove Line Comment',       keys: '⌘K ⌘U' },
+  { id: 'editor.action.blockComment',         label: 'Toggle Block Comment',     keys: '⌘⌥/' },
+  { id: 'editor.action.transformToUppercase',  label: 'Transform to Uppercase' },
+  { id: 'editor.action.transformToLowercase',  label: 'Transform to Lowercase' },
+  { id: 'editor.action.transformToTitlecase',  label: 'Transform to Title Case' },
+  { id: 'editor.action.joinLines',              label: 'Join Lines',         keys: '⌃J' },
+  { id: 'editor.action.sortLinesAscending',    label: 'Sort Lines Ascending' },
+  { id: 'editor.action.sortLinesDescending',   label: 'Sort Lines Descending' },
+  { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
+  { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol',     keys: '⌘⇧O' },
+  { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
+  { id: 'editor.action.fontZoomIn',    label: 'Increase Font Size',     keys: '⌘=' },
+  { id: 'editor.action.fontZoomOut',   label: 'Decrease Font Size',     keys: '⌘-' },
+  { id: 'editor.action.fontZoomReset', label: 'Reset Font Size', keys: '⌘0' },
+  { id: 'workbench.action.newFile',            label: 'New File',     keys: '⌘N' },
+  { id: 'workbench.action.closeAllEditors', label: 'Close All Editors', keys: '⌘K ⌘W' },
+  { id: 'editor.action.nextMatch',         label: 'Next Match',  keys: '⌘G' },
+  { id: 'editor.action.prevMatch',       label: 'Previous Match',   keys: '⌘⇧G' },
+  { id: 'editor.action.inlineRewrite',   label: 'AI Rewrite',        keys: '⌘K ⌘K' },
+  { id: 'editor.action.triggerGhost',    label: 'AI Completion (Cmd+I)',keys: '⌘I' },
+  { id: 'workbench.action.toggleSidebar',label: 'Toggle Sidebar',     keys: '⌘B' },
+  { id: 'workbench.action.focusExplorer',label: 'Show Explorer',   keys: '⌘⇧E' },
+  { id: 'workbench.action.focusSourceControl', label: 'Show Source Control', keys: '⌘⇧G' },
+  { id: 'workbench.action.focusActiveEditorGroup', label: 'Focus Editor', keys: '⌘K ⌘E' },
+  { id: 'workbench.action.findInFiles',  label: 'Find in Files',   keys: '⌘⇧F' },
+  { id: 'workbench.action.openNextEditor',      label: 'Next Tab',   keys: '⌃Tab' },
+  { id: 'workbench.action.openPreviousEditor',  label: 'Previous Tab',   keys: '⌃⇧Tab' },
+  { id: 'workbench.action.quickOpen',             label: 'Quick Open',     keys: '⌘P' },
+  { id: 'workbench.action.reopenClosedEditor',    label: 'Reopen Last Closed Tab', keys: '⌘⇧T' },
+  { id: 'workbench.action.openKeyboardShortcuts', label: 'Show Keyboard Shortcuts',       keys: '⌘K ⌘S' },
+  { id: 'workbench.action.selectTheme',           label: 'Select Color Theme',     keys: '⌘K ⌘T' },
+  { id: 'editor.action.openReplace',    label: 'Find and Replace',       keys: '⌘H' },
+  { id: 'editor.action.formatDocument', label: 'Format Document',       keys: '⌥⇧F' },
+  { id: 'editor.action.formatSelection',label: 'Format Selection',   keys: '⌘K ⌘F' },
+  { id: 'workbench.action.toggleAIChat',            label: 'Toggle AI Chat',    keys: '⌘⇧A' },
+  { id: 'editor.action.smartSelect.expand',          label: 'Expand Selection',   keys: '⇧⌥→' },
+  { id: 'editor.action.smartSelect.shrink',          label: 'Shrink Selection',   keys: '⇧⌥←' },
+  { id: 'workbench.action.copyFilePath',         label: 'Copy Absolute Path',      keys: '⌘K ⌘P' },
+  { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path' },
+  { id: 'workbench.action.revealInExplorer',label: 'Reveal in Explorer', keys: '⌘K ⌘R' },
+  { id: 'workbench.action.revealFileInOS',  label: 'Reveal in Finder',  keys: '⇧⌥R' },
+  { id: 'workbench.action.newWindow',       label: 'New Editor Window',    keys: '⌘⇧N' },
+  { id: 'workbench.action.openEditorAtIndex1', label: 'Switch to Tab 1', keys: '⌘1' },
+  { id: 'workbench.action.openEditorAtIndex2', label: 'Switch to Tab 2', keys: '⌘2' },
+  { id: 'workbench.action.openEditorAtIndex3', label: 'Switch to Tab 3', keys: '⌘3' },
+  { id: 'editor.action.deleteWordLeft',              label: 'Delete Word Left',   keys: '⌥⌫' },
+  { id: 'editor.action.deleteWordRight',             label: 'Delete Word Right',   keys: '⌥⌦' },
+  { id: 'editor.action.deleteAllLeft',              label: 'Delete to Line Start',       keys: '⌘⌫' },
+  { id: 'editor.action.deleteAllRight',             label: 'Delete to Line End',       keys: '⌘⌦' },
+  { id: 'workbench.action.closeOtherEditors',       label: 'Close Other Editors' },
+  { id: 'workbench.action.closeEditorsToTheRight', label: 'Close Editors to the Right' },
+  { id: 'workbench.action.closeEditorsToTheLeft',  label: 'Close Editors to the Left' },
+  { id: 'workbench.action.moveEditorRightInGroup',  label: 'Move Tab Right',   keys: '⌘⇧]' },
+  { id: 'workbench.action.moveEditorLeftInGroup',   label: 'Move Tab Left',   keys: '⌘⇧[' },
+  { id: 'workbench.action.navigateBack',    label: 'Go Back', keys: '⌃-' },
+  { id: 'workbench.action.navigateForward', label: 'Go Forward', keys: '⌃⇧-' },
+  { id: 'workbench.action.toggleZenMode',  label: 'Toggle Zen Mode',    keys: '⌘K ⌘Z' },
+  { id: 'workbench.action.openFolder',    label: 'Open Folder',    keys: '⌘K ⌘O' },
+  { id: 'workbench.action.reloadWindow',  label: 'Reload Window' },
+  { id: 'workbench.action.openFile',      label: 'Open File',     keys: '⌘O' },
+  { id: 'workbench.action.openSettings',  label: 'Open Settings',     keys: '⌘,' },
+  { id: 'workbench.action.findInFilesReplace', label: 'Replace in Files', keys: '⌘⇧H' },
+  { id: 'editor.action.transpose',           label: 'Transpose Characters',     keys: '⌃T' },
+  { id: 'editor.action.selectLine',          label: 'Select Current Line',     keys: '⌃L' },
+  { id: 'editor.action.indentationToSpaces', label: 'Convert Indentation to Spaces' },
+  { id: 'editor.action.indentationToTabs',   label: 'Convert Indentation to Tabs' },
+  { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
+  { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
+  { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -1123,8 +1142,8 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
           <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
           <span class="ide-tab-name">{{ f.name }}</span>
-          <span v-if="f.dirty" class="ide-tab-dirty" title="未存檔">●</span>
-          <button class="ide-tab-close" title="關閉" @click.stop="closeFile(f.relPath)">✕</button>
+          <span v-if="f.dirty" class="ide-tab-dirty" title="Unsaved">●</span>
+          <button class="ide-tab-close" title="Close" @click.stop="closeFile(f.relPath)">✕</button>
         </div>
       </div>
 
@@ -1178,7 +1197,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">
-          從左側 Explorer 或 Search 開啟檔案
+          Open a file from the Explorer or Search pane on the left
         </div>
       </div>
     </div>
@@ -1219,7 +1238,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="themeInputEl"
         v-model="themeQuery"
         class="ide-palette-input"
-        placeholder="選擇顏色主題…"
+        placeholder="Select color theme…"
         @keydown="onThemeKeydown"
       />
       <ul class="ide-palette-list">
@@ -1232,7 +1251,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           @click="confirmThemePicker"
         >
           <span class="ide-palette-label">{{ t.label }}</span>
-          <span v-if="t.id === currentTheme" class="ide-palette-key">目前</span>
+          <span v-if="t.id === currentTheme" class="ide-palette-key">Current</span>
         </li>
       </ul>
     </div>
@@ -1244,7 +1263,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="kbInputEl"
         v-model="kbQuery"
         class="ide-palette-input"
-        placeholder="搜尋快捷鍵…"
+        placeholder="Search keyboard shortcuts…"
         @keydown="onKbKeydown"
       />
       <ul class="ide-palette-list">
@@ -1262,7 +1281,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="langInputEl"
         v-model="langQuery"
         class="ide-palette-input"
-        placeholder="選擇語言模式…"
+        placeholder="Select language mode…"
         @keydown="onLangKeydown"
       />
       <ul class="ide-palette-list">
@@ -1287,7 +1306,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="symInputEl"
         v-model="symQuery"
         class="ide-palette-input"
-        placeholder="前往符號…"
+        placeholder="Go to symbol…"
         @keydown="onSymKeydown"
       />
       <ul v-if="symItems.length" class="ide-palette-list">
@@ -1300,10 +1319,10 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           @click="confirmGotoSymbol"
         >
           <span class="ide-palette-label">{{ s.name }}</span>
-          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · 第 {{ s.line }} 行</span>
+          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · Line {{ s.line }}</span>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">目前檔案沒有偵測到符號</div>
+      <div v-else class="ide-palette-empty">No symbols detected in the current file</div>
     </div>
   </div>
   <div v-if="qoOpen" class="ide-palette-overlay" @mousedown.self="closeQuickOpen">
@@ -1333,19 +1352,19 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
               <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.relPath }}</span>
             </template>
             <template v-else-if="item.qoKind === 'line'">
-              <span class="ide-palette-label">跳到第 {{ item.line }} 行</span>
+              <span class="ide-palette-label">Go to line {{ item.line }}</span>
             </template>
             <template v-else-if="item.qoKind === 'symbol'">
               <span class="ide-palette-label">{{ item.name }}</span>
-              <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.kind }} · 第 {{ item.line }} 行</span>
+              <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ item.kind }} · Line {{ item.line }}</span>
             </template>
           </li>
         </template>
       </ul>
       <div v-else class="ide-palette-empty">
-        <template v-if="qoQuery.startsWith(':')">輸入有效行號</template>
-        <template v-else-if="qoQuery.startsWith('@')">目前檔案沒有偵測到符號</template>
-        <template v-else>無開放的檔案</template>
+        <template v-if="qoQuery.startsWith(':')">Enter a valid line number</template>
+        <template v-else-if="qoQuery.startsWith('@')">No symbols detected in the current file</template>
+        <template v-else>No open files</template>
       </div>
     </div>
   </div>
@@ -1355,7 +1374,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="paletteInputEl"
         v-model="paletteQuery"
         class="ide-palette-input"
-        placeholder="輸入指令名稱…"
+        placeholder="Type a command name…"
         @keydown="onPaletteKeydown"
       />
       <ul v-if="filteredCmds.length" class="ide-palette-list">
@@ -1371,7 +1390,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span v-if="cmd.keys" class="ide-palette-key">{{ cmd.keys }}</span>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">無符合指令</div>
+      <div v-else class="ide-palette-empty">No matching commands</div>
     </div>
   </div>
   <NotificationHost />
@@ -1384,7 +1403,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       :style="{ left: bcDropdown.x + 'px', top: bcDropdown.y + 'px' }"
       @click.stop
     >
-      <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">（空）</div>
+      <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">(empty)</div>
       <div
         v-for="(item, i) in bcDropdown.items"
         :key="(item.relPath || '') + (item.line ?? 0)"
