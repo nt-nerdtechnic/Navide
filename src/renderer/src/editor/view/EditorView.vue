@@ -1216,8 +1216,13 @@ function expandSelection(): void {
   const cur = cursor.value
   const anc = anchor.value
   const noSel = !anc || (anc.line === cur.line && anc.col === cur.col)
-  // Save current state for shrink
-  _selStack.push({ anchor: anc ? { ...anc } : null, cursor: { ...cur } })
+  // Save current state for shrink (only if it differs from the previous saved state)
+  const _top = _selStack.length > 0 ? _selStack[_selStack.length - 1] : null
+  const _sameAnchor = anc === null ? _top?.anchor === null : (_top?.anchor?.line === anc.line && _top?.anchor?.col === anc.col)
+  const _sameCursor = _top?.cursor.line === cur.line && _top?.cursor.col === cur.col
+  if (!_top || !_sameAnchor || !_sameCursor) {
+    _selStack.push({ anchor: anc ? { ...anc } : null, cursor: { ...cur } })
+  }
   if (noSel && getWordAtCursor()) {
     // Step 1: select word under cursor.
     // selectWordAt() only extends FORWARD from col — it misses the cursor-at-word-end
