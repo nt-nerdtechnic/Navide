@@ -1601,6 +1601,7 @@ defineExpose({
             v-for="rl in visibleLines"
             :key="rl.index"
             class="ev-line"
+            :class="{ 'ev-line--active': rl.index === cursor.line }"
             :style="{ top: (rl.index * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
           >
             <span v-if="showLineNumbers" class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
@@ -1655,6 +1656,10 @@ defineExpose({
   left: 0;
   display: flex;
   white-space: pre;
+  right: 0;
+}
+.ev-line--active {
+  background: var(--ev-line-active, rgba(128, 128, 128, 0.06));
 }
 .ev-gutter {
   flex-shrink: 0;
