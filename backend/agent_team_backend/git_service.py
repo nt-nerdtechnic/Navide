@@ -1100,10 +1100,15 @@ class GitBranch:
     is_current: bool
     is_remote: bool
     tracking: str = ""
+    has_local: bool = False  # for remote entries: True if a local branch already tracks this ref
 
 
 async def list_branches(workspace_path: str) -> dict[str, Any]:
-    """Return local branches (with tracking info) + remote-only branches."""
+    """Return local branches (with tracking info) + all remote branches.
+
+    Remote branches carry ``has_local=True`` when a local branch already
+    tracks them, so the UI can distinguish "needs checkout" from "already local".
+    """
     rc, out, _ = await _run(
         ["git", "branch", "-vv", "--format=%(refname:short)\t%(HEAD)\t%(upstream:short)"],
         workspace_path,
@@ -1127,7 +1132,7 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
             local_trackings.add(tracking)
         branches.append(asdict(GitBranch(name=name, is_current=is_cur, is_remote=False, tracking=tracking)))
 
-    # Append remote-only branches (not yet checked out locally)
+    # Append ALL remote branches; mark those already checked out locally
     rc2, out2, _ = await _run(
         ["git", "branch", "-r", "--format=%(refname:short)"],
         workspace_path,
@@ -1135,11 +1140,13 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
     if rc2 == 0:
         for line in out2.splitlines():
             name = line.strip()
-            # Skip empty, HEAD pointers, and entries without a slash (e.g. bare "origin")
+            # Skip empty, HEAD pointers, and bare remote names (no slash = not a branch)
             if not name or "/" not in name or name.endswith("/HEAD"):
                 continue
-            if name not in local_trackings:
-                branches.append(asdict(GitBranch(name=name, is_current=False, is_remote=True, tracking="")))
+            branches.append(asdict(GitBranch(
+                name=name, is_current=False, is_remote=True,
+                tracking="", has_local=name in local_trackings,
+            )))
 
     return {"ok": True, "branches": branches, "current": current}
 

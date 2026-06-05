@@ -44,6 +44,7 @@ export interface GitBranch {
   is_current: boolean
   is_remote: boolean
   tracking: string
+  has_local?: boolean
 }
 
 export interface GitStashEntry {
