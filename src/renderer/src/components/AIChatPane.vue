@@ -2090,7 +2090,8 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   letter-spacing: 0.02em;
 }
 .ai-text :deep(.ai-code-fold-btn:hover) { color: var(--text-bright); background: var(--bg-subtle); }
-.ai-text :deep(.ai-code-apply-btn) {
+.ai-text :deep(.ai-code-apply-btn),
+.ai-text :deep(.ai-code-insert-btn) {
   background: none;
   border: 1px solid var(--accent-emphasis);
   border-radius: 4px;
@@ -2103,6 +2104,14 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 .ai-text :deep(.ai-code-apply-btn:hover) {
   background: var(--accent-emphasis);
   color: var(--text-on-emphasis, #fff);
+}
+.ai-text :deep(.ai-code-insert-btn) {
+  border-color: var(--success-fg, #3fb950);
+  color: var(--success-fg, #3fb950);
+}
+.ai-text :deep(.ai-code-insert-btn:hover) {
+  background: var(--success-fg, #3fb950);
+  color: #fff;
 }
 .ai-text :deep(pre.ai-code-block) {
   background: var(--bg-muted);
