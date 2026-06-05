@@ -16,8 +16,38 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('workspace:pick', defaultPath),
   openPath: (target: string): Promise<{ ok: boolean; revealed?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openPath', target),
+  revealPath: (target: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:revealPath', target),
+  openTerminal: (command: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('shell:openTerminal', command),
+  openTempFile: (filename: string, content: string): Promise<{ ok: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke('shell:openTempFile', filename, content),
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
+  openDiffWindow: (args: {
+    workspace_path: string
+    filepath: string
+    staged: boolean
+    name?: string
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openDiff', {
+      workspace_path: args.workspace_path,
+      filepath: args.filepath,
+      staged: String(args.staged),
+      name: args.name ?? args.filepath,
+    }),
+  openEditorWindow: (args: {
+    workspace_path: string
+    filepath: string
+    name?: string
+    line?: number
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openEditor', {
+      workspace_path: args.workspace_path,
+      filepath: args.filepath,
+      name: args.name ?? args.filepath,
+      ...(args.line ? { line: String(args.line) } : {}),
+    }),
   saveJson: (args: {
     defaultName?: string
     content: string

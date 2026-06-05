@@ -104,6 +104,8 @@ class Project:
     layout_mode: str = "grid"
     pipeline_id: str = ""  # which pipeline template was used for this run
     run_count: int = 0     # incremented on each successful pipeline completion
+    theme: str = "dark-github"  # backup of the user-level theme (source of truth is the renderer's localStorage)
+    theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -153,6 +155,13 @@ class ProjectStore:
     def _ensure_dir(self, workspace_path: str) -> Path:
         d = self.project_dir(workspace_path)
         d.mkdir(parents=True, exist_ok=True)
+        # Make the runtime dir self-ignoring so git never tracks it, regardless
+        # of the workspace's own .gitignore or staging order. `.gitignore` with
+        # `*` ignores the whole directory (including itself) — same pattern as
+        # pytest's .pytest_cache/.gitignore.
+        gi = d / ".gitignore"
+        if not gi.exists():
+            gi.write_text("*\n", encoding="utf-8")
         return d
 
     def peek(self, workspace_path: str) -> Project | None:

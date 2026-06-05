@@ -1,5 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 
 // Give the Electron process a distinct name so it can be targeted precisely
@@ -14,6 +17,8 @@ let backend: BackendHandle | null = null
 let mainWindow: BrowserWindow | null = null
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
+let diffWindow: BrowserWindow | null = null
+let editorWindow: BrowserWindow | null = null
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   const qs = new URLSearchParams(params).toString()
@@ -119,6 +124,35 @@ function openStagesWindow(): void {
   loadWindow(win, { window: 'stages' })
 }
 
+function openDiffWindow(params: Record<string, string>): void {
+  const search = { window: 'diff', ...params }
+  if (diffWindow && !diffWindow.isDestroyed()) {
+    // Reuse the window: reload it with the new file's params and focus.
+    loadWindow(diffWindow, search)
+    diffWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'Agent-Team · Diff',
+    parent: mainWindow ?? undefined,
+    // Match the renderer's dark theme so reopening/reloading doesn't flash white.
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  diffWindow = win
+  win.on('closed', () => {
+    if (diffWindow === win) diffWindow = null
+  })
+  loadWindow(win, search)
+}
+
 ipcMain.handle('window:openRoles', () => {
   openRolesWindow()
   return { ok: true }
@@ -126,6 +160,43 @@ ipcMain.handle('window:openRoles', () => {
 
 ipcMain.handle('window:openStages', () => {
   openStagesWindow()
+  return { ok: true }
+})
+
+ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
+  openDiffWindow(args ?? {})
+  return { ok: true }
+})
+
+function openEditorWindow(params: Record<string, string>): void {
+  const search = { window: 'editor', ...params }
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    loadWindow(editorWindow, search)
+    editorWindow.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'Agent-Team · Editor',
+    parent: mainWindow ?? undefined,
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  editorWindow = win
+  win.on('closed', () => {
+    if (editorWindow === win) editorWindow = null
+  })
+  loadWindow(win, search)
+}
+
+ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
+  openEditorWindow(args ?? {})
   return { ok: true }
 })
 
@@ -208,6 +279,19 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle('shell:openTerminal', async (_event, command: string) => {
+  if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
+  // Open Terminal.app and run the install command interactively (sudo / OAuth
+  // prompts need a real TTY). The command is AppleScript-escaped.
+  const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const script = `tell application "Terminal" to do script "${escaped}"\ntell application "Terminal" to activate`
+  return await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    const proc = spawn('osascript', ['-e', script])
+    proc.on('error', (err) => resolve({ ok: false, error: String(err) }))
+    proc.on('close', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `osascript exited ${code}` }))
+  })
+})
+
 ipcMain.handle('shell:openPath', async (_event, target: string) => {
   if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
   // shell.openPath returns an empty string on success, or an error message.
@@ -223,6 +307,33 @@ ipcMain.handle('shell:openPath', async (_event, target: string) => {
     }
   }
   return { ok: true }
+})
+
+ipcMain.handle('shell:revealPath', async (_event, target: string) => {
+  if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
+  try {
+    shell.showItemInFolder(target)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// Write read-only content (e.g. a file's HEAD version) to a temp file and open
+// it with the OS default app — the equivalent of Cursor's "Open File (HEAD)".
+ipcMain.handle('shell:openTempFile', async (_event, filename: string, content: string) => {
+  if (!filename || typeof filename !== 'string') return { ok: false, error: 'invalid filename' }
+  try {
+    const dir = join(tmpdir(), 'agent-team-head')
+    await mkdir(dir, { recursive: true })
+    const safe = filename.replace(/[/\\]/g, '_')
+    const file = join(dir, safe)
+    await writeFile(file, content ?? '', 'utf8')
+    const err = await shell.openPath(file)
+    return err ? { ok: false, error: err } : { ok: true, path: file }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
 })
 
 // Read bytes from a file starting at a given offset. Used by the stage watcher

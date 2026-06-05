@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
+import { useNotify } from './composables/useNotify'
+import NotificationHost from './components/NotificationHost.vue'
 import { useRoles, type Role } from './composables/useRoles'
 
 const backend = useBackend()
 const rolesApi = useRoles(backend)
+const notify = useNotify()
 
 interface DraftRole {
   key: string
@@ -18,7 +21,6 @@ interface DraftRole {
 const selectedKey = ref<string | null>(null)
 const draft = ref<DraftRole | null>(null)
 const saving = ref(false)
-const lastError = ref('')
 const confirmingDelete = ref(false)
 const confirmingReset = ref(false)
 
@@ -35,7 +37,6 @@ const importing = ref(false)
 const importPreview = ref<ImportPreview | null>(null)
 const importBusy = ref(false)
 const exportBusy = ref(false)
-const lastImportSummary = ref('')
 
 interface ExportEnvelope {
   format_version: number
@@ -47,7 +48,6 @@ interface ExportEnvelope {
 async function exportRoles(): Promise<void> {
   if (!window.agentTeam?.saveJson) return
   exportBusy.value = true
-  lastError.value = ''
   try {
     const envelope: ExportEnvelope = {
       format_version: 1,
@@ -62,9 +62,9 @@ async function exportRoles(): Promise<void> {
       content: JSON.stringify(envelope, null, 2)
     })
     if (result.ok) {
-      lastImportSummary.value = `Exported ${envelope.roles.length} role(s) → ${result.path}`
+      notify.toast(`Exported ${envelope.roles.length} role(s) → ${result.path}`, { type: 'success' })
     } else if (result.error) {
-      lastError.value = `Export failed: ${result.error}`
+      notify.toast(`Export failed: ${result.error}`, { type: 'error' })
     }
   } finally {
     exportBusy.value = false
@@ -89,19 +89,17 @@ function validateRoleEntry(r: unknown): Role | null {
 async function startImport(): Promise<void> {
   if (!window.agentTeam?.openJson) return
   importing.value = true
-  lastError.value = ''
-  lastImportSummary.value = ''
   try {
     const result = await window.agentTeam.openJson({ title: 'Import roles JSON' })
     if (!result.ok || !result.content) {
-      if (result.error) lastError.value = `Import failed: ${result.error}`
+      if (result.error) notify.toast(`Import failed: ${result.error}`, { type: 'error' })
       return
     }
     let parsed: unknown
     try {
       parsed = JSON.parse(result.content)
     } catch (err) {
-      lastError.value = `Invalid JSON: ${(err as Error).message}`
+      notify.toast(`Invalid JSON: ${(err as Error).message}`, { type: 'error' })
       return
     }
     const raw: unknown[] = Array.isArray(parsed)
@@ -110,7 +108,7 @@ async function startImport(): Promise<void> {
         ? (parsed as { roles: unknown[] }).roles
         : []
     if (raw.length === 0) {
-      lastError.value = 'No roles found in file (expected an array or { roles: [...] })'
+      notify.toast('No roles found in file (expected an array or { roles: [...] })', { type: 'error' })
       return
     }
     const rolesIn: Role[] = []
@@ -121,7 +119,7 @@ async function startImport(): Promise<void> {
       else invalid.push(i)
     })
     if (rolesIn.length === 0) {
-      lastError.value = `All ${raw.length} entries invalid — each role needs key, label, system_prompt`
+      notify.toast(`All ${raw.length} entries invalid — each role needs key, label, system_prompt`, { type: 'error' })
       return
     }
     const existing = new Set(rolesApi.roles.value.map((r) => r.key))
@@ -135,7 +133,7 @@ async function startImport(): Promise<void> {
       replaceAll: false
     }
     if (invalid.length > 0) {
-      lastError.value = `Skipped ${invalid.length} invalid entr${invalid.length === 1 ? 'y' : 'ies'}`
+      notify.toast(`Skipped ${invalid.length} invalid entr${invalid.length === 1 ? 'y' : 'ies'}`, { type: 'info' })
     }
   } finally {
     importing.value = false
@@ -149,7 +147,6 @@ function cancelImport(): void {
 async function applyImport(): Promise<void> {
   if (!importPreview.value) return
   importBusy.value = true
-  lastError.value = ''
   const { rolesIn, replaceAll, filePath } = importPreview.value
   try {
     // Replace all: delete every existing role NOT in the import set first.
@@ -175,12 +172,13 @@ async function applyImport(): Promise<void> {
     }
     importPreview.value = null
     const fileNote = filePath ? ` from ${filePath}` : ''
-    lastImportSummary.value =
+    const summary =
       `Imported ${ok} role(s)${fileNote}` +
-      (failed ? ` · ${failed} failed (see error)` : '') +
+      (failed ? ` · ${failed} failed` : '') +
       (replaceAll ? ' · replaced all' : '')
+    notify.toast(summary, { type: failed ? 'info' : 'success' })
   } catch (err) {
-    lastError.value = `Import failed: ${String((err as Error).message ?? err)}`
+    notify.toast(`Import failed: ${String((err as Error).message ?? err)}`, { type: 'error' })
   } finally {
     importBusy.value = false
   }
@@ -224,7 +222,6 @@ function fromRole(r: Role, isNew: boolean): DraftRole {
 
 function selectKey(key: string | null): void {
   selectedKey.value = key
-  lastError.value = ''
   if (key === null) {
     draft.value = null
     return
@@ -235,7 +232,6 @@ function selectKey(key: string | null): void {
 
 function startNew(): void {
   selectedKey.value = null
-  lastError.value = ''
   draft.value = {
     key: '',
     label: '',
@@ -269,7 +265,6 @@ const canSave = computed(() => {
 async function save(): Promise<void> {
   if (!draft.value || !canSave.value) return
   saving.value = true
-  lastError.value = ''
   const payload = {
     key: draft.value.key.trim(),
     label: draft.value.label.trim(),
@@ -291,7 +286,7 @@ async function save(): Promise<void> {
       if (role) selectKey(role.key)
     }
   } catch (err) {
-    lastError.value = String((err as Error).message ?? err)
+    notify.toast(String((err as Error).message ?? err), { type: 'error' })
   } finally {
     saving.value = false
   }
@@ -307,7 +302,7 @@ async function doDelete(): Promise<void> {
   if (ok) {
     selectKey(sorted.value[0]?.key ?? null)
   } else {
-    lastError.value = rolesApi.error.value
+    notify.toast(rolesApi.error.value, { type: 'error' })
   }
 }
 
@@ -353,7 +348,6 @@ const statusColor = computed(() => {
         <button class="ghost danger-link" @click="confirmingReset = true">↺ Reset to defaults</button>
       </div>
     </header>
-    <div v-if="lastImportSummary" class="banner ok">{{ lastImportSummary }}</div>
 
     <div class="body">
       <aside class="list">
@@ -387,8 +381,6 @@ const statusColor = computed(() => {
             </button>
           </div>
         </div>
-
-        <p v-if="lastError" class="err">{{ lastError }}</p>
 
         <div class="grid">
           <div>
@@ -502,6 +494,7 @@ const statusColor = computed(() => {
         </div>
       </div>
     </div>
+    <NotificationHost />
   </div>
 </template>
 
@@ -728,15 +721,6 @@ button.ghost:hover:not(:disabled) {
 .danger-link {
   color: #f85149;
 }
-.banner {
-  padding: 8px 16px;
-  font-size: 12px;
-  border-bottom: 1px solid #21262d;
-}
-.banner.ok {
-  background: #0d2818;
-  color: #3fb950;
-}
 .hint {
   color: #8b949e;
   font-size: 11px;
@@ -746,11 +730,6 @@ button.ghost:hover:not(:disabled) {
   color: #d29922;
   font-size: 11px;
   margin: 4px 0 0;
-}
-.err {
-  color: #f85149;
-  font-size: 12px;
-  margin: 0 0 8px;
 }
 .modal {
   position: fixed;

@@ -36,7 +36,7 @@ Plans:       none active · all detail plans retired · 2 future ideas F4-F5 —
 | Workspace-first entry + mode-aware UI | ✅ Stable | `recent_workspaces.py` + `Welcome.vue` · recent list + pin · pipeline/spawn/completed mode (M11) |
 | Manager pattern + pre-spawn team | ✅ Stable | default execution model: pre-spawn all slots (role only) → activate per stage · `isManager` slot + dispatch/ask/stage-done router (M13) |
 | Frontend tests | ✅ Stable | Vitest 63 (buffer/stages pure fns + 3 composables w/ mock backend) + Playwright 2 (Electron launch + Welcome→workspace smoke) (M14) |
-| Git preflight + task branch | 📋 Planned | See [[git-control.md]] |
+| Git panel (source control tab) | ✅ Stable | `git_service.py` + `useGit.ts` + `GitPane.vue`; Pipeline/Git top tabs in ControlPane |
 | Cross-agent route engine | 📋 Planned | See [[route-engine.md]] |
 
 Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · 📋 planned, detail plan exists · ❌ identified gap, no plan yet
@@ -199,6 +199,9 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 │ Welcome.vue gates entry · ControlPane mode-aware (M11)       │
 │ Composables: useBackend / useTerminal / useTokens / useHistory│
 │   useAnalyzer / useRoles / useStages / useRecentWorkspaces   │
+│   useTheme · useExplorer · useOnboarding · editor/ (scratch)  │
+│ Styles: styles/tokens/ — base (primitives) · semantic (roles)│
+│   · themes/*.css (5 built-ins via [data-theme] on <html>)    │
 │ App.vue: pipeline state machine · watchers · question queue  │
 └─────────────────────────────────────────────────────────────┘
               ↓ WebSocket (34 message types)
@@ -208,6 +211,9 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 │  app.py — dispatcher · 34 WS msgs · 8 HTTP routes           │
 │  ├─ terminals.py        PTY · 50ms batch                    │
 │  ├─ projects.py         per-workspace state                 │
+│  ├─ fs_service.py       Explorer safe file CRUD             │
+│  ├─ editor_service.py   editor AI rewrite/complete (LLM)    │
+│  ├─ onboarding_deps.py  env detection + install gate        │
 │  ├─ tokens_store.py     dedup + persist                     │
 │  ├─ roles_store.py      registry                            │
 │  ├─ stages_store.py     registry (slots-based)              │
@@ -291,6 +297,15 @@ Rules:
 ---
 
 ## 9 · Progress log (most recent first)
+
+### 2026-06-05 (later) — sequential feature branches
+Three plans completed on cumulative branches (theme-system → file-explorer → ai-native-editor → onboarding-wizard), each verified independently with no regressions.
+- **File Explorer** (`feat/file-explorer`) — backend `fs_service.py` (safe path resolution + list_dir/CRUD/read/write) + `fs.*` WS handlers; `useExplorer.ts` lazy tree + git-status overlay; `ExplorerPane.vue` (3rd sidebar tab, leftmost) opening files in Diff; context-menu CRUD via notify.confirm. +19 backend, +6 frontend tests.
+- **AI Native Editor** (`feat/ai-native-editor`) — from-scratch editor under `src/renderer/src/editor/`: `TextModel`/`UndoStack`/`jsTokenizer` (pure logic, 44 tests), `EditorView.vue` (DOM virtual scroll, hidden-textarea input + IME, caret/selection, syntax → `--syntax-*`), AI flows (Cmd+K rewrite accept/reject, ghost completion) via `editor.*` → `editor_service.py` (local LLM), `EditorPane.vue` + `?window=editor` standalone window + `fs.write_file` save; entry points in Explorer + GitPane.
+- **Onboarding Wizard** (`feat/onboarding-wizard`) — `onboarding_deps.py` dep registry + detection (ok/missing/outdated) + hard-block gate (foundation + ≥1 agent CLI + Ollama&model); `onboarding.*` WS handlers + completion flag (`~/.agent-team/onboarding.json`, `AGENT_TEAM_SKIP_ONBOARDING`); `useOnboarding.ts` + 3-step `OnboardingWizard.vue`; App.vue startup gate; external-Terminal installs via `shell:openTerminal`. +12 backend, +5 frontend tests.
+
+### 2026-06-05
+- **Theme System** shipped (`feat/theme-system`, plan `theme-system_35d87146`) — CSS custom-property token architecture replacing 68+ hardcoded colors. Three token layers: `styles/tokens/base.css` (primitives) → `semantic.css` (59 semantic roles + `--syntax-*` group) → `themes/*.css` (5 built-ins: Dark GitHub / Midnight / Forest / Light / High Contrast) applied via `[data-theme]` on `<html>`. `useTheme` composable manages selection + 8-token custom overrides; **localStorage is the source of truth**, workspace JSON `theme`/`theme_custom` are best-effort backup (load order localStorage → backend → `dark-github`). Appearance tab in SettingsModal (theme cards + color pickers w/ 300ms debounced live preview + reset). Default theme migration is pixel-identical (token defaults equal the old hex). 11 renderer files migrated (App.vue + 10 components, GitPane separated from the concurrent notification-system work). +10 useTheme tests, +4 backend theme tests; 173 frontend + 414 backend green; production build + cross-theme token-coverage smoke test pass.
 
 ### 2026-05-30 (later)
 - **M14 Frontend tests** shipped — Vitest infra + 63 unit tests (buffer/stages pure fns + useTokens/useHistory/useAnalyzer via mock backend) + Playwright 2 Electron E2E (launch + Welcome→workspace). Local scripts only. `App.vue`/`parseDispatchBlocks` deliberately untouched. Plan `frontend-tests_9c4ad7e2` retired. `typecheck:web` still exit 0.

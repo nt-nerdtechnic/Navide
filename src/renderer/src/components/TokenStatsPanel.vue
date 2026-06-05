@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
+import { useNotify } from '../composables/useNotify'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
+import type { PipelineStatusView } from './ControlPane.vue'
 
 interface Stage {
   id: string
@@ -23,6 +25,7 @@ interface Props {
   workspacePath: string
   stages: Stage[]
   panes: ActivePane[]
+  pipeline: PipelineStatusView
 }
 
 const props = defineProps<Props>()
@@ -53,7 +56,7 @@ watch(expanded, (v) => {
 }, { immediate: true })
 
 // Active right-panel tab — Tokens (default) or the pipeline History timeline.
-const tab = ref<'tokens' | 'history'>('tokens')
+const tab = ref<'history' | 'tokens'>('history')
 try {
   const t = localStorage.getItem('agentTeam.rightPanel.tab')
   if (t === 'history' || t === 'tokens') tab.value = t
@@ -61,35 +64,6 @@ try {
 watch(tab, (v) => {
   try { localStorage.setItem('agentTeam.rightPanel.tab', v) } catch { /* ignore */ }
 })
-
-// Per-section visibility toggles
-const sectionDefaults = {
-  run: true,
-  vendor: true,
-  stage: true,
-  pane: true,
-  cumulative: true,
-  global: true
-}
-type SectionKey = keyof typeof sectionDefaults
-
-const sections = ref<Record<SectionKey, boolean>>({ ...sectionDefaults })
-;(function loadSections() {
-  try {
-    const raw = localStorage.getItem('agentTeam.tokenPanel.sections')
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, boolean>>
-      for (const k of Object.keys(sectionDefaults) as SectionKey[]) {
-        if (typeof parsed[k] === 'boolean') sections.value[k] = parsed[k] as boolean
-      }
-    }
-  } catch { /* ignore */ }
-})()
-watch(sections, (v) => {
-  try { localStorage.setItem('agentTeam.tokenPanel.sections', JSON.stringify(v)) } catch { /* ignore */ }
-}, { deep: true })
-
-const settingsOpen = ref(false)
 
 // ─────────────────────── Derived view models ──────────────────────────────
 
@@ -166,13 +140,15 @@ function fmt(n: number): string {
 
 // ─────────────────────── Reset confirmations ──────────────────────────────
 
+const { confirm: notifyConfirm } = useNotify()
+
 async function confirmReset(scope: ResetScope): Promise<void> {
   const msg = {
     run: 'Reset the current pipeline run’s token counters? Workspace cumulative and global totals stay intact.',
     workspace: 'Wipe all token data for this workspace (current run + runs history + cumulative)? Global totals stay intact.',
     global: 'Wipe global all-time token totals? This affects every workspace.'
   }[scope]
-  if (!window.confirm(msg)) return
+  if (!(await notifyConfirm(msg, { title: 'Reset tokens', confirmText: 'Reset' }))) return
   await reset(scope)
 }
 </script>
@@ -181,14 +157,14 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   <aside class="token-panel" :class="{ 'is-expanded': expanded, 'is-collapsed': !expanded }">
     <!-- Collapsed rail: one icon per tab — click to expand + switch tab -->
     <div v-if="!expanded" class="rail">
+      <button class="rail-btn" :class="{ active: tab === 'history' }" title="Expand pipeline history" @click="tab = 'history'; expanded = true">
+        <span class="rail-icon">📜</span>
+        <span class="rail-label">History</span>
+      </button>
       <button class="rail-btn" :class="{ active: tab === 'tokens' }" :title="`Expand token stats · ${collapsedTotal} so far`" @click="tab = 'tokens'; expanded = true">
         <span class="rail-icon">📊</span>
         <span class="rail-label">Tokens</span>
         <span v-if="runTotals.calls > 0" class="rail-badge">{{ collapsedTotal }}</span>
-      </button>
-      <button class="rail-btn" :class="{ active: tab === 'history' }" title="Expand pipeline history" @click="tab = 'history'; expanded = true">
-        <span class="rail-icon">📜</span>
-        <span class="rail-label">History</span>
       </button>
     </div>
 
@@ -197,33 +173,19 @@ async function confirmReset(scope: ResetScope): Promise<void> {
       <header class="hdr">
         <button class="collapse" title="Collapse" @click="expanded = false">‹</button>
         <div class="tabs">
-          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 Tokens</button>
           <button class="tab" :class="{ active: tab === 'history' }" @click="tab = 'history'">📜 History</button>
+          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 Tokens</button>
         </div>
-        <button
-          v-if="tab === 'tokens'"
-          class="gear"
-          :class="{ active: settingsOpen }"
-          title="Show / hide sections"
-          @click="settingsOpen = !settingsOpen"
-        >⚙</button>
       </header>
 
-      <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" />
+      <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
 
       <template v-else>
-      <div v-if="settingsOpen" class="settings">
-        <label v-for="k in (Object.keys(sectionDefaults) as SectionKey[])" :key="k" class="setting">
-          <input type="checkbox" v-model="sections[k]" />
-          <span>{{ k }}</span>
-        </label>
-      </div>
-
       <div v-if="loading && !snapshot" class="msg">Loading…</div>
 
       <div class="body">
         <!-- Current run total -->
-        <section v-if="sections.run" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">Current run</span>
             <button class="reset-btn" title="Reset run counter" @click="confirmReset('run')">⟲</button>
@@ -241,7 +203,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- Cumulative (workspace lifetime) -->
-        <section v-if="sections.cumulative" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">Workspace cumulative</span>
             <button class="reset-btn" title="Wipe workspace history" @click="confirmReset('workspace')">⟲</button>
@@ -255,7 +217,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- Global all-time -->
-        <section v-if="sections.global" class="block">
+        <section class="block">
           <div class="block-hdr">
             <span class="block-title">All time (global)</span>
             <button class="reset-btn" title="Wipe global tally" @click="confirmReset('global')">⟲</button>
@@ -269,7 +231,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Vendor -->
-        <section v-if="sections.vendor" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By vendor</span></div>
           <table class="grid">
             <tr v-for="row in vendorRows" :key="row.key">
@@ -285,7 +247,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Stage -->
-        <section v-if="sections.stage" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By stage</span></div>
           <div v-if="!stageRows.length" class="muted">No stages defined.</div>
           <table v-else class="grid">
@@ -299,7 +261,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         </section>
 
         <!-- By Pane -->
-        <section v-if="sections.pane" class="block">
+        <section class="block">
           <div class="block-hdr"><span class="block-title">By pane</span></div>
           <div v-if="!paneRows.length" class="muted">No active panes.</div>
           <table v-else class="grid">
@@ -320,11 +282,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 <style scoped>
 .token-panel {
   height: 100%;
-  background: #0d1117;
-  border-left: 1px solid #21262d;
+  background: var(--bg-base);
+  border-left: 1px solid var(--border-muted);
   display: flex;
   flex-direction: column;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 12px;
   min-height: 0;
@@ -341,7 +303,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   appearance: none;
   background: transparent;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -351,11 +313,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   width: 100%;
 }
 .rail-btn:hover {
-  background: #161b22;
-  color: #e6edf3;
+  background: var(--bg-subtle);
+  color: var(--text-bright);
 }
 .rail-btn.active {
-  color: #58a6ff;
+  color: var(--accent-fg);
 }
 .rail-icon { font-size: 16px; }
 .rail-label {
@@ -367,8 +329,8 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .rail-badge {
   font-size: 10px;
-  background: #1f6feb;
-  color: #fff;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
   padding: 2px 6px;
   border-radius: 999px;
   margin-top: auto;
@@ -380,21 +342,21 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid #21262d;
-  background: #161b22;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
   flex-shrink: 0;
 }
 .collapse {
   background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 3px;
   font-size: 14px;
   line-height: 1;
 }
-.collapse:hover { color: #e6edf3; }
+.collapse:hover { color: var(--text-bright); }
 .title {
   font-weight: 600;
   flex: 1;
@@ -407,44 +369,18 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 .tab {
   background: transparent;
   border: 1px solid transparent;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   padding: 2px 8px;
   border-radius: 5px;
   font-size: 12px;
   font-weight: 600;
 }
-.tab:hover { color: #e6edf3; }
+.tab:hover { color: var(--text-bright); }
 .tab.active {
-  color: #e6edf3;
-  background: #0d1117;
-  border-color: #30363d;
-}
-.gear {
-  background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: 3px;
-}
-.gear.active { color: #58a6ff; border-color: #1f6feb; }
-.settings {
-  padding: 8px 12px;
-  border-bottom: 1px solid #21262d;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  background: #0d1117;
-  font-size: 11px;
-}
-.setting {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  text-transform: capitalize;
-  color: #c9d1d9;
-  cursor: pointer;
+  color: var(--text-bright);
+  background: var(--bg-base);
+  border-color: var(--border-default);
 }
 .body {
   flex: 1;
@@ -452,11 +388,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   padding: 8px 0;
   min-height: 0;
 }
-.msg { padding: 12px; color: #8b949e; }
+.msg { padding: 12px; color: var(--text-secondary); }
 
 .block {
   padding: 8px 12px;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--bg-subtle);
 }
 .block-hdr {
   display: flex;
@@ -468,24 +404,24 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  color: #8b949e;
+  color: var(--text-secondary);
   flex: 1;
 }
 .reset-btn {
   appearance: none;
   background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
   border-radius: 3px;
   padding: 0 6px;
   line-height: 1.7;
 }
-.reset-btn:hover { color: #f85149; border-color: #f85149; }
+.reset-btn:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
 .run-meta {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -494,7 +430,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 .run-id {
   font-family: Menlo, Monaco, monospace;
 }
-.muted { color: #8b949e; font-size: 11px; margin: 4px 0; }
+.muted { color: var(--text-secondary); font-size: 11px; margin: 4px 0; }
 
 .totals {
   display: grid;
@@ -503,14 +439,14 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .cell {
   text-align: center;
-  background: #161b22;
+  background: var(--bg-subtle);
   border-radius: 3px;
   padding: 6px 0;
 }
-.big { font-size: 14px; font-weight: 600; color: #e6edf3; }
+.big { font-size: 14px; font-weight: 600; color: var(--text-bright); }
 .lbl {
   font-size: 9px;
-  color: #8b949e;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -522,15 +458,15 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .grid tr.head td, .grid tr.head th {
   font-size: 9px;
-  color: #8b949e;
+  color: var(--text-secondary);
   text-transform: uppercase;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
   padding-top: 4px;
 }
 .grid th {
   text-align: left;
   font-weight: 500;
-  color: #c9d1d9;
+  color: var(--text-primary);
   padding: 3px 6px 3px 0;
   white-space: nowrap;
 }
@@ -538,7 +474,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   text-align: right;
   padding: 3px 6px;
   font-variant-numeric: tabular-nums;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
-.grid td.dim { color: #8b949e; }
+.grid td.dim { color: var(--text-secondary); }
 </style>

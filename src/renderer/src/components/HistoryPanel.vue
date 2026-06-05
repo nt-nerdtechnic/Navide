@@ -2,12 +2,47 @@
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
 import { useHistory, type HistoryEvent } from '../composables/useHistory'
 import type { useBackend } from '../composables/useBackend'
+import type { PipelineStatusView } from './ControlPane.vue'
 
 interface Props {
   backend: ReturnType<typeof useBackend>
   workspacePath: string
+  pipeline: PipelineStatusView
 }
 const props = defineProps<Props>()
+
+// ─────────────────────── Run info: file links + live log ───────────────────
+// Moved here from ControlPane so the run's project.json / pipeline.log /
+// backend.log links and the supervision log live alongside the timeline.
+// Classify a supervision-log line so errors stand out (red) and warnings (yellow).
+function logLevel(line: string): '' | 'is-error' | 'is-warn' {
+  if (/❌|✕|✗|exception|unreachable|rejection|\berror\b|\bfailed\b|\bthrew\b/i.test(line)) {
+    return 'is-error'
+  }
+  if (/⚠/.test(line)) return 'is-warn'
+  return ''
+}
+async function openPath(p: string): Promise<void> {
+  if (!p) return
+  if (!window.agentTeam?.openPath) {
+    try {
+      await navigator.clipboard.writeText(p)
+    } catch {
+      /* ignore */
+    }
+    return
+  }
+  await window.agentTeam.openPath(p)
+}
+// Auto-scroll the supervision log to the bottom whenever a new entry arrives.
+const pipelineLogEl = ref<HTMLElement | null>(null)
+watch(
+  () => props.pipeline.log.length,
+  async () => {
+    await nextTick()
+    if (pipelineLogEl.value) pipelineLogEl.value.scrollTop = pipelineLogEl.value.scrollHeight
+  }
+)
 
 const workspacePathRef: Ref<string> = computed(() => props.workspacePath) as unknown as Ref<string>
 const { events, path, loading } = useHistory(props.backend, workspacePathRef)
@@ -125,10 +160,66 @@ async function openFile(): Promise<void> {
     /* ignore */
   }
 }
+
+// ─────────────────── Draggable split: log (top) ↔ history (bottom) ──────────
+// Log region stays visible at all times; drag the divider to resize its height.
+// Height is persisted so it survives reloads. Bounds are static (clamped px).
+const logHeight = ref<number>(
+  (() => { try { return parseFloat(localStorage.getItem('agentTeam.history.logHeight') ?? '') || 160 } catch { return 160 } })()
+)
+watch(logHeight, (v) => { try { localStorage.setItem('agentTeam.history.logHeight', String(v)) } catch { /* ignore */ } })
+
+let _logDragStartY = 0
+let _logDragStartH = 0
+function onLogDividerStart(e: MouseEvent): void {
+  _logDragStartY = e.clientY
+  _logDragStartH = logHeight.value
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+  document.addEventListener('mousemove', onLogDividerMove)
+  document.addEventListener('mouseup', onLogDividerEnd)
+  e.preventDefault()
+}
+function onLogDividerMove(e: MouseEvent): void {
+  const h = _logDragStartH + e.clientY - _logDragStartY
+  logHeight.value = Math.max(60, Math.min(480, h))
+}
+function onLogDividerEnd(): void {
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+  document.removeEventListener('mousemove', onLogDividerMove)
+  document.removeEventListener('mouseup', onLogDividerEnd)
+}
 </script>
 
 <template>
   <div class="history">
+    <div class="run-info">
+      <div v-if="pipeline.projectId" class="paths-actions">
+        <button class="ghost" :title="pipeline.projectFile" @click="openPath(pipeline.projectFile)">📄 project.json</button>
+        <button class="ghost" :title="pipeline.pipelineLogFile" @click="openPath(pipeline.pipelineLogFile)">📜 pipeline.log</button>
+        <button class="ghost" :title="pipeline.backendLogFile" @click="openPath(pipeline.backendLogFile)">🪵 backend.log</button>
+      </div>
+      <div class="log-panel" :style="{ height: logHeight + 'px' }">
+        <div class="log-hdr">
+          <span class="log-title">›_ Console</span>
+          <span v-if="pipeline.log.length" class="log-count">{{ pipeline.log.length }}</span>
+        </div>
+        <div ref="pipelineLogEl" class="pipeline-log">
+          <template v-if="pipeline.log.length">
+            <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
+          </template>
+          <div v-else class="pipeline-log-empty">
+            <span class="empty-glyph">›_</span>
+            <span>目前沒有輸出</span>
+          </div>
+        </div>
+      </div>
+      <div class="log-resize" title="拖曳調整 log 區高度" @mousedown="onLogDividerStart">
+        <div class="log-resize-grip" />
+      </div>
+    </div>
+
     <div class="filters">
       <select v-model="typeFilter" class="flt" title="Filter by type">
         <option v-for="t in typeOptions" :key="t" :value="t">{{ t }}</option>
@@ -173,17 +264,130 @@ async function openFile(): Promise<void> {
   height: 100%;
   min-height: 0;
 }
+.run-info {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.paths-actions {
+  display: flex;
+  gap: 4px;
+}
+.paths-actions .ghost {
+  flex: 1;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  font-size: 10px;
+  padding: 4px 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.paths-actions .ghost:hover {
+  background: var(--bg-muted);
+}
+.log-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 4px;
+  background: var(--bg-inset);
+  border: 1px solid #1b2230;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.log-hdr {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--bg-subtle);
+  background: var(--bg-base);
+}
+.log-title {
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+}
+.log-count {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.pipeline-log {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 10px;
+}
+.pipeline-log-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.empty-glyph {
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 16px;
+  color: var(--border-default);
+  letter-spacing: 1px;
+}
+.log-resize {
+  flex-shrink: 0;
+  height: 7px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.log-resize-grip {
+  height: 1px;
+  width: 100%;
+  background: var(--bg-muted);
+  transition: background 0.12s, height 0.12s;
+}
+.log-resize:hover .log-resize-grip {
+  height: 3px;
+  background: var(--accent-focus);
+}
+.pipeline-log-line {
+  color: var(--text-secondary);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pipeline-log-line.is-error {
+  color: var(--danger-fg);
+  font-weight: 600;
+}
+.pipeline-log-line.is-warn {
+  color: var(--attention-fg);
+}
 .filters {
   display: flex;
   gap: 6px;
   padding: 6px 8px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-muted);
 }
 .flt,
 .search {
-  background: #0d1117;
-  color: #e6edf3;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  color: var(--text-bright);
+  border: 1px solid var(--border-default);
   border-radius: 5px;
   font-size: 11px;
   padding: 3px 5px;
@@ -210,14 +414,14 @@ async function openFile(): Promise<void> {
   border-left: 2px solid transparent;
 }
 .row:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .row.open {
-  background: #161b22;
+  background: var(--bg-subtle);
   border-left-color: #2f81f7;
 }
 .ts {
-  color: #6e7681;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -226,17 +430,17 @@ async function openFile(): Promise<void> {
   text-align: center;
 }
 .summary {
-  color: #c9d1d9;
+  color: var(--text-primary);
   word-break: break-word;
 }
 .detail {
   grid-column: 1 / -1;
   margin: 4px 0 2px;
   padding: 6px 8px;
-  background: #010409;
-  border: 1px solid #21262d;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
   border-radius: 5px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -245,27 +449,27 @@ async function openFile(): Promise<void> {
 }
 .msg {
   padding: 12px 8px;
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 12px;
 }
 .actions {
   display: flex;
   gap: 6px;
   padding: 6px 8px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
 }
 .act {
   flex: 1;
-  background: #0d1117;
-  color: #c9d1d9;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: 5px;
   font-size: 11px;
   padding: 5px 6px;
   cursor: pointer;
 }
 .act:hover:not(:disabled) {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .act:disabled {
   opacity: 0.5;

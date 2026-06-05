@@ -116,6 +116,11 @@ All outputs are passed between stages. Claude's Stage 02 design docs automatical
 
 ### Prerequisites
 
+On first launch the app runs an **Onboarding Wizard** that detects the tools
+below, offers one-click installs for what's missing, and hard-blocks the main UI
+until the required environment is ready (re-runnable from Settings → Appearance →
+Environment; set `AGENT_TEAM_SKIP_ONBOARDING=1` to bypass).
+
 | Tool | Version |
 |---|---|
 | Node.js | 22+ |

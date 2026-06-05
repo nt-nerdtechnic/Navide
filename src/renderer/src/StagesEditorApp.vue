@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
+import { useNotify } from './composables/useNotify'
+import NotificationHost from './components/NotificationHost.vue'
 import { useStages } from './composables/useStages'
 import { stageToBackend, type AgentKey, type Stage, type StageSlot } from './data/stages'
 
 const backend = useBackend()
 const stagesApi = useStages(backend)
+const notify = useNotify()
 
 const AGENT_OPTIONS: { key: AgentKey; label: string }[] = [
   { key: 'claude', label: 'Claude Code' },
@@ -19,10 +22,8 @@ const selectedId = ref<string | null>(null)
 const draft = ref<Stage | null>(null)
 const isNew = ref(false)
 const saving = ref(false)
-const lastError = ref('')
 const confirmingDelete = ref(false)
 const confirmingReset = ref(false)
-const lastSummary = ref('')
 
 // Per-slot form state for the "Add Slot" inline form
 const addingSlot = ref(false)
@@ -66,7 +67,6 @@ watch(
 
 function selectStage(id: string | null): void {
   selectedId.value = id
-  lastError.value = ''
   addingSlot.value = false
   if (id === null) {
     draft.value = null
@@ -81,7 +81,6 @@ function selectStage(id: string | null): void {
 
 function startNew(): void {
   selectedId.value = null
-  lastError.value = ''
   addingSlot.value = false
   isNew.value = true
   draft.value = {
@@ -102,17 +101,16 @@ function startNew(): void {
 async function save(): Promise<void> {
   if (!draft.value || !canSave.value) return
   saving.value = true
-  lastError.value = ''
   try {
     const payload = stageToBackend({ ...draft.value, id: draft.value.id.trim() })
     const resp = await backend.send<{ stage: Record<string, unknown> }>('stages.upsert', {
       stage: payload
     })
     if (!resp.ok || !resp.payload) {
-      lastError.value = resp.error?.message ?? 'Save failed'
+      notify.toast(resp.error?.message ?? 'Save failed', { type: 'error' })
       return
     }
-    lastSummary.value = `Saved stage "${draft.value.title}"`
+    notify.toast(`Saved stage "${draft.value.title}"`, { type: 'success' })
     isNew.value = false
     selectStage(draft.value.id.trim())
   } finally {
@@ -129,10 +127,10 @@ async function doDelete(): Promise<void> {
   const resp = await backend.send<{ stages: unknown[] }>('stages.delete', { id })
   confirmingDelete.value = false
   if (!resp.ok) {
-    lastError.value = resp.error?.message ?? 'Delete failed'
+    notify.toast(resp.error?.message ?? 'Delete failed', { type: 'error' })
     return
   }
-  lastSummary.value = `Deleted stage "${id}"`
+  notify.toast(`Deleted stage "${id}"`, { type: 'success' })
   selectStage(stagesApi.stages.value[0]?.id ?? null)
 }
 
@@ -140,10 +138,10 @@ async function doReset(): Promise<void> {
   const resp = await backend.send<{ stages: unknown[] }>('stages.reset', {})
   confirmingReset.value = false
   if (!resp.ok) {
-    lastError.value = resp.error?.message ?? 'Reset failed'
+    notify.toast(resp.error?.message ?? 'Reset failed', { type: 'error' })
     return
   }
-  lastSummary.value = 'Reset to factory defaults'
+  notify.toast('Reset to factory defaults', { type: 'success' })
   selectStage(stagesApi.stages.value[0]?.id ?? null)
 }
 
@@ -193,7 +191,6 @@ const importing = ref(false)
 async function exportStages(): Promise<void> {
   if (!window.agentTeam?.saveJson) return
   exportBusy.value = true
-  lastError.value = ''
   try {
     const envelope = {
       format_version: 1,
@@ -208,9 +205,9 @@ async function exportStages(): Promise<void> {
       content: JSON.stringify(envelope, null, 2)
     })
     if (result.ok) {
-      lastSummary.value = `Exported ${envelope.stages.length} stage(s) → ${result.path}`
+      notify.toast(`Exported ${envelope.stages.length} stage(s) → ${result.path}`, { type: 'success' })
     } else if (result.error) {
-      lastError.value = `Export failed: ${result.error}`
+      notify.toast(`Export failed: ${result.error}`, { type: 'error' })
     }
   } finally {
     exportBusy.value = false
@@ -220,18 +217,17 @@ async function exportStages(): Promise<void> {
 async function importStages(): Promise<void> {
   if (!window.agentTeam?.openJson) return
   importing.value = true
-  lastError.value = ''
   try {
     const result = await window.agentTeam.openJson({ title: 'Import stages JSON' })
     if (!result.ok || !result.content) {
-      if (result.error) lastError.value = `Import failed: ${result.error}`
+      if (result.error) notify.toast(`Import failed: ${result.error}`, { type: 'error' })
       return
     }
     let parsed: unknown
     try {
       parsed = JSON.parse(result.content)
     } catch (err) {
-      lastError.value = `Invalid JSON: ${(err as Error).message}`
+      notify.toast(`Invalid JSON: ${(err as Error).message}`, { type: 'error' })
       return
     }
     const raw: unknown[] = Array.isArray(parsed)
@@ -240,7 +236,7 @@ async function importStages(): Promise<void> {
         ? (parsed as { stages: unknown[] }).stages
         : []
     if (raw.length === 0) {
-      lastError.value = 'No stages found in file'
+      notify.toast('No stages found in file', { type: 'error' })
       return
     }
     let ok = 0
@@ -253,7 +249,9 @@ async function importStages(): Promise<void> {
       if (resp.ok) ok++
       else failed++
     }
-    lastSummary.value = `Imported ${ok} stage(s)` + (failed ? ` · ${failed} failed` : '')
+    notify.toast(`Imported ${ok} stage(s)` + (failed ? ` · ${failed} failed` : ''), {
+      type: failed ? 'info' : 'success'
+    })
   } finally {
     importing.value = false
   }
@@ -294,8 +292,6 @@ const statusColor = computed(() => {
       </div>
     </header>
 
-    <div v-if="lastSummary" class="banner ok">{{ lastSummary }}</div>
-    <div v-if="lastError" class="banner err-banner">{{ lastError }}</div>
 
     <div class="body">
       <!-- Left: stage list -->
@@ -446,6 +442,7 @@ const statusColor = computed(() => {
         </div>
       </div>
     </div>
+    <NotificationHost />
   </div>
 </template>
 
@@ -509,20 +506,6 @@ const statusColor = computed(() => {
   display: grid;
   grid-template-columns: 300px 1fr;
   min-height: 0;
-}
-.banner {
-  padding: 8px 16px;
-  font-size: 12px;
-  border-bottom: 1px solid #21262d;
-  flex-shrink: 0;
-}
-.banner.ok {
-  background: #0d2818;
-  color: #3fb950;
-}
-.banner.err-banner {
-  background: #2a0d0d;
-  color: #f85149;
 }
 .list {
   display: flex;

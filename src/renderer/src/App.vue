@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import ControlPane, {
@@ -16,8 +16,11 @@ import QuestionAlert from './components/QuestionAlert.vue'
 import CompletionModal from './components/CompletionModal.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import NotificationHost from './components/NotificationHost.vue'
+import OnboardingWizard from './components/OnboardingWizard.vue'
 import Welcome from './components/Welcome.vue'
 import { useBackend } from './composables/useBackend'
+import { useTheme } from './composables/useTheme'
 import { useRoles } from './composables/useRoles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
@@ -47,6 +50,37 @@ const rolesApi = useRoles(backend)
 const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
+const themeApi = useTheme()
+
+// Apply the theme as early as possible (localStorage → default 'dark-github').
+// The backend backup is adopted later, only if localStorage held nothing.
+onMounted(() => {
+  themeApi.loadTheme()
+})
+
+// ── First-run onboarding gate ────────────────────────────────────────────────
+// `null` = not yet checked. When the backend connects we ask whether the
+// environment setup is complete; if not, OnboardingWizard hard-blocks the shell.
+const onboardingComplete = ref<boolean | null>(null)
+async function checkOnboarding(): Promise<void> {
+  try {
+    const resp = await backend.send<{ complete?: boolean; skip?: boolean }>('onboarding.status', {})
+    onboardingComplete.value = resp.payload?.complete ?? true
+  } catch {
+    // If the check fails, don't lock the user out — fail open.
+    onboardingComplete.value = true
+  }
+}
+watch(
+  () => backend.status.value,
+  (s) => {
+    if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+  },
+  { immediate: true },
+)
+function reopenOnboarding(): void {
+  onboardingComplete.value = false
+}
 
 // --- Workspace-first entry gate (phase-4) ------------------------------------
 // The Welcome screen is shown until a workspace is chosen. Selection is kept in
@@ -83,6 +117,18 @@ function onWorkspaceSelected(path: string): void {
     /* sessionStorage unavailable — non-fatal, just won't survive reload */
   }
 }
+
+// Best-effort backup of theme prefs to the workspace JSON (source of truth stays
+// in localStorage). Fires whenever the active theme or custom overrides change.
+watch(
+  [themeApi.theme, themeApi.customOverrides],
+  () => {
+    if (currentWorkspace.value) {
+      void themeApi.syncToBackend(backend.send, currentWorkspace.value)
+    }
+  },
+  { deep: true },
+)
 
 function roleLabel(key: string): string {
   if (!key) return 'No role'
@@ -245,6 +291,7 @@ function resolveCommand(agentKey: string, override: string): string {
 
 type InjectionStatus = 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
 type KickoffStatus = 'none' | 'pending' | 'sent' | 'failed'
+type PreparationStatus = 'starting' | 'checking-dialog' | 'settling' | 'injecting-role' | 'waiting-agent' | 'ready' | 'failed'
 
 interface ActivePane {
   id: string
@@ -259,6 +306,7 @@ interface ActivePane {
   workspacePath: string
   origin: 'manual' | 'pipeline'
   injectionStatus: InjectionStatus
+  preparationStatus: PreparationStatus
   injectionTimer: number | null
   kickoffStatus: KickoffStatus
   kickoffPrompt: string
@@ -319,6 +367,7 @@ function syncViews(): void {
       status: (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
       error: ref?.error as string | undefined,
       injectionStatus: p.injectionStatus,
+      preparationStatus: p.preparationStatus,
       kickoffStatus: p.kickoffStatus,
       origin: p.origin,
       isCommander: paneIsCommander(p),
@@ -639,6 +688,22 @@ async function waitForQuiet(
   }
 }
 
+async function waitForStartupActivity(paneId: string, timeoutMs = 30_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!paneAlive(paneId)) return false
+    const ref = paneRefs[paneId]
+    if (!ref) return false
+    const status = ref.status as unknown as string
+    if (status === 'error' || status === 'exited') return false
+    const cleanSize = ((ref.cleanBuffer as unknown as string) ?? '').length
+    const rawAt = Number((ref.lastRawActivityAt as unknown as number | undefined) ?? 0)
+    if (cleanSize > 0 || rawAt > 0) return true
+    await sleep(250)
+  }
+  return false
+}
+
 // Global injection semaphore — at most 2 panes may inject simultaneously.
 // Without this, all 6+ pre-spawned panes send role prompts at the same moment,
 // flooding the WS connection and causing some 512-byte chunks to timeout/drop.
@@ -689,6 +754,7 @@ async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<
 
 function scheduleInjection(pane: ActivePane): void {
   pane.injectionStatus = 'scheduled'
+  pane.preparationStatus = 'checking-dialog'
   syncViews()
   const tag = `[pane ${pane.id.slice(0, 8)}]`
   ;(async () => {
@@ -712,6 +778,8 @@ function scheduleInjection(pane: ActivePane): void {
     //    finish rendering their first screen. Shorter after a known dismiss
     //    since the CLI usually transitions to a stable prompt immediately.
     const settleMs = dismissed ? 2500 : ROLE_PROMPT_DELAY_MS
+    pane.preparationStatus = 'settling'
+    syncViews()
     await sleep(settleMs)
     if (!paneAlive(pane.id)) return
 
@@ -719,6 +787,7 @@ function scheduleInjection(pane: ActivePane): void {
     //    will receive role + kickoff together at activation time.
     if (!pane.roleKey) {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
       syncViews()
       pipelineLog(`${tag} ⏸ no role selected — skipping role injection`)
       if (pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
@@ -728,6 +797,7 @@ function scheduleInjection(pane: ActivePane): void {
     }
     if (pane.skipRoleInjection) {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
       syncViews()
       pipelineLog(`${tag} ⏸ role deferred (pre-spawn — will inject at stage activation)`)
       return
@@ -735,6 +805,7 @@ function scheduleInjection(pane: ActivePane): void {
     const role = rolesApi.find(pane.roleKey)
     if (!role) {
       pane.injectionStatus = 'failed'
+      pane.preparationStatus = 'failed'
       syncViews()
       pipelineLog(`${tag} ✕ role '${pane.roleKey}' not found in registry`)
       return
@@ -745,6 +816,8 @@ function scheduleInjection(pane: ActivePane): void {
     // for this slot's stage to activate (which for late stages is much later).
     const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting role '${role.label}' (${roleContent.length} chars)`)
+    pane.preparationStatus = 'injecting-role'
+    syncViews()
     await acquireInjectionSlot()
     let ok: boolean
     try {
@@ -756,6 +829,7 @@ function scheduleInjection(pane: ActivePane): void {
       releaseInjectionSlot()
     }
     pane.injectionStatus = ok ? 'sent' : 'failed'
+    pane.preparationStatus = ok ? 'ready' : 'failed'
     syncViews()
     if (ok && pane.origin === 'manual' && pane.agentKey === 'claude' && pane.pinnedSessionId) {
       void persistPaneSession(pane, pane.pinnedSessionId)
@@ -775,6 +849,8 @@ function scheduleInjection(pane: ActivePane): void {
     //    the agent's role-acknowledgement output.
     if (pane.kickoffStatus === 'pending') {
       pipelineLog(`${tag} waiting for agent to acknowledge role (up to 30s)`)
+      pane.preparationStatus = 'waiting-agent'
+      syncViews()
       const result = await waitForActivityThenSettle(pane.id, 2500, 30_000)
       if (!paneAlive(pane.id)) return
       if (result === 'no-activity') {
@@ -800,6 +876,7 @@ function scheduleInjection(pane: ActivePane): void {
         }
       }
       pane.kickoffStatus = ok2 ? 'sent' : 'failed'
+      pane.preparationStatus = ok2 ? 'ready' : 'failed'
       syncViews()
       if (!ok2) {
         pipelineLog(`${tag} ✕ kickoff injection failed after ${MAX_KICKOFF_ATTEMPTS} attempts — arming watcher anyway`)
@@ -850,6 +927,42 @@ function sessionMarkerLine(marker?: string): string {
   return marker ? `\n\n<!-- agent-team-session: ${marker} -->` : ''
 }
 
+async function sendSessionMarkerBootstrap(pane: ActivePane, tag: string): Promise<boolean> {
+  const markerText = sessionMarkerLine(pane.sessionMarker).trim()
+  if (!markerText) return false
+  try {
+    await dismissStartupDialog(pane.id, DISMISS_TIMEOUT_MS)
+    if (!(await waitForStartupActivity(pane.id))) {
+      pipelineLog(`${tag} ⚠ no startup activity detected — session marker not sent`)
+      return false
+    }
+    await waitForQuiet(pane.id, 1000, 8000)
+    if (!paneAlive(pane.id)) return false
+    const ref = paneRefs[pane.id]
+    if (!ref?.sessionId) return false
+    backend.send('terminal.log_sent', {
+      terminal_session_id: ref.sessionId as string,
+      label: `session-marker:${pane.agentKey}`,
+      text: markerText
+    }).catch(() => {/* ignore */})
+    await backend.send('terminal.input', {
+      terminal_session_id: ref.sessionId as string,
+      data: BRACKETED_PASTE_START + markerText + BRACKETED_PASTE_END
+    })
+    await sleep(250)
+    await backend.send('terminal.input', {
+      terminal_session_id: ref.sessionId as string,
+      data: '\r'
+    })
+    pipelineLog(`${tag} ✓ session marker sent for resume capture`)
+    return true
+  } catch (err) {
+    console.error('[sendSessionMarkerBootstrap] failed:', err)
+    pipelineLog(`${tag} ⚠ session marker send failed — resume id may stay unknown`)
+    return false
+  }
+}
+
 async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const spec = agentSpecs.find((s) => s.agentKey === opts.agentKey)
   if (!spec) return null
@@ -884,6 +997,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     workspacePath: opts.workspacePath,
     origin: opts.origin,
     injectionStatus: 'pending',
+    preparationStatus: 'starting',
     injectionTimer: null,
     kickoffStatus: opts.kickoffPrompt ? 'pending' : 'none',
     kickoffPrompt: opts.kickoffPrompt ?? '',
@@ -945,9 +1059,19 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       outputLogFile
     })
     if ((ref.status as unknown as string) === 'running') {
+      if (pane.origin === 'manual' && !pane.roleKey && !pane.kickoffPrompt) {
+        pane.injectionStatus = 'skipped'
+        pane.preparationStatus = 'ready'
+        syncViews()
+        if (pane.agentKey === 'claude' && pane.pinnedSessionId) {
+          void persistPaneSession(pane, pane.pinnedSessionId)
+        }
+        return id
+      }
       scheduleInjection(pane)
     } else {
       pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'failed'
     }
   } finally {
     syncViews()
@@ -976,6 +1100,10 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
           ? ''
           : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
     })
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
+      void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
+    }
   }
 }
 
@@ -1229,6 +1357,8 @@ interface ProjectPayload {
     layout_mode?: string
     pipeline_id?: string
     run_count?: number
+    theme?: string
+    theme_custom?: Record<string, string>
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
@@ -1339,6 +1469,10 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
+    // Adopt the backend theme backup only if localStorage held nothing
+    // (load order: localStorage → backend → default). loadTheme() is a no-op
+    // for theme when localStorage already wins, so this is safe to call here.
+    themeApi.loadTheme({ theme: resp.project.theme, theme_custom: resp.project.theme_custom })
     const savedMode = resp.project.layout_mode
     if (savedMode === 'auto' || savedMode === 'grid' || savedMode === 'spotlight' || savedMode === 'fullscreen') {
       layoutMode.value = savedMode
@@ -4081,11 +4215,31 @@ const latestPipelineLog = computed<string>(() => {
 })
 
 function paneSubtitle(p: ActivePane): string {
-  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual`
+  const preparationLabel = panePreparationLabel(p)
+  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual · ${preparationLabel}`
   const stage = stagesApi.stageById.value[p.stageId] ?? { shortTitle: p.stageId }
   const prefix = p.origin === 'pipeline' ? `P${p.stageId} · ` : ''
   const stageLabel = stage.shortTitle || 'manual'
-  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel}`
+  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel} · ${preparationLabel}`
+}
+
+function panePreparationLabel(p: ActivePane): string {
+  switch (p.preparationStatus) {
+    case 'starting':
+      return 'starting CLI'
+    case 'checking-dialog':
+      return 'checking startup dialog'
+    case 'settling':
+      return 'waiting for CLI prompt'
+    case 'injecting-role':
+      return 'injecting role'
+    case 'waiting-agent':
+      return 'waiting for agent'
+    case 'ready':
+      return 'ready'
+    case 'failed':
+      return 'setup failed'
+  }
 }
 
 /** The effective Commander slot for a stage, or null. Commander mode only applies
@@ -4111,6 +4265,12 @@ function paneIsCommander(p: ActivePane): boolean {
 </script>
 
 <template>
+  <!-- First-run environment wizard: hard-blocks the shell until complete. -->
+  <OnboardingWizard
+    v-if="onboardingComplete === false"
+    :backend="backend"
+    @complete="onboardingComplete = true"
+  />
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <ControlPane
       ref="controlPaneRef"
@@ -4128,6 +4288,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :analyzer-status="analyzerStatus"
       :pipelines="pipelinesApi.pipelines.value"
       :active-pipeline-id="pipelinesApi.activePipelineId.value"
+      :backend="backend"
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
       v-model:auto-answer-enabled="autoAnswerEnabled"
@@ -4209,6 +4370,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :pipelines-api="pipelinesApi"
       @close="showSettings = false"
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
+      @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
     />
     <Teleport v-if="showHistory" to="body">
       <div class="history-overlay" @click.self="showHistory = false">
@@ -4439,6 +4601,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :workspace-path="pipeline.workspacePath"
       :stages="stagesApi.stages.value"
       :panes="paneViews"
+      :pipeline="pipelineView"
       v-model:expanded="tokenPanelExpanded"
     />
     <Welcome
@@ -4469,6 +4632,7 @@ function paneIsCommander(p: ActivePane): boolean {
     </Teleport>
     <div class="resize-handle resize-handle-left" @mousedown="onResizeStart($event, 'left')" />
     <div v-if="tokenPanelExpanded" class="resize-handle resize-handle-right" @mousedown="onResizeStart($event, 'right')" />
+    <NotificationHost />
   </div>
 </template>
 
@@ -4480,8 +4644,8 @@ function paneIsCommander(p: ActivePane): boolean {
   grid-template-columns: var(--left-width, 360px) 1fr var(--token-panel-width, 36px);
   position: relative;
   height: 100vh;
-  background: #010409;
-  color: #e6edf3;
+  background: var(--bg-inset);
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   overflow: hidden;
 }
@@ -4585,20 +4749,20 @@ function paneIsCommander(p: ActivePane): boolean {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 8px 10px;
-  background: #0d1117;
-  border-top: 1px solid #21262d;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-muted);
   scrollbar-width: thin;
-  scrollbar-color: #30363d transparent;
+  scrollbar-color: var(--border-default) transparent;
 }
 .spotlight-strip::-webkit-scrollbar { height: 4px; }
 .spotlight-strip::-webkit-scrollbar-track { background: transparent; }
-.spotlight-strip::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+.spotlight-strip::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 2px; }
 .spotlight-thumb {
   flex-shrink: 0;
   width: 160px;
   height: 84px;
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 6px;
   padding: 9px 12px;
   cursor: pointer;
@@ -4614,7 +4778,7 @@ function paneIsCommander(p: ActivePane): boolean {
   background: #1a2332;
 }
 .spotlight-thumb--active {
-  border-color: #388bfd;
+  border-color: var(--accent-focus);
   box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.25);
   background: #1a2332;
 }
@@ -4634,8 +4798,8 @@ function paneIsCommander(p: ActivePane): boolean {
 .spotlight-thumb-pipe-tag {
   font-size: 8px;
   font-weight: 700;
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -4643,14 +4807,14 @@ function paneIsCommander(p: ActivePane): boolean {
 .spotlight-thumb-name {
   font-size: 11px;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--text-bright);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .spotlight-thumb-role {
   font-size: 9px;
-  color: #8b949e;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4662,13 +4826,13 @@ function paneIsCommander(p: ActivePane): boolean {
   align-self: flex-start;
   margin-top: auto;
 }
-.spotlight-thumb-badge[data-status="running"]  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
-.spotlight-thumb-badge[data-status="idle"]     { background: #2d2100; color: #e3b341; border: 1px solid #9e6a03; }
-.spotlight-thumb-badge[data-status="starting"] { background: #0d1a2d; color: #58a6ff; border: 1px solid #1f6feb; }
+.spotlight-thumb-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
+.spotlight-thumb-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
+.spotlight-thumb-badge[data-status="starting"] { background: #0d1a2d; color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
 .spotlight-thumb-badge[data-status="error"],
-.spotlight-thumb-badge[data-status="stopped"]  { background: #3d0d0d; color: #f85149; border: 1px solid #da3633; }
+.spotlight-thumb-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
 .spotlight-strip-empty {
-  color: #484f58;
+  color: var(--text-disabled);
   font-size: 11px;
   padding: 0 8px;
 }
@@ -4686,7 +4850,7 @@ function paneIsCommander(p: ActivePane): boolean {
   gap: 4px;
   overflow-y: auto;
   padding: 8px 6px;
-  background: #0d1117;
+  background: var(--bg-base);
   min-width: 140px;
 }
 .meeting-item {
@@ -4695,17 +4859,17 @@ function paneIsCommander(p: ActivePane): boolean {
   gap: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-muted);
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
   min-width: 0;
 }
 .meeting-item:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
   border-color: #388bfd66;
 }
 .meeting-item--active {
-  border-color: #388bfd;
+  border-color: var(--accent-focus);
   background: #1a2332;
   box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
 }
@@ -4714,8 +4878,8 @@ function paneIsCommander(p: ActivePane): boolean {
   height: 28px;
   border-radius: 50%;
   background: #1a2332;
-  border: 1px solid #30363d;
-  color: #58a6ff;
+  border: 1px solid var(--border-default);
+  color: var(--accent-fg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4739,15 +4903,15 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-pipe-tag {
   font-size: 9px;
   font-weight: 700;
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
 }
 .meeting-name {
   font-size: 12px;
-  color: #e6edf3;
+  color: var(--text-bright);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4755,7 +4919,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .meeting-sub {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4767,13 +4931,13 @@ function paneIsCommander(p: ActivePane): boolean {
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
-.meeting-badge[data-status="running"]  { background: #0d2818; color: #3fb950; border: 1px solid #238636; }
-.meeting-badge[data-status="idle"]     { background: #2d2100; color: #e3b341; border: 1px solid #9e6a03; }
-.meeting-badge[data-status="stopped"]  { background: #3d0d0d; color: #f85149; border: 1px solid #da3633; }
-.meeting-badge[data-status="starting"] { background: #0d1a2d; color: #58a6ff; border: 1px solid #1f6feb; }
-.meeting-badge[data-status="error"]    { background: #3d0d0d; color: #ffa198; border: 1px solid #da3633; }
+.meeting-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
+.meeting-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
+.meeting-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
+.meeting-badge[data-status="starting"] { background: #0d1a2d; color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
+.meeting-badge[data-status="error"]    { background: var(--danger-subtle); color: var(--danger-bright); border: 1px solid var(--danger-emphasis); }
 .meeting-empty {
-  color: #484f58;
+  color: var(--text-disabled);
   font-size: 11px;
   text-align: center;
   padding: 16px 8px;
@@ -4788,11 +4952,11 @@ function paneIsCommander(p: ActivePane): boolean {
   position: absolute;
   z-index: 30;
   min-width: 160px;
-  background: #0d1117ee;
-  border: 1px solid #30363d;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 8px 32px var(--shadow-overlay);
   backdrop-filter: blur(8px);
 }
 .float-pip-resize {
@@ -4802,8 +4966,8 @@ function paneIsCommander(p: ActivePane): boolean {
   width: 14px;
   height: 14px;
   cursor: nwse-resize;
-  background: linear-gradient(135deg, transparent 40%, #444d56 40%, #444d56 60%, transparent 60%),
-              linear-gradient(135deg, transparent 60%, #444d56 60%, #444d56 80%, transparent 80%);
+  background: linear-gradient(135deg, transparent 40%, var(--border-default) 40%, var(--border-default) 60%, transparent 60%),
+              linear-gradient(135deg, transparent 60%, var(--border-default) 60%, var(--border-default) 80%, transparent 80%);
   opacity: 0.5;
   border-radius: 0 0 8px 0;
 }
@@ -4813,25 +4977,25 @@ function paneIsCommander(p: ActivePane): boolean {
   justify-content: space-between;
   padding: 7px 10px;
   cursor: move;
-  background: #161b22;
-  border-bottom: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
   user-select: none;
 }
 .float-pip-title {
   font-size: 11px;
   font-weight: 600;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .float-pip-toggle {
   background: none;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 12px;
   padding: 0 2px;
   line-height: 1;
 }
-.float-pip-toggle:hover { color: #e6edf3; }
+.float-pip-toggle:hover { color: var(--text-bright); }
 .float-pip-list {
   display: flex;
   flex-direction: column;
@@ -4850,9 +5014,9 @@ function paneIsCommander(p: ActivePane): boolean {
   text-align: center;
   max-width: 520px;
   padding: 28px 32px;
-  border: 1px dashed #30363d;
+  border: 1px dashed var(--border-default);
   border-radius: 8px;
-  background: #0d1117;
+  background: var(--bg-base);
 }
 .empty-card h2 {
   margin: 0 0 12px;
@@ -4861,17 +5025,17 @@ function paneIsCommander(p: ActivePane): boolean {
 .empty-card p {
   margin: 8px 0;
   font-size: 13px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   text-align: left;
 }
 .empty-card .muted {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 .empty-card.loading-card {
   border-style: solid;
   border-color: #1f6feb55;
-  background: linear-gradient(180deg, #0d1117 0%, #0d1730 100%);
+  background: linear-gradient(180deg, var(--bg-base) 0%, #0d1730 100%);
 }
 .empty-card.loading-card h2 {
   text-align: center;
@@ -4881,9 +5045,9 @@ function paneIsCommander(p: ActivePane): boolean {
   text-align: center;
   font-family: Menlo, Monaco, monospace;
   font-size: 12px;
-  color: #79c0ff;
-  background: #0a1426;
-  border: 1px solid #1f3a5f;
+  color: var(--accent-bright);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-muted);
   border-radius: 4px;
   padding: 8px 12px;
   margin: 12px 0;
@@ -4899,8 +5063,8 @@ function paneIsCommander(p: ActivePane): boolean {
   width: 38px;
   height: 38px;
   margin: 0 auto;
-  border: 3px solid #1f3a5f;
-  border-top-color: #58a6ff;
+  border: 3px solid var(--accent-muted);
+  border-top-color: var(--accent-fg);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
@@ -4912,32 +5076,32 @@ function paneIsCommander(p: ActivePane): boolean {
 .history-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1100;
 }
 .history-modal {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   width: min(680px, 92vw);
   height: min(560px, 85vh);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 12px 48px var(--shadow-overlay);
 }
 .history-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-muted);
   font-size: 13px;
   font-weight: 600;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .history-header-left {
   display: flex;
@@ -4947,7 +5111,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .history-killall {
   background: transparent;
   border: 1px solid #6e363666;
-  color: #f85149;
+  color: var(--danger-fg);
   font-size: 11px;
   padding: 2px 10px;
   border-radius: 4px;
@@ -4956,21 +5120,21 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .history-killall:hover {
   background: #6e363622;
-  border-color: #f85149;
+  border-color: var(--danger-fg);
   opacity: 1;
 }
 .history-close {
   background: transparent;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
 }
 .history-close:hover {
-  color: #e6edf3;
-  background: #21262d;
+  color: var(--text-bright);
+  background: var(--bg-muted);
 }
 .agent-history-list {
   flex: 1;
@@ -4978,20 +5142,20 @@ function paneIsCommander(p: ActivePane): boolean {
   padding: 8px 0;
 }
 .agent-history-empty {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 12px;
   text-align: center;
   padding: 24px;
 }
 .agent-history-row {
   padding: 8px 14px;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--bg-subtle);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 .agent-history-row.active {
-  border-left: 3px solid #3fb950;
+  border-left: 3px solid var(--success-fg);
   padding-left: 11px;
 }
 .agent-history-main {
@@ -5001,32 +5165,32 @@ function paneIsCommander(p: ActivePane): boolean {
   flex-wrap: wrap;
 }
 .ah-badge {
-  background: #21262d;
-  border: 1px solid #30363d;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 1px 6px;
   font-size: 11px;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .ah-badge.ah-role {
-  color: #79c0ff;
+  color: var(--accent-bright);
   border-color: #388bfd55;
 }
 .ah-origin {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .ah-status {
   font-size: 10px;
   font-weight: 600;
 }
-.ah-status.active { color: #3fb950; }
-.ah-status.removed { color: #6e7681; }
+.ah-status.active { color: var(--success-fg); }
+.ah-status.removed { color: var(--text-muted); }
 .agent-history-meta {
   display: flex;
   gap: 10px;
   font-size: 10px;
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .ah-session {
   font-family: monospace;
@@ -5046,34 +5210,34 @@ function paneIsCommander(p: ActivePane): boolean {
   border-radius: 20px;
   border: 1px solid #388bfd66;
   background: #388bfd14;
-  color: #79c0ff;
+  color: var(--accent-bright);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 .ah-revive:hover {
   background: #388bfd28;
-  border-color: #79c0ff;
+  border-color: var(--accent-bright);
   color: #cae8ff;
 }
 .stall-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 1100;
 }
 .stall-card {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-left: 4px solid #f0883e;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-left: 4px solid var(--warning-fg);
   border-radius: 8px;
   width: min(520px, 92vw);
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 12px 48px var(--shadow-overlay);
   overflow: hidden;
 }
 .stall-card header {
@@ -5081,18 +5245,18 @@ function paneIsCommander(p: ActivePane): boolean {
   align-items: center;
   gap: 8px;
   padding: 14px 18px;
-  border-bottom: 1px solid #21262d;
-  background: #161b22;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-subtle);
 }
 .stall-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #f0883e;
+  background: var(--warning-fg);
   box-shadow: 0 0 0 4px rgba(240, 136, 62, 0.2);
 }
 .stall-slot {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .stall-body {
@@ -5104,12 +5268,12 @@ function paneIsCommander(p: ActivePane): boolean {
 .stall-title {
   font-size: 14px;
   font-weight: 600;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .stall-reason {
   font-family: Menlo, Monaco, monospace;
   font-size: 12px;
-  color: #f0883e;
+  color: var(--warning-fg);
   background: #21130d;
   border: 1px solid #4d2818;
   border-radius: 4px;
@@ -5118,15 +5282,15 @@ function paneIsCommander(p: ActivePane): boolean {
 .stall-hint {
   margin: 0;
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-secondary);
   line-height: 1.6;
 }
 .stall-hint strong {
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .stall-auto {
   font-size: 12px;
-  color: #79c0ff;
+  color: var(--accent-bright);
   font-weight: 500;
 }
 .stall-card footer {
@@ -5134,13 +5298,13 @@ function paneIsCommander(p: ActivePane): boolean {
   gap: 8px;
   justify-content: flex-end;
   padding: 12px 18px;
-  border-top: 1px solid #21262d;
-  background: #0d1117;
+  border-top: 1px solid var(--border-muted);
+  background: var(--bg-base);
 }
 .stall-btn {
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #e6edf3;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-bright);
   font-size: 12px;
   padding: 8px 16px;
   border-radius: 4px;
@@ -5148,20 +5312,20 @@ function paneIsCommander(p: ActivePane): boolean {
   font-weight: 500;
 }
 .stall-btn.primary {
-  background: #238636;
-  border-color: #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border-color: var(--success-emphasis);
+  color: var(--text-on-emphasis);
 }
 .stall-btn.primary:hover {
-  background: #2ea043;
+  background: var(--success-emphasis);
 }
 .stall-btn.danger {
-  background: #6f1f1f;
-  border-color: #8a2929;
+  background: var(--danger-muted);
+  border-color: var(--danger-muted);
   color: #f4d2d2;
 }
 .stall-btn.danger:hover {
-  background: #8a2929;
+  background: var(--danger-muted);
 }
 </style>
 <style>
@@ -5170,6 +5334,6 @@ body,
 #app {
   margin: 0;
   height: 100%;
-  background: #010409;
+  background: var(--bg-inset);
 }
 </style>

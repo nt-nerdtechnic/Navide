@@ -151,7 +151,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
 .welcome-overlay {
   position: fixed;
   inset: 0;
-  background: #010409;
+  background: var(--bg-inset);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -161,12 +161,12 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
   width: 560px;
   max-height: 86vh;
   overflow-y: auto;
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
   border-radius: 12px;
   padding: 28px 32px;
-  color: #e6edf3;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  color: var(--text-bright);
+  box-shadow: 0 16px 48px var(--shadow-overlay);
 }
 .w-head h1 {
   margin: 0;
@@ -175,7 +175,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
 }
 .tagline {
   margin: 4px 0 0;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 .w-open,
@@ -185,7 +185,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
 .w-open h2,
 .w-recent h2 {
   font-size: 13px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-weight: 600;
   margin: 0 0 10px;
 }
@@ -194,28 +194,28 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
   gap: 10px;
 }
 button.primary {
-  background: #238636;
-  border: 1px solid #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border: 1px solid var(--success-strong);
+  color: var(--text-on-emphasis);
   padding: 8px 16px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
 }
 button.primary:hover:not(:disabled) {
-  background: #2ea043;
+  background: var(--success-strong);
 }
 button.ghost {
   background: transparent;
-  border: 1px solid #30363d;
-  color: #c9d1d9;
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
   padding: 8px 16px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
 }
 button.ghost:hover:not(:disabled) {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 button:disabled {
   opacity: 0.5;
@@ -239,8 +239,8 @@ button:disabled {
   cursor: pointer;
 }
 .recent-item:hover {
-  background: #161b22;
-  border-color: #30363d;
+  background: var(--bg-subtle);
+  border-color: var(--border-default);
 }
 .recent-item.stale {
   opacity: 0.55;
@@ -248,14 +248,14 @@ button:disabled {
 .pin {
   background: transparent;
   border: none;
-  color: #6e7681;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 15px;
   line-height: 1.4;
   padding: 0;
 }
 .pin.on {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .r-body {
   flex: 1;
@@ -275,33 +275,33 @@ button:disabled {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 10px;
-  background: #21262d;
-  color: #8b949e;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
 }
 .r-badge.completed {
-  color: #3fb950;
+  color: var(--success-fg);
   background: #11331b;
 }
 .r-badge.running {
-  color: #58a6ff;
-  background: #0d2845;
+  color: var(--accent-fg);
+  background: var(--accent-subtle);
 }
 .r-badge.aborted {
-  color: #d29922;
+  color: var(--attention-fg);
   background: #341a00;
 }
 .r-missing {
   font-size: 10px;
-  color: #f85149;
+  color: var(--danger-fg);
 }
 .r-time {
   margin-left: auto;
   font-size: 11px;
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .r-path {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
   overflow: hidden;
@@ -309,7 +309,7 @@ button:disabled {
 }
 .r-task {
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   margin-top: 2px;
 }
 .r-delete {
@@ -324,35 +324,35 @@ button:disabled {
   align-self: center;
 }
 .recent-item:hover .r-delete {
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .r-delete:hover {
-  color: #f85149 !important;
-  background: #21262d;
+  color: var(--danger-fg) !important;
+  background: var(--bg-muted);
 }
 .w-empty {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
 }
 .w-error {
-  color: #f85149;
+  color: var(--danger-fg);
   font-size: 12px;
 }
 .w-foot {
   margin-top: 24px;
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
   padding-top: 14px;
 }
 button.link {
   background: transparent;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 12px;
   padding: 0;
 }
 button.link:hover {
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 </style>

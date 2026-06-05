@@ -51,6 +51,12 @@ from .stages_store import StagesStore
 from .terminals import TerminalService
 from .tokens_store import TokensStore
 from .history_store import HistoryStore
+from . import git_service
+from . import fs_service
+from . import search_service
+from . import editor_service
+from . import onboarding_deps
+from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
 
@@ -120,6 +126,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
 _readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
+_git_watcher: GitWatcher | None = None
 
 
 # Module-level registry of all currently-connected WebSocket sessions so that
@@ -151,6 +158,11 @@ class Session:
             await self.websocket.send_json(event)
         except Exception as err:  # noqa: BLE001
             log.warning("send_event failed: %s", err)
+
+
+async def _broadcast_git_changed(ws_path: str) -> None:
+    """GitWatcher sink: a repo's working tree / .git changed on disk."""
+    await broadcast(make_event("git.changed", {"workspace_path": ws_path}))
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
@@ -293,6 +305,15 @@ async def _start_log_watcher() -> None:
     for r in _readers:
         _log_watcher.add_reader(r)
     _log_watcher.start()
+
+    # Git filesystem watcher: fires `git.changed` near-instantly when the
+    # working tree or `.git` state changes on disk (external edits, another
+    # terminal running git). Workspaces are registered lazily on first
+    # git.status — see the WebSocket handler.
+    global _git_watcher
+    _git_watcher = GitWatcher(_broadcast_git_changed)
+    _git_watcher.start()
+
     # Start MCP servers in the background so they're ready for the first pipeline run.
     asyncio.create_task(mcp_manager.startup())
 
@@ -309,11 +330,14 @@ async def _start_log_watcher() -> None:
 
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
-    global _log_watcher
+    global _log_watcher, _git_watcher
     if _log_watcher is not None:
         _log_watcher.stop()
+    if _git_watcher is not None:
+        _git_watcher.stop()
     await mcp_manager.shutdown()
     _log_watcher = None
+    _git_watcher = None
 
 
 @app.get("/health")
@@ -737,6 +761,21 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             project = project_store.peek(ws_raw)
             if project:
                 project.layout_mode = mode
+                project_store.save(project)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.set_theme":
+            # Backup-only persistence: localStorage in the renderer is the source
+            # of truth. We just stash the latest theme + custom overrides so they
+            # can sync across devices. Unknown workspace → silently no-op.
+            ws_raw = payload.get("workspace_path", "") or ""
+            project = project_store.peek(ws_raw)
+            if project:
+                theme = payload.get("theme")
+                if isinstance(theme, str) and theme:
+                    project.theme = theme
+                custom = payload.get("theme_custom")
+                if isinstance(custom, dict):
+                    project.theme_custom = custom
                 project_store.save(project)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "pipeline.slot_kickoff":
@@ -1282,6 +1321,563 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, {"ok": True})
             )
+
+        # -------- git --------
+        elif msg_type == "git.init":
+            ws_path = payload.get("workspace_path") or ""
+            create_gi = bool(payload.get("create_gitignore", True))
+            result = await git_service.init_repo(ws_path, create_gitignore=create_gi)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.status":
+            ws_path = payload.get("workspace_path") or ""
+            # The GitPane is now looking at this workspace — start (idempotently)
+            # watching it on disk so external changes refresh near-instantly.
+            if _git_watcher is not None:
+                _git_watcher.watch(ws_path)
+            include_ignored = bool(payload.get("include_ignored", False))
+            result = await git_service.get_status(ws_path, include_ignored=include_ignored)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.log":
+            ws_path = payload.get("workspace_path") or ""
+            n = int(payload.get("n", 20))
+            all_branches = bool(payload.get("all", False))
+            result = await git_service.get_log(ws_path, n, all_branches)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": result}))
+
+        elif msg_type == "git.stage":
+            ws_path = payload.get("workspace_path") or ""
+            files = payload.get("files") or []
+            result = await git_service.stage_files(ws_path, files)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.unstage":
+            ws_path = payload.get("workspace_path") or ""
+            files = payload.get("files") or []
+            result = await git_service.unstage_files(ws_path, files)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.stage_all":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.stage_all(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.commit":
+            ws_path = payload.get("workspace_path") or ""
+            message = payload.get("message") or ""
+            commit_all = bool(payload.get("all"))
+            result = await git_service.commit(ws_path, message, commit_all)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.sync":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.sync(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.generate_message":
+            ws_path = payload.get("workspace_path") or ""
+            ollama_url = _az_base_url()
+            model = payload.get("model") or "llama3.2"
+            attempt_count = int(payload.get("attempt_count") or 0)
+            result = await git_service.generate_commit_message(ws_path, ollama_url, model, attempt_count)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.discard":
+            ws_path = payload.get("workspace_path") or ""
+            files = payload.get("files") or []
+            result = await git_service.discard_changes(ws_path, files)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.fetch":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.fetch(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.pull":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.pull_only(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.push":
+            ws_path = payload.get("workspace_path") or ""
+            remote = payload.get("remote") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.push_only(ws_path, remote, branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.branches":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.list_branches(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.create_branch":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            switch_to = bool(payload.get("switch_to", True))
+            result = await git_service.create_branch(ws_path, name, switch_to=switch_to)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.switch_branch":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            result = await git_service.switch_branch(ws_path, name)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.delete_branch":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            force = bool(payload.get("force", False))
+            result = await git_service.delete_branch(ws_path, name, force=force)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.stash_list":
+            ws_path = payload.get("workspace_path") or ""
+            entries = await git_service.stash_list(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"stashes": entries}))
+
+        elif msg_type == "git.stash":
+            ws_path = payload.get("workspace_path") or ""
+            message = payload.get("message") or ""
+            paths = payload.get("paths") or None
+            result = await git_service.stash_push(ws_path, message, paths)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.stash_pop":
+            ws_path = payload.get("workspace_path") or ""
+            index = int(payload.get("index", 0))
+            result = await git_service.stash_pop(ws_path, index)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.stash_drop":
+            ws_path = payload.get("workspace_path") or ""
+            index = int(payload.get("index", 0))
+            result = await git_service.stash_drop(ws_path, index)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.amend":
+            ws_path = payload.get("workspace_path") or ""
+            message = payload.get("message") or ""
+            result = await git_service.amend_commit(ws_path, message)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.undo_commit":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.undo_last_commit(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.diff_file":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            staged = bool(payload.get("staged", False))
+            result = await git_service.diff_file(ws_path, filepath, staged=staged)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.diff_blame":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            staged = bool(payload.get("staged", False))
+            result = await git_service.diff_blame(ws_path, filepath, staged=staged)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.merge":
+            ws_path = payload.get("workspace_path") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.merge_branch(ws_path, branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.revert":
+            ws_path = payload.get("workspace_path") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            result = await git_service.revert_commit(ws_path, commit_hash)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.remotes":
+            ws_path = payload.get("workspace_path") or ""
+            remotes = await git_service.list_remotes(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"remotes": remotes}))
+
+        elif msg_type == "git.add_remote":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            url = payload.get("url") or ""
+            result = await git_service.add_remote(ws_path, name, url)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.remove_remote":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            result = await git_service.remove_remote(ws_path, name)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.cherry_pick":
+            ws_path = payload.get("workspace_path") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            result = await git_service.cherry_pick(ws_path, commit_hash)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.tags":
+            ws_path = payload.get("workspace_path") or ""
+            tags = await git_service.list_tags(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"tags": tags}))
+
+        elif msg_type == "git.create_tag":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            message = payload.get("message") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            result = await git_service.create_tag(ws_path, name, message, commit_hash)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.delete_tag":
+            ws_path = payload.get("workspace_path") or ""
+            name = payload.get("name") or ""
+            result = await git_service.delete_tag(ws_path, name)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.file_log":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            n = int(payload.get("n", 15))
+            commits = await git_service.file_log(ws_path, filepath, n)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": commits}))
+
+        elif msg_type == "git.show_file":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            rev = payload.get("rev") or "HEAD"
+            result = await git_service.show_file(ws_path, filepath, rev)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.resolve_ours":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.resolve_conflict_ours(ws_path, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.resolve_theirs":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.resolve_conflict_theirs(ws_path, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.clean":
+            ws_path = payload.get("workspace_path") or ""
+            dry_run = bool(payload.get("dry_run", True))
+            result = await git_service.clean_untracked(ws_path, dry_run=dry_run)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok") and not dry_run:
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.show_commit":
+            ws_path = payload.get("workspace_path") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            result = await git_service.show_commit(ws_path, commit_hash)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.worktrees":
+            ws_path = payload.get("workspace_path") or ""
+            entries = await git_service.list_worktrees(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"worktrees": entries}))
+
+        elif msg_type == "git.add_worktree":
+            ws_path = payload.get("workspace_path") or ""
+            wt_path = payload.get("worktree_path") or ""
+            branch = payload.get("branch") or ""
+            new_branch = bool(payload.get("new_branch", False))
+            result = await git_service.add_worktree(ws_path, wt_path, branch, new_branch=new_branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.remove_worktree":
+            ws_path = payload.get("workspace_path") or ""
+            wt_path = payload.get("worktree_path") or ""
+            force = bool(payload.get("force", False))
+            result = await git_service.remove_worktree(ws_path, wt_path, force=force)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.config_get":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.get_config(ws_path)
+            result["allowed_keys"] = sorted(git_service._ALLOWED_CONFIG_KEYS)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.config_set":
+            ws_path = payload.get("workspace_path") or ""
+            key = payload.get("key") or ""
+            value = payload.get("value") or ""
+            result = await git_service.set_config(ws_path, key, value)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.blame":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.blame_file(ws_path, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.compare_branches":
+            ws_path = payload.get("workspace_path") or ""
+            base = payload.get("base") or ""
+            compare = payload.get("compare") or ""
+            result = await git_service.compare_branches(ws_path, base, compare)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.rebase":
+            ws_path = payload.get("workspace_path") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.rebase_on(ws_path, branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.restore_from_branch":
+            ws_path = payload.get("workspace_path") or ""
+            branch = payload.get("branch") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.restore_file_from_branch(ws_path, branch, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.push_upstream":
+            ws_path = payload.get("workspace_path") or ""
+            branch = payload.get("branch") or ""
+            remote = payload.get("remote") or "origin"
+            result = await git_service.push_set_upstream(ws_path, branch, remote)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.apply_patch":
+            ws_path = payload.get("workspace_path") or ""
+            patch = payload.get("patch") or ""
+            reverse = bool(payload.get("reverse", False))
+            cached = bool(payload.get("cached", True))
+            result = await git_service.apply_patch(ws_path, patch, reverse=reverse, cached=cached)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.clone":
+            url = payload.get("url") or ""
+            target_dir = payload.get("target_dir") or ""
+            result = await git_service.clone_repo(url, target_dir)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.ignore":
+            ws_path = payload.get("workspace_path") or ""
+            pattern = payload.get("pattern") or ""
+            target = payload.get("target") or "project"
+            untrack = bool(payload.get("untrack", True))
+            result = await git_service.add_to_gitignore(ws_path, pattern, target=target, untrack=untrack)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.check_ignore":
+            ws_path = payload.get("workspace_path") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.check_ignore(ws_path, filepath)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.abort":
+            ws_path = payload.get("workspace_path") or ""
+            op = payload.get("op") or ""
+            result = await git_service.abort_operation(ws_path, op)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.stash_apply":
+            ws_path = payload.get("workspace_path") or ""
+            index = int(payload.get("index", 0))
+            result = await git_service.stash_apply(ws_path, index)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.pull_rebase":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.pull_rebase(ws_path)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.push_force":
+            ws_path = payload.get("workspace_path") or ""
+            remote = payload.get("remote") or ""
+            branch = payload.get("branch") or ""
+            result = await git_service.push_force(ws_path, remote, branch)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        # ── Explorer filesystem (fs.*) ──────────────────────────────────────
+        elif msg_type == "fs.list_dir":
+            ws_path = payload.get("workspace_path") or ""
+            rel = payload.get("rel_path", "") or ""
+            show_hidden = bool(payload.get("show_hidden", False))
+            result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "fs.mkdir":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.mkdir(ws_path, payload.get("rel_path", "") or "")
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.create_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.create_file(
+                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.rename":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.rename(
+                ws_path, payload.get("src_path", "") or "", payload.get("dst_path", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.delete":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.delete(ws_path, payload.get("rel_path", "") or "")
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.write_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.write_file(
+                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "fs.read_file":
+            ws_path = payload.get("workspace_path") or ""
+            result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "")
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        # ── Search (search.*) ───────────────────────────────────────────────
+        elif msg_type == "search.find_in_files":
+            result = await asyncio.to_thread(
+                search_service.find_in_files,
+                payload.get("workspace_path") or "",
+                payload.get("query", "") or "",
+                is_regex=bool(payload.get("is_regex")),
+                case_sensitive=bool(payload.get("case_sensitive")),
+                whole_word=bool(payload.get("whole_word")),
+                includes=payload.get("includes", "") or "",
+                excludes=payload.get("excludes", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "search.replace_in_files":
+            ws_path = payload.get("workspace_path") or ""
+            result = await asyncio.to_thread(
+                search_service.replace_in_files,
+                ws_path,
+                payload.get("query", "") or "",
+                payload.get("replacement", "") or "",
+                payload.get("files", []) or [],
+                is_regex=bool(payload.get("is_regex")),
+                case_sensitive=bool(payload.get("case_sensitive")),
+                whole_word=bool(payload.get("whole_word")),
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok") and result.get("total"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        # ── Editor AI (editor.*) ────────────────────────────────────────────
+        elif msg_type == "editor.rewrite":
+            result = await editor_service.rewrite(
+                _az_base_url(),
+                payload.get("model") or "llama3.2",
+                payload.get("code", "") or "",
+                payload.get("instruction", "") or "",
+                payload.get("language", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "editor.complete":
+            result = await editor_service.complete(
+                _az_base_url(),
+                payload.get("model") or "llama3.2",
+                payload.get("prefix", "") or "",
+                payload.get("suffix", "") or "",
+                payload.get("language", "") or "",
+            )
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        # ── Onboarding (onboarding.*) ───────────────────────────────────────
+        elif msg_type == "onboarding.status":
+            status = await asyncio.to_thread(onboarding_deps.get_status)
+            status["complete"] = onboarding_deps.is_complete()
+            status["skip"] = onboarding_deps.should_skip()
+            await session.websocket.send_json(make_response(msg_id, msg_type, status))
+
+        elif msg_type == "onboarding.install":
+            dep_id = payload.get("dep_id", "") or ""
+            result = await asyncio.to_thread(onboarding_deps.install_dep, dep_id)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "onboarding.pull_model":
+            model = payload.get("model", "") or onboarding_deps._SUGGESTED_MODEL
+            result = onboarding_deps.pull_model(model)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "onboarding.complete":
+            onboarding_deps.set_complete(bool(payload.get("complete", True)))
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         else:
             await session.websocket.send_json(

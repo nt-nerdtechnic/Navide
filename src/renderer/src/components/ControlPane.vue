@@ -2,7 +2,10 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
-import type { BackendStatus } from '../composables/useBackend'
+import GitPane from './GitPane.vue'
+import ExplorerPane from './ExplorerPane.vue'
+import SearchPane from './SearchPane.vue'
+import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
 
@@ -25,6 +28,7 @@ export interface ActivePaneView {
   status: string
   error?: string
   injectionStatus: 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
+  preparationStatus?: 'starting' | 'checking-dialog' | 'settling' | 'injecting-role' | 'waiting-agent' | 'ready' | 'failed'
   kickoffStatus?: 'none' | 'pending' | 'sent' | 'failed'
   origin: 'manual' | 'pipeline'
   /** True when this pane corresponds to a slot marked is_commander=true in
@@ -131,6 +135,8 @@ interface Props {
   pipelines?: PipelineSummary[]
   /** Currently active pipeline id (global). */
   activePipelineId?: string
+  /** Full backend instance — forwarded to GitPane for git operations. */
+  backend?: ReturnType<typeof useBackend>
 }
 
 const props = defineProps<Props>()
@@ -278,58 +284,27 @@ watch(workspacePath, (v) => {
   }, 400)
 }, { immediate: true })
 
-// Classify a supervision-log line so errors stand out (red) and warnings
-// (yellow) from the normal grey flow. Matches the markers pipelineLog() emits:
-// ❌/✕/✗ + words like error/failed/threw/exception/unreachable/rejection → error;
-// ⚠ → warning. Everything else stays default.
-function logLevel(line: string): '' | 'is-error' | 'is-warn' {
-  if (/❌|✕|✗|exception|unreachable|rejection|\berror\b|\bfailed\b|\bthrew\b/i.test(line)) {
-    return 'is-error'
-  }
-  if (/⚠/.test(line)) return 'is-warn'
-  return ''
-}
-
-// Auto-scroll pipeline log to bottom whenever a new entry arrives.
-const pipelineLogRef = ref<HTMLElement | null>(null)
-watch(
-  () => props.pipeline.log.length,
-  async () => {
-    await nextTick()
-    if (pipelineLogRef.value) {
-      pipelineLogRef.value.scrollTop = pipelineLogRef.value.scrollHeight
-    }
-  }
-)
-
 defineExpose({ openPipelineDetail })
 
-function shortPath(p: string): string {
-  if (!p) return ''
-  const home = '/Users/'
-  if (p.startsWith(home)) {
-    const rest = p.slice(home.length)
-    const slash = rest.indexOf('/')
-    if (slash > 0) return '~/' + rest.slice(slash + 1)
-  }
-  return p
-}
-
-async function openPath(p: string): Promise<void> {
-  if (!p) return
-  if (!window.agentTeam?.openPath) {
-    // Fallback: copy to clipboard
-    try {
-      await navigator.clipboard.writeText(p)
-    } catch {
-      /* ignore */
-    }
-    return
-  }
-  await window.agentTeam.openPath(p)
-}
 const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
+
+// ── Top-level tab: pipeline | git ─────────────────────────────────────────────
+const _TAB_KEY = 'agentTeam.sidebarTab'
+type SidebarTab = 'explorer' | 'search' | 'pipeline' | 'git'
+const sidebarTab = ref<SidebarTab>(
+  (() => {
+    try {
+      const v = sessionStorage.getItem(_TAB_KEY) as SidebarTab | null
+      // Backward-compat: unknown / legacy values fall back to 'pipeline'.
+      return v === 'explorer' || v === 'search' || v === 'pipeline' || v === 'git' ? v : 'pipeline'
+    } catch { return 'pipeline' }
+  })()
+)
+watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /* ignore */ } })
+
+// Git tab badge — updated by GitPane via changes-count event
+const gitChangesCount = ref(0)
 
 // ── Pipeline two-layer navigation ─────────────────────────────────────────────
 const sidebarView = ref<'list' | 'pipeline'>('list')
@@ -494,6 +469,27 @@ function injectionLabel(status: ActivePaneView['injectionStatus']): string {
   }
 }
 
+function preparationLabel(status: ActivePaneView['preparationStatus']): string {
+  switch (status) {
+    case 'starting':
+      return 'setup: starting CLI'
+    case 'checking-dialog':
+      return 'setup: checking dialog'
+    case 'settling':
+      return 'setup: waiting prompt'
+    case 'injecting-role':
+      return 'setup: injecting role'
+    case 'waiting-agent':
+      return 'setup: waiting agent'
+    case 'ready':
+      return 'setup: ready'
+    case 'failed':
+      return 'setup: failed'
+    default:
+      return ''
+  }
+}
+
 function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   if (!status || status === 'none') return ''
   switch (status) {
@@ -537,6 +533,50 @@ function onTaskDrop(e: DragEvent): void {
       </div>
       <div class="build-tag" title="目前執行的 build 版本">🏷 build {{ buildTag }}</div>
     </header>
+
+    <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
+    <div class="sidebar-tabs">
+      <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer" @click="sidebarTab = 'explorer'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
+      </button>
+      <button :class="['tab-btn', { active: sidebarTab === 'search' }]" title="搜尋（跨檔）" @click="sidebarTab = 'search'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.75.75 0 1 1-1.06 1.06l-3.04-3.04ZM11.5 7a4.5 4.5 0 1 0-9 0 4.5 4.5 0 0 0 9 0Z"/></svg>
+      </button>
+      <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline" @click="sidebarTab = 'pipeline'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
+      </button>
+      <button :class="['tab-btn', { active: sidebarTab === 'git' }]" title="Git" @click="sidebarTab = 'git'">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
+        <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
+      </button>
+    </div>
+
+    <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
+    <ExplorerPane
+      v-if="sidebarTab === 'explorer' && backend"
+      :workspace-path="workspace ?? ''"
+      :backend="backend"
+    />
+
+    <!-- ── Search tab ─────────────────────────────────────────────────────── -->
+    <SearchPane
+      v-if="sidebarTab === 'search' && backend"
+      :workspace-path="workspace ?? ''"
+      :backend="backend"
+    />
+
+    <!-- ── Git tab ────────────────────────────────────────────────────────── -->
+    <GitPane
+      v-if="sidebarTab === 'git' && backend"
+      :workspace-path="workspace ?? ''"
+      :analyzer-model="analyzerModel"
+      :backend="backend"
+      @changes-count="gitChangesCount = $event"
+      @open-workspace="$emit('workspace-browse', $event)"
+    />
+
+    <!-- ── Pipeline tab (all existing content) ───────────────────────────── -->
+    <template v-if="sidebarTab === 'pipeline'">
 
     <section v-if="sidebarView === 'list'" class="block panel-section">
       <label class="lbl">Workspace</label>
@@ -673,9 +713,6 @@ function onTaskDrop(e: DragEvent): void {
         <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
           Pipeline aborted. Agents are kept — Resume to continue, or Reset to clear.
         </p>
-        <div v-if="pipeline.log.length > 0" ref="pipelineLogRef" class="pipeline-log">
-          <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
-        </div>
       </template>
     </section>
 
@@ -827,34 +864,6 @@ function onTaskDrop(e: DragEvent): void {
       <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
         Provide task description + workspace, then start.
       </p>
-      <div v-if="pipeline.projectId && openedPipelineId === activePipelineId" class="paths">
-        <div class="paths-line">
-          <span class="paths-key">project</span>
-          <code :title="pipeline.projectFile">{{ shortPath(pipeline.projectFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">events</span>
-          <code :title="pipeline.pipelineLogFile">{{ shortPath(pipeline.pipelineLogFile) }}</code>
-        </div>
-        <div class="paths-line">
-          <span class="paths-key">backend</span>
-          <code :title="pipeline.backendLogFile">{{ shortPath(pipeline.backendLogFile) }}</code>
-        </div>
-        <div class="row tight">
-          <button class="ghost" @click="openPath(pipeline.projectFile)" title="Open project.json">
-            📄 project.json
-          </button>
-          <button class="ghost" @click="openPath(pipeline.pipelineLogFile)" title="Open pipeline.log">
-            📜 pipeline.log
-          </button>
-          <button class="ghost" @click="openPath(pipeline.backendLogFile)" title="Open backend.log">
-            🪵 backend.log
-          </button>
-        </div>
-      </div>
-      <div v-if="pipeline.log.length > 0 && openedPipelineId === activePipelineId" ref="pipelineLogRef" class="pipeline-log">
-        <div v-for="(line, i) in pipeline.log" :key="i" class="pipeline-log-line" :class="logLevel(line)">{{ line }}</div>
-      </div>
       </template>
     </section>
 
@@ -883,10 +892,10 @@ function onTaskDrop(e: DragEvent): void {
             <span class="badge manager-badge" title="本階段的 Manager — 控場、決定 ---STAGE-DONE---">🎯 Manager</span>
           </div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-else-if="!p.isMinimized" class="stage-line">
-            manual · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
           <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
@@ -955,6 +964,8 @@ function onTaskDrop(e: DragEvent): void {
       </template>
     </section>
 
+    </template><!-- end sidebarTab === 'pipeline' -->
+
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
         <div class="restart-card">
@@ -989,14 +1000,61 @@ function onTaskDrop(e: DragEvent): void {
   flex-direction: column;
   gap: 12px;
   padding: 14px;
-  background: #0d1117;
-  border-right: 1px solid #21262d;
-  color: #c9d1d9;
+  background: var(--bg-base);
+  border-right: 1px solid var(--border-muted);
+  color: var(--text-primary);
   font-size: 12px;
   overflow-y: auto;
 }
+
+/* ── Sidebar top-level tabs ─────────────────────────────────────── */
+.sidebar-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-muted);
+  margin: -4px -14px 0;
+  padding: 4px 10px 6px;
+}
+.tab-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.tab-btn:hover { color: var(--text-primary); background: var(--bg-elevated); }
+.tab-btn.active {
+  color: var(--text-bright);
+  background: var(--bg-muted);
+}
+.git-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--attention-fg);
+  color: var(--bg-base);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0 3px;
+  line-height: 1;
+  border: 1px solid var(--bg-base);
+}
 .brand {
-  border-bottom: 1px solid #21262d;
+  border-bottom: 1px solid var(--border-muted);
   padding-bottom: 10px;
 }
 .brand-row {
@@ -1008,7 +1066,7 @@ function onTaskDrop(e: DragEvent): void {
   margin-left: auto;
   background: none;
   border: none;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
   padding: 2px 4px;
@@ -1017,8 +1075,8 @@ function onTaskDrop(e: DragEvent): void {
   transition: color 0.15s, background 0.15s;
 }
 .gear-btn:hover {
-  color: #e6edf3;
-  background: #21262d;
+  color: var(--text-bright);
+  background: var(--bg-muted);
 }
 .brand h2 {
   margin: 0;
@@ -1031,13 +1089,13 @@ function onTaskDrop(e: DragEvent): void {
   border-radius: 50%;
 }
 .brand-sub {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
   margin-top: 4px;
   word-break: break-all;
 }
 .build-tag {
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 10px;
   margin-top: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1049,14 +1107,14 @@ function onTaskDrop(e: DragEvent): void {
   gap: 6px;
 }
 .panel-section {
-  border: 1px solid #30363d;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   padding: 8px 10px;
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .section-divider {
   border: none;
-  border-top: 1px solid #30363d;
+  border-top: 1px solid var(--border-default);
   margin: 8px 0;
 }
 .lbl {
@@ -1064,7 +1122,7 @@ function onTaskDrop(e: DragEvent): void {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 button.collapsible-header {
   background: transparent;
@@ -1074,14 +1132,14 @@ button.collapsible-header {
   text-align: left;
 }
 button.collapsible-header:hover {
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 input[type='text'],
 select,
 textarea {
-  background: #161b22;
-  border: 1px solid #30363d;
-  color: #e6edf3;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-bright);
   padding: 6px 8px;
   border-radius: 4px;
   font-family: inherit;
@@ -1097,11 +1155,11 @@ input[type='text']:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: #1f6feb;
+  border-color: var(--accent-emphasis);
 }
 textarea.drag-over {
-  border-color: #388bfd;
-  box-shadow: inset 0 0 0 1px #388bfd, 0 0 0 2px #388bfd44;
+  border-color: var(--accent-focus);
+  box-shadow: inset 0 0 0 1px var(--accent-focus), 0 0 0 2px #388bfd44;
 }
 .row {
   display: flex;
@@ -1144,7 +1202,7 @@ textarea.drag-over {
   gap: 8px;
   margin-top: 6px;
   font-size: 11px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   cursor: pointer;
   user-select: none;
 }
@@ -1152,11 +1210,11 @@ textarea.drag-over {
   width: 14px;
   height: 14px;
   margin-top: 2px;
-  accent-color: #d29922;
+  accent-color: var(--attention-fg);
   flex-shrink: 0;
 }
 .checkbox-row strong {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .analyzer-row {
   display: flex;
@@ -1179,11 +1237,11 @@ textarea.drag-over {
   flex-shrink: 0;
 }
 .muted-inline {
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 10px;
 }
 .muted-inline {
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 10px;
 }
 .pipeline-row {
@@ -1191,9 +1249,9 @@ textarea.drag-over {
 }
 
 button {
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #e6edf3;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-bright);
   font-size: 12px;
   padding: 6px 10px;
   border-radius: 4px;
@@ -1207,32 +1265,32 @@ button.wide {
   flex: 1;
 }
 button.primary {
-  background: #238636;
-  border-color: #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border-color: var(--success-strong);
+  color: var(--text-on-emphasis);
   font-weight: 600;
 }
 button.primary:not(:disabled):hover {
-  background: #2ea043;
+  background: var(--success-strong);
 }
 button.danger {
-  background: #6f1f1f;
-  border-color: #8a2929;
+  background: var(--danger-deep);
+  border-color: var(--danger-muted);
   color: #f4d2d2;
 }
 button.danger:hover {
-  background: #8a2929;
+  background: var(--danger-muted);
 }
 button.ghost {
   background: transparent;
 }
 button.ghost:hover:not(:disabled) {
-  background: #21262d;
+  background: var(--bg-muted);
 }
 button.link {
   background: transparent;
   border: none;
-  color: #58a6ff;
+  color: var(--accent-fg);
   font-size: 11px;
   padding: 2px 4px;
   text-align: left;
@@ -1244,8 +1302,8 @@ button.link {
 }
 button.history-btn {
   background: transparent;
-  border: 1px solid #30363d;
-  color: #8b949e;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
   font-size: 12px;
   padding: 0 8px;
   height: 32px;
@@ -1255,9 +1313,9 @@ button.history-btn {
   align-items: center;
 }
 button.history-btn:hover {
-  color: #e6edf3;
-  border-color: #58a6ff;
-  background: #161b22;
+  color: var(--text-bright);
+  border-color: var(--accent-fg);
+  background: var(--bg-subtle);
 }
 button.icon-btn {
   background: transparent;
@@ -1271,7 +1329,7 @@ button.icon-btn {
 }
 button.icon-btn:hover {
   opacity: 1;
-  background: #21262d;
+  background: var(--bg-muted);
 }
 button.icon-btn.muted {
   opacity: 0.3;
@@ -1280,16 +1338,16 @@ button.icon-btn.muted:hover {
   opacity: 0.8;
 }
 .hint {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
   margin: 0;
   line-height: 1.5;
 }
 .hint.warn {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .hint.ok {
-  color: #3fb950;
+  color: var(--success-fg);
 }
 /* ── Pipeline list styles ──────────────────────────────────────────────────── */
 .pipeline-pagination {
@@ -1311,7 +1369,7 @@ button.icon-btn.muted:hover {
 }
 .pg-info {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-secondary);
   min-width: 36px;
   text-align: center;
 }
@@ -1329,33 +1387,33 @@ button.icon-btn.muted:hover {
   gap: 6px;
   padding: 6px 8px;
   border-radius: 4px;
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   cursor: pointer;
   transition: background 0.1s;
 }
 .pipeline-item:hover {
-  background: #1c2128;
-  border-color: #30363d;
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
 }
 .pipeline-item.pipeline-active {
-  border-color: #1f6feb;
-  background: #0d1a2e;
+  border-color: var(--accent-emphasis);
+  background: var(--accent-subtle);
 }
 .pipeline-item-name {
   flex: 1;
   font-size: 12px;
-  color: #e6edf3;
+  color: var(--text-bright);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pipeline-active .pipeline-item-name {
-  color: #79c0ff;
+  color: var(--accent-bright);
 }
 .pipeline-item-meta {
   font-size: 10px;
-  color: #6e7681;
+  color: var(--text-muted);
   white-space: nowrap;
 }
 .pipeline-item-badge {
@@ -1363,13 +1421,13 @@ button.icon-btn.muted:hover {
   white-space: nowrap;
 }
 .pipeline-item-badge.running {
-  color: #3fb950;
+  color: var(--success-fg);
 }
 .pipeline-item-badge.idle {
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .pipeline-item-badge.done {
-  color: #58a6ff;
+  color: var(--accent-fg);
 }
 .new-pipeline-row {
   margin-top: 6px;
@@ -1377,10 +1435,10 @@ button.icon-btn.muted:hover {
 }
 .new-pipeline-input {
   flex: 1;
-  background: #010409;
-  border: 1px solid #1f6feb;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-emphasis);
   border-radius: 4px;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-size: 12px;
   padding: 4px 6px;
 }
@@ -1398,15 +1456,15 @@ button.icon-btn.muted:hover {
 .back-btn {
   font-size: 11px;
   padding: 2px 6px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .back-btn:hover {
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .pipeline-detail-name {
   font-size: 13px;
   font-weight: 600;
-  color: #79c0ff;
+  color: var(--accent-bright);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1420,7 +1478,7 @@ button.icon-btn.muted:hover {
 }
 .active-tag {
   font-size: 10px;
-  color: #3fb950;
+  color: var(--success-fg);
   background: #1a2e1a;
   border: 1px solid #2ea04355;
   border-radius: 3px;
@@ -1429,16 +1487,16 @@ button.icon-btn.muted:hover {
 }
 .rename-input {
   flex: 1;
-  background: #010409;
-  border: 1px solid #1f6feb;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-emphasis);
   border-radius: 4px;
-  color: #e6edf3;
+  color: var(--text-bright);
   font-size: 12px;
   padding: 3px 6px;
 }
 .hint code,
 .agent-cmd code {
-  background: #161b22;
+  background: var(--bg-subtle);
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 10px;
@@ -1458,7 +1516,7 @@ button.icon-btn.muted:hover {
 .resume-card {
   background: #1a2030;
   border: 1px solid #2d3f5f;
-  border-left: 3px solid #58a6ff;
+  border-left: 3px solid var(--accent-fg);
   border-radius: 4px;
   padding: 8px 10px;
   margin-bottom: 8px;
@@ -1467,7 +1525,7 @@ button.icon-btn.muted:hover {
   gap: 6px;
 }
 .resume-card.done {
-  border-left-color: #3fb950;
+  border-left-color: var(--success-fg);
 }
 .resume-card.done .done-header {
   display: flex;
@@ -1479,7 +1537,7 @@ button.icon-btn.muted:hover {
   align-items: center;
   gap: 8px;
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .resume-state {
   margin-left: auto;
@@ -1487,31 +1545,31 @@ button.icon-btn.muted:hover {
   text-transform: uppercase;
   padding: 2px 6px;
   border-radius: 999px;
-  background: #21262d;
+  background: var(--bg-muted);
 }
 .resume-state[data-state='running'] {
-  background: #1f6f43;
+  background: var(--success-muted);
   color: #d2f4dc;
 }
 .resume-state[data-state='aborted'] {
-  background: #6f1f1f;
+  background: var(--danger-deep);
   color: #f4d2d2;
 }
 .resume-state[data-state='completed'] {
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
 }
 .resume-meta {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .resume-meta .dot {
   margin: 0 4px;
 }
 .resume-task {
   font-size: 11px;
-  color: #c9d1d9;
-  background: #010409;
+  color: var(--text-primary);
+  background: var(--bg-inset);
   padding: 6px 8px;
   border-radius: 3px;
   white-space: pre-wrap;
@@ -1521,20 +1579,20 @@ button.icon-btn.muted:hover {
 .restart-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 200;
 }
 .restart-card {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-left: 4px solid #f85149;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-left: 4px solid var(--danger-fg);
   border-radius: 8px;
   padding: 20px 22px;
   width: min(480px, 90vw);
-  color: #e6edf3;
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
@@ -1546,15 +1604,15 @@ button.icon-btn.muted:hover {
 .restart-card p {
   margin: 8px 0;
   line-height: 1.6;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .restart-card .restart-warn {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
 }
 .restart-task {
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
   padding: 8px 10px;
   font-family: Menlo, Monaco, monospace;
@@ -1571,7 +1629,7 @@ button.icon-btn.muted:hover {
   margin-top: 12px;
 }
 .pipeline-running-divider {
-  border-top: 1px solid #21262d;
+  border-top: 1px solid var(--border-muted);
   margin: 8px 0;
 }
 .pipeline-running-name {
@@ -1583,12 +1641,12 @@ button.icon-btn.muted:hover {
 .prn-title {
   font-size: 11px;
   font-weight: 600;
-  color: #3fb950;
+  color: var(--success-fg);
   letter-spacing: 0.02em;
 }
 .prn-task {
   font-size: 11px;
-  color: #e6edf3;
+  color: var(--text-bright);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1597,13 +1655,13 @@ button.icon-btn.muted:hover {
 }
 .prn-meta {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .prn-auto {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .prn-manual {
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .pipeline-running {
   display: flex;
@@ -1612,14 +1670,14 @@ button.icon-btn.muted:hover {
 }
 .progress {
   height: 6px;
-  background: #161b22;
+  background: var(--bg-subtle);
   border-radius: 999px;
   overflow: hidden;
 }
 .progress .bar {
   position: relative;
   height: 100%;
-  background: linear-gradient(90deg, #1f6feb 0%, #388bfd 40%, #3fb950 100%);
+  background: linear-gradient(90deg, var(--accent-emphasis) 0%, var(--accent-focus) 40%, var(--success-fg) 100%);
   background-size: 200% 100%;
   transition: width 300ms ease;
   animation: bar-flow 2.5s linear infinite, bar-pulse 2s ease-in-out infinite;
@@ -1653,61 +1711,11 @@ button.icon-btn.muted:hover {
   font-weight: 600;
 }
 .pipeline-line .muted {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-weight: 400;
 }
-.pipeline-log {
-  background: #010409;
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin-top: 4px;
-  max-height: 200px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 10px;
-}
-.pipeline-log-line {
-  color: #8b949e;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.pipeline-log-line.is-error {
-  color: #f85149;
-  font-weight: 600;
-}
-.pipeline-log-line.is-warn {
-  color: #d29922;
-}
-.paths {
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: #010409;
-  border-radius: 4px;
-  font-family: Menlo, Monaco, 'Courier New', monospace;
-  font-size: 10px;
-}
-.paths-line {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 2px;
-  align-items: baseline;
-}
-.paths-key {
-  color: #8b949e;
-  width: 50px;
-  flex-shrink: 0;
-}
-.paths code {
-  color: #e6edf3;
-  background: transparent;
-  padding: 0;
-  word-break: break-all;
-  font-size: 10px;
-}
 .empty {
-  color: #6e7681;
+  color: var(--text-muted);
   font-style: italic;
   padding: 8px 0;
 }
@@ -1720,14 +1728,14 @@ button.icon-btn.muted:hover {
   gap: 8px;
 }
 .agent-item {
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
   padding: 8px 10px;
 }
 .agent-item.pipeline {
-  border-color: #1f3a5f;
-  background: linear-gradient(180deg, #0d1f2f 0%, #161b22 100%);
+  border-color: var(--accent-muted);
+  background: linear-gradient(180deg, #0d1f2f 0%, var(--bg-subtle) 100%);
 }
 .agent-item.manager {
   border-color: rgba(216, 180, 109, 0.5);
@@ -1745,32 +1753,32 @@ button.icon-btn.muted:hover {
   margin-left: -4px;
 }
 .agent-line:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .stage-line {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
   margin-bottom: 4px;
 }
 .pipe-tag {
   font-size: 9px;
   font-weight: 700;
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
   padding: 1px 5px;
   border-radius: 3px;
 }
 .badge {
   font-weight: 600;
   font-size: 10px;
-  background: #21262d;
+  background: var(--bg-muted);
   padding: 2px 6px;
   border-radius: 4px;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .badge.role {
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-muted);
+  color: var(--accent-bright);
 }
 .badge.manager-badge {
   background: rgba(216, 180, 109, 0.15);
@@ -1789,19 +1797,19 @@ button.icon-btn.muted:hover {
   text-transform: uppercase;
   padding: 2px 6px;
   border-radius: 999px;
-  background: #21262d;
-  color: #8b949e;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
 }
 .state[data-state='running'] {
-  background: #1f6f43;
+  background: var(--success-muted);
   color: #d2f4dc;
 }
 .state[data-state='starting'] {
-  background: #6f5b1f;
+  background: var(--attention-muted);
   color: #f4ecd2;
 }
 .state[data-state='error'] {
-  background: #6f1f1f;
+  background: var(--danger-deep);
   color: #f4d2d2;
 }
 .state[data-state='exited'] {
@@ -1817,7 +1825,7 @@ button.icon-btn.muted:hover {
 .minimized-tag {
   margin-left: auto;
   font-size: 10px;
-  color: #58a6ff;
+  color: var(--accent-fg);
   background: #1a2d4a;
   border: 1px solid #1f6feb55;
   border-radius: 999px;
@@ -1829,41 +1837,41 @@ button.icon-btn.muted:hover {
 }
 .agent-session {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-bottom: 4px;
   word-break: break-all;
 }
 .agent-session code {
-  color: #58a6ff;
+  color: var(--accent-fg);
 }
 .err {
-  color: #f85149;
+  color: var(--danger-fg);
   font-size: 10px;
   margin: 4px 0;
 }
 .prompt-block {
   margin-top: 4px;
   padding: 6px 8px;
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
 }
 .role-line {
   margin: 4px 0 0;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 10px;
 }
 .prompt-preview {
   margin: 6px 0 0;
   padding: 6px 8px;
-  background: #010409;
+  background: var(--bg-inset);
   border-radius: 4px;
   font-size: 10px;
   line-height: 1.5;
   max-height: 220px;
   overflow: auto;
   white-space: pre-wrap;
-  color: #e6edf3;
+  color: var(--text-bright);
 }
 .prompt-head {
   display: flex;
@@ -1880,7 +1888,7 @@ button.icon-btn.muted:hover {
   gap: 6px;
 }
 .warn-block .warn {
-  color: #d29922;
+  color: var(--attention-fg);
   margin: 0;
 }
 </style>
