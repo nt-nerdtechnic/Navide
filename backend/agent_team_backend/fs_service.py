@@ -23,6 +23,8 @@ _NOISE_SEGMENTS = frozenset({
     ".pytest_cache", ".ruff_cache", ".idea", ".gradle", ".git",
 })
 
+_MAX_DIR_ENTRIES = 2_000  # cap to avoid hanging on huge dirs (e.g. node_modules)
+
 
 class FsError(Exception):
     """Raised on invalid or unsafe filesystem operations."""
@@ -53,9 +55,8 @@ def _resolve_safe(workspace_path: str, rel_path: str) -> Path:
     return target
 
 
-def _entry(root: Path, child: Path) -> dict[str, Any]:
-    name = child.name
-    is_dir = child.is_dir()
+def _entry(root: Path, parent: Path, name: str, is_dir: bool) -> dict[str, Any]:
+    child = parent / name
     return {
         "name": name,
         "rel_path": str(child.relative_to(root)),
@@ -81,17 +82,31 @@ def list_dir(workspace_path: str, rel_path: str = "", show_hidden: bool = False)
 
     root = Path(workspace_path).resolve()
     entries: list[dict[str, Any]] = []
+    truncated = False
     try:
-        for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-            name = child.name
-            if name == PROJECT_DIR_NAME and child.parent == root:
+        # os.scandir() caches is_dir() from the readdir result — no extra stat() per entry.
+        with os.scandir(target) as it:
+            scan = sorted(it, key=lambda e: (not e.is_dir(), e.name.lower()))
+        if len(scan) > _MAX_DIR_ENTRIES:
+            scan = scan[:_MAX_DIR_ENTRIES]
+            truncated = True
+        for de in scan:
+            name = de.name
+            if name == PROJECT_DIR_NAME and target == root:
                 continue  # internal dir — never surfaced
             if name.startswith(".") and not show_hidden:
                 continue
-            entries.append(_entry(root, child))
+            entries.append(_entry(root, target, name, de.is_dir()))
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": True, "entries": entries, "rel_path": str(target.relative_to(root)) if target != root else ""}
+    result: dict[str, Any] = {
+        "ok": True,
+        "entries": entries,
+        "rel_path": str(target.relative_to(root)) if target != root else "",
+    }
+    if truncated:
+        result["truncated"] = True
+    return result
 
 
 def list_files_flat(

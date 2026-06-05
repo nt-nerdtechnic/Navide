@@ -24,6 +24,7 @@ from .fs_service import _NOISE_SEGMENTS, FsError, _resolve_safe
 _MAX_RESULTS = 2000
 _TIMEOUT_S = 30
 _REPLACE_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB — skip files larger than this
+_SCAN_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB — skip files in Python fallback scan
 
 
 def _rg_bin() -> str | None:
@@ -206,6 +207,8 @@ def _find_python(
             if not _glob_ok(rel, fn, includes, excludes):
                 continue
             try:
+                if fp.stat().st_size > _SCAN_SIZE_LIMIT:
+                    continue
                 content = fp.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue

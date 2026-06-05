@@ -554,19 +554,24 @@ async function requestGhost(): Promise<void> {
   const prefix = [...lines.slice(0, cur.line), lines[cur.line]?.slice(0, cur.col) ?? ''].join('\n')
   const suffix = [lines[cur.line]?.slice(cur.col) ?? '', ...lines.slice(cur.line + 1)].join('\n')
   ghostBusy.value = true
-  const resp = await props.backend.send<AiResult>('editor.complete', {
-    prefix, suffix, language: lang.value, model,
-  })
-  ghostBusy.value = false
-  if (resp.payload?.ok && resp.payload.text) {
-    // Guard: cursor may have moved while waiting for the AI response.
-    // Showing ghost text at a different position than where it was computed is wrong.
-    const newCur = editorRef.value?.getCursor()
-    if (!newCur || newCur.line !== cur.line || newCur.col !== cur.col) return
-    editorRef.value?.setGhost(resp.payload.text)
-    editorRef.value?.focus()
-  } else {
-    toast(resp.payload?.error || 'No completion available', { type: 'info' })
+  try {
+    const resp = await props.backend.send<AiResult>('editor.complete', {
+      prefix, suffix, language: lang.value, model,
+    })
+    if (resp.payload?.ok && resp.payload.text) {
+      // Guard: cursor may have moved while waiting for the AI response.
+      // Showing ghost text at a different position than where it was computed is wrong.
+      const newCur = editorRef.value?.getCursor()
+      if (!newCur || newCur.line !== cur.line || newCur.col !== cur.col) return
+      editorRef.value?.setGhost(resp.payload.text)
+      editorRef.value?.focus()
+    } else {
+      toast(resp.payload?.error || 'No completion available', { type: 'info' })
+    }
+  } catch {
+    // ignore — timeout or WS close; ghostBusy is reset in finally
+  } finally {
+    ghostBusy.value = false
   }
 }
 
