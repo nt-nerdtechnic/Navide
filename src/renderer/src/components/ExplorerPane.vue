@@ -267,6 +267,10 @@ async function submitPrompt(): Promise<void> {
     prompt.value = null
     return
   }
+  if (name.includes('/') || name.includes('\\')) {
+    void alert('Name cannot contain path separators', { title: 'Error' })
+    return
+  }
   const rel = p.parentRel ? `${p.parentRel}/${name}` : name
   let res: { payload: FsResult | null }
   if (p.kind === 'new-file') {

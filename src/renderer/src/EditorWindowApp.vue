@@ -590,6 +590,8 @@ registerCommand('editor.action.findReferences', () => {
   sidebarView.value = 'search'
   void nextTick(() => searchRef.value?.setQuery(word))
 })
+registerCommand('editor.action.changeEOLtoCRLF',     () => activeEditor()?.changeEOL('CRLF'))
+registerCommand('editor.action.changeEOLtoLF',       () => activeEditor()?.changeEOL('LF'))
 registerCommand('editor.action.selectLine',          () => activeEditor()?.selectLine())
 registerCommand('editor.action.transpose',           () => activeEditor()?.transpose())
 registerCommand('editor.action.indentationToSpaces', () => activeEditor()?.indentationToSpaces())
@@ -699,7 +701,6 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.smartSelect.expand',          label: 'Expand Selection',   keys: '⇧⌥→' },
   { id: 'editor.action.smartSelect.shrink',          label: 'Shrink Selection',   keys: '⇧⌥←' },
   { id: 'workbench.action.copyFilePath',         label: 'Copy Absolute Path',      keys: '⌘K ⌘P' },
-  { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path' },
   { id: 'workbench.action.revealInExplorer',label: 'Reveal in Explorer', keys: '⌘K ⌘R' },
   { id: 'workbench.action.revealFileInOS',  label: 'Reveal in Finder',  keys: '⇧⌥R' },
   { id: 'workbench.action.newWindow',       label: 'New Editor Window',    keys: '⌘⇧N' },
@@ -725,8 +726,6 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.findInFilesReplace', label: 'Replace in Files', keys: '⌘⇧H' },
   { id: 'editor.action.transpose',           label: 'Transpose Characters',     keys: '⌃T' },
   { id: 'editor.action.selectLine',          label: 'Select Current Line',     keys: '⌃L' },
-  { id: 'editor.action.indentationToSpaces', label: 'Convert Indentation to Spaces' },
-  { id: 'editor.action.indentationToTabs',   label: 'Convert Indentation to Tabs' },
   { id: 'editor.action.navigateToLastEditLocation', label: 'Go to Last Edit Location', keys: '⌘K ⌘Q' },
   { id: 'editor.action.moveSelectionToNextFindMatch', label: 'Move Selection to Next Occurrence', keys: '⌘K ⌘D' },
   { id: 'workbench.action.copyRelativeFilePath', label: 'Copy Relative Path', keys: '⌘⇧⌥C' },
