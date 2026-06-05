@@ -273,16 +273,22 @@ async function submitPrompt(): Promise<void> {
   }
   const rel = p.parentRel ? `${p.parentRel}/${name}` : name
   let res: { payload: FsResult | null }
-  if (p.kind === 'new-file') {
-    res = await props.backend.send<FsResult>('fs.create_file', { workspace_path: props.workspacePath, rel_path: rel })
-  } else if (p.kind === 'new-folder') {
-    res = await props.backend.send<FsResult>('fs.mkdir', { workspace_path: props.workspacePath, rel_path: rel })
-  } else {
-    res = await props.backend.send<FsResult>('fs.rename', {
-      workspace_path: props.workspacePath,
-      src_path: p.srcRel,
-      dst_path: rel,
-    })
+  try {
+    if (p.kind === 'new-file') {
+      res = await props.backend.send<FsResult>('fs.create_file', { workspace_path: props.workspacePath, rel_path: rel })
+    } else if (p.kind === 'new-folder') {
+      res = await props.backend.send<FsResult>('fs.mkdir', { workspace_path: props.workspacePath, rel_path: rel })
+    } else {
+      res = await props.backend.send<FsResult>('fs.rename', {
+        workspace_path: props.workspacePath,
+        src_path: p.srcRel,
+        dst_path: rel,
+      })
+    }
+  } catch (err) {
+    prompt.value = null
+    void alert(err instanceof Error ? err.message : 'Operation failed', { title: 'Error' })
+    return
   }
   prompt.value = null
   if (!res.payload?.ok) {
@@ -302,10 +308,16 @@ async function doDelete(entry: FsEntry): Promise<void> {
     confirmText: 'Delete',
   })
   if (!ok) return
-  const res = await props.backend.send<FsResult>('fs.delete', {
-    workspace_path: props.workspacePath,
-    rel_path: entry.rel_path,
-  })
+  let res: { payload: FsResult | null }
+  try {
+    res = await props.backend.send<FsResult>('fs.delete', {
+      workspace_path: props.workspacePath,
+      rel_path: entry.rel_path,
+    })
+  } catch (err) {
+    void alert(err instanceof Error ? err.message : 'Delete failed', { title: 'Error' })
+    return
+  }
   if (!res.payload?.ok) {
     void alert(res.payload?.error || 'Delete failed', { title: 'Error' })
     return
