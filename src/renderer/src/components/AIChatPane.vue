@@ -1890,6 +1890,20 @@ function getDateLabel(ts: number): string {
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
           </button>
+          <template v-if="msg.role === 'assistant' && !msg.streaming">
+            <button
+              class="ai-msg-action-btn ai-feedback-btn"
+              :class="{ 'ai-feedback-up': msg.feedback === 'up' }"
+              title="Good response"
+              @click="toggleFeedback(mi, 'up')"
+            >👍</button>
+            <button
+              class="ai-msg-action-btn ai-feedback-btn"
+              :class="{ 'ai-feedback-down': msg.feedback === 'down' }"
+              title="Bad response"
+              @click="toggleFeedback(mi, 'down')"
+            >👎</button>
+          </template>
           <button
             class="ai-msg-action-btn"
             :class="{ 'ai-bookmark-active': msg.bookmarked }"
@@ -2344,6 +2358,10 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-wrap:hover .ai-msg-time { opacity: 1; }
 .ai-msg-elapsed { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; }
+.ai-feedback-btn { font-size: 11px; opacity: 0.3; }
+.ai-feedback-btn:hover { opacity: 0.9; }
+.ai-feedback-up { opacity: 1 !important; filter: none; }
+.ai-feedback-down { opacity: 1 !important; filter: none; }
 .ai-bookmark-active { color: #f0c040 !important; opacity: 1 !important; }
 .ai-bookmark-indicator {
   position: absolute; top: 2px; right: 4px;
