@@ -211,7 +211,7 @@ function newThread(): void {
   allThreads.value.unshift(thread)
   currentThreadId.value = id
   messages.value = []
-  expandedMsgIdxs.value = new Set()
+  expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
   showThreads.value = false
 }
 
@@ -224,7 +224,7 @@ function switchThread(id: string): void {
   if (!thread) return
   currentThreadId.value = id
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
-  expandedMsgIdxs.value = new Set()
+  expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   showThreads.value = false
@@ -945,7 +945,7 @@ function clearConversation(): void {
   if (messages.value.length > 0 && !window.confirm('Clear all messages in this chat?')) return
   if (sending.value) stopStreaming()
   messages.value = []
-  expandedMsgIdxs.value = new Set()
+  expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
   // Also reset the title so it auto-updates on next message
   const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
   if (idx !== -1) allThreads.value[idx].title = 'New chat'
@@ -1679,7 +1679,7 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     newThread()
   }
   // Ctrl+Shift+K — clear current conversation
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'k') {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'k') {
     e.preventDefault()
     clearConversation()
   }
