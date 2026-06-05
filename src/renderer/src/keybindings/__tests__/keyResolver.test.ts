@@ -801,3 +801,37 @@ describe('rename symbol (F2)', () => {
     expect(dr.resolve(mkEvent('F2'), {})).toBeNull()
   })
 })
+
+describe('word selection with ctrl+shift', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+shift+left → cursorWordLeftSelect (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowLeft', { ctrlKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorWordLeftSelect')
+  })
+
+  it('ctrl+shift+right → cursorWordRightSelect (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('ArrowRight', { ctrlKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorWordRightSelect')
+  })
+
+  it('ctrl+shift+left/right require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('ArrowLeft', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('ArrowRight', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
+  })
+})
+
+describe('open link at cursor (cmd+alt+enter)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+alt+enter → openLink (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('Enter', { metaKey: true, altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.openLink')
+  })
+
+  it('cmd+alt+enter requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('Enter', { metaKey: true, altKey: true }), {})).toBeNull()
+  })
+})

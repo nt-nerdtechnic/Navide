@@ -390,6 +390,9 @@ registerCommand('editor.action.transformFromUrlEncoded',  () => activeEditor()?.
 registerCommand('editor.action.joinLines',               () => activeEditor()?.joinLines())
 registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.sortLinesAscending())
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
+registerCommand('editor.action.reverseLines',           () => activeEditor()?.reverseLines())
+registerCommand('editor.action.removeDuplicateLines',   () => activeEditor()?.removeDuplicateLines())
+registerCommand('editor.action.openLink',               () => activeEditor()?.openLinkAtCursor())
 registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
 registerCommand('editor.action.openFileAtCursor', async () => {
   const lineText = activeEditor()?.getCursorLineText?.() ?? ''
@@ -674,9 +677,16 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.transformFromBase64',     label: 'Transform from Base64' },
   { id: 'editor.action.transformToUrlEncoded',   label: 'URL Encode Selection' },
   { id: 'editor.action.transformFromUrlEncoded', label: 'URL Decode Selection' },
-  { id: 'editor.action.joinLines',              label: 'Join Lines',         keys: '⌃J' },
+  { id: 'editor.action.joinLines',              label: 'Join Lines',                  keys: '⌃J' },
   { id: 'editor.action.sortLinesAscending',    label: 'Sort Lines Ascending' },
   { id: 'editor.action.sortLinesDescending',   label: 'Sort Lines Descending' },
+  { id: 'editor.action.reverseLines',          label: 'Reverse Lines' },
+  { id: 'editor.action.removeDuplicateLines',  label: 'Remove Duplicate Lines' },
+  { id: 'editor.action.openLink',              label: 'Open Link at Cursor',         keys: '⌘⌥↩' },
+  { id: 'editor.action.changeEOLtoCRLF',       label: 'Change End of Line to CRLF' },
+  { id: 'editor.action.changeEOLtoLF',         label: 'Change End of Line to LF' },
+  { id: 'editor.action.indentationToSpaces',   label: 'Convert Indentation to Spaces' },
+  { id: 'editor.action.indentationToTabs',     label: 'Convert Indentation to Tabs' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol',     keys: '⌘⇧O' },
