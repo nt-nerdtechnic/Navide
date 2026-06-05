@@ -296,7 +296,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) { gitWorktrees.value = []; return }
     const resp = await send<{ worktrees: GitWorktree[] }>('git.worktrees', { workspace_path: ws })
-    if (resp.ok && resp.payload) gitWorktrees.value = resp.payload.worktrees ?? []
+    if (resp.ok && resp.payload && workspacePath() === ws) gitWorktrees.value = resp.payload.worktrees ?? []
   }
 
   async function addWorktree(worktree_path: string, branch: string, new_branch = false): Promise<{ ok: boolean; output?: string; error?: string }> {
@@ -323,7 +323,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) { gitConfig.value = {}; return }
     const resp = await send<{ ok: boolean; config: Record<string, string>; allowed_keys?: string[] }>('git.config_get', { workspace_path: ws })
-    if (resp.ok && resp.payload?.ok) {
+    if (resp.ok && resp.payload?.ok && workspacePath() === ws) {
       gitConfig.value = resp.payload.config ?? {}
       if (resp.payload.allowed_keys) gitConfigAllowedKeys.value = resp.payload.allowed_keys
     }
@@ -348,7 +348,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) { gitTags.value = []; return }
     const resp = await send<{ tags: GitTag[] }>('git.tags', { workspace_path: ws })
-    if (resp.ok && resp.payload) gitTags.value = resp.payload.tags ?? []
+    if (resp.ok && resp.payload && workspacePath() === ws) gitTags.value = resp.payload.tags ?? []
   }
 
   async function createTag(name: string, message = '', commit_hash = ''): Promise<{ ok: boolean; error?: string }> {
@@ -409,7 +409,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) { gitRemotes.value = []; return }
     const resp = await send<{ remotes: GitRemote[] }>('git.remotes', { workspace_path: ws })
-    if (resp.ok && resp.payload) gitRemotes.value = resp.payload.remotes ?? []
+    if (resp.ok && resp.payload && workspacePath() === ws) gitRemotes.value = resp.payload.remotes ?? []
   }
 
   async function diffFile(filepath: string, staged = false): Promise<string> {
@@ -473,14 +473,14 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) { gitBranches.value = []; return }
     const resp = await send<{ ok: boolean; branches: GitBranch[] }>('git.branches', { workspace_path: ws })
-    if (resp.ok && resp.payload?.ok) gitBranches.value = resp.payload.branches ?? []
+    if (resp.ok && resp.payload?.ok && workspacePath() === ws) gitBranches.value = resp.payload.branches ?? []
   }
 
   async function loadStashes(): Promise<void> {
     const ws = workspacePath()
     if (!ws) { gitStashes.value = []; return }
     const resp = await send<{ stashes: GitStashEntry[] }>('git.stash_list', { workspace_path: ws })
-    if (resp.ok && resp.payload) gitStashes.value = resp.payload.stashes ?? []
+    if (resp.ok && resp.payload && workspacePath() === ws) gitStashes.value = resp.payload.stashes ?? []
   }
 
   async function discardFile(path: string): Promise<void> {
