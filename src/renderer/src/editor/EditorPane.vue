@@ -66,7 +66,7 @@ function onCursorChange(pos: Position): void {
   const sel = editorRef.value?.getSelectionText() ?? ''
   if (sel) {
     const lineCount = sel.split('\n').length
-    selectionInfo.value = lineCount > 1 ? `${lineCount} 行已選` : `${sel.length} 字元已選`
+    selectionInfo.value = lineCount > 1 ? `${lineCount} lines selected` : `${sel.length} chars selected`
   } else {
     selectionInfo.value = ''
   }
@@ -82,7 +82,7 @@ async function load(): Promise<void> {
       rel_path: props.relPath,
     })
     if (!resp.payload?.ok) {
-      loadError.value = resp.payload?.error || '無法讀取檔案'
+      loadError.value = resp.payload?.error || 'Unable to read file'
       return
     }
     content.value = resp.payload.content ?? ''
@@ -92,7 +92,7 @@ async function load(): Promise<void> {
       editorRef.value?.revealLine(props.initialLine)
     }
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : '讀取檔案失敗'
+    loadError.value = err instanceof Error ? err.message : 'Failed to read file'
   }
 }
 
@@ -121,12 +121,12 @@ async function save(): Promise<void> {
     content: snapshot,
   })
   if (!resp.payload?.ok) {
-    void alert(resp.payload?.error || '存檔失敗', { title: '存檔錯誤' })
+    void alert(resp.payload?.error || 'Save failed', { title: 'Save error' })
     return
   }
   // Only clear dirty when no further edits landed while the request was in-flight.
   if (content.value === snapshot) dirty.value = false
-  toast('已存檔', { type: 'success' })
+  toast('Saved', { type: 'success' })
 }
 
 // ── Cmd+K rewrite ─────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ async function submitCmdK(): Promise<void> {
   if (cmdk.value.busy) return
   if (!cmdk.value.instruction.trim()) return
   if (!cmdk.value.range || !cmdk.value.code) {
-    void alert('請先選取要改寫的程式碼', { title: 'Cmd+K' })
+    void alert('Select code to rewrite first', { title: 'Cmd+K' })
     return
   }
   cmdk.value.busy = true
@@ -164,7 +164,7 @@ async function submitCmdK(): Promise<void> {
   })
   cmdk.value.busy = false
   if (!resp.payload?.ok || !resp.payload.text) {
-    void alert(resp.payload?.error || '改寫失敗', { title: 'Cmd+K' })
+    void alert(resp.payload?.error || 'Rewrite failed', { title: 'Cmd+K' })
     return
   }
   proposal.value = { range: cmdk.value.range, oldText: cmdk.value.code, newText: resp.payload.text }
@@ -469,7 +469,7 @@ async function requestGhost(): Promise<void> {
     editorRef.value?.setGhost(resp.payload.text)
     editorRef.value?.focus()
   } else {
-    toast(resp.payload?.error || '無補全建議', { type: 'info' })
+    toast(resp.payload?.error || 'No completion available', { type: 'info' })
   }
 }
 
@@ -622,14 +622,14 @@ defineExpose({
     <div class="ep-tabs">
       <div v-if="!embedded" class="ep-tab active">
         <span class="ep-tab-name">{{ name }}</span>
-        <span v-if="dirty" class="ep-dirty" title="未存檔">●</span>
+        <span v-if="dirty" class="ep-dirty" title="Unsaved">●</span>
       </div>
       <div class="ep-spacer" />
-      <button class="ep-act" :disabled="!dirty" title="存檔 (⌘S)" @click="save">儲存</button>
-      <button class="ep-act" title="AI 補全 (⌘I)" :disabled="ghostBusy || !loaded" @click="requestGhost">
-        {{ ghostBusy ? '…' : '✦ 補全' }}
+      <button class="ep-act" :disabled="!dirty" title="Save (⌘S)" @click="save">Save</button>
+      <button class="ep-act" title="AI complete (⌘I)" :disabled="ghostBusy || !loaded" @click="requestGhost">
+        {{ ghostBusy ? '…' : '✦ Complete' }}
       </button>
-      <button class="ep-act" title="AI 改寫選取 (⌘K)" :disabled="!loaded" @click="openCmdK">✦ Cmd+K</button>
+      <button class="ep-act" title="AI rewrite selection (⌘K)" :disabled="!loaded" @click="openCmdK">✦ Cmd+K</button>
     </div>
 
     <!-- Editor -->
@@ -643,22 +643,22 @@ defineExpose({
         @update:model-value="onChange"
         @cursor-change="onCursorChange"
       />
-      <div v-else class="ep-loading">載入中…</div>
+      <div v-else class="ep-loading">Loading…</div>
 
       <!-- Go-to-line overlay -->
       <div v-if="gotoOpen" class="ep-goto-overlay">
         <div class="ep-goto-box">
-          <span class="ep-goto-label">跳到行</span>
+          <span class="ep-goto-label">Go to line</span>
           <input
             ref="gotoInputEl"
             v-model="gotoLineInput"
             type="number"
             class="ep-goto-input"
-            placeholder="行號"
+            placeholder="Line number"
             min="1"
             @keydown="onGotoKeydown"
           />
-          <button class="ep-act" @click="submitGoto">跳</button>
+          <button class="ep-act" @click="submitGoto">Go</button>
         </div>
       </div>
     </div>
@@ -670,21 +670,21 @@ defineExpose({
         ref="cmdkInput"
         v-model="cmdk.instruction"
         class="ep-cmdk-input"
-        placeholder="描述你想對選取程式碼做的修改…"
+        placeholder="Describe the changes to make to the selected code…"
         @keydown.enter="submitCmdK"
         @keydown.esc="closeCmdK"
       />
-      <button class="ep-act primary" :disabled="cmdk.busy" @click="submitCmdK">{{ cmdk.busy ? '思考中…' : '改寫' }}</button>
-      <button class="ep-act" @click="closeCmdK">取消</button>
+      <button class="ep-act primary" :disabled="cmdk.busy" @click="submitCmdK">{{ cmdk.busy ? 'Thinking…' : 'Rewrite' }}</button>
+      <button class="ep-act" @click="closeCmdK">Cancel</button>
     </div>
 
     <!-- AI diff proposal -->
     <div v-if="proposal" class="ep-proposal">
       <div class="ep-prop-head">
-        <span>AI 建議改寫</span>
+        <span>AI suggested rewrite</span>
         <div class="ep-prop-actions">
-          <button class="ep-act success" @click="acceptProposal">✓ 接受</button>
-          <button class="ep-act" @click="rejectProposal">✕ 拒絕</button>
+          <button class="ep-act success" @click="acceptProposal">✓ Accept</button>
+          <button class="ep-act" @click="rejectProposal">✕ Reject</button>
         </div>
       </div>
       <div class="ep-prop-diff">
@@ -700,47 +700,47 @@ defineExpose({
           ref="findInputEl"
           v-model="findQuery"
           class="ep-find-input"
-          placeholder="搜尋…"
+          placeholder="Search…"
           @keydown="onFindKeydown"
         />
         <button
           class="ep-find-btn"
           :class="{ active: findCase }"
-          title="區分大小寫 (⌥C)"
+          title="Match case (⌥C)"
           @click="findCase = !findCase"
         >Aa</button>
         <button
           class="ep-find-btn"
           :class="{ active: findWholeWord }"
-          title="全字比對 (⌥W)"
+          title="Match whole word (⌥W)"
           @click="findWholeWord = !findWholeWord"
         >W|</button>
         <button
           class="ep-find-btn"
           :class="{ active: findRegex }"
-          title="使用正規表示式 (⌥R)"
+          title="Use regular expression (⌥R)"
           @click="findRegex = !findRegex"
         >.*</button>
         <span class="ep-find-count">
-          <template v-if="findQuery && findMatches.length === 0">無結果</template>
+          <template v-if="findQuery && findMatches.length === 0">No results</template>
           <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
         </span>
-        <button class="ep-find-nav" title="上一個 (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
-        <button class="ep-find-nav" title="下一個 (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
+        <button class="ep-find-nav" title="Previous match (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
+        <button class="ep-find-nav" title="Next match (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
         <button
           class="ep-find-btn"
           :class="{ active: replaceOpen }"
-          title="顯示取代 (⌘H)"
+          title="Toggle replace (⌘H)"
           @click="replaceOpen = !replaceOpen"
         >ab</button>
-        <button class="ep-find-close" title="關閉 (Esc)" @click="closeFind">✕</button>
+        <button class="ep-find-close" title="Close (Esc)" @click="closeFind">✕</button>
       </div>
       <div v-if="replaceOpen" class="ep-find-row">
         <input
           ref="replaceInputEl"
           v-model="replaceQuery"
           class="ep-find-input"
-          placeholder="取代…"
+          placeholder="Replace…"
           @keydown="onReplaceKeydown"
         />
         <button class="ep-find-nav" title="取代 (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>

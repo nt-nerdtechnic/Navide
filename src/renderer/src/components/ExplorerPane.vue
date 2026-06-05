@@ -149,9 +149,9 @@ function openSelected(): void {
 
 async function deleteSelected(): Promise<void> {
   const count = selectedKeys.value.size
-  const ok = await confirm(`確定刪除已選的 ${count} 個項目？此操作無法復原。`, {
-    title: '刪除',
-    confirmText: '刪除',
+  const ok = await confirm(`Delete ${count} selected items? This action cannot be undone.`, {
+    title: 'Delete',
+    confirmText: 'Delete',
   })
   if (!ok) return
   const paths = [...selectedKeys.value]
@@ -161,7 +161,7 @@ async function deleteSelected(): Promise<void> {
       rel_path: rel,
     })
     if (!res.payload?.ok) {
-      void alert(res.payload?.error || `刪除「${rel}」失敗`, { title: '錯誤' })
+      void alert(res.payload?.error || `Failed to delete "${rel}"`, { title: 'Error' })
     }
   }
   clearSelection()
@@ -172,9 +172,9 @@ async function copyPathsSelected(): Promise<void> {
   const text = [...selectedKeys.value].map(rel => absPath(rel)).join('\n')
   try {
     await navigator.clipboard.writeText(text)
-    toast(`已複製 ${selectedKeys.value.size} 個路徑`, { type: 'success' })
+    toast(`Copied ${selectedKeys.value.size} path(s)`, { type: 'success' })
   } catch {
-    toast('複製失敗', { type: 'error' })
+    toast('Copy failed', { type: 'error' })
   }
 }
 
@@ -226,7 +226,7 @@ function startNew(kind: 'new-file' | 'new-folder', entry: FsEntry | null): void 
   const parentRel = entry ? (entry.is_dir ? entry.rel_path : parentOf(entry.rel_path)) : ''
   prompt.value = {
     kind,
-    title: kind === 'new-file' ? '新增檔案' : '新增資料夾',
+    title: kind === 'new-file' ? 'New File' : 'New Folder',
     value: '',
     parentRel,
   }
@@ -236,7 +236,7 @@ function startNew(kind: 'new-file' | 'new-folder', entry: FsEntry | null): void 
 function startRename(entry: FsEntry): void {
   prompt.value = {
     kind: 'rename',
-    title: '重新命名',
+    title: 'Rename',
     value: entry.name,
     parentRel: parentOf(entry.rel_path),
     srcRel: entry.rel_path,
@@ -276,7 +276,7 @@ async function submitPrompt(): Promise<void> {
   }
   prompt.value = null
   if (!res.payload?.ok) {
-    void alert(res.payload?.error || '操作失敗', { title: '錯誤' })
+    void alert(res.payload?.error || 'Operation failed', { title: 'Error' })
     return
   }
   // Make sure the affected dir is expanded so the result is visible.
@@ -287,9 +287,9 @@ async function submitPrompt(): Promise<void> {
 }
 
 async function doDelete(entry: FsEntry): Promise<void> {
-  const ok = await confirm(`確定刪除「${entry.name}」？此操作無法復原。`, {
-    title: '刪除',
-    confirmText: '刪除',
+  const ok = await confirm(`Delete "${entry.name}"? This action cannot be undone.`, {
+    title: 'Delete',
+    confirmText: 'Delete',
   })
   if (!ok) return
   const res = await props.backend.send<FsResult>('fs.delete', {
@@ -297,7 +297,7 @@ async function doDelete(entry: FsEntry): Promise<void> {
     rel_path: entry.rel_path,
   })
   if (!res.payload?.ok) {
-    void alert(res.payload?.error || '刪除失敗', { title: '錯誤' })
+    void alert(res.payload?.error || 'Delete failed', { title: 'Error' })
     return
   }
   await explorer.refreshVisible()
@@ -310,9 +310,9 @@ async function reveal(entry: FsEntry): Promise<void> {
 async function copyPath(entry: FsEntry): Promise<void> {
   try {
     await navigator.clipboard.writeText(absPath(entry.rel_path))
-    toast('已複製路徑', { type: 'success' })
+    toast('Path copied', { type: 'success' })
   } catch {
-    toast('複製失敗', { type: 'error' })
+    toast('Copy failed', { type: 'error' })
   }
 }
 
@@ -424,21 +424,21 @@ defineExpose({ revealFile, focusTree })
         <button
           class="exp-icon-btn"
           :class="{ on: explorer.showHidden.value }"
-          title="顯示隱藏檔"
+          title="Show hidden files"
           @click="explorer.setShowHidden(!explorer.showHidden.value)"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2c3.5 0 6.4 2.3 7.5 5.5C14.4 10.7 11.5 13 8 13S1.6 10.7.5 7.5C1.6 4.3 4.5 2 8 2Zm0 1.5C5.4 3.5 3.2 5 2.1 7.5 3.2 10 5.4 11.5 8 11.5s4.8-1.5 5.9-4C12.8 5 10.6 3.5 8 3.5Zm0 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
         </button>
-        <button class="exp-icon-btn" title="重新整理" @click="explorer.reloadAll()">
+        <button class="exp-icon-btn" title="Refresh" @click="explorer.reloadAll()">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 1 0 4.546 2.914.75.75 0 0 1 1.364-.626A6.5 6.5 0 1 1 8 1.5V0l3 2-3 2V3Z"/></svg>
         </button>
-        <button class="exp-icon-btn" title="新增檔案" @click.stop="startNew('new-file', null)">
+        <button class="exp-icon-btn" title="New File" @click.stop="startNew('new-file', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H6.5a1 1 0 0 0-1 1v3.5"/><path d="M8.5 14H12a1 1 0 0 0 1-1V5l-3-3"/><path d="M10 2v3h3"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
-        <button class="exp-icon-btn" title="新增資料夾" @click.stop="startNew('new-folder', null)">
+        <button class="exp-icon-btn" title="New Folder" @click.stop="startNew('new-folder', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v1.5"/><path d="M13.5 7.5V12a1 1 0 0 1-1 1H7"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
-        <button class="exp-icon-btn" title="收縮所有資料夾" @click="explorer.expanded.value = new Set()">
+        <button class="exp-icon-btn" title="Collapse all folders" @click="explorer.expanded.value = new Set()">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-surface)"/><path d="M4 9.5h5"/></svg>
         </button>
       </div>
@@ -471,12 +471,12 @@ defineExpose({ revealFile, focusTree })
       </div>
 
       <div v-if="rows.length === 0 && workspacePath" class="exp-empty">
-        {{ explorer.error.value || '此目錄沒有可顯示的項目' }}
+        {{ explorer.error.value || 'No items to display in this directory' }}
       </div>
-      <div v-if="!workspacePath" class="exp-empty">先選擇一個 workspace</div>
+      <div v-if="!workspacePath" class="exp-empty">Select a workspace to get started</div>
 
       <div v-if="selectedKeys.size >= 2" class="selection-bar" @click.stop>
-        <span class="sel-count">已選 {{ selectedKeys.size }} 個</span>
+        <span class="sel-count">{{ selectedKeys.size }} selected</span>
         <button class="sel-btn close" @click="clearSelection()">✕</button>
       </div>
     </div>
@@ -491,13 +491,13 @@ defineExpose({ revealFile, focusTree })
           class="exp-prompt-input"
           type="text"
           spellcheck="false"
-          placeholder="名稱"
+          placeholder="Name"
           @keydown.enter="submitPrompt"
           @keydown.esc="prompt = null"
         />
         <div class="exp-prompt-actions">
-          <button class="exp-btn ghost" @click="prompt = null">取消</button>
-          <button class="exp-btn primary" @click="submitPrompt">確定</button>
+          <button class="exp-btn ghost" @click="prompt = null">Cancel</button>
+          <button class="exp-btn primary" @click="submitPrompt">OK</button>
         </div>
       </div>
     </div>
@@ -510,24 +510,24 @@ defineExpose({ revealFile, focusTree })
           v-if="selectedFilePaths.length > 0"
           class="exp-ctx-item"
           @click="openSelected(); closeCtx()"
-        >開啟 {{ selectedFilePaths.length }} 個檔案</button>
-        <button class="exp-ctx-item danger" @click="deleteSelected(); closeCtx()">刪除 {{ selectedKeys.size }} 個項目</button>
+        >Open {{ selectedFilePaths.length }} file(s)</button>
+        <button class="exp-ctx-item danger" @click="deleteSelected(); closeCtx()">Delete {{ selectedKeys.size }} items</button>
         <div class="exp-ctx-sep" />
-        <button class="exp-ctx-item" @click="copyPathsSelected(); closeCtx()">複製路徑</button>
+        <button class="exp-ctx-item" @click="copyPathsSelected(); closeCtx()">Copy paths</button>
       </template>
       <!-- Single-item context menu -->
       <template v-else>
-        <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">新增檔案</button>
-        <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">新增資料夾</button>
+        <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">New File</button>
+        <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">New Folder</button>
         <template v-if="ctx.entry">
           <div class="exp-ctx-sep" />
           <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
-          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">在編輯器開啟</button>
-          <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">重新命名</button>
-          <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">刪除</button>
+          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">Open in editor</button>
+          <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">Rename</button>
+          <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">Delete</button>
           <div class="exp-ctx-sep" />
           <button class="exp-ctx-item" @click="reveal(ctx.entry!); closeCtx()">Reveal in Finder</button>
-          <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">複製路徑</button>
+          <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">Copy path</button>
         </template>
       </template>
     </div>

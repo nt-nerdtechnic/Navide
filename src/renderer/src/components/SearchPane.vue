@@ -91,7 +91,7 @@ async function doSearch(): Promise<void> {
     if (mySeq !== seq) return // stale
     const p = resp.payload
     if (!p?.ok) {
-      error.value = p?.error || '搜尋失敗'
+      error.value = p?.error || 'Search failed'
       results.value = []; total.value = 0; truncated.value = false
       return
     }
@@ -100,7 +100,7 @@ async function doSearch(): Promise<void> {
     truncated.value = !!p.truncated
   } catch (e) {
     if (mySeq !== seq) return
-    error.value = e instanceof Error ? e.message : '搜尋失敗'
+    error.value = e instanceof Error ? e.message : 'Search failed'
   } finally {
     if (mySeq === seq) searching.value = false
   }
@@ -147,18 +147,18 @@ async function replaceInFiles(files: string[]): Promise<void> {
   }, 30_000)
   const p = resp.payload
   if (!p?.ok) {
-    void alert(p?.error || '取代失敗', { title: '取代' })
+    void alert(p?.error || 'Replace failed', { title: 'Replace' })
     return
   }
-  toast(`已取代 ${p.total ?? 0} 處`, { type: 'success' })
+  toast(`Replaced ${p.total ?? 0} occurrence(s)`, { type: 'success' })
   await doSearch()
 }
 
 async function replaceAll(): Promise<void> {
   if (!total.value) return
   const ok = await confirm(
-    `將「${query.value}」取代為「${replacement.value}」，影響 ${total.value} 處、${fileCount.value} 個檔案。此操作會直接修改檔案。`,
-    { title: '全部取代', confirmText: '全部取代' }
+    `Replace "${query.value}" with "${replacement.value}" — ${total.value} occurrence(s) across ${fileCount.value} file(s). This will modify files directly.`,
+    { title: 'Replace All', confirmText: 'Replace All' }
   )
   if (!ok) return
   await replaceInFiles(results.value.map((f) => f.rel_path))
@@ -166,8 +166,8 @@ async function replaceAll(): Promise<void> {
 
 async function replaceFile(file: FileResult): Promise<void> {
   const ok = await confirm(
-    `將此檔「${file.name}」內 ${file.matches.length} 處取代為「${replacement.value}」？`,
-    { title: '整檔取代', confirmText: '取代' }
+    `Replace ${file.matches.length} occurrence(s) in "${file.name}" with "${replacement.value}"?`,
+    { title: 'Replace in File', confirmText: 'Replace' }
   )
   if (!ok) return
   await replaceInFiles([file.rel_path])
@@ -180,7 +180,7 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
     rel_path: file.rel_path,
   })
   if (!read.payload?.ok || read.payload.content == null) {
-    void alert(read.payload?.error || '讀取檔案失敗', { title: '取代' })
+    void alert(read.payload?.error || 'Failed to read file', { title: 'Replace' })
     return
   }
   const lines = read.payload.content.split('\n')
@@ -190,7 +190,7 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
   // An empty check (=== '') misses cases where other content landed at those positions.
   const expectedSnippet = m.text.slice(m.col, m.end)
   if (line == null || line.slice(m.col, m.end) !== expectedSnippet) {
-    toast('內容已變動，請重新搜尋', { type: 'info' })
+    toast('Content has changed, please search again', { type: 'info' })
     await doSearch()
     return
   }
@@ -201,7 +201,7 @@ async function replaceOne(file: FileResult, m: Match): Promise<void> {
     content: lines.join('\n'),
   })
   if (!write.payload?.ok) {
-    void alert(write.payload?.error || '寫入失敗', { title: '取代' })
+    void alert(write.payload?.error || 'Write failed', { title: 'Replace' })
     return
   }
   await doSearch()
@@ -242,7 +242,7 @@ defineExpose({ openReplace, focusInput })
   <div class="search-pane">
     <!-- ── Search / replace inputs ──────────────────────────────────────── -->
     <div class="sp-inputs">
-      <button class="sp-expand" :title="showReplace ? '收合取代' : '展開取代'" @click="showReplace = !showReplace">
+      <button class="sp-expand" :title="showReplace ? 'Collapse replace' : 'Expand replace'" @click="showReplace = !showReplace">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" :style="{ transform: showReplace ? 'rotate(90deg)' : '' }">
           <path d="M6 4l4 4-4 4V4Z" />
         </svg>
@@ -255,17 +255,17 @@ defineExpose({ openReplace, focusInput })
             ref="queryInput"
             v-model="query"
             class="sp-input"
-            placeholder="搜尋"
+            placeholder="Search"
             spellcheck="false"
             @keydown.enter="doSearch"
             @keydown.esc="clearSearch"
           />
           <div class="sp-toggles">
-            <button class="sp-tg" :class="{ on: caseSensitive }" title="大小寫須相符 (Aa)" @click="caseSensitive = !caseSensitive">Aa</button>
-            <button class="sp-tg" :class="{ on: wholeWord }" title="全字相符" @click="wholeWord = !wholeWord">
+            <button class="sp-tg" :class="{ on: caseSensitive }" title="Match case (Aa)" @click="caseSensitive = !caseSensitive">Aa</button>
+            <button class="sp-tg" :class="{ on: wholeWord }" title="Match whole word" @click="wholeWord = !wholeWord">
               <span style="text-decoration: underline">ab</span>
             </button>
-            <button class="sp-tg" :class="{ on: isRegex }" title="使用正則表達式" @click="isRegex = !isRegex">.*</button>
+            <button class="sp-tg" :class="{ on: isRegex }" title="Use regular expression" @click="isRegex = !isRegex">.*</button>
           </div>
         </div>
 
@@ -274,11 +274,11 @@ defineExpose({ openReplace, focusInput })
           <input
             v-model="replacement"
             class="sp-input"
-            placeholder="取代"
+            placeholder="Replace"
             spellcheck="false"
             @keydown.enter="replaceAll"
           />
-          <button class="sp-replace-all" :disabled="!total" title="全部取代" @click="replaceAll">
+          <button class="sp-replace-all" :disabled="!total" title="Replace All" @click="replaceAll">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
           </button>
         </div>
@@ -288,17 +288,17 @@ defineExpose({ openReplace, focusInput })
     <!-- ── include / exclude ────────────────────────────────────────────── -->
     <div class="sp-globs">
       <label class="sp-glob-label">files to include</label>
-      <input v-model="includes" class="sp-glob-input" placeholder="例如 *.ts, src/**" spellcheck="false" />
+      <input v-model="includes" class="sp-glob-input" placeholder="e.g. *.ts, src/**" spellcheck="false" />
       <label class="sp-glob-label">files to exclude</label>
-      <input v-model="excludes" class="sp-glob-input" placeholder="例如 *.test.ts, dist/**" spellcheck="false" />
+      <input v-model="excludes" class="sp-glob-input" placeholder="e.g. *.test.ts, dist/**" spellcheck="false" />
     </div>
 
     <!-- ── summary ──────────────────────────────────────────────────────── -->
     <div class="sp-summary">
-      <span v-if="searching" class="sp-muted">搜尋中…</span>
+      <span v-if="searching" class="sp-muted">Searching…</span>
       <span v-else-if="error" class="sp-error">{{ error }}</span>
-      <span v-else-if="query && total === 0" class="sp-muted">沒有結果</span>
-      <span v-else-if="total > 0">{{ total }} 個結果 · {{ fileCount }} 個檔案<span v-if="truncated" class="sp-trunc"> · 已截斷</span></span>
+      <span v-else-if="query && total === 0" class="sp-muted">No results</span>
+      <span v-else-if="total > 0">{{ total }} result(s) · {{ fileCount }} file(s)<span v-if="truncated" class="sp-trunc"> · Truncated</span></span>
     </div>
 
     <!-- ── results ──────────────────────────────────────────────────────── -->
@@ -314,7 +314,7 @@ defineExpose({ openReplace, focusInput })
           <button
             v-if="showReplace"
             class="sp-file-replace"
-            title="整檔取代"
+            title="Replace in file"
             @click.stop="replaceFile(file)"
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
@@ -334,7 +334,7 @@ defineExpose({ openReplace, focusInput })
               <button
                 v-if="!isRegex"
                 class="sp-match-btn"
-                title="取代此筆"
+                title="Replace this match"
                 @click.stop="replaceOne(file, m)"
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
