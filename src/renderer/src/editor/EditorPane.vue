@@ -458,6 +458,39 @@ function onGotoKeydown(e: KeyboardEvent): void {
 // Live preview: move editor view as user types line number
 watch(gotoLineInput, () => { if (gotoOpen.value) _applyGotoInput() })
 
+// ── Right-click context menu ──────────────────────────────────────────────────
+const ctxOpen = ref(false)
+const ctxX = ref(0)
+const ctxY = ref(0)
+function showContextMenu(e: MouseEvent): void {
+  e.preventDefault()
+  ctxOpen.value = true
+  const container = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  ctxX.value = e.clientX - container.left
+  ctxY.value = e.clientY - container.top
+}
+function closeContextMenu(): void { ctxOpen.value = false }
+async function ctxPaste(): Promise<void> {
+  closeContextMenu()
+  try {
+    const text = await navigator.clipboard.readText()
+    if (text) editorRef.value?.insertText(text)
+  } catch { /* permission denied */ }
+  editorRef.value?.focus()
+}
+function ctxCopy(): void {
+  closeContextMenu()
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  if (sel) void navigator.clipboard.writeText(sel)
+  editorRef.value?.focus()
+}
+function ctxCut(): void {
+  closeContextMenu()
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  if (sel) { void navigator.clipboard.writeText(sel); editorRef.value?.insertText('') }
+  editorRef.value?.focus()
+}
+
 function onEditorBodyFocusin(e: FocusEvent): void {
   if (props.embedded && props.active === false) return
   const tag = (e.target as HTMLElement)?.tagName

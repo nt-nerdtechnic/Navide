@@ -25,7 +25,7 @@ const initialDiffStaged = params.get('diff_staged') === 'true'
 const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
 
 const backend = useBackend()
-const { confirm } = useNotify()
+const { confirm, toast } = useNotify()
 
 // ── Sidebar resize ────────────────────────────────────────────────────────────
 const SIDEBAR_W_KEY = 'ide-sidebar-width'

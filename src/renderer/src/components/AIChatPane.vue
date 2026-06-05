@@ -100,6 +100,7 @@ interface ChatMessage {
   errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
   bookmarked?: boolean
+  feedback?: 'up' | 'down'
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -1726,6 +1727,14 @@ function copyAllMessages(): void {
 function toggleBookmark(mi: number): void {
   const msg = messages.value[mi]
   if (msg) { msg.bookmarked = !msg.bookmarked; saveCurrentThread() }
+}
+
+// ── Message feedback ──────────────────────────────────────────────────────────
+function toggleFeedback(mi: number, type: 'up' | 'down'): void {
+  const msg = messages.value[mi]
+  if (!msg) return
+  msg.feedback = msg.feedback === type ? undefined : type
+  saveCurrentThread()
 }
 
 // ── Message date separators ────────────────────────────────────────────────────
