@@ -1289,6 +1289,9 @@ function scrollCursorIntoView(): void {
   } else if (caretX + MARGIN > el.scrollLeft + el.clientWidth) {
     el.scrollLeft = caretX + MARGIN - el.clientWidth
   }
+  // Keep scrollLeftVal in sync so the textarea overlay stays aligned with the caret
+  // (same reason vs.scrollTop is synced above; the async scroll event is too late).
+  scrollLeftVal.value = el.scrollLeft
 }
 
 // ── Geometry for caret / selection overlays ──────────────────────────────────
