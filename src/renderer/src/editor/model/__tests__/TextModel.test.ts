@@ -42,6 +42,15 @@ describe('TextModel.getValueInRange', () => {
     const r = { start: { line: 0, col: 1 }, end: { line: 2, col: 2 } }
     expect(m.getValueInRange(r)).toBe('bc\ndef\ngh')
   })
+
+  it('normalises reversed (end-before-start) selection', () => {
+    const m = new TextModel('hello world')
+    // end col < start col — should be swapped before reading
+    const forward = m.getValueInRange({ start: { line: 0, col: 6 }, end: { line: 0, col: 11 } })
+    const reversed = m.getValueInRange({ start: { line: 0, col: 11 }, end: { line: 0, col: 6 } })
+    expect(reversed).toBe(forward)
+    expect(reversed).toBe('world')
+  })
 })
 
 describe('TextModel.applyEdit', () => {

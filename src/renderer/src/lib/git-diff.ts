@@ -37,6 +37,9 @@ function kindOf(line: string): DiffLineKind | null {
 }
 
 /** Split a single-file unified diff into its file header and hunks. */
+const _MAX_HUNKS = 500
+const _MAX_HUNK_LINES = 10_000
+
 export function parseHunks(raw: string): ParsedDiff {
   const lines = raw.split('\n')
   const headerLines: string[] = []
@@ -52,6 +55,7 @@ export function parseHunks(raw: string): ParsedDiff {
   while (headerLines.length && headerLines[headerLines.length - 1] === '') headerLines.pop()
 
   while (i < lines.length) {
+    if (hunks.length >= _MAX_HUNKS) break  // guard: very large diffs would freeze the renderer
     const m = HUNK_RE.exec(lines[i])
     if (!m) {
       i++
@@ -67,6 +71,7 @@ export function parseHunks(raw: string): ParsedDiff {
     }
     i++
     while (i < lines.length && !lines[i].startsWith('@@')) {
+      if (hunk.lines.length >= _MAX_HUNK_LINES) { i++; continue }
       const k = kindOf(lines[i])
       if (k === null) {
         // Blank final line from split; stop this hunk.
