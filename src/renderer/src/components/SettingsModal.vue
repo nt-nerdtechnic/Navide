@@ -510,7 +510,10 @@ async function mAddFromCatalog(entry: CatalogEntry) {
 async function mRemoveServer(idx: number) {
   const name = mServers.value[idx]?.name
   mServers.value.splice(idx, 1)
-  if (name) { mExpanded.value.delete(name); mExpandedEnv.value.delete(name) }
+  if (name) {
+    const s1 = new Set(mExpanded.value); s1.delete(name); mExpanded.value = s1
+    const s2 = new Set(mExpandedEnv.value); s2.delete(name); mExpandedEnv.value = s2
+  }
   await mSave(true)
 }
 

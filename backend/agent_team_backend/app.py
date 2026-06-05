@@ -701,7 +701,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             session.terminals.kill(term_session_id)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
-            # 使用者主動 kill → 同步清除 project.json 中的 stale tmux_name
+            # User-initiated kill — clear stale tmux_name from project.json
             if killed_tmux_name and killed_ws_path:
                 try:
                     project_store.clear_tmux_name_by_value(killed_ws_path, killed_tmux_name)
@@ -1986,9 +1986,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if not cmd:
                 await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
             else:
-                resolved_cwd = Path(_os.path.realpath(ws_path)) if ws_path else None
+                resolved_cwd = Path(ws_path).resolve() if ws_path else None
                 # Validate that cwd is a known registered workspace (or its subdirectory)
-                known_roots = [Path(_os.path.realpath(w)) for w in attribution.known_workspaces()]
+                known_roots = [Path(w).resolve() for w in attribution.known_workspaces()]
                 cwd_allowed = resolved_cwd is None or any(
                     resolved_cwd == r or resolved_cwd.is_relative_to(r)
                     for r in known_roots

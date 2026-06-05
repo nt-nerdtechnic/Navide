@@ -168,9 +168,9 @@ def _find_rg(
                 break
             byte_start = sm.get("start", 0)
             byte_end = sm.get("end", 0)
-            col_char = len(text_bytes[:byte_start].decode("utf-8", errors="replace"))
+            col_char = len(text_bytes[:byte_start].decode("utf-8", errors="ignore"))
             end_char = col_char + len(
-                text_bytes[byte_start:byte_end].decode("utf-8", errors="replace")
+                text_bytes[byte_start:byte_end].decode("utf-8", errors="ignore")
             )
             _grouped_append(grouped, order, rel, {
                 "line": line_no, "col": col_char, "end": end_char, "text": text,

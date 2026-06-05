@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import GitPane from './GitPane.vue'
@@ -282,6 +282,7 @@ watch(workspacePath, (v) => {
     emit('workspace-check', v.trim())
   }, 400)
 }, { immediate: true })
+onUnmounted(() => { if (workspaceDebounce !== null) window.clearTimeout(workspaceDebounce) })
 
 defineExpose({ openPipelineDetail })
 
