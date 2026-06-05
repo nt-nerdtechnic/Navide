@@ -273,8 +273,12 @@ export function useGit(
   async function showCommit(commit_hash: string): Promise<GitCommitDetail | null> {
     const ws = workspacePath()
     if (!ws) return null
-    const resp = await send<GitCommitDetail & { ok: boolean; error?: string }>('git.show_commit', { workspace_path: ws, commit_hash })
-    if (resp.ok && resp.payload?.ok) return resp.payload as GitCommitDetail
+    try {
+      const resp = await send<GitCommitDetail & { ok: boolean; error?: string }>('git.show_commit', { workspace_path: ws, commit_hash })
+      if (resp.ok && resp.payload?.ok) return resp.payload as GitCommitDetail
+    } catch {
+      // network / timeout — caller shows no detail
+    }
     return null
   }
 
