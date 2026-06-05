@@ -119,8 +119,9 @@ watch(settingsProvider, (provider) => {
   }
 })
 
-// Input char counter (shown when > 200 chars)
+// Input char counter + token estimate (shown when > 200 chars)
 const inputCharCount = computed(() => inputText.value.length)
+const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
 
 // ── Conversation search ────────────────────────────────────────────────────────
 const showSearch = ref(false)
@@ -1252,7 +1253,7 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
             @keydown="onTextareaKeydown"
           />
           <span v-if="inputCharCount > 200" class="ai-char-count" :class="{ warn: inputCharCount > 2000 }">
-            {{ inputCharCount.toLocaleString() }}
+            {{ inputCharCount.toLocaleString() }} 字 · ~{{ inputTokenEstimate.toLocaleString() }} tokens
           </span>
         </div>
         <div class="ai-input-btns">
