@@ -41,20 +41,20 @@ class Dep:
 # are marked needs_terminal so the user runs/authenticates them interactively.
 DEPS: list[Dep] = [
     # Step 1 — Foundation
-    Dep("homebrew", "Homebrew", "macOS 套件管理器", "foundation",
+    Dep("homebrew", "Homebrew", "macOS package manager", "foundation",
         ["brew", "--version"], r"Homebrew (\d+\.\d+\.\d+)",
         install_cmd='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
         needs_terminal=True, docs_url="https://brew.sh"),
     Dep("node", "Node.js", "JavaScript runtime (≥ 22)", "foundation",
         ["node", "--version"], r"v?(\d+\.\d+\.\d+)", min_version="22.0.0",
         install_cmd="brew install node@22", docs_url="https://nodejs.org"),
-    Dep("pnpm", "pnpm", "套件管理器", "foundation",
+    Dep("pnpm", "pnpm", "Package manager", "foundation",
         ["pnpm", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install pnpm", docs_url="https://pnpm.io"),
     Dep("python", "Python", "Python 3.12+", "foundation",
         ["python3", "--version"], r"Python (\d+\.\d+\.\d+)", min_version="3.12.0",
         install_cmd="brew install python@3.12", docs_url="https://python.org"),
-    Dep("uv", "uv", "Python 套件/環境管理器", "foundation",
+    Dep("uv", "uv", "Python package and environment manager", "foundation",
         ["uv", "--version"], r"uv (\d+\.\d+\.\d+)",
         install_cmd="brew install uv", docs_url="https://docs.astral.sh/uv"),
 
@@ -71,7 +71,7 @@ DEPS: list[Dep] = [
         ["gemini", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @google/gemini-cli", needs_terminal=True,
         optional=True, docs_url=""),
-    Dep("ollama", "Ollama", "本地 LLM runtime（Analyzer 必要）", "analyzer",
+    Dep("ollama", "Ollama", "Local LLM runtime (required for Analyzer)", "analyzer",
         ["ollama", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install ollama", docs_url="https://ollama.com"),
     Dep("tmux", "tmux", "Terminal multiplexer（CLI process survival）", "foundation",
@@ -91,19 +91,19 @@ _SUGGESTED_MODEL = "qwen2.5-coder:7b"
 # are approximate download sizes for the default quantization.
 MODEL_CATALOG: list[dict[str, Any]] = [
     {"name": "qwen2.5-coder:7b", "size": "~4.7 GB",
-     "desc": "推薦 · 程式碼分析最佳平衡", "recommended": True},
+     "desc": "Recommended · Best balance for code analysis", "recommended": True},
     {"name": "qwen2.5-coder:1.5b", "size": "~1.0 GB",
-     "desc": "輕量 · 低記憶體、速度快", "recommended": False},
+     "desc": "Lightweight · Low memory, fast", "recommended": False},
     {"name": "qwen2.5-coder:3b", "size": "~2.0 GB",
-     "desc": "輕量加強 · 體積與品質兼顧", "recommended": False},
+     "desc": "Lightweight+ · Balance of size and quality", "recommended": False},
     {"name": "qwen2.5-coder:14b", "size": "~9.0 GB",
-     "desc": "高品質 · 需較多記憶體", "recommended": False},
+     "desc": "High quality · Requires more memory", "recommended": False},
     {"name": "qwen2.5-coder:32b", "size": "~20 GB",
-     "desc": "最高品質 · 需大量記憶體", "recommended": False},
+     "desc": "Best quality · Requires large memory", "recommended": False},
     {"name": "deepseek-coder-v2:16b", "size": "~8.9 GB",
-     "desc": "替代 · 強程式碼理解", "recommended": False},
+     "desc": "Alternative · Strong code comprehension", "recommended": False},
     {"name": "llama3.1:8b", "size": "~4.7 GB",
-     "desc": "通用 · 泛用對話與分析", "recommended": False},
+     "desc": "General purpose · Broad conversation and analysis", "recommended": False},
 ]
 
 
