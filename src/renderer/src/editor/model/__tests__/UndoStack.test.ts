@@ -169,3 +169,22 @@ describe('UndoStack redo invalidation', () => {
     expect(s.redo(m)).toBeNull()
   })
 })
+
+describe('UndoStack MAX_ENTRIES cap', () => {
+  it('caps undo stack at 500 entries when pushing distinct edits', () => {
+    const m = new TextModel('')
+    // Use a clock that advances 1 s per push so no merges happen.
+    let t = 0
+    const s = new UndoStack(() => (t += 1000))
+    // Push 600 non-mergeable edits.
+    for (let i = 0; i < 600; i++) {
+      const pos = { line: 0, col: 0 }
+      const op: EditOperation = { range: { start: pos, end: pos }, text: 'x' }
+      s.push(op, m.applyEdit(op).inverse)
+    }
+    // Stack should be capped at 500; undo exactly 500 times should exhaust it.
+    let undoCount = 0
+    while (s.canUndo()) { s.undo(m); undoCount++ }
+    expect(undoCount).toBe(500)
+  })
+})
