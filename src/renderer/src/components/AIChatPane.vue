@@ -259,6 +259,7 @@ const settingsApiKey = ref('')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
+const showModelPicker = ref(false)
 
 const ANTHROPIC_MODELS = [
   'claude-opus-4-8',
@@ -1552,6 +1553,10 @@ function onClickOutside(e: MouseEvent): void {
   if (slashMenuEl.value && !slashMenuEl.value.contains(e.target as Node)) {
     showSlashMenu.value = false
   }
+  const modelBar = document.querySelector('.ai-model-bar')
+  if (modelBar && !modelBar.contains(e.target as Node)) {
+    showModelPicker.value = false
+  }
 }
 
 onMounted(() => document.addEventListener('click', onClickOutside))
@@ -1757,6 +1762,24 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
           @mouseover="atMenuIdx = i"
         >
           {{ opt.label }}
+        </div>
+      </div>
+
+      <!-- Model quick-picker badge -->
+      <div class="ai-model-bar">
+        <button class="ai-model-badge-btn" :title="`Model: ${settingsModel} (click to change)`" @click="showModelPicker = !showModelPicker">
+          <span class="ai-model-badge-icon">⬡</span>
+          <span class="ai-model-badge-name">{{ settingsModel.split('/').pop()?.replace('claude-', '').replace('-20', ' 20') }}</span>
+          <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
+        </button>
+        <div v-if="showModelPicker" class="ai-model-picker-menu">
+          <div
+            v-for="m in currentModelOptions"
+            :key="m"
+            class="ai-model-picker-item"
+            :class="{ active: m === settingsModel }"
+            @click="settingsModel = m; showModelPicker = false; saveSettings()"
+          >{{ m }}</div>
         </div>
       </div>
 
@@ -2587,6 +2610,30 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
   font-family: ui-monospace, monospace;
 }
 .ai-char-count.warn { color: var(--danger-fg, #cf222e); }
+
+/* Model picker bar */
+.ai-model-bar { position: relative; display: flex; align-items: center; padding: 2px 8px 0; }
+.ai-model-badge-btn {
+  display: flex; align-items: center; gap: 4px;
+  background: none; border: 1px solid var(--border-muted); border-radius: 10px;
+  padding: 2px 8px; cursor: pointer; color: var(--text-secondary); font-size: 11px;
+  transition: border-color 0.15s;
+}
+.ai-model-badge-btn:hover { border-color: var(--accent-fg); color: var(--text-bright); }
+.ai-model-badge-icon { font-size: 10px; opacity: 0.6; }
+.ai-model-badge-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-model-badge-caret { font-size: 8px; opacity: 0.6; }
+.ai-model-picker-menu {
+  position: absolute; bottom: calc(100% + 4px); left: 8px;
+  background: var(--bg-overlay); border: 1px solid var(--border-muted); border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 200; min-width: 200px; overflow: hidden;
+}
+.ai-model-picker-item {
+  padding: 7px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ai-model-picker-item:hover { background: var(--bg-muted); color: var(--text-bright); }
+.ai-model-picker-item.active { color: var(--accent-fg); font-weight: 600; }
 
 /* Context window bar */
 .ai-ctx-bar {
