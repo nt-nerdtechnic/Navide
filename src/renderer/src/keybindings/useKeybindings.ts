@@ -20,7 +20,7 @@ function handleKeydown(e: KeyboardEvent): void {
   const rule = _resolver.resolve(e, getContext())
   if (!rule) return
   if (executeCommand(rule.command, rule.args)) {
-    e.stopPropagation()
+    e.stopImmediatePropagation()
     e.preventDefault()
   }
 }

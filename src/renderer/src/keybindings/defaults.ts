@@ -23,4 +23,14 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+z', command: 'editor.action.redo',    when: 'editorTextFocus' },
   { key: 'cmd+y',       command: 'editor.action.redo',    when: 'editorTextFocus' },
   { key: 'cmd+a',       command: 'editor.action.selectAll', when: 'editorTextFocus' },
+  { key: 'ctrl+g', command: 'editor.action.gotoLine',         when: 'editorOpen' },
+
+  // ── Workbench: sidebar & view ────────────────────────────────────────────────
+  { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },
+  { key: 'cmd+shift+e', command: 'workbench.action.focusExplorer' },
+  { key: 'cmd+shift+g', command: 'workbench.action.focusSourceControl', when: '!findOpen' },
+
+  // ── Editor tabs ──────────────────────────────────────────────────────────────
+  { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },
+  { key: 'ctrl+shift+tab', command: 'workbench.action.openPreviousEditor' },
 ]

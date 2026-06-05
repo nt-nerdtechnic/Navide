@@ -18,7 +18,6 @@ const emit = defineEmits<{
 
 const LINE_HEIGHT = 19
 const PAD_LEFT = 8
-const GUTTER_W = 48
 
 const model = new TextModel(props.modelValue)
 const undo = new UndoStack()
@@ -30,11 +29,16 @@ const cursor = ref<Position>({ line: 0, col: 0 })
 const anchor = ref<Position | null>(null) // selection start, null when no selection
 const decorations = ref<Decoration[]>([])
 const ghost = ref<{ pos: Position; text: string } | null>(null)
+// Remembered target column for vertical navigation (arrow up/down).
+// -1 = not set; preserved across consecutive vertical moves, cleared on any other action.
+let preferredCol = -1
 
 const lineCount = computed(() => {
   version.value // track
   return model.lineCount()
 })
+// Gutter grows to accommodate the widest line number (e.g. ≥1000 lines needs 4 digits).
+const gutterWidth = computed(() => Math.max(48, String(lineCount.value).length * 9 + 12))
 
 const vs = useVirtualScroll(lineCount, LINE_HEIGHT)
 const scrollEl = ref<HTMLElement | null>(null)
@@ -100,6 +104,7 @@ function comparePos(a: Position, b: Position): number {
 // ── Editing ──────────────────────────────────────────────────────────────────
 function applyEdit(range: Range, text: string): void {
   if (props.readonly) return
+  preferredCol = -1
   const op = { range, text }
   const { inverse, caret } = model.applyEdit(op)
   undo.push(op, inverse)
@@ -156,6 +161,7 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
   startOrClearSelection(extend)
   let { line, col } = cursor.value
   if (dCol !== 0) {
+    preferredCol = -1
     col += dCol
     if (col < 0) {
       if (line > 0) { line--; col = model.getLine(line).length } else col = 0
@@ -164,8 +170,9 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
     }
   }
   if (dLine !== 0) {
+    if (preferredCol < 0) preferredCol = col
     line = Math.max(0, Math.min(line + dLine, model.lineCount() - 1))
-    col = Math.min(col, model.getLine(line).length)
+    col = Math.min(preferredCol, model.getLine(line).length)
   }
   cursor.value = { line, col }
   ghost.value = null
@@ -173,6 +180,7 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
 }
 
 function moveTo(pos: Position, extend: boolean): void {
+  preferredCol = -1
   startOrClearSelection(extend)
   cursor.value = clampPos(pos)
   void nextTick(scrollCursorIntoView)
@@ -187,6 +195,7 @@ function startOrClearSelection(extend: boolean): void {
 }
 
 function homeKey(extend: boolean): void {
+  preferredCol = -1
   startOrClearSelection(extend)
   const line = model.getLine(cursor.value.line)
   let indent = 0
@@ -194,9 +203,52 @@ function homeKey(extend: boolean): void {
   cursor.value = { line: cursor.value.line, col: cursor.value.col === indent ? 0 : indent }
 }
 function endKey(extend: boolean): void {
+  preferredCol = -1
   startOrClearSelection(extend)
   const line = cursor.value.line
   cursor.value = { line, col: model.getLine(line).length }
+}
+
+function isWordChar(ch: string): boolean { return /[a-zA-Z0-9_]/.test(ch) }
+
+function moveWordLeft(extend: boolean): void {
+  preferredCol = -1
+  startOrClearSelection(extend)
+  let { line, col } = cursor.value
+  if (col === 0) {
+    if (line > 0) { line--; col = model.getLine(line).length }
+  } else {
+    const text = model.getLine(line)
+    col--
+    while (col > 0 && (text[col] === ' ' || text[col] === '\t')) col--
+    if (isWordChar(text[col])) {
+      while (col > 0 && isWordChar(text[col - 1])) col--
+    } else {
+      while (col > 0 && !isWordChar(text[col - 1]) && text[col - 1] !== ' ' && text[col - 1] !== '\t') col--
+    }
+  }
+  cursor.value = { line, col }
+  void nextTick(scrollCursorIntoView)
+}
+
+function moveWordRight(extend: boolean): void {
+  preferredCol = -1
+  startOrClearSelection(extend)
+  let { line, col } = cursor.value
+  const text = model.getLine(line)
+  if (col >= text.length) {
+    if (line < model.lineCount() - 1) { line++; col = 0 }
+  } else {
+    if (isWordChar(text[col])) {
+      while (col < text.length && isWordChar(text[col])) col++
+    } else if (text[col] === ' ' || text[col] === '\t') {
+      while (col < text.length && (text[col] === ' ' || text[col] === '\t')) col++
+    } else {
+      while (col < text.length && !isWordChar(text[col]) && text[col] !== ' ' && text[col] !== '\t') col++
+    }
+  }
+  cursor.value = { line, col }
+  void nextTick(scrollCursorIntoView)
 }
 
 // ── Indent / dedent selected lines ───────────────────────────────────────────
@@ -266,11 +318,20 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault(); selectAll(); return
   }
 
+  // Arrow + modifier combos (must precede switch to capture modifiers)
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault()
+    const left = e.key === 'ArrowLeft'
+    if (e.altKey) { left ? moveWordLeft(shift) : moveWordRight(shift) }
+    else if (mod)  { left ? homeKey(shift)      : endKey(shift)       }
+    else           { moveCursor(0, left ? -1 : 1, shift)              }
+    return
+  }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault(); moveCursor(e.key === 'ArrowUp' ? -1 : 1, 0, shift); return
+  }
+
   switch (e.key) {
-    case 'ArrowLeft': e.preventDefault(); moveCursor(0, -1, shift); break
-    case 'ArrowRight': e.preventDefault(); moveCursor(0, 1, shift); break
-    case 'ArrowUp': e.preventDefault(); moveCursor(-1, 0, shift); break
-    case 'ArrowDown': e.preventDefault(); moveCursor(1, 0, shift); break
     case 'Home': e.preventDefault(); homeKey(shift); break
     case 'End': e.preventDefault(); endKey(shift); break
     case 'Backspace': e.preventDefault(); deleteBackward(); break
@@ -306,11 +367,58 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
+const AUTO_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" }
+const CLOSE_CHARS = new Set([')', ']', '}', '"', "'"])
+
 function onInput(): void {
   const ta = textareaEl.value
   if (!ta || composing) return
   const v = ta.value
-  if (v) { insertText(v); ta.value = '' }
+  if (!v) return
+  ta.value = ''
+
+  // Single-char auto-pair logic (skip for paste / multi-char input)
+  if (v.length === 1) {
+    const closing = AUTO_PAIRS[v]
+    if (closing) {
+      const sel = selectionRange()
+      if (sel && sel.start.line === sel.end.line) {
+        // Wrap single-line selection: type `(selection)`
+        const inner = model.getValueInRange(sel)
+        insertText(v + inner + closing)
+        // Reselect inner content
+        const end = cursor.value
+        anchor.value = { line: end.line, col: end.col - closing.length - inner.length }
+        cursor.value = { line: end.line, col: end.col - closing.length }
+        return
+      } else if (sel) {
+        // Multi-line selection: just insert the bracket normally
+        insertText(v)
+        return
+      }
+      // Skip if next char is already the same closing bracket
+      const c = cursor.value
+      const lineText = model.getLine(c.line)
+      if (v === '"' || v === "'") {
+        if (lineText[c.col] === v) { cursor.value = { line: c.line, col: c.col + 1 }; void nextTick(scrollCursorIntoView); return }
+      }
+      insertText(v + closing)
+      cursor.value = { ...cursor.value, col: cursor.value.col - 1 }
+      void nextTick(scrollCursorIntoView)
+      return
+    }
+    // Skip over auto-inserted closing char
+    if (CLOSE_CHARS.has(v)) {
+      const c = cursor.value
+      if (model.getLine(c.line)[c.col] === v) {
+        cursor.value = { line: c.line, col: c.col + 1 }
+        void nextTick(scrollCursorIntoView)
+        return
+      }
+    }
+  }
+
+  insertText(v)
 }
 function onCompositionEnd(): void {
   composing = false
@@ -318,14 +426,17 @@ function onCompositionEnd(): void {
 }
 
 function doUndo(): void {
+  preferredCol = -1
   const p = undo.undo(model)
   if (p) { cursor.value = p; anchor.value = null; afterChange() }
 }
 function doRedo(): void {
+  preferredCol = -1
   const p = undo.redo(model)
   if (p) { cursor.value = p; anchor.value = null; afterChange() }
 }
 function selectAll(): void {
+  preferredCol = -1
   const last = model.lineCount() - 1
   anchor.value = { line: 0, col: 0 }
   cursor.value = { line: last, col: model.getLine(last).length }
@@ -337,15 +448,42 @@ function posFromMouse(e: MouseEvent): Position {
   if (!el) return cursor.value
   const rect = el.getBoundingClientRect()
   const y = e.clientY - rect.top + el.scrollTop
-  const x = e.clientX - rect.left + el.scrollLeft - GUTTER_W - PAD_LEFT
+  const x = e.clientX - rect.left + el.scrollLeft - gutterWidth.value - PAD_LEFT
   const line = Math.max(0, Math.min(Math.floor(y / LINE_HEIGHT), model.lineCount() - 1))
   const col = Math.max(0, Math.min(Math.round(x / charWidth.value), model.getLine(line).length))
   return { line, col }
 }
+
+function selectWordAt(pos: Position): void {
+  preferredCol = -1
+  const text = model.getLine(pos.line)
+  let start = Math.min(pos.col, text.length)
+  let end = start
+  if (start < text.length && isWordChar(text[start])) {
+    while (start > 0 && isWordChar(text[start - 1])) start--
+    while (end < text.length && isWordChar(text[end])) end++
+  }
+  anchor.value = { line: pos.line, col: start }
+  cursor.value = { line: pos.line, col: end }
+}
+
+function selectLineAt(lineNum: number): void {
+  preferredCol = -1
+  anchor.value = { line: lineNum, col: 0 }
+  cursor.value = { line: lineNum, col: model.getLine(lineNum).length }
+}
+
 let dragging = false
 function onMousedown(e: MouseEvent): void {
   if (e.button !== 0) return
-  moveTo(posFromMouse(e), e.shiftKey)
+  const pos = posFromMouse(e)
+  if (e.detail === 3) {
+    e.preventDefault(); selectLineAt(pos.line); focus(); return
+  }
+  if (e.detail === 2) {
+    e.preventDefault(); selectWordAt(pos); focus(); return
+  }
+  moveTo(pos, e.shiftKey)
   dragging = true
   focus()
 }
@@ -368,7 +506,7 @@ function scrollCursorIntoView(): void {
 
 // ── Geometry for caret / selection overlays ──────────────────────────────────
 function xFor(col: number): number {
-  return GUTTER_W + PAD_LEFT + col * charWidth.value
+  return gutterWidth.value + PAD_LEFT + col * charWidth.value
 }
 const caretStyle = computed(() => ({
   left: xFor(cursor.value.col) + 'px',
@@ -547,7 +685,7 @@ defineExpose({
             class="ev-line"
             :style="{ top: (rl.index * LINE_HEIGHT - vs.offsetY.value) + 'px', height: LINE_HEIGHT + 'px' }"
           >
-            <span class="ev-gutter" :style="{ width: GUTTER_W + 'px' }">{{ rl.index + 1 }}</span>
+            <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
             <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px' }"><span
               v-for="(s, si) in rl.segments"
               :key="si"

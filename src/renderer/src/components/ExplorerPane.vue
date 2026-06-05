@@ -236,17 +236,26 @@ async function copyPath(entry: FsEntry): Promise<void> {
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
+function doInitialLoad(): void {
+  if (!props.workspacePath) return
+  void explorer.loadDir('')
+  void git.loadStatus()
+}
+
 onMounted(() => {
-  if (props.workspacePath) {
-    void explorer.loadDir('')
-    void git.loadStatus()
+  if (props.backend.status.value === 'connected') {
+    doInitialLoad()
   }
+  // If backend isn't connected yet (fresh editor window), wait for it.
+  watch(
+    () => props.backend.status.value,
+    (s) => {
+      if (s === 'connected' && explorer.childrenCache.value.size === 0) doInitialLoad()
+    },
+  )
 })
 watch(wsRef, (v) => {
-  if (v) {
-    void explorer.loadDir('')
-    void git.loadStatus()
-  }
+  if (v) doInitialLoad()
 })
 </script>
 

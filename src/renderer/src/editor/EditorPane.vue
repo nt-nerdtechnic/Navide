@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
+import { setContext } from '../keybindings/useKeybindings'
 import EditorView from './view/EditorView.vue'
 import type { Range, Position } from './types'
 
@@ -57,9 +58,17 @@ const langDisplay = computed(() => LANG_MAP[lang.value] ?? (lang.value ? lang.va
 // ── Status bar cursor position ─────────────────────────────────────────────────
 const cursorLine = ref(1)
 const cursorCol = ref(1)
+const selectionInfo = ref('')
 function onCursorChange(pos: Position): void {
   cursorLine.value = pos.line + 1
   cursorCol.value = pos.col + 1
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  if (sel) {
+    const lineCount = sel.split('\n').length
+    selectionInfo.value = lineCount > 1 ? `${lineCount} 行已選` : `${sel.length} 字元已選`
+  } else {
+    selectionInfo.value = ''
+  }
 }
 
 interface FsRead { ok: boolean; content?: string; error?: string }
@@ -173,6 +182,17 @@ const findInputEl = ref<HTMLInputElement | null>(null)
 watch([findQuery, findCase], () => { if (findOpen.value) computeMatches() })
 watch(content, () => { if (findOpen.value && findQuery.value) computeMatches() })
 
+// Sync findOpen/editorTextFocus to keybinding context so when-clauses work.
+watch(findOpen, (v) => {
+  if (!props.embedded || props.active !== false) setContext('findOpen', v)
+})
+watch(() => props.active, (active) => {
+  if (props.embedded && active === false) {
+    setContext('findOpen', false)
+    setContext('editorTextFocus', false)
+  }
+})
+
 function openFind(): void {
   const sel = editorRef.value?.getSelectionText() ?? ''
   if (!findOpen.value) {
@@ -267,6 +287,22 @@ function onGotoKeydown(e: KeyboardEvent): void {
   else if (e.key === 'Enter') { e.preventDefault(); submitGoto() }
 }
 
+function onEditorBodyFocusin(e: FocusEvent): void {
+  if (props.embedded && props.active === false) return
+  if ((e.target as HTMLElement)?.tagName === 'TEXTAREA') {
+    setContext('editorTextFocus', true)
+  }
+}
+function onEditorBodyFocusout(e: FocusEvent): void {
+  if ((e.target as HTMLElement)?.tagName === 'TEXTAREA') {
+    const body = e.currentTarget as HTMLElement
+    const related = e.relatedTarget as HTMLElement | null
+    if (!related || !body.contains(related)) {
+      setContext('editorTextFocus', false)
+    }
+  }
+}
+
 async function requestGhost(): Promise<void> {
   const cur = editorRef.value?.getCursor()
   const value = editorRef.value?.getValue() ?? ''
@@ -341,7 +377,7 @@ defineExpose({ save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, ope
     </div>
 
     <!-- Editor -->
-    <div class="ep-body">
+    <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout">
       <div v-if="loadError" class="ep-error">{{ loadError }}</div>
       <EditorView
         v-else-if="loaded"
@@ -428,6 +464,7 @@ defineExpose({ save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, ope
     <!-- Status bar -->
     <div class="ep-statusbar">
       <span class="ep-status-pos">Ln {{ cursorLine }}, Col {{ cursorCol }}</span>
+      <span v-if="selectionInfo" class="ep-status-sel">{{ selectionInfo }}</span>
       <span class="ep-status-right">
         <span class="ep-status-lang">{{ langDisplay }}</span>
         <span class="ep-status-sep">·</span>

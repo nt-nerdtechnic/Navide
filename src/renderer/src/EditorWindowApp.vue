@@ -47,6 +47,7 @@ const initialSidebar = (['explorer', 'search', 'git'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
 const sidebarView = ref<'explorer' | 'search' | 'git'>(initialSidebar)
+const sidebarHidden = ref(false)
 const changesCount = ref(0)
 const activePath = computed(() => activeRel.value.split('/').filter(Boolean))
 
@@ -98,7 +99,22 @@ registerCommand('editor.action.openFind',      () => activeEditor()?.openFind())
 registerCommand('editor.action.nextMatch',     () => activeEditor()?.nextMatch())
 registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch())
 registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
-registerCommand('workbench.action.findInFiles', () => { sidebarView.value = 'search' })
+registerCommand('workbench.action.findInFiles', () => { sidebarHidden.value = false; sidebarView.value = 'search' })
+registerCommand('workbench.action.toggleSidebar', () => { sidebarHidden.value = !sidebarHidden.value })
+registerCommand('workbench.action.focusExplorer', () => { sidebarHidden.value = false; sidebarView.value = 'explorer' })
+registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
+registerCommand('workbench.action.openNextEditor', () => {
+  const files = openFiles.value
+  if (!files.length) return
+  const idx = files.findIndex((f) => f.relPath === activeRel.value)
+  activeRel.value = files[(idx + 1) % files.length]?.relPath ?? ''
+})
+registerCommand('workbench.action.openPreviousEditor', () => {
+  const files = openFiles.value
+  if (!files.length) return
+  const idx = files.findIndex((f) => f.relPath === activeRel.value)
+  activeRel.value = files[(idx - 1 + files.length) % files.length]?.relPath ?? ''
+})
 
 watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
 
@@ -186,7 +202,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
     </div>
 
     <!-- Sidebar -->
-    <div class="ide-sidebar" :style="{ width: sidebarWidth + 'px' }">
+    <div v-show="!sidebarHidden" class="ide-sidebar" :style="{ width: sidebarWidth + 'px' }">
       <ExplorerPane
         v-show="sidebarView === 'explorer'"
         :workspace-path="workspacePath"
@@ -211,7 +227,7 @@ if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialN
         @changes-count="changesCount = $event"
       />
     </div>
-    <div class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
+    <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
 
     <!-- Editor area -->
     <div class="ide-main">
