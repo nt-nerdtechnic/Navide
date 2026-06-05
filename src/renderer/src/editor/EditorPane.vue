@@ -627,6 +627,18 @@ function cursorWordLeftSelect(): void { editorRef.value?.cursorWordLeftSelect() 
 function cursorWordRightSelect(): void { editorRef.value?.cursorWordRightSelect() }
 function scrollLineUp(): void { editorRef.value?.scrollLineUp() }
 function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
+
+// ── Tab size / indentation ────────────────────────────────────────────────────
+const editorTabSize = ref(2)
+const editorUseSpaces = ref(true)
+const indentPickerOpen = ref(false)
+function openIndentPicker(): void { indentPickerOpen.value = !indentPickerOpen.value }
+function setIndent(size: number, spaces: boolean): void {
+  editorTabSize.value = size
+  editorUseSpaces.value = spaces
+  editorRef.value?.setTabSize(size)
+  editorRef.value?.setUseSpaces(spaces)
+}
 function transformToUppercase(): void { editorRef.value?.transformToUppercase() }
 function transformToLowercase(): void { editorRef.value?.transformToLowercase() }
 function transformToTitleCase(): void { editorRef.value?.transformToTitleCase() }
@@ -722,6 +734,7 @@ defineExpose({
   openReplace,
   getContent: () => content.value,
   changeEOL,
+  setIndent,
   getWordAtCursor: () => editorRef.value?.getWordAtCursor() ?? '',
   getSelection: () => editorRef.value?.getSelectionText() ?? '',
   insertTextAtCursor: (text: string) => editorRef.value?.insertText(text),
@@ -888,10 +901,20 @@ defineExpose({
       <span class="ep-status-right">
         <button class="ep-status-eol" :title="`Line Ending: ${eol} — click to toggle`" @click="changeEOL(eol === 'LF' ? 'CRLF' : 'LF')">{{ eol }}</button>
         <span class="ep-status-sep">·</span>
+        <button class="ep-status-indent" :title="`Indentation: ${editorUseSpaces ? editorTabSize + ' Spaces' : 'Tabs'} — click to change`" @click="openIndentPicker">{{ editorUseSpaces ? `Spaces: ${editorTabSize}` : 'Tab Size: ' + editorTabSize }}</button>
+        <span class="ep-status-sep">·</span>
         <span class="ep-status-lang">{{ langDisplay }}</span>
         <span class="ep-status-sep">·</span>
         <span class="ep-status-enc">UTF-8</span>
       </span>
+    </div>
+
+    <!-- Indent picker -->
+    <div v-if="indentPickerOpen" class="ep-indent-picker">
+      <div class="ep-indent-header">Indentation</div>
+      <button v-for="n in [2, 4, 6, 8]" :key="n" class="ep-indent-opt" :class="{ active: editorUseSpaces && editorTabSize === n }" @click="setIndent(n, true); indentPickerOpen = false">{{ n }} Spaces</button>
+      <div class="ep-indent-sep" />
+      <button v-for="n in [2, 4, 8]" :key="'t' + n" class="ep-indent-opt" :class="{ active: !editorUseSpaces && editorTabSize === n }" @click="setIndent(n, false); indentPickerOpen = false">Tabs ({{ n }})</button>
     </div>
   </div>
 </template>
@@ -1116,6 +1139,7 @@ defineExpose({
 .ep-ctx-sep { height: 1px; background: var(--border-default); margin: 3px 0; }
 
 .ep-statusbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1132,10 +1156,20 @@ defineExpose({
 .ep-status-sel { color: var(--accent-fg); font-variant-numeric: tabular-nums; padding-left: 8px; }
 .ep-status-right { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
 .ep-status-sep { opacity: 0.5; }
-.ep-status-eol {
+.ep-status-eol, .ep-status-indent {
   background: none; border: none; cursor: pointer; padding: 0 2px;
   color: inherit; font-size: inherit; font-family: inherit;
   opacity: 0.85;
 }
-.ep-status-eol:hover { color: var(--accent-fg); opacity: 1; }
+.ep-status-eol:hover, .ep-status-indent:hover { color: var(--accent-fg); opacity: 1; }
+.ep-indent-picker {
+  position: absolute; bottom: calc(100% + 4px); right: 8px;
+  background: var(--bg-overlay); border: 1px solid var(--border-default);
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.28);
+  padding: 4px 0; min-width: 140px; z-index: 300;
+}
+.ep-indent-header { padding: 4px 12px 2px; font-size: 10px; opacity: 0.5; text-transform: uppercase; letter-spacing: .04em; }
+.ep-indent-opt { display: block; width: 100%; text-align: left; padding: 4px 12px; background: none; border: none; cursor: pointer; font-size: 12px; color: var(--text-primary); }
+.ep-indent-opt:hover, .ep-indent-opt.active { background: var(--accent-muted); color: var(--accent-fg); }
+.ep-indent-sep { height: 1px; background: var(--border-default); margin: 3px 0; }
 </style>

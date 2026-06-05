@@ -392,22 +392,24 @@ function deleteLineRight(): void {
 }
 
 // ── Indent / dedent selected lines ───────────────────────────────────────────
-const INDENT = '  '
+const tabSize = ref(2)
+const useSpaces = ref(true)
+const INDENT = computed(() => useSpaces.value ? ' '.repeat(tabSize.value) : '\t')
 
 function indentLines(startLine: number, endLine: number): void {
   const savedAnchor = anchor.value ? { ...anchor.value } : null
   const savedCursor = { ...cursor.value }
   const newContent = Array.from({ length: endLine - startLine + 1 }, (_, i) =>
-    INDENT + model.getLine(startLine + i),
+    INDENT.value + model.getLine(startLine + i),
   ).join('\n')
   applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, newContent)
   // Restore selection shifted by INDENT.length on each affected line.
   // Guard: only shift positions within [startLine, endLine], matching dedentLines' anchorIdx logic.
   anchor.value = savedAnchor && savedAnchor.line >= startLine && savedAnchor.line <= endLine
-    ? { line: savedAnchor.line, col: savedAnchor.col + INDENT.length }
+    ? { line: savedAnchor.line, col: savedAnchor.col + INDENT.value.length }
     : savedAnchor
   cursor.value = savedCursor.line >= startLine && savedCursor.line <= endLine
-    ? { line: savedCursor.line, col: savedCursor.col + INDENT.length }
+    ? { line: savedCursor.line, col: savedCursor.col + INDENT.value.length }
     : savedCursor
 }
 
@@ -418,7 +420,7 @@ function dedentLines(startLine: number, endLine: number): void {
   const newContent = Array.from({ length: endLine - startLine + 1 }, (_, i) => {
     const line = model.getLine(startLine + i)
     let removed = 0
-    while (removed < INDENT.length && line[removed] === ' ') removed++
+    while (removed < INDENT.value.length && line[removed] === ' ') removed++
     // Tab-indented files: if no spaces found, remove one leading tab
     if (removed === 0 && line[0] === '\t') removed = 1
     removals.push(removed)
@@ -560,8 +562,8 @@ function onKeydown(e: KeyboardEvent): void {
       // Smart bracket expansion: pressing Enter between {|}, [|], (|) adds indented inner line
       const EXPAND_PAIRS: Record<string, string> = { '{': '}', '[': ']', '(': ')' }
       if (!selectionRange() && c.col > 0 && c.col < curLine.length && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
-        applyEdit({ start: c, end: c }, '\n' + indent + INDENT + '\n' + indent)
-        cursor.value = { line: c.line + 1, col: indent.length + INDENT.length }
+        applyEdit({ start: c, end: c }, '\n' + indent + INDENT.value + '\n' + indent)
+        cursor.value = { line: c.line + 1, col: indent.length + INDENT.value.length }
         break
       }
       insertText('\n' + indent)
@@ -578,7 +580,7 @@ function onKeydown(e: KeyboardEvent): void {
         const endLn = sel.end.col > 0 ? sel.end.line : Math.max(sel.start.line, sel.end.line - 1)
         indentLines(sel.start.line, endLn)
       } else {
-        insertText(INDENT)
+        insertText(INDENT.value)
       }
       break
     }
@@ -934,13 +936,13 @@ function indentationToSpaces(): void {
     const text = model.getLine(ln)
     let tabs = 0
     while (tabs < text.length && text[tabs] === '\t') tabs++
-    lines.push(tabs > 0 ? INDENT.repeat(tabs) + text.slice(tabs) : text)
+    lines.push(tabs > 0 ? INDENT.value.repeat(tabs) + text.slice(tabs) : text)
   }
   applyEdit({ start: { line: 0, col: 0 }, end: { line: totalLines - 1, col: model.getLine(totalLines - 1).length } }, lines.join('\n'))
 }
 function indentationToTabs(): void {
   const totalLines = model.lineCount()
-  const spaceSize = INDENT.length
+  const spaceSize = INDENT.value.length
   const lines: string[] = []
   for (let ln = 0; ln < totalLines; ln++) {
     const text = model.getLine(ln)
@@ -1132,6 +1134,11 @@ function cursorWordLeft(): void { moveWordLeft(false) }
 function cursorWordRight(): void { moveWordRight(false) }
 function cursorWordLeftSelect(): void { moveWordLeft(true) }
 function cursorWordRightSelect(): void { moveWordRight(true) }
+
+function setTabSize(size: number): void { tabSize.value = Math.max(1, Math.min(8, size)) }
+function setUseSpaces(spaces: boolean): void { useSpaces.value = spaces }
+function getTabSize(): number { return tabSize.value }
+function getUseSpaces(): boolean { return useSpaces.value }
 
 const BRACKET_OPEN = new Set(['(', '[', '{'])
 const BRACKET_CLOSE = new Set([')', ']', '}'])
@@ -1583,6 +1590,7 @@ defineExpose({
   insertText,
   cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
   cursorTopSelect, cursorBottomSelect,
+  setTabSize, setUseSpaces, getTabSize, getUseSpaces,
 })
 </script>
 
