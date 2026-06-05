@@ -671,3 +671,19 @@ describe('inlineRewrite shortcut (chord fix)', () => {
     expect(dr.resolve(mkEvent('i', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
   })
 })
+
+describe('focusActiveEditorGroup shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+k cmd+e → focusActiveEditorGroup (editorOpen)', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), { editorOpen: true }) // enter chord
+    expect(dr.resolve(mkEvent('e', { metaKey: true }), { editorOpen: true })?.command)
+      .toBe('workbench.action.focusActiveEditorGroup')
+  })
+
+  it('cmd+k cmd+e requires editorOpen', () => {
+    dr.resolve(mkEvent('k', { metaKey: true }), {}) // enter chord attempt
+    expect(dr.resolve(mkEvent('e', { metaKey: true }), {})).toBeNull()
+  })
+})

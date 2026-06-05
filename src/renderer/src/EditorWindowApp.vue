@@ -545,6 +545,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.toggleSidebar',label: '切換側邊欄',     keys: '⌘B' },
   { id: 'workbench.action.focusExplorer',label: '顯示檔案總管',   keys: '⌘⇧E' },
   { id: 'workbench.action.focusSourceControl', label: '顯示原始碼控制', keys: '⌘⇧G' },
+  { id: 'workbench.action.focusActiveEditorGroup', label: '聚焦編輯器', keys: '⌘K ⌘E' },
   { id: 'workbench.action.findInFiles',  label: '在檔案中搜尋',   keys: '⌘⇧F' },
   { id: 'workbench.action.openNextEditor',      label: '切換下一分頁',   keys: '⌃Tab' },
   { id: 'workbench.action.openPreviousEditor',  label: '切換上一分頁',   keys: '⌃⇧Tab' },
@@ -1108,6 +1109,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :get-editor-content="() => activeEditor()?.getContent?.() ?? ''"
         :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
+        :insert-text-at-cursor="(text: string) => activeEditor()?.insertTextAtCursor?.(text)"
       />
     </div>
   </div>
