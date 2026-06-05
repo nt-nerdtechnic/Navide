@@ -482,12 +482,19 @@ watch(gotoLineInput, () => { if (gotoOpen.value) _applyGotoInput() })
 const ctxOpen = ref(false)
 const ctxX = ref(0)
 const ctxY = ref(0)
-function showContextMenu(e: MouseEvent): void {
+const ctxMenuEl = ref<HTMLElement | null>(null)
+async function showContextMenu(e: MouseEvent): Promise<void> {
   e.preventDefault()
-  ctxOpen.value = true
   const container = (e.currentTarget as HTMLElement).getBoundingClientRect()
   ctxX.value = e.clientX - container.left
   ctxY.value = e.clientY - container.top
+  ctxOpen.value = true
+  await nextTick()
+  if (ctxMenuEl.value) {
+    const rect = ctxMenuEl.value.getBoundingClientRect()
+    if (rect.right > window.innerWidth) ctxX.value -= rect.right - window.innerWidth + 4
+    if (rect.bottom > window.innerHeight) ctxY.value -= rect.bottom - window.innerHeight + 4
+  }
 }
 function closeContextMenu(): void { ctxOpen.value = false }
 let _ctxEscHandler: ((e: KeyboardEvent) => void) | null = null
@@ -789,7 +796,7 @@ defineExpose({
 
       <!-- Context menu -->
       <div v-if="ctxOpen" class="ep-ctx-backdrop" @mousedown.self="closeContextMenu">
-        <div class="ep-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
+        <div ref="ctxMenuEl" class="ep-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
           <button class="ep-ctx-item" @click="ctxCut">Cut</button>
           <button class="ep-ctx-item" @click="ctxCopy">Copy</button>
           <button class="ep-ctx-item" @click="ctxPaste">Paste</button>
