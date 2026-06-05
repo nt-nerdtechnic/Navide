@@ -1069,6 +1069,7 @@ function stopStreaming(): void {
   if (last?.streaming) { last.streaming = false; last.thinking = false }
   sending.value = false
   currentSessionId.value = null
+  if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
 }
 
 // ── Clear conversation (clear current thread) ──────────────────────────────────
