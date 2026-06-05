@@ -443,6 +443,8 @@ function removeLineComment(): void { editorRef.value?.removeLineComment() }
 function toggleBlockComment(): void { editorRef.value?.toggleBlockComment() }
 function jumpToLine(n: number): void { editorRef.value?.revealLine(n); editorRef.value?.focus() }
 function deleteLine(): void { editorRef.value?.deleteLine() }
+function deleteWordLeft(): void { editorRef.value?.deleteWordLeft() }
+function deleteWordRight(): void { editorRef.value?.deleteWordRight() }
 function deleteLineLeft(): void { editorRef.value?.deleteLineLeft() }
 function deleteLineRight(): void { editorRef.value?.deleteLineRight() }
 function insertLineBelow(): void { editorRef.value?.insertLineBelow() }
@@ -469,6 +471,9 @@ function shrinkSelection(): void { editorRef.value?.shrinkSelection() }
 function joinLines(): void { editorRef.value?.joinLines() }
 function sortLinesAscending(): void { editorRef.value?.sortLinesAscending() }
 function sortLinesDescending(): void { editorRef.value?.sortLinesDescending() }
+function transpose(): void { editorRef.value?.transpose() }
+function indentationToSpaces(): void { editorRef.value?.indentationToSpaces() }
+function indentationToTabs(): void { editorRef.value?.indentationToTabs() }
 
 function selectNextOccurrence(): void {
   const curSel = editorRef.value?.getSelectionText() ?? ''
@@ -522,11 +527,12 @@ function selectAll(): void { editorRef.value?.selectAll() }
 defineExpose({
   save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
   toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
-  deleteLine, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
+  deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines, sortLinesAscending, sortLinesDescending,
+  transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
   selectNextOccurrence, selectAllOccurrences,
   setLanguage, zoomIn, zoomOut, zoomReset,

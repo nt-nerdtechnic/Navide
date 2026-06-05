@@ -264,6 +264,8 @@ registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !ai
 function getActiveRelPath(): string { return activeRel.value }
 registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
 registerCommand('editor.action.deleteLines',      () => activeEditor()?.deleteLine())
+registerCommand('editor.action.deleteWordLeft',   () => activeEditor()?.deleteWordLeft())
+registerCommand('editor.action.deleteWordRight',  () => activeEditor()?.deleteWordRight())
 registerCommand('editor.action.deleteAllLeft',    () => activeEditor()?.deleteLineLeft())
 registerCommand('editor.action.deleteAllRight',   () => activeEditor()?.deleteLineRight())
 registerCommand('editor.action.insertLineAfter',  () => activeEditor()?.insertLineBelow())
@@ -341,6 +343,13 @@ registerCommand('workbench.action.closeAllEditors', () => {
   openFiles.value = []
   activeRel.value = ''
 })
+registerCommand('workbench.action.closeOtherEditors', () => {
+  const cur = activeRel.value
+  if (!cur) return
+  const others = openFiles.value.filter((f) => f.relPath !== cur && f.kind === 'file' && f.dirty)
+  if (others.length > 0 && !window.confirm(`有 ${others.length} 個未存檔的檔案，確定要關閉其他分頁？`)) return
+  openFiles.value = openFiles.value.filter((f) => f.relPath === cur)
+})
 registerCommand('workbench.action.openNextEditor', () => {
   const files = openFiles.value
   if (!files.length) return
@@ -393,6 +402,17 @@ watch(activeRel, (rel) => setContext('editorOpen', !!rel), { immediate: true })
 
 // ── Explorer pane ref (for revealFile) ───────────────────────────────────────
 const explorerRef = ref<{ revealFile: (path: string) => Promise<void> } | null>(null)
+
+// ── Search pane ref (for openReplace) ────────────────────────────────────────
+const searchRef = ref<{ openReplace: () => void } | null>(null)
+registerCommand('workbench.action.findInFilesReplace', () => {
+  sidebarHidden.value = false
+  sidebarView.value = 'search'
+  void nextTick(() => searchRef.value?.openReplace())
+})
+registerCommand('editor.action.transpose',           () => activeEditor()?.transpose())
+registerCommand('editor.action.indentationToSpaces', () => activeEditor()?.indentationToSpaces())
+registerCommand('editor.action.indentationToTabs',   () => activeEditor()?.indentationToTabs())
 
 // ── Tab bar: auto-scroll active tab into view ─────────────────────────────────
 const tabsEl = ref<HTMLElement | null>(null)
@@ -473,8 +493,11 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.openEditorAtIndex1', label: '切換到第 1 個分頁', keys: '⌘1' },
   { id: 'workbench.action.openEditorAtIndex2', label: '切換到第 2 個分頁', keys: '⌘2' },
   { id: 'workbench.action.openEditorAtIndex3', label: '切換到第 3 個分頁', keys: '⌘3' },
+  { id: 'editor.action.deleteWordLeft',              label: '刪除前一個字詞',   keys: '⌥⌫' },
+  { id: 'editor.action.deleteWordRight',             label: '刪除後一個字詞',   keys: '⌥⌦' },
   { id: 'editor.action.deleteAllLeft',              label: '刪除到行首',       keys: '⌘⌫' },
   { id: 'editor.action.deleteAllRight',             label: '刪除到行尾',       keys: '⌘⌦' },
+  { id: 'workbench.action.closeOtherEditors',       label: '關閉其他編輯器' },
   { id: 'workbench.action.moveEditorRightInGroup',  label: '將分頁向右移動',   keys: '⌘⇧]' },
   { id: 'workbench.action.moveEditorLeftInGroup',   label: '將分頁向左移動',   keys: '⌘⇧[' },
   { id: 'workbench.action.navigateBack',    label: '返回上一個位置', keys: '⌃-' },
@@ -482,6 +505,10 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.toggleZenMode',  label: '切換禪模式',    keys: '⌘K ⌘Z' },
   { id: 'workbench.action.openFolder',    label: '開啟資料夾',    keys: '⌘K ⌘O' },
   { id: 'workbench.action.reloadWindow',  label: '重新載入視窗' },
+  { id: 'workbench.action.findInFilesReplace', label: '在檔案中取代', keys: '⌘⇧H' },
+  { id: 'editor.action.transpose',           label: '轉置字元',     keys: '⌃T' },
+  { id: 'editor.action.indentationToSpaces', label: '縮排轉換為空格' },
+  { id: 'editor.action.indentationToTabs',   label: '縮排轉換為 Tab' },
 ]
 const paletteOpen = ref(false)
 const paletteQuery = ref('')
@@ -832,6 +859,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @open-file="openFile"
       />
       <SearchPane
+        ref="searchRef"
         v-show="sidebarView === 'search'"
         :workspace-path="workspacePath"
         :backend="backend"

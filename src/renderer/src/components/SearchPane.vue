@@ -227,6 +227,12 @@ onMounted(() => {
   void Promise.resolve().then(() => queryInput.value?.focus())
 })
 onUnmounted(() => { if (debounce) clearTimeout(debounce) })
+
+function openReplace(): void {
+  showReplace.value = true
+  void nextTick(() => queryInput.value?.focus())
+}
+defineExpose({ openReplace })
 </script>
 
 <template>

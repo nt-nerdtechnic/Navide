@@ -491,12 +491,16 @@ const autoCommitPending = ref(false)
 const autoCommitStep = ref<'' | 'staging' | 'checking' | 'generating' | 'committing'>('')
 // Whole-flow lock: prevents concurrent runs and blocks manual ✦ during auto-commit
 const autoCommitRunning = ref(false)
+const autoCommitCountdown = ref(0)
 const AUTO_COMMIT_DELAY_MS = 60_000  // wait 60s of no new changes
 let _autoCommitTimer: ReturnType<typeof setTimeout> | null = null
+let _countdownInterval: ReturnType<typeof setInterval> | null = null
 
 function _clearAutoTimer(): void {
   if (_autoCommitTimer) { clearTimeout(_autoCommitTimer); _autoCommitTimer = null }
+  if (_countdownInterval) { clearInterval(_countdownInterval); _countdownInterval = null }
   autoCommitPending.value = false
+  autoCommitCountdown.value = 0
 }
 
 async function runAutoCommit(): Promise<void> {
@@ -545,6 +549,15 @@ function scheduleAutoCommit(): void {
   _clearAutoTimer()
   if (!autoCommit.value || !hasChanges.value) return
   autoCommitPending.value = true
+  const totalSecs = AUTO_COMMIT_DELAY_MS / 1000
+  autoCommitCountdown.value = totalSecs
+  _countdownInterval = setInterval(() => {
+    if (autoCommitCountdown.value > 1) {
+      autoCommitCountdown.value--
+    } else {
+      clearInterval(_countdownInterval!); _countdownInterval = null
+    }
+  }, 1_000)
   _autoCommitTimer = setTimeout(runAutoCommit, AUTO_COMMIT_DELAY_MS)
 }
 
@@ -565,7 +578,7 @@ watch(autoCommit, (val) => {
   }
 })
 
-onUnmounted(_clearAutoTimer)
+onUnmounted(() => { _clearAutoTimer() })
 
 // ── remote actions ────────────────────────────────────────────────────────────
 const { toast: notifyToast, alert: notifyAlert } = useNotify()
@@ -1283,7 +1296,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <template v-else-if="autoCommitStep === 'checking'">Lint 檢查中…</template>
             <template v-else-if="autoCommitStep === 'generating'">AI 生成 commit 訊息…</template>
             <template v-else-if="autoCommitStep === 'committing'">提交中…</template>
-            <template v-else>Auto Commit 等待中，60 秒後觸發</template>
+            <template v-else>Auto Commit 等待中，{{ autoCommitCountdown }} 秒後觸發</template>
           </span>
         </div>
       </div>

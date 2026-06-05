@@ -1,9 +1,18 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from 'vue'
 import { useNotify } from '../composables/useNotify'
 
 const { toasts, dialog, dismissToast, resolveDialog } = useNotify()
 
 const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
+
+const modalEl = ref<HTMLDivElement | null>(null)
+watch(dialog, async (d) => {
+  if (d) {
+    await nextTick()
+    modalEl.value?.focus()
+  }
+})
 </script>
 
 <template>
@@ -25,7 +34,7 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
     </div>
 
     <!-- Alert / Confirm dialog (blocking) -->
-    <div v-if="dialog" class="modal" @keydown.esc="resolveDialog(false)">
+    <div v-if="dialog" ref="modalEl" class="modal" tabindex="-1" @keydown.esc="resolveDialog(false)">
       <div class="card" :class="dialog.kind">
         <header>
           <span class="dot"></span>
@@ -128,6 +137,9 @@ const toastIcon = { success: '✓', error: '✕', info: 'ℹ' } as const
   align-items: center;
   justify-content: center;
   z-index: 2100;
+}
+.modal:focus {
+  outline: none;
 }
 .card {
   background: var(--bg-base);

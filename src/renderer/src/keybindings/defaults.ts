@@ -30,6 +30,8 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+/',         command: 'editor.action.toggleComment',  when: 'editorTextFocus' },
   { key: 'cmd+alt+/',     command: 'editor.action.blockComment',   when: 'editorTextFocus' },
   { key: 'cmd+shift+k',   command: 'editor.action.deleteLines',    when: 'editorTextFocus' },
+  { key: 'alt+backspace', command: 'editor.action.deleteWordLeft',  when: 'editorTextFocus' },
+  { key: 'alt+delete',    command: 'editor.action.deleteWordRight', when: 'editorTextFocus' },
   { key: 'cmd+backspace', command: 'editor.action.deleteAllLeft',  when: 'editorTextFocus' },
   { key: 'cmd+delete',    command: 'editor.action.deleteAllRight', when: 'editorTextFocus' },
   { key: 'cmd+enter',     command: 'editor.action.insertLineAfter', when: 'editorTextFocus' },
@@ -107,4 +109,8 @@ export const defaults: KeybindingRule[] = [
 
   // ── AI Chat ──────────────────────────────────────────────────────────────────
   { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },
+
+  // ── Replace in files / editor utilities ──────────────────────────────────────
+  { key: 'cmd+shift+h', command: 'workbench.action.findInFilesReplace' },
+  { key: 'ctrl+t',      command: 'editor.action.transpose',           when: 'editorTextFocus' },
 ]

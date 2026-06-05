@@ -524,3 +524,47 @@ describe('navigation history shortcuts', () => {
     expect(dr.resolve(mkEvent('-', { ctrlKey: true, shiftKey: true }), {})).toBeNull()
   })
 })
+
+describe('delete word shortcuts', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('alt+backspace → deleteWordLeft (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('Backspace', { altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.deleteWordLeft')
+  })
+
+  it('alt+delete → deleteWordRight (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('Delete', { altKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.deleteWordRight')
+  })
+
+  it('deleteWord shortcuts require editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('Backspace', { altKey: true }), {})).toBeNull()
+    expect(dr.resolve(mkEvent('Delete', { altKey: true }), {})).toBeNull()
+  })
+})
+
+describe('find in files replace shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+shift+h → findInFilesReplace', () => {
+    expect(dr.resolve(mkEvent('h', { metaKey: true, shiftKey: true }), {})?.command)
+      .toBe('workbench.action.findInFilesReplace')
+  })
+})
+
+describe('transpose shortcut', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('ctrl+t → transpose (editorTextFocus)', () => {
+    expect(dr.resolve(mkEvent('t', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.transpose')
+  })
+
+  it('ctrl+t requires editorTextFocus', () => {
+    expect(dr.resolve(mkEvent('t', { ctrlKey: true }), {})).toBeNull()
+  })
+})

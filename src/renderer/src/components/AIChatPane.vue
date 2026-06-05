@@ -43,6 +43,7 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   streaming?: boolean
+  model?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
 }
 
@@ -56,6 +57,32 @@ const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const showSettings = ref(false)
 const toastMsg = ref('')
 let toastTimer: number | null = null
+let saveTimer: number | null = null
+
+// ── Conversation persistence (localStorage) ────────────────────────────────────
+const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
+
+function loadHistory(): void {
+  try {
+    const raw = localStorage.getItem(historyKey.value)
+    if (!raw) return
+    const saved = JSON.parse(raw) as ChatMessage[]
+    // Drop any incomplete streaming messages from a previous session
+    messages.value = saved.filter((m) => !m.streaming).slice(-100)
+  } catch { /* ignore corrupt storage */ }
+}
+
+function saveHistory(): void {
+  if (saveTimer !== null) clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => {
+    try {
+      const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
+      localStorage.setItem(historyKey.value, JSON.stringify(toSave))
+    } catch { /* quota or serialization error */ }
+  }, 1000)
+}
+
+watch(messages, saveHistory, { deep: true })
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
@@ -232,7 +259,7 @@ async function sendMessage(): Promise<void> {
   history.push({ role: 'user', content: fullContent || displayText })
 
   // Push placeholder assistant message for streaming
-  messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [] })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
   await scrollBottom()
 
   try {
@@ -264,7 +291,56 @@ function stopStreaming(): void {
 function clearConversation(): void {
   if (sending.value) stopStreaming()
   messages.value = []
+  localStorage.removeItem(historyKey.value)
 }
+
+// ── Copy message ───────────────────────────────────────────────────────────────
+function copyMessage(content: string): void {
+  const plain = content.replace(/```[\s\S]*?```/g, (m) => m).replace(/<[^>]+>/g, '')
+  navigator.clipboard.writeText(plain).then(() => showToast('已複製')).catch(() => showToast('複製失敗'))
+}
+
+// ── Regenerate last AI response ────────────────────────────────────────────────
+async function regenerate(): Promise<void> {
+  if (sending.value) return
+  // Find last user message index
+  let lastUserIdx = -1
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'user') { lastUserIdx = i; break }
+  }
+  if (lastUserIdx === -1) return
+  // Keep only up to and including the last user message
+  messages.value = messages.value.slice(0, lastUserIdx + 1)
+  sending.value = true
+
+  const sessionId = crypto.randomUUID()
+  currentSessionId.value = sessionId
+
+  const history = messages.value.map((m) => ({ role: m.role, content: m.content }))
+  messages.value.push({ role: 'assistant', content: '', streaming: true, cards: [], model: settingsModel.value })
+  await scrollBottom()
+
+  try {
+    await props.backend.send('ai.chat.start', {
+      session_id: sessionId,
+      messages: history,
+      workspace_path: props.workspacePath,
+    })
+  } catch {
+    const last = messages.value[messages.value.length - 1]
+    if (last?.role === 'assistant') last.content = '錯誤：無法連線到後端'
+    if (last) last.streaming = false
+    sending.value = false
+    currentSessionId.value = null
+  }
+}
+
+const lastAssistantIdx = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'assistant') return i
+  }
+  return -1
+})
 
 // ── Accept edit ────────────────────────────────────────────────────────────────
 async function acceptEdit(card: EditProposalCard): Promise<void> {
@@ -454,6 +530,7 @@ function teardownListeners(): void {
 onMounted(() => {
   setupListeners()
   fetchSettings()
+  loadHistory()
 })
 
 onUnmounted(() => {
@@ -776,6 +853,21 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 
           <span v-if="msg.streaming" class="ai-cursor">▍</span>
         </div>
+        <!-- Message action bar (copy / regenerate / model badge) -->
+        <div class="ai-msg-actions" :class="msg.role">
+          <span v-if="msg.role === 'assistant' && msg.model" class="ai-model-badge">{{ msg.model }}</span>
+          <button class="ai-msg-action-btn" title="複製" @click="copyMessage(msg.content)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
+          </button>
+          <button
+            v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
+            class="ai-msg-action-btn"
+            title="重新生成"
+            @click="regenerate"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -965,9 +1057,48 @@ onUnmounted(() => document.removeEventListener('click', onClickOutside))
 }
 .ai-empty p { margin: 0; }
 
-.ai-msg-wrap { display: flex; }
-.ai-msg-wrap.user { justify-content: flex-end; }
-.ai-msg-wrap.assistant { justify-content: flex-start; }
+.ai-msg-wrap { display: flex; flex-direction: column; }
+.ai-msg-wrap.user { align-items: flex-end; }
+.ai-msg-wrap.assistant { align-items: flex-start; }
+
+/* Message action bar — model badge always visible; buttons hidden until hover */
+.ai-msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 0 4px;
+}
+.ai-msg-actions.user { justify-content: flex-end; }
+.ai-msg-actions.assistant { justify-content: flex-start; }
+.ai-model-badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-family: ui-monospace, Menlo, monospace;
+  padding: 1px 5px;
+  border: 1px solid var(--border-muted);
+  border-radius: 10px;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+.ai-msg-action-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+.ai-msg-wrap:hover .ai-msg-action-btn { opacity: 1; }
+.ai-msg-action-btn:hover {
+  background: var(--bg-subtle);
+  color: var(--text-bright);
+}
 
 .ai-bubble {
   max-width: 90%;
