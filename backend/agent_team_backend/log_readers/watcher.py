@@ -24,7 +24,6 @@ import asyncio
 import json
 import logging
 import os
-import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -103,7 +102,6 @@ class LogWatcher:
         self._rescan_task: asyncio.Task[None] | None = None
         self._save_task: asyncio.Task[None] | None = None
         self._watched_dirs: set[Path] = set()
-        self._lock = threading.Lock()
         self._started = False
 
     def add_reader(self, reader: LogReader) -> None:
@@ -222,9 +220,21 @@ class LogWatcher:
             except asyncio.CancelledError:
                 return
             if self._save_pending:
-                # Snapshot under brief lock so we don't race with parse mutation.
-                await asyncio.to_thread(self._save_seen)
+                # Take a snapshot on the event loop thread (no concurrent
+                # mutation here — asyncio is single-threaded at this point)
+                # before handing off to a worker thread for the actual I/O.
+                snapshot = {p: sorted(keys) for p, keys in self._seen_keys.items()}
                 self._save_pending = False
+                await asyncio.to_thread(self._write_snapshot, snapshot)
+
+    def _write_snapshot(self, snapshot: dict[str, list[str]]) -> None:
+        try:
+            self._seen_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._seen_path.with_suffix(self._seen_path.suffix + ".tmp")
+            tmp.write_text(json.dumps(snapshot, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, self._seen_path)
+        except OSError as err:
+            log.warning("seen-keys save failed: %s", err)
 
     def force_rescan(self) -> None:
         """Re-enqueue every session file IMMEDIATELY, ignoring in-memory dedup.
