@@ -1943,10 +1943,11 @@ function foldAll(): void {
 }
 function unfoldAll(): void { foldedLines.value = new Set() }
 function foldToLevel(n: number): void {
+  const ts = tabSize.value || 2
   const s = new Set<number>()
   for (let l = 0; l < model.lineCount(); l++) {
     const ind = _getIndent(model.getLine(l))
-    if (ind >= 0 && Math.floor(ind / 2) < n && _isFoldable(l)) s.add(l)
+    if (ind >= 0 && Math.floor(ind / ts) < n && _isFoldable(l)) s.add(l)
   }
   foldedLines.value = s
 }
