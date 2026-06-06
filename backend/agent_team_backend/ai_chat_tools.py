@@ -133,6 +133,29 @@ TOOL_DEFS = [
             "required": [],
         },
     },
+    {
+        "name": "glob_files",
+        "description": (
+            "Find files in the workspace matching a glob pattern. "
+            "Returns a list of relative file paths. "
+            "Useful for finding all files of a specific type or in a specific directory. "
+            "Examples: '**/*.test.ts', 'src/**/*.vue', '*.py'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern relative to the workspace root (e.g. '**/*.ts', 'src/**/*.vue').",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of files to return (default: 50, max: 200).",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
 ]
 
 # ── Path safety helper ────────────────────────────────────────────────────────
@@ -362,6 +385,34 @@ async def _tool_edit_file(input: dict, workspace_path: str) -> str:
     })
 
 
+async def _tool_glob_files(input: dict, workspace_path: str) -> str:
+    """Return files in workspace matching a glob pattern."""
+    pattern = (input.get("pattern") or "").strip()
+    if not pattern:
+        return "Error: pattern is required"
+    max_results = min(int(input.get("max_results") or 50), 200)
+
+    root = Path(workspace_path).resolve()
+    # Reject patterns that could escape the workspace
+    if ".." in pattern or pattern.startswith("/"):
+        return "Error: invalid pattern — must be relative and cannot contain '..'"
+
+    try:
+        matched = sorted(root.glob(pattern))
+        # Filter to files only, exclude common noise dirs
+        _SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", "out"}
+        files = [
+            str(p.relative_to(root))
+            for p in matched
+            if p.is_file() and not any(part in _SKIP for part in p.parts)
+        ][:max_results]
+        if not files:
+            return f"No files found matching pattern: {pattern}"
+        return f"Files matching '{pattern}' ({len(files)} result{'s' if len(files) != 1 else ''}):\n" + "\n".join(files)
+    except Exception as exc:
+        return f"Error: {exc}"
+
+
 async def _execute_command(command: str, cwd_rel: str, workspace_path: str) -> str:
     """Actually run a pre-approved command. Called only after user confirms."""
     if cwd_rel:
@@ -461,6 +512,8 @@ async def execute_tool(name: str, input: dict, workspace_path: str) -> str:
         return await _tool_edit_file(input, workspace_path)
     elif name == "list_directory":
         return await _tool_list_directory(input, workspace_path)
+    elif name == "glob_files":
+        return await _tool_glob_files(input, workspace_path)
     else:
         return f"Error: unknown tool: {name!r}"
 

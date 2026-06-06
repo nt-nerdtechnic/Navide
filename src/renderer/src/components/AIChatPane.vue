@@ -1670,6 +1670,7 @@ function getToolIcon(name: string): string {
     case 'edit_file':      return '✎'
     case 'run_command':    return '▶'
     case 'list_directory': return '⊞'
+    case 'glob_files':     return '✦'
     default:               return '⚙'
   }
 }
@@ -1684,6 +1685,7 @@ function getToolSummary(name: string, input: unknown): string {
     case 'edit_file':       return `Editing: ${str(inp.file_path)}`
     case 'run_command':     return `Running: ${str(inp.command)}`
     case 'list_directory':  return `Listing: ${str(inp.path) || '.'}`
+    case 'glob_files':      return `Glob: ${str(inp.pattern)}`
     default:                return name
   }
 }
@@ -1788,6 +1790,7 @@ async function sendMessage(): Promise<void> {
   if (rawText === '/test' || rawText.startsWith('/test ')) {
     if (!props.workspacePath) { showToast('/test requires an open workspace'); return }
     const extra = rawText.slice('/test'.length).trim()
+    const safeExtra = extra.replace(/[;&|`$(){}\\<>]/g, '')
     // Auto-detect test runner: vitest > pytest > npm test
     let testCmd = 'npm test -- --no-coverage 2>&1 | tail -80'
     try {
@@ -1801,7 +1804,7 @@ async function sendMessage(): Promise<void> {
       const isPytest = hasPytest.payload?.ok ||
         (hasPyproject.payload?.ok && hasPyproject.payload.content?.includes('[tool.pytest'))
       if (isPytest) {
-        testCmd = `python3 -m pytest ${extra} -q --tb=short 2>&1 | tail -100`
+        testCmd = `python3 -m pytest ${safeExtra} -q --tb=short 2>&1 | tail -100`
       } else {
         const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
           workspace_path: props.workspacePath, rel_path: 'package.json',
@@ -1810,9 +1813,9 @@ async function sendMessage(): Promise<void> {
         const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
         const deps = (pkg.dependencies ?? {}) as Record<string, string>
         if ('vitest' in devDeps || 'vitest' in deps) {
-          testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
-        } else if (extra) {
-          testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+          testCmd = `npx vitest run ${safeExtra} 2>&1 | tail -100`
+        } else if (safeExtra) {
+          testCmd = `npm test -- ${safeExtra} 2>&1 | tail -100`
         }
       }
     } catch { /* keep default */ }
@@ -1840,6 +1843,7 @@ async function sendMessage(): Promise<void> {
   if (rawText === '/fixtests' || rawText.startsWith('/fixtests ')) {
     if (!props.workspacePath) { showToast('/fixtests requires an open workspace'); return }
     const extra = rawText.slice('/fixtests'.length).trim()
+    const safeExtra = extra.replace(/[;&|`$(){}\\<>]/g, '')
     let testCmd = 'npm test -- --no-coverage 2>&1 | tail -100'
     try {
       const hasPytest = await props.backend.send<{ok:boolean}>('fs.read_file', {
@@ -1851,7 +1855,7 @@ async function sendMessage(): Promise<void> {
       const isPytest = hasPytest.payload?.ok ||
         (hasPyproject.payload?.ok && hasPyproject.payload.content?.includes('[tool.pytest'))
       if (isPytest) {
-        testCmd = `python3 -m pytest ${extra} -q --tb=short 2>&1 | tail -100`
+        testCmd = `python3 -m pytest ${safeExtra} -q --tb=short 2>&1 | tail -100`
       } else {
         const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
           workspace_path: props.workspacePath, rel_path: 'package.json',
@@ -1860,9 +1864,9 @@ async function sendMessage(): Promise<void> {
         const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
         const deps = (pkg.dependencies ?? {}) as Record<string, string>
         if ('vitest' in devDeps || 'vitest' in deps) {
-          testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
-        } else if (extra) {
-          testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+          testCmd = `npx vitest run ${safeExtra} 2>&1 | tail -100`
+        } else if (safeExtra) {
+          testCmd = `npm test -- ${safeExtra} 2>&1 | tail -100`
         }
       }
     } catch { /* keep default */ }
