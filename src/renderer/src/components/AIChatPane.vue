@@ -1683,6 +1683,11 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/ask:selection',   label: '/ask:selection',   description: 'Ask any question about the currently selected code in the editor',                                        template: '' },
   { id: '/debug:console',   label: '/debug:console',   description: 'Paste console output / log lines and get AI interpretation and fix suggestions',                          template: '' },
   { id: '/convert:types',   label: '/convert:types',   description: 'Convert between type systems: Zod ↔ TypeScript, Pydantic ↔ TypeScript, JSON Schema ↔ types',             template: '' },
+  { id: '/fix:types',       label: '/fix:types',       description: 'Run TypeScript type checker and ask AI to fix all type errors',                                             template: '' },
+  { id: '/explain:regex',   label: '/explain:regex',   description: 'Explain a regular expression in plain language — paste a regex and get a step-by-step breakdown',         template: '' },
+  { id: '/mock:data',       label: '/mock:data',       description: 'Generate realistic mock/test data for a TypeScript interface, Pydantic model, or JSON schema',            template: '' },
+  { id: '/find:dead:code',  label: '/find:dead:code',  description: 'Find unused functions, variables, exports, and dead code across the codebase',                            template: '' },
+  { id: '/deps:outdated',   label: '/deps:outdated',   description: 'Check for outdated npm/pip packages and get AI-guided update recommendations',                            template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2594,6 +2599,7 @@ async function sendMessage(): Promise<void> {
     '/thread:stats', '/lint:fix:auto', '/note:add', '/gen:table',
     '/format:json', '/git:stash:apply', '/doc:project',
     '/improve:prompt', '/gen:env', '/ask:selection', '/debug:console', '/convert:types',
+    '/fix:types', '/explain:regex', '/mock:data', '/find:dead:code', '/deps:outdated',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -7236,9 +7242,7 @@ ${preview}
 \`\`\`` })
       void sendToBackend()
     } else {
-      inputText.value = '[debug:console] Paste console output / log lines here, then press Enter for AI interpretation and fix suggestions:
-
-'
+      inputText.value = `[debug:console] Paste console output / log lines here, then press Enter for AI interpretation and fix suggestions:\n\n`
       nextTick(() => { textareaEl.value?.focus() })
     }
     return
@@ -7246,10 +7250,105 @@ ${preview}
 
   // /convert:types — convert between type systems
   if (cmd.id === '/convert:types') {
-    inputText.value = '[convert:types] Paste the type definition to convert (e.g. Zod schema → TypeScript interface, Pydantic model → TypeScript, JSON Schema → types):
-
-'
+    inputText.value = `[convert:types] Paste the type definition to convert (e.g. Zod schema → TypeScript interface, Pydantic model → TypeScript, JSON Schema → types):\n\n`
     nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /fix:types — run vue-tsc, inject errors, ask AI to fix
+  if (cmd.id === '/fix:types') {
+    inputText.value = ''
+    ;(async () => {
+      showToast('Running type checker…')
+      try {
+        const res = await window.api.invoke('shell.run', { cmd: 'npx vue-tsc --noEmit 2>&1 | head -80' })
+        const out = ((res as { stdout?: string })?.stdout ?? '').trim()
+        if (!out || out.toLowerCase().includes('found 0 errors')) {
+          showToast('No TypeScript errors found!')
+          addMsg({ role: 'user', content: 'TypeScript type checker reported no errors. The codebase is type-safe.' })
+        } else {
+          contextChips.value.push({ id: crypto.randomUUID(), label: '@ts:errors', content: `// vue-tsc --noEmit output:\n${out.slice(0, 6000)}` })
+          addMsg({ role: 'user', content: `Fix all TypeScript type errors shown in @ts:errors. For each error, show the corrected code and a one-line explanation of the fix.` })
+        }
+        void sendToBackend()
+      } catch { showToast('/fix:types: type checker unavailable') }
+    })()
+    return
+  }
+
+  // /explain:regex — explain a regular expression
+  if (cmd.id === '/explain:regex') {
+    const draft = inputText.value.replace('/explain:regex', '').trim()
+    if (draft) {
+      inputText.value = ''
+      addMsg({ role: 'user', content: `Explain this regular expression in plain language, breaking down each part:\n\n\`${draft}\`\n\nInclude: what it matches, what it rejects, and real-world examples.` })
+      void sendToBackend()
+    } else {
+      inputText.value = '/explain:regex '
+      showToast('Paste your regex after /explain:regex and press Enter')
+      nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    }
+    return
+  }
+
+  // /mock:data — generate mock/test data for a TS type or schema
+  if (cmd.id === '/mock:data') {
+    const draft = inputText.value.replace('/mock:data', '').trim()
+    if (draft) {
+      inputText.value = ''
+      addMsg({ role: 'user', content: `Generate realistic mock/test data for the following TypeScript type or schema. Return 3–5 varied example instances as a TypeScript array or JSON:\n\n\`\`\`\n${draft}\n\`\`\`` })
+      void sendToBackend()
+    } else {
+      inputText.value = '/mock:data '
+      showToast('Paste a TypeScript interface or Pydantic model after /mock:data')
+      nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    }
+    return
+  }
+
+  // /find:dead:code — find unused code in codebase
+  if (cmd.id === '/find:dead:code') {
+    inputText.value = ''
+    ;(async () => {
+      showToast('Scanning for dead code…')
+      try {
+        const tsRes = await window.api.invoke('shell.run', { cmd: "npx ts-prune 2>/dev/null | head -60 || grep -rn 'TODO.*remove\\|FIXME.*unused\\|@deprecated' --include='*.ts' --include='*.vue' --include='*.tsx' . 2>/dev/null | head -40" })
+        const out = ((tsRes as { stdout?: string })?.stdout ?? '').trim()
+        if (out) {
+          contextChips.value.push({ id: crypto.randomUUID(), label: '@dead:code', content: `// Potential dead code scan results:\n${out.slice(0, 5000)}` })
+          addMsg({ role: 'user', content: 'Review the dead code scan results in @dead:code. Identify which are genuinely unused, explain the risk of removing each, and suggest safe removal order.' })
+        } else {
+          addMsg({ role: 'user', content: 'Scan this codebase for dead code: unused exports, unreachable functions, orphaned utilities, and variables that are declared but never used. List findings by file with line numbers and explain why each is dead.' })
+        }
+        void sendToBackend()
+      } catch { showToast('/find:dead:code: scan failed') }
+    })()
+    return
+  }
+
+  // /deps:outdated — check for outdated packages
+  if (cmd.id === '/deps:outdated') {
+    inputText.value = ''
+    ;(async () => {
+      showToast('Checking outdated packages…')
+      try {
+        const [npmRes, pipRes] = await Promise.allSettled([
+          window.api.invoke('shell.run', { cmd: 'npm outdated --json 2>/dev/null || npm outdated 2>/dev/null | head -40' }),
+          window.api.invoke('shell.run', { cmd: 'backend/.venv/bin/pip list --outdated 2>/dev/null | head -30' }),
+        ])
+        const npmOut = npmRes.status === 'fulfilled' ? ((npmRes.value as { stdout?: string })?.stdout ?? '').trim() : ''
+        const pipOut = pipRes.status === 'fulfilled' ? ((pipRes.value as { stdout?: string })?.stdout ?? '').trim() : ''
+        const combined = [npmOut && `## npm outdated\n${npmOut}`, pipOut && `## pip outdated\n${pipOut}`].filter(Boolean).join('\n\n')
+        if (combined) {
+          contextChips.value.push({ id: crypto.randomUUID(), label: '@deps:outdated', content: `// Outdated packages:\n${combined.slice(0, 5000)}` })
+          addMsg({ role: 'user', content: 'Review the outdated packages in @deps:outdated. For each, explain: (1) what changed in the new version, (2) any breaking changes, (3) whether to update now, pin, or skip, and (4) the recommended update command.' })
+        } else {
+          showToast('All packages up to date (or package manager unavailable)')
+          addMsg({ role: 'user', content: 'All npm and pip packages appear to be up to date.' })
+        }
+        void sendToBackend()
+      } catch { showToast('/deps:outdated: package check failed') }
+    })()
     return
   }
 

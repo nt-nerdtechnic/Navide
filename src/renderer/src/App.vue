@@ -1127,6 +1127,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
         payload.agentKey === 'claude'
           ? ''
           : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+      run_group_id: currentRunGroupId.value,
     })
     const pane = panes.value.find((p) => p.id === paneId)
     if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
@@ -1409,6 +1410,7 @@ interface ProjectSlot {
   spawn_status: string   // 'pending' | 'spawned' | 'removed'
   kickoff_status: string // 'none' | 'sent' | 'failed'
   session_id?: string    // CLI session id for resume-on-restart ('' if unknown)
+  run_group_id?: string  // frontend tab this pane belongs to
 }
 
 interface ProjectStage {
@@ -1425,6 +1427,7 @@ interface ProjectManualPane {
   command: string
   spawn_status: string
   session_id?: string
+  run_group_id?: string  // frontend tab this pane belongs to
 }
 
 interface ProjectPayload {
@@ -1615,14 +1618,17 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   )
   pipeline.workspacePath = workspacePath
 
-  // Assign restored pipeline panes to the most recent existing run group.
-  // _loadRunGroups always ensures at least one group exists before this runs.
-  const restoreGroupId = runGroups.value[runGroups.value.length - 1]?.id ?? ''
+  // Fallback group: use the first (oldest) run group so panes without a
+  // persisted run_group_id land in the default tab, not the newest tab.
+  const fallbackGroupId = runGroups.value[0]?.id ?? ''
 
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
     const sessionId = (slot.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+    // Use the persisted run_group_id so the pane is restored into the correct
+    // tab; fall back to the first (default) group for pre-migration records.
+    const runGroupId = slot.run_group_id || fallbackGroupId
 
     let commandOverride: string
     let isResume: boolean
@@ -1643,7 +1649,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       commandOverride,
       workspacePath,
       origin: 'pipeline',
-      runGroupId: restoreGroupId || undefined,
+      runGroupId: runGroupId || undefined,
       isResume,
       skipRoleInjection,
       stageIndex,
@@ -1658,6 +1664,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         agent: slot.agent,
         role: slot.role,
         session_id: sessionId, // preserve the id across the new pane id
+        run_group_id: runGroupId,
       })
     }
   }))
@@ -1665,6 +1672,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const sessionId = (saved.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+    const manualRunGroupId = saved.run_group_id || fallbackGroupId
 
     // Preserve the original fallback command and session_id regardless of restore
     // mode — if we restart, the next restart needs them to fall back to
@@ -1690,6 +1698,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       commandOverride,
       workspacePath,
       origin: 'manual',
+      runGroupId: manualRunGroupId || undefined,
       isResume,
       skipRoleInjection,
       restoreMode,
@@ -1704,6 +1713,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         role: saved.role,
         command: fallbackCommand,
         session_id: canResume ? sessionId : '',
+        run_group_id: manualRunGroupId,
       })
       if (sessionId && !isResume) {
         await sendQuiet('manual_pane.session', {
@@ -1917,6 +1927,7 @@ async function preSpawnStage(index: number): Promise<void> {
         role: slot.roleKey,
         // Claude's pinned id is known now; Codex/Gemini stay "" until detected.
         session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+        run_group_id: currentRunGroupId.value,
       })
     }
   }))

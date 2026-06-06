@@ -60,6 +60,7 @@ class SlotRecord:
     # Claude: the --session-id we pinned at spawn (known immediately).
     # Codex/Gemini: the CLI-generated id, detected after spawn. "" = no resume.
     session_id: str = ""
+    run_group_id: str = ""  # which frontend tab this pane belongs to
 
 
 @dataclass
@@ -70,6 +71,7 @@ class ManualPaneRecord:
     command: str = ""
     spawn_status: str = "spawned"  # spawned / removed
     session_id: str = ""
+    run_group_id: str = ""  # which frontend tab this pane belongs to
 
 
 @dataclass
@@ -358,6 +360,7 @@ class ProjectStore:
         agent: str = "",
         role: str = "",
         session_id: str = "",
+        run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
         if stage_index < 0 or stage_index >= len(project.stages):
@@ -377,6 +380,8 @@ class ProjectStore:
         # pass "" here and get record_slot_session() later once detected.
         if session_id:
             slot.session_id = session_id
+        if run_group_id:
+            slot.run_group_id = run_group_id
         self.save(project)
         return project
 
@@ -447,6 +452,7 @@ class ProjectStore:
         role: str = "",
         command: str = "",
         session_id: str = "",
+        run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
         pane = next(
@@ -466,6 +472,8 @@ class ProjectStore:
         pane.spawn_status = "spawned"
         if session_id:
             pane.session_id = session_id
+        if run_group_id:
+            pane.run_group_id = run_group_id
         self.save(project)
         self.append_event(
             workspace_path,

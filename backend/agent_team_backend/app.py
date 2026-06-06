@@ -715,6 +715,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 # Claude passes its pinned --session-id here; Codex/Gemini pass
                 # "" and persist later via pipeline.slot_session once detected.
                 session_id=payload.get("session_id", ""),
+                run_group_id=payload.get("run_group_id", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
@@ -747,6 +748,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 role=payload.get("role", ""),
                 command=payload.get("command", ""),
                 session_id=payload.get("session_id", ""),
+                run_group_id=payload.get("run_group_id", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
