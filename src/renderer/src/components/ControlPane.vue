@@ -623,13 +623,13 @@ function onExplorerDividerEnd(): void {
       <div class="part-bottom">
         <section class="block panel-section">
           <div class="row between agent-list-hdr">
-            <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
+            <label class="lbl">{{ $t('label.active-agents', { running: runningCount, total: panes.length }) }}</label>
             <div class="agent-header-actions">
               <ViewPanel
                 :model-value="layoutMode ?? 'auto'"
                 @update:model-value="emit('update:layoutMode', $event)"
               />
-              <button class="history-btn" title="History" @click="emit('open-history')">📋</button>
+              <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
             </div>
           </div>
           <div v-if="panes.length === 0" class="empty">No agents running.</div>
