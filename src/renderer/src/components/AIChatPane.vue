@@ -2126,9 +2126,25 @@ async function sendMessage(): Promise<void> {
         editSetSuffix = `\n\n[EDIT MODE: Working set of files for targeted editing. For each file you modify, output the COMPLETE updated file content inside a fenced code block with the file path on the first line (e.g. \`\`\`typescript\n// src/foo.ts\n...\n\`\`\`). The user can then apply individual changes.]\n${files.join('\n\n')}`
       }
     }
-    // Workspace rules: inject .cursor/rules/*.mdc or AGENTS.md as system prefix
-    const rulesPrefix = workspaceRulesContent.value.trim()
-      ? `--- Project Rules ---\n${workspaceRulesContent.value.trim()}\n---\n\n`
+    // Workspace rules: inject alwaysApply rules + glob-matched rules based on context files
+    const ctxFilePaths: string[] = []
+    const activeRelPath = props.getActiveRelPath?.()
+    if (activeRelPath) ctxFilePaths.push(activeRelPath)
+    for (const chip of contextChips.value) {
+      const m = chip.label.match(/^@(?:file|selection):([^:]+)/)
+      if (m) ctxFilePaths.push(m[1])
+    }
+    ctxFilePaths.push(...editWorkingSet.value)
+    const matchingGlobBodies = workspaceGlobRules.value
+      .filter((rule) =>
+        rule.globs.split(/[,\s]+/).filter(Boolean).some((pat) =>
+          ctxFilePaths.some((fp) => globToRegex(pat).test(fp))
+        )
+      )
+      .map((rule) => rule.body)
+    const allRules = [workspaceRulesContent.value.trim(), ...matchingGlobBodies].filter(Boolean)
+    const rulesPrefix = allRules.length
+      ? `--- Project Rules ---\n${allRules.join('\n\n---\n\n')}\n---\n\n`
       : ''
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
@@ -2835,6 +2851,7 @@ function teardownListeners(): void {
 
 const workspaceRulesFile = ref<string | null>(null)
 const workspaceRulesContent = ref<string>('')
+const workspaceGlobRules = ref<Array<{ globs: string; body: string }>>([])
 
 function parseMdcFrontmatter(raw: string): { alwaysApply?: boolean; globs?: string; description?: string; body: string } {
   if (!raw.startsWith('---')) return { body: raw }
@@ -2853,9 +2870,21 @@ function parseMdcFrontmatter(raw: string): { alwaysApply?: boolean; globs?: stri
   }
 }
 
+function globToRegex(glob: string): RegExp {
+  const esc = glob.trim()
+    .replace(/\./g, '\\.')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '[^/]*')
+    .replace(//g, '.*')
+    .replace(/\?/g, '[^/]')
+  return new RegExp(`(^|/)${esc}$`, 'i')
+}
+
 async function detectWorkspaceRules(): Promise<void> {
   interface ReadResp { ok: boolean; content?: string }
   interface ListResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean }> }
+
+  workspaceGlobRules.value = []
 
   // 1. Try .cursor/rules/ directory (MDC format — Cursor 2025 standard)
   try {
@@ -2875,15 +2904,23 @@ async function detectWorkspaceRules(): Promise<void> {
           })
           if (r.payload?.ok && r.payload.content) {
             const parsed = parseMdcFrontmatter(r.payload.content)
-            // Include rules with alwaysApply: true or no frontmatter (legacy)
             if (parsed.alwaysApply || !r.payload.content.startsWith('---')) {
               parts.push(parsed.body || r.payload.content)
+            } else if (parsed.globs && parsed.body) {
+              // Glob-based rule — injected only when matching files are in context
+              workspaceGlobRules.value.push({ globs: parsed.globs, body: parsed.body })
             }
           }
         } catch { /* skip unreadable file */ }
       }
-      if (parts.length > 0) {
-        workspaceRulesFile.value = `.cursor/rules/ (${parts.length} rule${parts.length > 1 ? 's' : ''})`
+      if (parts.length > 0 || workspaceGlobRules.value.length > 0) {
+        const alwaysCount = parts.length
+        const globCount = workspaceGlobRules.value.length
+        const label = [
+          alwaysCount ? `${alwaysCount} always` : '',
+          globCount ? `${globCount} glob` : '',
+        ].filter(Boolean).join(', ')
+        workspaceRulesFile.value = `.cursor/rules/ (${label})`
         workspaceRulesContent.value = parts.join('\n\n---\n\n')
         return
       }
@@ -4570,6 +4607,10 @@ defineExpose({
     if (!contextChips.value.some((c) => c.label === label)) {
       contextChips.value.push({ id: crypto.randomUUID(), label, content })
     }
+    void nextTick(() => textareaEl.value?.focus())
+  },
+  injectDraft: (text: string) => {
+    inputText.value = text
     void nextTick(() => textareaEl.value?.focus())
   },
 })
