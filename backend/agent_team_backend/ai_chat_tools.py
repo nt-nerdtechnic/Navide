@@ -532,8 +532,10 @@ async def run_agent_loop(
     max_tokens = int(settings.get("max_tokens", 4096))
     provider = settings.get("provider", "ollama")
 
-    # Only pass tools for Anthropic
-    tools = TOOL_DEFS if provider == "anthropic" else None
+    # Tools are supported for Anthropic and OpenAI-compatible providers
+    # (Ollama supports tool-calling only on select models; disable to keep it simple)
+    _TOOL_PROVIDERS = {"anthropic", "openai", "groq", "deepseek", "mistral", "xai", "openai_compatible"}
+    tools = TOOL_DEFS if provider in _TOOL_PROVIDERS else None
 
     # Work on a copy so we don't mutate the caller's list
     conversation = list(messages)

@@ -2881,7 +2881,9 @@ function onTextareaInput(e: Event): void {
     const fragment = val.slice(1).toLowerCase()
     slashMenuFilter.value = fragment
     slashMenuIdx.value = 0
-    slashOptions.value = SLASH_COMMANDS.filter((c) => c.id.slice(1).startsWith(fragment))
+    slashOptions.value = SLASH_COMMANDS.filter(
+      (c) => c.id.slice(1).includes(fragment) || (c.description ?? '').toLowerCase().includes(fragment),
+    )
     showSlashMenu.value = slashOptions.value.length > 0
     return
   }
@@ -4215,20 +4217,43 @@ async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
 
 const dragOverChat = ref(false)
 function onChatDragOver(e: DragEvent): void {
-  const hasImage = Array.from(e.dataTransfer?.items ?? []).some((it) => it.type.startsWith('image/'))
-  if (hasImage) { e.preventDefault(); dragOverChat.value = true }
+  const hasFile = Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === 'file')
+  if (hasFile) { e.preventDefault(); dragOverChat.value = true }
 }
 function onChatDragLeave(e: DragEvent): void {
-  // Only reset when the cursor leaves the container itself, not a child element
   if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
     dragOverChat.value = false
   }
 }
-function onChatDrop(e: DragEvent): void {
+async function onChatDrop(e: DragEvent): Promise<void> {
   dragOverChat.value = false
   e.preventDefault()
-  const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith('image/'))
-  files.forEach(_addImageFile)
+  const files = Array.from(e.dataTransfer?.files ?? [])
+  for (const file of files) {
+    if (file.type.startsWith('image/')) {
+      _addImageFile(file)
+      continue
+    }
+    const filePath = (file as File & { path?: string }).path
+    const relPath = filePath && props.workspacePath && filePath.startsWith(props.workspacePath)
+      ? filePath.slice(props.workspacePath.length).replace(/^\//, '')
+      : file.name
+    try {
+      const text = await file.text()
+      const MAX = 80_000
+      const truncated = text.length > MAX ? text.slice(0, MAX) + '\n// … truncated' : text
+      const ext = file.name.split('.').pop() ?? ''
+      const chipLabel = `@${file.name}`
+      contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
+      contextChips.value.push({
+        id: crypto.randomUUID(),
+        label: chipLabel,
+        content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
+      })
+    } catch {
+      showToast(`Could not read: ${file.name}`)
+    }
+  }
 }
 
 function onTextareaKeydown(e: KeyboardEvent): void {
@@ -7294,7 +7319,7 @@ kbd {
 /* ── Drag-over overlay ──────────────────────────────────────────── */
 .ai-chat { position: relative; }
 .ai-chat.ai-drag-over::after {
-  content: 'Drop image to add as context';
+  content: 'Drop file to add as context';
   position: absolute; inset: 0; z-index: 50;
   background: rgba(0, 120, 212, 0.15);
   border: 2px dashed #0078d4; border-radius: 6px;
