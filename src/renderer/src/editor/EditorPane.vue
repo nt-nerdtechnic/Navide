@@ -755,35 +755,7 @@ function indentationToSpaces(): void { editorRef.value?.indentationToSpaces() }
 function indentationToTabs(): void { editorRef.value?.indentationToTabs() }
 
 function selectNextOccurrence(): void {
-  const curSel = editorRef.value?.getSelectionText() ?? ''
-  if (!curSel) {
-    // First press: select word at cursor
-    const word = editorRef.value?.getWordAtCursor() ?? ''
-    if (!word) return
-    const cur = editorRef.value?.getCursor()
-    if (!cur) return
-    const lineText = (editorRef.value?.getValue() ?? '').split('\n')[cur.line] ?? ''
-    let start = cur.col
-    while (start > 0 && /[a-zA-Z0-9_]/.test(lineText[start - 1])) start--
-    editorRef.value?.setSelection({ line: cur.line, col: start }, { line: cur.line, col: start + word.length })
-    return
-  }
-  // Subsequent presses: find next occurrence of selected text after current selection end
-  const text = editorRef.value?.getValue() ?? ''
-  const lines = text.split('\n')
-  const selRange = editorRef.value?.getSelectionRange()
-  const searchFrom = selRange?.end ?? editorRef.value?.getCursor() ?? { line: 0, col: 0 }
-
-  for (let pass = 0; pass < 2; pass++) {
-    for (let l = (pass === 0 ? searchFrom.line : 0); l < lines.length; l++) {
-      const startCol = pass === 0 && l === searchFrom.line ? searchFrom.col : 0
-      const idx = lines[l].indexOf(curSel, startCol)
-      if (idx !== -1) {
-        editorRef.value?.setSelection({ line: l, col: idx }, { line: l, col: idx + curSel.length })
-        return
-      }
-    }
-  }
+  editorRef.value?.selectNextOccurrence()
 }
 
 function selectAllOccurrences(): void {
