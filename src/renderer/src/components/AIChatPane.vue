@@ -484,6 +484,12 @@ watch(messages, saveCurrentThread, { deep: true })
 type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'openai_compatible'
 const settingsProvider = ref<ProviderName>('anthropic')
 const settingsApiKey = ref('')
+const settingsOpenAiKey = ref(localStorage.getItem('ai-chat-openai-key') ?? '')
+const settingsGroqKey = ref(localStorage.getItem('ai-chat-groq-key') ?? '')
+const settingsDeepSeekKey = ref(localStorage.getItem('ai-chat-deepseek-key') ?? '')
+const settingsOaiCompatUrl = ref(localStorage.getItem('ai-chat-oai-compat-url') ?? '')
+const settingsOaiCompatKey = ref(localStorage.getItem('ai-chat-oai-compat-key') ?? '')
+const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-model') ?? 'gpt-4o')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
@@ -542,9 +548,19 @@ const MODEL_CATALOG: ModelEntry[] = [
 ]
 const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
 const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
-const currentModelOptions = computed(() =>
-  settingsProvider.value === 'anthropic' ? ANTHROPIC_MODELS : OLLAMA_MODELS,
-)
+const OPENAI_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'openai').map((m) => m.id)
+const GROQ_MODELS       = MODEL_CATALOG.filter((m) => m.provider === 'groq').map((m) => m.id)
+const DEEPSEEK_MODELS   = MODEL_CATALOG.filter((m) => m.provider === 'deepseek').map((m) => m.id)
+const currentModelOptions = computed(() => {
+  switch (settingsProvider.value) {
+    case 'anthropic': return ANTHROPIC_MODELS
+    case 'openai':    return OPENAI_MODELS
+    case 'groq':      return GROQ_MODELS
+    case 'deepseek':  return DEEPSEEK_MODELS
+    case 'openai_compatible': return []
+    default:          return OLLAMA_MODELS
+  }
+})
 const modelIsCustom = computed(() => !MODEL_CATALOG.some((m) => m.id === settingsModel.value))
 const selectedModelKey = computed({
   get: () => (modelIsCustom.value ? 'custom' : settingsModel.value),
@@ -565,12 +581,11 @@ function switchModel(modelId: string): void {
 }
 
 // When provider switches, reset model to the first preset for that provider
-// (only if current model belongs to the other provider's list)
+// (only if current model doesn't belong to the new provider)
 watch(settingsProvider, (provider) => {
-  const opts = provider === 'anthropic' ? ANTHROPIC_MODELS : OLLAMA_MODELS
-  const other = provider === 'anthropic' ? OLLAMA_MODELS : ANTHROPIC_MODELS
-  if (!opts.includes(settingsModel.value) && other.includes(settingsModel.value)) {
-    settingsModel.value = opts[0]
+  const catalog = provider === 'openai_compatible' ? [] : MODEL_CATALOG.filter((m) => m.provider === provider).map((m) => m.id)
+  if (catalog.length && !catalog.includes(settingsModel.value)) {
+    settingsModel.value = catalog[0]
   }
 })
 
@@ -1320,10 +1335,12 @@ function resolveModel(): { provider: string; model: string } {
   if (settingsModel.value !== 'auto') {
     return { provider: settingsProvider.value, model: settingsModel.value }
   }
-  const hasKey = (settingsApiKey.value ?? '').trim().length > 0
-  return hasKey
-    ? { provider: 'anthropic', model: 'claude-sonnet-4-6' }
-    : { provider: 'ollama',    model: OLLAMA_MODELS[0] ?? 'llama3.2' }
+  // Auto: prefer Anthropic if key present, otherwise Ollama
+  if ((settingsApiKey.value ?? '').trim().length > 0) return { provider: 'anthropic', model: 'claude-sonnet-4-6' }
+  if ((settingsOpenAiKey.value ?? '').trim().length > 0) return { provider: 'openai', model: OPENAI_MODELS[0] ?? 'gpt-4o' }
+  if ((settingsGroqKey.value ?? '').trim().length > 0) return { provider: 'groq', model: GROQ_MODELS[0] ?? 'llama-3.3-70b-versatile' }
+  if ((settingsDeepSeekKey.value ?? '').trim().length > 0) return { provider: 'deepseek', model: DEEPSEEK_MODELS[0] ?? 'deepseek-chat' }
+  return { provider: 'ollama', model: OLLAMA_MODELS[0] ?? 'llama3.2' }
 }
 
 // Send current settings to backend without UI side-effects (toast, panel close).
@@ -1333,6 +1350,12 @@ function _pushSettingsToBackend(): void {
   const payload: Record<string, unknown> = {
     provider,
     anthropic_api_key: settingsApiKey.value,
+    openai_api_key: settingsOpenAiKey.value,
+    groq_api_key: settingsGroqKey.value,
+    deepseek_api_key: settingsDeepSeekKey.value,
+    openai_compatible_base_url: settingsOaiCompatUrl.value,
+    openai_compatible_api_key: settingsOaiCompatKey.value,
+    openai_compatible_model: settingsOaiCompatModel.value,
     model,
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
@@ -1347,6 +1370,12 @@ function _pushSettingsToBackend(): void {
 function saveSettings(): void {
   _pushSettingsToBackend()
   localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
+  if (settingsOpenAiKey.value) localStorage.setItem('ai-chat-openai-key', settingsOpenAiKey.value)
+  if (settingsGroqKey.value) localStorage.setItem('ai-chat-groq-key', settingsGroqKey.value)
+  if (settingsDeepSeekKey.value) localStorage.setItem('ai-chat-deepseek-key', settingsDeepSeekKey.value)
+  if (settingsOaiCompatUrl.value) localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
+  if (settingsOaiCompatKey.value) localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
+  if (settingsOaiCompatModel.value) localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -2081,9 +2110,18 @@ function setupListeners(): void {
     const p = payload as {
       provider?: string; anthropic_api_key?: string; model?: string
       ollama_base_url?: string; system_prompt?: string; max_tokens?: number; temperature?: number
+      openai_api_key?: string; groq_api_key?: string; deepseek_api_key?: string
+      openai_compatible_base_url?: string; openai_compatible_api_key?: string; openai_compatible_model?: string
     }
-    if (p.provider === 'anthropic' || p.provider === 'ollama') settingsProvider.value = p.provider
+    const validProviders: ProviderName[] = ['anthropic', 'ollama', 'openai', 'groq', 'deepseek', 'openai_compatible']
+    if (p.provider && validProviders.includes(p.provider as ProviderName)) settingsProvider.value = p.provider as ProviderName
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
+    if (p.openai_api_key) settingsOpenAiKey.value = p.openai_api_key
+    if (p.groq_api_key) settingsGroqKey.value = p.groq_api_key
+    if (p.deepseek_api_key) settingsDeepSeekKey.value = p.deepseek_api_key
+    if (p.openai_compatible_base_url) settingsOaiCompatUrl.value = p.openai_compatible_base_url
+    if (p.openai_compatible_api_key) settingsOaiCompatKey.value = p.openai_compatible_api_key
+    if (p.openai_compatible_model) settingsOaiCompatModel.value = p.openai_compatible_model
     if (p.model) settingsModel.value = p.model
     if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
     // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
@@ -3714,7 +3752,7 @@ function getDateLabel(ts: number): string {
         >✦ rules</span>
         <button class="ai-model-badge-btn" :title="`Model: ${settingsModel}\nCmd+/ to cycle · click to pick`" @click="showModelPicker = !showModelPicker">
           <span v-if="settingsModel === 'auto'" class="ai-model-badge-provider auto">✦</span>
-          <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ settingsProvider === 'anthropic' ? 'A' : 'O' }}</span>
+          <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ {'anthropic':'A','openai':'GPT','groq':'G','deepseek':'DS','openai_compatible':'C','ollama':'O'}[settingsProvider] ?? 'O' }}</span>
           <span class="ai-model-badge-name">{{ MODEL_CATALOG.find(m => m.id === settingsModel)?.display ?? settingsModel }}</span>
           <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
         </button>
@@ -3729,38 +3767,29 @@ function getDateLabel(ts: number): string {
             <span class="ai-model-picker-name">✦ Auto</span>
             <span class="ai-model-picker-note">Best available</span>
           </div>
-          <div class="ai-model-picker-sep" />
-          <!-- Anthropic group -->
-          <div class="ai-model-picker-group">Anthropic</div>
-          <div
-            v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')"
-            :key="m.id"
-            class="ai-model-picker-item"
-            :class="{ active: m.id === settingsModel }"
-            @click="switchModel(m.id); showModelPicker = false"
-          >
-            <span class="ai-model-picker-name">{{ m.display }}</span>
-            <span class="ai-model-picker-meta">
-              <span class="ai-model-picker-ctx" v-if="m.ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
-              <span class="ai-model-picker-note">{{ m.note }}</span>
-            </span>
-          </div>
-          <div class="ai-model-picker-sep" />
-          <!-- Ollama group -->
-          <div class="ai-model-picker-group">Ollama (Local)</div>
-          <div
-            v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')"
-            :key="m.id"
-            class="ai-model-picker-item"
-            :class="{ active: m.id === settingsModel }"
-            @click="switchModel(m.id); showModelPicker = false"
-          >
-            <span class="ai-model-picker-name">{{ m.display }}</span>
-            <span class="ai-model-picker-meta">
-              <span class="ai-model-picker-ctx" v-if="m.ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
-              <span class="ai-model-picker-note">{{ m.note }}</span>
-            </span>
-          </div>
+          <template v-for="group in [
+            { label: 'Anthropic', filter: 'anthropic' },
+            { label: 'OpenAI', filter: 'openai' },
+            { label: 'Groq', filter: 'groq' },
+            { label: 'DeepSeek', filter: 'deepseek' },
+            { label: 'Ollama (Local)', filter: 'ollama' },
+          ]" :key="group.label">
+            <div class="ai-model-picker-sep" />
+            <div class="ai-model-picker-group">{{ group.label }}</div>
+            <div
+              v-for="m in MODEL_CATALOG.filter(e => e.provider === group.filter)"
+              :key="m.id"
+              class="ai-model-picker-item"
+              :class="{ active: m.id === settingsModel }"
+              @click="switchModel(m.id); showModelPicker = false"
+            >
+              <span class="ai-model-picker-name">{{ m.display }}</span>
+              <span class="ai-model-picker-meta">
+                <span v-if="m.ctx" class="ai-model-picker-ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
+                <span class="ai-model-picker-note">{{ m.note }}</span>
+              </span>
+            </div>
+          </template>
           <!-- Custom model input -->
           <div class="ai-model-picker-sep" />
           <div class="ai-model-picker-custom">
@@ -4040,38 +4069,69 @@ function getDateLabel(ts: number): string {
         <div class="ai-settings-row">
           <label class="ai-settings-label">Provider</label>
           <div class="ai-settings-radios">
-            <label>
-              <input v-model="settingsProvider" type="radio" value="anthropic" />
-              Anthropic
-            </label>
-            <label>
-              <input v-model="settingsProvider" type="radio" value="ollama" />
-              Ollama
-            </label>
+            <label><input v-model="settingsProvider" type="radio" value="anthropic" /> Anthropic</label>
+            <label><input v-model="settingsProvider" type="radio" value="openai" /> OpenAI</label>
+            <label><input v-model="settingsProvider" type="radio" value="groq" /> Groq</label>
+            <label><input v-model="settingsProvider" type="radio" value="deepseek" /> DeepSeek</label>
+            <label><input v-model="settingsProvider" type="radio" value="ollama" /> Ollama</label>
+            <label><input v-model="settingsProvider" type="radio" value="openai_compatible" /> Custom (OpenAI-compat)</label>
           </div>
         </div>
         <div v-if="settingsProvider === 'anthropic'" class="ai-settings-row">
-          <label class="ai-settings-label">API Key</label>
+          <label class="ai-settings-label">Anthropic API Key</label>
           <input v-model="settingsApiKey" type="password" class="ai-settings-input" placeholder="sk-ant-…" />
+        </div>
+        <div v-if="settingsProvider === 'openai'" class="ai-settings-row">
+          <label class="ai-settings-label">OpenAI API Key</label>
+          <input v-model="settingsOpenAiKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+        </div>
+        <div v-if="settingsProvider === 'groq'" class="ai-settings-row">
+          <label class="ai-settings-label">Groq API Key</label>
+          <input v-model="settingsGroqKey" type="password" class="ai-settings-input" placeholder="gsk_…" />
+        </div>
+        <div v-if="settingsProvider === 'deepseek'" class="ai-settings-row">
+          <label class="ai-settings-label">DeepSeek API Key</label>
+          <input v-model="settingsDeepSeekKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+        </div>
+        <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
+          <label class="ai-settings-label">Base URL</label>
+          <input v-model="settingsOaiCompatUrl" type="text" class="ai-settings-input" placeholder="https://…/v1" />
+        </div>
+        <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
+          <label class="ai-settings-label">API Key</label>
+          <input v-model="settingsOaiCompatKey" type="password" class="ai-settings-input" placeholder="optional" />
+        </div>
+        <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
+          <label class="ai-settings-label">Model ID</label>
+          <input v-model="settingsOaiCompatModel" type="text" class="ai-settings-input" placeholder="gpt-4o" />
         </div>
         <div class="ai-settings-row">
           <label class="ai-settings-label">Model</label>
           <select
-            :value="modelIsCustom ? 'custom' : settingsModel"
+            :value="(settingsProvider === 'openai_compatible') ? 'custom' : (modelIsCustom ? 'custom' : settingsModel)"
             class="ai-settings-select"
             @change="(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== 'custom') switchModel(v) }"
           >
             <option value="auto">✦ Auto (best available)</option>
             <optgroup label="Anthropic">
-              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')" :key="m.id" :value="m.id">{{ m.display }}</option>
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="OpenAI">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'openai')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="Groq">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'groq')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="DeepSeek">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'deepseek')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
             </optgroup>
             <optgroup label="Ollama (Local)">
-              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')" :key="m.id" :value="m.id">{{ m.display }}</option>
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
             </optgroup>
             <option value="custom">Custom…</option>
           </select>
           <input
-            v-if="modelIsCustom"
+            v-if="modelIsCustom && settingsProvider !== 'openai_compatible'"
             v-model="settingsModel"
             type="text"
             class="ai-settings-input ai-settings-input--custom"
