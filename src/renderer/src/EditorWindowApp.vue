@@ -789,7 +789,6 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.insertCursorAbove',                   label: 'Add Cursor Above',                   keys: '⌘⌥↑' },
   { id: 'editor.action.insertCursorBelow',                   label: 'Add Cursor Below',                   keys: '⌘⌥↓' },
   { id: 'editor.action.insertCursorAtEndOfEachLineSelected', label: 'Add Cursors to Line Ends',           keys: '⇧⌥I' },
-  { id: 'editor.action.addSelectionToNextFindMatch',         label: 'Add Selection to Next Find Match',    keys: '⌘D' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol in File',     keys: '⌘⇧O' },
   { id: 'workbench.action.gotoWorkspaceSymbol', label: 'Go to Symbol in Workspace', keys: '⌘T' },
   { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
@@ -1026,7 +1025,6 @@ registerCommand('workbench.action.reopenClosedEditor', () => {
 registerCommand('editor.action.insertCursorAbove',                  () => activeEditor()?.insertCursorAbove?.())
 registerCommand('editor.action.insertCursorBelow',                  () => activeEditor()?.insertCursorBelow?.())
 registerCommand('editor.action.insertCursorAtEndOfEachLineSelected', () => activeEditor()?.addCursorsToLineEnds?.())
-registerCommand('editor.action.addSelectionToNextFindMatch',         () => activeEditor()?.selectNextOccurrence?.())
 
 // ── Line comment ─────────────────────────────────────────────────────────────
 registerCommand('editor.action.addLineComment',    () => activeEditor()?.addLineComment())
