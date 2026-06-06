@@ -1080,6 +1080,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
+  { id: '@git:stash',  label: '@git:stash — list all git stashes' },
   { id: '@git:diff',   label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
@@ -3063,7 +3064,14 @@ function onTextareaInput(e: Event): void {
     const fragment = val.slice(1).toLowerCase()
     slashMenuFilter.value = fragment
     slashMenuIdx.value = 0
-    slashOptions.value = SLASH_COMMANDS.filter(
+    // Merge saved prompt templates as custom slash commands (prefix /)
+    const templateCmds: SlashCommand[] = displayedTemplates.value.map((t) => ({
+      id: `/${t.name.toLowerCase().replace(/\s+/g, '-')}`,
+      label: `/${t.name.toLowerCase().replace(/\s+/g, '-')}`,
+      description: `My template: ${t.name}`,
+      template: t.text,
+    }))
+    slashOptions.value = [...SLASH_COMMANDS, ...templateCmds].filter(
       (c) => c.id.slice(1).includes(fragment) || (c.description ?? '').toLowerCase().includes(fragment),
     )
     showSlashMenu.value = slashOptions.value.length > 0
@@ -3128,6 +3136,12 @@ function onTextareaInput(e: Event): void {
   }
   if (/^docs$/i.test(fragment)) {
     atOptions.value = Object.entries(DOCS_CATALOG).map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
+    return
+  }
+
+  // @git:stash — list all git stashes
+  if (/^git:stash$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:stash', label: '@git:stash — list all stash entries' }]
     return
   }
 
@@ -3677,6 +3691,21 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = out ? `// recently committed files (last 5 commits):\n${out}` : '// @git:recent: no recent commits'
     } catch {
       chipContent = '// @git:recent: unavailable'
+    }
+  } else if (option.id === '@git:stash') {
+    chipLabel = '@git:stash'
+    try {
+      interface StashResp { stashes?: Array<{ index: number; ref: string; message: string }> }
+      const resp = await props.backend.send<StashResp>('git.stash_list', { workspace_path: props.workspacePath })
+      const stashes = resp.payload?.stashes ?? []
+      if (!stashes.length) {
+        chipContent = '// @git:stash: no stashes found'
+      } else {
+        const lines = stashes.map((s) => `  ${s.ref}: ${s.message}`)
+        chipContent = `// git stash list (${stashes.length} ${stashes.length === 1 ? 'entry' : 'entries'}):\n${lines.join('\n')}`
+      }
+    } catch {
+      chipContent = '// @git:stash: unavailable'
     }
   } else if (option.id === '@git:diff') {
     // Static option — expand to @git:diff: in textarea so user can type the branch name
