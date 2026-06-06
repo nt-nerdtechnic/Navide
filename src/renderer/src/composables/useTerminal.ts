@@ -292,9 +292,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
     if (charWidth === 0 || charHeight === 0) return { cols: term.cols, rows: term.rows }
 
+    // Use content-box width to match FitAddon's getComputedStyle().width calculation
+    const style = window.getComputedStyle(el)
+    const paddingH = parseInt(style.paddingLeft) + parseInt(style.paddingRight)
+    const paddingV = parseInt(style.paddingTop) + parseInt(style.paddingBottom)
     const overviewRulerW = 14  // FitAddon reserves this for the overview ruler
-    const cols = Math.max(2, Math.floor((el.clientWidth - overviewRulerW) / charWidth))
-    const rows = Math.max(1, Math.floor(el.clientHeight / charHeight))
+    const cols = Math.max(2, Math.floor((el.clientWidth - paddingH - overviewRulerW) / charWidth))
+    const rows = Math.max(1, Math.floor((el.clientHeight - paddingV) / charHeight))
     return { cols, rows }
   }
 
