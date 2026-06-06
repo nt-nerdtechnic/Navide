@@ -3355,7 +3355,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
   } else if (option.id.startsWith('@git:diff:')) {
     const branchName = option.id.slice('@git:diff:'.length).trim()
     chipLabel = `@git:diff:${branchName}`
-    if (!/^[A-Za-z0-9_./-]+$/.test(branchName)) {
+    if (!/^(?!-)(?!.*\.\.)[A-Za-z0-9_./-]+$/.test(branchName)) {
       chipContent = `// @git:diff:${branchName}: invalid branch name`
     } else {
       try {
