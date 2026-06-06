@@ -1307,6 +1307,7 @@ function stopStreaming(): void {
   sending.value = false
   currentSessionId.value = null
   if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
+  pendingCompactKeep.value = []
 }
 
 // ── Clear conversation (clear current thread) ──────────────────────────────────
@@ -1699,6 +1700,8 @@ function setupListeners(): void {
     sending.value = false
     currentSessionId.value = null
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
+    // If a compact operation was in progress, restore state
+    if (pendingCompactKeep.value.length > 0) pendingCompactKeep.value = []
     void scrollBottom()
   })
 
@@ -1935,6 +1938,7 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
       })
     } catch {
       messages.value = all
+      pendingCompactKeep.value = []
       sending.value = false
       showToast('Compact failed')
       return
