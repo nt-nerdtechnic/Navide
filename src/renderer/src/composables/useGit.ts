@@ -253,6 +253,17 @@ export function useGit(
     }
   }
 
+  async function diffBranches(base: string, compare: string): Promise<string> {
+    const ws = workspacePath()
+    if (!ws) return ''
+    try {
+      const resp = await send<{ ok: boolean; diff: string }>('git.diff_branches', { workspace_path: ws, base, compare })
+      return resp.ok && resp.payload?.ok ? (resp.payload.diff ?? '') : ''
+    } catch {
+      return ''
+    }
+  }
+
   async function rebaseOn(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
@@ -1224,7 +1235,7 @@ export function useGit(
     addRemote, removeRemote,
     // branches
     createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
-    compareBranches, restoreFileFromBranch,
+    compareBranches, diffBranches, restoreFileFromBranch,
     // stash
     stashPush, stashPop, stashDrop,
     // tags

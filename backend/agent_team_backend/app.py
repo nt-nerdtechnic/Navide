@@ -310,11 +310,11 @@ def _reap_orphan_tmux_sessions() -> None:
     try:
         result = subprocess.run(
             ["tmux", "ls", "-F", "#{session_name}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
             return
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return
 
     live = {s for s in result.stdout.splitlines() if _TMUX_NAME_RE.fullmatch(s)}
@@ -342,9 +342,9 @@ def _reap_orphan_tmux_sessions() -> None:
         try:
             subprocess.run(
                 ["tmux", "kill-session", "-t", orphan],
-                capture_output=True, check=False,
+                capture_output=True, check=False, timeout=5,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             pass
 
 
@@ -1831,6 +1831,16 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.compare_branches(ws_path, base, compare)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.diff_branches":
+            ws_path = payload.get("workspace_path") or ""
+            base = payload.get("base") or "main"
+            compare = payload.get("compare") or ""
+            if not compare:
+                _rc, _cur, _ = await git_service._run(["git", "rev-parse", "--abbrev-ref", "HEAD"], ws_path)
+                compare = _cur.strip() if _rc == 0 and _cur.strip() else "HEAD"
+            result = await git_service.diff_branches(ws_path, base, compare)
+            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.rebase":
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""
@@ -2177,6 +2187,43 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 approved=False,
             )
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        elif msg_type == "ai.review.start":
+            ws_path = payload.get("workspace_path") or ""
+            review_id = payload.get("review_id") or str(__import__("uuid").uuid4())
+            mode = payload.get("mode") or "working"  # "working" | "branch"
+            base = payload.get("base") or ""
+            compare = payload.get("compare") or ""
+            settings = {**ai_chat_settings_store.get()}
+
+            async def _run_review(rid=review_id, m=mode, b=base, c=compare, s=settings, ws=ws_path):
+                from .review_service import stream_review
+                try:
+                    if m == "branch":
+                        _b = b or "main"
+                        if not c:
+                            _rc, _cur, _ = await git_service._run(
+                                ["git", "rev-parse", "--abbrev-ref", "HEAD"], ws
+                            )
+                            _c = _cur.strip() if _rc == 0 and _cur.strip() else "HEAD"
+                        else:
+                            _c = c
+                        diff_result = await git_service.diff_branches(ws, _b, _c)
+                        diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
+                    else:
+                        diff_result = await git_service.diff_all(ws)
+                        diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
+                    async for chunk in stream_review(s, diff):
+                        await broadcast(make_event("ai.review.chunk", {"review_id": rid, "text": chunk}))
+                    await broadcast(make_event("ai.review.end", {"review_id": rid}))
+                except Exception as exc:
+                    log.exception("ai.review.start failed: %s", exc)
+                    await broadcast(make_event("ai.review.error", {"review_id": rid, "message": str(exc)}))
+
+            task = asyncio.create_task(_run_review())
+            session._chat_tasks.add(task)
+            task.add_done_callback(session._chat_tasks.discard)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "review_id": review_id}))
 
         else:
             await session.websocket.send_json(

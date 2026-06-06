@@ -487,6 +487,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
   { id: '@git:log', label: '@git:log — recent commit history (last 20)' },
+  { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -1285,6 +1286,19 @@ const lastAssistantIdx = computed(() => {
   return -1
 })
 
+// Active tool being executed during streaming (first pending tool_call card)
+const activeToolCard = computed(() => {
+  const idx = lastAssistantIdx.value
+  if (idx === -1) return null
+  const msg = messages.value[idx]
+  if (!msg.streaming) return null
+  for (let i = (msg.cards ?? []).length - 1; i >= 0; i--) {
+    const c = msg.cards![i]
+    if (c.kind === 'tool_call' && c.result == null) return c
+  }
+  return null
+})
+
 // ── Diff expand/collapse ──────────────────────────────────────────────────────
 const expandedDiffs = ref(new Set<string>())
 function isDiffExpanded(toolId: string): boolean { return expandedDiffs.value.has(toolId) }
@@ -1824,6 +1838,20 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = out ? `// git log (last 20 commits):\n${out}` : '// git log: no commits'
     } catch {
       chipContent = '// @git:log: unavailable'
+    }
+  } else if (option.id === '@git:branch') {
+    chipLabel = '@git:branch'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const branchResp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git branch --show-current 2>&1 && git log -1 --pretty="%h %s (%ar, %an)" 2>&1 && git status --short 2>&1 | head -20',
+        workspace_path: props.workspacePath,
+      })
+      chipContent = (branchResp.payload?.output ?? '').trim()
+        ? `// git branch info:\n${(branchResp.payload?.output ?? '').trim()}`
+        : '// git branch: no info'
+    } catch {
+      chipContent = '// @git:branch: unavailable'
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
@@ -2519,6 +2547,13 @@ function getDateLabel(ts: number): string {
       ↓ Scroll to bottom
     </button>
 
+    <!-- Active tool status banner -->
+    <div v-if="activeToolCard" class="ai-active-tool-banner">
+      <span class="ai-active-tool-icon">{{ getToolIcon(activeToolCard.tool_name) }}</span>
+      <span class="ai-active-tool-text">{{ getToolSummary(activeToolCard.tool_name, activeToolCard.tool_input) }}</span>
+      <span class="ai-active-tool-spinner" />
+    </div>
+
     <!-- Follow-up suggestions -->
     <div v-if="followUps.length && !sending" class="ai-followups">
       <button
@@ -3044,6 +3079,27 @@ function getDateLabel(ts: number): string {
 }
 .ai-followup-btn:hover { border-color: var(--accent-emphasis); color: var(--accent-fg); }
 .ai-followup-btn::before { content: '↩ '; opacity: 0.45; font-size: 10px; }
+
+.ai-active-tool-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
+}
+.ai-active-tool-icon { font-size: 13px; }
+.ai-active-tool-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-active-tool-spinner {
+  width: 10px; height: 10px;
+  border: 1.5px solid var(--border-muted);
+  border-top-color: var(--accent-emphasis);
+  border-radius: 50%;
+  animation: ai-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
 
 .ai-scroll-to-bottom {
   position: absolute;

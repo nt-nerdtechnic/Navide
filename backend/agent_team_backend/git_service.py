@@ -695,6 +695,26 @@ async def compare_branches(workspace_path: str, base: str, compare: str) -> dict
     return {"ok": True, "stat": summary, "files": files}
 
 
+async def diff_branches(workspace_path: str, base: str, compare: str) -> dict[str, Any]:
+    """Return the full unified diff between *base* and *compare* branches.
+
+    Uses three-dot diff (merge-base diff) so only changes unique to *compare*
+    relative to the common ancestor with *base* are shown — matching the typical
+    "what did this branch add?" view. Truncated to 30,000 chars.
+    """
+    if err := _validate_ref_name(base, "base branch"):
+        return {"ok": False, "diff": "", "error": err}
+    if err := _validate_ref_name(compare, "compare branch"):
+        return {"ok": False, "diff": "", "error": err}
+    rc, out, stderr = await _run(
+        ["git", "-c", "core.quotePath=false", "diff", f"{base.strip()}...{compare.strip()}"],
+        workspace_path,
+    )
+    if rc != 0:
+        return {"ok": False, "diff": "", "error": stderr.strip()}
+    return {"ok": True, "diff": out[:30_000]}
+
+
 async def rebase_on(workspace_path: str, branch: str) -> dict[str, Any]:
     """Rebase current branch onto *branch*.  Returns output or error."""
     if err := _validate_ref_name(branch, "branch name"):

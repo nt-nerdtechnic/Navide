@@ -5,6 +5,7 @@ import type { IgnoreTarget } from '../composables/useGit'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
+import ReviewPane from './ReviewPane.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -53,6 +54,7 @@ function fileDir(path: string): string {
 // ── view / sort ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list' | 'tree'>('tree')
 const sortBy = ref<'name' | 'path' | 'status'>('path')
+const showReview = ref(false)
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
 const showCommitMenuPos = ref({ top: 0, right: 0 })
@@ -1215,6 +1217,16 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
     </div>
 
+    <!-- AI Review overlay -->
+    <ReviewPane
+      v-else-if="showReview"
+      :workspace-path="workspacePath"
+      :backend="backend"
+      :git-status="gitStatus"
+      :git-branches="gitBranches"
+      @close="showReview = false"
+    />
+
     <template v-else>
 
       <!-- ══════════════════════════════════════════════════════
@@ -1236,6 +1248,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </button>
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
+        </button>
+        <!-- AI Review toggle -->
+        <button
+          class="hdr-btn"
+          :class="{ active: showReview }"
+          title="AI Review"
+          @click.stop="showReview = !showReview"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
+          </svg>
         </button>
         <!-- Sort menu -->
         <button class="hdr-btn" title="More options" @click.stop="openViewMenu($event)">···</button>

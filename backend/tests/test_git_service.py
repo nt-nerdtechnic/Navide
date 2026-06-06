@@ -1728,3 +1728,75 @@ class TestGenerateCommitMessage:
         await git_service.generate_commit_message(str(tmp_path), "http://x", "llama3.2", attempt_count=2)
         # 0.2 * (1 + 2) = 0.6
         assert _FakeClient.captured["body"]["options"]["temperature"] == pytest.approx(0.6)
+
+
+# ── diff_branches ──────────────────────────────────────────────────────────────
+
+def _make_branch_repo(path: Path) -> None:
+    """Create a repo with main and feature branches for diff tests."""
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True, capture_output=True)
+    (path / "base.txt").write_text("base content\n")
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True)
+    # Rename default branch to main
+    subprocess.run(["git", "branch", "-M", "main"], cwd=path, check=True, capture_output=True)
+    # Create feature branch
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=path, check=True, capture_output=True)
+    (path / "feature.txt").write_text("feature content\n")
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "add feature"], cwd=path, check=True, capture_output=True)
+
+
+class TestDiffBranches:
+    @pytest.mark.asyncio
+    async def test_returns_unified_diff(self, tmp_path):
+        _make_branch_repo(tmp_path)
+        result = await git_service.diff_branches(str(tmp_path), "main", "feature")
+        assert result["ok"] is True
+        diff = result["diff"]
+        # Standard patch format headers
+        assert "diff --git" in diff
+        assert "+++ b/feature.txt" in diff
+        assert "+feature content" in diff
+
+    @pytest.mark.asyncio
+    async def test_empty_diff_same_branch(self, tmp_path):
+        _make_branch_repo(tmp_path)
+        result = await git_service.diff_branches(str(tmp_path), "main", "main")
+        assert result["ok"] is True
+        assert result["diff"] == ""
+
+    @pytest.mark.asyncio
+    async def test_invalid_base_rejected(self, tmp_path):
+        _make_branch_repo(tmp_path)
+        result = await git_service.diff_branches(str(tmp_path), "-bad-ref", "feature")
+        assert result["ok"] is False
+        assert "base branch" in result.get("error", "")
+
+    @pytest.mark.asyncio
+    async def test_invalid_compare_rejected(self, tmp_path):
+        _make_branch_repo(tmp_path)
+        result = await git_service.diff_branches(str(tmp_path), "main", "--bad")
+        assert result["ok"] is False
+        assert "compare branch" in result.get("error", "")
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_branch_returns_error(self, tmp_path):
+        _make_branch_repo(tmp_path)
+        result = await git_service.diff_branches(str(tmp_path), "main", "no-such-branch")
+        assert result["ok"] is False
+        assert result["diff"] == ""
+
+    @pytest.mark.asyncio
+    async def test_diff_truncated_at_30000_chars(self, tmp_path, monkeypatch):
+        _make_branch_repo(tmp_path)
+        # Monkeypatch _run to return a very long diff
+        big_diff = "+" + "x" * 40_000
+        async def _fake_run(cmd, cwd, **_):
+            return 0, big_diff, ""
+        monkeypatch.setattr(git_service, "_run", _fake_run)
+        result = await git_service.diff_branches(str(tmp_path), "main", "feature")
+        assert result["ok"] is True
+        assert len(result["diff"]) == 30_000
