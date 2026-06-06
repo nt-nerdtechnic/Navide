@@ -1095,7 +1095,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:log', label: '@git:log — recent commit history (last 20, or @git:log:50 / @git:log:verbose)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
-  { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
+  { id: '@git:recent',   label: '@git:recent — recently committed files (last 5)' },
+  { id: '@git:modified', label: '@git:modified — list all uncommitted changed files' },
   { id: '@git:stash',  label: '@git:stash — list all git stashes' },
   { id: '@git:diff',   label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
@@ -3263,6 +3264,12 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @git:modified — list uncommitted changed files
+  if (/^git:modified$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:modified', label: '@git:modified — all uncommitted changed files' }]
+    return
+  }
+
   // @git:diff:<branch> — compare current HEAD vs a specific branch
   if (/^git:diff$/i.test(fragment)) {
     atOptions.value = [
@@ -3841,6 +3848,22 @@ async function selectAtOption(option: AtOption): Promise<void> {
       }
     } catch {
       chipContent = '// @git:stash: unavailable'
+    }
+  } else if (option.id === '@git:modified') {
+    chipLabel = '@git:modified'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git status --short 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      const out = (resp.payload?.output ?? '').trim()
+      chipContent = out
+        ? `// Uncommitted changes (git status --short):
+${out}`
+        : '// @git:modified: no uncommitted changes'
+    } catch {
+      chipContent = '// @git:modified: unavailable'
     }
   } else if (option.id === '@git:diff') {
     // Static option — expand to @git:diff: in textarea so user can type the branch name
@@ -4815,6 +4838,15 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       contextChips.value.push({ id: crypto.randomUUID(), label: `@${fileName}`, content: `// File: ${relPath}\n${content}` })
       showToast(`Added @${fileName} to context`)
     }
+  }
+  // Ctrl+Shift+W — add current file to Edit working set (switches to Edit mode)
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'w') {
+    e.preventDefault()
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('No file open'); return }
+    if (chatMode.value !== 'edit') chatMode.value = 'edit'
+    addToWorkingSet(relPath)
+    showToast(`Added ${relPath.split('/').pop()} to working set`)
   }
   // Ctrl+Enter — regenerate last AI response (when not sending)
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !sending.value && !e.shiftKey) {
