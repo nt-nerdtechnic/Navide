@@ -218,7 +218,7 @@ async def _stream_openai_compatible(
                     prompt_tokens = usage.get("prompt_tokens", 0)
                     completion_tokens = usage.get("completion_tokens", 0)
                 choices = chunk.get("choices") or []
-                text = (choices[0].get("delta", {}) if choices else {}).get("content", "")
+                text = (choices[0].get("delta") or {} if choices else {}).get("content", "")
                 if text:
                     yield text
 
