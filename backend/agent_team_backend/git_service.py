@@ -1094,7 +1094,7 @@ async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin
         if rc2 != 0:
             return {"ok": False, "error": f"Failed to set remote: {stderr2.strip()}"}
 
-    rc, _, stderr = await _run(["git", "fetch", remote], workspace_path)
+    rc, _, stderr = await _run_with_timeout(["git", "fetch", remote], workspace_path, timeout=60.0)
     if rc != 0:
         return {"ok": False, "error": f"git fetch failed: {stderr.strip()}"}
 
@@ -1438,14 +1438,14 @@ async def commit(workspace_path: str, message: str, all: bool = False) -> dict[s
 
 async def sync(workspace_path: str) -> dict[str, Any]:
     """Pull (rebase) then push.  Returns stdout/stderr for both steps."""
-    pull_rc, pull_out, pull_err = await _run(
-        ["git", "pull", "--rebase"], workspace_path
+    pull_rc, pull_out, pull_err = await _run_with_timeout(
+        ["git", "pull", "--rebase"], workspace_path, timeout=60.0
     )
     pull_output = (pull_out + pull_err).strip()
     if pull_rc != 0:
         return asdict(GitSyncResult(ok=False, pull_output=pull_output, error="pull failed"))
 
-    push_rc, push_out, push_err = await _run(["git", "push"], workspace_path)
+    push_rc, push_out, push_err = await _run_with_timeout(["git", "push"], workspace_path, timeout=60.0)
     push_output = (push_out + push_err).strip()
     if push_rc != 0:
         return asdict(GitSyncResult(ok=False, pull_output=pull_output, push_output=push_output, error="push failed"))
