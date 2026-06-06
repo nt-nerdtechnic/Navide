@@ -8,6 +8,7 @@ import type { usePipelines } from '../composables/usePipelines'
 import { stageToBackend, stageDefToFrontend, type Stage, type StageSlot } from '../data/stages'
 import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCatalog'
 import { useTheme } from '../composables/useTheme'
+import { useSettings } from '../composables/useSettings'
 import { useNotify } from '../composables/useNotify'
 
 const props = defineProps<{
@@ -77,6 +78,14 @@ const {
   setCustomOverride,
   resetCustom,
 } = useTheme()
+
+// ── Appearance (language) ─────────────────────────────────────────────────────
+const { language: currentLanguage, setLanguage } = useSettings()
+
+const SUPPORTED_LANGUAGES = [
+  { value: 'zh-TW', label: '繁體中文' },
+  { value: 'en-US', label: 'English' },
+]
 
 const { confirm: notifyConfirm } = useNotify()
 
@@ -1486,6 +1495,22 @@ async function plDelete(id: string, name: string) {
           </section>
 
           <section class="ap-section">
+            <h3 class="ap-title">Language</h3>
+            <p class="ap-hint">Language is a user-level preference applied across all workspaces.</p>
+            <div class="ap-lang-row">
+              <button
+                v-for="lang in SUPPORTED_LANGUAGES"
+                :key="lang.value"
+                :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
+                @click="setLanguage(lang.value)"
+              >
+                {{ lang.label }}
+                <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="ap-section">
             <div class="ap-section-head">
               <h3 class="ap-title">Custom Colors</h3>
               <button
@@ -1634,7 +1659,7 @@ async function plDelete(id: string, name: string) {
 .s-tab:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
 
 /* ── Appearance tab ─────────────────────────────────────────────────────────── */
-.appearance-body { padding: 18px 22px; overflow-y: auto; }
+.appearance-body { padding: 18px 22px; }
 .ap-section { margin-bottom: 26px; }
 .ap-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ap-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text-bright); }
@@ -1663,6 +1688,20 @@ async function plDelete(id: string, name: string) {
 .ap-swatch { width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--border-muted); }
 .ap-theme-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
 .ap-check { position: absolute; top: 10px; right: 11px; font-size: 12px; color: var(--accent-fg); }
+.ap-lang-row { display: flex; gap: 10px; }
+.ap-lang-btn {
+  position: relative;
+  padding: 8px 20px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ap-lang-btn:hover { border-color: var(--border-strong); background: var(--bg-muted); }
+.ap-lang-btn.active { border-color: var(--accent-emphasis); box-shadow: 0 0 0 1px var(--accent-emphasis); }
 .ap-reset {
   font-size: 11px;
   padding: 4px 10px;
@@ -1835,6 +1874,9 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .slot-clickable { cursor: pointer; transition: border-color 0.15s; }
 .slot-clickable:hover { border-color: var(--accent-focus); }
 .slot-form { background: var(--bg-base); border: 1px solid var(--border-default); border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+
+/* ── Appearance tab ─────────────────────────────────────────────────────────── */
+.appearance-body { overflow-y: auto; }
 
 /* ── MCP tab ──────────────────────────────────────────────────────────────── */
 .mcp-body { overflow-y: auto; display: flex; flex-direction: column; }
