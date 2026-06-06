@@ -2124,30 +2124,45 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             messages = payload.get("messages", []) or []
             workspace_path = payload.get("workspace_path", "") or ""
             system_suffix = payload.get("system_suffix", "") or ""
+            system_prefix = payload.get("system_prefix", "") or ""
             settings = {**ai_chat_settings_store.get()}
 
-            # Auto-inject workspace rules from well-known rule files
-            _RULE_FILES = [
-                ".cursor/rules", ".cursor/rules.md", "AGENTS.md",
-                ".ai/rules.md", ".ai/instructions.md",
-                ".github/copilot-instructions.md",
-            ]
-            if workspace_path:
-                for _rf in _RULE_FILES:
-                    _rp = Path(workspace_path) / _rf
-                    if _rp.is_file():
+            # Auto-inject workspace rules when frontend didn't already provide a prefix
+            if not system_prefix and workspace_path:
+                _cursor_rules_dir = Path(workspace_path) / ".cursor" / "rules"
+                if _cursor_rules_dir.is_dir():
+                    _mdc_parts: list[str] = []
+                    for _mdc in sorted(_cursor_rules_dir.glob("*.mdc")):
                         try:
-                            if _rp.stat().st_size <= 512_000:  # skip files > 512 KB
-                                _rules = _rp.read_text(encoding="utf-8", errors="replace")[:8_000].strip()
-                                if _rules:
-                                    system_suffix = f"{_rules}\n\n{system_suffix}".strip()
+                            _raw = _mdc.read_text(encoding="utf-8", errors="replace")
+                            if _raw.startswith("---") and "alwaysApply: true" in _raw:
+                                _end = _raw.index("---", 3) if _raw.count("---") >= 2 else len(_raw)
+                                _body = _raw[_end + 3:].strip()
+                                if _body:
+                                    _mdc_parts.append(_body[:4_000])
                         except OSError:
                             pass
-                        break  # use only the first found
+                    if _mdc_parts:
+                        system_prefix = "--- Project Rules ---\n" + "\n\n---\n\n".join(_mdc_parts) + "\n---\n\n"
+                if not system_prefix:
+                    for _rf in [".cursor/rules.md", ".cursorrules", "AGENTS.md", ".ai/rules.md",
+                                ".ai/instructions.md", ".github/copilot-instructions.md"]:
+                        _rp = Path(workspace_path) / _rf
+                        if _rp.is_file():
+                            try:
+                                if _rp.stat().st_size <= 512_000:
+                                    _rules = _rp.read_text(encoding="utf-8", errors="replace")[:8_000].strip()
+                                    if _rules:
+                                        system_prefix = f"--- Project Rules ---\n{_rules}\n---\n\n"
+                            except OSError:
+                                pass
+                            break
 
-            if system_suffix:
-                base_sys = settings.get("system_prompt", "You are a helpful AI coding assistant.")
-                settings["system_prompt"] = f"{base_sys}\n\n{system_suffix}"
+            base_sys = settings.get("system_prompt", "You are a helpful AI coding assistant.")
+            if system_prefix or system_suffix:
+                settings["system_prompt"] = (
+                    f"{system_prefix}{base_sys}" + (f"\n\n{system_suffix}" if system_suffix else "")
+                )
 
             async def _run_chat(sid=session_id, msgs=messages, ws_path=workspace_path, s=settings):
                 from .ai_chat_tools import run_agent_loop
@@ -2239,7 +2254,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     # Parse structured JSON result from streamed text
                     full_text = "".join(chunks)
                     try:
-                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
+                        mo = _re.search(r"```json\s*(.*)\s*```", full_text, _re.DOTALL)
                         if mo:
                             result = _json.loads(mo.group(1))
                             await broadcast(make_event("ai.review.result", {"review_id": rid, "result": result}))

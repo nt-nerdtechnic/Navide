@@ -1411,11 +1411,16 @@ async function sendMessage(): Promise<void> {
         editSetSuffix = `\n\n[EDIT MODE: Working set of files for targeted editing. For each file you modify, output the COMPLETE updated file content inside a fenced code block with the file path on the first line (e.g. \`\`\`typescript\n// src/foo.ts\n...\n\`\`\`). The user can then apply individual changes.]\n${files.join('\n\n')}`
       }
     }
+    // Workspace rules: inject .cursor/rules/*.mdc or AGENTS.md as system prefix
+    const rulesPrefix = workspaceRulesContent.value.trim()
+      ? `--- Project Rules ---\n${workspaceRulesContent.value.trim()}\n---\n\n`
+      : ''
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
+      ...(rulesPrefix ? { system_prefix: rulesPrefix } : {}),
       ...(lengthHint || notesSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + smartCtxSuffix + editSetSuffix } : {}),
     })
   } catch {
@@ -1857,9 +1862,11 @@ function setupListeners(): void {
       if (p.model) last.model = p.model
       if (p.input_tokens != null) last.inputTokens = p.input_tokens
       if (p.output_tokens != null) last.outputTokens = p.output_tokens
-      // Pass last user message for context-aware follow-up generation
+      // Store follow-ups on the message itself (per-message, like VS Code Copilot)
       const lastUser = [...messages.value].reverse().find((m) => m.role === 'user')
-      followUps.value = extractFollowUps(last.content, lastUser?.content ?? '')
+      const generated = extractFollowUps(last.content, lastUser?.content ?? '')
+      last.followUps = generated
+      followUps.value = generated
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
@@ -1973,26 +1980,82 @@ function teardownListeners(): void {
 }
 
 const workspaceRulesFile = ref<string | null>(null)
+const workspaceRulesContent = ref<string>('')
+
+function parseMdcFrontmatter(raw: string): { alwaysApply?: boolean; globs?: string; description?: string; body: string } {
+  if (!raw.startsWith('---')) return { body: raw }
+  const end = raw.indexOf('---', 3)
+  if (end === -1) return { body: raw }
+  const fm = raw.slice(3, end).trim()
+  const body = raw.slice(end + 3).trim()
+  const alwaysApply = /alwaysApply\s*:\s*true/i.test(fm)
+  const globsMatch = fm.match(/globs\s*:\s*["']?([^"'\n]+)["']?/)
+  const descMatch = fm.match(/description\s*:\s*(.+)/)
+  return {
+    alwaysApply,
+    globs: globsMatch?.[1]?.trim(),
+    description: descMatch?.[1]?.trim(),
+    body,
+  }
+}
 
 async function detectWorkspaceRules(): Promise<void> {
+  interface ReadResp { ok: boolean; content?: string }
+  interface ListResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean }> }
+
+  // 1. Try .cursor/rules/ directory (MDC format — Cursor 2025 standard)
+  try {
+    const listResp = await props.backend.send<ListResp>('fs.list_dir', {
+      workspace_path: props.workspacePath,
+      rel_path: '.cursor/rules',
+    })
+    const entries = listResp.payload?.entries ?? []
+    const mdcFiles = entries.filter((e) => !e.is_dir && e.name.endsWith('.mdc'))
+    if (mdcFiles.length > 0) {
+      const parts: string[] = []
+      for (const entry of mdcFiles) {
+        try {
+          const r = await props.backend.send<ReadResp>('fs.read_file', {
+            workspace_path: props.workspacePath,
+            rel_path: `.cursor/rules/${entry.name}`,
+          })
+          if (r.payload?.ok && r.payload.content) {
+            const parsed = parseMdcFrontmatter(r.payload.content)
+            // Include rules with alwaysApply: true or no frontmatter (legacy)
+            if (parsed.alwaysApply || !r.payload.content.startsWith('---')) {
+              parts.push(parsed.body || r.payload.content)
+            }
+          }
+        } catch { /* skip unreadable file */ }
+      }
+      if (parts.length > 0) {
+        workspaceRulesFile.value = `.cursor/rules/ (${parts.length} rule${parts.length > 1 ? 's' : ''})`
+        workspaceRulesContent.value = parts.join('\n\n---\n\n')
+        return
+      }
+    }
+  } catch { /* directory not found */ }
+
+  // 2. Fall back to single-file rules
   const RULE_FILES = [
-    '.cursor/rules', '.cursor/rules.md', 'AGENTS.md',
+    '.cursor/rules.md', '.cursorrules', 'AGENTS.md',
     '.ai/rules.md', '.ai/instructions.md', '.github/copilot-instructions.md',
   ]
   for (const rf of RULE_FILES) {
     try {
-      interface ReadResp { ok: boolean; content?: string }
       const resp = await props.backend.send<ReadResp>('fs.read_file', {
         workspace_path: props.workspacePath,
         rel_path: rf,
       })
       if (resp.payload?.ok && resp.payload.content) {
         workspaceRulesFile.value = rf
+        workspaceRulesContent.value = resp.payload.content
         return
       }
     } catch { /* file not found */ }
   }
   workspaceRulesFile.value = null
+  workspaceRulesContent.value = ''
 }
 
 onMounted(() => {
@@ -3318,6 +3381,18 @@ function getDateLabel(ts: number): string {
         </div>
         <span v-if="msg.bookmarked" class="ai-bookmark-indicator" title="Bookmarked">★</span>
       </div>
+      <!-- Per-message follow-up suggestions (only on last assistant message when not streaming) -->
+      <div
+        v-if="msg.role === 'assistant' && msg.followUps?.length && !msg.streaming && mi === lastAssistantIdx"
+        class="ai-followups ai-followups-inline"
+      >
+        <button
+          v-for="(q, qi) in msg.followUps"
+          :key="qi"
+          class="ai-followup-btn"
+          @click="inputText = q; nextTick(() => textareaEl?.focus())"
+        >{{ q }}</button>
+      </div>
       </template>
     </div>
 
@@ -3336,16 +3411,6 @@ function getDateLabel(ts: number): string {
       <span class="ai-active-tool-icon">{{ getToolIcon(activeToolCard.tool_name) }}</span>
       <span class="ai-active-tool-text">{{ getToolSummary(activeToolCard.tool_name, activeToolCard.tool_input) }}</span>
       <span class="ai-active-tool-spinner" />
-    </div>
-
-    <!-- Follow-up suggestions -->
-    <div v-if="followUps.length && !sending" class="ai-followups">
-      <button
-        v-for="(q, qi) in followUps"
-        :key="qi"
-        class="ai-followup-btn"
-        @click="inputText = q; followUps = []; nextTick(() => textareaEl?.focus())"
-      >{{ q }}</button>
     </div>
 
     <!-- Search bar -->
@@ -4076,6 +4141,11 @@ function getDateLabel(ts: number): string {
   padding: 4px 10px 2px;
   border-top: 1px solid var(--border-muted);
   background: var(--bg-canvas);
+}
+.ai-followups-inline {
+  border-top: none;
+  padding: 4px 14px 6px;
+  background: transparent;
 }
 .ai-followup-btn {
   text-align: left;
