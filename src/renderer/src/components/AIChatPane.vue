@@ -122,6 +122,8 @@ const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const showSettings = ref(false)
 const showShortcuts = ref(false)
 const autoScroll = ref(true)
+// Per-thread scroll position memory
+const threadScrollPositions = new Map<string, number>()
 const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
@@ -166,9 +168,31 @@ interface DiffApplyState {
   relPath: string
   oldLines: number
   newLines: number
+  oldContent: string
   btn: HTMLButtonElement
 }
 const diffApplyState = ref<DiffApplyState | null>(null)
+
+// Quick inline diff: return first changed lines (added/removed) for preview
+function computeSimpleDiffPreview(oldText: string, newText: string, maxLines = 8): Array<{ type: '+' | '-' | ' '; text: string }> {
+  const oldLines = oldText.split('\n')
+  const newLines = newText.split('\n')
+  const result: Array<{ type: '+' | '-' | ' '; text: string }> = []
+  let changed = 0
+  const limit = Math.min(Math.max(oldLines.length, newLines.length), 60)
+  for (let i = 0; i < limit && result.length < maxLines; i++) {
+    const o = oldLines[i]
+    const n = newLines[i]
+    if (o === n) {
+      if (changed > 0) result.push({ type: ' ', text: o ?? '' })
+    } else {
+      if (o !== undefined) result.push({ type: '-', text: o })
+      if (n !== undefined) result.push({ type: '+', text: n })
+      changed++
+    }
+  }
+  return result
+}
 
 async function confirmApply(): Promise<void> {
   const s = diffApplyState.value
@@ -345,6 +369,10 @@ function newThread(): void {
 
 function switchThread(id: string): void {
   if (id === currentThreadId.value) { showThreads.value = false; return }
+  // Save current thread's scroll position before switching
+  if (messagesEl.value) {
+    threadScrollPositions.set(currentThreadId.value, messagesEl.value.scrollTop)
+  }
   if (sending.value) stopStreaming()
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
   _doSave()
@@ -364,6 +392,18 @@ function switchThread(id: string): void {
   }
   // Clear edit-mode working set on thread switch
   editWorkingSet.value = []
+  // Restore scroll position; default to bottom for new/short threads
+  const savedPos = threadScrollPositions.get(id)
+  nextTick(() => {
+    if (!messagesEl.value) return
+    if (savedPos !== undefined) {
+      messagesEl.value.scrollTop = savedPos
+      autoScroll.value = false
+    } else {
+      messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+      autoScroll.value = true
+    }
+  })
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   showThreads.value = false
@@ -724,15 +764,17 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       const newLines = code.split('\n').length
       // Read current file to compute diff stats
       let oldLines = 0
+      let oldContent = ''
       try {
         interface ReadResp { ok: boolean; content?: string }
         const r = await props.backend.send<ReadResp>('fs.read_file', {
           workspace_path: props.workspacePath,
           rel_path: relPath,
         })
-        oldLines = (r.payload?.content ?? '').split('\n').length
+        oldContent = r.payload?.content ?? ''
+        oldLines = oldContent.split('\n').length
       } catch { /* file may not exist yet */ }
-      diffApplyState.value = { code, relPath, oldLines, newLines, btn: applyBtn }
+      diffApplyState.value = { code, relPath, oldLines, newLines, oldContent, btn: applyBtn }
     } catch { showToast('Apply failed') }
   }
 
@@ -788,6 +830,21 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       if (r?.ok) showToast('Saved')
       else if (!r?.canceled) showToast('Save failed')
     } catch { showToast('Save failed') }
+    return
+  }
+
+  // Inline code action buttons (Explain / Refactor)
+  const codeActionBtn = target.closest<HTMLButtonElement>('.ai-code-action-btn')
+  if (codeActionBtn) {
+    try {
+      const code = decodeURIComponent(escape(atob(codeActionBtn.dataset.code ?? '')))
+      const action = codeActionBtn.dataset.action ?? 'explain'
+      const prompt = action === 'explain'
+        ? `Explain this code clearly and concisely:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
+        : `Refactor this code to improve readability and maintainability. Show the complete refactored version:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
+      inputText.value = prompt
+      await nextTick(); textareaEl.value?.focus()
+    } catch { /* ignore */ }
     return
   }
 
@@ -929,6 +986,14 @@ function renderMarkdownLite(rawText: string): string {
       .split('\n')
       .map((line) => `<span class="code-ln">${line}</span>`)
       .join('\n')
+    // Inline code actions (explain/refactor) for code-like languages
+    const isCodeLang = !isShell && !['json', 'yaml', 'toml', 'sql', 'md', 'markdown', 'text', ''].includes((lang ?? '').toLowerCase())
+    const explainBtn = isCodeLang && code.trim().length > 20
+      ? `<button class="ai-code-action-btn" data-action="explain" data-code="${encoded}" title="Ask AI to explain this code">Explain</button>`
+      : ''
+    const refactorBtn = isCodeLang && code.trim().length > 30
+      ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code">Refactor</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
@@ -939,6 +1004,7 @@ function renderMarkdownLite(rawText: string): string {
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
+      `${explainBtn || refactorBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}</div>` : ''}` +
       `${toggleBtn}` +
       `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code class="has-line-numbers">${numberedLines}</code></pre>` +
       `</div>`,
@@ -3882,6 +3948,15 @@ function getDateLabel(ts: number): string {
               {{ diffApplyState.newLines > diffApplyState.oldLines ? '+' : '' }}{{ diffApplyState.newLines - diffApplyState.oldLines }}
             </span>
           </div>
+          <!-- Inline diff preview -->
+          <div v-if="diffApplyState.oldContent" class="ai-diff-preview">
+            <div
+              v-for="(ln, li) in computeSimpleDiffPreview(diffApplyState.oldContent, diffApplyState.code)"
+              :key="li"
+              class="ai-diff-ln"
+              :class="ln.type === '+' ? 'diff-add' : ln.type === '-' ? 'diff-del' : 'diff-ctx'"
+            ><span class="ai-diff-sign">{{ ln.type }}</span><span class="ai-diff-text">{{ ln.text }}</span></div>
+          </div>
           <p class="ai-modal-warning">This will overwrite the entire file.</p>
         </div>
         <div class="ai-modal-footer">
@@ -4360,6 +4435,18 @@ function getDateLabel(ts: number): string {
 }
 .ai-text :deep(.ai-code-run-btn:hover) { background: var(--warning-fg, #d29922); color: #fff; }
 .ai-text :deep(.ai-code-run-btn:disabled) { opacity: 0.6; cursor: default; }
+.ai-text :deep(.ai-code-actions) {
+  display: flex; gap: 4px; padding: 3px 8px;
+  background: var(--bg-muted); border-top: 1px solid var(--border-muted);
+}
+.ai-text :deep(.ai-code-action-btn) {
+  background: none; border: none;
+  color: var(--text-muted); cursor: pointer; font-size: 10.5px;
+  padding: 1px 6px; border-radius: 3px; opacity: 0.65;
+}
+.ai-text :deep(.ai-code-action-btn:hover) {
+  opacity: 1; background: var(--bg-subtle); color: var(--accent-fg);
+}
 .ai-text :deep(.ai-code-apply-btn),
 .ai-text :deep(.ai-code-insert-btn) {
   background: none;
@@ -5403,6 +5490,17 @@ kbd {
 .ai-diff-delta.del { color: #f85149; background: rgba(248,81,73,.15); }
 .ai-diff-delta.same { opacity: .5; }
 .ai-modal-warning { font-size: 12px; opacity: .55; margin: 8px 0 0; }
+.ai-diff-preview {
+  margin-top: 10px; border: 1px solid var(--border-muted);
+  border-radius: 4px; overflow: hidden; max-height: 180px; overflow-y: auto;
+  font-family: var(--font-mono, monospace); font-size: 11.5px;
+}
+.ai-diff-ln { display: flex; gap: 6px; padding: 1px 8px; }
+.ai-diff-ln.diff-add { background: rgba(63,185,80,0.1); color: #3fb950; }
+.ai-diff-ln.diff-del { background: rgba(248,81,73,0.1); color: #f85149; }
+.ai-diff-ln.diff-ctx { color: var(--text-muted); }
+.ai-diff-sign { flex-shrink: 0; width: 10px; font-weight: bold; }
+.ai-diff-text { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .ai-modal-footer {
   display: flex; gap: 8px; justify-content: flex-end;
   padding: 12px 16px; border-top: 1px solid var(--border, #3c3c3c);
