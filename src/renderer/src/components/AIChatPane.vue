@@ -1211,13 +1211,14 @@ function renderMarkdownLite(rawText: string): string {
   })
   // Extract LaTeX math blocks before HTML escape so they survive unharmed
   const mathBlocks: string[] = []
+  const _escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   // Display math: $$...$$
   text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
     try {
       const rendered = katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false })
       mathBlocks.push(rendered)
     } catch {
-      mathBlocks.push(`<span class="ai-latex-err">$$${expr}$$</span>`)
+      mathBlocks.push(`<span class="ai-latex-err">$$${_escHtml(expr)}$$</span>`)
     }
     return `\x00M${mathBlocks.length - 1}\x00`
   })
@@ -1227,7 +1228,7 @@ function renderMarkdownLite(rawText: string): string {
       const rendered = katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })
       mathBlocks.push(rendered)
     } catch {
-      mathBlocks.push(`<span class="ai-latex-err">$${expr}$</span>`)
+      mathBlocks.push(`<span class="ai-latex-err">$${_escHtml(expr)}$</span>`)
     }
     return `\x00M${mathBlocks.length - 1}\x00`
   })
