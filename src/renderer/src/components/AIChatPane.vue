@@ -125,7 +125,6 @@ const autoScroll = ref(true)
 const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
-const followUps = ref<string[]>([])
 const streamNow = ref(Date.now())
 let streamTickInterval: number | null = null
 
@@ -1328,7 +1327,6 @@ async function sendMessage(): Promise<void> {
     return
   }
 
-  followUps.value = []
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
@@ -1880,7 +1878,6 @@ function setupListeners(): void {
       const lastUser = [...messages.value].reverse().find((m) => m.role === 'user')
       const generated = extractFollowUps(last.content, lastUser?.content ?? '')
       last.followUps = generated
-      followUps.value = generated
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
