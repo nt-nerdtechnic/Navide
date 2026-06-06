@@ -2049,6 +2049,9 @@ function foldAt(line: number): void {
     cursor.value = clampPos({ line, col: cursor.value.col })
     anchor.value = null
   }
+  if (ghost.value && ghost.value.pos.line > line && ghost.value.pos.line <= end) {
+    ghost.value = null
+  }
 }
 function unfoldAt(line: number): void {
   const s = new Set(foldedLines.value)
@@ -2060,14 +2063,23 @@ function toggleFoldAt(line: number): void {
   else foldAt(line)
 }
 function _ensureCursorVisible(): void {
-  if (modelToDisplayMap.value.get(cursor.value.line) !== undefined) return
+  if (modelToDisplayMap.value.get(cursor.value.line) !== undefined) {
+    // Cursor is visible; still check if ghost text became hidden.
+    if (ghost.value && modelToDisplayMap.value.get(ghost.value.pos.line) === undefined) {
+      ghost.value = null
+    }
+    return
+  }
   for (const fl of foldedLines.value) {
     const end = _foldRangeEnd(fl)
     if (cursor.value.line > fl && cursor.value.line <= end) {
       cursor.value = clampPos({ line: fl, col: cursor.value.col })
       anchor.value = null
-      return
+      break
     }
+  }
+  if (ghost.value && modelToDisplayMap.value.get(ghost.value.pos.line) === undefined) {
+    ghost.value = null
   }
 }
 function foldAll(): void {
