@@ -518,12 +518,15 @@ function cycleResponseLength(): void {
 const inputCharCount = computed(() => inputText.value.length)
 const inputTokenEstimate = computed(() => Math.ceil(inputCharCount.value / 4))
 
-// Context window usage estimate (assumes ~100k token limit)
-const CTX_MAX_TOKENS = 100_000
+// Context window usage — use model-specific ctx from catalog, fall back to 100k
+const currentModelCtx = computed(() => {
+  const entry = MODEL_CATALOG.find((m) => m.id === settingsModel.value)
+  return entry?.ctx ?? 100_000
+})
 const conversationTokenEstimate = computed(() =>
-  messages.value.reduce((sum, m) => sum + Math.ceil((m.rawContent ?? m.content).length / 4), 0)
+  messages.value.reduce((sum, m) => sum + Math.ceil(String(m.rawContent ?? m.content).length / 4), 0)
 )
-const ctxUsagePct = computed(() => Math.min(100, Math.round((conversationTokenEstimate.value / CTX_MAX_TOKENS) * 100)))
+const ctxUsagePct = computed(() => Math.min(100, Math.round((conversationTokenEstimate.value / currentModelCtx.value) * 100)))
 const ctxUsageLevel = computed(() => {
   if (ctxUsagePct.value >= 90) return 'danger'
   if (ctxUsagePct.value >= 60) return 'warn'
@@ -625,6 +628,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@tree', label: '@tree — workspace file tree structure' },
   { id: '@symbol', label: '@symbol — find a function or class definition' },
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
+  { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -664,6 +668,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/model',    label: '/model',    description: 'Switch model for this conversation',            template: '' },
   { id: '/rename',   label: '/rename',   description: 'Rename this chat thread',                       template: '' },
   { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
+  { id: '/generate', label: '/generate', description: 'Generate a new file from description',          template: '' },
+  { id: '/search',   label: '/search',   description: 'Search codebase for a symbol or string',        template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2340,6 +2346,38 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     return
   }
 
+  if (cmd.id === '/generate') {
+    inputText.value = 'Generate a new file: '
+    await nextTick(); textareaEl.value?.focus()
+    return
+  }
+
+  if (cmd.id === '/search') {
+    const query = window.prompt('Search workspace for:')
+    if (!query?.trim()) return
+    inputText.value = ''
+    try {
+      interface SearchResp2 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+      const resp = await props.backend.send<SearchResp2>('search.find_in_files', {
+        workspace_path: props.workspacePath,
+        query: query.trim(),
+        is_regex: false,
+        case_sensitive: false,
+        max_results: 40,
+      })
+      const results = resp.payload?.results ?? []
+      if (results.length === 0) { showToast(`No results for "${query}"`); return }
+      let chipContent = `// Workspace search: "${query}" — ${results.length} files\n`
+      for (const r of results.slice(0, 10)) {
+        chipContent += `\n// ${r.rel_path}\n`
+        for (const m of r.matches.slice(0, 4)) chipContent += `${m.line}: ${m.text}\n`
+      }
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: chipContent })
+      showToast(`Found in ${results.length} file(s)`)
+    } catch { showToast('/search: unavailable') }
+    return
+  }
+
   inputText.value = cmd.template + ' '
 
   // Auto-inject current file chip for code-focused commands when no chip exists yet
@@ -2738,6 +2776,12 @@ async function selectAtOption(option: AtOption): Promise<void> {
     } catch {
       chipContent = '// @terminal: unavailable'
     }
+  } else if (option.id === '@notepad') {
+    chipLabel = '@notepad'
+    const noteText = notesContent.value.trim()
+    chipContent = noteText
+      ? `// Workspace Notepad:\n${noteText}`
+      : '// @notepad: empty — open the Notepad panel to add notes'
   } else if (option.id === '@symbol') {
     // Prompt user to type symbol name
     const newVal = val.slice(0, atIdx) + '@symbol:' + val.slice(cur)
@@ -3589,7 +3633,7 @@ function getDateLabel(ts: number): string {
       </div>
 
       <!-- Context window usage bar (shown when > 30%) -->
-      <div v-if="ctxUsagePct > 30" class="ai-ctx-bar" :class="ctxUsageLevel" :title="`~${conversationTokenEstimate.toLocaleString()} / ${CTX_MAX_TOKENS.toLocaleString()} tokens`">
+      <div v-if="ctxUsagePct > 30" class="ai-ctx-bar" :class="ctxUsageLevel" :title="`~${conversationTokenEstimate.toLocaleString()} / ${currentModelCtx.toLocaleString()} tokens (${settingsModel})`">
         <div class="ai-ctx-bar-track">
           <div class="ai-ctx-bar-fill" :style="{ width: ctxUsagePct + '%' }" />
         </div>
