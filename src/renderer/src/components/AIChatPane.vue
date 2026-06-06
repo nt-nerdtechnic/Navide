@@ -1183,6 +1183,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
+  { id: '@model', label: '@model — switch model for next message (e.g. @model:gpt-4o)' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
@@ -1256,6 +1257,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/translate',    label: '/translate',    description: 'Translate code comments/strings to another language (e.g. /translate Spanish)', template: '' },
   { id: '/spell',        label: '/spell',        description: 'Fix spelling and grammar in the current file or selection', template: '' },
   { id: '/git',          label: '/git',          description: 'Quick git status + recent commits summary',               template: '' },
+  { id: '/save-prompt',  label: '/save-prompt',  description: 'Save current input as a reusable prompt template (e.g. /save-prompt Code Review)', template: '' },
+  { id: '/prompts',      label: '/prompts',      description: 'Browse and load saved prompt templates',                  template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -3515,6 +3518,24 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @model:id — temporarily switch model for next message
+  if (/^model:?$/i.test(fragment)) {
+    const topModels = MODEL_CATALOG.filter((m) => m.id !== 'auto' && m.provider !== 'ollama').slice(0, 6)
+    atOptions.value = topModels.map((m) => ({ id: `@model:${m.id}`, label: `@model:${m.id} — ${m.display} (${m.note})` }))
+    return
+  }
+  const isModelQuery = /^model:.+/i.test(fragment)
+  if (isModelQuery) {
+    const modelFrag = fragment.slice('model:'.length).toLowerCase()
+    const matched = MODEL_CATALOG.filter(
+      (m) => m.id.toLowerCase().includes(modelFrag) || m.display.toLowerCase().includes(modelFrag)
+    ).slice(0, 6)
+    atOptions.value = matched.length
+      ? matched.map((m) => ({ id: `@model:${m.id}`, label: `@model:${m.id} — ${m.display}` }))
+      : [{ id: `@model:${fragment.slice('model:'.length)}`, label: `@model:${fragment.slice('model:'.length)} — use this model` }]
+    return
+  }
+
   // @glob:pattern — match files by glob pattern (e.g. @glob:src/**/*.ts)
   if (/^glob:?$/i.test(fragment)) {
     atOptions.value = [{ id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' }]
@@ -3871,6 +3892,26 @@ ${historyText}`
   }
 
   // /git — quick git status + recent commits summary
+  if (cmd.id === '/save-prompt') {
+    const rawText = inputText.value.trim()
+    const nameArg = rawText.slice('/save-prompt'.length).trim()
+    const promptText = nameArg || rawText
+    if (!promptText) { showToast('/save-prompt: type a prompt name or write a prompt first'); return }
+    const name = nameArg || promptText.slice(0, 40)
+    const tmpl: PromptTemplate = { id: `pt-${Date.now()}`, name, text: nameArg ? '' : promptText }
+    promptTemplates.value = [tmpl, ...promptTemplates.value]
+    savePromptTemplates()
+    inputText.value = ''
+    showToast(`Saved: "${name}" — open Prompt Templates to edit`)
+    return
+  }
+
+  if (cmd.id === '/prompts') {
+    inputText.value = ''
+    showPromptTemplates.value = true
+    return
+  }
+
   if (cmd.id === '/git') {
     inputText.value = ''
     if (!props.workspacePath) { showToast('/git requires an open workspace'); return }
@@ -4327,6 +4368,34 @@ ${out}`
     } catch {
       chipContent = `// @folder:${folderPath}: unavailable`
     }
+  } else if (option.id === '@model' || option.id.startsWith('@model:')) {
+    // @model — switch model for the current conversation (Cursor-style inline model switch)
+    if (option.id === '@model') {
+      // Rewrite to @model: so user can type model name
+      const newVal = val.slice(0, atIdx) + '@model:' + val.slice(cur)
+      inputText.value = newVal
+      showAtMenu.value = false
+      await nextTick()
+      el.focus()
+      const pos = atIdx + '@model:'.length
+      el.setSelectionRange(pos, pos)
+      return
+    }
+    const modelId = option.id.slice('@model:'.length).trim()
+    const entry = MODEL_CATALOG.find((m) => m.id === modelId)
+    if (entry) {
+      settingsProvider.value = entry.provider === 'auto' ? settingsProvider.value : entry.provider
+      settingsModel.value = entry.id
+      showToast(`Model switched to ${entry.display}`)
+    } else {
+      showToast(`@model: unknown model "${modelId}"`)
+    }
+    // Remove the @model:xxx from input (don't add a chip)
+    inputText.value = val.slice(0, atIdx) + val.slice(cur)
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    return
   } else if (option.id === '@glob:' || option.id.startsWith('@glob:')) {
     // If bare @glob: (no pattern yet), rewrite input to @glob: and wait for user to type pattern
     if (option.id === '@glob:') {
