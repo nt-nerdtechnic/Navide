@@ -1207,7 +1207,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
     <!-- ── Init panel ─────────────────────────────────────── -->
     <div v-else-if="!gitStatus.is_git_repo" class="init-panel">
-      <svg class="init-svg" width="32" height="32" viewBox="0 0 16 16" fill="#3fb950">
+      <svg class="init-svg" width="32" height="32" viewBox="0 0 16 16" fill="var(--success-fg)">
         <path d="M15.698 7.287 8.712.302a1.03 1.03 0 0 0-1.457 0l-1.45 1.45 1.84 1.84a1.223 1.223 0 0 1 1.55 1.56l1.773 1.774a1.224 1.224 0 0 1 1.267 2.025 1.226 1.226 0 0 1-2.002-1.334L8.58 5.965v4.233a1.226 1.226 0 0 1 .321 2.432 1.226 1.226 0 0 1-1.11-1.384 1.224 1.224 0 0 1 .787-1.03V5.926a1.224 1.224 0 0 1-.666-1.608L6.076 2.486 .302 8.26a1.03 1.03 0 0 0 0 1.456l6.986 6.986a1.03 1.03 0 0 0 1.456 0l6.953-6.953a1.031 1.031 0 0 0 0-1.462z"/>
       </svg>
       <div class="init-title">Not a Git repository</div>
@@ -1810,7 +1810,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
         <div v-if="historyExpanded" class="card-body">
         <div class="history-search-row">
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="#6e7681" style="flex-shrink:0"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="var(--text-muted)" style="flex-shrink:0"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
           <input v-model="historySearch" class="search-input" placeholder="Search commits…" @click.stop />
         </div>
         <div class="history-scope-row" @click.stop>
@@ -2208,11 +2208,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .op-abort-btn:hover { background: var(--danger-muted); }
 .op-banner-conflict { background: var(--attention-subtle); border-bottom-color: var(--attention-muted); }
-.op-banner-conflict .op-text { color: var(--warning-fg, #d29922); }
+.op-banner-conflict .op-text { color: var(--warning-fg); }
 .op-banner-ready { background: var(--success-subtle); border-bottom-color: var(--success-muted); }
-.op-banner-ready .op-text { color: var(--success-fg, #3fb950); font-weight: 600; }
+.op-banner-ready .op-text { color: var(--success-fg); font-weight: 600; }
 .op-commit-btn {
-  background: var(--success-subtle); color: var(--success-fg, #3fb950); border: 1px solid var(--success-fg, #3fb950);
+  background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-fg);
   border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; margin-left: auto;
 }
 .op-commit-btn:hover { background: var(--success-muted); }
@@ -2272,7 +2272,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: transparent; border: none; color: var(--text-primary); font-size: 12px;
   padding: 5px 8px; border-radius: 4px; cursor: pointer; text-align: left;
 }
-.menu-item:hover { background: rgba(177,186,196,0.1); }
+.menu-item:hover { background: var(--bg-active); }
 .menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
 .menu-check { width: 14px; text-align: center; font-size: 11px; color: var(--accent-fg); flex-shrink: 0; }
 .menu-sep { height: 1px; background: var(--border-muted); margin: 4px 0; }
@@ -2305,7 +2305,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .ai-btn.auto-active {
   color: var(--accent-fg);
   border-color: var(--accent-fg);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-fg, #58a6ff) 45%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-fg) 45%, transparent);
 }
 .ai-btn.auto-active:not(.generating) span {
   display: inline-block;
@@ -2328,18 +2328,18 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .auto-commit-btn.on {
   color: var(--accent-fg);
-  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 10%, transparent);
+  background: color-mix(in srgb, var(--accent-fg) 10%, transparent);
 }
 .auto-commit-btn.on .ac-badge {
-  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 25%, transparent);
+  background: color-mix(in srgb, var(--accent-fg) 25%, transparent);
   color: var(--accent-fg);
 }
 .ac-status-bar {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 12px;
   font-size: 11px; color: var(--text-muted);
-  background: color-mix(in srgb, var(--accent-fg, #58a6ff) 6%, transparent);
-  border-top: 1px solid color-mix(in srgb, var(--accent-fg, #58a6ff) 18%, transparent);
+  background: color-mix(in srgb, var(--accent-fg) 6%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--accent-fg) 18%, transparent);
 }
 .ac-status-spinner {
   display: inline-block; flex-shrink: 0;
@@ -2420,13 +2420,13 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   padding: 0 8px 0 16px; gap: 0; cursor: default; position: relative;
 }
 .file-row:hover { background: rgba(177,186,196,0.06); }
-.row-conflict { background: rgba(248,81,73,0.05) !important; }
-.row-selected { background: rgba(88,166,255,0.10) !important; }
-.row-selected:hover { background: rgba(88,166,255,0.15) !important; }
+.row-conflict { background: color-mix(in srgb, var(--danger-fg) 5%, transparent) !important; }
+.row-selected { background: color-mix(in srgb, var(--accent-fg) 10%, transparent) !important; }
+.row-selected:hover { background: color-mix(in srgb, var(--accent-fg) 15%, transparent) !important; }
 .selection-bar {
   display: flex; align-items: center; gap: 6px;
-  padding: 5px 10px; border-top: 1px solid rgba(88,166,255,0.25);
-  background: rgba(13,17,23,0.96); flex-shrink: 0; z-index: 2;
+  padding: 5px 10px; border-top: 1px solid color-mix(in srgb, var(--accent-fg) 25%, transparent);
+  background: color-mix(in srgb, var(--bg-base) 96%, transparent); flex-shrink: 0; z-index: 2;
 }
 .sel-count { font-size: 11px; color: var(--text-muted); margin-right: 4px; white-space: nowrap; }
 .sel-btn {
@@ -2434,10 +2434,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: rgba(177,186,196,0.08); color: var(--text-primary); cursor: pointer;
 }
 .sel-btn:hover { background: rgba(177,186,196,0.15); }
-.sel-btn.primary { border-color: rgba(88,166,255,0.4); color: var(--accent-fg); }
-.sel-btn.primary:hover { background: rgba(88,166,255,0.12); }
-.sel-btn.danger { border-color: rgba(248,81,73,0.4); color: var(--danger-fg); }
-.sel-btn.danger:hover { background: rgba(248,81,73,0.12); }
+.sel-btn.primary { border-color: color-mix(in srgb, var(--accent-fg) 40%, transparent); color: var(--accent-fg); }
+.sel-btn.primary:hover { background: color-mix(in srgb, var(--accent-fg) 12%, transparent); }
+.sel-btn.danger { border-color: color-mix(in srgb, var(--danger-fg) 40%, transparent); color: var(--danger-fg); }
+.sel-btn.danger:hover { background: color-mix(in srgb, var(--danger-fg) 12%, transparent); }
 .sel-clear { margin-left: auto; opacity: 0.6; }
 
 .file-status {
@@ -2480,7 +2480,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .row-btn.always { opacity: 1; }
 /* Stage = primary action, emphasised and rightmost */
 .row-btn.primary { color: var(--accent-fg); font-size: 13px; font-weight: 700; }
-.row-btn.primary:hover { color: var(--text-on-emphasis); background: rgba(56,139,253,0.25); }
+.row-btn.primary:hover { color: var(--text-on-emphasis); background: color-mix(in srgb, var(--accent-focus) 25%, transparent); }
 /* Discard = shrunk to avoid accidental clicks */
 .row-btn.shrink { min-width: 14px; height: 14px; font-size: 8px; opacity: 0.5; padding: 0; }
 .row-btn.shrink:hover { opacity: 1; }
@@ -2715,22 +2715,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .config-key { color: var(--text-muted); min-width: 108px; flex-shrink: 0; font-family: monospace; font-size: 10px; }
 .config-val { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .config-val.clickable { cursor: pointer; border-radius: 3px; padding: 1px 4px; margin: -1px -4px; }
-.config-val.clickable:hover { background: #1c2330; color: var(--text-on-emphasis); }
+.config-val.clickable:hover { background: var(--bg-muted); color: var(--text-on-emphasis); }
 .config-inline-input { flex: 1; min-width: 0; }
 
 /* ── Merge conflict modal ───────────────────────────────────────────────────── */
 .merge-conflict-box {
-  margin: 4px 8px; background: #1a0f00; border: 1px solid var(--warning-fg, #d29922);
+  margin: 4px 8px; background: var(--attention-subtle); border: 1px solid var(--warning-fg);
   border-radius: 4px; padding: 8px 10px; font-size: 11px;
 }
-.merge-conflict-box .clean-title { color: var(--warning-fg, #d29922); }
+.merge-conflict-box .clean-title { color: var(--warning-fg); }
 .merge-conflict-context { color: var(--text-muted); font-size: 10px; margin-bottom: 4px; }
-.conflict-file { color: var(--warning-fg, #d29922) !important; opacity: 0.9; }
+.conflict-file { color: var(--warning-fg) !important; opacity: 0.9; }
 .merge-conflict-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
 
 /* ── Clean confirm ──────────────────────────────────────────────────────────── */
 .clean-box {
-  margin: 4px 8px; background: #1a0a0a; border: 1px solid var(--danger-fg);
+  margin: 4px 8px; background: var(--danger-subtle); border: 1px solid var(--danger-fg);
   border-radius: 4px; padding: 8px 10px; font-size: 11px;
 }
 .clean-title { color: var(--danger-fg); font-weight: 600; margin-bottom: 4px; }
@@ -2793,7 +2793,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   text-align: left;
   font-family: inherit;
 }
-.tp-dropdown .menu-item:hover { background: rgba(177, 186, 196, 0.1); }
+.tp-dropdown .menu-item:hover { background: var(--bg-active); }
 .tp-dropdown .menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
 .tp-dropdown .menu-check {
   width: 14px;
@@ -2833,7 +2833,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   text-align: left;
   font-family: inherit;
 }
-.ctx-menu .menu-item:hover { background: rgba(177, 186, 196, 0.1); }
+.ctx-menu .menu-item:hover { background: var(--bg-active); }
 .ctx-menu .menu-item.danger { color: var(--danger-fg); }
 .ctx-menu .menu-item.danger:hover { background: var(--diff-del-bg); }
 .ctx-menu .menu-sep {

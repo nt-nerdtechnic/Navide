@@ -1814,7 +1814,7 @@ button.danger:hover { background: var(--danger-muted); }
 button.ghost { background: transparent; }
 button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .danger-link { color: var(--danger-fg); border-color: transparent; background: transparent; }
-.danger-link:hover { background: rgba(248,81,73,0.1) !important; }
+.danger-link:hover { background: color-mix(in srgb, var(--danger-fg) 10%, transparent) !important; }
 
 /* ── Messages ─────────────────────────────────────────────────────────────── */
 .err-msg { color: var(--danger-fg); font-size: 11px; margin: 0; }
@@ -1882,7 +1882,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .mcp-dot {
   width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
-.mcp-dot.connected { background: var(--success-fg); box-shadow: 0 0 6px rgba(63,185,80,0.6); }
+.mcp-dot.connected { background: var(--success-fg); box-shadow: 0 0 6px color-mix(in srgb, var(--success-fg) 60%, transparent); }
 .mcp-dot.error     { background: var(--danger-fg); }
 .mcp-dot.disabled  { background: var(--text-disabled); }
 .mcp-dot.unknown   { background: var(--text-disabled); }
@@ -1892,7 +1892,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
   border: none; background: transparent; color: var(--text-disabled);
   font-size: 14px; cursor: pointer; padding: 2px 4px; border-radius: 4px; line-height: 1;
 }
-.mcp-delete-btn:hover { color: var(--danger-fg); background: rgba(248,81,73,0.1); }
+.mcp-delete-btn:hover { color: var(--danger-fg); background: color-mix(in srgb, var(--danger-fg) 10%, transparent); }
 .mcp-delete-btn.small { font-size: 10px; color: var(--text-muted); }
 .mcp-delete-btn.small:hover { color: var(--danger-fg); }
 
@@ -2168,16 +2168,16 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-row-fail td { color: var(--text-disabled); }
 .az-row-fail .az-td-model { color: var(--text-muted); }
 .az-badge-pass {
-  background: rgba(63, 185, 80, 0.15);
+  background: color-mix(in srgb, var(--success-fg) 15%, transparent);
   color: var(--success-fg);
-  border: 1px solid rgba(63,185,80,0.3);
+  border: 1px solid color-mix(in srgb, var(--success-fg) 30%, transparent);
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 11px;
   font-weight: 600;
 }
 .az-badge-fail {
-  background: rgba(248, 81, 73, 0.1);
+  background: color-mix(in srgb, var(--danger-fg) 10%, transparent);
   color: var(--text-muted);
   border: 1px solid var(--border-muted);
   padding: 2px 8px;
@@ -2203,7 +2203,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .pl-active .pl-name { color: var(--accent-bright); }
 .pl-meta { font-size: 11px; color: var(--text-muted); }
 .pl-badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600; letter-spacing: 0.02em; }
-.pl-badge.active { background: rgba(63,185,80,0.12); color: var(--success-fg); border: 1px solid rgba(46,160,67,0.45); }
+.pl-badge.active { background: color-mix(in srgb, var(--success-fg) 12%, transparent); color: var(--success-fg); border: 1px solid color-mix(in srgb, var(--success-strong) 45%, transparent); }
 .pl-item-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pl-summary { font-size: 12px; color: var(--success-fg); }
 .pl-enter { color: var(--text-muted); font-size: 14px; }
@@ -2222,22 +2222,22 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
   color: var(--text-secondary); font-size: 12px; padding: 4px 10px; cursor: pointer;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
-.pl-set-default-btn:hover:not(:disabled) { color: var(--success-fg); background: rgba(63,185,80,0.08); border-color: rgba(63,185,80,0.35); }
+.pl-set-default-btn:hover:not(:disabled) { color: var(--success-fg); background: color-mix(in srgb, var(--success-fg) 8%, transparent); border-color: color-mix(in srgb, var(--success-fg) 35%, transparent); }
 .pl-set-default-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .pl-run-btn {
   display: inline-flex; align-items: center; gap: 5px;
-  background: rgba(35,134,54,0.9); border: 1px solid var(--success-fg); border-radius: 6px;
+  background: color-mix(in srgb, var(--success-emphasis) 90%, transparent); border: 1px solid var(--success-fg); border-radius: 6px;
   color: var(--text-on-emphasis); font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
   padding: 5px 14px; cursor: pointer;
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
-.pl-run-btn:hover { background: var(--success-strong); border-color: var(--success-bright); box-shadow: 0 0 0 3px rgba(63,185,80,0.18); }
+.pl-run-btn:hover { background: var(--success-strong); border-color: var(--success-bright); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success-fg) 18%, transparent); }
 .pl-delete-icon {
   background: none; border: 1px solid transparent; cursor: pointer;
   color: var(--text-muted); font-size: 14px; padding: 4px 6px; border-radius: 5px;
   opacity: 0.55; transition: opacity 0.15s, color 0.15s, background 0.15s, border-color 0.15s;
 }
-.pl-delete-icon:hover:not(:disabled) { opacity: 1; color: var(--danger-fg); background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.2); }
+.pl-delete-icon:hover:not(:disabled) { opacity: 1; color: var(--danger-fg); background: color-mix(in srgb, var(--danger-fg) 8%, transparent); border-color: color-mix(in srgb, var(--danger-fg) 20%, transparent); }
 .pl-delete-icon:disabled { opacity: 0.2; cursor: not-allowed; }
 .pl-detail-header {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -2275,7 +2275,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
   border: 1px solid var(--accent-emphasis);
   border-radius: 6px;
   background: var(--accent-emphasis);
-  color: #fff;
+  color: var(--text-on-emphasis);
   cursor: pointer;
   transition: opacity 0.15s;
 }

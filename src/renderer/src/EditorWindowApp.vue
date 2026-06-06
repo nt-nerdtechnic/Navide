@@ -2062,7 +2062,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   line-height: 15px;
   text-align: center;
 }
-.ide-act-badge--err { background: #f85149; color: #fff; }
+.ide-act-badge--err { background: var(--danger-fg); color: var(--text-on-emphasis); }
 
 .ide-sidebar {
   flex-shrink: 0;
@@ -2137,9 +2137,9 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   border-radius: 3px;
   flex-shrink: 0;
 }
-.ide-tab-diff-badge.staged { background: #1f3a2f; color: #56d364; }
-.ide-tab-diff-badge.unstaged { background: #3a2f1f; color: #e3b341; }
-.ide-tab-diff-badge.conflict-badge { background: #3a1f1f; color: #f85149; }
+.ide-tab-diff-badge.staged { background: color-mix(in srgb, var(--success-fg) 18%, transparent); color: var(--success-bright); }
+.ide-tab-diff-badge.unstaged { background: color-mix(in srgb, var(--attention-fg) 18%, transparent); color: var(--attention-bright); }
+.ide-tab-diff-badge.conflict-badge { background: color-mix(in srgb, var(--danger-fg) 18%, transparent); color: var(--danger-fg); }
 .ide-tab-diff-badge.branch-diff-badge { background: var(--accent-subtle); color: var(--accent-fg); }
 .ide-tab-close {
   border: none;
@@ -2185,8 +2185,8 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-tab-ctx {
   position: fixed;
   z-index: 300;
-  background: var(--bg-subtle, #1c1c2e);
-  border: 1px solid var(--border-default, #3a3a5c);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0,0,0,0.5);
   padding: 4px 0;
@@ -2200,11 +2200,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   cursor: pointer;
   white-space: nowrap;
 }
-.ide-tab-ctx-item:hover { background: var(--accent, #5a9eff); color: #fff; }
+.ide-tab-ctx-item:hover { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
 .ide-tab-ctx-item.disabled { opacity: 0.4; pointer-events: none; }
 .ide-tab-ctx-sep {
   height: 1px;
-  background: var(--border-default, #3a3a5c);
+  background: var(--border-default);
   margin: 4px 0;
 }
 .ide-bc-dd {

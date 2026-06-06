@@ -1313,7 +1313,7 @@ textarea:focus {
 }
 textarea.drag-over {
   border-color: var(--accent-focus);
-  box-shadow: inset 0 0 0 1px var(--accent-focus), 0 0 0 2px #388bfd44;
+  box-shadow: inset 0 0 0 1px var(--accent-focus), 0 0 0 2px color-mix(in srgb, var(--accent-focus) 27%, transparent);
 }
 .row {
   display: flex;
@@ -1634,7 +1634,7 @@ button.icon-btn.muted:hover {
   font-size: 10px;
   color: var(--success-fg);
   background: var(--success-subtle);
-  border: 1px solid #2ea04355;
+  border: 1px solid color-mix(in srgb, var(--success-strong) 33%, transparent);
   border-radius: 3px;
   padding: 1px 5px;
   white-space: nowrap;
@@ -1981,7 +1981,7 @@ button.icon-btn.muted:hover {
   font-size: 10px;
   color: var(--accent-fg);
   background: #1a2d4a;
-  border: 1px solid #1f6feb55;
+  border: 1px solid color-mix(in srgb, var(--accent-emphasis) 33%, transparent);
   border-radius: 999px;
   padding: 2px 8px;
 }
