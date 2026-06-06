@@ -2457,7 +2457,6 @@ function stopStreaming(): void {
 
 // ── Clear conversation (clear current thread) ──────────────────────────────────
 function clearConversation(): void {
-  if (messages.value.length > 0 && !window.confirm('Clear all messages in this chat?')) return
   if (sending.value) stopStreaming()
   _navAssistIdx = -1
   messages.value = []
@@ -4044,6 +4043,47 @@ ${historyText}`
   if (cmd.id === '/import') {
     inputText.value = ''
     void importConversation()
+    return
+  }
+
+  if (cmd.id === '/pr') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/pr requires an open workspace'); return }
+    try {
+      showToast('Fetching diff…')
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      // Prefer diff from main/master, fall back to staged
+      const [vsMain, staged] = await Promise.all([
+        props.backend.send<ShellResp>('shell.run', { command: 'git log --oneline -20 2>&1', workspace_path: props.workspacePath }),
+        props.backend.send<ShellResp>('shell.run', { command: 'git diff --stat HEAD 2>&1 | head -40', workspace_path: props.workspacePath }),
+      ])
+      const commits = (vsMain.payload?.output ?? '').trim()
+      const stat = (staged.payload?.output ?? '').trim()
+      const chipContent = `// Recent commits (for PR description):\n${commits || '(none)'}\n\n// Changed files:\n${stat || '(none)'}`
+      contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@git'))
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git(pr)', content: chipContent })
+      inputText.value = 'Write a concise GitHub pull request title and description for these changes.\n\nFormat:\n**Title:** <title>\n\n**Description:**\n<what changed and why>\n\n**Testing:**\n<how to test>'
+    } catch { showToast('/pr: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/changelog') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/changelog requires an open workspace'); return }
+    try {
+      showToast('Fetching commits…')
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git log --oneline -30 --format="%h %s (%an)" 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      const log = (resp.payload?.output ?? '').trim()
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@git:log')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git:log', content: `// git log (last 30):\n${log || '(none)'}` })
+      inputText.value = 'Write a CHANGELOG entry for these recent commits, grouped by category (Added, Changed, Fixed, Removed). Use Keep a Changelog format.'
+    } catch { showToast('/changelog: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
     return
   }
 
