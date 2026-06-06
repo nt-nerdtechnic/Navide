@@ -1078,7 +1078,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@selection', label: '@selection — editor selection' },
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
-  { id: '@git:log', label: '@git:log — recent commit history (last 20)' },
+  { id: '@git:log', label: '@git:log — recent commit history (last 20, or @git:log:50)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
@@ -3170,6 +3170,22 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @git:log:N — show last N commits (custom count)
+  if (/^git:log$/i.test(fragment)) {
+    atOptions.value = [
+      { id: '@git:log',    label: '@git:log — last 20 commits' },
+      { id: '@git:log:5',  label: '@git:log:5 — last 5 commits' },
+      { id: '@git:log:10', label: '@git:log:10 — last 10 commits' },
+      { id: '@git:log:50', label: '@git:log:50 — last 50 commits' },
+    ]
+    return
+  }
+  if (/^git:log:\d+$/i.test(fragment)) {
+    const n = fragment.slice('git:log:'.length)
+    atOptions.value = [{ id: `@git:log:${n}`, label: `@git:log:${n} — last ${n} commits` }]
+    return
+  }
+
   // @git:stash — list all git stashes
   if (/^git:stash$/i.test(fragment)) {
     atOptions.value = [{ id: '@git:stash', label: '@git:stash — list all stash entries' }]
@@ -3650,16 +3666,18 @@ async function selectAtOption(option: AtOption): Promise<void> {
     } catch {
       chipContent = '// @git:staged: unavailable'
     }
-  } else if (option.id === '@git:log') {
-    chipLabel = '@git:log'
+  } else if (option.id === '@git:log' || option.id.startsWith('@git:log:')) {
+    const rawN = option.id.startsWith('@git:log:') ? option.id.slice('@git:log:'.length) : '20'
+    const n = Math.min(Math.max(parseInt(rawN, 10) || 20, 1), 500)
+    chipLabel = `@git:log:${n}`
     try {
       interface ShellResp { ok: boolean; output?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
-        command: 'git log --oneline -20 2>&1',
+        command: `git log --oneline -${n} 2>&1`,
         workspace_path: props.workspacePath,
       })
       const out = (resp.payload?.output ?? '').trim()
-      chipContent = out ? `// git log (last 20 commits):\n${out}` : '// git log: no commits'
+      chipContent = out ? `// git log (last ${n} commits):\n${out}` : '// git log: no commits'
     } catch {
       chipContent = '// @git:log: unavailable'
     }

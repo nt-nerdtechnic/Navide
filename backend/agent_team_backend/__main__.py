@@ -9,6 +9,7 @@ import socket
 import uvicorn
 
 from . import __version__
+from .app import app as _fastapi_app
 from .applog import backend_port_file, setup_file_logging
 
 
@@ -49,8 +50,10 @@ def main() -> int:
     except OSError as err:
         log.warning("could not write port-file: %s", err)
 
+    # Use the already-imported app object so PyInstaller can detect this
+    # dependency statically (string-based import is invisible to the bundler).
     config = uvicorn.Config(
-        "agent_team_backend.app:app",
+        _fastapi_app,
         host=args.host,
         port=resolved_port,
         log_level=args.log_level,

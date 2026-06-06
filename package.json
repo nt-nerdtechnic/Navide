@@ -34,6 +34,10 @@
       {
         "from": "resources/",
         "to": "resources/"
+      },
+      {
+        "from": "backend/dist/agent_team_backend",
+        "to": "bin/agent_team_backend"
       }
     ],
     "mac": {

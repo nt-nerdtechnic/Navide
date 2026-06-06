@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
+import { join } from 'node:path'
 import { app } from 'electron'
 
 export interface BackendHandle {
@@ -29,17 +30,35 @@ function findFreePort(): Promise<number> {
 export async function startBackend(): Promise<BackendHandle> {
   const port = await findFreePort()
   const host = '127.0.0.1'
-  const projectRoot = app.getAppPath()
 
-  const proc = spawn(
-    'uv',
-    ['--project', 'backend', 'run', 'python', '-m', 'agent_team_backend', '--port', String(port), '--log-level', 'debug'],
-    {
-      cwd: projectRoot,
-      env: { ...process.env },
+  // Electron strips PATH on macOS; restore common tool locations so the backend
+  // can reach git, tmux, claude, etc. via subprocess.
+  const env = { ...process.env }
+  if (process.platform === 'darwin') {
+    const common = ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/bin', '/bin']
+    const existing = (env.PATH ?? '').split(':').filter(Boolean)
+    env.PATH = [...new Set([...common, ...existing])].join(':')
+  }
+
+  let proc: ChildProcess
+  if (app.isPackaged) {
+    const binaryPath = join(process.resourcesPath, 'bin', 'agent_team_backend')
+    proc = spawn(binaryPath, ['--port', String(port), '--log-level', 'info'], {
+      env,
       stdio: ['ignore', 'pipe', 'pipe']
-    }
-  )
+    })
+  } else {
+    const projectRoot = app.getAppPath()
+    proc = spawn(
+      'uv',
+      ['--project', 'backend', 'run', 'python', '-m', 'agent_team_backend', '--port', String(port), '--log-level', 'debug'],
+      {
+        cwd: projectRoot,
+        env,
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    )
+  }
 
   proc.stdout?.on('data', (chunk: Buffer) => {
     process.stdout.write(`[backend] ${chunk.toString()}`)
