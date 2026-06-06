@@ -363,6 +363,8 @@ function switchThread(id: string): void {
       _pushSettingsToBackend()
     }
   }
+  // Clear edit-mode working set on thread switch
+  editWorkingSet.value = []
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   showThreads.value = false
@@ -3531,6 +3533,12 @@ function getDateLabel(ts: number): string {
           :title="`Add ${props.getActiveRelPath?.()} to working set`"
           @click="addToWorkingSet(props.getActiveRelPath?.() ?? '')"
         >+ current file</button>
+        <button
+          v-if="editWorkingSet.length > 1"
+          class="ai-working-set-clear"
+          title="Clear working set"
+          @click="editWorkingSet = []"
+        >Clear</button>
         <span v-if="!editWorkingSet.length" class="ai-working-set-empty">No files — add the current file or use @file</span>
       </div>
 
@@ -4969,6 +4977,8 @@ function getDateLabel(ts: number): string {
 .ai-working-set-remove:hover { opacity: 1; }
 .ai-working-set-add { background: none; border: 1px dashed rgba(240,160,48,0.4); border-radius: 3px; padding: 1px 6px; font-size: 10px; color: #f0a030; cursor: pointer; opacity: 0.7; }
 .ai-working-set-add:hover { opacity: 1; background: rgba(240,160,48,0.1); }
+.ai-working-set-clear { background: none; border: none; font-size: 10px; color: var(--text-muted); cursor: pointer; opacity: 0.5; padding: 1px 4px; }
+.ai-working-set-clear:hover { opacity: 1; color: var(--text-secondary); }
 .ai-working-set-empty { font-size: 10px; color: var(--text-muted); opacity: 0.6; }
 
 /* Context window bar */
