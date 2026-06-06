@@ -1,0 +1,152 @@
+<script setup lang="ts">
+import { computed } from 'vue'
+import { allDiagnosticsSorted } from '../editor/diagnostics'
+import type { Diagnostic } from '../editor/diagnostics'
+
+const emit = defineEmits<{
+  (e: 'open-file', payload: { filepath: string; line: number }): void
+}>()
+
+const all = computed(() => allDiagnosticsSorted())
+
+const errorCount = computed(() => all.value.filter(d => d.severity === 'error').length)
+const warnCount  = computed(() => all.value.filter(d => d.severity === 'warning').length)
+
+// Group by relPath, preserving sorted order
+interface Group { relPath: string; items: Diagnostic[] }
+const groups = computed((): Group[] => {
+  const map = new Map<string, Diagnostic[]>()
+  for (const d of all.value) {
+    const arr = map.get(d.relPath) ?? []
+    arr.push(d)
+    map.set(d.relPath, arr)
+  }
+  return Array.from(map.entries()).map(([relPath, items]) => ({ relPath, items }))
+})
+
+function sevIcon(sev: Diagnostic['severity']): string {
+  return sev === 'error' ? '●' : sev === 'warning' ? '▲' : '●'
+}
+function sevClass(sev: Diagnostic['severity']): string {
+  return `sev-${sev}`
+}
+
+function openItem(d: Diagnostic): void {
+  emit('open-file', { filepath: d.relPath, line: d.line })
+}
+</script>
+
+<template>
+  <div class="problems-pane">
+    <div class="problems-header">
+      <span class="problems-title">Problems</span>
+      <span v-if="errorCount" class="badge badge-err">{{ errorCount }} error{{ errorCount !== 1 ? 's' : '' }}</span>
+      <span v-if="warnCount" class="badge badge-warn">{{ warnCount }} warning{{ warnCount !== 1 ? 's' : '' }}</span>
+    </div>
+    <div v-if="!all.length" class="problems-empty">No problems detected</div>
+    <div v-else class="problems-list">
+      <div v-for="g in groups" :key="g.relPath" class="prob-group">
+        <div class="prob-file">{{ g.relPath }}</div>
+        <div
+          v-for="(d, i) in g.items"
+          :key="i"
+          class="prob-item"
+          :class="sevClass(d.severity)"
+          @click="openItem(d)"
+        >
+          <span class="prob-icon" :class="sevClass(d.severity)">{{ sevIcon(d.severity) }}</span>
+          <span class="prob-msg">{{ d.message }}</span>
+          <span class="prob-loc">{{ d.line }}{{ d.col ? ':' + d.col : '' }}</span>
+          <span v-if="d.source" class="prob-src">{{ d.source }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.problems-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.problems-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0;
+}
+.problems-title {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.badge-err  { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+.badge-warn { background: rgba(187, 128, 9, 0.2); color: #d29922; }
+
+.problems-empty {
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.problems-list {
+  flex: 1;
+  overflow-y: auto;
+}
+.prob-group { margin-bottom: 2px; }
+.prob-file {
+  padding: 6px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prob-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 12px 3px 20px;
+  cursor: pointer;
+  border-radius: 3px;
+  margin: 0 4px;
+}
+.prob-item:hover { background: var(--bg-muted); }
+.prob-icon { font-size: 9px; flex-shrink: 0; }
+.prob-icon.sev-error   { color: #f85149; }
+.prob-icon.sev-warning { color: #d29922; }
+.prob-icon.sev-info    { color: #58a6ff; }
+.prob-msg {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+}
+.prob-loc {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+.prob-src {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: italic;
+}
+</style>

@@ -233,24 +233,24 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     })
     resizeObserver = new ResizeObserver(() => {
       cancelAnimationFrame(resizeRafId)
-      resizeRafId = requestAnimationFrame(() => {
-        const doFit = () => {
-          try {
-            fit.fit()
-            if (sessionId.value) {
-              void backend.send('terminal.resize', {
-                terminal_session_id: sessionId.value,
-                cols: term.cols,
-                rows: term.rows
-              })
-            }
-          } catch {
-            // ignore transient fit errors during teardown
+      const doFit = () => {
+        try {
+          fit.fit()
+          if (sessionId.value) {
+            void backend.send('terminal.resize', {
+              terminal_session_id: sessionId.value,
+              cols: term.cols,
+              rows: term.rows
+            })
           }
+        } catch {
+          // ignore transient fit errors during teardown
         }
+      }
+      resizeRafId = requestAnimationFrame(() => {
         // If xterm hasn't measured character cell dimensions yet, retry next frame
         if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
-          requestAnimationFrame(doFit)
+          resizeRafId = requestAnimationFrame(doFit)
         } else {
           doFit()
         }
