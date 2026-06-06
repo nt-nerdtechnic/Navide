@@ -2705,6 +2705,7 @@ interface StageRouter {
 const stageRouters = new Map<number, StageRouter>()
 
 const ROUTER_POLL_MS = 4_000
+const _managerScanRunning = new Set<number>()
 
 function ensureStageRouter(stageIndex: number): StageRouter {
   let r = stageRouters.get(stageIndex)
@@ -3119,10 +3120,13 @@ function matchWorkerByLabel(router: StageRouter, to: string): { paneId: string; 
 /** Scan all Manager-mode panes in the current stage for sentinel blocks +
  *  route messages. Called by startStageWatcher on each poll tick. */
 async function managerRouterScan(stageIndex: number): Promise<void> {
+  if (_managerScanRunning.has(stageIndex)) return
   if (stageIndex !== pipeline.stageIndex || pipeline.state !== 'running') return
   const router = stageRouters.get(stageIndex)
   const stage = stagesApi.stages.value[stageIndex]
   if (!router || !stage || router.finished) return
+  _managerScanRunning.add(stageIndex)
+  try {
 
   // ── Worker panes: scan for ASK / REPORT ───────────────────────────────────
   for (const [label, paneId] of router.workerPaneIds) {
@@ -3186,6 +3190,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
       void onPipelineNext()
     }
   }
+  } finally {
+    _managerScanRunning.delete(stageIndex)
+  }
 }
 
 function queueOrRouteWorkerMsg(router: StageRouter, stageId: string, msg: PendingMessage): void {
@@ -3212,6 +3219,7 @@ async function injectManagerPane(router: StageRouter, msg: PendingMessage): Prom
 
 let globalRouterHandle: number | null = null
 const globalRouterCursors = new Map<string, number>()
+let _globalScanRunning = false
 
 function startGlobalManagerRouter(): void {
   if (globalRouterHandle !== null) return
@@ -3230,7 +3238,10 @@ function stopGlobalManagerRouter(): void {
 }
 
 async function globalManagerRouterScan(): Promise<void> {
+  if (_globalScanRunning) return
   if (pipeline.state !== 'running') return
+  _globalScanRunning = true
+  try {
   const managerPaneId = globalManagerPaneId()
   if (!managerPaneId) return
   const gm = pipeline.globalManager!
@@ -3277,6 +3288,9 @@ async function globalManagerRouterScan(): Promise<void> {
     }
     pipelineLog(`🎯 Global → ${target.slotLabel} (Stage ${target.stageId}): ${d.message.slice(0, 50).replace(/\s+/g, ' ')}`)
     await injectPane(target.id, `[→ DISPATCH FROM Manager]\n${d.message}`, `manager-dispatch:${target.slotLabel}`, true)
+  }
+  } finally {
+    _globalScanRunning = false
   }
 }
 
