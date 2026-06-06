@@ -125,6 +125,7 @@ export const defaults: KeybindingRule[] = [
   // ── AI Chat ──────────────────────────────────────────────────────────────────
   { key: 'cmd+shift+a', command: 'workbench.action.toggleAIChat' },
   { key: 'ctrl+`',      command: 'workbench.action.toggleAIChat' },
+  { key: 'cmd+j',       command: 'workbench.action.toggleAIChat' },
   // Note: cmd+shift+l is selectHighlights when editorTextFocus; addSelectionToChat fires only when editor is open but textarea is NOT focused
   { key: 'cmd+shift+l', command: 'workbench.action.addSelectionToChat', when: 'editorOpen && !editorTextFocus' },
 
@@ -142,4 +143,12 @@ export const defaults: KeybindingRule[] = [
   { key: 'f12',         command: 'editor.action.openFileAtCursor',  when: 'editorTextFocus' },
   { key: 'shift+f12',  command: 'editor.action.findReferences',   when: 'editorTextFocus' },
   { key: 'f2',          command: 'editor.action.renameSymbol',     when: 'editorTextFocus' },
+
+  // ── Cursor line navigation ─────────────────────────────────────────────────────
+  { key: 'ctrl+home', command: 'editor.action.cursorTop',             when: 'editorTextFocus' },
+  { key: 'ctrl+end',  command: 'editor.action.cursorBottom',          when: 'editorTextFocus' },
+  { key: 'shift+home', command: 'editor.action.cursorLineStartSelect', when: 'editorTextFocus' },
+  { key: 'shift+end',  command: 'editor.action.cursorLineEndSelect',   when: 'editorTextFocus' },
+  { key: 'ctrl+shift+home', command: 'editor.action.cursorTopSelect',    when: 'editorTextFocus' },
+  { key: 'ctrl+shift+end',  command: 'editor.action.cursorBottomSelect', when: 'editorTextFocus' },
 ]

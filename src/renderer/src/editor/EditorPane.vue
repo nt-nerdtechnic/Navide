@@ -674,6 +674,11 @@ function cursorTop(): void { editorRef.value?.cursorTop() }
 function cursorBottom(): void { editorRef.value?.cursorBottom() }
 function cursorTopSelect(): void { editorRef.value?.cursorTopSelect() }
 function cursorBottomSelect(): void { editorRef.value?.cursorBottomSelect() }
+function cursorLineStart(): void { editorRef.value?.cursorLineStart() }
+function cursorLineEnd(): void { editorRef.value?.cursorLineEnd() }
+function cursorLineStartSelect(): void { editorRef.value?.cursorLineStartSelect() }
+function cursorLineEndSelect(): void { editorRef.value?.cursorLineEndSelect() }
+function selectCurrentWord(): void { editorRef.value?.selectCurrentWord() }
 function cursorWordLeft(): void { editorRef.value?.cursorWordLeft() }
 function cursorWordRight(): void { editorRef.value?.cursorWordRight() }
 function cursorWordLeftSelect(): void { editorRef.value?.cursorWordLeftSelect() }
@@ -778,6 +783,8 @@ defineExpose({
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom, cursorTopSelect, cursorBottomSelect,
+  cursorLineStart, cursorLineEnd, cursorLineStartSelect, cursorLineEndSelect,
+  selectCurrentWord,
   cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
   scrollLineUp, scrollLineDown,
   transformToUppercase, transformToLowercase, transformToTitleCase,

@@ -835,3 +835,48 @@ describe('open link at cursor (cmd+alt+enter)', () => {
     expect(dr.resolve(mkEvent('Enter', { metaKey: true, altKey: true }), {})).toBeNull()
   })
 })
+
+describe('cursor line navigation (Home/End/ctrl+Home/End)', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('shift+home → cursorLineStartSelect', () => {
+    expect(dr.resolve(mkEvent('Home', { shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorLineStartSelect')
+  })
+
+  it('shift+end → cursorLineEndSelect', () => {
+    expect(dr.resolve(mkEvent('End', { shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorLineEndSelect')
+  })
+
+  it('ctrl+home → cursorTop', () => {
+    expect(dr.resolve(mkEvent('Home', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorTop')
+  })
+
+  it('ctrl+end → cursorBottom', () => {
+    expect(dr.resolve(mkEvent('End', { ctrlKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorBottom')
+  })
+
+  it('ctrl+shift+home → cursorTopSelect', () => {
+    expect(dr.resolve(mkEvent('Home', { ctrlKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorTopSelect')
+  })
+
+  it('ctrl+shift+end → cursorBottomSelect', () => {
+    expect(dr.resolve(mkEvent('End', { ctrlKey: true, shiftKey: true }), { editorTextFocus: true })?.command)
+      .toBe('editor.action.cursorBottomSelect')
+  })
+})
+
+describe('cmd+j toggles AI chat panel', () => {
+  let dr: KeyResolver
+  beforeEach(() => { dr = new KeyResolver(defaults) })
+
+  it('cmd+j → toggleAIChat (no when)', () => {
+    expect(dr.resolve(mkEvent('j', { metaKey: true }), {})?.command)
+      .toBe('workbench.action.toggleAIChat')
+  })
+})

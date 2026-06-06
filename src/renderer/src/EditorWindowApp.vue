@@ -371,9 +371,14 @@ registerCommand('editor.action.indentLines',         () => activeEditor()?.inden
 registerCommand('editor.action.outdentLines',        () => activeEditor()?.dedentLine())
 registerCommand('editor.action.cursorTop',            () => activeEditor()?.cursorTop())
 registerCommand('editor.action.cursorBottom',         () => activeEditor()?.cursorBottom())
-registerCommand('editor.action.cursorTopSelect',      () => activeEditor()?.cursorTopSelect())
-registerCommand('editor.action.cursorBottomSelect',   () => activeEditor()?.cursorBottomSelect())
-registerCommand('editor.action.cursorWordLeft',       () => activeEditor()?.cursorWordLeft())
+registerCommand('editor.action.cursorTopSelect',       () => activeEditor()?.cursorTopSelect())
+registerCommand('editor.action.cursorBottomSelect',    () => activeEditor()?.cursorBottomSelect())
+registerCommand('editor.action.cursorLineStart',       () => activeEditor()?.cursorLineStart())
+registerCommand('editor.action.cursorLineEnd',         () => activeEditor()?.cursorLineEnd())
+registerCommand('editor.action.cursorLineStartSelect', () => activeEditor()?.cursorLineStartSelect())
+registerCommand('editor.action.cursorLineEndSelect',   () => activeEditor()?.cursorLineEndSelect())
+registerCommand('editor.action.selectCurrentWord',     () => activeEditor()?.selectCurrentWord())
+registerCommand('editor.action.cursorWordLeft',        () => activeEditor()?.cursorWordLeft())
 registerCommand('editor.action.cursorWordRight',      () => activeEditor()?.cursorWordRight())
 registerCommand('editor.action.cursorWordLeftSelect', () => activeEditor()?.cursorWordLeftSelect())
 registerCommand('editor.action.cursorWordRightSelect',() => activeEditor()?.cursorWordRightSelect())
@@ -395,7 +400,7 @@ registerCommand('editor.action.sortLinesAscending',     () => activeEditor()?.so
 registerCommand('editor.action.sortLinesDescending',    () => activeEditor()?.sortLinesDescending())
 registerCommand('editor.action.reverseLines',           () => activeEditor()?.reverseLines())
 registerCommand('editor.action.removeDuplicateLines',   () => activeEditor()?.removeDuplicateLines())
-registerCommand('editor.action.openLink',               () => activeEditor()?.openLinkAtCursor())
+registerCommand('editor.action.openLink',               () => { activeEditor()?.openLinkAtCursor() })
 registerCommand('editor.action.navigateToLastEditLocation', () => activeEditor()?.navigateToLastEdit())
 registerCommand('editor.action.openFileAtCursor', async () => {
   const lineText = activeEditor()?.getCursorLineText?.() ?? ''
@@ -690,6 +695,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.changeEOLtoLF',         label: 'Change End of Line to LF' },
   { id: 'editor.action.indentationToSpaces',   label: 'Convert Indentation to Spaces' },
   { id: 'editor.action.indentationToTabs',     label: 'Convert Indentation to Tabs' },
+  { id: 'editor.action.selectCurrentWord',       label: 'Select Current Word' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol',     keys: '⌘⇧O' },
