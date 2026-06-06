@@ -2041,6 +2041,12 @@ function zoomReset(): void { fontZoom.value = 1.0 }
 function foldAt(line: number): void {
   if (!_isFoldable(line)) return
   foldedLines.value = new Set([...foldedLines.value, line])
+  // If the cursor is now hidden inside the folded range, move it to the fold header.
+  const end = _foldRangeEnd(line)
+  if (cursor.value.line > line && cursor.value.line <= end) {
+    cursor.value = clampPos({ line, col: cursor.value.col })
+    anchor.value = null
+  }
 }
 function unfoldAt(line: number): void {
   const s = new Set(foldedLines.value)
@@ -2051,12 +2057,24 @@ function toggleFoldAt(line: number): void {
   if (foldedLines.value.has(line)) unfoldAt(line)
   else foldAt(line)
 }
+function _ensureCursorVisible(): void {
+  if (modelToDisplayMap.value.get(cursor.value.line) !== undefined) return
+  for (const fl of foldedLines.value) {
+    const end = _foldRangeEnd(fl)
+    if (cursor.value.line > fl && cursor.value.line <= end) {
+      cursor.value = clampPos({ line: fl, col: cursor.value.col })
+      anchor.value = null
+      return
+    }
+  }
+}
 function foldAll(): void {
   const s = new Set<number>()
   for (let l = 0; l < model.lineCount(); l++) {
     if (_isFoldable(l)) s.add(l)
   }
   foldedLines.value = s
+  _ensureCursorVisible()
 }
 function unfoldAll(): void { foldedLines.value = new Set() }
 function foldToLevel(n: number): void {
@@ -2067,6 +2085,7 @@ function foldToLevel(n: number): void {
     if (ind >= 0 && Math.floor(ind / ts) < n && _isFoldable(l)) s.add(l)
   }
   foldedLines.value = s
+  _ensureCursorVisible()
 }
 function foldRecursively(line: number): void {
   const end = _foldRangeEnd(line)
@@ -2075,6 +2094,7 @@ function foldRecursively(line: number): void {
     if (_isFoldable(l)) s.add(l)
   }
   foldedLines.value = s
+  _ensureCursorVisible()
 }
 function unfoldRecursively(line: number): void {
   const end = _foldRangeEnd(line)
