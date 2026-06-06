@@ -1312,6 +1312,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@tree', label: '@tree — workspace file tree structure' },
   { id: '@symbol', label: '@symbol — find a function or class definition' },
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
+  { id: '@terminal:error', label: '@terminal:error — last error/exception from terminal output' },
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
   { id: '@docs',     label: '@docs — fetch official documentation as context' },
@@ -5011,6 +5012,23 @@ ${out}`
         : '// @terminal: no terminal output available (tmux required)'
     } catch {
       chipContent = '// @terminal: unavailable'
+    }
+  } else if (option.id === '@terminal:error') {
+    chipLabel = '@terminal:error'
+    try {
+      interface ShellResp2 { ok: boolean; output?: string }
+      showToast('Extracting last error from terminal…')
+      // Capture terminal scrollback and grep for error patterns
+      const resp = await props.backend.send<ShellResp2>('shell.run', {
+        command: 'tmux capture-pane -p -S -500 2>/dev/null | grep -E "(Error|error|Traceback|FAILED|Failed|Exception|exception|SyntaxError|TypeError|ValueError|RuntimeError|\\bERR\\b)" | tail -30 || echo "(no errors found)"',
+        workspace_path: props.workspacePath,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      chipContent = raw && raw !== '(no errors found)'
+        ? `// Last terminal errors:\n\`\`\`\n${raw.slice(-3000)}\n\`\`\``
+        : '// @terminal:error: no error patterns found in recent output'
+    } catch {
+      chipContent = '// @terminal:error: unavailable'
     }
   } else if (option.id === '@notepad') {
     chipLabel = '@notepad'
