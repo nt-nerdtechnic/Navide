@@ -2413,6 +2413,21 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // /save-prompt <name> — save named empty template from command line
+  if (rawText.startsWith('/save-prompt ')) {
+    const nameArg = rawText.slice('/save-prompt '.length).trim()
+    inputText.value = ''
+    if (nameArg) {
+      const tmpl: PromptTemplate = { id: `pt-${Date.now()}`, name: nameArg, text: '' }
+      promptTemplates.value = [tmpl, ...promptTemplates.value]
+      savePromptTemplates()
+      showToast(`Saved template: "${nameArg}" — open Prompt Templates to add content`)
+    } else {
+      showToast('Usage: /save-prompt <name>')
+    }
+    return
+  }
+
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
