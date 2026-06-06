@@ -687,6 +687,7 @@ function applySystemPromptProfile(profile: string): void {
 
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
+const settingsUserRules = ref(localStorage.getItem('ai-chat-user-rules') ?? '')
 // Chat mode — 'ask' = suggestions only, 'edit' = targeted file edits, 'agent' = full autonomous
 const chatMode = ref<'ask' | 'edit' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
 watch(chatMode, (mode) => {
@@ -1017,6 +1018,22 @@ const globalSearchResults = computed<GlobalSearchResult[]>(() => {
   }
   return results
 })
+
+function highlightSearchMatch(snippet: string, query: string): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  if (!query || query.length < 2) return esc(snippet)
+  const qLow = query.toLowerCase()
+  const parts: string[] = []
+  let i = 0
+  while (i < snippet.length) {
+    const pos = snippet.toLowerCase().indexOf(qLow, i)
+    if (pos === -1) { parts.push(esc(snippet.slice(i))); break }
+    parts.push(esc(snippet.slice(i, pos)))
+    parts.push(`<mark class="ai-search-hl">${esc(snippet.slice(pos, pos + qLow.length))}</mark>`)
+    i = pos + qLow.length
+  }
+  return parts.join('')
+}
 
 function openGlobalSearch(): void {
   showGlobalSearch.value = true
@@ -1892,6 +1909,7 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   localStorage.setItem('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
+  localStorage.setItem('ai-chat-user-rules', settingsUserRules.value)
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -2221,9 +2239,13 @@ async function sendMessage(): Promise<void> {
       )
       .map((rule) => rule.body)
     const allRules = [workspaceRulesContent.value.trim(), ...matchingGlobBodies].filter(Boolean)
-    const rulesPrefix = allRules.length
+    const projectRulesPrefix = allRules.length
       ? `--- Project Rules ---\n${allRules.join('\n\n---\n\n')}\n---\n\n`
       : ''
+    const userRulesPrefix = settingsUserRules.value.trim()
+      ? `--- User Rules (applies to all projects) ---\n${settingsUserRules.value.trim()}\n---\n\n`
+      : ''
+    const rulesPrefix = userRulesPrefix + projectRulesPrefix
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
@@ -5024,7 +5046,8 @@ function getDateLabel(ts: number): string {
           >
             <span class="ai-gsr-thread">{{ r.threadTitle }}</span>
             <span class="ai-gsr-role">{{ r.role === 'user' ? 'You' : 'AI' }}</span>
-            <span class="ai-gsr-snippet">{{ r.snippet }}</span>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <span class="ai-gsr-snippet" v-html="highlightSearchMatch(r.snippet, globalSearchQuery.trim())" />
           </button>
         </div>
         <div class="ai-global-search-footer">
@@ -6170,6 +6193,18 @@ function getDateLabel(ts: number): string {
           </div>
         </div>
 
+        <!-- User-level global AI rules (Cursor parity: applies to all projects) -->
+        <div class="ai-settings-row ai-settings-row--column">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <label class="ai-settings-label" style="margin:0">User Rules <span style="font-size:10px;opacity:.55;font-weight:400">— global, all projects</span></label>
+          </div>
+          <textarea
+            v-model="settingsUserRules"
+            class="ai-settings-textarea"
+            rows="3"
+            placeholder="e.g. Always use TypeScript strict mode. Prefer functional components over classes."
+          />
+        </div>
         <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
           <span class="ai-rules-icon">✦</span>
           <span>Workspace rules auto-applied from <code>{{ workspaceRulesFile }}</code></span>
@@ -7577,6 +7612,7 @@ function getDateLabel(ts: number): string {
 .ai-gsr-thread { font-size: 11px; font-weight: 600; color: var(--accent-emphasis); opacity: 0.85; }
 .ai-gsr-role { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 .ai-gsr-snippet { font-size: 12px; color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-search-hl { background: var(--accent-emphasis); color: var(--text-on-emphasis, #fff); border-radius: 2px; padding: 0 1px; font-weight: 600; }
 .ai-global-search-footer {
   padding: 6px 12px;
   font-size: 11px;
