@@ -333,6 +333,7 @@ const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsMaxTokens = ref(4096)
+const settingsTemperature = ref<number | null>(null)  // null = use model default
 const showModelPicker = ref(false)
 
 const ANTHROPIC_MODELS = [
@@ -1045,14 +1046,18 @@ function fetchSettings(): void {
 }
 
 function saveSettings(): void {
-  props.backend.send('ai.chat.settings.set', {
+  const payload: Record<string, unknown> = {
     provider: settingsProvider.value,
     anthropic_api_key: settingsApiKey.value,
     model: settingsModel.value,
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
-  }).catch(() => {/* ignore */})
+  }
+  if (settingsTemperature.value !== null) {
+    payload.temperature = Math.max(0, Math.min(1, settingsTemperature.value))
+  }
+  props.backend.send('ai.chat.settings.set', payload).catch(() => {/* ignore */})
   localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
   showSettings.value = false
   showToast('Settings saved')
@@ -1634,7 +1639,7 @@ function setupListeners(): void {
   unsubSettingsGet = props.backend.on('ai.chat.settings', (payload) => {
     const p = payload as {
       provider?: string; anthropic_api_key?: string; model?: string
-      ollama_base_url?: string; system_prompt?: string; max_tokens?: number
+      ollama_base_url?: string; system_prompt?: string; max_tokens?: number; temperature?: number
     }
     if (p.provider === 'anthropic' || p.provider === 'ollama') settingsProvider.value = p.provider
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
@@ -1643,6 +1648,7 @@ function setupListeners(): void {
     // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
     if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
     if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
+    if (p.temperature !== undefined) settingsTemperature.value = p.temperature
   })
 }
 
@@ -2035,7 +2041,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
       interface ShellResp { ok: boolean; output?: string }
       showToast('Running git blame…')
       const blameResp = await props.backend.send<ShellResp>('shell.run', {
-        command: `git blame --line-porcelain "${relPath}" 2>&1 | grep -E "^(author |author-time |summary |[0-9a-f]{40} )" | awk 'BEGIN{h=""} /^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9)} /^author-time /{print h" "a": "s}' | sort -u | head -60`,
+        command: `git blame --line-porcelain "${relPath}" 2>&1 | grep -E "^(author |summary |[0-9a-f]{40} )" | awk '/^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9); print h" "a": "s}' | sort -u | head -60`,
         workspace_path: props.workspacePath,
       })
       const out = (blameResp.payload?.output ?? '').trim()
@@ -3208,6 +3214,19 @@ function getDateLabel(ts: number): string {
           <div class="ai-tokens-row">
             <input v-model.number="settingsMaxTokens" type="range" min="256" max="16000" step="256" class="ai-tokens-slider" />
             <span class="ai-tokens-val">{{ settingsMaxTokens.toLocaleString() }}</span>
+          </div>
+        </div>
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Temperature (0 = precise, 1 = creative)</label>
+          <div class="ai-tokens-row">
+            <label class="ai-toggle-label" style="margin-right:8px">
+              <input type="checkbox" :checked="settingsTemperature === null" @change="settingsTemperature = settingsTemperature === null ? 0.7 : null" />
+              Use default
+            </label>
+            <template v-if="settingsTemperature !== null">
+              <input v-model.number="settingsTemperature" type="range" min="0" max="1" step="0.05" class="ai-tokens-slider" />
+              <span class="ai-tokens-val">{{ (settingsTemperature ?? 0).toFixed(2) }}</span>
+            </template>
           </div>
         </div>
         <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
