@@ -5,6 +5,7 @@ import { useNotify } from '../composables/useNotify'
 import { setContext } from '../keybindings/useKeybindings'
 import EditorView from './view/EditorView.vue'
 import type { Range, Position } from './types'
+import { diagnosticsStore } from './diagnostics'
 
 const props = defineProps<{
   workspacePath: string
@@ -34,6 +35,8 @@ const { toast, alert } = useNotify()
 const content = ref('')
 const dirty = ref(false)
 watch(dirty, (v) => emit('dirty', v))
+
+const fileDiagnostics = computed(() => diagnosticsStore.value.get(props.relPath) ?? [])
 // Navigate to a specific line when the host signals a new target (e.g. search results
 // clicking an already-open file). revealSeq ensures the watch fires even when revealAt
 // is the same line number as before.
@@ -859,6 +862,7 @@ defineExpose({
         ref="editorRef"
         :model-value="content"
         :language="lang"
+        :diagnostics="fileDiagnostics"
         @update:model-value="onChange"
         @cursor-change="onCursorChange"
       />

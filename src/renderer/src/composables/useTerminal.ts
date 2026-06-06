@@ -297,15 +297,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       tmuxName.value = resp.payload.tmux_name ?? ''
       status.value = 'running'
 
-      // Authoritative resize: by the time terminal.create round-trips, xterm
-      // has measured its cell dimensions. Refit and sync PTY immediately so the
-      // terminal always opens at the correct container size regardless of whether
-      // ResizeObserver fired before or after this spawn call.
-      try { fit.fit() } catch { /* ignore */ }
-      void backend.send('terminal.resize', {
-        terminal_session_id: sessionId.value,
-        cols: term.cols,
-        rows: term.rows
+      // Authoritative resize: defer one frame so xterm has rendered and measured
+      // its character cell dimensions before we fit. This is the only size sync
+      // needed — ResizeObserver handles all subsequent container changes.
+      const sid = sessionId.value
+      requestAnimationFrame(() => {
+        try { fit.fit() } catch { /* ignore */ }
+        void backend.send('terminal.resize', {
+          terminal_session_id: sid,
+          cols: term.cols,
+          rows: term.rows
+        })
       })
 
       // Auto-focus once the PTY is wired up so the user can immediately type

@@ -7,11 +7,18 @@ import { getIndent as _getIndentUtil, foldRangeEnd as _foldRangeEndUtil, compute
 import { useVirtualScroll } from './useVirtualScroll'
 import type { Position, Range, Token, Decoration, EditOperation } from '../types'
 import { toSnakeCase, toCamelCase, toKebabCase, toPascalCase } from '../textTransforms'
+import type { Diagnostic } from '../diagnostics'
 
-const props = withDefaults(defineProps<{ modelValue?: string; readonly?: boolean; language?: string }>(), {
+const props = withDefaults(defineProps<{
+  modelValue?: string
+  readonly?: boolean
+  language?: string
+  diagnostics?: Diagnostic[]
+}>(), {
   modelValue: '',
   readonly: false,
   language: '',
+  diagnostics: () => [],
 })
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
@@ -68,6 +75,18 @@ const sizerMinWidth = computed(() => {
   version.value // track edits
   const max = _maxLineLenCache >= 0 ? _maxLineLenCache : _scanMaxLineLen()
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
+})
+
+// ── Diagnostics index (line → highest-severity diagnostic for gutter icon) ───
+const _SEV_RANK: Record<string, number> = { error: 2, warning: 1, info: 0 }
+const diagByLine = computed<Map<number, Diagnostic>>(() => {
+  const m = new Map<number, Diagnostic>()
+  for (const d of props.diagnostics) {
+    const key = d.line - 1 // diagnostics are 1-based
+    const existing = m.get(key)
+    if (!existing || (_SEV_RANK[d.severity] ?? 0) > (_SEV_RANK[existing.severity] ?? 0)) m.set(key, d)
+  }
+  return m
 })
 
 // ── Fold state (must be before vs so visibleLineCount is available) ──────────
@@ -2259,7 +2278,7 @@ defineExpose({
             :style="{ top: (rl.displayIdx * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
           >
             <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">
-              <span v-if="rl.foldable || rl.folded" class="ev-fold-icon" @click.stop="toggleFoldAt(rl.index)">{{ rl.folded ? '▶' : '▼' }}</span><template v-if="showLineNumbers">{{ rl.index + 1 }}</template></span>
+              <span v-if="rl.foldable || rl.folded" class="ev-fold-icon" @click.stop="toggleFoldAt(rl.index)">{{ rl.folded ? '▶' : '▼' }}</span><span v-else-if="diagByLine.has(rl.index)" class="ev-diag-icon" :class="`ev-diag-${diagByLine.get(rl.index)!.severity}`">{{ diagByLine.get(rl.index)!.severity === 'error' ? '●' : '▲' }}</span><template v-if="showLineNumbers">{{ rl.index + 1 }}</template></span>
             <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px', tabSize: tabSize }"><span
               v-for="(s, si) in rl.segments"
               :key="si"
@@ -2414,6 +2433,14 @@ defineExpose({
   border: 1px solid rgba(100, 160, 255, 0.6);
   border-radius: 2px;
 }
+.ev-diag-icon {
+  font-size: 9px;
+  cursor: default;
+  margin-right: 2px;
+}
+.ev-diag-error   { color: #f85149; }
+.ev-diag-warning { color: #d29922; }
+.ev-diag-info    { color: #58a6ff; }
 .ev-suggest {
   position: absolute;
   z-index: 20;

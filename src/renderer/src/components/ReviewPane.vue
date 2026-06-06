@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useReview } from '../composables/useReview'
 import type { ReviewFinding } from '../composables/useReview'
 import type { useBackend } from '../composables/useBackend'
 import type { useGit } from '../composables/useGit'
+import { setDiagnostics, clearDiagnostics } from '../editor/diagnostics'
+import type { Diagnostic } from '../editor/diagnostics'
 
 const props = defineProps<{
   workspacePath: string
@@ -20,6 +22,21 @@ const emit = defineEmits<{
 }>()
 
 const { isReviewing, reviewResult, reviewError, reviewElapsed, startReview, stopReview } = useReview(props.backend)
+
+// Sync review findings → diagnosticsStore so Problems panel and gutter icons update.
+watch(reviewResult, (result) => {
+  if (!result) return
+  const byFile = new Map<string, Diagnostic[]>()
+  for (const f of result.findings) {
+    if (!f.file || f.line == null) continue
+    const sev: Diagnostic['severity'] =
+      f.severity === 'critical' ? 'error' : f.severity === 'warning' ? 'warning' : 'info'
+    const arr = byFile.get(f.file) ?? []
+    arr.push({ relPath: f.file, line: f.line, col: 0, severity: sev, message: f.title, source: 'review' })
+    byFile.set(f.file, arr)
+  }
+  for (const [relPath, diags] of byFile) setDiagnostics(relPath, diags)
+})
 
 const mode = ref<'working' | 'branch'>('working')
 const baseBranch = ref('main')
