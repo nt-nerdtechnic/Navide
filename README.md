@@ -297,7 +297,7 @@ All Slots must complete before the Stage advances (in Strict Mode, Idle/Cap requ
 ## Project Structure
 
 ```
-agent-team/
+Navide (Agent-Team)/
 ├── src/
 │   ├── main/
 │   │   ├── index.ts          Electron main process, IPC, multi-window

@@ -291,7 +291,7 @@ pnpm dev
 ## 專案結構
 
 ```
-agent-team/
+Navide (Agent-Team)/
 ├── src/
 │   ├── main/
 │   │   ├── index.ts          Electron 主進程、IPC、多視窗
