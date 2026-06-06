@@ -2084,6 +2084,15 @@ function setupListeners(): void {
     sending.value = false
     currentSessionId.value = null
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
+    // Auto-checkpoint every 20 messages (background, no toast)
+    const msgCount = messages.value.filter((m) => !m.streaming).length
+    if (msgCount > 0 && msgCount % 20 === 0) {
+      const snap = messages.value.filter((m) => !m.streaming).map((m) => ({ ...m }))
+      const label = `Auto (${msgCount} msgs)`
+      const cp: ChatCheckpoint = { id: `cp-${Date.now()}`, name: label, timestamp: Date.now(), messagesSnapshot: snap }
+      checkpoints.value = [cp, ...checkpoints.value].slice(0, 10)
+      saveCurrentThread()
+    }
     // /compact: after the summary arrives, replace the placeholder and splice in kept messages
     if (pendingCompactKeep.value.length > 0) {
       const kept = pendingCompactKeep.value
@@ -3177,7 +3186,12 @@ function onChatDragOver(e: DragEvent): void {
   const hasImage = Array.from(e.dataTransfer?.items ?? []).some((it) => it.type.startsWith('image/'))
   if (hasImage) { e.preventDefault(); dragOverChat.value = true }
 }
-function onChatDragLeave(): void { dragOverChat.value = false }
+function onChatDragLeave(e: DragEvent): void {
+  // Only reset when the cursor leaves the container itself, not a child element
+  if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+    dragOverChat.value = false
+  }
+}
 function onChatDrop(e: DragEvent): void {
   dragOverChat.value = false
   e.preventDefault()
@@ -3378,6 +3392,9 @@ function saveCheckpoint(name?: string): void {
 function restoreCheckpoint(cp: ChatCheckpoint): void {
   if (!window.confirm(`Restore to checkpoint "${cp.name}"?\nThis will replace the current conversation (${messages.value.length} messages).`)) return
   messages.value = cp.messagesSnapshot.map((m) => ({ ...m, streaming: false, thinking: false }))
+  // Clear any in-flight /compact state so its handler doesn't overwrite the restored messages
+  pendingCompactKeep.value = []
+  pendingCompactAllMessages.value = []
   saveCurrentThread()
   showCheckpoints.value = false
   showToast(`Restored: ${cp.name}`)
@@ -3614,28 +3631,29 @@ function getDateLabel(ts: number): string {
               <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>▾
             </button>
             <div v-if="regenModelOpen" class="ai-regen-model-menu">
-              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Anthropic</div>
-              <div
-                v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')"
-                :key="m.id"
-                class="ai-regen-model-item"
-                :class="{ active: m.id === settingsModel }"
-                @mousedown.prevent="regenWithModel(m.id)"
-              >
-                <span>{{ m.display }}</span>
-                <span class="ai-model-picker-note">{{ m.note }}</span>
-              </div>
-              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Ollama (Local)</div>
-              <div
-                v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')"
-                :key="m.id"
-                class="ai-regen-model-item"
-                :class="{ active: m.id === settingsModel }"
-                @mousedown.prevent="regenWithModel(m.id)"
-              >
-                <span>{{ m.display }}</span>
-                <span class="ai-model-picker-note">{{ m.note }}</span>
-              </div>
+              <template v-for="grp in [
+                { label: 'Anthropic', filter: 'anthropic' },
+                { label: 'OpenAI',   filter: 'openai'    },
+                { label: 'Groq',     filter: 'groq'      },
+                { label: 'DeepSeek', filter: 'deepseek'  },
+                { label: 'Ollama',   filter: 'ollama'    },
+              ]" :key="grp.label">
+                <div
+                  v-if="MODEL_CATALOG.some(e => e.provider === grp.filter)"
+                  class="ai-model-picker-group"
+                  style="font-size:9px;padding:4px 8px 2px"
+                >{{ grp.label }}</div>
+                <div
+                  v-for="m in MODEL_CATALOG.filter(e => e.provider === grp.filter)"
+                  :key="m.id"
+                  class="ai-regen-model-item"
+                  :class="{ active: m.id === settingsModel }"
+                  @mousedown.prevent="regenWithModel(m.id)"
+                >
+                  <span>{{ m.display }}</span>
+                  <span class="ai-model-picker-note">{{ m.note }}</span>
+                </div>
+              </template>
             </div>
           </div>
           <button
