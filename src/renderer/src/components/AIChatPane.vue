@@ -1361,7 +1361,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/summarize', label: '/summarize', description: 'Summarize conversation', template: '' },
   { id: '/run',      label: '/run',      description: 'Run shell command',       template: '' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
-  { id: '/export',   label: '/export',   description: 'Export chat (default: markdown; /export json)',  template: '' },
+  { id: '/export',   label: '/export',   description: 'Export chat (default: markdown; /export json; /export html)',  template: '' },
   { id: '/help',     label: '/help',     description: 'Show all commands',       template: '' },
   { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
   { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
@@ -2364,7 +2364,7 @@ async function sendMessage(): Promise<void> {
   if (rawText === '/export' || rawText.startsWith('/export ')) {
     const arg = rawText.slice('/export'.length).trim().toLowerCase()
     inputText.value = ''
-    void exportConversation(arg === 'json' ? 'json' : 'markdown')
+    void exportConversation(arg === 'json' ? 'json' : arg === 'html' ? 'html' : 'markdown')
     return
   }
 
@@ -6251,7 +6251,11 @@ function getDateLabel(ts: number): string {
             class="ai-msg-cost"
             :title="`Estimated API cost for this response (${msg.model})`"
           >{{ estimateCost(msg.model, msg.inputTokens ?? 0, msg.outputTokens ?? 0) }}</span>
-          <span v-if="msg.timestamp" class="ai-msg-time">
+          <span
+            v-if="msg.timestamp"
+            class="ai-msg-time"
+            :title="new Date(msg.timestamp).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })"
+          >
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
         </div>
