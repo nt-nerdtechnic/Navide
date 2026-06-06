@@ -1321,7 +1321,9 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@docs',     label: '@docs — fetch official documentation as context' },
   { id: '@usages',   label: '@usages — find all call sites of a symbol (e.g. @usages:MyFunc)' },
   { id: '@env',      label: '@env — project env vars from .env.example (no secrets)' },
-  { id: '@package',  label: '@package — package.json scripts & dependencies overview' },
+  { id: '@package',    label: '@package — package.json scripts & dependencies overview' },
+  { id: '@dependents', label: '@dependents — find all files that import the current open file' },
+  { id: '@lint',       label: '@lint — run ESLint / ruff / mypy and attach errors' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -5412,6 +5414,62 @@ ${out}`
       } catch {
         chipContent = '// @package: unavailable'
       }
+    }
+  } else if (option.id === '@dependents') {
+    chipLabel = '@dependents'
+    const activeFile = props.getActiveRelPath?.()
+    if (!activeFile) {
+      chipContent = '// @dependents: no active file open in editor'
+    } else {
+      try {
+        interface SearchResp3 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+        showToast(`Finding dependents of ${activeFile.split('/').pop()}…`)
+        const filename = activeFile.split('/').pop()?.replace(/\.\w+$/, '') ?? ''
+        const resp = await props.backend.send<SearchResp3>('search.find_in_files', {
+          workspace_path: props.workspacePath,
+          query: filename,
+          is_regex: false,
+          case_sensitive: false,
+          max_results: 50,
+        })
+        const importers = (resp.payload?.results ?? []).filter((r) =>
+          r.rel_path !== activeFile &&
+          r.matches.some((m) => /import|require|from/.test(m.text) && m.text.includes(filename))
+        )
+        if (!importers.length) {
+          chipContent = `// @dependents: no files found that import '${activeFile}'`
+        } else {
+          const lines = importers.map((r) => {
+            const importLine = r.matches.find((m) => /import|require|from/.test(m.text))
+            return `  ${r.rel_path}${importLine ? `  → ${importLine.text.trim().slice(0, 60)}` : ''}`
+          })
+          chipContent = `// Files that import '${activeFile}' (${importers.length} found):\n${lines.join('\n')}`
+        }
+      } catch {
+        chipContent = '// @dependents: unavailable'
+      }
+    }
+  } else if (option.id === '@lint') {
+    chipLabel = '@lint'
+    try {
+      interface ShellRespLint { ok: boolean; output?: string }
+      showToast('Running linter…')
+      const resp = await props.backend.send<ShellRespLint>('shell.run', {
+        command: [
+          '(npx eslint . --ext .ts,.tsx,.vue,.js 2>&1 | head -60)',
+          '|| (ruff check . 2>&1 | head -60)',
+          '|| (python -m mypy . --no-error-summary 2>&1 | head -40)',
+          '|| echo "(no linter found: install eslint, ruff, or mypy)"',
+        ].join(' '),
+        workspace_path: props.workspacePath,
+        timeout_ms: 30000,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      chipContent = raw
+        ? `// Lint output:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
+        : '// @lint: no output (no errors, or linter not found)'
+    } catch {
+      chipContent = '// @lint: unavailable'
     }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
     // @file:lineRange — e.g., "src/App.vue:10-50"
