@@ -197,7 +197,10 @@ async function openBcDropdown(segIdx: number, e: MouseEvent): Promise<void> {
   } else {
     const parentPath = activePath.value.slice(0, segIdx).join('/')
     interface LsResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean; rel_path: string }> }
-    const resp = await backend.send<LsResp>('fs.list_dir', { workspace_path: workspacePath, rel_path: parentPath, show_hidden: false })
+    let resp: Awaited<ReturnType<typeof backend.send<LsResp>>>
+    try {
+      resp = await backend.send<LsResp>('fs.list_dir', { workspace_path: workspacePath, rel_path: parentPath, show_hidden: false })
+    } catch { return }
     const entries = resp.payload?.entries
     // Guard: if the user closed the dropdown (or opened another) while we waited, don't reopen.
     if (entries && bcDropdown.value === null) {
