@@ -880,6 +880,8 @@ watch([settingsApiKey, settingsOpenAiKey, settingsGroqKey, settingsDeepSeekKey,
 // Long message fold — collapse AI messages with > 50 lines (UI-only, ephemeral)
 const expandedMsgIdxs = ref(new Set<number>())
 const MSG_FOLD_LINE_THRESHOLD = 50
+// Right-click context menu state
+const msgCtxMenu = ref<{ x: number; y: number; mi: number; role: string } | null>(null)
 function isMsgFolded(mi: number, content: string): boolean {
   return content.split('\n').length > MSG_FOLD_LINE_THRESHOLD && !expandedMsgIdxs.value.has(mi)
 }
@@ -2392,6 +2394,46 @@ function quoteMessage(content: string): void {
   showToast('Quoted — add your question below')
 }
 
+// ── Message right-click context menu ──────────────────────────────────────────
+function onMsgContextMenu(e: MouseEvent): void {
+  const wrap = (e.target as Element).closest<HTMLElement>('.ai-msg-wrap')
+  if (!wrap) return
+  e.preventDefault()
+  const mi = parseInt(wrap.dataset.mi ?? '-1', 10)
+  if (mi < 0 || mi >= messages.value.length) return
+  const vw = window.innerWidth, vh = window.innerHeight
+  msgCtxMenu.value = { x: Math.min(e.clientX, vw - 168), y: Math.min(e.clientY, vh - 200), mi, role: messages.value[mi].role }
+}
+function closeMsgCtxMenu(): void { msgCtxMenu.value = null }
+function ctxMenuCopy(): void {
+  if (!msgCtxMenu.value) return
+  const content = messages.value[msgCtxMenu.value.mi]?.content ?? ''
+  navigator.clipboard.writeText(content).catch(() => {})
+  showToast('Copied to clipboard')
+  msgCtxMenu.value = null
+}
+function ctxMenuQuote(): void {
+  if (!msgCtxMenu.value) return
+  quoteMessage(messages.value[msgCtxMenu.value.mi]?.content ?? '')
+  msgCtxMenu.value = null
+}
+function ctxMenuEdit(): void {
+  if (!msgCtxMenu.value) return
+  inputText.value = messages.value[msgCtxMenu.value.mi]?.content ?? ''
+  msgCtxMenu.value = null
+  nextTick(() => textareaEl.value?.focus())
+}
+function ctxMenuDelete(): void {
+  if (!msgCtxMenu.value) return
+  messages.value.splice(msgCtxMenu.value.mi, 1)
+  saveCurrentThread()
+  msgCtxMenu.value = null
+}
+function ctxMenuRegen(): void {
+  msgCtxMenu.value = null
+  void regenerate()
+}
+
 // ── Regenerate last AI response ────────────────────────────────────────────────
 function undoLastSend(): void {
   if (sending.value) return
@@ -2687,7 +2729,8 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     if (messages.value.length > 0) saveCheckpoint()
   }
-  // Escape while diff-apply modal is open — cancel apply regardless of focus
+  // Escape — close context menu or diff-apply modal
+  if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
   }
@@ -3034,6 +3077,40 @@ function globToRegex(glob: string): RegExp {
     .replace(//g, '.*')
     .replace(/\?/g, '[^/]')
   return new RegExp(`(^|/)${esc}$`, 'i')
+}
+
+async function createWorkspaceRulesFile(): Promise<void> {
+  if (!props.workspacePath) return
+  const template = `# AI Rules for this project
+
+## Coding style
+- Use descriptive variable names
+- Write self-documenting code; add comments only for non-obvious logic
+
+## Stack
+- <!-- Describe your tech stack, e.g.: TypeScript, Vue 3, Python, FastAPI -->
+
+## Preferences
+- Prefer minimal changes when fixing bugs
+- Always explain the "why" when proposing a refactor
+`
+  try {
+    interface WriteResp { ok: boolean; error?: string }
+    const resp = await props.backend.send<WriteResp>('fs.write_file', {
+      workspace_path: props.workspacePath,
+      rel_path: 'AGENTS.md',
+      content: template,
+    })
+    if (resp.payload?.ok !== false) {
+      showToast('Created AGENTS.md — edit it to add project rules')
+      props.openFile?.('AGENTS.md')
+      await detectWorkspaceRules()
+    } else {
+      showToast('Failed to create AGENTS.md: ' + (resp.payload?.error ?? 'unknown error'))
+    }
+  } catch (e) {
+    showToast('Failed to create AGENTS.md: ' + String(e))
+  }
 }
 
 async function detectWorkspaceRules(): Promise<void> {
@@ -5073,7 +5150,7 @@ function getDateLabel(ts: number): string {
       <span>⚠ Backend disconnected — messages won't send until reconnected</span>
     </div>
     <!-- Messages list -->
-    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @scroll.passive="onMessagesScroll">
+    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @contextmenu.prevent="onMsgContextMenu" @scroll.passive="onMessagesScroll">
       <div v-if="messages.length === 0" class="ai-empty">
         <svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" style="opacity:.3">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
@@ -5115,6 +5192,7 @@ function getDateLabel(ts: number): string {
       <div
         class="ai-msg-wrap ai-msg"
         :class="[msg.role, { 'search-match': isSearchMatch(mi), 'search-active': isSearchActive(mi) }]"
+        :data-mi="mi"
       >
         <!-- Bubble -->
         <div class="ai-bubble" :class="msg.role">
@@ -6222,7 +6300,9 @@ function getDateLabel(ts: number): string {
           <span>Workspace rules auto-applied from <code>{{ workspaceRulesFile }}</code></span>
         </div>
         <div v-else class="ai-settings-row ai-rules-notice ai-rules-missing">
-          <span>No workspace rules found. Create <code>AGENTS.md</code> or <code>.cursor/rules</code> to add project-specific AI instructions.</span>
+          <span>No workspace rules found.</span>
+          <button v-if="workspacePath" class="ai-create-rules-btn" @click="createWorkspaceRulesFile">+ Create AGENTS.md</button>
+          <span v-if="!workspacePath" style="opacity:.6;font-size:11px">Create <code>AGENTS.md</code> or <code>.cursor/rules</code></span>
         </div>
         <!-- Session usage statistics -->
         <div class="ai-stats-row">
@@ -6267,6 +6347,33 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>/checkpoints</kbd></td><td>View &amp; restore checkpoints</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Message right-click context menu -->
+    <div v-if="msgCtxMenu" class="ai-msg-ctx-overlay" @click.self="closeMsgCtxMenu" @contextmenu.prevent>
+      <div class="ai-msg-ctx-menu" :style="{ left: msgCtxMenu.x + 'px', top: msgCtxMenu.y + 'px' }">
+        <button class="ai-ctx-item" @click="ctxMenuCopy">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2Zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6ZM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h-1v1H2V6h1V5H2Z"/></svg>
+          Copy
+        </button>
+        <button class="ai-ctx-item" @click="ctxMenuQuote">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.5 3a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1h-11Zm0 4a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1h-6Zm0 3a.5.5 0 0 0 0 1h6a.5.5 0 0 0 0-1h-6Z"/></svg>
+          Quote
+        </button>
+        <button v-if="msgCtxMenu.role === 'user'" class="ai-ctx-item" @click="ctxMenuEdit">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/></svg>
+          Edit &amp; Resend
+        </button>
+        <button v-if="msgCtxMenu.role === 'assistant'" class="ai-ctx-item" @click="ctxMenuRegen">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg>
+          Regenerate
+        </button>
+        <div class="ai-ctx-sep" />
+        <button class="ai-ctx-item ai-ctx-danger" @click="ctxMenuDelete">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
+          Delete
+        </button>
+      </div>
     </div>
 
     <!-- Toast -->
@@ -7813,7 +7920,9 @@ function getDateLabel(ts: number): string {
 }
 .ai-rules-notice code { font-size: 10.5px; background: var(--bg-muted); padding: 0 3px; border-radius: 2px; }
 .ai-rules-icon { color: var(--accent-fg); flex-shrink: 0; }
-.ai-rules-missing { opacity: 0.6; }
+.ai-rules-missing { opacity: 0.8; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-create-rules-btn { flex-shrink: 0; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--accent-emphasis); background: transparent; color: var(--accent-fg, var(--accent-emphasis)); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.ai-create-rules-btn:hover { background: var(--accent-emphasis); color: var(--text-on-emphasis, #fff); }
 .ai-settings-save {
   padding: 5px 16px;
   background: var(--accent-emphasis);
@@ -8106,6 +8215,42 @@ kbd {
   display: flex; align-items: center; justify-content: center;
   font-size: 14px; color: #0078d4; pointer-events: none;
 }
+
+/* ── Message right-click context menu ──────────────────────────────────────── */
+.ai-msg-ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+}
+.ai-msg-ctx-menu {
+  position: fixed;
+  background: var(--bg-panel, #252526);
+  border: 1px solid var(--border, #454545);
+  border-radius: 6px;
+  padding: 4px;
+  min-width: 154px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.55);
+  user-select: none;
+}
+.ai-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-bright, #cccccc);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-ctx-item:hover { background: var(--bg-hover, #2a2d2e); }
+.ai-ctx-sep { height: 1px; background: var(--border, #454545); margin: 3px 4px; }
+.ai-ctx-danger { color: #e05050; }
+.ai-ctx-danger:hover { background: rgba(220,50,50,.14); color: #e05050; }
 </style>
 
 <style>
