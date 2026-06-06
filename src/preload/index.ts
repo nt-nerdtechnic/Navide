@@ -55,6 +55,19 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onOpenEditorDiff: (cb: (params: Record<string, string>) => void): void => {
     ipcRenderer.on('editor:openDiff', (_event, params: Record<string, string>) => cb(params))
   },
+  openBranchDiffWindow: (args: {
+    workspace_path: string
+    base: string
+    compare?: string
+  }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openBranchDiff', {
+      workspace_path: args.workspace_path,
+      branch_diff_base: args.base,
+      branch_diff_compare: args.compare ?? '',
+    }),
+  onOpenEditorBranchDiff: (cb: (params: Record<string, string>) => void): void => {
+    ipcRenderer.on('editor:openBranchDiff', (_event, params: Record<string, string>) => cb(params))
+  },
   saveJson: (args: {
     defaultName?: string
     content: string

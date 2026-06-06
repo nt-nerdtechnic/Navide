@@ -24,6 +24,9 @@ const initialLine = Number(params.get('line')) || 0
 const initialDiffFile = params.get('diff_filepath') ?? ''
 const initialDiffStaged = params.get('diff_staged') === 'true'
 const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
+// branch-diff pre-load: when opened via openBranchDiffWindow with no existing editor window
+const initialBranchDiffBase = params.get('branch_diff_base') ?? ''
+const initialBranchDiffCompare = params.get('branch_diff_compare') ?? ''
 
 const backend = useBackend()
 const { confirm, toast } = useNotify()
@@ -712,6 +715,23 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectCurrentWord',       label: 'Select Current Word' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
+  { id: 'editor.fold',             label: 'Fold',               keys: '⌘⌥[' },
+  { id: 'editor.unfold',           label: 'Unfold',             keys: '⌘⌥]' },
+  { id: 'editor.toggleFold',       label: 'Toggle Fold' },
+  { id: 'editor.foldAll',          label: 'Fold All',           keys: '⌘K ⌘0' },
+  { id: 'editor.unfoldAll',        label: 'Unfold All',         keys: '⌘K ⌘J' },
+  { id: 'editor.foldRecursively',  label: 'Fold Recursively',   keys: '⌘K ⌘[' },
+  { id: 'editor.unfoldRecursively',label: 'Unfold Recursively', keys: '⌘K ⌘]' },
+  { id: 'editor.foldLevel1',       label: 'Fold Level 1',       keys: '⌘K ⌘1' },
+  { id: 'editor.foldLevel2',       label: 'Fold Level 2',       keys: '⌘K ⌘2' },
+  { id: 'editor.foldLevel3',       label: 'Fold Level 3',       keys: '⌘K ⌘3' },
+  { id: 'editor.foldLevel4',       label: 'Fold Level 4',       keys: '⌘K ⌘4' },
+  { id: 'editor.foldLevel5',       label: 'Fold Level 5',       keys: '⌘K ⌘5' },
+  { id: 'editor.foldLevel6',       label: 'Fold Level 6',       keys: '⌘K ⌘6' },
+  { id: 'editor.foldLevel7',       label: 'Fold Level 7',       keys: '⌘K ⌘7' },
+  { id: 'editor.action.insertCursorAbove',                   label: 'Add Cursor Above',                   keys: '⌘⌥↑' },
+  { id: 'editor.action.insertCursorBelow',                   label: 'Add Cursor Below',                   keys: '⌘⌥↓' },
+  { id: 'editor.action.insertCursorAtEndOfEachLineSelected', label: 'Add Cursors to Line Ends',           keys: '⇧⌥I' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol in File',     keys: '⌘⇧O' },
   { id: 'workbench.action.gotoWorkspaceSymbol', label: 'Go to Symbol in Workspace', keys: '⌘T' },
   { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
@@ -926,10 +946,28 @@ watch(qoQuery, (q) => {
 })
 registerCommand('workbench.action.quickOpen', openQuickOpen)
 registerCommand('workbench.action.focusActiveEditorGroup', () => { activeEditor()?.focus?.() })
+
+// ── Code Folding ──────────────────────────────────────────────────────────────
+registerCommand('editor.fold',              () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.foldAt?.(l) })
+registerCommand('editor.unfold',            () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.unfoldAt?.(l) })
+registerCommand('editor.toggleFold',        () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.toggleFoldAt?.(l) })
+registerCommand('editor.foldAll',           () => activeEditor()?.foldAll?.())
+registerCommand('editor.unfoldAll',         () => activeEditor()?.unfoldAll?.())
+registerCommand('editor.foldRecursively',   () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.foldRecursively?.(l) })
+registerCommand('editor.unfoldRecursively', () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.unfoldRecursively?.(l) })
+for (let _n = 1; _n <= 7; _n++) {
+  const n = _n
+  registerCommand(`editor.foldLevel${n}`, () => activeEditor()?.foldToLevel?.(n))
+}
 registerCommand('workbench.action.reopenClosedEditor', () => {
   const last = closedHistory.pop()
   if (last) openFile({ filepath: last.relPath, name: last.name })
 })
+
+// ── Multi-cursor ──────────────────────────────────────────────────────────────
+registerCommand('editor.action.insertCursorAbove',                  () => activeEditor()?.insertCursorAbove?.())
+registerCommand('editor.action.insertCursorBelow',                  () => activeEditor()?.insertCursorBelow?.())
+registerCommand('editor.action.insertCursorAtEndOfEachLineSelected', () => activeEditor()?.addCursorsToLineEnds?.())
 
 // ── Line comment ─────────────────────────────────────────────────────────────
 registerCommand('editor.action.addLineComment',    () => activeEditor()?.addLineComment())
@@ -1180,6 +1218,7 @@ onMounted(() => {
     agentTeam?: {
       onSwitchEditorSidebar?: (cb: (s: string) => void) => void
       onOpenEditorDiff?: (cb: (params: Record<string, string>) => void) => void
+      onOpenEditorBranchDiff?: (cb: (params: Record<string, string>) => void) => void
     }
   }).agentTeam
   api?.onSwitchEditorSidebar?.((sidebar) => {
@@ -1194,6 +1233,10 @@ onMounted(() => {
       name: params.name,
     })
   })
+  api?.onOpenEditorBranchDiff?.((params) => {
+    openBranchDiff({ base: params.branch_diff_base ?? 'main', compare: params.branch_diff_compare ?? '' })
+  })
+  if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onAppKeydown)
@@ -1279,8 +1322,10 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
+        show-branch-diff
         @open-file="openFile"
         @open-conflict="openConflict"
+        @open-branch-diff="openBranchDiff"
         @changes-count="changesCount = $event"
       />
     </div>
@@ -1299,6 +1344,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         >
           <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
           <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
+          <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
           <span class="ide-tab-name">{{ f.name }}</span>
           <span v-if="f.dirty" class="ide-tab-dirty" title="Unsaved">●</span>
           <button class="ide-tab-close" title="Close" @click.stop="closeFile(f.relPath)">✕</button>
@@ -1353,6 +1399,14 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :name="f.name"
             :backend="backend"
             @resolved="closeFile(f.relPath)"
+          />
+          <BranchDiffPane
+            v-else-if="f.kind === 'branch-diff'"
+            v-show="f.relPath === activeRel"
+            :workspace-path="workspacePath"
+            :base="f.base!"
+            :compare="f.compare ?? ''"
+            :backend="backend"
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">
@@ -1727,6 +1781,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-tab-diff-badge.staged { background: #1f3a2f; color: #56d364; }
 .ide-tab-diff-badge.unstaged { background: #3a2f1f; color: #e3b341; }
 .ide-tab-diff-badge.conflict-badge { background: #3a1f1f; color: #f85149; }
+.ide-tab-diff-badge.branch-diff-badge { background: var(--accent-subtle); color: var(--accent-fg); }
 .ide-tab-close {
   border: none;
   background: transparent;

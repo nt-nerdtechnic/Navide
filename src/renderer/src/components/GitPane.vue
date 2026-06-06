@@ -14,6 +14,7 @@ const props = defineProps<{
   // When embedded in the editor window, "open in editor" opens in-place via the
   // `open-file` event instead of spawning a separate editor window.
   embedded?: boolean
+  showBranchDiff?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,7 +22,18 @@ const emit = defineEmits<{
   (e: 'open-workspace', path: string): void
   (e: 'open-file', payload: { filepath: string; name: string }): void
   (e: 'open-conflict', payload: { filepath: string; name: string }): void
+  (e: 'open-branch-diff', payload: { base: string; compare: string }): void
 }>()
+
+function openBranchDiffTab(base = 'main'): void {
+  type AgentTeamApi = { openBranchDiffWindow?: (a: { workspace_path: string; base: string }) => void }
+  const api = (window as Window & { agentTeam?: AgentTeamApi }).agentTeam
+  if (api?.openBranchDiffWindow) {
+    api.openBranchDiffWindow({ workspace_path: props.workspacePath, base })
+  } else {
+    emit('open-branch-diff', { base, compare: '' })
+  }
+}
 
 const {
   gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
@@ -1248,6 +1260,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </button>
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
+        </button>
+        <!-- Diff with main (mini-IDE only) -->
+        <button
+          v-if="showBranchDiff"
+          class="hdr-btn"
+          title="Diff with main"
+          @click.stop="openBranchDiffTab()"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2.75 1a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H2.75zm5.5 0a.75.75 0 0 0 0 1.5h.75v7.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H8.25zm-5 7a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V9.5h.75a.75.75 0 0 0 0-1.5H3.25zM8 9.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5H8z"/>
+          </svg>
         </button>
         <!-- AI Review toggle -->
         <button

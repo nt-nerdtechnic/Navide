@@ -31,6 +31,8 @@ const tokenizer = computed(() => tokenizerFor(props.language ?? ''))
 const version = ref(0)
 const cursor = ref<Position>({ line: 0, col: 0 })
 const anchor = ref<Position | null>(null) // selection start, null when no selection
+const extraCursors = ref<Position[]>([])
+const extraAnchors = ref<(Position | null)[]>([])
 const decorations = ref<Decoration[]>([])
 const ghost = ref<{ pos: Position; text: string } | null>(null)
 // Remembered target column for vertical navigation (arrow up/down).
@@ -53,12 +55,10 @@ const lineCount = computed(() => {
   version.value // track
   return model.lineCount()
 })
-const showLineNumbers = ref(true)
 // Gutter grows to accommodate the widest line number (e.g. ≥1000 lines needs 4 digits).
-const gutterWidth = computed(() =>
-  showLineNumbers.value ? Math.max(48, String(lineCount.value).length * 9 + 12) : 0
-)
-const charWidth = ref(8)
+const showLineNumbers = ref(true)
+function toggleLineNumbers(): void { showLineNumbers.value = !showLineNumbers.value }
+const gutterWidth = computed(() => Math.max(48, String(lineCount.value).length * 9 + 12))
 // Sizer minimum width ensures long lines are horizontally scrollable.
 // Uses cached max-length: O(1) on pure inserts, O(N) only when cache is invalid.
 const sizerMinWidth = computed(() => {
@@ -67,14 +67,64 @@ const sizerMinWidth = computed(() => {
   return gutterWidth.value + PAD_LEFT + max * charWidth.value + 40
 })
 
-const vs = useVirtualScroll(lineCount, lineHeightPx)
+// ── Fold state (must be before vs so visibleLineCount is available) ──────────
+const foldedLines = ref<Set<number>>(new Set())
+
+function _getIndent(line: string): number {
+  let i = 0
+  while (i < line.length && (line[i] === ' ' || line[i] === '\t')) i++
+  return line.trim() === '' ? -1 : i
+}
+function _foldRangeEnd(startLine: number): number {
+  const startIndent = _getIndent(model.getLine(startLine))
+  if (startIndent < 0) return startLine
+  let end = startLine
+  let foundContent = false
+  for (let l = startLine + 1; l < model.lineCount(); l++) {
+    const ind = _getIndent(model.getLine(l))
+    if (ind < 0) { end = l; continue }
+    if (ind > startIndent) { foundContent = true; end = l }
+    else break
+  }
+  return foundContent ? end : startLine
+}
+function _isFoldable(line: number): boolean {
+  return _foldRangeEnd(line) > line
+}
+
+// visibleModelLines[displayIndex] = modelLine
+const visibleModelLines = computed<number[]>(() => {
+  version.value // re-run on edits
+  const hidden = new Set<number>()
+  for (const startLine of foldedLines.value) {
+    const end = _foldRangeEnd(startLine)
+    for (let l = startLine + 1; l <= end; l++) hidden.add(l)
+  }
+  const result: number[] = []
+  for (let i = 0; i < model.lineCount(); i++) {
+    if (!hidden.has(i)) result.push(i)
+  }
+  return result
+})
+
+const modelToDisplayMap = computed<Map<number, number>>(() => {
+  const m = new Map<number, number>()
+  visibleModelLines.value.forEach((ml, di) => m.set(ml, di))
+  return m
+})
+function m2d(modelLine: number): number {
+  return modelToDisplayMap.value.get(modelLine) ?? modelLine
+}
+
+const visibleLineCount = computed(() => {
+  version.value
+  return visibleModelLines.value.length
+})
+const vs = useVirtualScroll(visibleLineCount, lineHeightPx)
 const scrollEl = ref<HTMLElement | null>(null)
 const scrollLeftVal = ref(0)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
-
-// Column ruler at 80 chars (VS Code-compatible guide line)
-const RULER_COL = 80
-const rulerLeft = computed(() => gutterWidth.value + PAD_LEFT + RULER_COL * charWidth.value - scrollLeftVal.value)
+const charWidth = ref(8)
 let composing = false
 
 // ── Tokenization (whole-doc; fine for typical source files) ──────────────────
@@ -99,9 +149,7 @@ function _ensureTokensUpTo(lastLine: number): void {
       // Continue to ensure lines between here and lastLine are computed too.
       stateIn = cached.stateOut
     } else {
-      // Skip tokenizing extremely long lines (minified files) to avoid UI freeze.
-      const safeText = text.length > 10_000 ? '' : text
-      const { tokens, endState } = tok.tokenizeLine(safeText, stateIn)
+      const { tokens, endState } = tok.tokenizeLine(text, stateIn)
       _tokCache[i] = { text, stateIn, tokens, stateOut: endState }
       stateIn = endState
     }
@@ -112,15 +160,26 @@ function _ensureTokensUpTo(lastLine: number): void {
 watch(tokenizer, () => { _tokCache = []; _tokInvalidFrom = 0 })
 
 interface RenderLine {
-  index: number
+  index: number       // model line index (for line number, gutter icons)
+  displayIdx: number  // display index (for top positioning)
   segments: { text: string; cls: string }[]
+  foldable: boolean
+  folded: boolean
 }
 
 const visibleLines = computed<RenderLine[]>(() => {
   version.value // re-render on every edit
   const res: RenderLine[] = []
-  for (let i = vs.startLine.value; i < vs.endLine.value; i++) {
-    res.push({ index: i, segments: segmentsFor(i) })
+  for (let di = vs.startLine.value; di < vs.endLine.value; di++) {
+    const mi = visibleModelLines.value[di]
+    if (mi === undefined) break
+    res.push({
+      index: mi,
+      displayIdx: di,
+      segments: segmentsFor(mi),
+      foldable: _isFoldable(mi),
+      folded: foldedLines.value.has(mi),
+    })
   }
   return res
 })
@@ -180,13 +239,72 @@ function applyEdit(range: Range, text: string): void {
   afterChange()
 }
 
+// ── Multi-cursor edit ────────────────────────────────────────────────────────
+// Returns true when multi-cursor was active and all edits were applied.
+// getRange is called on the ORIGINAL document state for each cursor (pre-sort).
+// Edits are applied bottom-to-top so upper positions stay valid.
+function applyMultiCursorEdit(
+  getRange: (pos: Position, anch: Position | null) => Range | null,
+  text: string,
+): boolean {
+  if (extraCursors.value.length === 0) return false
+  if (props.readonly) return true // multi-cursor active but readonly → consume event
+  preferredCol = -1
+  undo.beginGroup()
+
+  type Entry = { range: Range; isPrimary: boolean; extraIdx: number }
+  const entries: Entry[] = []
+  const pRange = getRange(cursor.value, anchor.value)
+  if (pRange) entries.push({ range: pRange, isPrimary: true, extraIdx: -1 })
+  for (let i = 0; i < extraCursors.value.length; i++) {
+    const r = getRange(extraCursors.value[i], extraAnchors.value[i] ?? null)
+    if (r) entries.push({ range: r, isPrimary: false, extraIdx: i })
+  }
+
+  entries.sort((a, b) => {
+    if (b.range.start.line !== a.range.start.line) return b.range.start.line - a.range.start.line
+    return b.range.start.col - a.range.start.col
+  })
+
+  const newPrimary = { ...cursor.value }
+  const newExtras = extraCursors.value.map(p => ({ ...p }))
+
+  for (const e of entries) {
+    const op = { range: e.range, text }
+    const { inverse, caret } = model.applyEdit(op)
+    undo.push(op, inverse)
+    if (e.range.start.line < _tokInvalidFrom) _tokInvalidFrom = e.range.start.line
+    if (e.isPrimary) { newPrimary.line = caret.line; newPrimary.col = caret.col }
+    else { newExtras[e.extraIdx] = caret }
+  }
+
+  _maxLineLenCache = -1
+  cursor.value = newPrimary
+  anchor.value = null
+  extraCursors.value = newExtras
+  extraAnchors.value = newExtras.map(() => null)
+  ghost.value = null
+  afterChange()
+  return true
+}
+
 function insertText(text: string): void {
+  if (applyMultiCursorEdit((pos, anch) => {
+    const r = anch ? (comparePos(anch, pos) <= 0 ? { start: anch, end: pos } : { start: pos, end: anch }) : null
+    return r ?? { start: pos, end: pos }
+  }, text)) return
   const sel = selectionRange()
   const range = sel ?? { start: cursor.value, end: cursor.value }
   applyEdit(range, text)
 }
 
 function deleteBackward(): void {
+  if (applyMultiCursorEdit((pos, anch) => {
+    if (anch) return comparePos(anch, pos) <= 0 ? { start: anch, end: pos } : { start: pos, end: anch }
+    if (pos.col > 0) return { start: { line: pos.line, col: pos.col - 1 }, end: pos }
+    if (pos.line > 0) { const prevLen = model.getLine(pos.line - 1).length; return { start: { line: pos.line - 1, col: prevLen }, end: pos } }
+    return null
+  }, '')) return
   const sel = selectionRange()
   if (sel) { applyEdit(sel, ''); return }
   const c = cursor.value
@@ -206,6 +324,13 @@ function deleteBackward(): void {
 }
 
 function deleteForward(): void {
+  if (applyMultiCursorEdit((pos, anch) => {
+    if (anch) return comparePos(anch, pos) <= 0 ? { start: anch, end: pos } : { start: pos, end: anch }
+    const lineLen = model.getLine(pos.line).length
+    if (pos.col < lineLen) return { start: pos, end: { line: pos.line, col: pos.col + 1 } }
+    if (pos.line < model.lineCount() - 1) return { start: pos, end: { line: pos.line + 1, col: 0 } }
+    return null
+  }, '')) return
   const sel = selectionRange()
   if (sel) { applyEdit(sel, ''); return }
   const c = cursor.value
@@ -258,6 +383,7 @@ function _adjCommentPos(
 }
 
 function moveCursor(dLine: number, dCol: number, extend: boolean): void {
+  _clearExtraCursors()
   startOrClearSelection(extend)
   let { line, col } = cursor.value
   if (dCol !== 0) {
@@ -275,6 +401,16 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
     col = Math.min(preferredCol, model.getLine(line).length)
   }
   cursor.value = { line, col }
+  // Auto-unfold if cursor lands on a hidden line
+  if (modelToDisplayMap.value.get(cursor.value.line) === undefined) {
+    for (const fl of foldedLines.value) {
+      const end = _foldRangeEnd(fl)
+      if (cursor.value.line > fl && cursor.value.line <= end) {
+        unfoldAt(fl)
+        break
+      }
+    }
+  }
   ghost.value = null
   void nextTick(scrollCursorIntoView)
 }
@@ -296,6 +432,7 @@ function startOrClearSelection(extend: boolean): void {
 }
 
 function homeKey(extend: boolean): void {
+  _clearExtraCursors()
   preferredCol = -1
   ghost.value = null
   startOrClearSelection(extend)
@@ -305,6 +442,7 @@ function homeKey(extend: boolean): void {
   cursor.value = { line: cursor.value.line, col: cursor.value.col === indent ? 0 : indent }
 }
 function endKey(extend: boolean): void {
+  _clearExtraCursors()
   preferredCol = -1
   ghost.value = null
   startOrClearSelection(extend)
@@ -394,6 +532,7 @@ function deleteLineRight(): void {
 }
 
 // ── Indent / dedent selected lines ───────────────────────────────────────────
+const showLineNumbers = ref(true)
 const tabSize = ref(2)
 const useSpaces = ref(true)
 const INDENT = computed(() => useSpaces.value ? ' '.repeat(tabSize.value) : '\t')
@@ -401,17 +540,18 @@ const INDENT = computed(() => useSpaces.value ? ' '.repeat(tabSize.value) : '\t'
 function indentLines(startLine: number, endLine: number): void {
   const savedAnchor = anchor.value ? { ...anchor.value } : null
   const savedCursor = { ...cursor.value }
+  const indent = INDENT.value
   const newContent = Array.from({ length: endLine - startLine + 1 }, (_, i) =>
-    INDENT.value + model.getLine(startLine + i),
+    indent + model.getLine(startLine + i),
   ).join('\n')
   applyEdit({ start: { line: startLine, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } }, newContent)
-  // Restore selection shifted by INDENT.length on each affected line.
+  // Restore selection shifted by indent.length on each affected line.
   // Guard: only shift positions within [startLine, endLine], matching dedentLines' anchorIdx logic.
   anchor.value = savedAnchor && savedAnchor.line >= startLine && savedAnchor.line <= endLine
-    ? { line: savedAnchor.line, col: savedAnchor.col + INDENT.value.length }
+    ? { line: savedAnchor.line, col: savedAnchor.col + indent.length }
     : savedAnchor
   cursor.value = savedCursor.line >= startLine && savedCursor.line <= endLine
-    ? { line: savedCursor.line, col: savedCursor.col + INDENT.value.length }
+    ? { line: savedCursor.line, col: savedCursor.col + indent.length }
     : savedCursor
 }
 
@@ -496,17 +636,17 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     const sel = selectionRange()
     const text = sel ? model.getValueInRange(sel) : model.getLine(cursor.value.line) + '\n'
-    navigator.clipboard.writeText(text).catch((err) => console.warn('[editor] copy failed:', err))
+    void navigator.clipboard.writeText(text)
     return
   }
   if (mod && (e.key === 'x' || e.key === 'X')) {
     e.preventDefault()
     const sel = selectionRange()
     if (sel) {
-      navigator.clipboard.writeText(model.getValueInRange(sel)).catch((err) => console.warn('[editor] cut failed:', err))
+      void navigator.clipboard.writeText(model.getValueInRange(sel))
       applyEdit(sel, '')
     } else {
-      navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n').catch((err) => console.warn('[editor] cut failed:', err))
+      void navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n')
       deleteLine()
     }
     return
@@ -594,12 +734,11 @@ function onKeydown(e: KeyboardEvent): void {
 const AUTO_PAIRS: Record<string, string> = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' }
 const CLOSE_CHARS = new Set([')', ']', '}', '"', "'", '`'])
 
-const PASTE_CAP = 1_000_000 // 1 MB — prevent UI freeze on huge pastes
 function onInput(): void {
   const ta = textareaEl.value
   if (!ta || composing) return
-  const v = ta.value.slice(0, PASTE_CAP)
-  if (!v) { ta.value = ''; return }
+  const v = ta.value
+  if (!v) return
   ta.value = ''
 
   // Single-char auto-pair logic (skip for paste / multi-char input)
@@ -654,12 +793,14 @@ function onCompositionEnd(): void {
 function doUndo(): void {
   preferredCol = -1
   ghost.value = null
+  _clearExtraCursors()
   const p = undo.undo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
 function doRedo(): void {
   preferredCol = -1
   ghost.value = null
+  _clearExtraCursors()
   const p = undo.redo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
@@ -790,50 +931,41 @@ function transformToTitleCase(): void {
   applyEdit(sel, titled)
 }
 function transformToSnakeCase(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   applyEdit(sel, toSnakeCase(model.getValueInRange(sel)))
 }
 function transformToCamelCase(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   applyEdit(sel, toCamelCase(model.getValueInRange(sel)))
 }
 function transformToKebabCase(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   applyEdit(sel, toKebabCase(model.getValueInRange(sel)))
 }
 function transformToPascalCase(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   applyEdit(sel, toPascalCase(model.getValueInRange(sel)))
 }
 function transformToBase64(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   const bytes = new TextEncoder().encode(model.getValueInRange(sel))
   const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join('')
   applyEdit(sel, btoa(binary))
 }
 function transformFromBase64(): boolean {
-  const sel = selectionRange()
-  if (!sel) return true
+  const sel = selectionRange(); if (!sel) return true
   try {
     const binary = atob(model.getValueInRange(sel).trim())
     const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
-    applyEdit(sel, new TextDecoder().decode(bytes))
-    return true
+    applyEdit(sel, new TextDecoder().decode(bytes)); return true
   } catch { return false }
 }
 function transformToUrlEncoded(): void {
-  const sel = selectionRange()
-  if (!sel) return
+  const sel = selectionRange(); if (!sel) return
   applyEdit(sel, encodeURIComponent(model.getValueInRange(sel)))
 }
 function transformFromUrlEncoded(): boolean {
-  const sel = selectionRange()
-  if (!sel) return true
+  const sel = selectionRange(); if (!sel) return true
   try { applyEdit(sel, decodeURIComponent(model.getValueInRange(sel))); return true }
   catch { return false }
 }
@@ -862,29 +994,16 @@ function formatSelection(): void {
   anchor.value = savedAnchor ? clampPos(savedAnchor) : null
 }
 function formatDocument(): void {
-  let newText: string
-  // JSON: pretty-print with configured indent size
-  if (props.language === 'json') {
-    try {
-      const parsed = JSON.parse(model.getValue())
-      newText = JSON.stringify(parsed, null, INDENT.value) + '\n'
-    } catch {
-      // Invalid JSON — fall through to basic format
-      newText = ''
-    }
-  } else {
-    newText = ''
+  const lc = model.lineCount()
+  const lines: string[] = []
+  for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
+  // Ensure single trailing newline, but only for non-empty documents.
+  // An empty document stays empty — adding '\n' would corrupt it.
+  if (lines.some(l => l !== '')) {
+    while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+    lines.push('')
   }
-  if (!newText) {
-    const lc = model.lineCount()
-    const lines: string[] = []
-    for (let i = 0; i < lc; i++) lines.push(model.getLine(i).trimEnd())
-    if (lines.some(l => l !== '')) {
-      while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-      lines.push('')
-    }
-    newText = lines.join('\n')
-  }
+  const newText = lines.join('\n')
   if (newText === model.getValue()) return
   const savedCursor = { ...cursor.value }
   const savedAnchor = anchor.value ? { ...anchor.value } : null
@@ -954,58 +1073,34 @@ function sortLines(dir: 'asc' | 'desc'): void {
 }
 function sortLinesAscending(): void { sortLines('asc') }
 function sortLinesDescending(): void { sortLines('desc') }
-
 function reverseLines(): void {
   const range = selectionRange()
   const startL = range ? range.start.line : 0
-  const endL   = range
-    ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1))
-    : model.lineCount() - 1
-  const lines  = []
+  const endL = range ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1)) : model.lineCount() - 1
+  const lines: string[] = []
   for (let i = startL; i <= endL; i++) lines.push(model.getLine(i))
   lines.reverse()
-  const newText = lines.join('\n')
-  applyEdit(
-    { start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } },
-    newText,
-  )
-  cursor.value = { line: startL, col: 0 }
-  anchor.value = null
+  applyEdit({ start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } }, lines.join('\n'))
+  cursor.value = { line: startL, col: 0 }; anchor.value = null
 }
-
 function removeDuplicateLines(): void {
   const range = selectionRange()
   const startL = range ? range.start.line : 0
-  const endL   = range
-    ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1))
-    : model.lineCount() - 1
-  const seen   = new Set<string>()
-  const unique: string[] = []
-  for (let i = startL; i <= endL; i++) {
-    const line = model.getLine(i)
-    if (!seen.has(line)) { seen.add(line); unique.push(line) }
-  }
-  applyEdit(
-    { start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } },
-    unique.join('\n'),
-  )
-  cursor.value = { line: startL, col: 0 }
-  anchor.value = null
+  const endL = range ? (range.end.col > 0 ? range.end.line : Math.max(range.start.line, range.end.line - 1)) : model.lineCount() - 1
+  const seen = new Set<string>(); const unique: string[] = []
+  for (let i = startL; i <= endL; i++) { const l = model.getLine(i); if (!seen.has(l)) { seen.add(l); unique.push(l) } }
+  applyEdit({ start: { line: startL, col: 0 }, end: { line: endL, col: model.getLine(endL).length } }, unique.join('\n'))
+  cursor.value = { line: startL, col: 0 }; anchor.value = null
 }
-
 function openLinkAtCursor(): boolean {
-  const line = model.getLine(cursor.value.line)
-  const col  = cursor.value.col
-  const urlRe = /https?:\/\/[^\s"'<>)\]]+/g
-  let m: RegExpExecArray | null
+  const line = model.getLine(cursor.value.line); const col = cursor.value.col
+  const urlRe = /https?:\/\/[^\s"'<>)\]]+/g; let m: RegExpExecArray | null
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any
   while ((m = urlRe.exec(line)) !== null) {
     if (col >= m.index && col <= m.index + m[0].length) {
-      const url = m[0]
-      if (window.agentTeam?.openExternal) {
-        void window.agentTeam.openExternal(url)
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer')
-      }
+      if (w.agentTeam?.openExternal) void w.agentTeam.openExternal(m[0])
+      else window.open(m[0], '_blank', 'noopener,noreferrer')
       return true
     }
   }
@@ -1198,6 +1293,7 @@ function dedentLine(): void {
 }
 
 function cursorTop(): void {
+  _clearExtraCursors()
   anchor.value = null
   ghost.value = null
   cursor.value = { line: 0, col: 0 }
@@ -1206,6 +1302,7 @@ function cursorTop(): void {
 }
 
 function cursorBottom(): void {
+  _clearExtraCursors()
   anchor.value = null
   ghost.value = null
   const lastLine = model.lineCount() - 1
@@ -1215,37 +1312,25 @@ function cursorBottom(): void {
 }
 
 function cursorTopSelect(): void {
-  ghost.value = null
-  startOrClearSelection(true)
-  cursor.value = { line: 0, col: 0 }
-  preferredCol = -1
+  ghost.value = null; startOrClearSelection(true)
+  cursor.value = { line: 0, col: 0 }; preferredCol = -1
   void nextTick(scrollCursorIntoView)
 }
-
 function cursorBottomSelect(): void {
-  ghost.value = null
-  startOrClearSelection(true)
+  ghost.value = null; startOrClearSelection(true)
   const lastLine = model.lineCount() - 1
-  cursor.value = { line: lastLine, col: model.getLine(lastLine).length }
-  preferredCol = -1
+  cursor.value = { line: lastLine, col: model.getLine(lastLine).length }; preferredCol = -1
   void nextTick(scrollCursorIntoView)
 }
-
 function cursorWordLeft(): void { moveWordLeft(false) }
 function cursorWordRight(): void { moveWordRight(false) }
 function cursorWordLeftSelect(): void { moveWordLeft(true) }
 function cursorWordRightSelect(): void { moveWordRight(true) }
-
 function cursorLineStart(): void { homeKey(false) }
 function cursorLineEnd(): void { endKey(false) }
 function cursorLineStartSelect(): void { homeKey(true) }
 function cursorLineEndSelect(): void { endKey(true) }
-
-function selectCurrentWord(): void {
-  ghost.value = null
-  selectWordAt(cursor.value)
-}
-
+function selectCurrentWord(): void { ghost.value = null; selectWordAt(cursor.value) }
 function setTabSize(size: number): void { tabSize.value = Math.max(1, Math.min(8, size)) }
 function setUseSpaces(spaces: boolean): void { useSpaces.value = spaces }
 function getTabSize(): number { return tabSize.value }
@@ -1372,7 +1457,8 @@ function posFromMouse(e: MouseEvent): Position {
   const rect = el.getBoundingClientRect()
   const y = e.clientY - rect.top + el.scrollTop
   const x = e.clientX - rect.left + el.scrollLeft - gutterWidth.value - PAD_LEFT
-  const line = Math.max(0, Math.min(Math.floor(y / lineHeightPx.value), model.lineCount() - 1))
+  const di = Math.max(0, Math.min(Math.floor(y / lineHeightPx.value), visibleModelLines.value.length - 1))
+  const line = visibleModelLines.value[di] ?? model.lineCount() - 1
   const col = Math.max(0, Math.min(Math.round(x / charWidth.value), model.getLine(line).length))
   return { line, col }
 }
@@ -1384,13 +1470,8 @@ function expandSelection(): void {
   const cur = cursor.value
   const anc = anchor.value
   const noSel = !anc || (anc.line === cur.line && anc.col === cur.col)
-  // Save current state for shrink (only if it differs from the previous saved state)
-  const _top = _selStack.length > 0 ? _selStack[_selStack.length - 1] : null
-  const _sameAnchor = anc === null ? _top?.anchor === null : (_top?.anchor?.line === anc.line && _top?.anchor?.col === anc.col)
-  const _sameCursor = _top?.cursor.line === cur.line && _top?.cursor.col === cur.col
-  if (!_top || !_sameAnchor || !_sameCursor) {
-    _selStack.push({ anchor: anc ? { ...anc } : null, cursor: { ...cur } })
-  }
+  // Save current state for shrink
+  _selStack.push({ anchor: anc ? { ...anc } : null, cursor: { ...cur } })
   if (noSel && getWordAtCursor()) {
     // Step 1: select word under cursor.
     // selectWordAt() only extends FORWARD from col — it misses the cursor-at-word-end
@@ -1474,8 +1555,9 @@ function onMouseup(): void { dragging = false }
 function scrollCursorIntoView(): void {
   const el = scrollEl.value
   if (!el) return
-  // Vertical
-  const top = cursor.value.line * lineHeightPx.value
+  // Vertical: use display index so folded lines don't push caret off-screen
+  const displayLine = m2d(cursor.value.line)
+  const top = displayLine * lineHeightPx.value
   if (top < el.scrollTop) el.scrollTop = top
   else if (top + lineHeightPx.value > el.scrollTop + el.clientHeight) {
     el.scrollTop = top + lineHeightPx.value - el.clientHeight
@@ -1514,16 +1596,17 @@ const selectionRects = computed<SelRect[]>(() => {
   const vEnd = vs.endLine.value
   const rects: SelRect[] = []
   // When selection ends at col 0 of a line, that line has no highlighted content.
-  // Use sel.end.line - 1 as the last highlighted line to avoid a misleading 2px sliver.
-  const lastHighlightLine = sel.end.col === 0 ? sel.end.line - 1 : sel.end.line
-  for (let line = Math.max(sel.start.line, vStart); line <= Math.min(lastHighlightLine, vEnd - 1); line++) {
+  const lastHighlightModel = sel.end.col === 0 ? sel.end.line - 1 : sel.end.line
+  for (let di = vStart; di < vEnd; di++) {
+    const line = visibleModelLines.value[di]
+    if (line === undefined) break
+    if (line < sel.start.line || line > lastHighlightModel) continue
     const lineLen = model.getLine(line).length
     const startCol = line === sel.start.line ? sel.start.col : 0
-    // endCol: when sel.end.col===0, lastHighlightLine < sel.end.line so this always yields lineLen ✓
     const endCol = line === sel.end.line ? sel.end.col : lineLen
     const left = xFor(startCol)
-    const width = Math.max(2, (endCol - startCol) * charWidth.value + (line < lastHighlightLine ? charWidth.value : 0))
-    rects.push({ left, top: line * lineHeightPx.value, width })
+    const width = Math.max(2, (endCol - startCol) * charWidth.value + (line < lastHighlightModel ? charWidth.value : 0))
+    rects.push({ left, top: di * lineHeightPx.value, width })
   }
   return rects
 })
@@ -1538,13 +1621,16 @@ const decorationRects = computed<DecRect[]>(() => {
     const vEnd = vs.endLine.value
     // Same fix as selectionRects: a range ending at col=0 has no content on that last line.
     const lastHL = d.range.end.col === 0 ? d.range.end.line - 1 : d.range.end.line
-    for (let line = Math.max(d.range.start.line, vStart); line <= Math.min(lastHL, vEnd - 1); line++) {
+    for (let di = vStart; di < vEnd; di++) {
+      const line = visibleModelLines.value[di]
+      if (line === undefined) break
+      if (line < d.range.start.line || line > lastHL) continue
       const startCol = line === d.range.start.line ? d.range.start.col : 0
       const endCol = line === d.range.end.line ? d.range.end.col : model.getLine(line).length
       rects.push({
         id: `${d.id}:${line}`,
         left: xFor(startCol),
-        top: line * lineHeightPx.value,
+        top: di * lineHeightPx.value,
         width: Math.max(4, (endCol - startCol) * charWidth.value),
         className: d.className,
       })
@@ -1676,7 +1762,90 @@ function acceptGhost(): void {
 function zoomIn(): void { fontZoom.value = Math.min(2.0, Math.round((fontZoom.value + 0.1) * 10) / 10) }
 function zoomOut(): void { fontZoom.value = Math.max(0.5, Math.round((fontZoom.value - 0.1) * 10) / 10) }
 function zoomReset(): void { fontZoom.value = 1.0 }
-function toggleLineNumbers(): void { showLineNumbers.value = !showLineNumbers.value }
+
+// ── Fold operations ───────────────────────────────────────────────────────────
+function foldAt(line: number): void {
+  if (!_isFoldable(line)) return
+  foldedLines.value = new Set([...foldedLines.value, line])
+}
+function unfoldAt(line: number): void {
+  const s = new Set(foldedLines.value)
+  s.delete(line)
+  foldedLines.value = s
+}
+function toggleFoldAt(line: number): void {
+  if (foldedLines.value.has(line)) unfoldAt(line)
+  else foldAt(line)
+}
+function foldAll(): void {
+  const s = new Set<number>()
+  for (let l = 0; l < model.lineCount(); l++) {
+    if (_isFoldable(l)) s.add(l)
+  }
+  foldedLines.value = s
+}
+function unfoldAll(): void { foldedLines.value = new Set() }
+function foldToLevel(n: number): void {
+  const s = new Set<number>()
+  for (let l = 0; l < model.lineCount(); l++) {
+    const ind = _getIndent(model.getLine(l))
+    if (ind >= 0 && Math.floor(ind / 2) < n && _isFoldable(l)) s.add(l)
+  }
+  foldedLines.value = s
+}
+function foldRecursively(line: number): void {
+  const end = _foldRangeEnd(line)
+  const s = new Set(foldedLines.value)
+  for (let l = line; l <= end; l++) {
+    if (_isFoldable(l)) s.add(l)
+  }
+  foldedLines.value = s
+}
+function unfoldRecursively(line: number): void {
+  const end = _foldRangeEnd(line)
+  const s = new Set(foldedLines.value)
+  for (let l = line; l <= end; l++) s.delete(l)
+  foldedLines.value = s
+}
+
+// ── Multi-cursor ─────────────────────────────────────────────────────────────
+function _clearExtraCursors(): void {
+  extraCursors.value = []
+  extraAnchors.value = []
+}
+
+function insertCursorAbove(): void {
+  const c = cursor.value
+  if (c.line <= 0) return
+  const newLine = c.line - 1
+  const newPos: Position = { line: newLine, col: Math.min(c.col, model.getLine(newLine).length) }
+  if (extraCursors.value.some(e => e.line === newPos.line && e.col === newPos.col)) return
+  extraCursors.value = [...extraCursors.value, newPos]
+  extraAnchors.value = [...extraAnchors.value, null]
+}
+
+function insertCursorBelow(): void {
+  const c = cursor.value
+  if (c.line >= model.lineCount() - 1) return
+  const newLine = c.line + 1
+  const newPos: Position = { line: newLine, col: Math.min(c.col, model.getLine(newLine).length) }
+  if (extraCursors.value.some(e => e.line === newPos.line && e.col === newPos.col)) return
+  extraCursors.value = [...extraCursors.value, newPos]
+  extraAnchors.value = [...extraAnchors.value, null]
+}
+
+function addCursorsToLineEnds(): void {
+  const sel = selectionRange()
+  if (!sel || sel.start.line === sel.end.line) return
+  const newCursors: Position[] = []
+  for (let l = sel.start.line; l <= sel.end.line; l++) {
+    newCursors.push({ line: l, col: model.getLine(l).length })
+  }
+  cursor.value = newCursors[0]
+  anchor.value = null
+  extraCursors.value = newCursors.slice(1)
+  extraAnchors.value = newCursors.slice(1).map(() => null)
+}
 
 defineExpose({
   focus, getValue, setValue, getSelectionRange, getSelectionText, getCursor,
@@ -1688,35 +1857,27 @@ defineExpose({
   jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, transformToTitleCase,
-  transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
-  transformToBase64, transformFromBase64, transformToUrlEncoded, transformFromUrlEncoded,
-  trimTrailingWhitespace, formatDocument, formatSelection,
+  transformToUppercase, transformToLowercase, transformToTitleCase, trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
-  reverseLines, removeDuplicateLines, openLinkAtCursor,
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
-  setSelection, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
+  setSelection, zoomIn, zoomOut, zoomReset,
   undo: doUndo, redo: doRedo, selectAll,
-  insertText,
-  cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
-  cursorTopSelect, cursorBottomSelect,
-  cursorLineStart, cursorLineEnd, cursorLineStartSelect, cursorLineEndSelect,
-  selectCurrentWord,
-  setTabSize, setUseSpaces, getTabSize, getUseSpaces,
+  foldAt, unfoldAt, toggleFoldAt, foldAll, unfoldAll, foldToLevel, foldRecursively, unfoldRecursively,
+  toggleLineNumbers,
+  insertCursorAbove, insertCursorBelow, addCursorsToLineEnds,
+  getCursorLine: () => cursor.value.line,
 })
 </script>
 
 <template>
   <div class="editor-view" :style="{ '--ev-fs': fontSizePx + 'px', '--ev-lh': lineHeightPx + 'px' }" @mousedown="onMousedown" @mousemove="onMousemove">
-    <!-- Column ruler (80-char guide) -->
-    <div v-if="rulerLeft > gutterWidth" class="ev-ruler" :style="{ left: rulerLeft + 'px' }" />
     <textarea
       ref="textareaEl"
       class="ev-input"
-      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: cursor.line * lineHeightPx - vs.scrollTop.value + 'px' }"
+      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: m2d(cursor.line) * lineHeightPx - vs.scrollTop.value + 'px' }"
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
@@ -1749,22 +1910,30 @@ defineExpose({
             :key="rl.index"
             class="ev-line"
             :class="{ 'ev-line--active': rl.index === cursor.line }"
-            :style="{ top: (rl.index * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
+            :style="{ top: (rl.displayIdx * lineHeightPx - vs.offsetY.value) + 'px', height: lineHeightPx + 'px' }"
           >
-            <span v-if="showLineNumbers" class="ev-gutter" :style="{ width: gutterWidth + 'px' }">{{ rl.index + 1 }}</span>
+            <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">
+              <span v-if="rl.foldable || rl.folded" class="ev-fold-icon" @click.stop="toggleFoldAt(rl.index)">{{ rl.folded ? '▶' : '▼' }}</span><template v-if="showLineNumbers">{{ rl.index + 1 }}</template></span>
             <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px' }"><span
               v-for="(s, si) in rl.segments"
               :key="si"
               :class="s.cls"
-            >{{ s.text }}</span></span>
+            >{{ s.text }}</span><span v-if="rl.folded" class="ev-fold-ellipsis">…</span></span>
           </div>
           <!-- caret -->
-          <div class="ev-caret" :style="{ left: caretStyle.left, top: (cursor.line * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }" />
+          <div class="ev-caret" :style="{ left: caretStyle.left, top: (m2d(cursor.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }" />
+          <!-- extra carets (multi-cursor) -->
+          <div
+            v-for="(ec, ei) in extraCursors"
+            :key="'ec' + ei"
+            class="ev-caret"
+            :style="{ left: (xFor(ec.col) - scrollLeftVal) + 'px', top: (m2d(ec.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }"
+          />
           <!-- ghost text -->
           <div
             v-if="ghost && ghostStyle"
             class="ev-ghost"
-            :style="{ left: ghostStyle.left, top: (ghost.pos.line * lineHeightPx - vs.offsetY.value) + 'px' }"
+            :style="{ left: ghostStyle.left, top: (m2d(ghost.pos.line) * lineHeightPx - vs.offsetY.value) + 'px' }"
           >{{ ghost.text }}</div>
         </div>
       </div>
@@ -1789,13 +1958,6 @@ defineExpose({
   inset: 0;
   overflow: auto;
 }
-.ev-ruler {
-  position: absolute;
-  top: 0; bottom: 0; width: 1px;
-  background: var(--text-muted, rgba(120,120,120,.18));
-  pointer-events: none;
-  z-index: 1;
-}
 .ev-sizer { position: relative; width: 100%; }
 .ev-slab { position: absolute; top: 0; left: 0; will-change: transform; }
 .ev-line {
@@ -1803,10 +1965,6 @@ defineExpose({
   left: 0;
   display: flex;
   white-space: pre;
-  right: 0;
-}
-.ev-line--active {
-  background: var(--ev-line-active, rgba(128, 128, 128, 0.06));
 }
 .ev-gutter {
   flex-shrink: 0;
@@ -1877,4 +2035,18 @@ defineExpose({
 .tok-variable { color: var(--syntax-variable); }
 .tok-invalid { color: var(--syntax-invalid); text-decoration: wavy underline; }
 .tok-text { color: var(--text-primary); }
+.ev-fold-icon {
+  cursor: pointer;
+  padding: 0 3px;
+  opacity: 0.5;
+  font-size: 0.7em;
+  user-select: none;
+}
+.ev-fold-icon:hover { opacity: 1; }
+.ev-fold-ellipsis {
+  color: var(--text-muted);
+  opacity: 0.6;
+  font-style: italic;
+  margin-left: 4px;
+}
 </style>

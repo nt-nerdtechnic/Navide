@@ -1,0 +1,310 @@
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import { parseHunks, toSideBySide, type Hunk, type SideRow } from '../lib/git-diff'
+import type { useBackend } from '../composables/useBackend'
+
+const props = defineProps<{
+  workspacePath: string
+  base: string
+  compare: string
+  backend: ReturnType<typeof useBackend>
+}>()
+
+interface FileDiff {
+  filename: string
+  addCount: number
+  delCount: number
+  hunks: Hunk[]
+  rows: Array<{ hunk: Hunk; sideRows: SideRow[]; hiddenAbove: number }>
+}
+
+const loading = ref(false)
+const loadError = ref('')
+const fileDiffs = ref<FileDiff[]>([])
+const totalAdded = ref(0)
+const totalDeleted = ref(0)
+const resolvedCompare = ref('')
+const collapsed = ref<Record<number, boolean>>({})
+
+let _seq = 0
+
+function splitFileDiffs(raw: string) {
+  return raw
+    .split(/(?=^diff --git )/m)
+    .filter(p => p.startsWith('diff --git '))
+    .map(p => {
+      const m = p.match(/^diff --git a\/(.+?) b\//)
+      return { filename: m?.[1] ?? '(unknown)', diff: p }
+    })
+}
+
+function countLines(hunks: Hunk[]) {
+  let added = 0; let deleted = 0
+  for (const h of hunks) {
+    for (const l of h.lines) {
+      if (l.kind === '+') added++
+      else if (l.kind === '-') deleted++
+    }
+  }
+  return { added, deleted }
+}
+
+async function loadDiff() {
+  if (!props.workspacePath) return
+  const seq = ++_seq
+  loading.value = true
+  loadError.value = ''
+  fileDiffs.value = []
+  try {
+    const resp = await props.backend.send<{ ok: boolean; diff: string; error?: string }>('git.diff_branches', {
+      workspace_path: props.workspacePath,
+      base: props.base,
+      compare: props.compare || '',
+    })
+    if (seq !== _seq) return
+    if (resp.ok && resp.payload?.ok) {
+      const raw = resp.payload.diff ?? ''
+      const parts = splitFileDiffs(raw)
+      let ta = 0; let td = 0
+      fileDiffs.value = parts.map(p => {
+        const parsed = parseHunks(p.diff)
+        const { added, deleted } = countLines(parsed.hunks)
+        ta += added; td += deleted
+        const rows = parsed.hunks.map((hunk, i) => ({
+          hunk,
+          sideRows: toSideBySide(hunk),
+          hiddenAbove: i === 0
+            ? hunk.oldStart - 1
+            : hunk.oldStart - (parsed.hunks[i - 1].oldStart + parsed.hunks[i - 1].oldCount),
+        }))
+        return { filename: p.filename, addCount: added, delCount: deleted, hunks: parsed.hunks, rows }
+      })
+      totalAdded.value = ta
+      totalDeleted.value = td
+      resolvedCompare.value = props.compare || 'HEAD'
+      collapsed.value = {}
+    } else {
+      loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
+    }
+  } catch (e) {
+    if (seq === _seq) loadError.value = e instanceof Error ? e.message : 'Failed to load diff'
+  } finally {
+    if (seq === _seq) loading.value = false
+  }
+}
+
+watch(() => props.backend.status.value, s => {
+  if (s === 'connected' && !fileDiffs.value.length && !loadError.value) void loadDiff()
+}, { immediate: true })
+
+watch([() => props.base, () => props.compare, () => props.workspacePath], () => loadDiff())
+
+function toggleCollapse(i: number) {
+  collapsed.value = { ...collapsed.value, [i]: !collapsed.value[i] }
+}
+
+function cellClass(cell: SideRow['left']): string {
+  if (!cell) return 'k-empty'
+  if (cell.kind === '+') return 'k-add'
+  if (cell.kind === '-') return 'k-del'
+  return 'k-ctx'
+}
+</script>
+
+<template>
+  <div class="bdp">
+    <!-- Top bar -->
+    <div class="bdp-bar">
+      <span class="bdp-badge">±</span>
+      <span class="bdp-title">{{ base }} → {{ resolvedCompare || compare || 'HEAD' }}</span>
+      <template v-if="!loading && fileDiffs.length">
+        <span class="bdp-meta">{{ fileDiffs.length }} file{{ fileDiffs.length !== 1 ? 's' : '' }}</span>
+        <span class="bdp-add">+{{ totalAdded }}</span>
+        <span class="bdp-del">-{{ totalDeleted }}</span>
+      </template>
+      <div class="bdp-sp" />
+      <button class="bdp-btn" title="Refresh" :disabled="loading" @click="loadDiff">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- States -->
+    <div v-if="loading" class="bdp-msg">Loading diff…</div>
+    <div v-else-if="loadError" class="bdp-msg bdp-err">{{ loadError }}</div>
+    <div v-else-if="!fileDiffs.length" class="bdp-msg">
+      No changes between <strong>{{ base }}</strong> and <strong>{{ resolvedCompare || 'HEAD' }}</strong>
+    </div>
+
+    <!-- File list -->
+    <div v-else class="bdp-scroll">
+      <div v-for="(f, fi) in fileDiffs" :key="f.filename" class="bdp-file">
+
+        <!-- File header row -->
+        <div class="bdp-file-hdr" @click="toggleCollapse(fi)">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
+            class="bdp-chevron" :style="{ transform: collapsed[fi] ? 'rotate(-90deg)' : '' }">
+            <path d="M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427z"/>
+          </svg>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" class="bdp-file-ic">
+            <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.56v2.19c0 .138.112.25.25.25h2.19Z"/>
+          </svg>
+          <span class="bdp-fname">{{ f.filename }}</span>
+          <span v-if="f.addCount" class="bdp-add">+{{ f.addCount }}</span>
+          <span v-if="f.delCount" class="bdp-del">-{{ f.delCount }}</span>
+        </div>
+
+        <!-- Hunks (side-by-side) -->
+        <div v-if="!collapsed[fi]" class="bdp-hunks">
+          <template v-for="({ hunk, sideRows, hiddenAbove }, hi) in f.rows" :key="hi">
+
+            <!-- Hidden lines separator -->
+            <div v-if="hiddenAbove > 0" class="bdp-hidden">
+              <div class="bdp-hidden-side" />
+              <div class="bdp-hidden-side">{{ hiddenAbove }} hidden line{{ hiddenAbove !== 1 ? 's' : '' }}</div>
+            </div>
+
+            <!-- Hunk header -->
+            <div class="bdp-hunk-hdr">
+              <span class="bdp-range">{{ hunk.header }}</span>
+            </div>
+
+            <!-- Side-by-side grid -->
+            <div class="bdp-grid">
+              <template v-for="(row, ri) in sideRows" :key="ri">
+                <!-- Left (old) -->
+                <div class="bdp-side bdp-left" :class="cellClass(row.left)">
+                  <span class="bdp-no">{{ row.left?.lineNo ?? '' }}</span>
+                  <span class="bdp-sign">{{ row.left ? (row.left.kind === ' ' ? '' : row.left.kind) : '' }}</span>
+                  <span class="bdp-code">{{ row.left?.text ?? '' }}</span>
+                </div>
+                <!-- Right (new) -->
+                <div class="bdp-side bdp-right" :class="cellClass(row.right)">
+                  <span class="bdp-no">{{ row.right?.lineNo ?? '' }}</span>
+                  <span class="bdp-sign">{{ row.right ? (row.right.kind === ' ' ? '' : row.right.kind) : '' }}</span>
+                  <span class="bdp-code">{{ row.right?.text ?? '' }}</span>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.bdp {
+  display: flex; flex-direction: column; height: 100%;
+  background: var(--bg-base); color: var(--text-primary);
+  font-size: 12px; overflow: hidden;
+}
+
+/* Top bar */
+.bdp-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0; min-height: 28px; background: var(--bg-elevated);
+}
+.bdp-badge {
+  font-size: 10px; font-weight: 700; color: var(--accent-fg);
+  background: var(--accent-subtle); border-radius: 3px; padding: 1px 5px; flex-shrink: 0;
+}
+.bdp-title { font-size: 11px; font-weight: 600; color: var(--text-primary); }
+.bdp-meta { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
+.bdp-add { font-size: 11px; color: var(--success-fg, #3fb950); font-variant-numeric: tabular-nums; }
+.bdp-del { font-size: 11px; color: var(--danger-fg, #f85149); font-variant-numeric: tabular-nums; }
+.bdp-sp { flex: 1; }
+.bdp-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; background: transparent; border: none;
+  border-radius: 4px; color: var(--text-muted); cursor: pointer; padding: 0;
+}
+.bdp-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.bdp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* States */
+.bdp-msg {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: var(--text-muted); padding: 24px; text-align: center;
+}
+.bdp-err { color: var(--danger-fg, #f85149); }
+
+/* Scroll container */
+.bdp-scroll { flex: 1; overflow-y: auto; overflow-x: auto; }
+
+/* File block */
+.bdp-file { border-bottom: 1px solid var(--border-muted); }
+
+.bdp-file-hdr {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 10px; cursor: pointer; user-select: none;
+  background: var(--bg-subtle); position: sticky; top: 0; z-index: 2;
+  border-bottom: 1px solid var(--border-muted);
+}
+.bdp-file-hdr:hover { background: rgba(177,186,196,0.06); }
+.bdp-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform 0.1s; }
+.bdp-file-ic { color: var(--text-muted); flex-shrink: 0; }
+.bdp-fname {
+  flex: 1; font-size: 12px; font-weight: 600; color: var(--text-primary);
+  font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Hidden lines row */
+.bdp-hidden {
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border-muted);
+}
+.bdp-hidden-side {
+  padding: 3px 10px; font-size: 11px; color: var(--text-muted);
+  background: var(--bg-base); border-right: 1px solid var(--border-muted);
+  font-style: italic;
+}
+.bdp-hidden-side:last-child { border-right: none; }
+
+/* Hunk header */
+.bdp-hunk-hdr {
+  padding: 3px 10px; background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.bdp-range {
+  font-size: 11px; color: var(--accent-fg, #79c0ff); opacity: 0.85;
+}
+
+/* Side-by-side grid: each hunk is a 2-column grid */
+.bdp-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.bdp-side {
+  display: flex; align-items: baseline; gap: 0;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+  line-height: 1.5; min-width: 0; border-right: 1px solid var(--border-muted);
+}
+.bdp-right { border-right: none; }
+
+.bdp-no {
+  min-width: 36px; text-align: right; padding: 0 6px;
+  color: var(--text-muted); user-select: none; flex-shrink: 0;
+  font-variant-numeric: tabular-nums; font-size: 11px;
+}
+.bdp-sign {
+  width: 14px; text-align: center; flex-shrink: 0;
+  color: var(--text-muted); font-weight: 700;
+}
+.bdp-code {
+  flex: 1; padding: 0 6px 0 2px; white-space: pre; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Cell colours */
+.k-add  { background: rgba(46,160,67,0.12); }
+.k-add .bdp-no, .k-add .bdp-sign { color: var(--success-fg, #3fb950); }
+.k-del  { background: rgba(248,81,73,0.12); }
+.k-del .bdp-no, .k-del .bdp-sign { color: var(--danger-fg, #f85149); }
+.k-ctx  { background: transparent; }
+.k-empty { background: rgba(0,0,0,0.06); }
+</style>

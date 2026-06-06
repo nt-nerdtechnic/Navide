@@ -93,6 +93,27 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+n',       command: 'workbench.action.newFile' },
   { key: 'cmd+shift+n', command: 'workbench.action.newWindow' },
   { key: 'cmd+shift+o', command: 'workbench.action.gotoSymbol', when: 'editorOpen' },
+  { key: 'cmd+t',       command: 'workbench.action.gotoWorkspaceSymbol' },
+
+  // ── Multi-cursor ─────────────────────────────────────────────────────────────
+  { key: 'cmd+alt+up',   command: 'editor.action.insertCursorAbove',                   when: 'editorTextFocus' },
+  { key: 'cmd+alt+down', command: 'editor.action.insertCursorBelow',                   when: 'editorTextFocus' },
+  { key: 'shift+alt+i',  command: 'editor.action.insertCursorAtEndOfEachLineSelected', when: 'editorTextFocus' },
+
+  // ── Code Folding ─────────────────────────────────────────────────────────────
+  { key: 'cmd+alt+[',   command: 'editor.fold',            when: 'editorOpen' },
+  { key: 'cmd+alt+]',   command: 'editor.unfold',          when: 'editorOpen' },
+  { key: 'cmd+k cmd+[', command: 'editor.foldRecursively', when: 'editorOpen' },
+  { key: 'cmd+k cmd+]', command: 'editor.unfoldRecursively', when: 'editorOpen' },
+  { key: 'cmd+k cmd+0', command: 'editor.foldAll',         when: 'editorOpen' },
+  { key: 'cmd+k cmd+j', command: 'editor.unfoldAll',       when: 'editorOpen' },
+  { key: 'cmd+k cmd+1', command: 'editor.foldLevel1',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+2', command: 'editor.foldLevel2',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+3', command: 'editor.foldLevel3',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+4', command: 'editor.foldLevel4',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+5', command: 'editor.foldLevel5',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+6', command: 'editor.foldLevel6',      when: 'editorOpen' },
+  { key: 'cmd+k cmd+7', command: 'editor.foldLevel7',      when: 'editorOpen' },
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
   { key: 'f1',          command: 'workbench.action.showCommands' },
   { key: 'cmd+k cmd+w', command: 'workbench.action.closeAllEditors' },

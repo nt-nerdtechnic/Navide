@@ -156,6 +156,24 @@ ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
   return { ok: true }
 })
 
+function openBranchDiffWindow(params: Record<string, string>): void {
+  if (editorWindow && !editorWindow.isDestroyed()) {
+    editorWindow.webContents.send('editor:openBranchDiff', params)
+    editorWindow.focus()
+    return
+  }
+  openEditorWindow({
+    workspace_path: params.workspace_path,
+    branch_diff_base: params.branch_diff_base ?? 'main',
+    branch_diff_compare: params.branch_diff_compare ?? '',
+  })
+}
+
+ipcMain.handle('window:openBranchDiff', (_event, args: Record<string, string>) => {
+  openBranchDiffWindow(args ?? {})
+  return { ok: true }
+})
+
 function openEditorWindow(params: Record<string, string>): void {
   const search = { window: 'editor', ...params }
   if (editorWindow && !editorWindow.isDestroyed()) {
