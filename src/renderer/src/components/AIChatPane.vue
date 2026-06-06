@@ -349,8 +349,29 @@ async function confirmApply(): Promise<void> {
   }).then(() => {
     s.btn.textContent = 'Applied ✓'
     s.btn.style.color = 'var(--success-fg, #3fb950)'
-    window.setTimeout(() => { s.btn.textContent = 'Apply'; s.btn.style.color = '' }, 2000)
     showToast(`Applied to ${s.relPath}`)
+    // Add a transient "Revert" button next to the Apply button (Cursor-style undo)
+    if (s.oldContent && s.btn.parentElement && !s.btn.parentElement.querySelector('.ai-code-revert-btn')) {
+      const revertBtn = document.createElement('button')
+      revertBtn.className = 'ai-code-revert-btn'
+      revertBtn.title = `Revert ${s.relPath} to original content`
+      revertBtn.textContent = 'Revert'
+      const originalContent = s.oldContent
+      const relPath = s.relPath
+      revertBtn.addEventListener('click', () => {
+        props.backend.send('fs.write_file', {
+          workspace_path: props.workspacePath,
+          rel_path: relPath,
+          content: originalContent,
+        }).then(() => {
+          showToast(`Reverted ${relPath}`)
+          revertBtn.remove()
+          s.btn.textContent = 'Apply'
+          s.btn.style.color = ''
+        }).catch(() => showToast('Revert failed'))
+      })
+      s.btn.insertAdjacentElement('afterend', revertBtn)
+    }
   }).catch(() => showToast('Apply failed'))
 }
 
@@ -6182,6 +6203,18 @@ function getDateLabel(ts: number): string {
   background: var(--bg-subtle);
   color: var(--text-bright);
 }
+.ai-text :deep(.ai-code-revert-btn) {
+  background: none;
+  border: 1px solid var(--warn-fg, #d29922);
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--warn-fg, #d29922);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 4px;
+  opacity: 0.85;
+}
+.ai-text :deep(.ai-code-revert-btn:hover) { opacity: 1; background: rgba(210,153,34,0.12); }
 .ai-text :deep(.ai-code-fold-btn) {
   display: block;
   width: 100%;
