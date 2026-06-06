@@ -776,6 +776,17 @@ const ctxUsageLevel = computed(() => {
   return 'ok'
 })
 
+// Auto-compact when context exceeds 90% — trigger once per overflow event
+let _autoCompactFired = false
+watch(ctxUsagePct, (pct) => {
+  if (pct >= 90 && !_autoCompactFired && !sending.value && messages.value.length >= 4) {
+    _autoCompactFired = true
+    showToast('Context 90% — auto-compacting conversation history…')
+    triggerCompact()
+  }
+  if (pct < 60) _autoCompactFired = false  // reset when context drops after compact
+})
+
 // ── Conversation search ────────────────────────────────────────────────────────
 const showSearch = ref(false)
 const searchQuery = ref('')
