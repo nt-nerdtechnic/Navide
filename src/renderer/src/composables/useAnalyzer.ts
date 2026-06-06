@@ -313,6 +313,12 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     () => backend.status.value,
     (s) => {
       if (s === 'connected') void refreshAll()
+      else {
+        pulling.value = false
+        pullProgress.value = null
+        benchmarking.value = false
+        benchmarkProgress.value = null
+      }
     },
     { immediate: true }
   )
