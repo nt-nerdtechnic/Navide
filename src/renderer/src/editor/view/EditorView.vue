@@ -1836,7 +1836,8 @@ const suggestIdx = ref(0)
 let _suggestTimer: number | null = null
 
 const suggestStyle = computed(() => {
-  const x = xForLine(cursor.value.line, cursor.value.col) - scrollLeftVal.value
+  // Inside ev-slab (scrollable), so no scrollLeftVal subtraction needed
+  const x = xForLine(cursor.value.line, cursor.value.col)
   // Same coordinate system as ghost text: (model line → display line) * lh - offsetY
   const lineY = m2d(cursor.value.line) * lineHeightPx.value - vs.offsetY.value
   // viewport-relative cursor top (used to decide whether to flip above)
@@ -2177,7 +2178,7 @@ defineExpose({
             v-for="(ec, ei) in extraCursors"
             :key="'ec' + ei"
             class="ev-caret"
-            :style="{ left: (xForLine(ec.line, ec.col) - scrollLeftVal) + 'px', top: (m2d(ec.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }"
+            :style="{ left: xForLine(ec.line, ec.col) + 'px', top: (m2d(ec.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }"
           />
           <!-- ghost text -->
           <div
