@@ -252,10 +252,20 @@ const displayedTemplates = computed(() =>
 )
 
 // ── Notepads (persistent context notes, always injected into system prompt) ───
+interface Notepad { id: string; name: string; content: string; updatedAt: number }
 const showNotes = ref(false)
 const notesKey = computed(() => `ai-chat-notes:${props.workspacePath}`)
+const notepadKey = computed(() => `ai-chat-notepads:${props.workspacePath}`)
 const notesContent = ref('')
+const namedNotepads = ref<Notepad[]>([])
+const activeNotepadId = ref<string | null>(null)
+
 watch(notesKey, (k) => { notesContent.value = localStorage.getItem(k) ?? '' }, { immediate: true })
+watch(notepadKey, (k) => {
+  try { namedNotepads.value = JSON.parse(localStorage.getItem(k) ?? '[]') as Notepad[] }
+  catch { namedNotepads.value = [] }
+}, { immediate: true })
+
 function saveNotes(): void {
   if (notesContent.value.trim()) {
     localStorage.setItem(notesKey.value, notesContent.value)
@@ -263,6 +273,29 @@ function saveNotes(): void {
     localStorage.removeItem(notesKey.value)
   }
 }
+function saveNamedNotepads(): void {
+  try { localStorage.setItem(notepadKey.value, JSON.stringify(namedNotepads.value)) }
+  catch { /* quota */ }
+}
+function createNotepad(name: string): Notepad {
+  const np: Notepad = { id: crypto.randomUUID(), name: name.trim() || 'Note', content: '', updatedAt: Date.now() }
+  namedNotepads.value = [...namedNotepads.value, np]
+  saveNamedNotepads()
+  activeNotepadId.value = np.id
+  return np
+}
+function deleteNotepad(id: string): void {
+  namedNotepads.value = namedNotepads.value.filter((n) => n.id !== id)
+  if (activeNotepadId.value === id) activeNotepadId.value = namedNotepads.value[0]?.id ?? null
+  saveNamedNotepads()
+}
+function updateNotepadContent(id: string, content: string): void {
+  const np = namedNotepads.value.find((n) => n.id === id)
+  if (np) { np.content = content; np.updatedAt = Date.now(); saveNamedNotepads() }
+}
+const activeNotepad = computed(() =>
+  namedNotepads.value.find((n) => n.id === activeNotepadId.value) ?? namedNotepads.value[0] ?? null
+)
 
 // ── Rotating input placeholder (mode-aware) ───────────────────────────────────
 const PLACEHOLDER_HINTS_ASK = [
@@ -3701,6 +3734,24 @@ function onTextareaInput(e: Event): void {
   }
 
   // @glob:pattern — match files by glob pattern (e.g. @glob:src/**/*.ts)
+  // @notepad:name — reference a specific named notepad
+  if (/^notepad:?$/i.test(fragment)) {
+    const opts = namedNotepads.value.length
+      ? namedNotepads.value.map((n) => ({ id: `@notepad:${n.name}`, label: `@notepad:${n.name}` }))
+      : [{ id: '@notepad', label: '@notepad — workspace notes (open panel to create named notepads)' }]
+    atOptions.value = opts
+    return
+  }
+  const isNotepadQuery = /^notepad:.+/i.test(fragment)
+  if (isNotepadQuery) {
+    const notepadName = fragment.slice('notepad:'.length).toLowerCase()
+    const matched = namedNotepads.value.filter((n) => n.name.toLowerCase().includes(notepadName))
+    atOptions.value = matched.length
+      ? matched.map((n) => ({ id: `@notepad:${n.name}`, label: `@notepad:${n.name}` }))
+      : [{ id: `@notepad:${fragment.slice('notepad:'.length)}`, label: `@notepad:${fragment.slice('notepad:'.length)} (new notepad)` }]
+    return
+  }
+
   if (/^glob:?$/i.test(fragment)) {
     atOptions.value = [{ id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' }]
     return
@@ -4806,6 +4857,19 @@ ${out}`
     chipContent = noteText
       ? `// Workspace Notepad:\n${noteText}`
       : '// @notepad: empty — open the Notepad panel to add notes'
+  } else if (option.id.startsWith('@notepad:')) {
+    const notepadName = option.id.slice('@notepad:'.length)
+    const np = namedNotepads.value.find((n) => n.name === notepadName)
+    chipLabel = `@notepad:${notepadName}`
+    if (np && np.content.trim()) {
+      chipContent = `// Notepad "${np.name}":\n${np.content.trim()}`
+    } else if (np) {
+      chipContent = `// Notepad "${np.name}" is empty — open the Notes panel to add content`
+    } else {
+      // Create a new notepad with that name
+      createNotepad(notepadName)
+      chipContent = `// Notepad "${notepadName}" created — open Notes panel to add content`
+    }
   } else if (option.id === '@docs') {
     const newVal = val.slice(0, atIdx) + '@docs:' + val.slice(cur)
     inputText.value = newVal

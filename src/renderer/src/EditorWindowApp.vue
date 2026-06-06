@@ -1226,7 +1226,27 @@ watch(themeQuery, () => { themeIdx.value = 0 })
 registerCommand('workbench.action.selectTheme', openThemePicker)
 
 // ── Modal context (any overlay open) → Escape can close via keybinding ────────
-const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || wsymOpen.value || langOpen.value || kbOpen.value || themeOpen.value)
+const newFileOpen = ref(false)
+const newFilePath = ref('untitled.txt')
+const newFileInputEl = ref<HTMLInputElement | null>(null)
+
+function openNewFileDialog(): void {
+  if (!workspacePath) return
+  newFilePath.value = 'untitled.txt'
+  newFileOpen.value = true
+  nextTick(() => { newFileInputEl.value?.select() })
+}
+function closeNewFileDialog(): void { newFileOpen.value = false }
+async function confirmNewFile(): Promise<void> {
+  const relPath = newFilePath.value.trim()
+  if (!relPath) { closeNewFileDialog(); return }
+  closeNewFileDialog()
+  const resp = await backend.send<{ ok: boolean; error?: string }>('fs.write_file', { workspace_path: workspacePath, rel_path: relPath, content: '' })
+  if (!resp.payload?.ok) { toast(resp.payload?.error ?? 'Failed to create file'); return }
+  openFile({ filepath: relPath })
+}
+
+const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || wsymOpen.value || langOpen.value || kbOpen.value || themeOpen.value || newFileOpen.value)
 watch(anyOverlayOpen, (v) => setContext('modalOpen', v))
 
 // ── Close modal (Escape when any overlay is open) ────────────────────────────
@@ -1238,17 +1258,11 @@ registerCommand('workbench.action.closeModal', () => {
   if (langOpen.value) { closeLangPicker(); return }
   if (kbOpen.value) { closeKeyboardShortcuts(); return }
   if (themeOpen.value) { closeThemePicker(true); return }
+  if (newFileOpen.value) { closeNewFileDialog(); return }
 })
 
 // ── New file (⌘N) ─────────────────────────────────────────────────────────────
-registerCommand('workbench.action.newFile', async () => {
-  if (!workspacePath) return
-  const name = window.prompt('New file path (relative to workspace):', 'untitled.txt')
-  if (!name?.trim()) return
-  const relPath = name.trim()
-  const resp = await backend.send('fs.write_file', { workspace_path: workspacePath, rel_path: relPath, content: '' })
-  if (resp.ok) openFile({ filepath: relPath })
-})
+registerCommand('workbench.action.newFile', openNewFileDialog)
 
 function onAppKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && tabCtxMenu.value) { tabCtxMenu.value = null; return }
@@ -1717,6 +1731,23 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <div v-else class="ide-palette-empty">No matching commands</div>
     </div>
   </div>
+
+  <!-- New file dialog -->
+  <div v-if="newFileOpen" class="ide-palette-overlay" @mousedown.self="closeNewFileDialog">
+    <div class="ide-palette" style="max-width:440px">
+      <div class="ide-new-file-label">New File — enter path relative to workspace</div>
+      <input
+        ref="newFileInputEl"
+        v-model="newFilePath"
+        class="ide-palette-input"
+        placeholder="e.g. src/components/MyComponent.vue"
+        @keydown.enter.prevent="confirmNewFile"
+        @keydown.escape.prevent="closeNewFileDialog"
+      />
+      <div class="ide-new-file-hint">Press Enter to create &nbsp;·&nbsp; Esc to cancel</div>
+    </div>
+  </div>
+
   <NotificationHost />
 
   <!-- Tab right-click context menu -->
@@ -2066,6 +2097,8 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   flex-shrink: 0;
 }
 .ide-palette-empty { padding: 12px 14px; color: var(--text-muted); font-size: 12px; }
+.ide-new-file-label { padding: 10px 14px 4px; font-size: 11px; color: var(--text-muted); user-select: none; }
+.ide-new-file-hint { padding: 6px 14px 8px; font-size: 10.5px; color: var(--text-muted); opacity: .7; }
 .ide-palette-section-header {
   padding: 4px 14px 2px;
   font-size: 10px;
