@@ -131,6 +131,7 @@ const inputText = ref('')
 const inputHistory: string[] = []
 let historyIdx = -1
 let historySavedDraft = ''  // input text saved before first ArrowUp
+let _navAssistIdx = -1     // index into assistant messages for Alt+Up/Down navigation
 const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
 
@@ -565,6 +566,7 @@ function newThread(): void {
 
 function switchThread(id: string): void {
   if (id === currentThreadId.value) { showThreads.value = false; return }
+  _navAssistIdx = -1  // reset message nav index on thread switch
   // Save current thread's scroll position before switching
   if (messagesEl.value) {
     threadScrollPositions.set(currentThreadId.value, messagesEl.value.scrollTop)
@@ -1078,7 +1080,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
-  { id: '@git:diff',  label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
+  { id: '@git:diff',   label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
+  { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -2186,6 +2189,7 @@ function stopStreaming(): void {
 function clearConversation(): void {
   if (messages.value.length > 0 && !window.confirm('Clear all messages in this chat?')) return
   if (sending.value) stopStreaming()
+  _navAssistIdx = -1
   messages.value = []
   expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
   // Also reset the title so it auto-updates on next message
@@ -2577,6 +2581,21 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   // Escape while diff-apply modal is open — cancel apply regardless of focus
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
+  }
+  // Alt+Up / Alt+Down — navigate between AI assistant messages (Cursor-style)
+  if (e.altKey && !e.metaKey && !e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    const els = [...(messagesEl.value?.querySelectorAll<HTMLElement>('.ai-msg.assistant') ?? [])]
+    if (!els.length) return
+    e.preventDefault()
+    if (e.key === 'ArrowUp') {
+      _navAssistIdx = _navAssistIdx <= 0 ? els.length - 1 : _navAssistIdx - 1
+    } else {
+      _navAssistIdx = _navAssistIdx >= els.length - 1 ? 0 : _navAssistIdx + 1
+    }
+    const target = els[_navAssistIdx]
+    target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    target.setAttribute('data-nav-focus', 'true')
+    window.setTimeout(() => target.removeAttribute('data-nav-focus'), 1000)
   }
 }
 
@@ -3130,6 +3149,20 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @git:commit:<hash> — show a specific commit's diff
+  if (/^git:commit$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:commit', label: '@git:commit — type a commit hash (e.g. @git:commit:abc1234)' }]
+    return
+  }
+  const isGitCommitQuery = /^git:commit:/i.test(fragment)
+  if (isGitCommitQuery) {
+    const hashFrag = fragment.slice('git:commit:'.length)
+    atOptions.value = hashFrag.length >= 1
+      ? [{ id: `@git:commit:${hashFrag}`, label: `@git:commit:${hashFrag} — show this commit` }]
+      : [{ id: '@git:commit', label: '@git:commit — type a commit hash' }]
+    return
+  }
+
   // @usages:<symbol> — find all call sites / references of a symbol across the codebase
   if (/^usages$/i.test(fragment)) {
     atOptions.value = [{ id: '@usages', label: '@usages — type a symbol name after the colon' }]
@@ -3653,6 +3686,41 @@ async function selectAtOption(option: AtOption): Promise<void> {
           : `// @git:diff:${branchName}: ${resp.payload?.error ?? 'no diff found'}`
       } catch {
         chipContent = `// @git:diff:${branchName}: unavailable`
+      }
+    }
+  } else if (option.id === '@git:commit') {
+    const newVal = val.slice(0, atIdx) + '@git:commit:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@git:commit:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@git:commit:')) {
+    const hash = option.id.slice('@git:commit:'.length).trim()
+    chipLabel = `@git:commit:${hash}`
+    if (!/^[0-9a-f]{4,40}$/i.test(hash)) {
+      chipContent = `// @git:commit:${hash}: invalid hash (must be 4–40 hex chars)`
+    } else {
+      try {
+        showToast(`Fetching commit ${hash.slice(0, 7)}…`)
+        interface ShowCommitResp { ok: boolean; hash?: string; short_hash?: string; author_name?: string; date?: string; message?: string; body?: string; files?: string[]; error?: string }
+        const resp = await props.backend.send<ShowCommitResp>('git.show_commit', {
+          workspace_path: props.workspacePath,
+          commit_hash: hash,
+        })
+        const p = resp.payload
+        if (!p?.ok) {
+          chipContent = `// @git:commit:${hash}: ${p?.error ?? 'not found'}`
+        } else {
+          const header = `commit ${p.short_hash} — ${p.message}\nAuthor: ${p.author_name} · ${p.date?.slice(0, 10)}`
+          const files = p.files?.length ? `\nFiles changed:\n${p.files.map((f) => `  ${f}`).join('\n')}` : ''
+          const body = p.body ? `\n\n${p.body}` : ''
+          chipContent = `// @git:commit:${p.short_hash}\n${header}${body}${files}`
+        }
+      } catch {
+        chipContent = `// @git:commit:${hash}: unavailable`
       }
     }
   } else if (option.id === '@codebase') {
@@ -4501,7 +4569,7 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     void sendMessage()
   }
   // Prompt history: Up/Down arrow when not in menus
-  if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+  if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const el = textareaEl.value
     if (el && inputHistory.length > 0 && el.selectionStart === 0) {
       e.preventDefault()
@@ -4513,7 +4581,7 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       nextTick(() => { if (el) { el.selectionStart = el.selectionEnd = el.value.length } })
     }
   }
-  if (e.key === 'ArrowDown' && !e.shiftKey && !e.ctrlKey && !e.metaKey && historyIdx >= 0) {
+  if (e.key === 'ArrowDown' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && historyIdx >= 0) {
     e.preventDefault()
     if (historyIdx < inputHistory.length - 1) {
       historyIdx++
@@ -5841,6 +5909,7 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Enter</kbd></td><td>Send message</td></tr>
           <tr><td><kbd>Shift+Enter</kbd></td><td>New line</td></tr>
           <tr><td><kbd>↑ / ↓</kbd></td><td>Browse input history</td></tr>
+          <tr><td><kbd>Alt+↑ / Alt+↓</kbd></td><td>Navigate between AI messages</td></tr>
           <tr><td><kbd>Ctrl+L</kbd></td><td>Focus AI chat input</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
           <tr><td><kbd>Ctrl+Shift+K</kbd></td><td>Clear current conversation</td></tr>
@@ -7110,6 +7179,7 @@ function getDateLabel(ts: number): string {
 .ai-search-close:hover { color: var(--text-bright); }
 .ai-msg-wrap.search-match .ai-bubble { outline: 1px solid var(--accent-emphasis); opacity: 0.7; }
 .ai-msg-wrap.search-active .ai-bubble { outline: 2px solid var(--accent-emphasis); opacity: 1; }
+.ai-msg-wrap[data-nav-focus="true"] .ai-bubble { outline: 2px solid var(--accent, #6366f1); box-shadow: 0 0 0 4px rgba(99,102,241,0.12); transition: outline 0.1s, box-shadow 0.1s; }
 .ai-text :deep(mark.ai-search-highlight) {
   background: rgba(255, 213, 0, 0.35);
   color: inherit;
