@@ -212,9 +212,12 @@ async def _tool_read_file(input: dict, workspace_path: str) -> str:
         if size > _BYTE_CAP:
             with target.open("rb") as fh:
                 raw = fh.read(_BYTE_CAP)
-                # trim trailing UTF-8 continuation bytes to avoid splitting a multi-byte char
-                while raw and (raw[-1] & 0xC0) == 0x80:
-                    raw = raw[:-1]
+                # trim trailing UTF-8 continuation bytes — count first, slice once (max 3)
+                n = 0
+                while n < 3 and n < len(raw) and (raw[-1 - n] & 0xC0) == 0x80:
+                    n += 1
+                if n:
+                    raw = raw[:-n]
             content = raw.decode("utf-8", errors="replace")
             content += f"\n\n[Truncated: file is {size // 1024} KB; showing first 5 MB]"
             return content
