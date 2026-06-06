@@ -1346,6 +1346,9 @@ function fetchSettings(): void {
 
 // Resolve "auto" model to a real backend model+provider pair
 function resolveModel(): { provider: string; model: string } {
+  if (settingsProvider.value === 'openai_compatible') {
+    return { provider: 'openai_compatible', model: settingsOaiCompatModel.value }
+  }
   if (settingsModel.value !== 'auto') {
     return { provider: settingsProvider.value, model: settingsModel.value }
   }
@@ -2155,7 +2158,7 @@ function setupListeners(): void {
     if (p.deepseek_api_key) settingsDeepSeekKey.value = p.deepseek_api_key
     if (p.openai_compatible_base_url) settingsOaiCompatUrl.value = p.openai_compatible_base_url
     if (p.openai_compatible_api_key) settingsOaiCompatKey.value = p.openai_compatible_api_key
-    if (p.openai_compatible_model) settingsOaiCompatModel.value = p.openai_compatible_model
+    if (p.openai_compatible_model !== undefined) settingsOaiCompatModel.value = p.openai_compatible_model
     if (p.model) settingsModel.value = p.model
     if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
     // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
@@ -3144,13 +3147,7 @@ async function onDrop(e: DragEvent): Promise<void> {
   }
 }
 
-async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
-  const items = Array.from(e.clipboardData?.items ?? [])
-  const imageItem = items.find((it) => it.type.startsWith('image/'))
-  if (!imageItem) return
-  e.preventDefault()
-  const file = imageItem.getAsFile()
-  if (!file) return
+function _addImageFile(file: File): void {
   const reader = new FileReader()
   reader.onload = () => {
     const dataUrl = reader.result as string
@@ -3158,12 +3155,34 @@ async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
     contextChips.value.push({
       id: crypto.randomUUID(),
       label: `@image${chipCount > 1 ? chipCount : ''}`,
-      content: `[Image pasted: ${file.type}, ${Math.round(file.size / 1024)}KB]`,
+      content: `[Image: ${file.name || file.type}, ${Math.round(file.size / 1024)}KB]`,
       imageData: dataUrl,
     })
     showToast('Image added as context')
   }
   reader.readAsDataURL(file)
+}
+
+async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
+  const items = Array.from(e.clipboardData?.items ?? [])
+  const imageItem = items.find((it) => it.type.startsWith('image/'))
+  if (!imageItem) return
+  e.preventDefault()
+  const file = imageItem.getAsFile()
+  if (file) _addImageFile(file)
+}
+
+const dragOverChat = ref(false)
+function onChatDragOver(e: DragEvent): void {
+  const hasImage = Array.from(e.dataTransfer?.items ?? []).some((it) => it.type.startsWith('image/'))
+  if (hasImage) { e.preventDefault(); dragOverChat.value = true }
+}
+function onChatDragLeave(): void { dragOverChat.value = false }
+function onChatDrop(e: DragEvent): void {
+  dragOverChat.value = false
+  e.preventDefault()
+  const files = Array.from(e.dataTransfer?.files ?? []).filter((f) => f.type.startsWith('image/'))
+  files.forEach(_addImageFile)
 }
 
 function onTextareaKeydown(e: KeyboardEvent): void {
@@ -3405,7 +3424,13 @@ function getDateLabel(ts: number): string {
 </script>
 
 <template>
-  <div class="ai-chat">
+  <div
+    class="ai-chat"
+    :class="{ 'ai-drag-over': dragOverChat }"
+    @dragover.prevent="onChatDragOver"
+    @dragleave="onChatDragLeave"
+    @drop.prevent="onChatDrop"
+  >
     <!-- Backend offline banner -->
     <div v-if="props.backend.status.value === 'disconnected' || props.backend.status.value === 'error'" class="ai-offline-banner">
       <span>⚠ Backend disconnected — messages won't send until reconnected</span>
@@ -5763,6 +5788,59 @@ kbd {
   background: #0078d4; border: none; color: #fff; font-weight: 600;
 }
 .ai-apply-confirm-btn:hover { background: #106ebe; }
+
+/* ── Checkpoints panel ───────────────────────────────────────────── */
+.ai-checkpoints-panel {
+  position: absolute; top: 0; right: 0; width: 280px; height: 100%;
+  background: var(--bg-2, #1e1e2e); border-left: 1px solid var(--border, #3c3c3c);
+  display: flex; flex-direction: column; z-index: 20; overflow: hidden;
+}
+.ai-checkpoints-actions {
+  padding: 8px 10px; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border, #3c3c3c); flex-shrink: 0;
+}
+.ai-cp-save-btn {
+  flex: 1; padding: 5px 8px; font-size: 11px; cursor: pointer;
+  background: var(--bg-3, #2a2a2a); border: 1px solid var(--border, #3c3c3c);
+  color: var(--fg, #ccc); border-radius: 4px;
+}
+.ai-cp-save-btn:hover { background: #0078d4; color: #fff; border-color: #0078d4; }
+.ai-cp-hint { font-size: 9px; color: var(--text-muted, #666); white-space: nowrap; }
+.ai-checkpoint-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border, #3c3c3c);
+  transition: background .1s;
+}
+.ai-checkpoint-item:hover { background: var(--bg-3, #2a2a2a); }
+.ai-cp-info { flex: 1; min-width: 0; }
+.ai-cp-name { display: block; font-size: 11px; color: var(--fg, #ccc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-cp-meta { font-size: 10px; color: var(--text-muted, #666); }
+.ai-cp-btns { display: flex; gap: 4px; flex-shrink: 0; }
+.ai-cp-restore-btn {
+  padding: 2px 6px; font-size: 10px; cursor: pointer; border-radius: 3px;
+  background: #0078d4; border: none; color: #fff;
+}
+.ai-cp-restore-btn:hover { background: #106ebe; }
+.ai-cp-del-btn {
+  padding: 2px 6px; font-size: 10px; cursor: pointer; border-radius: 3px;
+  background: transparent; border: 1px solid var(--border, #3c3c3c); color: var(--text-muted, #666);
+}
+.ai-cp-del-btn:hover { background: #c0392b; color: #fff; border-color: transparent; }
+.ai-cp-has { position: relative; }
+.ai-cp-has::after {
+  content: ''; position: absolute; top: 3px; right: 3px;
+  width: 5px; height: 5px; border-radius: 50%; background: #10b981;
+}
+/* ── Drag-over overlay ──────────────────────────────────────────── */
+.ai-chat { position: relative; }
+.ai-chat.ai-drag-over::after {
+  content: 'Drop image to add as context';
+  position: absolute; inset: 0; z-index: 50;
+  background: rgba(0, 120, 212, 0.15);
+  border: 2px dashed #0078d4; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; color: #0078d4; pointer-events: none;
+}
 </style>
 
 <style>
