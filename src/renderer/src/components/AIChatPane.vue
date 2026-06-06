@@ -5173,9 +5173,10 @@ function onTextareaKeydown(e: KeyboardEvent): void {
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
     e.preventDefault()
     textareaEl.value?.focus()
-    if (!inputText.value.startsWith('/')) inputText.value = '/' + inputText.value
+    const hadSlash = inputText.value.startsWith('/')
+    if (!hadSlash) inputText.value = '/' + inputText.value
     showSlashMenu.value = true
-    slashMenuFilter.value = inputText.value.slice(1)
+    slashMenuFilter.value = hadSlash ? inputText.value.slice(1) : ''
     slashOptions.value = SLASH_COMMANDS.filter((c) => c.id.includes(slashMenuFilter.value.toLowerCase()))
   }
   // Ctrl+Enter — regenerate last AI response (when not sending)
@@ -5878,16 +5879,29 @@ function getDateLabel(ts: number): string {
           <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
         </button>
         <div v-if="showModelPicker" class="ai-model-picker-menu">
-          <!-- Auto tier -->
-          <div class="ai-model-picker-group">Smart Routing</div>
-          <div
-            class="ai-model-picker-item"
-            :class="{ active: settingsModel === 'auto' }"
-            @click="switchModel('auto'); showModelPicker = false"
-          >
-            <span class="ai-model-picker-name">✦ Auto</span>
-            <span class="ai-model-picker-note">Best available</span>
+          <!-- Search filter -->
+          <div class="ai-model-picker-search-wrap">
+            <input
+              v-model="modelPickerSearch"
+              class="ai-model-picker-search"
+              placeholder="Search models…"
+              autocomplete="off"
+              @click.stop
+              @keydown.escape.prevent="showModelPicker = false"
+            />
           </div>
+          <!-- Auto tier (hidden when search active) -->
+          <template v-if="!modelPickerSearch.trim()">
+            <div class="ai-model-picker-group">Smart Routing</div>
+            <div
+              class="ai-model-picker-item"
+              :class="{ active: settingsModel === 'auto' }"
+              @click="switchModel('auto'); showModelPicker = false"
+            >
+              <span class="ai-model-picker-name">✦ Auto</span>
+              <span class="ai-model-picker-note">Best available</span>
+            </div>
+          </template>
           <template v-for="group in [
             { label: 'Anthropic', filter: 'anthropic' },
             { label: 'OpenAI', filter: 'openai' },
@@ -5898,24 +5912,26 @@ function getDateLabel(ts: number): string {
             { label: 'DeepSeek', filter: 'deepseek' },
             { label: 'Ollama (Local)', filter: 'ollama' },
           ]" :key="group.label">
-            <div class="ai-model-picker-sep" />
-            <div class="ai-model-picker-group">
-              {{ group.label }}
-              <span v-if="!providerHasKey[group.filter]" class="ai-picker-no-key" title="No API key configured — set in Settings">no key</span>
-            </div>
-            <div
-              v-for="m in MODEL_CATALOG.filter(e => e.provider === group.filter)"
-              :key="m.id"
-              class="ai-model-picker-item"
-              :class="{ active: m.id === settingsModel }"
-              @click="switchModel(m.id); showModelPicker = false"
-            >
-              <span class="ai-model-picker-name">{{ m.display }}</span>
-              <span class="ai-model-picker-meta">
-                <span v-if="m.ctx" class="ai-model-picker-ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
-                <span class="ai-model-picker-note">{{ m.note }}</span>
-              </span>
-            </div>
+            <template v-if="MODEL_CATALOG.filter(e => e.provider === group.filter && (!modelPickerSearch.trim() || e.display.toLowerCase().includes(modelPickerSearch.toLowerCase()) || e.note.toLowerCase().includes(modelPickerSearch.toLowerCase()) || e.id.includes(modelPickerSearch.toLowerCase()))).length > 0">
+              <div class="ai-model-picker-sep" />
+              <div class="ai-model-picker-group">
+                {{ group.label }}
+                <span v-if="!providerHasKey[group.filter]" class="ai-picker-no-key" title="No API key configured — set in Settings">no key</span>
+              </div>
+              <div
+                v-for="m in MODEL_CATALOG.filter(e => e.provider === group.filter && (!modelPickerSearch.trim() || e.display.toLowerCase().includes(modelPickerSearch.toLowerCase()) || e.note.toLowerCase().includes(modelPickerSearch.toLowerCase()) || e.id.includes(modelPickerSearch.toLowerCase())))"
+                :key="m.id"
+                class="ai-model-picker-item"
+                :class="{ active: m.id === settingsModel }"
+                @click="switchModel(m.id); showModelPicker = false"
+              >
+                <span class="ai-model-picker-name">{{ m.display }}</span>
+                <span class="ai-model-picker-meta">
+                  <span v-if="m.ctx" class="ai-model-picker-ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
+                  <span class="ai-model-picker-note">{{ m.note }}</span>
+                </span>
+              </div>
+            </template>
           </template>
           <!-- Custom model input -->
           <div class="ai-model-picker-sep" />
@@ -7719,8 +7735,12 @@ function getDateLabel(ts: number): string {
 .ai-model-picker-menu {
   position: absolute; bottom: calc(100% + 4px); left: 8px;
   background: var(--bg-overlay); border: 1px solid var(--border-muted); border-radius: 6px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 200; min-width: 200px; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 200; min-width: 220px; overflow: hidden;
+  max-height: 380px; overflow-y: auto;
 }
+.ai-model-picker-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06)); }
+.ai-model-picker-search { width: 100%; box-sizing: border-box; background: var(--bg-muted); border: 1px solid var(--border-muted); border-radius: 4px; color: var(--text-primary); font-size: 11px; padding: 4px 7px; outline: none; }
+.ai-model-picker-search:focus { border-color: var(--accent-emphasis); }
 .ai-model-picker-item {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary);
