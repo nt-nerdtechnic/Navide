@@ -1070,7 +1070,6 @@ async function sendMessage(): Promise<void> {
         : `Error: ${r?.error ?? 'unknown'}`
       messages.value.push({ role: 'assistant', content: out, timestamp: Date.now() })
     } catch { messages.value.push({ role: 'assistant', content: 'Command failed', isError: true, timestamp: Date.now() }) }
-    _scheduleSave()
     return
   }
 
