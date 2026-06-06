@@ -8,32 +8,50 @@ export interface ReviewOptions {
   compare?: string
 }
 
+export interface ReviewFinding {
+  id: string
+  file: string
+  line: number | null
+  severity: 'critical' | 'warning' | 'suggestion'
+  title: string
+  body: string
+}
+
+export interface ReviewResult {
+  summary: string
+  findings: ReviewFinding[]
+  verdict: 'approve' | 'approve_with_comments' | 'request_changes'
+}
+
 export function useReview(backend: ReturnType<typeof useBackend>) {
   const isReviewing = ref(false)
-  const reviewText = ref('')
+  const reviewResult = ref<ReviewResult | null>(null)
   const reviewError = ref('')
   const currentReviewId = ref('')
 
-  let _unsubChunk: (() => void) | null = null
+  let _unsubResult: (() => void) | null = null
   let _unsubEnd: (() => void) | null = null
   let _unsubError: (() => void) | null = null
 
   function _teardown() {
-    _unsubChunk?.(); _unsubChunk = null
+    _unsubResult?.(); _unsubResult = null
     _unsubEnd?.(); _unsubEnd = null
     _unsubError?.(); _unsubError = null
   }
 
   function _setup(rid: string) {
     _teardown()
-    _unsubChunk = backend.on('ai.review.chunk', (payload) => {
-      const p = payload as { review_id: string; text: string }
+    _unsubResult = backend.on('ai.review.result', (payload) => {
+      const p = payload as { review_id: string; result: ReviewResult }
       if (p.review_id !== rid) return
-      reviewText.value += p.text
+      reviewResult.value = p.result
     })
     _unsubEnd = backend.on('ai.review.end', (payload) => {
       const p = payload as { review_id: string }
       if (p.review_id !== rid) return
+      if (!reviewResult.value) {
+        reviewError.value = 'Could not parse review output. Try again.'
+      }
       isReviewing.value = false
       _teardown()
     })
@@ -47,7 +65,7 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   }
 
   async function startReview(options: ReviewOptions): Promise<void> {
-    reviewText.value = ''
+    reviewResult.value = null
     reviewError.value = ''
     isReviewing.value = true
     const rid = crypto.randomUUID()
@@ -82,5 +100,5 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   })
   onUnmounted(_teardown)
 
-  return { isReviewing, reviewText, reviewError, startReview, stopReview }
+  return { isReviewing, reviewResult, reviewError, startReview, stopReview }
 }

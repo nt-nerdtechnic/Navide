@@ -1,4 +1,4 @@
-"""AI Code Review streaming service."""
+"""AI Code Review streaming service — structured JSON output."""
 
 from __future__ import annotations
 
@@ -10,22 +10,32 @@ log = logging.getLogger("agent_team_backend.review_service")
 _MAX_REVIEW_DIFF_CHARS = 30_000
 
 REVIEW_SYSTEM_PROMPT = """\
-You are a senior software engineer conducting a thorough code review. \
-Analyse the provided git diff with a critical eye, focusing on:
+You are a senior software engineer conducting a thorough code review.
+Analyse the provided git diff, then respond with ONLY a JSON object wrapped in a ```json code block.
 
-1. **Bugs & correctness** – off-by-one errors, null/undefined dereferences, race conditions, wrong assumptions
-2. **Security** – injection vulnerabilities, improper input validation, secrets in code, insecure defaults
-3. **Performance** – N+1 queries, unnecessary re-renders, blocking I/O, large allocations
-4. **Architecture** – separation of concerns, unnecessary coupling, missing or excessive abstractions
-5. **Maintainability** – unclear naming, missing edge-case handling, dead code
+Schema (all fields required):
+{
+  "summary": "<2-3 sentence overview of overall change quality>",
+  "findings": [
+    {
+      "id": "<short kebab-case slug, unique within this response>",
+      "file": "<relative file path, or empty string for cross-cutting issues>",
+      "line": <integer line number or null>,
+      "severity": "critical" | "warning" | "suggestion",
+      "title": "<one-line description>",
+      "body": "<detailed explanation with actionable advice>"
+    }
+  ],
+  "verdict": "approve" | "approve_with_comments" | "request_changes"
+}
 
-Output as Markdown. Structure your response:
-- A brief **Summary** paragraph (2-3 sentences) on the overall change quality.
-- A **Findings** section with one sub-heading per file that has notable issues (skip files with no issues). \
-For each finding, rate severity: 🔴 Critical / 🟡 Warning / 🔵 Suggestion.
-- A **Verdict** line: ✅ Approve / ⚠️ Approve with minor comments / ❌ Request changes.
+Severity guide:
+- critical: must fix before merging (correctness bugs, security vulnerabilities)
+- warning: should fix (performance, architecture, maintainability concerns)
+- suggestion: optional improvement (naming, style, minor refactor)
 
-Be concise. No praise for the obvious. Focus on actionable insights.\
+Emit an empty findings array [] when there are no notable issues.
+Return NO text outside the ```json block.\
 """
 
 
@@ -35,13 +45,13 @@ async def stream_review(
 ) -> AsyncIterator[str]:
     """Stream an AI code review for *diff*.
 
-    Yields text chunks from the configured AI provider. The caller is
-    responsible for broadcasting these chunks to connected clients.
+    Yields raw text chunks (JSON wrapped in a ```json block).
+    The caller collects chunks, parses the JSON, and emits a structured result.
     """
     from .ai_chat_service import stream_chat
 
     if not diff.strip():
-        yield "*(no changes to review)*"
+        yield '```json\n{"summary":"No changes to review.","findings":[],"verdict":"approve"}\n```'
         return
 
     truncated = diff[:_MAX_REVIEW_DIFF_CHARS]
@@ -61,5 +71,5 @@ async def stream_review(
         }
     ]
 
-    async for chunk in stream_chat(settings, messages, REVIEW_SYSTEM_PROMPT, max_tokens=4096):
+    async for chunk in stream_chat(settings, messages, REVIEW_SYSTEM_PROMPT, max_tokens=8192):
         yield chunk

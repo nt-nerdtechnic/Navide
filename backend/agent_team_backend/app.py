@@ -2213,6 +2213,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             settings = {**ai_chat_settings_store.get()}
 
             async def _run_review(rid=review_id, m=mode, b=base, c=compare, s=settings, ws=ws_path):
+                import re as _re
+                import json as _json
                 from .review_service import stream_review
                 try:
                     if m == "branch":
@@ -2227,11 +2229,22 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         diff_result = await git_service.diff_branches(ws, _b, _c)
                         diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
                     else:
-                        # working mode: include both staged + unstaged (git diff HEAD)
+                        # working mode: staged + unstaged (git diff HEAD)
                         diff_result = await git_service.diff_branches(ws, "", "")
                         diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
+                    chunks: list[str] = []
                     async for chunk in stream_review(s, diff):
+                        chunks.append(chunk)
                         await broadcast(make_event("ai.review.chunk", {"review_id": rid, "text": chunk}))
+                    # Parse structured JSON result from streamed text
+                    full_text = "".join(chunks)
+                    try:
+                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
+                        if mo:
+                            result = _json.loads(mo.group(1))
+                            await broadcast(make_event("ai.review.result", {"review_id": rid, "result": result}))
+                    except Exception:
+                        log.warning("ai.review: failed to parse JSON from streamed output")
                     await broadcast(make_event("ai.review.end", {"review_id": rid}))
                 except Exception as exc:
                     log.exception("ai.review.start failed: %s", exc)
