@@ -2160,8 +2160,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
             base_sys = settings.get("system_prompt", "You are a helpful AI coding assistant.")
             if system_prefix or system_suffix:
+                sep = "" if (not system_prefix or system_prefix.endswith("\n")) else "\n"
                 settings["system_prompt"] = (
-                    f"{system_prefix}{base_sys}" + (f"\n\n{system_suffix}" if system_suffix else "")
+                    f"{system_prefix}{sep}{base_sys}" + (f"\n\n{system_suffix}" if system_suffix else "")
                 )
 
             async def _run_chat(sid=session_id, msgs=messages, ws_path=workspace_path, s=settings):
