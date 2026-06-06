@@ -2191,10 +2191,17 @@ function getDateLabel(ts: number): string {
     <!-- Messages list -->
     <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @scroll.passive="onMessagesScroll">
       <div v-if="messages.length === 0" class="ai-empty">
-        <svg width="32" height="32" viewBox="0 0 16 16" fill="currentColor" style="opacity:.35">
+        <svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" style="opacity:.3">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
         </svg>
-        <p>AI assistant ready — type a message or use @ to insert context</p>
+        <p class="ai-empty-title">AI assistant ready</p>
+        <p class="ai-empty-hint">@ to add context &nbsp;·&nbsp; / for commands &nbsp;·&nbsp; Enter to send</p>
+        <div class="ai-empty-suggestions">
+          <button class="ai-empty-btn" @click="inputText = '/explain '; nextTick(() => textareaEl?.focus())">/explain — explain code</button>
+          <button class="ai-empty-btn" @click="inputText = '/fix '; nextTick(() => textareaEl?.focus())">/fix — find and fix issues</button>
+          <button class="ai-empty-btn" @click="inputText = '/tests '; nextTick(() => textareaEl?.focus())">/tests — generate unit tests</button>
+          <button class="ai-empty-btn" @click="inputText = '/review '; nextTick(() => textareaEl?.focus())">/review — code review</button>
+        </div>
       </div>
 
       <template v-for="(msg, mi) in messages" :key="mi">
@@ -2791,8 +2798,20 @@ function getDateLabel(ts: number): string {
   color: var(--text-muted);
   font-size: 12px;
   text-align: center;
+  padding: 24px;
 }
 .ai-empty p { margin: 0; }
+.ai-empty-title { font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.ai-empty-hint { font-size: 11px; opacity: 0.7; }
+.ai-empty-suggestions {
+  display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 8px;
+}
+.ai-empty-btn {
+  padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border-muted);
+  background: var(--bg-subtle); color: var(--text-secondary); font-size: 11.5px;
+  cursor: pointer; white-space: nowrap;
+}
+.ai-empty-btn:hover { border-color: var(--accent-emphasis); color: var(--accent-fg); background: var(--bg-inset); }
 
 .ai-msg-wrap { display: flex; flex-direction: column; position: relative; }
 .ai-msg-wrap.user { align-items: flex-end; }
