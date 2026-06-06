@@ -1363,6 +1363,7 @@ async def _run_with_timeout(
         if proc is not None and proc.returncode is None:
             try:
                 proc.kill()
+                await proc.wait()
             except Exception:
                 pass
 
