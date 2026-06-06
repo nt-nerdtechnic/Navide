@@ -2472,19 +2472,21 @@ function onSwitchWorkspace(): void {
 
 async function doCloseWorkspace(): Promise<void> {
   confirmCloseWorkspace.value = false
-  if (pipeline.state === 'running') await onPipelineAbort()
-  await onPipelineReset()
+  // Show Welcome screen immediately so the button feels responsive.
+  // The async cleanup (abort / kill panes) runs after the gate is lifted.
+  workspaceSelected.value = false
+  currentWorkspace.value = ''
   existingProject.value = null
   currentMode.value = 'spawn'
   pipeline.workspacePath = ''
-  workspaceSelected.value = false
-  currentWorkspace.value = ''
   try {
     sessionStorage.removeItem(WS_SELECTED_KEY)
     sessionStorage.removeItem(WS_PATH_KEY)
   } catch {
     /* ignore */
   }
+  if (pipeline.state === 'running') await onPipelineAbort()
+  await onPipelineReset()
 }
 
 // Triggered by the Browse button in ControlPane. Behaves like picking a workspace
