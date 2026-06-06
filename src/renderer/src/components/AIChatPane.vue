@@ -1159,7 +1159,9 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent',   label: '@git:recent — recently committed files (last 5)' },
   { id: '@git:modified', label: '@git:modified — list all uncommitted changed files' },
-  { id: '@git:stash',  label: '@git:stash — list all git stashes' },
+  { id: '@git:stash',        label: '@git:stash — list all git stashes' },
+  { id: '@git:tag',          label: '@git:tag — list recent git tags' },
+  { id: '@git:contributors', label: '@git:contributors — top contributors (git shortlog)' },
   { id: '@git:diff',   label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
@@ -3414,6 +3416,18 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @git:tag — list recent tags
+  if (/^git:tag$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:tag', label: '@git:tag — recent git tags' }]
+    return
+  }
+
+  // @git:contributors — top contributors
+  if (/^git:contributors?$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:contributors', label: '@git:contributors — top contributors (git shortlog)' }]
+    return
+  }
+
   // @git:modified — list uncommitted changed files
   if (/^git:modified$/i.test(fragment)) {
     atOptions.value = [{ id: '@git:modified', label: '@git:modified — all uncommitted changed files' }]
@@ -4065,6 +4079,32 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
       }
     } catch {
       chipContent = '// @git:stash: unavailable'
+    }
+  } else if (option.id === '@git:tag') {
+    chipLabel = '@git:tag'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git tag --sort=-version:refname -l 2>&1 | head -20',
+        workspace_path: props.workspacePath,
+      })
+      const out = (resp.payload?.output ?? '').trim()
+      chipContent = out ? `// git tags (most recent first):\n${out}` : '// @git:tag: no tags found'
+    } catch {
+      chipContent = '// @git:tag: unavailable'
+    }
+  } else if (option.id === '@git:contributors') {
+    chipLabel = '@git:contributors'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git shortlog -sn --no-merges 2>&1 | head -20',
+        workspace_path: props.workspacePath,
+      })
+      const out = (resp.payload?.output ?? '').trim()
+      chipContent = out ? `// top contributors (git shortlog):\n${out}` : '// @git:contributors: no commit history'
+    } catch {
+      chipContent = '// @git:contributors: unavailable'
     }
   } else if (option.id === '@git:modified') {
     chipLabel = '@git:modified'
@@ -5084,6 +5124,15 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     if (chatMode.value !== 'edit') chatMode.value = 'edit'
     addToWorkingSet(relPath)
     showToast(`Added ${relPath.split('/').pop()} to working set`)
+  }
+  // Ctrl+Shift+P — command palette: focus input and open slash menu (VS Code parity)
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+    e.preventDefault()
+    textareaEl.value?.focus()
+    if (!inputText.value.startsWith('/')) inputText.value = '/' + inputText.value
+    showSlashMenu.value = true
+    slashMenuFilter.value = inputText.value.slice(1)
+    slashOptions.value = SLASH_COMMANDS.filter((c) => c.id.includes(slashMenuFilter.value.toLowerCase()))
   }
   // Ctrl+Enter — regenerate last AI response (when not sending)
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !sending.value && !e.shiftKey) {
@@ -6505,6 +6554,8 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Escape</kbd></td><td>Stop generation · close menu · cancel Apply</td></tr>
           <tr><td>Drag file</td><td>Add file to context</td></tr>
           <tr><td>Drag/Paste image</td><td>Add screenshot as context</td></tr>
+          <tr><td><kbd>Ctrl+Shift+P</kbd></td><td>Open slash command palette</td></tr>
+          <tr><td><kbd>Ctrl+Shift+W</kbd></td><td>Add current file to Edit working set</td></tr>
           <tr><td><kbd>Ctrl+Shift+S</kbd></td><td>Save conversation checkpoint</td></tr>
           <tr><td><kbd>/checkpoint</kbd></td><td>Save named checkpoint</td></tr>
           <tr><td><kbd>/checkpoints</kbd></td><td>View &amp; restore checkpoints</td></tr>
