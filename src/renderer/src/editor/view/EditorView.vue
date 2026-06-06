@@ -532,7 +532,6 @@ function deleteLineRight(): void {
 }
 
 // ── Indent / dedent selected lines ───────────────────────────────────────────
-const showLineNumbers = ref(true)
 const tabSize = ref(2)
 const useSpaces = ref(true)
 const INDENT = computed(() => useSpaces.value ? ' '.repeat(tabSize.value) : '\t')
@@ -1857,16 +1856,25 @@ defineExpose({
   jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
   indentLine, dedentLine, cursorTop, cursorBottom,
   scrollLineUp, scrollLineDown,
-  transformToUppercase, transformToLowercase, transformToTitleCase, trimTrailingWhitespace, formatDocument, formatSelection,
+  transformToUppercase, transformToLowercase, transformToTitleCase,
+  transformToSnakeCase, transformToCamelCase, transformToKebabCase, transformToPascalCase,
+  transformToBase64, transformFromBase64, transformToUrlEncoded, transformFromUrlEncoded,
+  trimTrailingWhitespace, formatDocument, formatSelection,
   joinLines,
   sortLinesAscending, sortLinesDescending,
+  reverseLines, removeDuplicateLines, openLinkAtCursor,
   selectLine,
   transpose, indentationToSpaces, indentationToTabs,
   expandSelection, shrinkSelection,
-  setSelection, zoomIn, zoomOut, zoomReset,
+  setSelection, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
   undo: doUndo, redo: doRedo, selectAll,
+  insertText,
+  cursorWordLeft, cursorWordRight, cursorWordLeftSelect, cursorWordRightSelect,
+  cursorTopSelect, cursorBottomSelect,
+  cursorLineStart, cursorLineEnd, cursorLineStartSelect, cursorLineEndSelect,
+  selectCurrentWord,
+  setTabSize, setUseSpaces, getTabSize, getUseSpaces,
   foldAt, unfoldAt, toggleFoldAt, foldAll, unfoldAll, foldToLevel, foldRecursively, unfoldRecursively,
-  toggleLineNumbers,
   insertCursorAbove, insertCursorBelow, addCursorsToLineEnds,
   getCursorLine: () => cursor.value.line,
 })
