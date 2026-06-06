@@ -1450,8 +1450,6 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@workspace', label: '@workspace — full project overview (README + tree + deps + rules)' },
   { id: '@tree', label: '@tree — workspace file tree structure' },
   { id: '@symbol', label: '@symbol — find a function or class definition' },
-  { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
-  { id: '@terminal:error', label: '@terminal:error — last error/exception from terminal output' },
   { id: '@test:results', label: '@test:results — run test suite and attach output (vitest/pytest/jest)' },
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
@@ -1591,6 +1589,12 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/mode',             label: '/mode',             description: 'Switch chat mode: /mode ask | /mode edit | /mode agent',                               template: '' },
   { id: '/session:stats',    label: '/session:stats',    description: 'Show token usage and estimated cost for this conversation session',                     template: '' },
   { id: '/gen:sql',          label: '/gen:sql',          description: 'Generate SQL query from description (e.g. /gen:sql users who signed up last month)',    template: '' },
+  { id: '/typecheck',        label: '/typecheck',        description: 'Run TypeScript (vue-tsc) or Python (mypy) type check and ask AI to fix errors',           template: '' },
+  { id: '/arch',             label: '/arch',             description: 'Generate an architecture overview of the codebase (structure, key modules, dependencies)',  template: '' },
+  { id: '/diff:explain',     label: '/diff:explain',     description: 'Explain a commit or branch diff in plain English (e.g. /diff:explain abc1234)',            template: '' },
+  { id: '/complexity',       label: '/complexity',       description: 'Analyze cyclomatic complexity and flag overly complex functions in the current file',       template: '' },
+  { id: '/deps:audit',       label: '/deps:audit',       description: 'Run npm audit / pip-audit for known security vulnerabilities in dependencies',              template: '' },
+  { id: '/estimate',         label: '/estimate',         description: 'Estimate development effort for a task or feature description',                            template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2489,6 +2493,8 @@ async function sendMessage(): Promise<void> {
     '/accessibility', '/regex',
     '/pin:file', '/context:clear', '/gen:component',
     '/rules:show', '/mode', '/session:stats', '/gen:sql',
+    '/typecheck', '/arch', '/diff:explain',
+    '/complexity', '/deps:audit', '/estimate',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -3599,6 +3605,16 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 's') {
     e.preventDefault()
     if (messages.value.length > 0) saveCheckpoint()
+  }
+  // Ctrl+Shift+N / Cmd+Shift+N — new chat thread (VS Code Copilot parity: Ctrl+Alt+N)
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'n') {
+    e.preventDefault()
+    newThread()
+  }
+  // Ctrl+Shift+T / Cmd+Shift+T — toggle thread panel (VS Code: show chat history)
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 't') {
+    e.preventDefault()
+    showThreads.value = !showThreads.value
   }
   // Escape — close context menu or diff-apply modal
   if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
@@ -5529,6 +5545,110 @@ Respond with:
     return
   }
 
+  // /typecheck — run tsc/mypy and ask AI to fix errors
+  if (cmd.id === '/typecheck') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/typecheck requires an open workspace'); return }
+    try {
+      showToast('Running type check…')
+      interface ShellRespTc { ok: boolean; output?: string; error?: string }
+      // Detect if Python or TypeScript project
+      const relPath = props.getActiveRelPath?.()
+      const isPy = relPath?.endsWith('.py') ?? false
+      const cmd2 = isPy
+        ? 'python -m mypy . --ignore-missing-imports --no-error-summary 2>&1 | head -40'
+        : 'npx vue-tsc --noEmit 2>&1 | head -40 || npx tsc --noEmit 2>&1 | head -40'
+      const r = await props.backend.send<ShellRespTc>('shell.run', { command: cmd2, workspace_path: props.workspacePath })
+      const out = (r.payload?.output ?? '').trim()
+      if (!out || out.includes('Found 0 errors') || out.includes('0 errors')) {
+        showToast('/typecheck: no errors found ✓'); return
+      }
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@typecheck')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@typecheck', content: `// Type check errors:
+${out}` })
+      inputText.value = `The type checker found errors shown in @typecheck above. For each error:
+1. Quote the error message
+2. Identify the root cause
+3. Show the corrected code
+
+Fix all errors, starting with the most critical.`
+    } catch { showToast('/typecheck: failed to run type checker') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /arch — generate codebase architecture overview
+  if (cmd.id === '/arch') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/arch requires an open workspace'); return }
+    try {
+      showToast('Analyzing project structure…')
+      interface ShellRespArch { ok: boolean; output?: string }
+      const [treeResp, pkgResp] = await Promise.all([
+        props.backend.send<ShellRespArch>('shell.run', {
+          command: 'find . -type f ! -path "*/node_modules/*" ! -path "*/.venv/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/__pycache__/*" | head -80 | sort',
+          workspace_path: props.workspacePath,
+        }),
+        props.backend.send<ShellRespArch>('shell.run', {
+          command: 'cat package.json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps({k:d.get(k,{}) for k in ['name','description','dependencies','devDependencies','scripts']}, indent=2))" 2>/dev/null | head -60 || echo "(no package.json)"',
+          workspace_path: props.workspacePath,
+        }),
+      ])
+      const tree = (treeResp.payload?.output ?? '').trim()
+      const pkg = (pkgResp.payload?.output ?? '').trim()
+      const chip = `// Project file tree:
+${tree}
+
+// package.json summary:
+${pkg}`
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@arch')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@arch', content: chip.slice(0, 8000) })
+      inputText.value = `Based on the project structure in @arch, generate a concise architecture overview:
+
+1. **Project type** (framework, language, runtime)
+2. **Key directories** and what they contain
+3. **Main data flow** (how a request/event moves through the system)
+4. **Core dependencies** and why they are used
+5. A **Mermaid diagram** of the high-level architecture
+
+Be concise and developer-focused.`
+    } catch { showToast('/arch: failed to analyze project') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /diff:explain — explain a commit or branch diff in plain English
+  if (cmd.id === '/diff:explain') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/diff:explain requires an open workspace'); return }
+    const ref2 = (extra ?? '').trim()
+    const SAFE_REF = /^[A-Za-z0-9_./@^~-]+$/
+    if (ref2 && (!SAFE_REF.test(ref2) || ref2.includes('..'))) { showToast('/diff:explain: invalid ref/hash'); return }
+    try {
+      showToast('Fetching diff…')
+      interface ShellRespDe { ok: boolean; output?: string }
+      const sqRef = ref2 ? "'" + ref2.replace(/'/g, "'\''") + "'" : 'HEAD'
+      const diffCmd = ref2
+        ? `git show ${sqRef} --stat --unified=3 2>&1 | head -120`
+        : `git diff HEAD~1..HEAD --stat --unified=3 2>&1 | head -120`
+      const r = await props.backend.send<ShellRespDe>('shell.run', { command: diffCmd, workspace_path: props.workspacePath })
+      const out = (r.payload?.output ?? '').trim()
+      if (!out) { showToast('/diff:explain: no diff found'); return }
+      const label = ref2 ? `@diff:${ref2.slice(0, 10)}` : '@diff:HEAD'
+      contextChips.value = contextChips.value.filter((c) => c.label === label)
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// git diff${ref2 ? ` ${ref2}` : ' HEAD~1..HEAD'}:
+${out}` })
+      inputText.value = `Explain the changes shown in ${label} in plain English. For each changed file:
+1. What was changed and why (infer intent from the code)
+2. Risk assessment (could this break anything?)
+3. Suggestions for improvement (if any)
+
+End with a one-sentence summary suitable for a CHANGELOG entry.`
+    } catch { showToast('/diff:explain: failed to fetch diff') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
   // /todo — find TODO/FIXME comments and ask AI to resolve them
   if (cmd.id === '/todo') {
     inputText.value = ''
@@ -6772,44 +6892,6 @@ ${out}`
       } catch {
         chipContent = '// @tree: unavailable'
       }
-    }
-  } else if (option.id === '@terminal') {
-    chipLabel = '@terminal'
-    try {
-      interface ShellResp { ok: boolean; output?: string; error?: string }
-      showToast('Capturing terminal output…')
-      // Try tmux capture-pane for the most recent pane in the current session
-      const resp = await props.backend.send<ShellResp>('shell.run', {
-        command: 'tmux capture-pane -p -S -100 2>/dev/null || echo "(tmux not available)"',
-        workspace_path: props.workspacePath,
-      })
-      const raw = (resp.payload?.output ?? '').trim()
-      chipContent = raw && raw !== '(tmux not available)'
-        ? `// Terminal output (last ~100 lines):\n\`\`\`\n${raw.slice(-4000)}\n\`\`\``
-        : '// @terminal: no terminal output available (tmux required)'
-    } catch {
-      chipContent = '// @terminal: unavailable'
-    }
-  } else if (option.id === '@terminal:error') {
-    chipLabel = '@terminal:error'
-    try {
-      interface ShellResp2 { ok: boolean; output?: string }
-      showToast('Extracting last error from terminal…')
-      // Capture terminal scrollback and grep for error patterns
-      const resp = await props.backend.send<ShellResp2>('shell.run', {
-        command: 'tmux capture-pane -p -S -500 2>/dev/null | grep -E "(Error|error|Traceback|FAILED|Failed|Exception|exception|SyntaxError|TypeError|ValueError|RuntimeError|\\bERR\\b)" | tail -30 || echo "(no errors found)"',
-        workspace_path: props.workspacePath,
-      })
-      if (!resp.payload?.ok) {
-        chipContent = `// @terminal:error: ${resp.payload?.error ?? 'backend error'}`
-      } else {
-        const raw = (resp.payload?.output ?? '').trim()
-        chipContent = raw && raw !== '(no errors found)'
-          ? `// Last terminal errors:\n\`\`\`\n${raw.slice(-3000)}\n\`\`\``
-          : '// @terminal:error: no error patterns found in recent output'
-      }
-    } catch {
-      chipContent = '// @terminal:error: unavailable'
     }
   } else if (option.id === '@test:results') {
     chipLabel = '@test:results'
@@ -9237,7 +9319,7 @@ function getDateLabel(ts: number): string {
               <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(item.thread.id)">✕</button>
             </div>
             <div v-if="item.thread.messages.length && renamingThreadId !== item.thread.id" class="ai-thread-preview">
-              {{ item.thread.messages[item.thread.messages.length - 1]?.content.replace(/[#`*_~>]/g, '').trim().slice(0, 60) }}
+              {{ (item.thread.messages.find(m => m.role === 'user') ?? item.thread.messages[0])?.content.replace(/[#`*_~>]/g, '').replace(/\/\w+\s*/g, '').trim().slice(0, 70) || '…' }}
             </div>
           </div>
         </template>
@@ -9729,6 +9811,8 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Alt+↑ / Alt+↓</kbd></td><td>Navigate between AI messages</td></tr>
           <tr><td><kbd>Ctrl+L</kbd></td><td>Focus AI chat input</td></tr>
           <tr><td><kbd>Ctrl+N</kbd></td><td>New chat</td></tr>
+          <tr><td><kbd>Ctrl+Shift+N</kbd></td><td>New chat thread (from anywhere)</td></tr>
+          <tr><td><kbd>Ctrl+Shift+T</kbd></td><td>Toggle chat thread history</td></tr>
           <tr><td><kbd>Ctrl+Shift+K</kbd></td><td>Clear current conversation</td></tr>
           <tr><td><kbd>Ctrl+Shift+A</kbd></td><td>Add current file to context</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
@@ -10764,6 +10848,11 @@ function getDateLabel(ts: number): string {
 .ai-chips-total { font-size: 9px; opacity: 0.5; letter-spacing: 0.02em; color: var(--text-muted); }
 .ai-chips-clear { border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); border-radius: 4px; font-size: 10px; padding: 1px 5px; cursor: pointer; line-height: 1.4; }
 .ai-chips-clear:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
+.ai-chips-warn {
+  font-size: 9px; padding: 1px 5px; border-radius: 3px; letter-spacing: 0.03em; cursor: default;
+  color: #d29922; background: rgba(187,128,9,0.15); border: 1px solid rgba(187,128,9,0.3);
+}
+.ai-chips-warn-critical { color: #f85149; background: rgba(248,81,73,0.15); border-color: rgba(248,81,73,0.3); }
 .ai-chip { cursor: pointer; }
 .ai-chip:hover { filter: brightness(1.15); }
 .ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }

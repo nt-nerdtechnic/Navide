@@ -56,7 +56,6 @@ export interface SpawnOptions {
   agentKey?: string
   metadata?: Record<string, unknown>
   outputLogFile?: string  // if set, backend writes ANSI-stripped output to this path
-  skipTmux?: boolean      // bypass tmux wrapping (e.g. when command is already tmux attach-session)
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -76,7 +75,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const containerRef = shallowRef<HTMLElement | null>(null)
   const status = ref<TerminalStatus>('idle')
   const sessionId = ref<string>('')
-  const tmuxName = ref<string>('')
   const error = ref<string>('')
   const lastCommand = ref<string>('')
 
@@ -133,7 +131,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let resizeRafId = 0
   let mounted = false
 
-  // Debounce the size we push to the backend PTY/tmux. Layout transitions and
+  // Debounce the size we push to the backend PTY. Layout transitions and
   // app startup churn the pane size repeatedly (e.g. grid→spotlight); pushing
   // every intermediate size resizes the live CLI's TUI over and over, and any
   // output it printed at a transient narrow width can't reflow when it grows
@@ -305,7 +303,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  async function spawn(opts: SpawnOptions): Promise<{ tmuxName: string }> {
+  async function spawn(opts: SpawnOptions): Promise<void> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
     }
@@ -316,7 +314,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const resp = await backend.send<{
         terminal_session_id: string
         pid: number
-        tmux_name?: string
       }>('terminal.create', {
         pane_id: paneId,
         agent_key: opts.agentKey ?? null,
@@ -329,16 +326,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         rows: 24,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
-        skip_tmux: opts.skipTmux ?? false,
       })
       if (!resp.ok || !resp.payload) {
         status.value = 'error'
         error.value = resp.error?.message ?? 'spawn failed'
         term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
-        return { tmuxName: '' }
+        return
       }
       sessionId.value = resp.payload.terminal_session_id
-      tmuxName.value = resp.payload.tmux_name ?? ''
       status.value = 'running'
 
       // Push the real size now that sessionId exists. The ResizeObserver's
@@ -376,7 +371,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       error.value = String((err as Error).message ?? err)
       term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
     }
-    return { tmuxName: tmuxName.value }
   }
 
   function pasteText(text: string): void {
@@ -438,7 +432,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pasteText,
     status,
     sessionId,
-    tmuxName,
     error,
     lastCommand,
     cleanBuffer,

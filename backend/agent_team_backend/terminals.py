@@ -19,29 +19,6 @@ from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
 
-def _tmux_available() -> bool:
-    """Return True if tmux ≥ 3.0 is installed and usable."""
-    if shutil.which("tmux") is None:
-        return False
-    try:
-        result = subprocess.run(
-            ["tmux", "-V"], capture_output=True, text=True, timeout=5
-        )
-        out = (result.stdout or "") + (result.stderr or "")
-        m = re.search(r"tmux (\d+)\.(\d+)", out)
-        if m:
-            major, minor = int(m.group(1)), int(m.group(2))
-            return (major, minor) >= (3, 0)
-    except (subprocess.SubprocessError, OSError):
-        pass
-    return False
-
-
-def _make_tmux_name(pane_id: str) -> str:
-    """Generate a short, unique tmux session name (≤ 50 chars)."""
-    suffix = pane_id.replace("-", "")[:12]
-    return f"at-{suffix}"
-
 # Strip ALL ANSI/VT escape sequences for clean log output:
 #   CSI:  \x1b[ ... final-byte
 #   OSC:  \x1b] ... \x07  (window title, colour palettes, etc.)
@@ -123,8 +100,6 @@ class TerminalSession:
     # Per-session vendor-parser state — used by vendor_parsers.parse_chunk to
     # compute deltas against the last seen cumulative token totals.
     vendor_parser_state: dict[str, Any] = field(default_factory=dict)
-    # tmux session name when spawned via tmux; "" means plain PTY mode.
-    tmux_name: str = ""
 
 
 # Batch PTY output chunks for up to this many milliseconds before sending a
@@ -153,7 +128,6 @@ class TerminalService:
         # Per-session pending INPUT bytes not yet accepted by the non-blocking
         # PTY master (EAGAIN / partial write). Drained via add_writer.
         self._in_buffers: dict[str, bytearray] = {}    # session_id -> pending bytes
-        self._use_tmux: bool = False  # plain PTY mode — tmux removed for xterm scrollback
 
     def create(
         self,
@@ -167,7 +141,6 @@ class TerminalService:
         env: dict[str, str] | None = None,
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
-        skip_tmux: bool = False,
     ) -> TerminalSession:
         if len(self._sessions) >= self._MAX_SESSIONS:
             raise RuntimeError(f"Too many terminal sessions (max {self._MAX_SESSIONS})")
@@ -190,61 +163,16 @@ class TerminalService:
             final_env.update(env)
 
         try:
-            tmux_name = ""
-            if self._use_tmux and not skip_tmux:
-                tmux_name = _make_tmux_name(pane_id)
-                _session_created = False
-                try:
-                    subprocess.run(
-                        ["tmux", "new-session", "-d", "-s", tmux_name,
-                         "-x", str(cols), "-y", str(rows)] + argv,
-                        cwd=cwd,
-                        env=final_env,
-                        check=True,
-                        capture_output=True,
-                        timeout=10,
-                    )
-                    _session_created = True
-                    proc = subprocess.Popen(
-                        ["tmux", "attach-session", "-t", tmux_name, "-d"],
-                        stdin=slave,
-                        stdout=slave,
-                        stderr=slave,
-                        cwd=cwd,
-                        env=final_env,
-                        close_fds=True,
-                        start_new_session=True,
-                    )
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
-                    log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
-                    if _session_created:
-                        # new-session succeeded but attach failed — clean up to avoid orphan session
-                        subprocess.run(
-                            ["tmux", "kill-session", "-t", tmux_name],
-                            capture_output=True, check=False, timeout=5,
-                        )
-                    tmux_name = ""
-                    proc = subprocess.Popen(
-                        argv,
-                        stdin=slave,
-                        stdout=slave,
-                        stderr=slave,
-                        cwd=cwd,
-                        env=final_env,
-                        close_fds=True,
-                        start_new_session=True,
-                    )
-            else:
-                proc = subprocess.Popen(
-                    argv,
-                    stdin=slave,
-                    stdout=slave,
-                    stderr=slave,
-                    cwd=cwd,
-                    env=final_env,
-                    close_fds=True,
-                    start_new_session=True,
-                )
+            proc = subprocess.Popen(
+                argv,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=cwd,
+                env=final_env,
+                close_fds=True,
+                start_new_session=True,
+            )
         except Exception:
             os.close(master)
             os.close(slave)
@@ -270,7 +198,6 @@ class TerminalService:
             proc=proc,
             metadata=metadata or {},
             output_log_fp=log_fp,
-            tmux_name=tmux_name,
         )
         self._sessions[session.id] = session
         self._loop.add_reader(master, self._on_readable, session)
@@ -362,15 +289,6 @@ class TerminalService:
         if session.closed:
             return
         self._set_winsize(session.master_fd, rows, cols)
-        if session.tmux_name:
-            try:
-                subprocess.run(
-                    ["tmux", "resize-window", "-t", session.tmux_name,
-                     "-x", str(cols), "-y", str(rows)],
-                    capture_output=True, timeout=5,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
 
     def interrupt(self, session_id: str) -> None:
         session = self._require(session_id)
@@ -381,28 +299,19 @@ class TerminalService:
         except OSError as err:
             log.warning("interrupt session %s failed: %s", session_id, err)
 
-    def kill(self, session_id: str, *, keep_tmux: bool = False) -> None:
+    def kill(self, session_id: str) -> None:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
-        tmux_name = session.tmux_name
         self._close(session, reason="killed")
         try:
             os.killpg(os.getpgid(session.proc.pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-        if tmux_name and not keep_tmux:
-            try:
-                subprocess.run(
-                    ["tmux", "kill-session", "-t", tmux_name],
-                    capture_output=True, timeout=5,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
 
     def shutdown(self) -> None:
         for session in list(self._sessions.values()):
-            self.kill(session.id, keep_tmux=True)
+            self.kill(session.id)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)

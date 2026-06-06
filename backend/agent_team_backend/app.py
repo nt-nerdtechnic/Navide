@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import subprocess
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +63,6 @@ from .git_watcher import GitWatcher
 log = logging.getLogger("agent_team_backend")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat()
-_TMUX_NAME_RE = re.compile(r"^at-[A-Za-z0-9]{1,32}$")
 
 app = FastAPI(title="agent-team-backend", version=__version__)
 
@@ -302,53 +300,6 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         _log_watcher.force_rescan()
 
 
-def _reap_orphan_tmux_sessions() -> None:
-    """Kill orphan at-* tmux sessions that don't belong to any known workspace.
-
-    Compares running at-* sessions from `tmux ls` against all known workspace
-    project.json records; any session not found in any project.json is killed.
-    """
-    try:
-        result = subprocess.run(
-            ["tmux", "ls", "-F", "#{session_name}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            return
-    except (OSError, subprocess.TimeoutExpired):
-        return
-
-    live = {s for s in result.stdout.splitlines() if _TMUX_NAME_RE.fullmatch(s)}
-    if not live:
-        return
-
-    known: set[str] = set()
-    for entry in recent_workspaces_store.list():
-        ws_path = entry.get("path", "")
-        if not ws_path:
-            continue
-        project = project_store.peek(ws_path)
-        if not project:
-            continue
-        for pane in project.manual_panes:
-            if pane.tmux_name:
-                known.add(pane.tmux_name)
-        for stage in project.stages:
-            for slot in stage.slots:
-                if slot.tmux_name:
-                    known.add(slot.tmux_name)
-
-    for orphan in live - known:
-        log.info("reaping orphan tmux session: %s", orphan)
-        try:
-            subprocess.run(
-                ["tmux", "kill-session", "-t", orphan],
-                capture_output=True, check=False, timeout=5,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
-
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
     global _log_watcher
@@ -382,12 +333,6 @@ async def _start_log_watcher() -> None:
     except Exception as err:  # noqa: BLE001
         log.warning("claude hooks install failed: %s", err)
 
-    # Reap orphan tmux sessions left by a previous App crash
-    try:
-        _reap_orphan_tmux_sessions()
-    except Exception as err:  # noqa: BLE001
-        log.warning("orphan tmux reap failed: %s", err)
-
 
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
@@ -399,42 +344,6 @@ async def _stop_log_watcher() -> None:
     await mcp_manager.shutdown()
     _log_watcher = None
     _git_watcher = None
-
-
-@app.get("/api/tmux/check")
-async def tmux_check(request: Request) -> dict[str, Any]:
-    """Check which tmux sessions are still alive.
-
-    Query param: names=session1,session2,...
-    Returns: { "results": { "session1": true, "session2": false, ... } }
-    """
-    names_raw = request.query_params.get("names", "")
-    names = [n.strip() for n in names_raw.split(",") if n.strip()]
-    if not names:
-        return {"results": {}}
-
-    # Reject invalid names immediately without a subprocess call.
-    invalid = {n: False for n in names if not _TMUX_NAME_RE.fullmatch(n)}
-    to_check = [n for n in names if _TMUX_NAME_RE.fullmatch(n)]
-
-    live: set[str] = set()
-    if to_check:
-        try:
-            # One tmux ls call instead of N has-session calls — avoids blocking
-            # the asyncio event loop N times.
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["tmux", "ls", "-F", "#{session_name}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            live = set(result.stdout.splitlines())
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-
-    results = {**invalid, **{n: n in live for n in to_check}}
-    return {"results": results}
 
 
 @app.get("/health")
@@ -641,7 +550,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 env=payload.get("env"),
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
-                skip_tmux=bool(payload.get("skip_tmux", False)),
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
@@ -671,7 +579,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         "pane_id": term.pane_id,
                         "pid": term.proc.pid,
                         "command": term.command,
-                        "tmux_name": term.tmux_name,
                     },
                 )
             )
@@ -703,23 +610,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             # release the attribution registration.
             term_session_id = payload["terminal_session_id"]
             pane_id_for_unreg = ""
-            killed_tmux_name = ""
-            killed_ws_path = ""
             for sess in session.terminals._sessions.values():  # noqa: SLF001
                 if sess.id == term_session_id:
                     pane_id_for_unreg = sess.pane_id
-                    killed_tmux_name = sess.tmux_name
-                    killed_ws_path = str(sess.metadata.get("workspace_path") or "")
                     break
             session.terminals.kill(term_session_id)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
-            # User-initiated kill — clear stale tmux_name from project.json
-            if killed_tmux_name and killed_ws_path:
-                try:
-                    project_store.clear_tmux_name_by_value(killed_ws_path, killed_tmux_name)
-                except Exception as err:  # noqa: BLE001
-                    log.warning("clear tmux_name after kill failed: %s", err)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         # -------- project / pipeline --------
@@ -867,25 +764,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload["workspace_path"],
                 pane_id=payload["pane_id"],
                 session_id=payload.get("session_id", ""),
-            )
-            await session.websocket.send_json(
-                make_response(msg_id, msg_type, _project_payload(project))
-            )
-        elif msg_type == "pipeline.slot_tmux":
-            project = project_store.record_slot_tmux_name(
-                payload["workspace_path"],
-                stage_index=int(payload["stage_index"]),
-                slot_label=payload["slot_label"],
-                tmux_name=payload.get("tmux_name", ""),
-            )
-            await session.websocket.send_json(
-                make_response(msg_id, msg_type, _project_payload(project))
-            )
-        elif msg_type == "manual_pane.tmux":
-            project = project_store.record_manual_pane_tmux_name(
-                payload["workspace_path"],
-                pane_id=payload["pane_id"],
-                tmux_name=payload.get("tmux_name", ""),
             )
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))

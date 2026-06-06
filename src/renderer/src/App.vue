@@ -351,7 +351,7 @@ interface SpawnHistoryEntry {
   workspacePath: string
   spawnedAt: string
   removedAt?: string
-  restoreMode?: 'tmux-reattach' | 'memory-resume' | 'fresh'
+  restoreMode?: 'memory-resume' | 'fresh'
 }
 
 const panes = ref<ActivePane[]>([])
@@ -929,12 +929,10 @@ interface SpawnInternal {
    *  prior session. Suppresses the fresh Claude --session-id and the
    *  Codex/Gemini detection marker — the session id is already known. */
   isResume?: boolean
-  /** Pipeline stage index — needed to persist tmux_name via pipeline.slot_tmux. */
+  /** Pipeline stage index. */
   stageIndex?: number
   /** Restore mode label for the agent history badge. */
-  restoreMode?: 'tmux-reattach' | 'memory-resume' | 'fresh'
-  /** Skip backend tmux wrapping — set when commandOverride is already a tmux attach-session. */
-  skipTmux?: boolean
+  restoreMode?: 'memory-resume' | 'fresh'
 }
 
 /** Trailing line embedded in a Codex/Gemini kickoff so the backend can match
@@ -1061,7 +1059,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       : undefined
     pane.outputLogFile = outputLogFile
 
-    const { tmuxName } = await ref.spawn({
+    const { status: spawnStatus } = await ref.spawn({
       command: ['bash', '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
@@ -1076,26 +1074,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         slot_label: opts.slotLabel ?? ''         // stable by_pane key survives frontend restarts
       },
       outputLogFile,
-      skipTmux: opts.skipTmux,
     })
-
-    // Persist tmux_name immediately so it survives an App restart.
-    if (tmuxName && opts.workspacePath) {
-      if (opts.origin === 'pipeline' && opts.stageIndex !== undefined && opts.slotLabel) {
-        void sendQuiet('pipeline.slot_tmux', {
-          workspace_path: opts.workspacePath,
-          stage_index: opts.stageIndex,
-          slot_label: opts.slotLabel,
-          tmux_name: tmuxName,
-        })
-      } else if (opts.origin === 'manual') {
-        void sendQuiet('manual_pane.tmux', {
-          workspace_path: opts.workspacePath,
-          pane_id: id,
-          tmux_name: tmuxName,
-        })
-      }
-    }
 
     if ((ref.status as unknown as string) === 'running') {
       if (pane.origin === 'manual' && !pane.roleKey && !pane.kickoffPrompt) {
@@ -1420,7 +1399,6 @@ interface ProjectSlot {
   spawn_status: string   // 'pending' | 'spawned' | 'removed'
   kickoff_status: string // 'none' | 'sent' | 'failed'
   session_id?: string    // CLI session id for resume-on-restart ('' if unknown)
-  tmux_name?: string
 }
 
 interface ProjectStage {
@@ -1437,7 +1415,6 @@ interface ProjectManualPane {
   command: string
   spawn_status: string
   session_id?: string
-  tmux_name?: string
 }
 
 interface ProjectPayload {
@@ -1599,22 +1576,6 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   }
 }
 
-async function checkTmuxAlive(names: string[]): Promise<Record<string, boolean>> {
-  if (!names.length) return {}
-  const base = backend.httpUrl.value
-  if (!base) return Object.fromEntries(names.map((n) => [n, false]))
-  try {
-    const resp = await fetch(
-      `${base}/api/tmux/check?names=${encodeURIComponent(names.join(','))}`
-    )
-    if (!resp.ok) return Object.fromEntries(names.map((n) => [n, false]))
-    const data = await resp.json() as { results: Record<string, boolean> }
-    return data.results ?? {}
-  } catch {
-    return Object.fromEntries(names.map((n) => [n, false]))
-  }
-}
-
 /** Re-spawn CLI panes for all slots recorded in project.json.
  *  Called on workspace load so terminal screens appear immediately without
  *  waiting for the user to click Resume.
@@ -1638,48 +1599,25 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   )
   if (spawned.length === 0 && manualPanes.length === 0) return
 
-  // Batch-check which tmux sessions are still alive.
-  const allTmuxNames = [
-    ...spawned.map((s) => s.slot.tmux_name ?? '').filter(Boolean),
-    ...manualPanes.map((p) => p.tmux_name ?? '').filter(Boolean),
-  ]
-  const tmuxAlive = await checkTmuxAlive(allTmuxNames)
-
-  const tmuxCount = Object.values(tmuxAlive).filter(Boolean).length
-  const memoryCount =
-    spawned.filter((s) => !tmuxAlive[s.slot.tmux_name ?? ''] && (s.slot.session_id ?? '').trim()).length +
-    manualPanes.filter((p) => !tmuxAlive[p.tmux_name ?? ''] && (p.session_id ?? '').trim()).length
   pipelineLog(
-    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s)` +
-    ` — ${tmuxCount} tmux reattach, ${memoryCount} with memory`
+    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s)`
   )
   pipeline.workspacePath = workspacePath
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
     const sessionId = (slot.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const rawSlotTmuxName = slot.tmux_name ?? ''
-    // Validate tmux session name to prevent command injection — only safe chars allowed.
-    const slotTmuxName = /^[a-zA-Z0-9_:.-]{1,64}$/.test(rawSlotTmuxName) ? rawSlotTmuxName : ''
-    const isTmuxAlive = slotTmuxName ? (tmuxAlive[slotTmuxName] ?? false) : false
 
     let commandOverride: string
     let isResume: boolean
     let skipRoleInjection: boolean
-    let restoreMode: 'tmux-reattach' | 'memory-resume' | 'fresh'
+    let restoreMode: 'memory-resume' | 'fresh'
 
-    if (isTmuxAlive) {
-      commandOverride = `tmux attach-session -t ${slotTmuxName} -d`
-      isResume = true
-      skipRoleInjection = true
-      restoreMode = 'tmux-reattach'
-    } else {
-      const resumeCmd = buildResumeCommand(slot.agent, sessionId, skipFlag)
-      commandOverride = resumeCmd
-      isResume = !!resumeCmd
-      skipRoleInjection = isResume
-      restoreMode = isResume ? 'memory-resume' : 'fresh'
-    }
+    const resumeCmd = buildResumeCommand(slot.agent, sessionId, skipFlag)
+    commandOverride = resumeCmd
+    isResume = !!resumeCmd
+    skipRoleInjection = isResume
+    restoreMode = isResume ? 'memory-resume' : 'fresh'
 
     const paneId = await spawnPane({
       agentKey: slot.agent as AgentKey,
@@ -1693,7 +1631,6 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       skipRoleInjection,
       stageIndex,
       restoreMode,
-      skipTmux: isTmuxAlive,
     })
     if (paneId) {
       await sendQuiet('pipeline.slot_spawn', {
@@ -1711,34 +1648,23 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const sessionId = (saved.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const rawSavedTmuxName = saved.tmux_name ?? ''
-    // Validate tmux session name to prevent command injection — only safe chars allowed.
-    const savedTmuxName = /^[a-zA-Z0-9_:.-]{1,64}$/.test(rawSavedTmuxName) ? rawSavedTmuxName : ''
-    const isTmuxAlive = savedTmuxName ? (tmuxAlive[savedTmuxName] ?? false) : false
 
     // Preserve the original fallback command and session_id regardless of restore
-    // mode — if tmux later dies, the next restart needs them to fall back to
+    // mode — if we restart, the next restart needs them to fall back to
     // memory-resume or command-resume.
     const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
 
     let commandOverride: string
     let isResume: boolean
     let skipRoleInjection: boolean
-    let restoreMode: 'tmux-reattach' | 'memory-resume' | 'fresh'
+    let restoreMode: 'memory-resume' | 'fresh'
 
-    if (isTmuxAlive) {
-      commandOverride = `tmux attach-session -t ${savedTmuxName} -d`
-      isResume = true
-      skipRoleInjection = true
-      restoreMode = 'tmux-reattach'
-    } else {
-      const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
-      const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
-      commandOverride = resumeCmd || fallbackCommand || ''
-      isResume = !!resumeCmd
-      skipRoleInjection = isResume
-      restoreMode = isResume ? 'memory-resume' : 'fresh'
-    }
+    const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
+    const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+    commandOverride = resumeCmd || fallbackCommand || ''
+    isResume = !!resumeCmd
+    skipRoleInjection = isResume
+    restoreMode = isResume ? 'memory-resume' : 'fresh'
 
     const paneId = await spawnPane({
       agentKey: saved.agent as AgentKey,
@@ -1750,10 +1676,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       isResume,
       skipRoleInjection,
       restoreMode,
-      skipTmux: isTmuxAlive,
     })
     if (paneId) {
-      const canResume = !isTmuxAlive && isResume
+      const canResume = isResume
       await sendQuiet<ProjectPayload>('manual_pane.spawn', {
         workspace_path: workspacePath,
         pane_id: paneId,
@@ -1761,9 +1686,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         agent: saved.agent,
         role: saved.role,
         command: fallbackCommand,
-        session_id: isTmuxAlive ? sessionId : (canResume ? sessionId : ''),
+        session_id: canResume ? sessionId : '',
       })
-      if (sessionId && !isTmuxAlive && !isResume) {
+      if (sessionId && !isResume) {
         await sendQuiet('manual_pane.session', {
           workspace_path: workspacePath,
           pane_id: paneId,
@@ -4699,12 +4624,7 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span class="ah-badge ah-role">{{ entry.roleLabel }}</span>
                 <span class="ah-origin">{{ entry.origin }}</span>
                 <span
-                  v-if="entry.restoreMode === 'tmux-reattach'"
-                  class="ah-restore-badge ah-tmux"
-                  title="tmux session 仍存活，直接重連"
-                >重連中</span>
-                <span
-                  v-else-if="entry.restoreMode === 'memory-resume'"
+                  v-if="entry.restoreMode === 'memory-resume'"
                   class="ah-restore-badge ah-resume"
                   title="以 CLI resume 指令載入記憶"
                 >記憶恢復</span>
@@ -5669,12 +5589,7 @@ function paneIsCommander(p: ActivePane): boolean {
   border-radius: 10px;
   letter-spacing: 0.2px;
 }
-.ah-restore-badge.ah-tmux {
-  background: var(--success-subtle);
-  color: var(--success-fg);
-  border: 1px solid var(--success-muted);
-}
-.ah-restore-badge.ah-resume {
+.ah-restore-badge.ah-memory {
   background: var(--accent-subtle);
   color: var(--accent-fg);
   border: 1px solid var(--accent-muted);
