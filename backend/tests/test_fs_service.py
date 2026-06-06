@@ -107,12 +107,11 @@ def test_delete_file(tmp_path: Path) -> None:
     assert not (Path(ws) / "README.md").exists()
 
 
-def test_delete_nonempty_dir_rejected(tmp_path: Path) -> None:
+def test_delete_nonempty_dir_ok(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     res = fs_service.delete(ws, "src")  # contains main.ts
-    assert res["ok"] is False
-    assert "not empty" in res["error"].lower()
-    assert (Path(ws) / "src").is_dir()  # untouched
+    assert res["ok"] is True
+    assert not (Path(ws) / "src").exists()
 
 
 def test_delete_empty_dir_ok(tmp_path: Path) -> None:
