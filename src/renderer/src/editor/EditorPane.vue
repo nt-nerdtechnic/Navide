@@ -273,6 +273,13 @@ function openFind(): void {
   void nextTick(() => { findInputEl.value?.focus(); findInputEl.value?.select() })
   if (findQuery.value) computeMatches()
 }
+function useSelectionForFind(): void {
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  if (sel) findQuery.value = sel
+  findOpen.value = true
+  void nextTick(() => { findInputEl.value?.focus(); findInputEl.value?.select() })
+  if (findQuery.value) computeMatches()
+}
 function closeFind(): void {
   findOpen.value = false
   replaceOpen.value = false
@@ -777,7 +784,7 @@ function selectAll(): void { editorRef.value?.selectAll() }
 function focusEditor(): void { editorRef.value?.focus() }
 
 defineExpose({
-  save, openCmdK, requestGhost, openFind, nextMatch, prevMatch, openGoto,
+  save, openCmdK, requestGhost, openFind, useSelectionForFind, nextMatch, prevMatch, openGoto,
   focus: focusEditor,
   toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,

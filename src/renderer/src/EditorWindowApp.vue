@@ -319,8 +319,9 @@ useKeybindings()
 registerCommand('editor.action.save',          () => activeEditor()?.save())
 registerCommand('editor.action.inlineRewrite', () => activeEditor()?.openCmdK())
 registerCommand('editor.action.triggerGhost',  () => activeEditor()?.requestGhost())
-registerCommand('editor.action.openFind',      () => activeEditor()?.openFind())
-registerCommand('editor.action.openReplace',   () => activeEditor()?.openReplace())
+registerCommand('editor.action.openFind',             () => activeEditor()?.openFind())
+registerCommand('editor.action.useSelectionForFind', () => activeEditor()?.useSelectionForFind())
+registerCommand('editor.action.openReplace',          () => activeEditor()?.openReplace())
 registerCommand('editor.action.nextMatch',     () => activeEditor()?.nextMatch())
 registerCommand('editor.action.prevMatch',     () => activeEditor()?.prevMatch())
 registerCommand('editor.action.gotoLine',      () => activeEditor()?.openGoto())
@@ -645,7 +646,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.undo',      label: 'Undo',       keys: '⌘Z' },
   { id: 'editor.action.redo',      label: 'Redo',       keys: '⌘⇧Z' },
   { id: 'editor.action.selectAll', label: 'Select All',       keys: '⌘A' },
-  { id: 'editor.action.openFind',  label: 'Find',       keys: '⌘F' },
+  { id: 'editor.action.openFind',              label: 'Find',                      keys: '⌘F' },
+  { id: 'editor.action.useSelectionForFind', label: 'Find with Selection',        keys: '⌘E' },
   { id: 'editor.action.gotoLine',  label: 'Go to Line',     keys: '⌘L' },
   { id: 'editor.action.toggleComment',   label: 'Toggle Line Comment',     keys: '⌘/' },
   { id: 'editor.action.deleteLines',     label: 'Delete Line',         keys: '⌘⇧K' },
