@@ -4347,7 +4347,10 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix, /generate…)</td></tr>
           <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
           <tr><td>Drag file</td><td>Add file to context</td></tr>
-          <tr><td>Paste image</td><td>Add screenshot as context</td></tr>
+          <tr><td>Drag/Paste image</td><td>Add screenshot as context</td></tr>
+          <tr><td><kbd>Ctrl+Shift+S</kbd></td><td>Save conversation checkpoint</td></tr>
+          <tr><td><kbd>/checkpoint</kbd></td><td>Save named checkpoint</td></tr>
+          <tr><td><kbd>/checkpoints</kbd></td><td>View &amp; restore checkpoints</td></tr>
         </tbody>
       </table>
     </div>
