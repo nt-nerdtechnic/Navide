@@ -312,6 +312,16 @@ function deleteBackward(): void {
   const c = cursor.value
   if (c.col > 0) {
     const lineText = model.getLine(c.line)
+    // SmartBackspace: in leading spaces-only region, delete back to previous tab stop.
+    if (useSpaces.value && c.col <= lineText.length) {
+      const before = lineText.slice(0, c.col)
+      if (/^ +$/.test(before)) {
+        const ts = tabSize.value
+        const prevStop = c.col - ((c.col % ts) || ts)
+        applyEdit({ start: { line: c.line, col: prevStop }, end: c }, '')
+        return
+      }
+    }
     // Delete both brackets when cursor is between an auto-inserted pair.
     // Guard c.col < lineText.length prevents undefined===undefined false-positive at EOL.
     if (c.col < lineText.length && AUTO_PAIRS[lineText[c.col - 1]] === lineText[c.col]) {
