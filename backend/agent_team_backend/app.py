@@ -2194,6 +2194,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 t.cancel()
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
+        elif msg_type == "ai.review.stop":
+            for t in list(session._chat_tasks):
+                t.cancel()
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
         elif msg_type == "ai.review.start":
             ws_path = payload.get("workspace_path") or ""
             review_id = payload.get("review_id") or str(__import__("uuid").uuid4())

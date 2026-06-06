@@ -70,6 +70,9 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   }
 
   function stopReview() {
+    if (currentReviewId.value) {
+      backend.send('ai.review.stop', { review_id: currentReviewId.value }).catch(() => {/* ignore */})
+    }
     isReviewing.value = false
     _teardown()
   }
