@@ -517,7 +517,10 @@ async def run_agent_loop(
                     except json.JSONDecodeError as err:
                         log.warning("failed to parse done meta JSON: %s", err)
                 else:
-                    assistant_text_parts.append(chunk)
+                    # Don't include thinking sentinels in the text content sent
+                    # back to the API — they're display-only for the frontend.
+                    if not chunk.startswith("\x00THINKING:"):
+                        assistant_text_parts.append(chunk)
                     await emit("ai.chat.chunk", {
                         "session_id": session_id,
                         "text": chunk,

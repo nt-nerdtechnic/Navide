@@ -125,7 +125,10 @@ const THEME_SWATCHES: Record<string, string[]> = {
 // Close on ESC
 function onKeyDown(e: KeyboardEvent) { if (e.key === 'Escape') emit('close') }
 onMounted(() => window.addEventListener('keydown', onKeyDown))
-onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown)
+  if (previewTimer) { clearTimeout(previewTimer); previewTimer = null }
+})
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ROLES TAB
