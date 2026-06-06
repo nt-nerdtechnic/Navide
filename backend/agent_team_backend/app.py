@@ -2218,22 +2218,76 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             else:
                 try:
                     import httpx as _httpx
-                    import json as _json
-                    # DuckDuckGo Instant Answers API — no API key required
-                    ddg_url = "https://api.duckduckgo.com/"
-                    params = {"q": query, "format": "json", "no_html": "1", "skip_disambig": "1", "t": "agent-team-ide"}
-                    async with _httpx.AsyncClient(timeout=10.0) as _hc:
-                        resp = await _hc.get(ddg_url, params=params)
-                        resp.raise_for_status()
-                        data = resp.json()
+                    import html as _html_mod
+                    from html.parser import HTMLParser as _HTMLParser
+
+                    class _DDGLiteParser(_HTMLParser):
+                        """Parse DuckDuckGo Lite HTML to extract search results."""
+                        def __init__(self) -> None:
+                            super().__init__()
+                            self.results: list[dict] = []
+                            self._in_result = False
+                            self._cur: dict = {}
+                            self._capture: str | None = None
+
+                        def handle_starttag(self, tag: str, attrs: list) -> None:
+                            amap = dict(attrs)
+                            # Result links in DDG Lite are <a class="result-link">
+                            if tag == "a" and "result-link" in (amap.get("class") or ""):
+                                self._cur = {"url": amap.get("href", ""), "title": "", "snippet": ""}
+                                self._in_result = True
+                                self._capture = "title"
+                            elif tag == "td" and self._in_result and "result-snippet" in (amap.get("class") or ""):
+                                self._capture = "snippet"
+
+                        def handle_endtag(self, tag: str) -> None:
+                            if tag == "a" and self._capture == "title":
+                                self._capture = None
+                            elif tag == "td" and self._capture == "snippet":
+                                self._capture = None
+                                if self._cur.get("url"):
+                                    self.results.append(self._cur)
+                                self._in_result = False
+                                self._cur = {}
+
+                        def handle_data(self, data: str) -> None:
+                            if self._capture and self._cur:
+                                self._cur[self._capture] = (self._cur.get(self._capture, "") + data).strip()
+
                     results: list[dict] = []
-                    # Abstract (best single result)
-                    if data.get("AbstractText"):
-                        results.append({"title": data.get("Heading", query), "snippet": data["AbstractText"], "url": data.get("AbstractURL", "")})
-                    # RelatedTopics
-                    for item in (data.get("RelatedTopics") or [])[:6]:
-                        if isinstance(item, dict) and item.get("Text"):
-                            results.append({"title": item.get("Text", "")[:80], "snippet": item.get("Text", ""), "url": item.get("FirstURL", "")})
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (compatible; AgentTeamIDE/1.0)",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                    async with _httpx.AsyncClient(timeout=10.0, follow_redirects=True) as _hc:
+                        # Primary: DDG Lite HTML (proper search results, no API key)
+                        try:
+                            lite_resp = await _hc.get(
+                                "https://lite.duckduckgo.com/lite/",
+                                params={"q": query, "kl": "us-en"},
+                                headers=headers,
+                            )
+                            lite_resp.raise_for_status()
+                            parser = _DDGLiteParser()
+                            parser.feed(lite_resp.text)
+                            results = parser.results[:7]
+                        except Exception:
+                            pass
+                        # Fallback: DDG Instant Answers API
+                        if not results:
+                            ia_resp = await _hc.get(
+                                "https://api.duckduckgo.com/",
+                                params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
+                                headers=headers,
+                            )
+                            ia_resp.raise_for_status()
+                            data = ia_resp.json()
+                            if data.get("AbstractText"):
+                                results.append({"title": data.get("Heading", query), "snippet": data["AbstractText"], "url": data.get("AbstractURL", "")})
+                            for item in (data.get("RelatedTopics") or [])[:6]:
+                                if isinstance(item, dict) and item.get("Text"):
+                                    results.append({"title": item.get("Text", "")[:80], "snippet": item.get("Text", ""), "url": item.get("FirstURL", "")})
+
                     await session.websocket.send_json(make_response(msg_id, msg_type, {"query": query, "results": results[:7]}))
                 except Exception as _e:
                     await session.websocket.send_json(make_error(msg_id, msg_type, "SEARCH_ERROR", str(_e)))

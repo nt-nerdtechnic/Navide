@@ -2493,8 +2493,11 @@ function setupListeners(): void {
     sending.value = false
     currentSessionId.value = null
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
-    // If a compact operation was in progress, restore state
-    if (pendingCompactKeep.value.length > 0) pendingCompactKeep.value = []
+    // If a compact operation was in progress, restore the full history snapshot
+    if (pendingCompactAllMessages.value.length > 0) {
+      messages.value = pendingCompactAllMessages.value
+    }
+    pendingCompactKeep.value = []
     pendingCompactAllMessages.value = []
     void scrollBottom()
   })
