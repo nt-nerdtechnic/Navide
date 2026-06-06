@@ -325,6 +325,57 @@ async function closeFile(relPath: string): Promise<void> {
   }
 }
 
+// ── Tab right-click context menu ──────────────────────────────────────────────
+const tabCtxMenu = ref<{ relPath: string; x: number; y: number } | null>(null)
+
+function openTabCtxMenu(e: MouseEvent, relPath: string): void {
+  tabCtxMenu.value = { relPath, x: e.clientX, y: e.clientY }
+}
+function closeTabCtxMenu(): void { tabCtxMenu.value = null }
+
+async function ctxCloseOthers(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  const dirty = openFiles.value.filter((f) => f.relPath !== relPath && f.kind === 'file' && f.dirty)
+  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, { title: 'Close Other Tabs', confirmText: 'Close' }); if (!ok) return }
+  openFiles.value = openFiles.value.filter((f) => f.relPath === relPath)
+}
+async function ctxCloseRight(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  const idx = openFiles.value.findIndex((f) => f.relPath === relPath)
+  if (idx < 0) return
+  const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, { title: 'Close Tabs to the Right', confirmText: 'Close' }); if (!ok) return }
+  openFiles.value = openFiles.value.slice(0, idx + 1)
+}
+async function ctxCloseLeft(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  const idx = openFiles.value.findIndex((f) => f.relPath === relPath)
+  if (idx <= 0) return
+  const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, { title: 'Close Tabs to the Left', confirmText: 'Close' }); if (!ok) return }
+  openFiles.value = openFiles.value.slice(idx)
+}
+async function ctxCloseAll(): Promise<void> {
+  closeTabCtxMenu()
+  const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, { title: 'Close All Tabs', confirmText: 'Close All' }); if (!ok) return }
+  openFiles.value = []; activeRel.value = ''
+}
+async function ctxCopyPath(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  if (!relPath.startsWith('\x00')) await navigator.clipboard.writeText(`${workspacePath.replace(/\/+$/, '')}/${relPath}`)
+}
+async function ctxCopyRelPath(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  if (!relPath.startsWith('\x00')) await navigator.clipboard.writeText(relPath)
+}
+async function ctxRevealInFinder(relPath: string): Promise<void> {
+  closeTabCtxMenu()
+  if (!relPath.startsWith('\x00') && workspacePath) {
+    await window.agentTeam?.revealPath(`${workspacePath.replace(/\/+$/, '')}/${relPath}`)
+  }
+}
+
 // ── EditorPane ref tracking (for command delegation) ─────────────────────────
 const editorPaneRefs = new Map<string, InstanceType<typeof EditorPane>>()
 function setEditorRef(relPath: string, el: unknown): void {
@@ -1200,6 +1251,7 @@ registerCommand('workbench.action.newFile', async () => {
 })
 
 function onAppKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && tabCtxMenu.value) { tabCtxMenu.value = null; return }
   if (e.key === 'Escape' && bcDropdown.value) { bcDropdown.value = null; return }
   const mod = e.metaKey || e.ctrlKey
   if (mod && (e.key === 'w' || e.key === 'W') && activeRel.value) {
@@ -1348,6 +1400,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           :class="{ active: f.relPath === activeRel }"
           :title="(f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : f.relPath"
           @click="activeRel = f.relPath"
+          @contextmenu.prevent="openTabCtxMenu($event, f.relPath)"
         >
           <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
           <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
@@ -1644,6 +1697,22 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   </div>
   <NotificationHost />
 
+  <!-- Tab right-click context menu -->
+  <teleport to="body">
+    <div v-if="tabCtxMenu" class="ide-tab-ctx" :style="{ left: tabCtxMenu.x + 'px', top: tabCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
+      <div class="ide-tab-ctx-item" @click="closeFile(tabCtxMenu!.relPath).then(closeTabCtxMenu)">Close</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseOthers(tabCtxMenu!.relPath)">Close Others</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseRight(tabCtxMenu!.relPath)">Close to the Right</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.relPath)">Close to the Left</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseAll">Close All</div>
+      <div class="ide-tab-ctx-sep" />
+      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyPath(tabCtxMenu!.relPath)">Copy Path</div>
+      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyRelPath(tabCtxMenu!.relPath)">Copy Relative Path</div>
+      <div v-if="!tabCtxMenu!.relPath.startsWith('\x00')" class="ide-tab-ctx-item" @click="ctxRevealInFinder(tabCtxMenu!.relPath)">Reveal in Finder</div>
+    </div>
+    <div v-if="tabCtxMenu" class="ide-tab-ctx-backdrop" @mousedown="closeTabCtxMenu" />
+  </teleport>
+
   <!-- Breadcrumb dropdown -->
   <teleport to="body">
     <div
@@ -1828,6 +1897,34 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-bc-file { color: var(--text-primary); font-weight: 500; }
 
 /* ── Breadcrumb Dropdown ─────────────────────────────────────────────────── */
+.ide-tab-ctx-backdrop {
+  position: fixed; inset: 0; z-index: 299;
+}
+.ide-tab-ctx {
+  position: fixed;
+  z-index: 300;
+  background: var(--bg-subtle, #1c1c2e);
+  border: 1px solid var(--border-default, #3a3a5c);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  padding: 4px 0;
+  min-width: 180px;
+  user-select: none;
+}
+.ide-tab-ctx-item {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ide-tab-ctx-item:hover { background: var(--accent, #5a9eff); color: #fff; }
+.ide-tab-ctx-item.disabled { opacity: 0.4; pointer-events: none; }
+.ide-tab-ctx-sep {
+  height: 1px;
+  background: var(--border-default, #3a3a5c);
+  margin: 4px 0;
+}
 .ide-bc-dd {
   position: fixed;
   z-index: 300;
