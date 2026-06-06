@@ -1714,6 +1714,7 @@ onUnmounted(() => {
   ro?.disconnect()
   window.removeEventListener('resize', syncViewport)
   window.removeEventListener('mouseup', onMouseup)
+  if (_suggestTimer !== null) { clearTimeout(_suggestTimer); _suggestTimer = null }
 })
 
 watch(() => props.modelValue, (v) => {

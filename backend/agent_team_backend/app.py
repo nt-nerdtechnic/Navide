@@ -157,8 +157,9 @@ class Session:
         # Token attribution now happens via log_readers (background log scan),
         # NOT via PTY output. TerminalService runs without a token sink.
         self.terminals = TerminalService(emit=self._send_event)
-        # Track background chat tasks so they can be cancelled on disconnect.
+        # Track background tasks so they can be cancelled on disconnect.
         self._chat_tasks: set[asyncio.Task] = set()
+        self._review_tasks: set[asyncio.Task] = set()
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         try:
@@ -551,6 +552,8 @@ async def ws(websocket: WebSocket) -> None:
         _SESSIONS.discard(session)
         session.terminals.shutdown()
         for t in session._chat_tasks:
+            t.cancel()
+        for t in session._review_tasks:
             t.cancel()
 
 
@@ -2192,7 +2195,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.review.stop":
-            for t in list(session._chat_tasks):
+            for t in list(session._review_tasks):
                 t.cancel()
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
@@ -2229,8 +2232,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     await broadcast(make_event("ai.review.error", {"review_id": rid, "message": str(exc)}))
 
             task = asyncio.create_task(_run_review())
-            session._chat_tasks.add(task)
-            task.add_done_callback(session._chat_tasks.discard)
+            session._review_tasks.add(task)
+            task.add_done_callback(session._review_tasks.discard)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "review_id": review_id}))
 
         else:
