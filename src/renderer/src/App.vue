@@ -1114,7 +1114,8 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     stageId: payload.stageId,
     commandOverride: '',
     workspacePath: payload.workspacePath,
-    origin: 'manual'
+    origin: 'manual',
+    runGroupId: currentRunGroupId.value || undefined,
   })
   if (paneId) {
     await sendQuiet<ProjectPayload>('manual_pane.spawn', {
@@ -4580,7 +4581,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :agent-specs="agentSpecs"
       :roles="rolesApi.roles.value"
       :stages="stagesApi.stages.value"
-      :panes="paneViews"
+      :panes="paneViews.filter(v => tabFilteredPaneIds.has(v.id))"
       :pipeline="pipelineView"
       :existing-project="existingProject"
       :workspace="currentWorkspace"

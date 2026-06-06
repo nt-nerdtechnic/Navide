@@ -1688,6 +1688,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/mock:data',       label: '/mock:data',       description: 'Generate realistic mock/test data for a TypeScript interface, Pydantic model, or JSON schema',            template: '' },
   { id: '/find:dead:code',  label: '/find:dead:code',  description: 'Find unused functions, variables, exports, and dead code across the codebase',                            template: '' },
   { id: '/deps:outdated',   label: '/deps:outdated',   description: 'Check for outdated npm/pip packages and get AI-guided update recommendations',                            template: '' },
+  { id: '/add:types',       label: '/add:types',       description: 'Add TypeScript type annotations to the current file — no any, explicit return types, full interfaces',         template: '' },
+  { id: '/dockerfile',      label: '/dockerfile',      description: 'Generate a production-ready Dockerfile for this project, or explain/fix the existing one',                    template: '' },
+  { id: '/ci:help',         label: '/ci:help',         description: 'Review or generate CI/CD pipeline configuration (GitHub Actions, GitLab CI, CircleCI, etc.)',                 template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2600,6 +2603,7 @@ async function sendMessage(): Promise<void> {
     '/format:json', '/git:stash:apply', '/doc:project',
     '/improve:prompt', '/gen:env', '/ask:selection', '/debug:console', '/convert:types',
     '/fix:types', '/explain:regex', '/mock:data', '/find:dead:code', '/deps:outdated',
+    '/add:types', '/dockerfile', '/ci:help',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -4775,6 +4779,27 @@ function triggerCompact(): void {
 async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   showSlashMenu.value = false
   trackRecentCmd(cmd.id)
+  // Bridge: commands that have rawText handlers in sendMessage but need selectSlashCommand routing
+  if (cmd.id === '/help') {
+    inputText.value = '/help'
+    void sendMessage()
+    return
+  }
+  if (cmd.id === '/checkpoint') {
+    saveCheckpoint()
+    return
+  }
+  if (cmd.id === '/checkpoints') {
+    showCheckpoints.value = true
+    return
+  }
+  if (cmd.id === '/open') {
+    inputText.value = '/open '
+    showToast('Type a filename or pattern after /open')
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    return
+  }
+
   if (cmd.id === '/run') {
     // Let user type the command after /run
     inputText.value = '/run '
@@ -7255,6 +7280,145 @@ ${preview}
     return
   }
 
+  // Helper: inject current file content as a context chip and return { relPath, ext }
+  // Used by many file-aware commands below
+  function _injectCurrentFile(): { relPath: string; ext: string } | null {
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (!relPath || !content) return null
+    const ext = relPath.split('.').pop() ?? ''
+    const label = `@${relPath.split('/').pop()}`
+    if (!contextChips.value.some((c) => c.label === label)) {
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 12000)}\n\`\`\`` })
+    }
+    return { relPath, ext }
+  }
+
+  // /diagram — generate a Mermaid diagram
+  if (cmd.id === '/diagram') {
+    const file = _injectCurrentFile()
+    inputText.value = file
+      ? `Generate a Mermaid diagram that visualizes the structure of \`${file.relPath.split('/').pop()}\`. Use a flowchart or class diagram depending on what best represents the code. Return only the Mermaid code block.`
+      : 'Generate a Mermaid diagram that visualizes the architecture of this project. Use a flowchart or component diagram.'
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /doc — write documentation for current file
+  if (cmd.id === '/doc') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/doc: no file open'); return }
+    inputText.value = `Write clear, concise documentation for the exported symbols in \`${file.relPath.split('/').pop()}\`. Include: purpose, parameters, return values, and usage examples. Use JSDoc format for TypeScript or docstrings for Python.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /explain — explain the current file
+  if (cmd.id === '/explain') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/explain: no file open'); return }
+    inputText.value = `Explain what \`${file.relPath.split('/').pop()}\` does. Cover: purpose, key functions/components, data flow, and any non-obvious design decisions.`
+    void sendMessage()
+    return
+  }
+
+  // /improve — suggest improvements for current file
+  if (cmd.id === '/improve') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/improve: no file open'); return }
+    inputText.value = `Suggest concrete improvements for \`${file.relPath.split('/').pop()}\`. Cover: code quality, performance, readability, error handling, and test coverage. Prioritise by impact.`
+    void sendMessage()
+    return
+  }
+
+  // /migrate — suggest migration steps
+  if (cmd.id === '/migrate') {
+    inputText.value = 'Provide a step-by-step migration plan for: '
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    return
+  }
+
+  // /mock — generate mocks/stubs
+  if (cmd.id === '/mock') {
+    const file = _injectCurrentFile()
+    inputText.value = file
+      ? `Generate complete test mocks and stubs for the classes, interfaces, and functions in \`${file.relPath.split('/').pop()}\`. Use the appropriate mock library for the language/framework.`
+      : 'Generate complete test mocks and stubs for: '
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /optimize — performance optimization for current file
+  if (cmd.id === '/optimize') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/optimize: no file open'); return }
+    inputText.value = `Analyze \`${file.relPath.split('/').pop()}\` for performance bottlenecks. Identify the top 3 issues, explain why each is slow, and provide optimized replacement code.`
+    void sendMessage()
+    return
+  }
+
+  // /perf — performance bottleneck analysis
+  if (cmd.id === '/perf') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/perf: no file open'); return }
+    inputText.value = `Analyze \`${file.relPath.split('/').pop()}\` for performance bottlenecks: memory allocations, unnecessary re-renders, N+1 queries, blocking operations, and algorithmic complexity issues. List each with a severity rating and suggested fix.`
+    void sendMessage()
+    return
+  }
+
+  // /refactor — refactor current file
+  if (cmd.id === '/refactor') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/refactor: no file open'); return }
+    inputText.value = `Refactor \`${file.relPath.split('/').pop()}\` to improve readability and maintainability without changing functionality. Focus on: naming, function size, single responsibility, and removing duplication.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /review — code review for current file
+  if (cmd.id === '/review') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/review: no file open'); return }
+    inputText.value = `Review \`${file.relPath.split('/').pop()}\` as if in a pull request. Check for: bugs, edge cases, security issues, performance problems, missing error handling, and style violations. Be specific about line numbers.`
+    void sendMessage()
+    return
+  }
+
+  // /security — security audit for current file
+  if (cmd.id === '/security') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/security: no file open'); return }
+    inputText.value = `Perform a security audit on \`${file.relPath.split('/').pop()}\`. Check for: injection vulnerabilities, authentication/authorization flaws, sensitive data exposure, insecure dependencies, and OWASP Top 10 issues. Rate each finding by severity.`
+    void sendMessage()
+    return
+  }
+
+  // /tests — generate tests for current file
+  if (cmd.id === '/tests') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/tests: no file open'); return }
+    inputText.value = `Write comprehensive unit tests for \`${file.relPath.split('/').pop()}\`. Cover: happy paths, edge cases, error conditions, and boundary values. Use the existing test framework and follow the project's test patterns.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /types — generate/improve TypeScript types for current file
+  if (cmd.id === '/types') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/types: no file open'); return }
+    inputText.value = `Generate comprehensive TypeScript type definitions for \`${file.relPath.split('/').pop()}\`. Add explicit return types, parameter types, and interface definitions where missing. Avoid \`any\`. Return the full updated file.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /new — create a new file
+  if (cmd.id === '/new') {
+    inputText.value = 'Create a new file: '
+    showToast('Describe the file to create (e.g. "Create a new file: src/utils/format.ts that formats dates")')
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    return
+  }
+
   // /fix:types — run vue-tsc, inject errors, ask AI to fix
   if (cmd.id === '/fix:types') {
     inputText.value = ''
@@ -7348,6 +7512,64 @@ ${preview}
         }
         void sendToBackend()
       } catch { showToast('/deps:outdated: package check failed') }
+    })()
+    return
+  }
+
+  // /add:types — add TypeScript type annotations to current file
+  if (cmd.id === '/add:types') {
+    const file = _injectCurrentFile()
+    if (!file) { showToast('/add:types: no file open'); return }
+    inputText.value = `Add explicit TypeScript type annotations to every function parameter, return type, and variable in \`${file.relPath.split('/').pop()}\`. Remove all \`any\` types. Add interface/type definitions for complex objects. Return the full updated file.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /dockerfile — generate or explain Dockerfile
+  if (cmd.id === '/dockerfile') {
+    inputText.value = ''
+    ;(async () => {
+      try {
+        const dfRes = await window.api.invoke('fs.read_file', { path: 'Dockerfile' })
+        const existing = typeof dfRes === 'string' ? dfRes : (dfRes as { content?: string })?.content ?? ''
+        if (existing.trim()) {
+          contextChips.value.push({ id: crypto.randomUUID(), label: '@Dockerfile', content: `\`\`\`dockerfile\n${existing.slice(0, 4000)}\n\`\`\`` })
+          addMsg({ role: 'user', content: 'Review this Dockerfile for best practices: security (non-root user, minimal base image), layer caching, build efficiency, and correctness. Suggest specific improvements.' })
+        } else {
+          const pkgRes = await window.api.invoke('fs.read_file', { path: 'package.json' }).catch(() => null)
+          const pkg = pkgRes ? JSON.parse(typeof pkgRes === 'string' ? pkgRes : (pkgRes as { content?: string })?.content ?? '{}') : {}
+          const framework = pkg?.dependencies?.['next'] ? 'Next.js' : pkg?.dependencies?.['vue'] ? 'Vue 3' : pkg?.dependencies?.['react'] ? 'React' : pkg?.scripts?.dev ? 'Node.js' : 'application'
+          addMsg({ role: 'user', content: `Generate a production-ready multi-stage Dockerfile for this ${framework} project. Include: minimal base image, non-root user, health check, proper .dockerignore hints, and build optimisation for layer caching.` })
+        }
+        void sendToBackend()
+      } catch { showToast('/dockerfile: could not read project files') }
+    })()
+    return
+  }
+
+  // /ci:help — review or generate CI pipeline config
+  if (cmd.id === '/ci:help') {
+    inputText.value = ''
+    ;(async () => {
+      try {
+        const ciRes = await window.api.invoke('shell.run', { cmd: "find .github/workflows -name '*.yml' -o -name '*.yaml' 2>/dev/null | head -5 || find . -name '.gitlab-ci.yml' -o -name 'circle.yml' 2>/dev/null | head -3" })
+        const files = ((ciRes as { stdout?: string })?.stdout ?? '').trim().split('\n').filter(Boolean)
+        if (files.length) {
+          const first = files[0]
+          const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+          if (SAFE_PATH.test(first) && !first.includes('..')) {
+            const content = await window.api.invoke('fs.read_file', { path: first.trim() })
+            const yaml = typeof content === 'string' ? content : (content as { content?: string })?.content ?? ''
+            contextChips.value.push({ id: crypto.randomUUID(), label: '@ci:config', content: `// ${first}\n\`\`\`yaml\n${yaml.slice(0, 5000)}\n\`\`\`` })
+            addMsg({ role: 'user', content: `Review this CI/CD configuration. Check for: security issues (secret exposure, arbitrary code execution), missing caching, inefficient job ordering, and missing steps like type-checking or security scanning. Suggest specific improvements.` })
+          } else {
+            addMsg({ role: 'user', content: 'Generate a GitHub Actions CI workflow for this project that includes: install, type-check, lint, test, and build steps. Use caching for node_modules and follow security best practices.' })
+          }
+        } else {
+          addMsg({ role: 'user', content: 'Generate a GitHub Actions CI workflow for this project that includes: install, type-check, lint, test, and build steps. Use caching for node_modules and follow security best practices.' })
+        }
+        void sendToBackend()
+      } catch { showToast('/ci:help: CI config scan failed') }
     })()
     return
   }
