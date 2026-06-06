@@ -734,6 +734,64 @@ function renderWithSearchHighlight(content: string): string {
   )
 }
 
+// ── Global cross-thread search (Ctrl+Shift+F) ─────────────────────────────────
+interface GlobalSearchResult {
+  threadId: string
+  threadTitle: string
+  msgIdx: number
+  role: string
+  snippet: string
+}
+
+const showGlobalSearch = ref(false)
+const globalSearchQuery = ref('')
+const globalSearchInput = ref<HTMLInputElement | null>(null)
+
+const globalSearchResults = computed<GlobalSearchResult[]>(() => {
+  const q = globalSearchQuery.value.trim().toLowerCase()
+  if (!q || q.length < 2) return []
+  const results: GlobalSearchResult[] = []
+  for (const thread of allThreads.value) {
+    for (let i = 0; i < thread.messages.length; i++) {
+      const m = thread.messages[i]
+      const text = typeof m.rawContent === 'string' ? m.rawContent : m.content
+      if (text.toLowerCase().includes(q)) {
+        const idx = text.toLowerCase().indexOf(q)
+        const start = Math.max(0, idx - 40)
+        const end = Math.min(text.length, idx + q.length + 60)
+        const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
+        results.push({ threadId: thread.id, threadTitle: thread.title, msgIdx: i, role: m.role, snippet })
+        if (results.length >= 50) return results
+      }
+    }
+  }
+  return results
+})
+
+function openGlobalSearch(): void {
+  showGlobalSearch.value = true
+  globalSearchQuery.value = ''
+  nextTick(() => globalSearchInput.value?.focus())
+}
+
+function closeGlobalSearch(): void {
+  showGlobalSearch.value = false
+  globalSearchQuery.value = ''
+}
+
+function jumpToGlobalResult(r: GlobalSearchResult): void {
+  closeGlobalSearch()
+  if (r.threadId !== currentThreadId.value) {
+    switchThread(r.threadId)
+  }
+  nextTick(() => {
+    const el = messagesEl.value?.querySelectorAll('.ai-msg')[r.msgIdx] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el?.classList.add('ai-msg-flash')
+    setTimeout(() => el?.classList.remove('ai-msg-flash'), 1200)
+  })
+}
+
 // ── Context chips (@mentions) ──────────────────────────────────────────────────
 interface ContextChip {
   id: string
@@ -3325,6 +3383,11 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       historySavedDraft = ''
     }
   }
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    openGlobalSearch()
+    return
+  }
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     e.preventDefault()
     openSearch()
@@ -3494,6 +3557,40 @@ function getDateLabel(ts: number): string {
     @dragleave="onChatDragLeave"
     @drop.prevent="onChatDrop"
   >
+    <!-- Global cross-thread search overlay (Ctrl+Shift+F) -->
+    <div v-if="showGlobalSearch" class="ai-global-search-overlay" @click.self="closeGlobalSearch">
+      <div class="ai-global-search-box">
+        <div class="ai-global-search-header">
+          <input
+            ref="globalSearchInput"
+            v-model="globalSearchQuery"
+            class="ai-global-search-input"
+            placeholder="Search all chats…"
+            @keydown.escape="closeGlobalSearch"
+          />
+          <button class="ai-global-search-close" @click="closeGlobalSearch">✕</button>
+        </div>
+        <div class="ai-global-search-results">
+          <div v-if="globalSearchQuery.trim().length >= 2 && globalSearchResults.length === 0" class="ai-global-search-empty">
+            No results across {{ allThreads.length }} threads
+          </div>
+          <button
+            v-for="(r, i) in globalSearchResults"
+            :key="i"
+            class="ai-global-search-result"
+            @click="jumpToGlobalResult(r)"
+          >
+            <span class="ai-gsr-thread">{{ r.threadTitle }}</span>
+            <span class="ai-gsr-role">{{ r.role === 'user' ? 'You' : 'AI' }}</span>
+            <span class="ai-gsr-snippet">{{ r.snippet }}</span>
+          </button>
+        </div>
+        <div class="ai-global-search-footer">
+          {{ globalSearchResults.length > 0 ? `${globalSearchResults.length} result${globalSearchResults.length > 1 ? 's' : ''} across all threads` : '' }}
+        </div>
+      </div>
+    </div>
+
     <!-- Backend offline banner -->
     <div v-if="props.backend.status.value === 'disconnected' || props.backend.status.value === 'error'" class="ai-offline-banner">
       <span>⚠ Backend disconnected — messages won't send until reconnected</span>
@@ -3517,6 +3614,19 @@ function getDateLabel(ts: number): string {
           <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="opacity:.5;flex-shrink:0"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
           <span>Active: <code>{{ props.getActiveRelPath?.()?.split('/').pop() }}</code></span>
           <button class="ai-empty-file-btn" @click="inputText = '@file '; nextTick(() => textareaEl?.focus())">Add to context</button>
+        </div>
+        <!-- Recent threads quick-jump (Cursor-style) — shown when there are prior chats -->
+        <div v-if="allThreads.filter(t => t.id !== currentThreadId && t.messages.length > 0).length > 0" class="ai-empty-recents">
+          <p class="ai-empty-recents-label">Recent chats</p>
+          <div
+            v-for="t in allThreads.filter(th => th.id !== currentThreadId && th.messages.length > 0).slice(0, 4)"
+            :key="t.id"
+            class="ai-empty-recent-item"
+            @click="switchThread(t.id)"
+          >
+            <span class="ai-empty-recent-title">{{ t.title }}</span>
+            <span class="ai-empty-recent-meta">{{ t.messages.length }} msgs</span>
+          </div>
         </div>
       </div>
 
@@ -4497,6 +4607,16 @@ function getDateLabel(ts: number): string {
   background: transparent; color: var(--text-secondary);
 }
 .ai-empty-file-btn:hover { background: #0078d4; color: #fff; border-color: #0078d4; }
+.ai-empty-recents { margin-top: 14px; width: 100%; max-width: 280px; }
+.ai-empty-recents-label { font-size: 10px; color: var(--text-muted, #666); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 5px; }
+.ai-empty-recent-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 5px 8px; border-radius: 5px; cursor: pointer;
+  border: 1px solid transparent; transition: background .1s, border-color .1s;
+}
+.ai-empty-recent-item:hover { background: var(--bg-3, #2a2a2a); border-color: var(--border, #3c3c3c); }
+.ai-empty-recent-title { font-size: 11.5px; color: var(--fg, #ccc); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.ai-empty-recent-meta { font-size: 10px; color: var(--text-muted, #666); flex-shrink: 0; }
 
 .ai-msg-wrap { display: flex; flex-direction: column; position: relative; }
 .ai-msg-wrap.user { align-items: flex-end; }
@@ -5579,6 +5699,91 @@ function getDateLabel(ts: number): string {
 .ai-msg-wrap.search-active .ai-text :deep(mark.ai-search-highlight) {
   background: rgba(255, 165, 0, 0.5);
 }
+
+/* ── Global cross-thread search overlay ──────────────────────────────────── */
+.ai-global-search-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 60px;
+  z-index: 300;
+}
+.ai-global-search-box {
+  background: var(--bg-panel, #1e1e2e);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  width: min(540px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+}
+.ai-global-search-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ai-global-search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-bright);
+  font-size: 14px;
+  font-family: inherit;
+}
+.ai-global-search-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 2px 4px;
+}
+.ai-global-search-close:hover { color: var(--text-bright); }
+.ai-global-search-results {
+  overflow-y: auto;
+  flex: 1;
+}
+.ai-global-search-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.ai-global-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text-normal);
+  font-family: inherit;
+}
+.ai-global-search-result:hover { background: var(--bg-hover); }
+.ai-gsr-thread { font-size: 11px; font-weight: 600; color: var(--accent-emphasis); opacity: 0.85; }
+.ai-gsr-role { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
+.ai-gsr-snippet { font-size: 12px; color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-global-search-footer {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-subtle);
+  min-height: 24px;
+}
+.ai-msg-flash { animation: ai-flash 0.4s ease 2; }
+@keyframes ai-flash { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* ── Settings panel ────────────────────────────────────────────────────────── */
 .ai-settings {
