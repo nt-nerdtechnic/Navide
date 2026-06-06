@@ -1824,7 +1824,9 @@ function setupListeners(): void {
       if (p.model) last.model = p.model
       if (p.input_tokens != null) last.inputTokens = p.input_tokens
       if (p.output_tokens != null) last.outputTokens = p.output_tokens
-      followUps.value = extractFollowUps(last.content)
+      // Pass last user message for context-aware follow-up generation
+      const lastUser = [...messages.value].reverse().find((m) => m.role === 'user')
+      followUps.value = extractFollowUps(last.content, lastUser?.content ?? '')
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
@@ -3357,6 +3359,13 @@ function getDateLabel(ts: number): string {
 
       <!-- Model quick-picker badge -->
       <div class="ai-model-bar">
+        <!-- Chat mode toggle: Ask (read-only) vs Agent (can execute edits/commands) -->
+        <button
+          class="ai-mode-toggle"
+          :class="chatMode"
+          :title="chatMode === 'ask' ? 'Ask mode — AI suggests, you approve\nClick to switch to Agent mode' : 'Agent mode — AI can auto-apply edits & run commands\nClick to switch to Ask mode'"
+          @click="chatMode = chatMode === 'ask' ? 'agent' : 'ask'"
+        >{{ chatMode === 'ask' ? 'Ask' : 'Agent' }}</button>
         <span
           v-if="workspaceRulesFile"
           class="ai-rules-badge"
@@ -3391,7 +3400,10 @@ function getDateLabel(ts: number): string {
             @click="switchModel(m.id); showModelPicker = false"
           >
             <span class="ai-model-picker-name">{{ m.display }}</span>
-            <span class="ai-model-picker-note">{{ m.note }}</span>
+            <span class="ai-model-picker-meta">
+              <span class="ai-model-picker-ctx" v-if="m.ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
+              <span class="ai-model-picker-note">{{ m.note }}</span>
+            </span>
           </div>
           <div class="ai-model-picker-sep" />
           <!-- Ollama group -->
@@ -3404,7 +3416,10 @@ function getDateLabel(ts: number): string {
             @click="switchModel(m.id); showModelPicker = false"
           >
             <span class="ai-model-picker-name">{{ m.display }}</span>
-            <span class="ai-model-picker-note">{{ m.note }}</span>
+            <span class="ai-model-picker-meta">
+              <span class="ai-model-picker-ctx" v-if="m.ctx">{{ m.ctx >= 1000 ? (m.ctx/1000)+'k' : m.ctx }}</span>
+              <span class="ai-model-picker-note">{{ m.note }}</span>
+            </span>
           </div>
           <!-- Custom model input -->
           <div class="ai-model-picker-sep" />
@@ -3728,10 +3743,10 @@ function getDateLabel(ts: number): string {
           />
         </div>
         <div class="ai-settings-row">
-          <label class="ai-settings-label">Agent mode</label>
+          <label class="ai-settings-label">Chat mode</label>
           <label class="ai-toggle-label">
-            <input v-model="settingsAutoAccept" type="checkbox" />
-            Auto-accept file edits
+            <input :checked="chatMode === 'agent'" type="checkbox" @change="chatMode = ($event.target as HTMLInputElement).checked ? 'agent' : 'ask'" />
+            Agent mode — auto-accept file edits &amp; commands
           </label>
         </div>
         <div class="ai-settings-row">
@@ -4716,6 +4731,17 @@ function getDateLabel(ts: number): string {
 .ai-model-picker-item:hover { background: var(--bg-muted); color: var(--text-bright); }
 .ai-model-picker-item.active { color: var(--accent-fg); font-weight: 600; }
 .ai-model-badge-provider.auto { background: linear-gradient(135deg, #7c3aed, #2563eb); color: #fff; }
+/* Model context size chip */
+.ai-model-picker-meta { display: flex; align-items: center; gap: 4px; }
+.ai-model-picker-ctx { font-size: 9px; background: var(--bg-muted); border-radius: 3px; padding: 0 4px; color: var(--text-muted); opacity: 0.8; }
+/* Chat mode toggle (Ask / Agent) */
+.ai-mode-toggle {
+  padding: 2px 8px; font-size: 10px; font-weight: 600; border-radius: 10px; cursor: pointer;
+  background: none; border: 1px solid var(--border-muted); color: var(--text-muted);
+  transition: border-color .15s, color .15s, background .15s;
+}
+.ai-mode-toggle.ask   { border-color: var(--border-muted); color: var(--text-muted); }
+.ai-mode-toggle.agent { border-color: #57ab5a; color: #57ab5a; background: rgba(87,171,90,0.1); }
 
 /* Context window bar */
 .ai-ctx-bar {
