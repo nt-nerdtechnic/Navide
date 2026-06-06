@@ -4095,6 +4095,10 @@ ${historyText}`
         command: 'git log --oneline -30 --format="%h %s (%an)" 2>&1',
         workspace_path: props.workspacePath,
       })
+      if (!resp.payload?.ok) {
+        showToast('/changelog: ' + (resp.payload?.error ?? 'backend error'))
+        return
+      }
       const log = (resp.payload?.output ?? '').trim()
       contextChips.value = contextChips.value.filter((c) => c.label !== '@git:log')
       contextChips.value.push({ id: crypto.randomUUID(), label: '@git:log', content: `// git log (last 30):\n${log || '(none)'}` })
