@@ -73,3 +73,44 @@ async def test_list_directory_not_a_dir(tmp_path: Path) -> None:
     (tmp_path / "file.txt").write_text("hello")
     result = await _tool_list_directory({"path": "file.txt"}, str(tmp_path))
     assert result.startswith("Error:")
+
+
+# ── write_file ────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_write_file_creates_new_file(tmp_path):
+    from agent_team_backend.ai_chat_tools import _tool_write_file
+    result = await _tool_write_file(
+        {"file_path": "new_file.txt", "content": "hello world"},
+        str(tmp_path),
+    )
+    assert "Written" in result
+    assert (tmp_path / "new_file.txt").read_text() == "hello world"
+
+
+@pytest.mark.asyncio
+async def test_write_file_creates_parent_dirs(tmp_path):
+    from agent_team_backend.ai_chat_tools import _tool_write_file
+    result = await _tool_write_file(
+        {"file_path": "deep/nested/file.py", "content": "# code"},
+        str(tmp_path),
+    )
+    assert "Written" in result
+    assert (tmp_path / "deep" / "nested" / "file.py").read_text() == "# code"
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_path_escape(tmp_path):
+    from agent_team_backend.ai_chat_tools import _tool_write_file
+    result = await _tool_write_file(
+        {"file_path": "../../etc/passwd", "content": "hack"},
+        str(tmp_path),
+    )
+    assert result.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_write_file_missing_path_returns_error(tmp_path):
+    from agent_team_backend.ai_chat_tools import _tool_write_file
+    result = await _tool_write_file({"content": "data"}, str(tmp_path))
+    assert result.startswith("Error:")

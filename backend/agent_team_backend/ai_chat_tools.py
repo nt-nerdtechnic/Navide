@@ -156,6 +156,31 @@ TOOL_DEFS = [
             "required": ["pattern"],
         },
     },
+    {
+        "name": "write_file",
+        "description": (
+            "Write complete content to a file in the workspace. "
+            "Creates the file (and any parent directories) if it does not exist, "
+            "or OVERWRITES it entirely if it does. "
+            "Use this to create new files from scratch. "
+            "For updating existing files, prefer edit_file which shows a diff. "
+            "Returns the number of bytes written."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Relative path to the file within the workspace.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Complete file content to write.",
+                },
+            },
+            "required": ["file_path", "content"],
+        },
+    },
 ]
 
 # ── Path safety helper ────────────────────────────────────────────────────────
@@ -413,6 +438,33 @@ async def _tool_glob_files(input: dict, workspace_path: str) -> str:
         return f"Error: {exc}"
 
 
+async def _tool_write_file(input: dict, workspace_path: str) -> str:
+    """Write (create or overwrite) a file with complete content."""
+    file_path = (input.get("file_path") or "").strip()
+    content = input.get("content", "")
+
+    if not file_path:
+        return "Error: file_path is required"
+    if not isinstance(content, str):
+        return "Error: content must be a string"
+
+    try:
+        target = _safe_resolve(workspace_path, file_path)
+    except ValueError as exc:
+        return f"Error: {exc}"
+
+    _WRITE_SIZE_CAP = 2 * 1024 * 1024  # 2 MB
+    if len(content.encode("utf-8")) > _WRITE_SIZE_CAP:
+        return f"Error: content is too large to write in one call ({len(content)} chars > 2 MB limit)"
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"Written {len(content.encode('utf-8'))} bytes to {file_path}"
+    except OSError as exc:
+        return f"Error writing file: {exc}"
+
+
 async def _execute_command(command: str, cwd_rel: str, workspace_path: str) -> str:
     """Actually run a pre-approved command. Called only after user confirms."""
     if cwd_rel:
@@ -514,6 +566,8 @@ async def execute_tool(name: str, input: dict, workspace_path: str) -> str:
         return await _tool_list_directory(input, workspace_path)
     elif name == "glob_files":
         return await _tool_glob_files(input, workspace_path)
+    elif name == "write_file":
+        return await _tool_write_file(input, workspace_path)
     else:
         return f"Error: unknown tool: {name!r}"
 

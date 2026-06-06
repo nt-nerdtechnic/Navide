@@ -1673,6 +1673,7 @@ function getToolIcon(name: string): string {
     case 'run_command':    return '▶'
     case 'list_directory': return '⊞'
     case 'glob_files':     return '✦'
+    case 'write_file':     return '✍'
     default:               return '⚙'
   }
 }
@@ -1688,6 +1689,7 @@ function getToolSummary(name: string, input: unknown): string {
     case 'run_command':     return `Running: ${str(inp.command)}`
     case 'list_directory':  return `Listing: ${str(inp.path) || '.'}`
     case 'glob_files':      return `Glob: ${str(inp.pattern)}`
+    case 'write_file':      return `Write: ${str(inp.file_path)}`
     default:                return name
   }
 }
