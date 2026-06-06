@@ -273,12 +273,25 @@ async def _stream_openai_compatible(
     if tools:
         body["tools"] = _to_openai_tools(tools)
 
-    temperature = settings.get("temperature")
-    if temperature is not None:
-        try:
-            body["temperature"] = max(0.0, min(1.0, float(temperature)))
-        except (TypeError, ValueError):
-            pass
+    # Reasoning models (o3, o3-mini, o4-mini, etc.) use reasoning_effort instead of temperature.
+    # Sending temperature to these models causes an API error.
+    _REASONING_MODEL_PREFIXES = ("o1", "o3", "o4")
+    is_reasoning_model = any(model.startswith(p) for p in _REASONING_MODEL_PREFIXES)
+
+    if is_reasoning_model:
+        # max_tokens → max_completion_tokens for reasoning models
+        body.pop("max_tokens", None)
+        body["max_completion_tokens"] = max_tokens
+        reasoning_effort = settings.get("reasoning_effort")
+        if reasoning_effort in ("low", "medium", "high"):
+            body["reasoning_effort"] = reasoning_effort
+    else:
+        temperature = settings.get("temperature")
+        if temperature is not None:
+            try:
+                body["temperature"] = max(0.0, min(1.0, float(temperature)))
+            except (TypeError, ValueError):
+                pass
 
     headers = {"Content-Type": "application/json"}
     if api_key:

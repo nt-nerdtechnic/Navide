@@ -673,8 +673,11 @@ function removeFromWorkingSet(idx: number): void {
 const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const settingsThinkingBudget = ref<number | null>(null) // null = disabled; token budget for extended thinking
+const settingsReasoningEffort = ref<'low' | 'medium' | 'high' | null>(null)
 const THINKING_SUPPORTED_MODELS = new Set(['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-3-7-sonnet-20250219'])
+const REASONING_MODEL_PREFIXES = ['o1', 'o3', 'o4']
 const thinkingSupported = computed(() => THINKING_SUPPORTED_MODELS.has(settingsModel.value))
+const reasoningModelSelected = computed(() => REASONING_MODEL_PREFIXES.some((p) => settingsModel.value.startsWith(p)))
 const showModelPicker = ref(false)
 
 interface ModelEntry {
@@ -1797,11 +1800,14 @@ function _pushSettingsToBackend(): void {
     system_prompt: settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
   }
-  if (settingsTemperature.value !== null) {
+  if (settingsTemperature.value !== null && !reasoningModelSelected.value) {
     payload.temperature = Math.max(0, Math.min(1, settingsTemperature.value))
   }
   if (settingsThinkingBudget.value !== null && thinkingSupported.value) {
     payload.thinking_budget_tokens = Math.max(1024, Math.min(32000, settingsThinkingBudget.value))
+  }
+  if (settingsReasoningEffort.value !== null && reasoningModelSelected.value) {
+    payload.reasoning_effort = settingsReasoningEffort.value
   }
   props.backend.send('ai.chat.settings.set', payload).catch(() => {/* ignore */})
 }
@@ -4980,7 +4986,7 @@ function getDateLabel(ts: number): string {
           v-for="(q, qi) in msg.followUps"
           :key="qi"
           class="ai-followup-btn"
-          @click="inputText = q; nextTick(() => textareaEl?.focus())"
+          @click="inputText = q; nextTick(() => void sendMessage())"
         >{{ q }}</button>
       </div>
       </template>
@@ -5682,7 +5688,17 @@ function getDateLabel(ts: number): string {
             <span class="ai-tokens-val">{{ settingsMaxTokens.toLocaleString() }}</span>
           </div>
         </div>
-        <div class="ai-settings-row">
+        <!-- Reasoning effort (OpenAI o1/o3/o4 models) -->
+        <div v-if="reasoningModelSelected" class="ai-settings-row">
+          <label class="ai-settings-label">Reasoning effort</label>
+          <div class="ai-tokens-row" style="gap:6px">
+            <label v-for="lvl in ['low','medium','high']" :key="lvl" class="ai-toggle-label" style="gap:4px;cursor:pointer">
+              <input type="radio" :value="lvl" :checked="(settingsReasoningEffort ?? 'medium') === lvl" @change="settingsReasoningEffort = lvl as 'low'|'medium'|'high'" />
+              {{ lvl.charAt(0).toUpperCase() + lvl.slice(1) }}
+            </label>
+          </div>
+        </div>
+        <div v-if="!reasoningModelSelected" class="ai-settings-row">
           <label class="ai-settings-label">Temperature (0 = precise, 1 = creative)</label>
           <div class="ai-tokens-row">
             <label class="ai-toggle-label" style="margin-right:8px">
