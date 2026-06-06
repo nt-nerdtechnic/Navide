@@ -127,6 +127,20 @@ let streamTickInterval: number | null = null
 // Holds messages to re-append after a /compact summary finishes streaming
 const pendingCompactKeep = ref<ChatMessage[]>([])
 
+// ── Rotating input placeholder ────────────────────────────────────────────────
+const PLACEHOLDER_HINTS = [
+  'Ask anything… (Enter to send, Shift+Enter for new line)',
+  'Type @ to add context: @file, @git, @terminal, @symbol…',
+  'Try /explain, /fix, /tests, /review, /compact…',
+  'Ctrl+L to focus · Ctrl+F to search · Ctrl+N for new chat',
+  'Paste an image to include it as context',
+  'Drag a file here to add it as context',
+  '@file:10-50 to include specific line ranges',
+]
+const placeholderIdx = ref(0)
+const inputPlaceholder = computed(() => PLACEHOLDER_HINTS[placeholderIdx.value])
+let placeholderInterval: number | null = null
+
 // ── Apply-code diff preview modal ────────────────────────────────────────────
 interface DiffApplyState {
   code: string
@@ -1529,6 +1543,9 @@ let unsubSettingsGet: (() => void) | null = null
 
 function setupListeners(): void {
   document.addEventListener('keydown', _onGlobalKeydown)
+  placeholderInterval = window.setInterval(() => {
+    if (!inputText.value) placeholderIdx.value = (placeholderIdx.value + 1) % PLACEHOLDER_HINTS.length
+  }, 5000)
   unsubChunk = props.backend.on('ai.chat.chunk', (payload) => {
     const p = payload as { session_id: string; text: string }
     if (p.session_id !== currentSessionId.value) return
@@ -1709,6 +1726,7 @@ function setupListeners(): void {
 
 function teardownListeners(): void {
   document.removeEventListener('keydown', _onGlobalKeydown)
+  if (placeholderInterval !== null) { clearInterval(placeholderInterval); placeholderInterval = null }
   unsubChunk?.()
   unsubToolCall?.()
   unsubToolResult?.()
@@ -3113,7 +3131,7 @@ function getDateLabel(ts: number): string {
             ref="textareaEl"
             v-model="inputText"
             class="ai-textarea"
-            placeholder="Type a message… (@ to insert context, Enter to send, Shift+Enter for new line)"
+            :placeholder="inputPlaceholder"
             :disabled="sending"
             rows="1"
             @input="onTextareaInput"
