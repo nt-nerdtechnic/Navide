@@ -185,7 +185,7 @@ async function confirmApply(): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; model?: string }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
@@ -296,6 +296,14 @@ function loadThreads(): void {
   const latest = allThreads.value[0]
   currentThreadId.value = latest.id
   messages.value = latest.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
+  // Restore per-conversation model if the thread has one
+  if (latest.model) {
+    const entry = MODEL_CATALOG.find((m) => m.id === latest.model)
+    if (entry) {
+      settingsProvider.value = entry.provider === 'auto' ? settingsProvider.value : entry.provider
+      settingsModel.value = latest.model
+    }
+  }
 }
 
 function _doSave(): void {
@@ -343,6 +351,15 @@ function switchThread(id: string): void {
   currentThreadId.value = id
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
   expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
+  // Restore per-conversation model override when switching threads
+  if (thread.model) {
+    const entry = MODEL_CATALOG.find((m) => m.id === thread.model)
+    if (entry) {
+      if (entry.provider !== 'auto') settingsProvider.value = entry.provider
+      settingsModel.value = thread.model
+      saveSettings()
+    }
+  }
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   showThreads.value = false
@@ -399,11 +416,12 @@ const showModelPicker = ref(false)
 
 interface ModelEntry {
   id: string
-  provider: 'anthropic' | 'ollama'
+  provider: 'anthropic' | 'ollama' | 'auto'
   display: string
   note: string   // speed/capability hint
 }
 const MODEL_CATALOG: ModelEntry[] = [
+  { id: 'auto',                       provider: 'auto',      display: 'Auto',                    note: 'Best available' },
   { id: 'claude-opus-4-8',           provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable' },
   { id: 'claude-sonnet-4-6',         provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced' },
   { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast' },
@@ -427,11 +445,16 @@ const selectedModelKey = computed({
   set: (val: string) => { if (val !== 'custom') settingsModel.value = val },
 })
 
-// Atomically switch provider + model and persist to backend
+// Atomically switch provider + model and persist to backend.
+// Saves the chosen model as a per-conversation override so switching threads
+// restores each thread's model independently (differentiator vs Cursor/VS Code).
 function switchModel(modelId: string): void {
   const entry = MODEL_CATALOG.find((m) => m.id === modelId)
-  if (entry) settingsProvider.value = entry.provider
+  if (entry && entry.provider !== 'auto') settingsProvider.value = entry.provider
   settingsModel.value = modelId
+  // Persist per-conversation model on the current thread
+  const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+  if (ct) ct.model = modelId
   saveSettings()
 }
 
@@ -1132,10 +1155,23 @@ function fetchSettings(): void {
 }
 
 function saveSettings(): void {
+  // Resolve "auto" to a real model before sending to backend
+  let resolvedProvider = settingsProvider.value as string
+  let resolvedModel = settingsModel.value
+  if (resolvedModel === 'auto') {
+    const hasKey = (settingsApiKey.value ?? '').trim().length > 0
+    if (hasKey) {
+      resolvedProvider = 'anthropic'
+      resolvedModel = 'claude-sonnet-4-6'
+    } else {
+      resolvedProvider = 'ollama'
+      resolvedModel = OLLAMA_MODELS[0] ?? 'llama3.2'
+    }
+  }
   const payload: Record<string, unknown> = {
-    provider: settingsProvider.value,
+    provider: resolvedProvider,
     anthropic_api_key: settingsApiKey.value,
-    model: settingsModel.value,
+    model: resolvedModel,
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
@@ -2829,6 +2865,14 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       void regenerate()
     }
   }
+  // Cmd+/ — cycle through models (Cursor-style shortcut)
+  if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+    e.preventDefault()
+    const cycleable = MODEL_CATALOG.filter((m) => m.provider !== 'auto')
+    const idx = cycleable.findIndex((m) => m.id === settingsModel.value)
+    const next = cycleable[(idx + 1) % cycleable.length]
+    if (next) { switchModel(next.id); showToast(`Model: ${next.display}`) }
+  }
 }
 
 // Auto-resize textarea
@@ -3113,7 +3157,7 @@ function getDateLabel(ts: number): string {
                 <span>{{ m.display }}</span>
                 <span class="ai-model-picker-note">{{ m.note }}</span>
               </div>
-              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Ollama</div>
+              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Ollama (Local)</div>
               <div
                 v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')"
                 :key="m.id"
@@ -3283,12 +3327,24 @@ function getDateLabel(ts: number): string {
           :title="`Workspace rules active from ${workspaceRulesFile}`"
           @click="showSettings = true"
         >✦ rules</span>
-        <button class="ai-model-badge-btn" :title="`Provider: ${settingsProvider}  Model: ${settingsModel}\n(click to change)`" @click="showModelPicker = !showModelPicker">
-          <span class="ai-model-badge-provider" :class="settingsProvider">{{ settingsProvider === 'anthropic' ? 'A' : 'O' }}</span>
+        <button class="ai-model-badge-btn" :title="`Model: ${settingsModel}\nCmd+/ to cycle · click to pick`" @click="showModelPicker = !showModelPicker">
+          <span v-if="settingsModel === 'auto'" class="ai-model-badge-provider auto">✦</span>
+          <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ settingsProvider === 'anthropic' ? 'A' : 'O' }}</span>
           <span class="ai-model-badge-name">{{ MODEL_CATALOG.find(m => m.id === settingsModel)?.display ?? settingsModel }}</span>
           <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
         </button>
         <div v-if="showModelPicker" class="ai-model-picker-menu">
+          <!-- Auto tier -->
+          <div class="ai-model-picker-group">Smart Routing</div>
+          <div
+            class="ai-model-picker-item"
+            :class="{ active: settingsModel === 'auto' }"
+            @click="switchModel('auto'); showModelPicker = false"
+          >
+            <span class="ai-model-picker-name">✦ Auto</span>
+            <span class="ai-model-picker-note">Best available</span>
+          </div>
+          <div class="ai-model-picker-sep" />
           <!-- Anthropic group -->
           <div class="ai-model-picker-group">Anthropic</div>
           <div
@@ -3301,6 +3357,7 @@ function getDateLabel(ts: number): string {
             <span class="ai-model-picker-name">{{ m.display }}</span>
             <span class="ai-model-picker-note">{{ m.note }}</span>
           </div>
+          <div class="ai-model-picker-sep" />
           <!-- Ollama group -->
           <div class="ai-model-picker-group">Ollama (Local)</div>
           <div
@@ -4606,11 +4663,12 @@ function getDateLabel(ts: number): string {
   box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 200; min-width: 200px; overflow: hidden;
 }
 .ai-model-picker-item {
-  padding: 7px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 12px; font-size: 12px; cursor: pointer; color: var(--text-secondary);
 }
 .ai-model-picker-item:hover { background: var(--bg-muted); color: var(--text-bright); }
 .ai-model-picker-item.active { color: var(--accent-fg); font-weight: 600; }
+.ai-model-badge-provider.auto { background: linear-gradient(135deg, #7c3aed, #2563eb); color: #fff; }
 
 /* Context window bar */
 .ai-ctx-bar {

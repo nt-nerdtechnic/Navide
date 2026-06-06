@@ -1485,7 +1485,14 @@ function posFromMouse(e: MouseEvent): Position {
   const x = e.clientX - rect.left + el.scrollLeft - gutterWidth.value - PAD_LEFT
   const di = Math.max(0, Math.min(Math.floor(y / lineHeightPx.value), visibleModelLines.value.length - 1))
   const line = visibleModelLines.value[di] ?? model.lineCount() - 1
-  const col = Math.max(0, Math.min(Math.round(x / charWidth.value), model.getLine(line).length))
+  const lineText = model.getLine(line)
+  if (!lineText.includes('\t')) {
+    const col = Math.max(0, Math.min(Math.round(x / charWidth.value), lineText.length))
+    return { line, col }
+  }
+  // Tab-aware: convert pixel x to visual column, then to model offset
+  const targetVis = x / charWidth.value
+  const col = offsetFromVisCol(lineText, targetVis, tabSize.value)
   return { line, col }
 }
 
@@ -1609,7 +1616,7 @@ function scrollCursorIntoView(): void {
   // async 'scroll' event risks a one-frame paint with stale virtual rows).
   vs.scrollTop.value = el.scrollTop
   // Horizontal: keep caret within the visible content area
-  const caretX = xFor(cursor.value.col)
+  const caretX = xForLine(cursor.value.line, cursor.value.col)
   const MARGIN = 40
   if (caretX < el.scrollLeft + gutterWidth.value + MARGIN) {
     el.scrollLeft = Math.max(0, caretX - gutterWidth.value - MARGIN)
@@ -1622,11 +1629,18 @@ function scrollCursorIntoView(): void {
 }
 
 // ── Geometry for caret / selection overlays ──────────────────────────────────
+// xFor: fast path for space-only lines (col == visual col).
 function xFor(col: number): number {
   return gutterWidth.value + PAD_LEFT + col * charWidth.value
 }
+// xForLine: tab-aware pixel position for a given (model line, col).
+function xForLine(line: number, col: number): number {
+  const text = model.getLine(line)
+  if (!text.includes('\t')) return xFor(col)
+  return gutterWidth.value + PAD_LEFT + visColFromOffset(text, col, tabSize.value) * charWidth.value
+}
 const caretStyle = computed(() => ({
-  left: xFor(cursor.value.col) + 'px',
+  left: xForLine(cursor.value.line, cursor.value.col) + 'px',
   height: lineHeightPx.value + 'px',
 }))
 
@@ -1646,8 +1660,9 @@ const selectionRects = computed<SelRect[]>(() => {
     const lineLen = model.getLine(line).length
     const startCol = line === sel.start.line ? sel.start.col : 0
     const endCol = line === sel.end.line ? sel.end.col : lineLen
-    const left = xFor(startCol)
-    const width = Math.max(2, (endCol - startCol) * charWidth.value + (line < lastHighlightModel ? charWidth.value : 0))
+    const left = xForLine(line, startCol)
+    const rightEdge = xForLine(line, endCol) + (line < lastHighlightModel ? charWidth.value : 0)
+    const width = Math.max(2, rightEdge - left)
     rects.push({ left, top: di * lineHeightPx.value, width })
   }
   return rects
@@ -1671,9 +1686,9 @@ const decorationRects = computed<DecRect[]>(() => {
       const endCol = line === d.range.end.line ? d.range.end.col : model.getLine(line).length
       rects.push({
         id: `${d.id}:${line}`,
-        left: xFor(startCol),
+        left: xForLine(line, startCol),
         top: di * lineHeightPx.value,
-        width: Math.max(4, (endCol - startCol) * charWidth.value),
+        width: Math.max(4, xForLine(line, endCol) - xForLine(line, startCol)),
         className: d.className,
       })
     }
@@ -1683,7 +1698,7 @@ const decorationRects = computed<DecRect[]>(() => {
 
 const ghostStyle = computed(() => {
   if (!ghost.value) return null
-  return { left: xFor(ghost.value.pos.col) + 'px' }
+  return { left: xForLine(ghost.value.pos.line, ghost.value.pos.col) + 'px' }
 })
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -1821,7 +1836,7 @@ const suggestIdx = ref(0)
 let _suggestTimer: number | null = null
 
 const suggestStyle = computed(() => {
-  const x = xFor(cursor.value.col) - scrollLeftVal.value
+  const x = xForLine(cursor.value.line, cursor.value.col) - scrollLeftVal.value
   // Same coordinate system as ghost text: (model line → display line) * lh - offsetY
   const lineY = m2d(cursor.value.line) * lineHeightPx.value - vs.offsetY.value
   // viewport-relative cursor top (used to decide whether to flip above)
@@ -2112,7 +2127,7 @@ defineExpose({
     <textarea
       ref="textareaEl"
       class="ev-input"
-      :style="{ left: (xFor(cursor.col) - scrollLeftVal) + 'px', top: m2d(cursor.line) * lineHeightPx - vs.scrollTop.value + 'px' }"
+      :style="{ left: (xForLine(cursor.line, cursor.col) - scrollLeftVal) + 'px', top: m2d(cursor.line) * lineHeightPx - vs.scrollTop.value + 'px' }"
       spellcheck="false"
       autocapitalize="off"
       autocomplete="off"
@@ -2149,7 +2164,7 @@ defineExpose({
           >
             <span class="ev-gutter" :style="{ width: gutterWidth + 'px' }">
               <span v-if="rl.foldable || rl.folded" class="ev-fold-icon" @click.stop="toggleFoldAt(rl.index)">{{ rl.folded ? '▶' : '▼' }}</span><template v-if="showLineNumbers">{{ rl.index + 1 }}</template></span>
-            <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px' }"><span
+            <span class="ev-content" :style="{ paddingLeft: PAD_LEFT + 'px', tabSize: tabSize }"><span
               v-for="(s, si) in rl.segments"
               :key="si"
               :class="s.cls"
@@ -2162,7 +2177,7 @@ defineExpose({
             v-for="(ec, ei) in extraCursors"
             :key="'ec' + ei"
             class="ev-caret"
-            :style="{ left: (xFor(ec.col) - scrollLeftVal) + 'px', top: (m2d(ec.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }"
+            :style="{ left: (xForLine(ec.line, ec.col) - scrollLeftVal) + 'px', top: (m2d(ec.line) * lineHeightPx - vs.offsetY.value) + 'px', height: caretStyle.height }"
           />
           <!-- ghost text -->
           <div
