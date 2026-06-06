@@ -191,6 +191,58 @@ const pendingCompactKeep = ref<ChatMessage[]>([])
 // Holds ALL pre-compact messages so stopStreaming() can restore them on user abort
 const pendingCompactAllMessages = ref<ChatMessage[]>([])
 
+// ── Prompt Templates Library (Cursor "Saved Prompts" parity) ─────────────────
+interface PromptTemplate { id: string; name: string; text: string }
+const showPromptTemplates = ref(false)
+const promptTemplates = ref<PromptTemplate[]>(
+  JSON.parse(localStorage.getItem('ai-chat-prompt-templates') ?? '[]') as PromptTemplate[]
+)
+
+// Built-in starter templates shown when library is empty
+const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [
+  { id: 'pt-review',   name: 'Code Review',     text: 'Review this code for bugs, security issues, and improvements:\n\n```\n\n```' },
+  { id: 'pt-tests',    name: 'Write Tests',      text: 'Write comprehensive unit tests for the following code, covering edge cases:\n\n```\n\n```' },
+  { id: 'pt-explain',  name: 'Explain Code',     text: 'Explain this code step by step, as if teaching a junior developer:\n\n```\n\n```' },
+  { id: 'pt-refactor', name: 'Refactor',         text: 'Refactor this code for better readability and maintainability, preserving all behavior:\n\n```\n\n```' },
+  { id: 'pt-optimize', name: 'Optimize',         text: 'Analyze this code for performance bottlenecks and suggest optimizations with time/space complexity notes:\n\n```\n\n```' },
+  { id: 'pt-docs',     name: 'Generate Docs',    text: 'Write clear, concise documentation for this code including parameters, return values, and usage examples:\n\n```\n\n```' },
+  { id: 'pt-security', name: 'Security Audit',   text: 'Perform a security audit of this code. Look for OWASP Top 10 vulnerabilities, injection risks, and authentication issues:\n\n```\n\n```' },
+]
+
+function savePromptTemplates(): void {
+  localStorage.setItem('ai-chat-prompt-templates', JSON.stringify(promptTemplates.value))
+}
+
+function addPromptTemplate(): void {
+  const name = inputText.value.trim().slice(0, 40) || 'New template'
+  const text = inputText.value.trim() || ''
+  const tmpl: PromptTemplate = { id: `pt-${Date.now()}`, name, text }
+  promptTemplates.value = [tmpl, ...promptTemplates.value]
+  savePromptTemplates()
+  showToast(`Saved: "${tmpl.name}"`)
+}
+
+function usePromptTemplate(t: PromptTemplate): void {
+  inputText.value = t.text
+  showPromptTemplates.value = false
+  nextTick(() => textareaEl.value?.focus())
+}
+
+function deletePromptTemplate(id: string): void {
+  promptTemplates.value = promptTemplates.value.filter((t) => t.id !== id)
+  savePromptTemplates()
+}
+
+function renamePromptTemplate(t: PromptTemplate, newName: string): void {
+  if (!newName.trim()) return
+  t.name = newName.trim()
+  savePromptTemplates()
+}
+
+const displayedTemplates = computed(() =>
+  promptTemplates.value.length > 0 ? promptTemplates.value : DEFAULT_PROMPT_TEMPLATES
+)
+
 // ── Notepads (persistent context notes, always injected into system prompt) ───
 const showNotes = ref(false)
 const notesKey = computed(() => `ai-chat-notes:${props.workspacePath}`)
@@ -505,6 +557,8 @@ function switchThread(id: string): void {
   }
   // Clear edit-mode working set on thread switch
   editWorkingSet.value = []
+  // Reset auto-compact guard so the new thread can trigger compaction if it's near the limit
+  _autoCompactFired = false
   // Restore scroll position; default to bottom for new/short threads
   const savedPos = threadScrollPositions.get(id)
   nextTick(() => {
@@ -4573,6 +4627,14 @@ function getDateLabel(ts: number): string {
           </button>
           <button
             class="ai-settings-btn"
+            :class="{ active: showPromptTemplates }"
+            title="Prompt templates library"
+            @click="showPromptTemplates = !showPromptTemplates"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v1.752l1.441 1.44a.75.75 0 0 1-1.06 1.06l-1.5-1.5A.75.75 0 0 1 7 7V4.75a.75.75 0 0 1 1.5 0Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
             title="Keyboard shortcuts (?)"
             @click="showShortcuts = !showShortcuts"
           >
@@ -4695,6 +4757,32 @@ function getDateLabel(ts: number): string {
         <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px">
           <span class="ai-settings-hint" style="flex:1">{{ notesContent.trim() ? `~${Math.ceil(notesContent.length/4)} tokens` : 'Empty — nothing injected' }}</span>
           <button class="ai-cancel-btn" @click="notesContent = ''; saveNotes()">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prompt Templates Library panel -->
+    <div v-if="showPromptTemplates" class="ai-settings">
+      <div class="ai-settings-header">
+        <span>Prompt Templates <span style="font-weight:400;opacity:.6;font-size:11px">— click to insert into chat</span></span>
+        <button class="ai-settings-close" @click="showPromptTemplates = false">✕</button>
+      </div>
+      <div class="ai-settings-body">
+        <div class="ai-pt-actions">
+          <button class="ai-pt-save-btn" :disabled="!inputText.trim()" title="Save current input as template" @click="addPromptTemplate">
+            + Save current input
+          </button>
+          <span class="ai-settings-hint">{{ promptTemplates.length > 0 ? `${promptTemplates.length} saved` : 'Showing built-ins' }}</span>
+          <button v-if="promptTemplates.length > 0" class="ai-cancel-btn" @click="promptTemplates = []; savePromptTemplates()">Clear all</button>
+        </div>
+        <div class="ai-pt-list">
+          <div v-for="t in displayedTemplates" :key="t.id" class="ai-pt-item">
+            <button class="ai-pt-use" @click="usePromptTemplate(t)">
+              <span class="ai-pt-name">{{ t.name }}</span>
+              <span class="ai-pt-preview">{{ t.text.slice(0, 60).replace(/\n/g, ' ') }}…</span>
+            </button>
+            <button v-if="promptTemplates.length > 0" class="ai-pt-del" title="Delete" @click="deletePromptTemplate(t.id)">✕</button>
+          </div>
         </div>
       </div>
     </div>
