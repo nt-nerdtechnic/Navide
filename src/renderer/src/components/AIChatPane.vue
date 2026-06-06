@@ -755,6 +755,8 @@ const REASONING_MODEL_PREFIXES = ['o1', 'o3', 'o4']
 const thinkingSupported = computed(() => THINKING_SUPPORTED_MODELS.has(settingsModel.value))
 const reasoningModelSelected = computed(() => REASONING_MODEL_PREFIXES.some((p) => settingsModel.value.startsWith(p)))
 const showModelPicker = ref(false)
+const modelPickerSearch = ref('')
+watch(showModelPicker, (v) => { if (!v) modelPickerSearch.value = '' })
 
 interface ModelEntry {
   id: string
@@ -1164,6 +1166,7 @@ const atMenuEl = ref<HTMLElement | null>(null)
 interface AtOption { id: string; label: string }
 const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@file', label: '@file — current open file' },
+  { id: '@recent', label: '@recent — recently opened files in this session' },
   { id: '@selection', label: '@selection — editor selection' },
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
@@ -3952,6 +3955,22 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     chipContent = relPath
       ? `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``
       : content
+  } else if (option.id === '@recent') {
+    // Add all recently-opened files (up to 5) as context
+    const paths = recentAtFiles.value.slice(0, 5)
+    if (!paths.length) { showToast('@recent: no files opened yet this session'); return }
+    chipLabel = '@recent'
+    const sections: string[] = []
+    for (const p of paths) {
+      try {
+        interface FileResp { content?: string }
+        const r = await props.backend.send<FileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: p })
+        const fc = (r as { payload?: { content?: string } }).payload?.content ?? ''
+        const ext = p.split('.').pop() ?? ''
+        sections.push(`// File: ${p}\n\`\`\`${ext}\n${fc.slice(0, 20_000)}\n\`\`\``)
+      } catch { /* skip unreadable */ }
+    }
+    chipContent = sections.length ? sections.join('\n\n') : '// @recent: could not read files'
   } else if (option.id === '@selection') {
     const selected = props.getEditorSelection?.() ?? ''
     const relPath = props.getActiveRelPath?.() ?? ''
@@ -4100,26 +4119,34 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   } else if (option.id === '@git:tag') {
     chipLabel = '@git:tag'
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git tag --sort=-version:refname -l 2>&1 | head -20',
         workspace_path: props.workspacePath,
       })
-      const out = (resp.payload?.output ?? '').trim()
-      chipContent = out ? `// git tags (most recent first):\n${out}` : '// @git:tag: no tags found'
+      if (!resp.payload?.ok) {
+        chipContent = `// @git:tag: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const out = (resp.payload?.output ?? '').trim()
+        chipContent = out ? `// git tags (most recent first):\n${out}` : '// @git:tag: no tags found'
+      }
     } catch {
       chipContent = '// @git:tag: unavailable'
     }
   } else if (option.id === '@git:contributors') {
     chipLabel = '@git:contributors'
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git shortlog -sn --no-merges 2>&1 | head -20',
         workspace_path: props.workspacePath,
       })
-      const out = (resp.payload?.output ?? '').trim()
-      chipContent = out ? `// top contributors (git shortlog):\n${out}` : '// @git:contributors: no commit history'
+      if (!resp.payload?.ok) {
+        chipContent = `// @git:contributors: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const out = (resp.payload?.output ?? '').trim()
+        chipContent = out ? `// top contributors (git shortlog):\n${out}` : '// @git:contributors: no commit history'
+      }
     } catch {
       chipContent = '// @git:contributors: unavailable'
     }
@@ -5604,7 +5631,7 @@ function getDateLabel(ts: number): string {
                   @mousedown.prevent="regenWithModel(m.id)"
                 >
                   <span>{{ m.display }}</span>
-                  <span class="ai-model-picker-note">{{ m.note }}</span>
+                  <span class="ai-model-picker-note">{{ m.note }}{{ m.ctx ? ` · ${m.ctx >= 1_000_000 ? (m.ctx/1_000_000).toFixed(1)+'M' : m.ctx >= 1000 ? Math.round(m.ctx/1000)+'k' : m.ctx}` : '' }}</span>
                 </div>
               </template>
             </div>
