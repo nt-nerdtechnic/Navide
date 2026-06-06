@@ -1,0 +1,87 @@
+# -*- mode: python ; coding: utf-8 -*-
+#
+# Build from the backend/ directory:
+#   cd backend && uv run pyinstaller agent_team_backend.spec
+#
+# Output: backend/dist/agent_team_backend  (single executable)
+# Electron copies it to resources/bin/ via package.json extraResources.
+
+a = Analysis(
+    ['agent_team_backend/__main__.py'],
+    pathex=['.'],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        # The top-level app object (imported by name in __main__.py, but listed
+        # here as belt-and-suspenders for PyInstaller's graph walk).
+        'agent_team_backend.app',
+        # uvicorn internals that are resolved at runtime, not import-time.
+        'uvicorn.main',
+        'uvicorn.lifespan.on',
+        'uvicorn.protocols.websockets.websockets_impl',
+        'uvicorn.protocols.websockets.wsproto_impl',
+        'uvicorn.protocols.http.h11_impl',
+        'uvicorn.protocols.http.httptools_impl',
+        'uvicorn.logging',
+        'uvicorn.loops.asyncio',
+        'uvicorn.loops.uvloop',
+        # uvicorn[standard] optional extras.
+        'websockets',
+        'websockets.legacy',
+        'websockets.legacy.server',
+        'httptools',
+        'watchfiles',
+        # watchdog: macOS FSEvents backend + polling fallback.
+        'watchdog.observers.fsevents',
+        'watchdog.observers.polling',
+        # anthropic SDK uses lazy internal imports.
+        'anthropic',
+        'anthropic._streaming',
+        # httpx (used by anthropic and fastapi test clients).
+        'httpx',
+        # MCP SDK.
+        'mcp',
+        'mcp.server',
+        'mcp.server.stdio',
+        'mcp.client',
+        'mcp.client.stdio',
+        # pydantic v2 validators loaded via plugin mechanism.
+        'pydantic.deprecated.class_validators',
+        'pydantic.deprecated.config',
+        'pydantic.deprecated.tools',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[
+        # Dev-only; never needed at runtime.
+        'pytest',
+        'pytest_asyncio',
+    ],
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='agent_team_backend',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    # argv_emulation=True causes PTY issues on macOS; keep it off.
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
