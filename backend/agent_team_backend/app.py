@@ -2246,13 +2246,17 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                             elif tag == "td" and self._capture == "snippet":
                                 self._capture = None
                                 if self._cur.get("url"):
+                                    # Strip accumulated whitespace now that the field is complete
+                                    self._cur["title"] = self._cur.get("title", "").strip()
+                                    self._cur["snippet"] = self._cur.get("snippet", "").strip()
                                     self.results.append(self._cur)
                                 self._in_result = False
                                 self._cur = {}
 
                         def handle_data(self, data: str) -> None:
                             if self._capture and self._cur:
-                                self._cur[self._capture] = (self._cur.get(self._capture, "") + data).strip()
+                                # Accumulate without stripping — strip only when finalising
+                                self._cur[self._capture] = self._cur.get(self._capture, "") + data
 
                     results: list[dict] = []
                     headers = {
