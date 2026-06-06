@@ -4340,6 +4340,14 @@ function removeChip(id: string): void {
   contextChips.value = contextChips.value.filter((c) => c.id !== id)
 }
 
+function clearNonPinnedChips(): void {
+  contextChips.value = contextChips.value.filter((c) => c.pinned)
+}
+
+const chipsTokenTotal = computed(() =>
+  contextChips.value.reduce((sum, c) => sum + Math.ceil((c.content?.length ?? 0) / 4), 0)
+)
+
 function chipIcon(label: string): string {
   if (label.startsWith('@git')) return '⎇'
   if (label.startsWith('@symbol')) return '⟨⟩'
@@ -5236,6 +5244,15 @@ function getDateLabel(ts: number): string {
     >
       <!-- Context chips -->
       <div v-if="contextChips.length" class="ai-chips">
+        <span class="ai-chips-meta">
+          <span class="ai-chips-total" :title="`Total context from chips: ~${chipsTokenTotal.toLocaleString()} tokens`">~{{ chipsTokenTotal > 999 ? (chipsTokenTotal / 1000).toFixed(1) + 'k' : chipsTokenTotal }}t</span>
+          <button
+            v-if="contextChips.filter(c => !c.pinned).length > 1"
+            class="ai-chips-clear"
+            title="Remove all non-pinned context chips"
+            @click.stop="clearNonPinnedChips"
+          >Clear</button>
+        </span>
         <span
           v-for="chip in contextChips"
           :key="chip.id"
@@ -6896,6 +6913,10 @@ function getDateLabel(ts: number): string {
 .ai-chip-remove:hover { opacity: 1; }
 .ai-chip-tokens { font-size: 9px; opacity: 0.55; margin: 0 3px 0 1px; letter-spacing: 0.02em; }
 .ai-chip-icon { font-size: 10px; opacity: 0.7; margin-right: 3px; flex-shrink: 0; }
+.ai-chips-meta { display: inline-flex; align-items: center; gap: 4px; margin-right: 4px; flex-shrink: 0; }
+.ai-chips-total { font-size: 9px; opacity: 0.5; letter-spacing: 0.02em; color: var(--text-muted); }
+.ai-chips-clear { border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); border-radius: 4px; font-size: 10px; padding: 1px 5px; cursor: pointer; line-height: 1.4; }
+.ai-chips-clear:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
 .ai-chip { cursor: pointer; }
 .ai-chip:hover { filter: brightness(1.15); }
 .ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }
