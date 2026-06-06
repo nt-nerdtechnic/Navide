@@ -77,8 +77,13 @@ class LogWatcher:
         rescan_interval_s: float = 30.0,
         seen_path: Path | None = None,
         save_interval_s: float = 10.0,
+        workspace_provider: Callable[[], list[str]] | None = None,
     ) -> None:
         self._sink = sink
+        # Returns the workspaces the user has actually opened. Periodic/startup
+        # backfill is scoped to these so we never re-stat the entire multi-GB
+        # CLI history every cycle. None → legacy full scan.
+        self._workspace_provider = workspace_provider
         self._activity_sink = activity_sink
         self._session_sink = session_sink
         self._rescan_interval_s = rescan_interval_s
@@ -282,11 +287,43 @@ class LogWatcher:
             f" (workspace={workspace_path})" if workspace_path else " (all readers)",
         )
 
+    def _files_to_scan(self) -> list[Path]:
+        """Files for periodic/startup backfill, scoped to opened workspaces.
+
+        When a workspace_provider is set we only enumerate files belonging to
+        the workspaces the user has actually opened (readers that can't map a
+        workspace to a subset fall back to their full list — those vendors keep
+        far fewer files). This stops the drain task from re-stat'ing the entire
+        multi-GB Claude history every cycle, which used to saturate the event
+        loop and stall the backend. No provider / nothing registered yet →
+        full scan (legacy).
+        """
+        provider = self._workspace_provider
+        workspaces = list(provider()) if provider else []
+        if not workspaces:
+            files: list[Path] = []
+            for reader in self._readers:
+                files.extend(reader.session_files())
+            return files
+        files = []
+        seen: set[str] = set()
+        for reader in self._readers:
+            for ws in workspaces:
+                scoped = reader.session_files_for_workspace(ws)
+                cand = scoped if scoped is not None else reader.session_files()
+                for p in cand:
+                    k = str(p)
+                    if k not in seen:
+                        seen.add(k)
+                        files.append(p)
+        return files
+
     async def _rescan_loop(self) -> None:
-        """Periodically force a re-enqueue of every known session file.
+        """Periodically re-enqueue session files for opened workspaces.
 
         Catches watchdog misses (e.g. on network FS where INotify isn't
-        delivered) and brand-new files since startup.
+        delivered) and brand-new files since startup. Scope comes from
+        _files_to_scan() so this never walks the whole CLI history.
         """
         # First scan happens immediately (initial backfill).
         delay = 0.5
@@ -295,9 +332,8 @@ class LogWatcher:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 return
-            for reader in self._readers:
-                for p in reader.session_files():
-                    self._queue.put_nowait(p)
+            for p in self._files_to_scan():
+                self._queue.put_nowait(p)
             delay = self._rescan_interval_s
 
     async def _process_path(self, path: Path) -> None:

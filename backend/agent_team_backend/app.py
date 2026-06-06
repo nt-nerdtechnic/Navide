@@ -298,7 +298,20 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         # need re-emit so cumulative populates. tokens_store dedup makes
         # already-counted events safe. Scope to THIS workspace so we don't
         # re-parse the entire (multi-GB) Claude history and stall the loop.
-        _log_watcher.force_rescan(workspace_path)
+        #
+        # force_rescan still enumerates session files synchronously (Codex /
+        # Gemini readers fall back to ALL their files), which blocks the event
+        # loop and stalls every terminal.create queued behind it. Run it
+        # off-loop so spawns return immediately; the rescan only backfills
+        # stats, so its timing isn't on the critical path.
+        watcher = _log_watcher
+        try:
+            asyncio.get_running_loop().run_in_executor(
+                None, watcher.force_rescan, workspace_path
+            )
+        except RuntimeError:
+            # No running loop (non-async caller) — fall back to inline.
+            watcher.force_rescan(workspace_path)
 
 
 @app.on_event("startup")
@@ -308,6 +321,9 @@ async def _start_log_watcher() -> None:
         sink=_on_log_token_usage,
         activity_sink=_on_log_activity,
         session_sink=_on_session_file,
+        # Scope periodic/startup backfill to opened workspaces so the drain task
+        # never re-stats the entire multi-GB CLI history (which stalled the loop).
+        workspace_provider=attribution.known_workspaces,
     )
     for r in _readers:
         _log_watcher.add_reader(r)

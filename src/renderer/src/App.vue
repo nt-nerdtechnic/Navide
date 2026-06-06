@@ -1069,7 +1069,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       : undefined
     pane.outputLogFile = outputLogFile
 
-    const { status: spawnStatus } = await ref.spawn({
+    await ref.spawn({
       command: ['bash', '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
