@@ -2071,13 +2071,34 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         # ── Editor AI (editor.*) ────────────────────────────────────────────
         elif msg_type == "editor.rewrite":
-            result = await editor_service.rewrite(
-                _az_base_url(),
-                payload.get("model") or ANALYZER_DEFAULT_MODEL,
-                payload.get("code", "") or "",
-                payload.get("instruction", "") or "",
-                payload.get("language", "") or "",
-            )
+            _rew_code = payload.get("code", "") or ""
+            _rew_instr = payload.get("instruction", "") or ""
+            _rew_lang = payload.get("language", "") or ""
+            _chat_cfg = ai_chat_settings_store.get()
+            if _chat_cfg.get("provider", "ollama") == "ollama":
+                result = await editor_service.rewrite(
+                    _az_base_url(),
+                    payload.get("model") or ANALYZER_DEFAULT_MODEL,
+                    _rew_code,
+                    _rew_instr,
+                    _rew_lang,
+                )
+            else:
+                from .ai_chat_service import stream_chat as _stream_chat
+                _lang_hint = f" ({_rew_lang})" if _rew_lang else ""
+                _msgs = [{"role": "user", "content": (
+                    f"Rewrite the following code{_lang_hint} per this instruction: {_rew_instr}\n\n"
+                    f"```\n{_rew_code}\n```\n\nReturn ONLY the rewritten code, no explanation."
+                )}]
+                _chunks: list[str] = []
+                async for _chunk in _stream_chat(_chat_cfg, _msgs, "You are a code rewriting assistant. Output only code.", max_tokens=2048):
+                    if not _chunk.startswith("\x00"):
+                        _chunks.append(_chunk)
+                _text = "".join(_chunks).strip()
+                # Strip markdown fences if model wrapped the code
+                _text = re.sub(r'^```[a-zA-Z]*\n?', '', _text).strip()
+                _text = re.sub(r'\n?```$', '', _text).strip()
+                result = {"ok": True, "text": _text} if _text else {"ok": False, "error": "Empty response"}
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "editor.complete":
