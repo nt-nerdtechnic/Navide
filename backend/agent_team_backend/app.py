@@ -426,9 +426,10 @@ async def tmux_check(request: Request) -> dict[str, Any]:
                 ["tmux", "ls", "-F", "#{session_name}"],
                 capture_output=True,
                 text=True,
+                timeout=5,
             )
             live = set(result.stdout.splitlines())
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             pass
 
     results = {**invalid, **{n: n in live for n in to_check}}
