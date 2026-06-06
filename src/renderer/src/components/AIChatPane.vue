@@ -89,7 +89,7 @@ interface CommandProposalCard {
 interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
-  rawContent?: string  // full content sent to AI (includes @chip file/git content)
+  rawContent?: string | unknown[]  // full content sent to AI (includes @chip file/git content, or multimodal array)
   streaming?: boolean
   thinking?: boolean   // true until first chunk arrives
   model?: string
@@ -471,6 +471,7 @@ interface ContextChip {
   id: string
   label: string
   content: string
+  imageData?: string // base64 data URL for pasted images (e.g. data:image/png;base64,...)
 }
 const contextChips = ref<ContextChip[]>([])
 const previewChipId = ref<string | null>(null)
@@ -526,6 +527,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
   { id: '/help',     label: '/help',     description: 'Show all commands',       template: '' },
+  { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1072,6 +1074,45 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // /test — run test suite and show output
+  if (rawText === '/test' || rawText.startsWith('/test ')) {
+    if (!props.workspacePath) { showToast('/test requires an open workspace'); return }
+    const extra = rawText.slice('/test'.length).trim()
+    // Detect test runner: vitest if vitest.config exists, else npm test
+    let testCmd = 'npm test -- --no-coverage 2>&1 | tail -80'
+    try {
+      const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
+        workspace_path: props.workspacePath, rel_path: 'package.json',
+      })
+      const pkg = JSON.parse(hasPkg.payload?.content ?? '{}') as Record<string, unknown>
+      const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
+      const deps = (pkg.dependencies ?? {}) as Record<string, string>
+      if ('vitest' in devDeps || 'vitest' in deps) {
+        testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
+      } else if (extra) {
+        testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+      }
+    } catch { /* keep default */ }
+    inputText.value = ''
+    messages.value.push({ role: 'user', content: `/test${extra ? ' ' + extra : ''}`, timestamp: Date.now() })
+    showToast('Running tests…')
+    try {
+      interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: testCmd, workspace_path: props.workspacePath,
+      })
+      const r = resp.payload
+      const exitCode = r?.exit_code ?? 0
+      const out = r?.output?.trim() ?? '(no output)'
+      const status = exitCode === 0 ? '✓ Tests passed' : `✗ Tests failed (exit ${exitCode})`
+      const content = `${status}\n\`\`\`\n${out}\n\`\`\``
+      messages.value.push({ role: 'assistant', content, timestamp: Date.now() })
+    } catch {
+      messages.value.push({ role: 'assistant', content: 'Test command failed', isError: true, timestamp: Date.now() })
+    }
+    return
+  }
+
   // /run <cmd> — execute shell command and add output as message
   if (rawText.startsWith('/run ')) {
     const cmd = rawText.slice('/run '.length).trim()
@@ -1098,15 +1139,32 @@ async function sendMessage(): Promise<void> {
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
-  let fullContent = ''
+  const imageChips = contextChips.value.filter((c) => c.imageData)
+  let textContent = ''
   for (const chip of contextChips.value) {
-    fullContent += `[Context: ${chip.label}]\n${chip.content}\n\n`
+    if (!chip.imageData) textContent += `[Context: ${chip.label}]\n${chip.content}\n\n`
   }
-  if (rawText) {
-    fullContent += `[User]: ${rawText}`
-  }
+  if (rawText) textContent += `[User]: ${rawText}`
   const displayText = rawText || contextChips.value.map((c) => c.label).join(' ')
-  const sentContent = fullContent || displayText
+
+  // If images are present, build a multimodal content array for Anthropic
+  type ContentBlock = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  let sentContent: string | ContentBlock[]
+  if (imageChips.length > 0) {
+    const blocks: ContentBlock[] = []
+    for (const ic of imageChips) {
+      const dataUrl = ic.imageData!
+      const sep = dataUrl.indexOf(',')
+      const meta = dataUrl.slice(5, sep)  // e.g. "image/png;base64"
+      const mediaType = meta.split(';')[0]
+      const b64 = dataUrl.slice(sep + 1)
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } })
+    }
+    if (textContent.trim()) blocks.push({ type: 'text', text: textContent })
+    sentContent = blocks
+  } else {
+    sentContent = textContent || displayText
+  }
 
   // Keep the in-memory list bounded so a very long session doesn't exhaust memory.
   if (messages.value.length >= MAX_MESSAGES) messages.value.splice(0, messages.value.length - MAX_MESSAGES + 1)
@@ -2149,6 +2207,28 @@ async function onDrop(e: DragEvent): Promise<void> {
   }
 }
 
+async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
+  const items = Array.from(e.clipboardData?.items ?? [])
+  const imageItem = items.find((it) => it.type.startsWith('image/'))
+  if (!imageItem) return
+  e.preventDefault()
+  const file = imageItem.getAsFile()
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    const dataUrl = reader.result as string
+    const chipCount = contextChips.value.filter((c) => c.imageData).length + 1
+    contextChips.value.push({
+      id: crypto.randomUUID(),
+      label: `@image${chipCount > 1 ? chipCount : ''}`,
+      content: `[Image pasted: ${file.type}, ${Math.round(file.size / 1024)}KB]`,
+      imageData: dataUrl,
+    })
+    showToast('Image added as context')
+  }
+  reader.readAsDataURL(file)
+}
+
 function onTextareaKeydown(e: KeyboardEvent): void {
   if (showSlashMenu.value) {
     if (e.key === 'ArrowDown') {
@@ -2596,21 +2676,23 @@ function getDateLabel(ts: number): string {
           v-for="chip in contextChips"
           :key="chip.id"
           class="ai-chip"
-          :class="{ 'ai-chip-active': previewChipId === chip.id }"
+          :class="{ 'ai-chip-active': previewChipId === chip.id, 'ai-chip-image': !!chip.imageData }"
           @click.stop="previewChipId = previewChipId === chip.id ? null : chip.id"
         >
+          <img v-if="chip.imageData" :src="chip.imageData" class="ai-chip-thumb" alt="pasted image" />
           {{ chip.label }}
-          <span class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
+          <span v-if="!chip.imageData" class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
           <button class="ai-chip-remove" @click.stop="removeChip(chip.id)">×</button>
         </span>
         <!-- Chip preview popover -->
         <div v-if="previewChip" class="ai-chip-popover" @click.stop>
           <div class="ai-chip-popover-header">
             <span class="ai-chip-popover-label">{{ previewChip.label }}</span>
-            <span class="ai-chip-popover-tokens">~{{ Math.ceil(previewChip.content.length / 4).toLocaleString() }} tokens</span>
+            <span v-if="!previewChip.imageData" class="ai-chip-popover-tokens">~{{ Math.ceil(previewChip.content.length / 4).toLocaleString() }} tokens</span>
             <button class="ai-chip-popover-close" @click="previewChipId = null">×</button>
           </div>
-          <pre class="ai-chip-popover-content">{{ previewChip.content.slice(0, 1200) }}{{ previewChip.content.length > 1200 ? '\n…' : '' }}</pre>
+          <img v-if="previewChip.imageData" :src="previewChip.imageData" class="ai-chip-popover-img" alt="pasted image" />
+          <pre v-else class="ai-chip-popover-content">{{ previewChip.content.slice(0, 1200) }}{{ previewChip.content.length > 1200 ? '\n…' : '' }}</pre>
         </div>
       </div>
 
@@ -2687,6 +2769,7 @@ function getDateLabel(ts: number): string {
             rows="1"
             @input="onTextareaInput"
             @keydown="onTextareaKeydown"
+            @paste="onTextareaPaste"
           />
           <span v-if="inputCharCount > 200" class="ai-char-count" :class="{ warn: inputCharCount > 2000 }">
             {{ inputCharCount.toLocaleString() }} chars · ~{{ inputTokenEstimate.toLocaleString() }} tokens
@@ -3667,6 +3750,9 @@ function getDateLabel(ts: number): string {
 .ai-chip { cursor: pointer; }
 .ai-chip:hover { filter: brightness(1.15); }
 .ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }
+.ai-chip-image { padding: 2px 6px 2px 3px; }
+.ai-chip-thumb { width: 22px; height: 16px; object-fit: cover; border-radius: 3px; vertical-align: middle; flex-shrink: 0; }
+.ai-chip-popover-img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 8px auto; }
 
 .ai-chip-popover {
   position: absolute;
