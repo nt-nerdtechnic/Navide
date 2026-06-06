@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useTerminal } from '../composables/useTerminal'
 import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
@@ -27,27 +27,9 @@ const terminal = useTerminal(props.paneId, props.backend)
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
-// Clock tick so the "running → idle" computed becomes reactive against time.
-// 5 s granularity is fine — we only need to flip the badge once after 30 s
-// of cleaned-text silence.
-const nowTick = ref<number>(Date.now())
-const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 5000)
-onUnmounted(() => window.clearInterval(tickInterval))
-
-// Idle window for the "still alive but agent done" state. Cleaned text means
-// the agent printed something semantically meaningful — TUI spinners and token
-// counts don't count, so this hits as soon as the turn ends and the CLI sits
-// at an interactive prompt.
-const PROMPT_IDLE_MS = 30_000
-
-const displayStatus = computed<string>(() => {
-  const base = terminal.status.value
-  if (base !== 'running') return base
-  const lastAt = terminal.lastActivityAt.value
-  // No activity ever yet → still "starting" semantically.
-  if (lastAt === 0) return 'running'
-  return nowTick.value - lastAt > PROMPT_IDLE_MS ? 'idle' : 'running'
-})
+// RUNNING vs IDLE is driven entirely by the CLI-execution signal inside
+// useTerminal (agent.activity events), not by guessing from the output buffer.
+const displayStatus = terminal.displayStatus
 
 defineExpose({
   spawn: terminal.spawn,

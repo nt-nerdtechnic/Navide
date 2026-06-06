@@ -1,4 +1,4 @@
-import { onScopeDispose, ref, shallowRef } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -11,18 +11,35 @@ import type { ITheme } from '@xterm/xterm'
 // getPropertyValue returns the raw `var(--gray-12)` token, not the resolved hex.
 // The light palette remaps ANSI white/brightWhite so TUI apps (designed for dark
 // terminals) stay readable on a light background.
+// Shared ANSI 16-color palette for dark themes, aligned to the base.css color
+// scales so CLI output (green spinners, syntax highlight, etc.) matches the app
+// design instead of falling back to xterm.js's built-in defaults.
+const DARK_ANSI = {
+  black: '#484f58',   brightBlack: '#6e7681',
+  red: '#ff7b72',     brightRed: '#ffa198',
+  green: '#3fb950',   brightGreen: '#56d364',
+  yellow: '#d29922',  brightYellow: '#e3b341',
+  blue: '#58a6ff',    brightBlue: '#79c0ff',
+  magenta: '#bc8cff', brightMagenta: '#d2a8ff',
+  cyan: '#56d4dd',    brightCyan: '#b3f0ff',
+  white: '#b1bac4',   brightWhite: '#ffffff',
+}
+
 const XTERM_THEMES: Record<string, ITheme> = {
   'dark-github': {
     background: '#0d1117', foreground: '#e6edf3',
     cursor: '#58a6ff', selectionBackground: 'rgba(56,139,253,0.35)',
+    ...DARK_ANSI,
   },
   'dark-midnight': {
     background: '#0a0e14', foreground: '#c5d0e6',
     cursor: '#6cb0ff', selectionBackground: 'rgba(56,139,253,0.3)',
+    ...DARK_ANSI,
   },
   'dark-forest': {
     background: '#0c130d', foreground: '#e9f2e7',
     cursor: '#6fc28a', selectionBackground: 'rgba(111,194,138,0.3)',
+    ...DARK_ANSI,
   },
   'light': {
     background: '#ffffff', foreground: '#1f2328',
@@ -39,6 +56,14 @@ const XTERM_THEMES: Record<string, ITheme> = {
   'high-contrast': {
     background: '#000000', foreground: '#ffffff',
     cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
+    black: '#686868',   brightBlack: '#a0a0a0',
+    red: '#ff6b66',     brightRed: '#ff9a94',
+    green: '#56d364',   brightGreen: '#7ee787',
+    yellow: '#e3b341',  brightYellow: '#f2cc60',
+    blue: '#79c0ff',    brightBlue: '#a5d6ff',
+    magenta: '#d2a8ff', brightMagenta: '#e2c5ff',
+    cyan: '#56d4dd',    brightCyan: '#b3f0ff',
+    white: '#e6edf3',   brightWhite: '#ffffff',
   },
 }
 
@@ -97,11 +122,43 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // short window after a focus event so the badge stays honest.
   const lastFocusAt = ref<number>(0)
   const FOCUS_GRACE_MS = 3_000
+
+  // ── RUNNING vs IDLE ──────────────────────────────────────────────────────────
+  // We want RUNNING only when the CLI is genuinely executing — not for brief
+  // nudges, TUI redraws, or prompt echoes that last a second or two.
+  //
+  // Strategy: track the start of each CONTINUOUS burst of PTY activity.
+  // A gap > BURST_GAP_MS in raw output resets the burst start. Only bursts
+  // that have lasted > MIN_BURST_MS are shown as RUNNING. Short nudge
+  // responses (1–2 s) never reach the threshold; real work (tool chains,
+  // file edits, long responses) easily exceeds it.
+  //
+  // No external signals (hooks, attribution, focus) are involved — this
+  // purely tracks what the PTY itself emits.
+  const BURST_GAP_MS   = 1_000   // gap that splits two separate bursts
+  const MIN_BURST_MS   = 2_000   // burst must last this long to show RUNNING
+  const STALE_MS       = 2_000   // no output for this long → not running
+  const activityBurstStartAt = ref<number>(0)
+  // Tick so displayStatus re-evaluates after output goes quiet.
+  const nowTick = ref<number>(Date.now())
+  const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 1_000)
+
+  const displayStatus = computed<string>(() => {
+    if (status.value !== 'running') return status.value
+    if (lastRawActivityAt.value === 0) return 'idle'
+    if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
+    return (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
+  })
   const BUFFER_CAP = 128 * 1024
 
   function appendClean(chunk: string): void {
     // ANY byte counts as "process still alive" — spinners included.
-    if (chunk.length > 0) lastRawActivityAt.value = Date.now()
+    if (chunk.length > 0) {
+      const now = Date.now()
+      // If the gap since last output exceeds BURST_GAP_MS, this is a new burst.
+      if (now - lastRawActivityAt.value > BURST_GAP_MS) activityBurstStartAt.value = now
+      lastRawActivityAt.value = now
+    }
     const cleaned = dropTuiNoise(stripAnsi(chunk))
     if (!cleaned) return
     const next = cleanBuffer.value + cleaned
@@ -411,6 +468,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   onScopeDispose(() => {
     cleanupSession()
+    clearInterval(tickInterval)
     cancelAnimationFrame(resizeRafId)
     if (resizeSendTimer) clearTimeout(resizeSendTimer)
     resizeObserver?.disconnect()
@@ -431,6 +489,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     fitTerminal,
     pasteText,
     status,
+    displayStatus,
     sessionId,
     error,
     lastCommand,
