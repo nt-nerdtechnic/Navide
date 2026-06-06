@@ -760,11 +760,11 @@ async function plDelete(id: string, name: string) {
         <!-- Header -->
         <div class="s-header">
           <div class="s-tabs">
-            <button :class="['s-tab', { active: activeTab === 'roles' }]" @click="activeTab = 'roles'">🎭 Roles</button>
-            <button :class="['s-tab', { active: activeTab === 'pipelines' }]" @click="activeTab = 'pipelines'">🔀 Pipelines</button>
-            <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">🔌 MCP</button>
-            <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">🧠 Analyzer</button>
-            <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">🎨 Appearance</button>
+            <button :class="['s-tab', { active: activeTab === 'roles' }]" @click="activeTab = 'roles'">{{ $t('settings.tab.roles') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'pipelines' }]" @click="activeTab = 'pipelines'">{{ $t('settings.tab.pipelines') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">{{ $t('settings.tab.mcp') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
           </div>
           <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
@@ -772,13 +772,13 @@ async function plDelete(id: string, name: string) {
         <!-- ── ROLES TAB ─────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'roles'" class="s-body">
           <div class="tab-toolbar">
-            <button class="ghost" :disabled="rExportBusy" @click="rExport">{{ rExportBusy ? '…' : '⬇ Export JSON' }}</button>
-            <button class="ghost" :disabled="rImporting" @click="rImport">{{ rImporting ? '…' : '⬆ Import JSON' }}</button>
+            <button class="ghost" :disabled="rExportBusy" @click="rExport">{{ rExportBusy ? '…' : $t('settings.roles.export-json') }}</button>
+            <button class="ghost" :disabled="rImporting" @click="rImport">{{ rImporting ? '…' : $t('settings.roles.import-json') }}</button>
             <span v-if="rSummary" class="summary-ok">{{ rSummary }}</span>
           </div>
           <div class="split">
             <aside class="split-list">
-              <button class="primary new-btn" @click="rStartNew">+ New role</button>
+              <button class="primary new-btn" @click="rStartNew">{{ $t('settings.roles.new-role') }}</button>
               <ul>
                 <li v-for="r in rSorted" :key="r.key"
                     :class="{ active: rSelectedKey === r.key && rDraft && !rDraft.isNew }"
@@ -793,28 +793,28 @@ async function plDelete(id: string, name: string) {
               <div class="detail-head">
                 <h3>{{ rDraft.isNew ? 'New role' : 'Edit role' }}</h3>
                 <div class="row-g gap">
-                  <button v-if="!rDraft.isNew" class="danger" @click="rConfirmDelete = true">🗑 Delete</button>
-                  <button class="primary" :disabled="!rCanSave || rSaving" @click="rSave">{{ rSaving ? 'Saving…' : rDraft.isNew ? 'Create' : 'Save' }}</button>
+                  <button v-if="!rDraft.isNew" class="danger" @click="rConfirmDelete = true">{{ $t('settings.roles.delete') }}</button>
+                  <button class="primary" :disabled="!rCanSave || rSaving" @click="rSave">{{ rSaving ? 'Saving…' : rDraft.isNew ? 'Create' : $t('settings.roles.save') }}</button>
                 </div>
               </div>
               <p v-if="rError" class="err-msg">{{ rError }}</p>
               <div class="two-col">
                 <div class="field">
-                  <label class="lbl">Key</label>
+                  <label class="lbl">{{ $t('settings.roles.key-label') }}</label>
                   <input v-model="rDraft.key" type="text" placeholder="lowercase_key" spellcheck="false" :disabled="!rDraft.isNew && rDraft.originalKey === 'pm'" />
                   <p v-if="rDraft.isNew && rolesApi.find(rDraft.key.trim())" class="warn-msg">key already exists</p>
                 </div>
                 <div class="field">
-                  <label class="lbl">Label</label>
+                  <label class="lbl">{{ $t('settings.roles.label-label') }}</label>
                   <input v-model="rDraft.label" type="text" placeholder="e.g. Tech Lead" spellcheck="false" />
                 </div>
               </div>
               <div class="field">
-                <label class="lbl">One-line summary</label>
+                <label class="lbl">{{ $t('settings.roles.one-line-label') }}</label>
                 <input v-model="rDraft.one_line" type="text" placeholder="short hint shown in dropdown" spellcheck="false" />
               </div>
               <div class="field">
-                <label class="lbl">System prompt</label>
+                <label class="lbl">{{ $t('settings.roles.system-prompt-label') }}</label>
                 <textarea v-model="rDraft.system_prompt" rows="14" spellcheck="false"></textarea>
                 <p class="hint-msg">{{ rDraft.system_prompt.length }} chars · Changes apply to new spawns only</p>
               </div>
@@ -1324,7 +1324,7 @@ async function plDelete(id: string, name: string) {
                   {{ plCurrentPipeline?.name }}
                   <button class="pl-rename-icon" :disabled="plBusy"
                     @click="plStartRename(plEditingId, plCurrentPipeline?.name ?? '')"
-                    title="Rename">✎</button>
+                    :title="$t('action.rename')">✎</button>
                 </h3>
               </template>
               <div class="pl-detail-actions">
@@ -1342,7 +1342,7 @@ async function plDelete(id: string, name: string) {
                 <span v-if="plSummary" class="pl-summary">{{ plSummary }}</span>
                 <button class="pl-run-btn"
                   @click="emit('open-pipeline', plEditingId); emit('close')"
-                  title="Close settings and go to run">
+                  :title="$t('action.close-settings-run')">
                   ▶ Run
                 </button>
               </div>
@@ -1471,7 +1471,7 @@ async function plDelete(id: string, name: string) {
         <!-- ══ APPEARANCE TAB ══ -->
         <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
           <section class="ap-section">
-            <h3 class="ap-title">Theme</h3>
+            <h3 class="ap-title">{{ $t('settings.appearance.theme') }}</h3>
             <p class="ap-hint">Theme is a user-level preference applied across all workspaces.</p>
             <div class="ap-theme-grid">
               <button
@@ -1512,14 +1512,14 @@ async function plDelete(id: string, name: string) {
 
           <section class="ap-section">
             <div class="ap-section-head">
-              <h3 class="ap-title">Custom Colors</h3>
+              <h3 class="ap-title">{{ $t('settings.appearance.custom-colors') }}</h3>
               <button
                 v-if="hasCustomOverrides"
                 class="ap-reset"
                 @click="resetCustom"
                 title="Reset all custom colors to the built-in theme"
               >
-                ↺ Reset to defaults
+                {{ $t('settings.appearance.reset-to-defaults') }}
               </button>
             </div>
             <p class="ap-hint">Tweaks are layered on top of the current theme and preserved when switching themes.</p>
@@ -1541,7 +1541,7 @@ async function plDelete(id: string, name: string) {
                   v-if="customOverrides[tok.id]"
                   class="ap-color-clear"
                   @click.prevent="setCustomOverride(tok.id, null)"
-                  title="Clear this color override"
+                  :title="$t('action.clear-color-override')"
                 >✕</button>
               </label>
             </div>
@@ -1564,7 +1564,7 @@ async function plDelete(id: string, name: string) {
         <h3>Delete role "{{ rDraft?.label }}"?</h3>
         <p>This action cannot be undone.</p>
         <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="rConfirmDelete = false">Cancel</button>
+          <button class="ghost" @click="rConfirmDelete = false">{{ $t('settings.roles.cancel') }}</button>
           <button class="danger" @click="rDoDelete">Delete</button>
         </div>
       </div>

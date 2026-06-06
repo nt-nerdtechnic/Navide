@@ -10378,7 +10378,7 @@ function showModelChange(mi: number): string | null {
             :src="msg.imageData"
             class="ai-msg-img-thumb"
             alt="pasted image"
-            title="Click to zoom"
+            :title="$t('action.click-to-zoom')"
             @click="zoomedImageSrc = msg.imageData ?? null"
           />
           <!-- Extended thinking block (collapsible) -->
@@ -10539,7 +10539,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="msg.role === 'assistant' && !msg.streaming"
             class="ai-msg-action-btn"
-            title="Quote reply"
+            :title="$t('action.quote-reply')"
             @click="quoteReply(msg)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h1a.75.75 0 0 1 .75.75v1.19l1.72-1.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25ZM1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H7.81l-2.53 2.53a.749.749 0 0 1-1.28-.53V12h-.25A1.75 1.75 0 0 1 2 10.25v-7.5ZM5.5 6.25a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Zm.75 2.25h2.5a.75.75 0 0 1 0 1.5H6.25a.75.75 0 0 1 0-1.5Z"/></svg>
@@ -10551,7 +10551,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="msg.role === 'assistant' && !msg.streaming"
             class="ai-msg-action-btn"
-            title="Add response as context for next message"
+            :title="$t('action.add-as-context')"
             @click="addResponseAsContext(msg)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25v-8.5C0 2.784.784 2 1.75 2ZM1.5 3.75v.5c.918.553 2.963 1.785 4.78 2.886A1.75 1.75 0 0 0 8 7.5c.641 0 1.245-.332 1.72-.864C11.537 6.035 13.582 4.803 14.5 4.25v-.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM1.5 6.893v5.357c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V6.893l-4.064 2.45a3.25 3.25 0 0 1-3.372 0Z"/></svg>
@@ -10560,7 +10560,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="msg.role === 'user' && !sending"
             class="ai-msg-action-btn ai-msg-delete-btn"
-            title="Delete this exchange"
+            :title="$t('action.delete-exchange')"
             @click="deleteMessagePair(mi)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/></svg>
@@ -10587,7 +10587,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
             class="ai-msg-action-btn"
-            title="Regenerate"
+            :title="$t('action.regenerate')"
             @click="regenerate"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
@@ -10599,7 +10599,7 @@ function showModelChange(mi: number): string | null {
           >
             <button
               class="ai-msg-action-btn ai-regen-model-btn"
-              title="Regenerate with a different model"
+              :title="$t('action.regenerate-with-model')"
               @click.stop="regenModelOpen = !regenModelOpen"
             >
               <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>▾
@@ -10653,13 +10653,13 @@ function showModelChange(mi: number): string | null {
             <button
               class="ai-msg-action-btn ai-feedback-btn"
               :class="{ 'ai-feedback-up': msg.feedback === 'up' }"
-              title="Good response"
+              :title="$t('action.good-response')"
               @click="toggleFeedback(mi, 'up')"
             >👍</button>
             <button
               class="ai-msg-action-btn ai-feedback-btn"
               :class="{ 'ai-feedback-down': msg.feedback === 'down' }"
-              title="Bad response"
+              :title="$t('action.bad-response')"
               @click="toggleFeedback(mi, 'down')"
             >👎</button>
           </template>
@@ -10864,7 +10864,7 @@ function showModelChange(mi: number): string | null {
         <button
           v-if="editWorkingSet.length > 1"
           class="ai-working-set-clear"
-          title="Clear working set"
+          :title="$t('action.clear-working-set')"
           @click="editWorkingSet = []"
         >Clear</button>
         <span v-if="!editWorkingSet.length" class="ai-working-set-empty">No files — add the current file or use @file</span>
@@ -11046,7 +11046,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="!sending && props.getEditorSelection"
             class="ai-settings-btn"
-            title="Add editor selection as context (Cursor-style: adds selected code as @selection chip)"
+            :title="$t('action.add-editor-selection')"
             @click="() => {
               const sel = props.getEditorSelection?.()?.trim()
               if (!sel) { showToast('No selection — select code in the editor first'); return }
@@ -11067,7 +11067,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="!sending && workspacePath"
             class="ai-settings-btn"
-            title="Attach file — add any workspace file as context (Cursor-style)"
+            :title="$t('action.attach-file')"
             @click="attachFile"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -11078,7 +11078,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="!sending"
             class="ai-settings-btn"
-            title="Attach image — pick an image file from disk to add to context"
+            :title="$t('action.attach-image')"
             @click="imageFileInputEl?.click()"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -11097,7 +11097,7 @@ function showModelChange(mi: number): string | null {
             v-if="voiceSupported && !sending"
             class="ai-voice-btn"
             :class="{ 'ai-voice-active': voiceListening }"
-            :title="voiceListening ? 'Stop listening' : 'Voice input'"
+            :title="voiceListening ? $t('action.voice-stop-listening') : $t('action.voice-input')"
             @click="toggleVoiceInput"
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
@@ -11108,14 +11108,14 @@ function showModelChange(mi: number): string | null {
             v-if="!sending && inputText.trim().length > 10"
             class="ai-enhance-btn"
             :disabled="enhancingPrompt"
-            :title="enhancingPrompt ? 'Enhancing…' : 'Enhance prompt — AI rewrites your message to be clearer and more specific'"
+            :title="enhancingPrompt ? $t('action.enhance-prompt-busy') : $t('action.enhance-prompt')"
             @click="enhancePrompt"
           >{{ enhancingPrompt ? '…' : '✦' }}</button>
           <button
             v-if="!sending"
             class="ai-send-btn"
             :disabled="!inputText.trim() && contextChips.length === 0"
-            :title="settingsSendMode === 'ctrl-enter' ? 'Send (Ctrl+Enter)' : 'Send (Enter)'"
+            :title="settingsSendMode === 'ctrl-enter' ? $t('action.send-ctrl-enter') : $t('action.send-enter')"
             @click="sendMessage"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -11125,7 +11125,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-else
             class="ai-stop-btn"
-            title="Stop"
+            :title="$t('action.stop-streaming')"
             @click="stopStreaming"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -11134,14 +11134,14 @@ function showModelChange(mi: number): string | null {
           </button>
           <button
             class="ai-settings-btn"
-            title="New chat"
+            :title="$t('action.new-chat')"
             @click="newThread"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"/></svg>
           </button>
           <button
             class="ai-settings-btn"
-            title="Chat history"
+            :title="$t('action.chat-history')"
             :class="{ active: showThreads }"
             @click="showThreads = !showThreads; if (!showThreads) threadSearchQuery = ''"
           >
@@ -11149,7 +11149,7 @@ function showModelChange(mi: number): string | null {
           </button>
           <button
             class="ai-settings-btn"
-            title="Search chat (Ctrl+F)"
+            :title="$t('action.search-chat')"
             :disabled="messages.length === 0"
             @click="openSearch"
           >
@@ -11159,7 +11159,7 @@ function showModelChange(mi: number): string | null {
           </button>
           <button
             class="ai-settings-btn"
-            title="Copy conversation to clipboard"
+            :title="$t('action.copy-conversation')"
             :disabled="messages.length === 0"
             @click="copyAllMessages"
           >
@@ -11167,7 +11167,7 @@ function showModelChange(mi: number): string | null {
           </button>
           <button
             class="ai-settings-btn"
-            title="Clear chat"
+            :title="$t('action.clear-chat')"
             :disabled="messages.length === 0"
             @click="clearConversation"
           >
@@ -11178,7 +11178,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="!sending && workspacePath"
             class="ai-settings-btn"
-            title="Fix TypeScript errors — run type check and pre-fill a fix request"
+            :title="$t('action.fix-typescript-errors')"
             @click="fixProblems"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.72.22a.749.749 0 0 1 1.06 0l1.25 1.25a.749.749 0 0 1 0 1.06L5.78 3.78a.749.749 0 0 1-1.06 0L3.47 2.53a.749.749 0 0 1 0-1.06ZM5 5.5a.5.5 0 0 1 .5-.5H8a.5.5 0 0 1 0 1H5.5A.5.5 0 0 1 5 5.5Zm-1.5 5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1H4a.5.5 0 0 1-.5-.5Zm1-2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5Zm8.25-6.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 12.75 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H3.25A1.75 1.75 0 0 1 1.5 10.25v-7.5C1.5 1.784 2.284 1 3.25 1ZM3.25 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
@@ -11187,7 +11187,7 @@ function showModelChange(mi: number): string | null {
             v-if="messages.length > 0"
             class="ai-settings-btn"
             :class="{ active: showCheckpoints, 'ai-cp-has': checkpoints.length > 0 }"
-            :title="`Checkpoints (${checkpoints.length}) — Ctrl+Shift+S to save`"
+            :title="$t('action.checkpoints', { count: checkpoints.length })"
             @click="showCheckpoints = !showCheckpoints"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 1.5 0ZM8 12a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
@@ -11195,20 +11195,20 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="messages.length > 0 && !sending"
             class="ai-settings-btn"
-            title="Undo last send — remove last message and restore text to input"
+            :title="$t('action.undo-last-send')"
             @click="undoLastSend"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.22 6.28a.749.749 0 0 0 0 1.06l5.5 5.5a.749.749 0 1 0 1.06-1.06L3.561 7.75H12.5a3.25 3.25 0 0 1 0 6.5h-1.5a.75.75 0 0 0 0 1.5h1.5a4.75 4.75 0 0 0 0-9.5H3.56l4.22-4.22a.749.749 0 1 0-1.06-1.06Z"/></svg>
           </button>
           <button
             class="ai-response-length-btn"
-            :title="`Response length: ${RESPONSE_LENGTH_LABELS[responseLength]} (click to cycle)`"
+            :title="$t('action.response-length', { label: RESPONSE_LENGTH_LABELS[responseLength] })"
             @click="cycleResponseLength"
           >{{ RESPONSE_LENGTH_LABELS[responseLength] }}</button>
           <button
             class="ai-settings-btn"
             :class="{ active: showNotes, 'ai-notes-has-content': !!notesContent.trim() }"
-            :title="notesContent.trim() ? 'Workspace notes (active — injected into every message)' : 'Workspace notes'"
+            :title="notesContent.trim() ? $t('action.workspace-notes-active') : $t('action.workspace-notes')"
             @click="showNotes = !showNotes"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM3.5 6.25a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm.75 2.25h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1 0-1.5Z"/></svg>
@@ -11216,7 +11216,7 @@ function showModelChange(mi: number): string | null {
           <button
             class="ai-settings-btn"
             :class="{ active: showPromptTemplates }"
-            title="Prompt templates library"
+            :title="$t('action.prompt-templates')"
             @click="showPromptTemplates = !showPromptTemplates"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v1.752l1.441 1.44a.75.75 0 0 1-1.06 1.06l-1.5-1.5A.75.75 0 0 1 7 7V4.75a.75.75 0 0 1 1.5 0Z"/></svg>
@@ -11224,7 +11224,7 @@ function showModelChange(mi: number): string | null {
           <button
             v-if="messages.length > 0"
             class="ai-settings-btn"
-            title="Copy thread as Markdown"
+            :title="$t('action.copy-thread-markdown')"
             @click="copyThreadAsMarkdown"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
@@ -11232,21 +11232,21 @@ function showModelChange(mi: number): string | null {
           <button
             class="ai-settings-btn"
             :class="{ active: showBookmarks }"
-            :title="bookmarkedMessages.length ? `Bookmarks (${bookmarkedMessages.length})` : 'Bookmarks — bookmark messages with ★'"
+            :title="bookmarkedMessages.length ? $t('action.bookmarks-count', { count: bookmarkedMessages.length }) : $t('action.bookmarks')"
             @click="showBookmarks = !showBookmarks"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 0 1-1.227.579L8 11.722l-3.773 3.107A.75.75 0 0 1 3 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.91l3.023-2.489a.75.75 0 0 1 .954 0L11.5 12.66V2.75a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
             class="ai-settings-btn"
-            title="Keyboard shortcuts (?)"
+            :title="$t('action.keyboard-shortcuts')"
             @click="showShortcuts = !showShortcuts"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM5 8.5H2.75a.75.75 0 0 1 0-1.5H5a.75.75 0 0 1 0 1.5Zm2.5 2h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm0-4h-4.75a.75.75 0 0 1 0-1.5H7.5a.75.75 0 0 1 0 1.5Zm5.75 4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Zm0-4h-3a.75.75 0 0 1 0-1.5h3a.75.75 0 0 1 0 1.5Z"/></svg>
           </button>
           <button
             class="ai-settings-btn"
-            title="Settings"
+            :title="$t('action.settings')"
             @click="showSettings = !showSettings"
           >
             <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
@@ -11457,7 +11457,7 @@ function showModelChange(mi: number): string | null {
             <span>Memories <span style="opacity:.6;font-size:10.5px">— injected into every conversation (cross-session)</span></span>
             <button
               class="ai-notepad-add-btn"
-              title="Add memory"
+              :title="$t('action.add-memory')"
               @click="() => { const f = window.prompt('New memory fact (one sentence):'); if (f?.trim()) addMemory(f.trim()) }"
             >+</button>
           </div>
@@ -11476,7 +11476,7 @@ function showModelChange(mi: number): string | null {
             <span>Always-Include Files <span style="opacity:.6;font-size:10.5px">— file content injected every conversation</span></span>
             <button
               class="ai-notepad-add-btn"
-              title="Pin a file path to always include"
+              :title="$t('action.pin-file-path')"
               @click="() => { const p = window.prompt('File path to always include (relative to workspace, e.g. src/types.ts):'); if (p?.trim()) addGlobalPin(p.trim()) }"
             >+</button>
           </div>

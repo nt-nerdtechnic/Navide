@@ -289,12 +289,12 @@ const statusClass = computed(() => {
       </div>
       <div class="toolbar">
         <button class="ghost" :disabled="exportBusy" @click="exportStages">
-          {{ exportBusy ? '…' : '⬇ Export JSON' }}
+          {{ exportBusy ? '…' : $t('settings.roles.export-json') }}
         </button>
         <button class="ghost" :disabled="importing" @click="importStages">
-          {{ importing ? '…' : '⬆ Import JSON' }}
+          {{ importing ? '…' : $t('settings.roles.import-json') }}
         </button>
-        <button class="ghost danger-link" @click="confirmingReset = true">↺ Reset to defaults</button>
+        <button class="ghost danger-link" @click="confirmingReset = true">↺ {{ $t('action.reset-defaults') }}</button>
       </div>
     </header>
 
@@ -302,7 +302,7 @@ const statusClass = computed(() => {
     <div class="body">
       <!-- Left: stage list -->
       <aside class="list">
-        <button class="primary new-btn" @click="startNew">+ Add Stage</button>
+        <button class="primary new-btn" @click="startNew">{{ $t('action.add-stage') }}</button>
         <ul>
           <li
             v-for="(s, idx) in stagesApi.stages.value"
@@ -314,9 +314,9 @@ const statusClass = computed(() => {
               <span class="stage-num">{{ idx + 1 }}</span>
               <span class="stage-title">{{ s.title }}</span>
               <div class="reorder-btns">
-                <button class="icon-btn" :disabled="idx === 0" @click.stop="moveUp(idx)" title="Move up">↑</button>
-                <button class="icon-btn" :disabled="idx === stagesApi.stages.value.length - 1" @click.stop="moveDown(idx)" title="Move down">↓</button>
-                <button class="icon-btn danger-icon" @click.stop="() => { selectStage(s.id); confirmingDelete = true }" title="Delete">🗑</button>
+                <button class="icon-btn" :disabled="idx === 0" @click.stop="moveUp(idx)" :title="$t('action.move-up')">↑</button>
+                <button class="icon-btn" :disabled="idx === stagesApi.stages.value.length - 1" @click.stop="moveDown(idx)" :title="$t('action.move-down')">↓</button>
+                <button class="icon-btn danger-icon" @click.stop="() => { selectStage(s.id); confirmingDelete = true }" :title="$t('action.delete')">🗑</button>
               </div>
             </div>
             <div class="stage-pills">
@@ -331,11 +331,11 @@ const statusClass = computed(() => {
       <!-- Right: editor -->
       <section v-if="draft" class="detail">
         <div class="form-header">
-          <h2>{{ isNew ? 'New Stage' : 'Edit Stage' }}</h2>
+          <h2>{{ isNew ? $t('label.new-stage') : $t('label.edit-stage') }}</h2>
           <div class="actions">
             <button v-if="!isNew" class="danger" @click="confirmingDelete = true">🗑 Delete</button>
             <button class="primary" :disabled="!canSave || saving" @click="save">
-              {{ saving ? 'Saving…' : isNew ? 'Create' : 'Save' }}
+              {{ saving ? $t('label.saving') : isNew ? $t('action.create') : $t('settings.roles.save') }}
             </button>
           </div>
         </div>
@@ -379,7 +379,7 @@ const statusClass = computed(() => {
         <div class="slots-section">
           <div class="slots-header">
             <span class="lbl">Parallel Slots ({{ draft.slots?.length ?? 0 }})</span>
-            <button v-if="!addingSlot" class="ghost small" @click="startAddSlot">+ Add Slot</button>
+            <button v-if="!addingSlot" class="ghost small" @click="startAddSlot">{{ $t('action.add-slot') }}</button>
           </div>
 
           <div v-if="draft.slots && draft.slots.length > 0" class="slot-list">
@@ -388,12 +388,12 @@ const statusClass = computed(() => {
                 <span class="pill agent">{{ slot.agentKey }}</span>
                 <span class="pill role">{{ slot.roleKey }}</span>
                 <strong>{{ slot.label }}</strong>
-                <button class="icon-btn danger-icon" style="margin-left: auto" @click="removeSlot(si)" title="Remove slot">✕</button>
+                <button class="icon-btn danger-icon" style="margin-left: auto" @click="removeSlot(si)" :title="$t('action.remove-slot')">✕</button>
               </div>
               <pre class="slot-body">{{ slot.kickoffBody.slice(0, 200) }}{{ slot.kickoffBody.length > 200 ? '…' : '' }}</pre>
             </div>
           </div>
-          <p v-else-if="!addingSlot" class="hint">No parallel slots — stage runs with a single agent.</p>
+          <p v-else-if="!addingSlot" class="hint">{{ $t('label.no-parallel-slots') }}</p>
 
           <!-- Inline add-slot form -->
           <div v-if="addingSlot" class="slot-form">
@@ -431,8 +431,8 @@ const statusClass = computed(() => {
         <h3>Delete stage "{{ draft?.title }}"?</h3>
         <p>This removes the stage from the persisted registry. Running pipelines that reference this stage will skip it.</p>
         <div class="modal-actions">
-          <button class="ghost" @click="confirmingDelete = false">Cancel</button>
-          <button class="danger" @click="doDelete">Delete</button>
+          <button class="ghost" @click="confirmingDelete = false">{{ $t('action.cancel') }}</button>
+          <button class="danger" @click="doDelete">{{ $t('action.delete') }}</button>
         </div>
       </div>
     </div>

@@ -1210,7 +1210,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <svg class="init-svg" width="32" height="32" viewBox="0 0 16 16" fill="var(--success-fg)">
         <path d="M15.698 7.287 8.712.302a1.03 1.03 0 0 0-1.457 0l-1.45 1.45 1.84 1.84a1.223 1.223 0 0 1 1.55 1.56l1.773 1.774a1.224 1.224 0 0 1 1.267 2.025 1.226 1.226 0 0 1-2.002-1.334L8.58 5.965v4.233a1.226 1.226 0 0 1 .321 2.432 1.226 1.226 0 0 1-1.11-1.384 1.224 1.224 0 0 1 .787-1.03V5.926a1.224 1.224 0 0 1-.666-1.608L6.076 2.486 .302 8.26a1.03 1.03 0 0 0 0 1.456l6.986 6.986a1.03 1.03 0 0 0 1.456 0l6.953-6.953a1.031 1.031 0 0 0 0-1.462z"/>
       </svg>
-      <div class="init-title">Not a Git repository</div>
+      <div class="init-title">{{ $t('status.not-git-repo') }}</div>
       <div class="init-desc">This folder does not have a <code>.git</code> directory</div>
       <button class="btn-primary w-full" :disabled="isInitializing" @click="doInit(true)">
         {{ isInitializing ? 'Initializing…' : 'Initialize Repository' }}
@@ -1245,18 +1245,18 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Panel header -->
       <div class="panel-header">
-        <span class="panel-title">SOURCE CONTROL</span>
+        <span class="panel-title">{{ $t('pane.git.title') }}</span>
         <div class="spacer" />
         <!-- View mode toggle -->
         <button
           class="hdr-btn"
-          :title="viewMode === 'tree' ? 'Switch to List View' : 'Switch to Tree View'"
+          :title="viewMode === 'tree' ? $t('action.switch-to-list-view') : $t('action.switch-to-tree-view')"
           @click.stop="viewMode = viewMode === 'tree' ? 'list' : 'tree'; showViewMenu = false"
         >
           <svg v-if="viewMode === 'tree'" width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 2.75a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM1.5 8a.75.75 0 1 1 1.5 0A.75.75 0 0 1 1.5 8zm.75 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 3.5h9.5a.75.75 0 0 0 0-1.5h-9.5a.75.75 0 0 0 0 1.5zM4 8.75h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5zm0 5.5h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5z"/></svg>
           <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4h12v1.5H2zm0 3.5h12V9H2zm0 3.5h12v1.5H2z"/></svg>
         </button>
-        <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
+        <button class="hdr-btn" :title="$t('action.refresh')" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
         <!-- Diff Review button (mini-IDE only) — opens combined diff+review in editor tab -->
@@ -1271,7 +1271,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           </svg>
         </button>
         <!-- Sort menu -->
-        <button class="hdr-btn" title="More options" @click.stop="openViewMenu($event)">···</button>
+        <button class="hdr-btn" :title="$t('action.more-options')" @click.stop="openViewMenu($event)">···</button>
         <Teleport to="body">
           <div v-if="showViewMenu" class="tp-backdrop" @click="showViewMenu = false" />
           <div v-if="showViewMenu" class="tp-dropdown" :style="{ top: viewMenuPos.top + 'px', right: viewMenuPos.right + 'px' }" @click.stop>
@@ -1345,7 +1345,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <span v-if="isCommitting">Committing…</span>
             <span v-else>✓ {{ amendMode ? 'Amend Commit' : 'Commit' }}</span>
           </button>
-          <button class="commit-arrow-btn" :disabled="!hasStaged && !gitLog.length" title="More options" @click.stop="openCommitMenu($event)">▾</button>
+          <button class="commit-arrow-btn" :disabled="!hasStaged && !gitLog.length" :title="$t('action.commit-more-options')" @click.stop="openCommitMenu($event)">▾</button>
           <Teleport to="body">
             <div v-if="showCommitMenu" class="tp-backdrop" @click="showCommitMenu = false" />
             <div v-if="showCommitMenu" class="tp-dropdown" :style="{ top: showCommitMenuPos.top + 'px', right: showCommitMenuPos.right + 'px' }" @click.stop>
@@ -1386,16 +1386,16 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- ── STAGED CHANGES ──────────────────────────────────── -->
       <div class="sec-hdr clickable" @click="stagedExpanded = !stagedExpanded" @contextmenu.prevent="openStagedSectionMenu($event)">
         <span class="sec-caret">{{ stagedExpanded ? '▾' : '▸' }}</span>
-        <span class="sec-label">Staged Changes</span>
+        <span class="sec-label">{{ $t('label.staged-changes') }}</span>
         <span v-if="hasStaged" class="sec-badge">{{ gitStatus.staged.length }}</span>
         <div class="spacer" />
         <div class="sec-actions" @click.stop>
-          <button v-if="hasStaged" class="sec-btn" title="Unstage All Changes" @click="doUnstageAll">−</button>
+          <button v-if="hasStaged" class="sec-btn" :title="$t('action.unstage-all')" @click="doUnstageAll">−</button>
         </div>
       </div>
       <p v-if="gitError" class="err-text git-error-row" style="padding:2px 16px">
         {{ gitError }}
-        <button class="git-error-x" title="Dismiss" @click.stop="clearGitError">✕</button>
+        <button class="git-error-x" :title="$t('action.dismiss')" @click.stop="clearGitError">✕</button>
       </p>
 
       <div v-if="stagedExpanded && hasStaged" class="file-group">
@@ -1512,14 +1512,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- ── CHANGES (unstaged) ──────────────────────────────── -->
       <div class="sec-hdr clickable" @click="changesExpanded = !changesExpanded" @contextmenu.prevent="openChangesSectionMenu($event)">
         <span class="sec-caret">{{ changesExpanded ? '▾' : '▸' }}</span>
-        <span class="sec-label">Changes</span>
+        <span class="sec-label">{{ $t('label.changes') }}</span>
         <span v-if="gitStatus.unstaged?.length || gitStatus.untracked?.length" class="sec-badge">
           {{ (gitStatus.unstaged?.length ?? 0) + (gitStatus.untracked?.length ?? 0) }}
         </span>
         <div class="spacer" />
         <div class="sec-actions" @click.stop>
-          <button v-if="hasChanges" class="sec-btn danger" title="Discard All Changes" @click="openDiscardAll">↩</button>
-          <button v-if="hasChanges" class="sec-btn" title="Stage All" @click="stageAll">＋</button>
+          <button v-if="hasChanges" class="sec-btn danger" :title="$t('action.discard-all')" @click="openDiscardAll">↩</button>
+          <button v-if="hasChanges" class="sec-btn" :title="$t('action.stage-all')" @click="stageAll">＋</button>
         </div>
       </div>
 
@@ -1529,8 +1529,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div v-if="mergeConflictContext" class="merge-conflict-context">{{ mergeConflictContext }}</div>
         <div v-for="f in mergeConflictFiles" :key="f" class="clean-file conflict-file">{{ f }}</div>
         <div class="merge-conflict-actions">
-          <button class="btn-danger" @click="doConflictAbort">Abort merge</button>
-          <button class="btn-primary" @click="doConflictKeep">Resolve conflicts</button>
+          <button class="btn-danger" @click="doConflictAbort">{{ $t('action.abort-merge') }}</button>
+          <button class="btn-primary" @click="doConflictKeep">{{ $t('action.resolve-conflicts') }}</button>
         </div>
       </div>
 
@@ -1546,7 +1546,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Stash with optional label -->
       <div v-if="showStashPrompt" class="stash-box">
-        <div class="stash-title">Save as Draft (label optional)</div>
+        <div class="stash-title">{{ $t('action.save-draft-title') }}</div>
         <div class="input-row">
           <input
             v-model="stashMessage"
@@ -1559,7 +1559,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
         <div class="clean-actions">
           <button class="btn-ghost" @click="showStashPrompt = false">Cancel</button>
-          <button class="btn-primary" @click="doStash">Save Draft</button>
+          <button class="btn-primary" @click="doStash">{{ $t('action.save-draft') }}</button>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
       </div>
@@ -1673,7 +1673,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- ── IGNORED (only when "Show Ignored Files" is on) ──────── -->
       <div v-if="showIgnored" class="sec-hdr clickable" @click="ignoredExpanded = !ignoredExpanded">
         <span class="sec-caret">{{ ignoredExpanded ? '▾' : '▸' }}</span>
-        <span class="sec-label">Ignored</span>
+        <span class="sec-label">{{ $t('label.ignored') }}</span>
         <span v-if="gitStatus.ignored?.length" class="sec-badge">{{ gitStatus.ignored.length }}</span>
         <div class="spacer" />
       </div>
@@ -1714,14 +1714,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span v-if="aheadBehind" class="ab-text">{{ aheadBehind }}</span>
         </button>
         <div class="spacer" />
-        <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" :class="{ busy: remoteBusy === 'publish' }" title="Publish Branch" :disabled="!!remoteBusy" @click="doPushUpstream">
+        <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" :class="{ busy: remoteBusy === 'publish' }" :title="$t('action.publish-branch')" :disabled="!!remoteBusy" @click="doPushUpstream">
           <span v-if="remoteBusy === 'publish'" class="spinner">⟳</span><template v-else>↑ Publish</template>
         </button>
         <button class="remote-btn" :class="{ busy: remoteBusy === 'fetch' }" title="Fetch" :disabled="!!remoteBusy" @click="doFetch">
           <span v-if="remoteBusy === 'fetch'" class="spinner">⟳</span>
           <svg v-else width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" title="Pull" :disabled="!!remoteBusy" @click="doPull">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" :title="$t('action.pull')" :disabled="!!remoteBusy" @click="doPull">
           <span v-if="remoteBusy === 'pull'" class="spinner">⟳</span><template v-else>↓</template>
         </button>
         <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush()">

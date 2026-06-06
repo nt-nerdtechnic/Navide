@@ -1495,7 +1495,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <button
         class="ide-act-btn"
         :class="{ active: sidebarView === 'explorer' }"
-        title="Explorer"
+        :title="$t('pane.explorer.title')"
         @click="sidebarView = 'explorer'"
       >
         <svg width="22" height="22" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
@@ -1503,7 +1503,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <button
         class="ide-act-btn"
         :class="{ active: sidebarView === 'search' }"
-        title="Search"
+        :title="$t('pane.search.title')"
         @click="sidebarView = 'search'"
       >
         <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
@@ -1511,7 +1511,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <button
         class="ide-act-btn"
         :class="{ active: sidebarView === 'git' }"
-        title="Source Control"
+        :title="$t('pane.git.tab')"
         @click="sidebarView = 'git'"
       >
         <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z"/></svg>
@@ -1520,7 +1520,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <button
         class="ide-act-btn"
         :class="{ active: sidebarView === 'problems' }"
-        title="Problems (⌘⇧M)"
+        :title="$t('pane.problems.tab-shortcut')"
         @click="sidebarView = 'problems'; sidebarHidden = false"
       >
         <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor"><path d="M8.22 1.754a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm-1.763-.707c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm-.25-5.25a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 0 1.5 0Z"/></svg>
@@ -1602,8 +1602,8 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
           <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
           <span class="ide-tab-name">{{ f.name }}</span>
-          <span v-if="f.dirty" class="ide-tab-dirty" title="Unsaved">●</span>
-          <button class="ide-tab-close" title="Close" @click.stop="closeFile(f.relPath)">✕</button>
+          <span v-if="f.dirty" class="ide-tab-dirty" :title="$t('label.unsaved')">●</span>
+          <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFile(f.relPath)">✕</button>
         </div>
       </div>
 
@@ -1688,7 +1688,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             @click="secondaryGroup.activeRel = f.relPath"
           >
             <span class="ide-tab-name">{{ f.name }}</span>
-            <button class="ide-tab-close" title="Close" @click.stop="closeFileInSecondary(f.relPath)">✕</button>
+            <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFileInSecondary(f.relPath)">✕</button>
           </div>
         </div>
         <div class="ide-editors">
@@ -1715,7 +1715,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <button
         class="ide-right-act-btn"
         :class="{ active: aiPanelOpen }"
-        title="AI Chat (⌘⇧A)"
+        :title="$t('pane.ai-chat.tab-shortcut')"
         @click="aiPanelOpen = !aiPanelOpen"
       >
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
@@ -1971,11 +1971,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   <!-- Tab right-click context menu -->
   <teleport to="body">
     <div v-if="tabCtxMenu" class="ide-tab-ctx" :style="{ left: tabCtxMenu.x + 'px', top: tabCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
-      <div class="ide-tab-ctx-item" @click="closeFile(tabCtxMenu!.relPath).then(closeTabCtxMenu)">Close</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseOthers(tabCtxMenu!.relPath)">Close Others</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseRight(tabCtxMenu!.relPath)">Close to the Right</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.relPath)">Close to the Left</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseAll">Close All</div>
+      <div class="ide-tab-ctx-item" @click="closeFile(tabCtxMenu!.relPath).then(closeTabCtxMenu)">{{ $t('action.close') }}</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseOthers(tabCtxMenu!.relPath)">{{ $t('action.close-others') }}</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseRight(tabCtxMenu!.relPath)">{{ $t('action.close-to-right') }}</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.relPath)">{{ $t('action.close-to-left') }}</div>
+      <div class="ide-tab-ctx-item" @click="ctxCloseAll">{{ $t('action.close-all') }}</div>
       <div class="ide-tab-ctx-sep" />
       <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyPath(tabCtxMenu!.relPath)">Copy Path</div>
       <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyRelPath(tabCtxMenu!.relPath)">Copy Relative Path</div>

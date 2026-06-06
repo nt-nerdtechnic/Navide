@@ -340,18 +340,18 @@ const statusClass = computed(() => {
       </div>
       <div class="toolbar">
         <button class="ghost" :disabled="exportBusy" @click="exportRoles">
-          {{ exportBusy ? '…' : '⬇ Export JSON' }}
+          {{ exportBusy ? '…' : $t('settings.roles.export-json') }}
         </button>
         <button class="ghost" :disabled="importing" @click="startImport">
-          {{ importing ? '…' : '⬆ Import JSON' }}
+          {{ importing ? '…' : $t('settings.roles.import-json') }}
         </button>
-        <button class="ghost danger-link" @click="confirmingReset = true">↺ Reset to defaults</button>
+        <button class="ghost danger-link" @click="confirmingReset = true">↺ {{ $t('action.reset-defaults') }}</button>
       </div>
     </header>
 
     <div class="body">
       <aside class="list">
-        <button class="primary new-btn" @click="startNew">+ New role</button>
+        <button class="primary new-btn" @click="startNew">{{ $t('settings.roles.new-role') }}</button>
         <ul>
           <li
             v-for="r in sorted"
@@ -371,20 +371,20 @@ const statusClass = computed(() => {
 
       <section v-if="draft" class="detail">
         <div class="form-header">
-          <h2>{{ draft.isNew ? 'New role' : 'Edit role' }}</h2>
+          <h2>{{ draft.isNew ? $t('label.new-role') : $t('label.edit-role') }}</h2>
           <div class="actions">
             <button v-if="!draft.isNew" class="danger" @click="confirmingDelete = true">
               🗑 Delete
             </button>
             <button class="primary" :disabled="!canSave || saving" @click="save">
-              {{ saving ? 'Saving…' : draft.isNew ? 'Create' : 'Save' }}
+              {{ saving ? $t('label.saving') : draft.isNew ? $t('action.create') : $t('settings.roles.save') }}
             </button>
           </div>
         </div>
 
         <div class="grid">
           <div>
-            <label>Key</label>
+            <label>{{ $t('settings.roles.key-label') }}</label>
             <input
               v-model="draft.key"
               type="text"
@@ -398,7 +398,7 @@ const statusClass = computed(() => {
             </p>
           </div>
           <div>
-            <label>Label</label>
+            <label>{{ $t('settings.roles.label-label') }}</label>
             <input
               v-model="draft.label"
               type="text"
@@ -408,7 +408,7 @@ const statusClass = computed(() => {
           </div>
         </div>
 
-        <label>One-line summary</label>
+        <label>{{ $t('settings.roles.one-line-label') }}</label>
         <input
           v-model="draft.one_line"
           type="text"
@@ -416,7 +416,7 @@ const statusClass = computed(() => {
           spellcheck="false"
         />
 
-        <label>System prompt</label>
+        <label>{{ $t('settings.roles.system-prompt-label') }}</label>
         <textarea
           v-model="draft.system_prompt"
           rows="18"
@@ -442,8 +442,8 @@ const statusClass = computed(() => {
           <code>defaultRole</code> will fall back to whatever happens to match at runtime.
         </p>
         <div class="modal-actions">
-          <button class="ghost" @click="confirmingDelete = false">Cancel</button>
-          <button class="danger" @click="doDelete">Delete</button>
+          <button class="ghost" @click="confirmingDelete = false">{{ $t('action.cancel') }}</button>
+          <button class="danger" @click="doDelete">{{ $t('action.delete') }}</button>
         </div>
       </div>
     </div>
@@ -456,8 +456,8 @@ const statusClass = computed(() => {
           will be restored. This is destructive and cannot be undone.
         </p>
         <div class="modal-actions">
-          <button class="ghost" @click="confirmingReset = false">Cancel</button>
-          <button class="danger" @click="doReset">Reset</button>
+          <button class="ghost" @click="confirmingReset = false">{{ $t('action.cancel') }}</button>
+          <button class="danger" @click="doReset">{{ $t('action.reset-defaults') }}</button>
         </div>
       </div>
     </div>
