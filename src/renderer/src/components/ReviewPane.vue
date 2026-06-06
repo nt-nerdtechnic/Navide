@@ -86,6 +86,8 @@ const currentBranch = computed(() =>
 )
 
 async function doReview() {
+  // Flush current model selection before backend reads settings in ai.review.start
+  await saveModel()
   await startReview({
     workspacePath: props.workspacePath,
     mode: mode.value,
@@ -114,6 +116,10 @@ function renderMd(text: string): string {
     let line = escHtml(raw)
 
     // Headings
+    if (raw.startsWith('#### ')) {
+      out.push(`<h4>${escHtml(raw.slice(5))}</h4>`)
+      continue
+    }
     if (raw.startsWith('### ')) {
       out.push(`<h3>${escHtml(raw.slice(4))}</h3>`)
       continue
@@ -385,6 +391,10 @@ function applyInline(s: string): string {
 .md-body :deep(h3) {
   font-size: 12px; font-weight: 600; color: var(--accent-fg);
   margin: 10px 0 4px;
+}
+.md-body :deep(h4) {
+  font-size: 11px; font-weight: 600; color: var(--text-secondary);
+  margin: 6px 0 2px;
 }
 .md-body :deep(p) {
   margin: 0 0 6px; line-height: 1.6; color: var(--text-primary);

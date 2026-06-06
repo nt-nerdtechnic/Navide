@@ -2201,6 +2201,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.review.start":
+            # Cancel any in-progress review before starting a new one.
+            for _t in list(session._review_tasks):
+                _t.cancel()
+            session._review_tasks.clear()
             ws_path = payload.get("workspace_path") or ""
             review_id = payload.get("review_id") or str(__import__("uuid").uuid4())
             mode = payload.get("mode") or "working"  # "working" | "branch"
@@ -2223,7 +2227,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         diff_result = await git_service.diff_branches(ws, _b, _c)
                         diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
                     else:
-                        diff_result = await git_service.diff_all(ws)
+                        # working mode: include both staged + unstaged (git diff HEAD)
+                        diff_result = await git_service.diff_branches(ws, "", "")
                         diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
                     async for chunk in stream_review(s, diff):
                         await broadcast(make_event("ai.review.chunk", {"review_id": rid, "text": chunk}))
