@@ -672,17 +672,18 @@ class StagesStore:
             return new_stages
 
     def reset(self, pipeline_id: str | None = None) -> list[dict[str, Any]]:
-        doc = self._read_doc()
-        pipeline = self._get_pipeline(doc, pipeline_id)
-        pid = pipeline.get("id", "")
-        if pid == "default":
-            pipeline["stages"] = default_stages()
-        elif pid == "maintenance":
-            pipeline["stages"] = default_maintenance_stages()
-        else:
-            pipeline["stages"] = []
-        self._write_doc(doc)
-        return pipeline["stages"]
+        with self._lock:
+            doc = self._read_doc()
+            pipeline = self._get_pipeline(doc, pipeline_id)
+            pid = pipeline.get("id", "")
+            if pid == "default":
+                pipeline["stages"] = default_stages()
+            elif pid == "maintenance":
+                pipeline["stages"] = default_maintenance_stages()
+            else:
+                pipeline["stages"] = []
+            self._write_doc(doc)
+            return pipeline["stages"]
 
 
 def _migrate(raw: dict[str, Any]) -> dict[str, Any]:
