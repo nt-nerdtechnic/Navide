@@ -1037,6 +1037,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
   { id: '@docs',     label: '@docs — fetch official documentation as context' },
   { id: '@usages',   label: '@usages — find all call sites of a symbol (e.g. @usages:MyFunc)' },
+  { id: '@env',      label: '@env — project env vars from .env.example (no secrets)' },
+  { id: '@package',  label: '@package — package.json scripts & dependencies overview' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1067,7 +1069,7 @@ watch(() => props.getActiveRelPath?.(), (path) => {
 interface SlashCommand { id: string; label: string; description: string; template: string }
 const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/explain', label: '/explain', description: 'Explain code',             template: 'Explain the following code in detail:' },
-  { id: '/fix',     label: '/fix',     description: 'Fix issue',               template: 'Find and fix the issues in the following code:' },
+  { id: '/fix',     label: '/fix',     description: 'Fix issue (add @problems for TS errors)', template: 'Find and fix the issues in the following code:' },
   { id: '/tests',   label: '/tests',   description: 'Generate tests',          template: 'Write comprehensive unit tests for the following code:' },
   { id: '/doc',     label: '/doc',     description: 'Write docs',              template: 'Write clear documentation for the following code:' },
   { id: '/review',   label: '/review',   description: 'Code review',           template: 'Review the following code and point out potential issues and improvements:' },
@@ -3875,6 +3877,78 @@ async function selectAtOption(option: AtOption): Promise<void> {
         chipContent = `// @usages:${symbolName}: unavailable`
       }
     }
+  } else if (option.id === '@env') {
+    chipLabel = '@env'
+    if (!props.workspacePath) {
+      chipContent = '// @env: no workspace open'
+    } else {
+      try {
+        interface ReadResp { ok: boolean; content?: string }
+        // Try .env.example first, then .env.template, then .env.sample
+        const candidates = ['.env.example', '.env.template', '.env.sample', '.env.local.example']
+        let found = false
+        for (const name of candidates) {
+          const resp = await props.backend.send<ReadResp>('fs.read_file', {
+            workspace_path: props.workspacePath,
+            rel_path: name,
+          }).catch(() => ({ payload: { ok: false, content: '' } }))
+          if (resp.payload?.ok && resp.payload.content?.trim()) {
+            chipContent = `// ${name} (environment variables)\n\`\`\`\n${(resp.payload.content ?? '').slice(0, 6000)}\n\`\`\``
+            found = true
+            break
+          }
+        }
+        if (!found) {
+          // Fallback: read .env but strip values (keep only VAR_NAME= lines)
+          const envResp = await props.backend.send<ReadResp>('fs.read_file', {
+            workspace_path: props.workspacePath,
+            rel_path: '.env',
+          }).catch(() => ({ payload: { ok: false, content: '' } }))
+          if (envResp.payload?.ok && envResp.payload.content?.trim()) {
+            const maskedLines = (envResp.payload.content ?? '').split('\n')
+              .map((line) => {
+                if (line.startsWith('#') || !line.includes('=')) return line
+                const [key] = line.split('=')
+                return `${key}=<value hidden>`
+              })
+              .join('\n')
+            chipContent = `// .env variable names (values masked for security)\n\`\`\`\n${maskedLines.slice(0, 4000)}\n\`\`\``
+          } else {
+            chipContent = '// @env: no .env.example or .env file found'
+          }
+        }
+      } catch {
+        chipContent = '// @env: unavailable'
+      }
+    }
+  } else if (option.id === '@package') {
+    chipLabel = '@package'
+    if (!props.workspacePath) {
+      chipContent = '// @package: no workspace open'
+    } else {
+      try {
+        interface ReadResp { ok: boolean; content?: string }
+        const resp = await props.backend.send<ReadResp>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: 'package.json',
+        })
+        if (!resp.payload?.ok || !resp.payload.content) {
+          chipContent = '// @package: package.json not found'
+        } else {
+          const pkg = JSON.parse(resp.payload.content) as Record<string, unknown>
+          const summary: Record<string, unknown> = {}
+          if (pkg.name) summary.name = pkg.name
+          if (pkg.version) summary.version = pkg.version
+          if (pkg.scripts) summary.scripts = pkg.scripts
+          if (pkg.dependencies) summary.dependencies = Object.keys(pkg.dependencies as object)
+          if (pkg.devDependencies) summary.devDependencies = Object.keys(pkg.devDependencies as object)
+          if (pkg.engines) summary.engines = pkg.engines
+          chipContent = `// package.json overview\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\``
+        }
+      } catch {
+        chipContent = '// @package: unavailable'
+      }
+    }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
     // @file:lineRange — e.g., "src/App.vue:10-50"
     const lineMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(option.id)!
@@ -3936,6 +4010,8 @@ function chipIcon(label: string): string {
   if (label.startsWith('@docs')) return '📖'
   if (label.startsWith('@test-')) return '✗'
   if (label.startsWith('@usages')) return '↗'
+  if (label.startsWith('@env')) return '⚙'
+  if (label.startsWith('@package')) return '📦'
   if (label.startsWith('@problems')) return '⚠'
   if (label.startsWith('@clipboard')) return '📋'
   if (label.startsWith('@tree')) return '🌲'
