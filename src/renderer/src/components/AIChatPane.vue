@@ -397,22 +397,44 @@ const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const showModelPicker = ref(false)
 
-const ANTHROPIC_MODELS = [
-  'claude-opus-4-8',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5-20251001',
-  'claude-3-5-sonnet-20241022',
-  'claude-3-5-haiku-20241022',
+interface ModelEntry {
+  id: string
+  provider: 'anthropic' | 'ollama'
+  display: string
+  note: string   // speed/capability hint
+}
+const MODEL_CATALOG: ModelEntry[] = [
+  { id: 'claude-opus-4-8',           provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable' },
+  { id: 'claude-sonnet-4-6',         provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced' },
+  { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast' },
+  { id: 'claude-3-5-sonnet-20241022',provider: 'anthropic', display: 'Claude 3.5 Sonnet',       note: 'Stable' },
+  { id: 'claude-3-5-haiku-20241022', provider: 'anthropic', display: 'Claude 3.5 Haiku',        note: 'Fast · Stable' },
+  { id: 'llama3.2',                  provider: 'ollama',    display: 'Llama 3.2',               note: 'Local' },
+  { id: 'llama3.1',                  provider: 'ollama',    display: 'Llama 3.1',               note: 'Local' },
+  { id: 'qwen2.5-coder',             provider: 'ollama',    display: 'Qwen 2.5 Coder',          note: 'Local · Code' },
+  { id: 'mistral',                   provider: 'ollama',    display: 'Mistral',                 note: 'Local' },
+  { id: 'codellama',                 provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code' },
+  { id: 'gemma2',                    provider: 'ollama',    display: 'Gemma 2',                 note: 'Local' },
 ]
-const OLLAMA_MODELS = ['llama3.2', 'llama3.1', 'qwen2.5-coder', 'mistral', 'codellama', 'gemma2']
+const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
+const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
 const currentModelOptions = computed(() =>
   settingsProvider.value === 'anthropic' ? ANTHROPIC_MODELS : OLLAMA_MODELS,
 )
-const modelIsCustom = computed(() => !currentModelOptions.value.includes(settingsModel.value))
+const modelIsCustom = computed(() => !MODEL_CATALOG.some((m) => m.id === settingsModel.value))
 const selectedModelKey = computed({
   get: () => (modelIsCustom.value ? 'custom' : settingsModel.value),
   set: (val: string) => { if (val !== 'custom') settingsModel.value = val },
 })
+
+// Atomically switch provider + model and persist to backend
+function switchModel(modelId: string): void {
+  const entry = MODEL_CATALOG.find((m) => m.id === modelId)
+  if (entry) settingsProvider.value = entry.provider
+  settingsModel.value = modelId
+  saveSettings()
+}
+
 // When provider switches, reset model to the first preset for that provider
 // (only if current model belongs to the other provider's list)
 watch(settingsProvider, (provider) => {
@@ -1450,15 +1472,16 @@ function undoLastSend(): void {
 // ── Regenerate with a different model ─────────────────────────────────────────
 const regenModelOpen = ref(false)
 
-function regenWithModel(model: string): void {
+function regenWithModel(modelId: string): void {
   regenModelOpen.value = false
-  const prev = settingsModel.value
-  settingsModel.value = model
-  saveSettings()
-  void regenerate().then(() => {
-    // Restore previous model if user hasn't changed it themselves
-    if (settingsModel.value === model) {
-      settingsModel.value = prev
+  const prevModel    = settingsModel.value
+  const prevProvider = settingsProvider.value
+  switchModel(modelId)
+  void regenerate().finally(() => {
+    // Restore previous provider + model after the stream completes or fails
+    if (settingsModel.value === modelId) {
+      settingsProvider.value = prevProvider
+      settingsModel.value = prevModel
       saveSettings()
     }
   })
@@ -3079,13 +3102,28 @@ function getDateLabel(ts: number): string {
               <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>▾
             </button>
             <div v-if="regenModelOpen" class="ai-regen-model-menu">
+              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Anthropic</div>
               <div
-                v-for="m in currentModelOptions"
-                :key="m"
+                v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')"
+                :key="m.id"
                 class="ai-regen-model-item"
-                :class="{ active: m === settingsModel }"
-                @mousedown.prevent="regenWithModel(m)"
-              >{{ m.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</div>
+                :class="{ active: m.id === settingsModel }"
+                @mousedown.prevent="regenWithModel(m.id)"
+              >
+                <span>{{ m.display }}</span>
+                <span class="ai-model-picker-note">{{ m.note }}</span>
+              </div>
+              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Ollama</div>
+              <div
+                v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')"
+                :key="m.id"
+                class="ai-regen-model-item"
+                :class="{ active: m.id === settingsModel }"
+                @mousedown.prevent="regenWithModel(m.id)"
+              >
+                <span>{{ m.display }}</span>
+                <span class="ai-model-picker-note">{{ m.note }}</span>
+              </div>
             </div>
           </div>
           <button
@@ -3245,19 +3283,45 @@ function getDateLabel(ts: number): string {
           :title="`Workspace rules active from ${workspaceRulesFile}`"
           @click="showSettings = true"
         >✦ rules</span>
-        <button class="ai-model-badge-btn" :title="`Model: ${settingsModel} (click to change)`" @click="showModelPicker = !showModelPicker">
-          <span class="ai-model-badge-icon">⬡</span>
-          <span class="ai-model-badge-name">{{ settingsModel.split('/').pop()?.replace('claude-', '').replace('-20', ' 20') }}</span>
+        <button class="ai-model-badge-btn" :title="`Provider: ${settingsProvider}  Model: ${settingsModel}\n(click to change)`" @click="showModelPicker = !showModelPicker">
+          <span class="ai-model-badge-provider" :class="settingsProvider">{{ settingsProvider === 'anthropic' ? 'A' : 'O' }}</span>
+          <span class="ai-model-badge-name">{{ MODEL_CATALOG.find(m => m.id === settingsModel)?.display ?? settingsModel }}</span>
           <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
         </button>
         <div v-if="showModelPicker" class="ai-model-picker-menu">
+          <!-- Anthropic group -->
+          <div class="ai-model-picker-group">Anthropic</div>
           <div
-            v-for="m in currentModelOptions"
-            :key="m"
+            v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')"
+            :key="m.id"
             class="ai-model-picker-item"
-            :class="{ active: m === settingsModel }"
-            @click="settingsModel = m; showModelPicker = false; saveSettings()"
-          >{{ m }}</div>
+            :class="{ active: m.id === settingsModel }"
+            @click="switchModel(m.id); showModelPicker = false"
+          >
+            <span class="ai-model-picker-name">{{ m.display }}</span>
+            <span class="ai-model-picker-note">{{ m.note }}</span>
+          </div>
+          <!-- Ollama group -->
+          <div class="ai-model-picker-group">Ollama (Local)</div>
+          <div
+            v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')"
+            :key="m.id"
+            class="ai-model-picker-item"
+            :class="{ active: m.id === settingsModel }"
+            @click="switchModel(m.id); showModelPicker = false"
+          >
+            <span class="ai-model-picker-name">{{ m.display }}</span>
+            <span class="ai-model-picker-note">{{ m.note }}</span>
+          </div>
+          <!-- Custom model input -->
+          <div class="ai-model-picker-sep" />
+          <div class="ai-model-picker-custom">
+            <input
+              class="ai-model-picker-custom-input"
+              placeholder="Custom model ID…"
+              @keydown.enter.prevent="(e) => { const v = (e.target as HTMLInputElement).value.trim(); if (v) { settingsModel = v; saveSettings(); showModelPicker = false } }"
+            />
+          </div>
         </div>
       </div>
 
@@ -3752,13 +3816,39 @@ function getDateLabel(ts: number): string {
   position: absolute; bottom: calc(100% + 4px); right: 0;
   background: var(--bg-overlay); border: 1px solid var(--border-default);
   border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.28);
-  padding: 4px 0; min-width: 170px; z-index: 60;
+  padding: 4px 0; min-width: 200px; z-index: 60; max-height: 280px; overflow-y: auto;
 }
 .ai-regen-model-item {
+  display: flex; align-items: center; justify-content: space-between;
   padding: 5px 12px; font-size: 11.5px; cursor: pointer;
-  color: var(--text-primary); white-space: nowrap;
+  color: var(--text-primary); gap: 8px;
 }
 .ai-regen-model-item:hover, .ai-regen-model-item.active { background: var(--accent-muted); color: var(--accent-fg); }
+
+/* Provider badge on model bar button */
+.ai-model-badge-provider {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 3px; font-size: 9px; font-weight: 700;
+  flex-shrink: 0;
+}
+.ai-model-badge-provider.anthropic { background: rgba(209,92,255,0.2); color: #d15cff; }
+.ai-model-badge-provider.ollama    { background: rgba(87,171,90,0.2);  color: #57ab5a; }
+
+/* Model picker grouped items */
+.ai-model-picker-group {
+  padding: 5px 10px 2px; font-size: 10px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text-muted); opacity: 0.7; user-select: none;
+}
+.ai-model-picker-name { flex: 1; font-size: 12px; }
+.ai-model-picker-note { font-size: 10px; color: var(--text-muted); opacity: 0.75; white-space: nowrap; }
+.ai-model-picker-sep  { height: 1px; background: var(--border-muted); margin: 4px 0; }
+.ai-model-picker-custom { padding: 4px 8px 6px; }
+.ai-model-picker-custom-input {
+  width: 100%; box-sizing: border-box; padding: 4px 8px; font-size: 11px;
+  background: var(--bg-muted); border: 1px solid var(--border-muted); border-radius: 4px;
+  color: var(--text-primary); outline: none;
+}
+.ai-model-picker-custom-input:focus { border-color: var(--accent-emphasis); }
 .ai-feedback-btn { font-size: 11px; opacity: 0.3; }
 .ai-feedback-btn:hover { opacity: 0.9; }
 .ai-feedback-up { opacity: 1 !important; filter: none; }
