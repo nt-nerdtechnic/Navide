@@ -1571,6 +1571,11 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
   if (seq !== workspaceCheckSeq) return
   if (pipeline.state !== 'running') pipeline.workspacePath = path
+  // Keep currentWorkspace in sync with the workspace being inspected so that
+  // run-group localStorage keys match: _saveRunGroups() keys off currentWorkspace
+  // while _loadRunGroups() keys off `path`. If they diverge, a pipeline tab saved
+  // under one key is unreadable under the other and silently vanishes on reload.
+  currentWorkspace.value = path
   existingProject.value = resp ? buildExistingProjectInfo(resp) : null
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
