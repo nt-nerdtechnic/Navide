@@ -104,6 +104,7 @@ interface ChatMessage {
   bookmarked?: boolean
   feedback?: 'up' | 'down'
   commitMsg?: string   // detected conventional-commit message
+  followUps?: string[] // suggested follow-up questions (shown below response)
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -410,6 +411,12 @@ const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
+// Chat mode — 'ask' = suggestions only, 'agent' = can execute edits/commands
+const chatMode = ref<'ask' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
+watch(chatMode, (mode) => {
+  settingsAutoAccept.value = mode === 'agent'
+  localStorage.setItem('ai-chat-auto-accept', mode === 'agent' ? 'true' : 'false')
+})
 const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const showModelPicker = ref(false)
@@ -419,20 +426,21 @@ interface ModelEntry {
   provider: 'anthropic' | 'ollama' | 'auto'
   display: string
   note: string   // speed/capability hint
+  ctx?: number   // context window in tokens
 }
 const MODEL_CATALOG: ModelEntry[] = [
   { id: 'auto',                       provider: 'auto',      display: 'Auto',                    note: 'Best available' },
-  { id: 'claude-opus-4-8',           provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable' },
-  { id: 'claude-sonnet-4-6',         provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced' },
-  { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast' },
-  { id: 'claude-3-5-sonnet-20241022',provider: 'anthropic', display: 'Claude 3.5 Sonnet',       note: 'Stable' },
-  { id: 'claude-3-5-haiku-20241022', provider: 'anthropic', display: 'Claude 3.5 Haiku',        note: 'Fast · Stable' },
-  { id: 'llama3.2',                  provider: 'ollama',    display: 'Llama 3.2',               note: 'Local' },
-  { id: 'llama3.1',                  provider: 'ollama',    display: 'Llama 3.1',               note: 'Local' },
-  { id: 'qwen2.5-coder',             provider: 'ollama',    display: 'Qwen 2.5 Coder',          note: 'Local · Code' },
-  { id: 'mistral',                   provider: 'ollama',    display: 'Mistral',                 note: 'Local' },
-  { id: 'codellama',                 provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code' },
-  { id: 'gemma2',                    provider: 'ollama',    display: 'Gemma 2',                 note: 'Local' },
+  { id: 'claude-opus-4-8',           provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable',   ctx: 200_000 },
+  { id: 'claude-sonnet-4-6',         provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced',        ctx: 200_000 },
+  { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast',            ctx: 200_000 },
+  { id: 'claude-3-5-sonnet-20241022',provider: 'anthropic', display: 'Claude 3.5 Sonnet',       note: 'Stable',          ctx: 200_000 },
+  { id: 'claude-3-5-haiku-20241022', provider: 'anthropic', display: 'Claude 3.5 Haiku',        note: 'Fast · Stable',   ctx: 200_000 },
+  { id: 'llama3.2',                  provider: 'ollama',    display: 'Llama 3.2',               note: 'Local',           ctx: 128_000 },
+  { id: 'llama3.1',                  provider: 'ollama',    display: 'Llama 3.1',               note: 'Local',           ctx: 128_000 },
+  { id: 'qwen2.5-coder',             provider: 'ollama',    display: 'Qwen 2.5 Coder',          note: 'Local · Code',    ctx: 128_000 },
+  { id: 'mistral',                   provider: 'ollama',    display: 'Mistral',                 note: 'Local',           ctx: 32_000 },
+  { id: 'codellama',                 provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code',    ctx: 16_000 },
+  { id: 'gemma2',                    provider: 'ollama',    display: 'Gemma 2',                 note: 'Local',           ctx: 8_000 },
 ]
 const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
 const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
@@ -798,18 +806,32 @@ async function runCommit(msg: ChatMessage): Promise<void> {
 }
 
 // ── Follow-up suggestions ──────────────────────────────────────────────────────
-function extractFollowUps(content: string): string[] {
-  // Strip code blocks first
+function extractFollowUps(content: string, userContent?: string): string[] {
+  // 1. Try to extract questions the AI already asked in its response
   const stripped = content.replace(/```[\s\S]*?```/g, '').replace(/`[^`]+`/g, '')
-  // Find sentences ending with ?
   const sentences = stripped.match(/[A-Z][^.!?]*\?/g) ?? []
-  // Filter: at least 15 chars, not too long, start with question words
   const QUESTION_WORDS = /^(What|How|Why|When|Where|Which|Who|Can|Could|Should|Would|Is|Are|Does|Do)\b/i
-  const suggestions = sentences
+  const fromContent = sentences
     .map((s) => s.trim())
     .filter((s) => s.length >= 15 && s.length <= 120 && QUESTION_WORDS.test(s))
     .slice(0, 3)
-  return suggestions
+  if (fromContent.length >= 2) return fromContent
+
+  // 2. Fallback: generate context-aware suggestions based on response/request type
+  const c = content.toLowerCase()
+  const u = (userContent ?? '').toLowerCase()
+  const hasCode = content.includes('```')
+  const isError = c.includes('error') || c.includes('bug') || u.includes('fix') || u.includes('error')
+  const isTest  = c.includes('test') || u.includes('test')
+  const isExplain = u.includes('explain') || u.includes('what is') || u.includes('how does')
+  const isOptimize = c.includes('performance') || c.includes('optimiz') || u.includes('optim')
+  if (isError && hasCode) return ['Can you show the full fixed version?', 'Are there other similar issues?', 'How can I prevent this?']
+  if (isTest)  return ['Add edge case tests', 'Show integration test example', 'What should I mock here?']
+  if (isExplain && hasCode) return ['Give a minimal runnable example', 'What are the common gotchas?', 'How does this compare to alternatives?']
+  if (isOptimize) return ['What is the time complexity?', 'Are there memory trade-offs?', 'Show benchmark approach']
+  if (hasCode) return ['Add error handling', 'Write tests for this', 'Explain the key parts']
+  if (isExplain) return ['Give a concrete example', 'What are the edge cases?', 'What should I learn next?']
+  return fromContent  // empty if nothing matched
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────

@@ -44,9 +44,11 @@ let preferredCol = -1
 let _maxLineLenCache = -1
 function _scanMaxLineLen(): number {
   let m = 0
+  const ts = tabSize.value
   for (let i = 0; i < model.lineCount(); i++) {
-    const l = model.getLine(i).length
-    if (l > m) m = l
+    const line = model.getLine(i)
+    const len = line.includes('\t') ? visColFromOffset(line, line.length, ts) : line.length
+    if (len > m) m = len
   }
   return (_maxLineLenCache = m)
 }
@@ -225,7 +227,10 @@ function applyEdit(range: Range, text: string): void {
   // Pure single-line insert (typing) can only increase the max → O(1) check.
   // Everything else (delete, multi-line edit, newline) → invalidate for lazy rescan.
   if (isPureInsert && text.indexOf('\n') === -1) {
-    const newLen = model.getLine(caret.line).length
+    const editedLine = model.getLine(caret.line)
+    const newLen = editedLine.includes('\t')
+      ? visColFromOffset(editedLine, editedLine.length, tabSize.value)
+      : editedLine.length
     // Only update incrementally when cache is valid; if -1 (invalidated), leave it
     // so the next sizerMinWidth read triggers a full rescan via _scanMaxLineLen().
     if (_maxLineLenCache >= 0 && newLen > _maxLineLenCache) _maxLineLenCache = newLen
@@ -1367,8 +1372,8 @@ function cursorLineEnd(): void { endKey(false) }
 function cursorLineStartSelect(): void { homeKey(true) }
 function cursorLineEndSelect(): void { endKey(true) }
 function selectCurrentWord(): void { ghost.value = null; selectWordAt(cursor.value) }
-function setTabSize(size: number): void { tabSize.value = Math.max(1, Math.min(8, size)) }
-function setUseSpaces(spaces: boolean): void { useSpaces.value = spaces }
+function setTabSize(size: number): void { tabSize.value = Math.max(1, Math.min(8, size)); _maxLineLenCache = -1 }
+function setUseSpaces(spaces: boolean): void { useSpaces.value = spaces; _maxLineLenCache = -1 }
 function getTabSize(): number { return tabSize.value }
 function getUseSpaces(): boolean { return useSpaces.value }
 
