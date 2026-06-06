@@ -136,8 +136,9 @@ const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
 
 // ── Voice input (Web Speech API) ───────────────────────────────────────────────
+interface _SR { continuous: boolean; interimResults: boolean; lang: string; onresult: ((e: Event) => void) | null; onend: (() => void) | null; onerror: (() => void) | null; start(): void; stop(): void }
 const voiceListening = ref(false)
-let _speechRecognition: SpeechRecognition | null = null
+let _speechRecognition: _SR | null = null
 const voiceSupported = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
 
 function toggleVoiceInput(): void {
@@ -147,17 +148,20 @@ function toggleVoiceInput(): void {
     voiceListening.value = false
     return
   }
-  const SpeechRecognitionCtor = (window.SpeechRecognition ?? (window as unknown as Record<string, unknown>)['webkitSpeechRecognition']) as typeof SpeechRecognition
+  type SpeechRecognitionCtor = new () => _SR
+  const win = window as unknown as Record<string, unknown>
+  const SpeechRecognitionCtor = (win['SpeechRecognition'] ?? win['webkitSpeechRecognition']) as SpeechRecognitionCtor
   _speechRecognition = new SpeechRecognitionCtor()
   _speechRecognition.continuous = false
   _speechRecognition.interimResults = true
   _speechRecognition.lang = navigator.language || 'en-US'
   let interimText = ''
-  _speechRecognition.onresult = (e: SpeechRecognitionEvent) => {
+  _speechRecognition.onresult = (e: Event) => {
+    const se = e as unknown as { resultIndex: number; results: SpeechRecognitionResultList }
     let interim = '', final = ''
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript
-      if (e.results[i].isFinal) final += t
+    for (let i = se.resultIndex; i < se.results.length; i++) {
+      const t = se.results[i][0].transcript
+      if (se.results[i].isFinal) final += t
       else interim += t
     }
     if (final) {
@@ -848,7 +852,16 @@ watch(settingsProvider, (provider) => {
   if (catalog.length && !catalog.includes(settingsModel.value)) {
     settingsModel.value = catalog[0]
   }
+  // Reset test status when switching providers
+  testConnStatus.value = {}
+  testConnError.value = {}
 })
+
+// Reset test status when API key changes so stale result isn't shown
+watch([settingsApiKey, settingsOpenAiKey, settingsGroqKey, settingsDeepSeekKey,
+       settingsGoogleKey, settingsMistralKey, settingsXaiKey,
+       settingsOaiCompatKey, settingsOaiCompatUrl, settingsOllamaUrl],
+  () => { testConnStatus.value = {}; testConnError.value = {} })
 
 // Long message fold — collapse AI messages with > 50 lines (UI-only, ephemeral)
 const expandedMsgIdxs = ref(new Set<number>())
@@ -2647,7 +2660,7 @@ let unsubSettingsGet: (() => void) | null = null
 function setupListeners(): void {
   document.addEventListener('keydown', _onGlobalKeydown)
   placeholderInterval = window.setInterval(() => {
-    if (!inputText.value) placeholderIdx.value = (placeholderIdx.value + 1) % PLACEHOLDER_HINTS.length
+    if (!inputText.value) placeholderIdx.value = (placeholderIdx.value + 1) % PLACEHOLDER_HINTS_ASK.length
   }, 5000)
   unsubChunk = props.backend.on('ai.chat.chunk', (payload) => {
     const p = payload as { session_id: string; text: string }
@@ -5250,12 +5263,13 @@ function getDateLabel(ts: number): string {
 
     <!-- Scroll-to-bottom button (shown when user has scrolled up during streaming) -->
     <button
-      v-if="sending && !autoScroll"
+      v-if="!autoScroll"
       class="ai-scroll-to-bottom"
-      title="Scroll to bottom"
+      :class="{ 'ai-scroll-to-bottom--live': sending }"
+      title="Scroll to bottom (↓)"
       @click="autoScroll = true; scrollBottom(true)"
     >
-      ↓ Scroll to bottom
+      ↓<span v-if="sending"> live</span>
     </button>
 
     <!-- Active tool status banner -->
@@ -6358,19 +6372,34 @@ function getDateLabel(ts: number): string {
 .ai-scroll-to-bottom {
   position: absolute;
   bottom: 130px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--accent-emphasis);
-  color: var(--text-on-emphasis, #fff);
-  border: none;
-  border-radius: 12px;
-  padding: 4px 12px;
-  font-size: 12px;
+  right: 12px;
+  background: var(--bg-elevated, var(--bg-base));
+  color: var(--text-bright);
+  border: 1px solid var(--border-muted);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
   cursor: pointer;
   z-index: 10;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  padding: 0;
+  gap: 3px;
+  transition: opacity 0.15s;
 }
-.ai-scroll-to-bottom:hover { opacity: 0.85; }
+.ai-scroll-to-bottom--live {
+  border-radius: 12px;
+  width: auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis, #fff);
+  border-color: transparent;
+}
+.ai-scroll-to-bottom:hover { opacity: 0.8; }
 
 .ai-bubble {
   max-width: 90%;
