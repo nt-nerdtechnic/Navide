@@ -4171,32 +4171,45 @@ function onDragleave(): void { isDraggingOver.value = false }
 async function onDrop(e: DragEvent): Promise<void> {
   e.preventDefault()
   isDraggingOver.value = false
+  type AgentApi = Record<string, (...a: unknown[]) => unknown>
+  const api = (window as Window & { agentTeam?: AgentApi }).agentTeam
   const files = Array.from(e.dataTransfer?.files ?? [])
+  const MAX = 80_000
   for (const file of files.slice(0, 5)) {
-    // Electron exposes the real absolute path via getPathForFile
-    const absPath = window.agentTeam?.getPathForFile(file) ?? ''
-    // Compute path relative to workspace
-    const sep = props.workspacePath.endsWith('/') ? '' : '/'
-    const prefix = props.workspacePath + sep
-    const relPath = absPath.startsWith(prefix) ? absPath.slice(prefix.length) : absPath
-    if (!relPath) continue
+    const absPath = api?.getPathForFile?.(file) as string | undefined ?? ''
+    if (!absPath) continue
+    const wsRoot = props.workspacePath ? props.workspacePath.replace(/\/$/, '') : ''
+    const isInsideWorkspace = wsRoot && (absPath === wsRoot || absPath.startsWith(wsRoot + '/'))
+    const relPath = isInsideWorkspace ? absPath.slice(wsRoot.length).replace(/^\//, '') : absPath
+    const fileName = absPath.split('/').pop() ?? file.name
+    const ext = fileName.split('.').pop() ?? ''
+    const label = `@${fileName}`
+    if (contextChips.value.some((c) => c.label === label)) continue
     try {
-      interface ReadResp { ok: boolean; content?: string }
-      const resp = await props.backend.send<ReadResp>('fs.read_file', {
-        workspace_path: props.workspacePath,
-        rel_path: relPath,
-      })
-      const label = `@${relPath.split('/').pop()}`
-      const ext = relPath.split('.').pop() ?? ''
-      if (contextChips.value.some((c) => c.label === label)) continue
-      const fileContent = (resp.payload?.content ?? '').slice(0, 50_000)
+      let fileContent = ''
+      if (isInsideWorkspace) {
+        interface ReadResp { ok: boolean; content?: string }
+        const resp = await props.backend.send<ReadResp>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: relPath,
+        })
+        if (!resp.payload?.ok) { showToast(`Could not read: ${fileName}`); continue }
+        fileContent = resp.payload?.content ?? ''
+      } else {
+        if (!api?.readFileFrom) { showToast('Cannot read file outside workspace'); continue }
+        interface RfResp { ok: boolean; content: string }
+        const r = await (api.readFileFrom as (p: string, b: number) => Promise<RfResp>)(absPath, 0)
+        if (!r.ok) { showToast(`Could not read: ${fileName}`); continue }
+        fileContent = r.content
+      }
+      const truncated = fileContent.length > MAX ? fileContent.slice(0, MAX) + '\n// … truncated' : fileContent
       contextChips.value.push({
         id: crypto.randomUUID(),
         label,
-        content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent}\n\`\`\``,
+        content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
       })
     } catch {
-      showToast(`Unable to read: ${relPath}`)
+      showToast(`Could not read: ${fileName}`)
     }
   }
 }
@@ -4690,10 +4703,29 @@ function getDateLabel(ts: number): string {
                   <span class="ai-tool-toggle">{{ card.collapsed ? '▶' : '▼' }}</span>
                 </div>
                 <div v-if="!card.collapsed" class="ai-tool-body">
-                  <pre class="ai-tool-pre">{{ JSON.stringify(card.tool_input, null, 2) }}</pre>
-                  <div v-if="card.result != null" class="ai-tool-result">
-                    <span class="ai-tool-result-label">Result: </span>{{ card.result }}
+                  <!-- Readable input summary based on tool type -->
+                  <div v-if="card.tool_name === 'edit_file' && (card.tool_input as Record<string,unknown>).instructions" class="ai-tool-param">
+                    <span class="ai-tool-param-label">Instructions: </span>
+                    <span class="ai-tool-param-val">{{ (card.tool_input as Record<string,unknown>).instructions }}</span>
                   </div>
+                  <div v-else-if="card.tool_name === 'search_files' && (card.tool_input as Record<string,unknown>).query" class="ai-tool-param">
+                    <span class="ai-tool-param-label">Query: </span>
+                    <code class="ai-tool-code-inline">{{ (card.tool_input as Record<string,unknown>).query }}</code>
+                    <span v-if="(card.tool_input as Record<string,unknown>).file_pattern" class="ai-tool-param-val"> in {{ (card.tool_input as Record<string,unknown>).file_pattern }}</span>
+                  </div>
+                  <div v-else-if="card.tool_name === 'run_command' && (card.tool_input as Record<string,unknown>).command" class="ai-tool-param">
+                    <code class="ai-tool-code-inline">$ {{ (card.tool_input as Record<string,unknown>).command }}</code>
+                  </div>
+                  <div v-else-if="!['read_file','list_directory','glob_files','write_file'].includes(card.tool_name)" class="ai-tool-param">
+                    <pre class="ai-tool-pre">{{ JSON.stringify(card.tool_input, null, 2) }}</pre>
+                  </div>
+                  <!-- Result: code-style pre for file/command output, plain for others -->
+                  <template v-if="card.result != null">
+                    <pre v-if="['read_file', 'write_file', 'run_command'].includes(card.tool_name)" class="ai-tool-result-pre">{{ String(card.result).slice(0, 2000) }}{{ String(card.result).length > 2000 ? '\n…truncated' : '' }}</pre>
+                    <div v-else class="ai-tool-result">
+                      <span class="ai-tool-result-label">Result: </span>{{ card.result }}
+                    </div>
+                  </template>
                 </div>
               </div>
 
@@ -6377,6 +6409,36 @@ function getDateLabel(ts: number): string {
 }
 .ai-tool-result { margin-top: 6px; color: var(--text-muted); font-size: 11px; }
 .ai-tool-result-label { color: var(--accent-fg); font-weight: 600; margin-right: 4px; }
+.ai-tool-result-pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-base, #0d1117);
+  color: var(--text-secondary);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border-muted);
+}
+.ai-tool-param {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+.ai-tool-param-label { color: var(--text-muted); margin-right: 4px; }
+.ai-tool-param-val { color: var(--text-secondary); }
+.ai-tool-code-inline {
+  font-family: ui-monospace, Menlo, monospace;
+  background: var(--bg-subtle);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  color: var(--accent-fg);
+}
 
 /* ── Edit proposal card ────────────────────────────────────────────────────── */
 .ai-edit-card {
