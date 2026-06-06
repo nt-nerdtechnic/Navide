@@ -47,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     # Shared
     "system_prompt": "You are a helpful AI coding assistant.",
     "max_tokens": 4096,
+    "reasoning_effort": None,
 }
 
 _VALID_PROVIDERS = (

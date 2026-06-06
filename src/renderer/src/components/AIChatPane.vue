@@ -2785,8 +2785,9 @@ function setupListeners(): void {
       ollama_base_url?: string; system_prompt?: string; max_tokens?: number; temperature?: number
       openai_api_key?: string; groq_api_key?: string; deepseek_api_key?: string
       openai_compatible_base_url?: string; openai_compatible_api_key?: string; openai_compatible_model?: string
+      reasoning_effort?: 'low' | 'medium' | 'high' | null
     }
-    const validProviders: ProviderName[] = ['anthropic', 'ollama', 'openai', 'groq', 'deepseek', 'openai_compatible']
+    const validProviders: ProviderName[] = ['anthropic', 'ollama', 'openai', 'groq', 'deepseek', 'google', 'mistral', 'xai', 'openai_compatible']
     if (p.provider && validProviders.includes(p.provider as ProviderName)) settingsProvider.value = p.provider as ProviderName
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
     if (p.openai_api_key) settingsOpenAiKey.value = p.openai_api_key
@@ -2801,6 +2802,7 @@ function setupListeners(): void {
     if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
     if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
     if (p.temperature !== undefined) settingsTemperature.value = p.temperature
+    if (p.reasoning_effort !== undefined) settingsReasoningEffort.value = p.reasoning_effort ?? null
     // Re-apply per-conversation model override after backend settings load
     const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
     if (ct?.model) {
@@ -4933,11 +4935,14 @@ function getDateLabel(ts: number): string {
             </button>
             <div v-if="regenModelOpen" class="ai-regen-model-menu">
               <template v-for="grp in [
-                { label: 'Anthropic', filter: 'anthropic' },
-                { label: 'OpenAI',   filter: 'openai'    },
-                { label: 'Groq',     filter: 'groq'      },
-                { label: 'DeepSeek', filter: 'deepseek'  },
-                { label: 'Ollama',   filter: 'ollama'    },
+                { label: 'Anthropic',    filter: 'anthropic' },
+                { label: 'OpenAI',       filter: 'openai'    },
+                { label: 'Google',       filter: 'google'    },
+                { label: 'Mistral',      filter: 'mistral'   },
+                { label: 'xAI',         filter: 'xai'       },
+                { label: 'Groq',         filter: 'groq'      },
+                { label: 'DeepSeek',     filter: 'deepseek'  },
+                { label: 'Ollama',       filter: 'ollama'    },
               ]" :key="grp.label">
                 <div
                   v-if="MODEL_CATALOG.some(e => e.provider === grp.filter)"
@@ -5189,6 +5194,9 @@ function getDateLabel(ts: number): string {
           <template v-for="group in [
             { label: 'Anthropic', filter: 'anthropic' },
             { label: 'OpenAI', filter: 'openai' },
+            { label: 'Google Gemini', filter: 'google' },
+            { label: 'Mistral AI', filter: 'mistral' },
+            { label: 'xAI Grok', filter: 'xai' },
             { label: 'Groq', filter: 'groq' },
             { label: 'DeepSeek', filter: 'deepseek' },
             { label: 'Ollama (Local)', filter: 'ollama' },
