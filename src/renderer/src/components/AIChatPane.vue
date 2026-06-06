@@ -2265,14 +2265,15 @@ async function attachFile(): Promise<void> {
   }
 
   for (const absPath of absPaths) {
-    const relPath = props.workspacePath && absPath.startsWith(props.workspacePath)
-      ? absPath.slice(props.workspacePath.length).replace(/^\//, '')
+    const wsRoot = props.workspacePath ? props.workspacePath.replace(/\/$/, '') : ''
+    const isInsideWorkspace = wsRoot && (absPath === wsRoot || absPath.startsWith(wsRoot + '/'))
+    const relPath = isInsideWorkspace
+      ? absPath.slice(wsRoot.length).replace(/^\//, '')
       : absPath
     const ext = relPath.split('.').pop() ?? ''
     const fileName = relPath.split('/').pop() ?? relPath
     try {
       let fileContent = ''
-      const isInsideWorkspace = props.workspacePath && absPath.startsWith(props.workspacePath)
       if (isInsideWorkspace) {
         interface ReadResp { ok: boolean; content?: string }
         const r = await props.backend.send<ReadResp>('fs.read_file', {
