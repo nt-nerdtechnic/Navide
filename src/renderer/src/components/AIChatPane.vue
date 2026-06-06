@@ -143,6 +143,7 @@ interface _SR { continuous: boolean; interimResults: boolean; lang: string; onre
 const voiceListening = ref(false)
 let _speechRecognition: _SR | null = null
 const voiceSupported = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+const enhancingPrompt = ref(false)
 
 function toggleVoiceInput(): void {
   if (!voiceSupported) { showToast('Voice input not supported in this environment'); return }
@@ -180,6 +181,32 @@ function toggleVoiceInput(): void {
   _speechRecognition.start()
   voiceListening.value = true
   nextTick(() => textareaEl.value?.focus())
+}
+
+async function enhancePrompt(): Promise<void> {
+  const draft = inputText.value.trim()
+  if (!draft || enhancingPrompt.value) return
+  enhancingPrompt.value = true
+  try {
+    const systemMsg = 'You are a prompt-engineering assistant. Rewrite the user\'s draft message to be clearer, more specific, and more likely to get a helpful AI response. Keep the same intent. Output ONLY the improved prompt text, nothing else.'
+    const resp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('ai.enhance_prompt', {
+      system: systemMsg,
+      prompt: draft,
+      model: settingsModel.value,
+      provider: settingsProvider.value,
+    })
+    if (resp.payload?.ok && resp.payload.content) {
+      inputText.value = resp.payload.content
+      nextTick(() => textareaEl.value?.focus())
+      showToast('Prompt enhanced')
+    } else {
+      showToast(resp.payload?.error ?? 'Enhancement failed')
+    }
+  } catch {
+    showToast('Enhancement failed')
+  } finally {
+    enhancingPrompt.value = false
+  }
 }
 const messagesEl = ref<HTMLElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
@@ -6542,6 +6569,13 @@ function getDateLabel(ts: number): string {
             </svg>
           </button>
           <button
+            v-if="!sending && inputText.trim().length > 10"
+            class="ai-enhance-btn"
+            :disabled="enhancingPrompt"
+            :title="enhancingPrompt ? 'Enhancing…' : 'Enhance prompt — AI rewrites your message to be clearer and more specific'"
+            @click="enhancePrompt"
+          >{{ enhancingPrompt ? '…' : '✦' }}</button>
+          <button
             v-if="!sending"
             class="ai-send-btn"
             :disabled="!inputText.trim() && contextChips.length === 0"
@@ -8504,6 +8538,14 @@ function getDateLabel(ts: number): string {
 }
 .ai-send-btn:hover:not(:disabled) { opacity: 0.85; }
 .ai-send-btn:disabled { opacity: 0.4; cursor: default; }
+.ai-enhance-btn {
+  width: 28px; height: 28px; border-radius: 6px; border: 1px solid var(--border-muted);
+  background: var(--bg-muted); color: var(--accent-fg); cursor: pointer;
+  font-size: 13px; display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s, opacity 0.12s; flex-shrink: 0;
+}
+.ai-enhance-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-emphasis) 12%, var(--bg-muted)); }
+.ai-enhance-btn:disabled { opacity: 0.5; cursor: default; }
 .ai-stop-btn {
   background: #b91c1c;
   color: #fff;

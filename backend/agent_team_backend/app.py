@@ -2278,6 +2278,37 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 _tc_err = str(_e)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": _tc_ok, "error": _tc_err}))
 
+        elif msg_type == "ai.enhance_prompt":
+            _ep_system = (payload.get("system") or "").strip()
+            _ep_prompt = (payload.get("prompt") or "").strip()[:4000]
+            _ep_model = (payload.get("model") or "").strip()
+            _ep_provider = (payload.get("provider") or "").strip()
+            if not _ep_prompt:
+                await session.websocket.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "prompt is required"))
+            else:
+                try:
+                    from .ai_chat_service import stream_chat
+                    # Use a shallow copy of session settings, overriding model if specified
+                    _ep_settings = dict(session.settings)
+                    if _ep_provider:
+                        _ep_settings["provider"] = _ep_provider
+                    if _ep_model:
+                        _ep_settings["model"] = _ep_model
+                    _ep_content = ""
+                    async with asyncio.timeout(30):
+                        async for _ep_chunk in stream_chat(
+                            settings=_ep_settings,
+                            messages=[{"role": "user", "content": _ep_prompt}],
+                            system=_ep_system,
+                            max_tokens=1024,
+                        ):
+                            if _ep_chunk.startswith("\x00"):
+                                break  # DONE or TOOL sentinel
+                            _ep_content += _ep_chunk
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "content": _ep_content.strip()}))
+                except Exception as _ep_exc:
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(_ep_exc)}))
+
         elif msg_type == "ai.web.search":
             query = (payload.get("query") or "").strip()[:200]
             if not query:
