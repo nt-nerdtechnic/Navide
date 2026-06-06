@@ -9,6 +9,8 @@ import pytest
 
 from agent_team_backend.ai_chat_service import (
     _OPENAI_COMPAT_CONFIGS,
+    _convert_messages_to_openai,
+    _to_openai_tools,
     _stream_openai_compatible,
     stream_chat,
 )
@@ -213,3 +215,102 @@ def _wrap_client(mock_resp: MagicMock) -> MagicMock:
     ctx.__aenter__ = AsyncMock(return_value=mock_client)
     ctx.__aexit__ = AsyncMock(return_value=False)
     return ctx
+
+
+# ── _to_openai_tools ──────────────────────────────────────────────────────────
+
+def test_to_openai_tools_converts_schema() -> None:
+    tools = [
+        {
+            "name": "read_file",
+            "description": "Read a file",
+            "input_schema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        }
+    ]
+    result = _to_openai_tools(tools)
+    assert len(result) == 1
+    assert result[0]["type"] == "function"
+    assert result[0]["function"]["name"] == "read_file"
+    assert result[0]["function"]["description"] == "Read a file"
+    assert result[0]["function"]["parameters"]["properties"]["path"]["type"] == "string"
+
+
+def test_to_openai_tools_empty() -> None:
+    assert _to_openai_tools([]) == []
+
+
+# ── _convert_messages_to_openai ───────────────────────────────────────────────
+
+def test_convert_messages_passthrough_simple() -> None:
+    msgs = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there"},
+    ]
+    result = _convert_messages_to_openai(msgs)
+    assert result == msgs
+
+
+def test_convert_messages_assistant_tool_use() -> None:
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me read that"},
+                {
+                    "type": "tool_use",
+                    "id": "call_abc",
+                    "name": "read_file",
+                    "input": {"path": "foo.py"},
+                },
+            ],
+        }
+    ]
+    result = _convert_messages_to_openai(msgs)
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    assert result[0]["content"] == "Let me read that"
+    assert len(result[0]["tool_calls"]) == 1
+    tc = result[0]["tool_calls"][0]
+    assert tc["id"] == "call_abc"
+    assert tc["function"]["name"] == "read_file"
+    assert json.loads(tc["function"]["arguments"]) == {"path": "foo.py"}
+
+
+def test_convert_messages_tool_result() -> None:
+    msgs = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_abc",
+                    "content": "file contents here",
+                }
+            ],
+        }
+    ]
+    result = _convert_messages_to_openai(msgs)
+    assert len(result) == 1
+    assert result[0]["role"] == "tool"
+    assert result[0]["tool_call_id"] == "call_abc"
+    assert result[0]["content"] == "file contents here"
+
+
+def test_convert_messages_mixed_user_turn() -> None:
+    msgs = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "result"},
+                {"type": "text", "text": "Does this look right?"},
+            ],
+        }
+    ]
+    result = _convert_messages_to_openai(msgs)
+    # tool result should become a tool role, text should become user role
+    assert any(r["role"] == "tool" for r in result)
+    assert any(r["role"] == "user" for r in result)

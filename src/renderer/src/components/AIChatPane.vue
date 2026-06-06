@@ -2252,20 +2252,30 @@ async function attachFile(): Promise<void> {
     : absPath
 
   const ext = relPath.split('.').pop() ?? ''
+  const fileName = relPath.split('/').pop() ?? relPath
   try {
-    interface ReadResp { ok: boolean; content?: string }
-    const r = await props.backend.send<ReadResp>('fs.read_file', {
-      workspace_path: props.workspacePath,
-      rel_path: relPath,
-    })
-    if (!r.payload?.ok || !r.payload.content) {
-      showToast(`Could not read file: ${relPath}`)
-      return
+    let fileContent = ''
+    const isInsideWorkspace = props.workspacePath && absPath.startsWith(props.workspacePath)
+    if (isInsideWorkspace) {
+      interface ReadResp { ok: boolean; content?: string }
+      const r = await props.backend.send<ReadResp>('fs.read_file', {
+        workspace_path: props.workspacePath,
+        rel_path: relPath,
+      })
+      if (!r.payload?.ok) { showToast(`Could not read file: ${relPath}`); return }
+      fileContent = r.payload?.content ?? ''
+    } else {
+      // File is outside workspace — use absolute-path reader
+      const api = (window as Window & { agentTeam?: Record<string, (...a: unknown[]) => unknown> }).agentTeam
+      if (!api?.readFileFrom) { showToast('Cannot read file outside workspace'); return }
+      interface RfResp { ok: boolean; content: string }
+      const r = await (api.readFileFrom as (p: string, b: number) => Promise<RfResp>)(absPath, 0)
+      if (!r.ok) { showToast(`Could not read file: ${fileName}`); return }
+      fileContent = r.content
     }
-    const content = r.payload.content
     const MAX = 80_000
-    const truncated = content.length > MAX ? content.slice(0, MAX) + '\n// … truncated' : content
-    const chipLabel = `@${relPath.split('/').pop() ?? relPath}`
+    const truncated = fileContent.length > MAX ? fileContent.slice(0, MAX) + '\n// … truncated' : fileContent
+    const chipLabel = `@${fileName}`
     contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
     contextChips.value.push({
       id: crypto.randomUUID(),
@@ -2274,7 +2284,7 @@ async function attachFile(): Promise<void> {
     })
     nextTick(() => textareaEl.value?.focus())
   } catch {
-    showToast(`Could not read file: ${relPath}`)
+    showToast(`Could not read file: ${fileName}`)
   }
 }
 
