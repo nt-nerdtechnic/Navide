@@ -21,7 +21,11 @@ export function extractDropPaths(e: DragEvent): string[] {
         .filter((f): f is File => f !== null)
     : Array.from(dt.files)
 
-  return sources.map(f => getPath(f)).filter(Boolean)
+  if (sources.length) return sources.map(f => getPath(f)).filter(Boolean)
+
+  // Fallback: paths set via dataTransfer.setData('text/plain', ...) by in-app drags
+  const text = dt.getData('text/plain')
+  return text ? text.split('\n').map(p => p.trim()).filter(Boolean) : []
 }
 
 /** Shell-escape a path so it can be safely pasted into a PTY command line. */

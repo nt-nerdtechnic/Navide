@@ -8,32 +8,49 @@ import pytest
 from agent_team_backend import review_service
 
 
-class TestReviewJsonRegex:
-    """Verify the regex used in app.py _run_review to extract the JSON block."""
+def _extract_review_json(text: str):
+    """Mirror the extraction logic used in app.py _run_review."""
+    import json as _json
+    mo = re.search(r"```json\s*", text)
+    if not mo:
+        return None
+    try:
+        raw, _ = _json.JSONDecoder().raw_decode(text[mo.end():].lstrip())
+        return raw
+    except _json.JSONDecodeError:
+        return None
 
-    # The pattern used in app.py (non-greedy after the fix)
-    _PATTERN = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
+
+class TestReviewJsonExtraction:
+    """Verify the raw_decode extraction used in app.py _run_review."""
 
     def test_extracts_json_from_clean_block(self):
         text = '```json\n{"summary":"ok","findings":[],"verdict":"approve"}\n```'
-        mo = self._PATTERN.search(text)
-        assert mo is not None
-        assert '"summary"' in mo.group(1)
+        raw = _extract_review_json(text)
+        assert raw is not None
+        assert raw["summary"] == "ok"
 
-    def test_non_greedy_picks_first_block(self):
-        """With two ```json blocks the regex must match the FIRST one only."""
+    def test_picks_first_block_with_two_json_blocks(self):
+        """With two ```json blocks, raw_decode stops at the first closing brace."""
         first = '{"summary":"first","findings":[],"verdict":"approve"}'
         second = '{"summary":"second","findings":[],"verdict":"request_changes"}'
         text = f"```json\n{first}\n```\n\nsome text\n\n```json\n{second}\n```"
-        mo = self._PATTERN.search(text)
-        assert mo is not None
-        assert "first" in mo.group(1)
-        assert "second" not in mo.group(1)
+        raw = _extract_review_json(text)
+        assert raw is not None
+        assert raw["summary"] == "first"
+
+    def test_handles_embedded_code_fence_in_body(self):
+        """Body fields containing ```fences``` must not truncate the JSON."""
+        body_with_fence = "Fix this:\\n```python\\nx = 1\\n```"
+        text = f'```json\n{{"summary":"ok","findings":[{{"body":"{body_with_fence}"}}],"verdict":"approve"}}\n```'
+        raw = _extract_review_json(text)
+        assert raw is not None
+        assert raw["summary"] == "ok"
+        assert len(raw["findings"]) == 1
 
     def test_no_match_without_block(self):
         text = '{"summary":"bare","findings":[],"verdict":"approve"}'
-        mo = self._PATTERN.search(text)
-        assert mo is None
+        assert _extract_review_json(text) is None
 
 
 async def _collect(ait) -> str:

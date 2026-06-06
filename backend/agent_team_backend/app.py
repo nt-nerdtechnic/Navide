@@ -2360,9 +2360,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     # Parse and validate structured JSON result from streamed text
                     full_text = "".join(chunks)
                     try:
-                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
-                        if mo:
-                            raw = _json.loads(mo.group(1))
+                        # Use raw_decode so it stops at the matching closing brace,
+                        # handling both: (a) embedded ```fences``` inside JSON string
+                        # values (where .*? would truncate) and (b) multiple JSON
+                        # blocks in the output (where .* would merge them).
+                        _fence_mo = _re.search(r"```json\s*", full_text)
+                        raw = None
+                        if _fence_mo:
+                            try:
+                                raw, _ = _json.JSONDecoder().raw_decode(
+                                    full_text[_fence_mo.end():].lstrip()
+                                )
+                            except _json.JSONDecodeError:
+                                raw = None
+                        if raw:
                             _VALID_VERDICTS = {"approve", "approve_with_comments", "request_changes"}
                             _VALID_SEVS = {"critical", "warning", "suggestion"}
                             validated: dict = {

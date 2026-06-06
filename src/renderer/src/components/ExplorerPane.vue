@@ -479,6 +479,8 @@ defineExpose({ revealFile, focusTree })
         class="exp-row"
         :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
         :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
+        :draggable="!row.entry.is_dir"
+        @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.entry.rel_path))"
         @click.stop="handleRowClick($event, row.entry)"
         @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
         @contextmenu.stop="openCtx($event, row.entry)"
