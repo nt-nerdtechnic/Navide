@@ -296,6 +296,8 @@ function updateNotepadContent(id: string, content: string): void {
 const activeNotepad = computed(() =>
   namedNotepads.value.find((n) => n.id === activeNotepadId.value) ?? namedNotepads.value[0] ?? null
 )
+const showNewNotepadInput = ref(false)
+const newNotepadName = ref('')
 
 // ── Rotating input placeholder (mode-aware) ───────────────────────────────────
 const PLACEHOLDER_HINTS_ASK = [
@@ -6657,12 +6659,46 @@ function getDateLabel(ts: number): string {
           v-model="notesContent"
           class="ai-notes-textarea"
           placeholder="e.g. This is a Vue 3 + TypeScript project using Tailwind CSS. Always use composition API with <script setup>. Prefer const over let."
-          rows="10"
+          rows="6"
           @input="saveNotes"
         />
         <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px">
           <span class="ai-settings-hint" style="flex:1">{{ notesContent.trim() ? `~${Math.ceil(notesContent.length/4)} tokens` : 'Empty — nothing injected' }}</span>
           <button class="ai-cancel-btn" @click="notesContent = ''; saveNotes()">Clear</button>
+        </div>
+
+        <!-- Named Notepads -->
+        <div class="ai-notepad-section">
+          <div class="ai-notepad-section-header">
+            <span>Named Notepads <span style="opacity:.6;font-size:10.5px">— reference via <code>@notepad:name</code></span></span>
+            <button class="ai-notepad-add-btn" title="New notepad" @click="showNewNotepadInput = !showNewNotepadInput">+</button>
+          </div>
+          <div v-if="showNewNotepadInput" class="ai-notepad-new-row">
+            <input
+              v-model="newNotepadName"
+              class="ai-notepad-new-input"
+              placeholder="Notepad name…"
+              @keydown.enter.prevent="if (newNotepadName.trim()) { createNotepad(newNotepadName); newNotepadName = ''; showNewNotepadInput = false }"
+              @keydown.escape.prevent="showNewNotepadInput = false; newNotepadName = ''"
+            />
+            <button class="ai-notepad-create-btn" :disabled="!newNotepadName.trim()" @click="if (newNotepadName.trim()) { createNotepad(newNotepadName); newNotepadName = ''; showNewNotepadInput = false }">Create</button>
+          </div>
+          <div v-if="namedNotepads.length === 0 && !showNewNotepadInput" class="ai-settings-hint" style="padding:6px 0">No named notepads yet — click + to create one.</div>
+          <div v-for="np in namedNotepads" :key="np.id" class="ai-notepad-item">
+            <div class="ai-notepad-item-header" @click="activeNotepadId = activeNotepadId === np.id ? null : np.id">
+              <span class="ai-notepad-item-name" :class="{ active: activeNotepadId === np.id }">{{ np.name }}</span>
+              <span class="ai-notepad-item-tokens">{{ np.content.trim() ? `~${Math.ceil(np.content.length/4)} tok` : 'empty' }}</span>
+              <button class="ai-notepad-item-del" title="Delete" @click.stop="deleteNotepad(np.id)">✕</button>
+            </div>
+            <textarea
+              v-if="activeNotepadId === np.id"
+              :value="np.content"
+              class="ai-notes-textarea"
+              :placeholder="`Notes for ${np.name}…`"
+              rows="5"
+              @input="updateNotepadContent(np.id, ($event.target as HTMLTextAreaElement).value)"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -8877,6 +8913,26 @@ kbd {
 }
 .ai-notes-textarea:focus { outline: none; border-color: #0078d4; }
 .ai-notes-has-content { color: #3fb950 !important; }
+
+/* Named Notepads */
+.ai-notepad-section { margin-top: 16px; }
+.ai-notepad-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.ai-notepad-section-header > span { font-size: 11.5px; font-weight: 600; color: var(--fg, #ccc); }
+.ai-notepad-add-btn { background: none; border: 1px solid var(--border, #3c3c3c); border-radius: 4px; color: var(--fg-muted, #888); cursor: pointer; font-size: 14px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+.ai-notepad-add-btn:hover { color: var(--fg, #ccc); border-color: var(--fg-muted, #888); }
+.ai-notepad-new-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.ai-notepad-new-input { flex: 1; background: var(--bg-3, #2a2a2a); border: 1px solid var(--border, #3c3c3c); border-radius: 4px; color: var(--fg, #ccc); font-size: 12px; padding: 4px 8px; outline: none; }
+.ai-notepad-new-input:focus { border-color: #0078d4; }
+.ai-notepad-create-btn { background: #0078d4; border: none; border-radius: 4px; color: #fff; cursor: pointer; font-size: 11.5px; padding: 4px 10px; }
+.ai-notepad-create-btn:disabled { opacity: .4; cursor: default; }
+.ai-notepad-item { margin-bottom: 6px; }
+.ai-notepad-item-header { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 5px 8px; border-radius: 4px; background: var(--bg-3, #2a2a2a); border: 1px solid var(--border, #3c3c3c); }
+.ai-notepad-item-header:hover { border-color: var(--fg-muted, #888); }
+.ai-notepad-item-name { flex: 1; font-size: 12px; color: var(--fg-muted, #888); }
+.ai-notepad-item-name.active { color: var(--fg, #ccc); font-weight: 600; }
+.ai-notepad-item-tokens { font-size: 10px; color: var(--fg-muted, #888); opacity: .7; flex-shrink: 0; }
+.ai-notepad-item-del { background: none; border: none; color: var(--fg-muted, #888); cursor: pointer; font-size: 10px; padding: 0 2px; flex-shrink: 0; }
+.ai-notepad-item-del:hover { color: #e06c75; }
 
 /* ── Apply-code diff preview modal ──────────────────────────────────────────── */
 .ai-modal-overlay {

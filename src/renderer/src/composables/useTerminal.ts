@@ -273,6 +273,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // Wait two frames: first lets xterm measure its character cell dimensions,
+    // second ensures fit.fit() from mount() has run with the correct container size.
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    try { fit.fit() } catch { /* ignore if not yet mounted */ }
     try {
       const resp = await backend.send<{
         terminal_session_id: string
