@@ -638,13 +638,11 @@ function onExplorerDividerEnd(): void {
               <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
                 <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
                 <span class="badge">{{ p.agentLabel }}</span>
+                <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
                 <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
                 <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
               </div>
               <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
-              <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
-                <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
-              </div>
               <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
                 stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
               </div>
@@ -896,13 +894,11 @@ function onExplorerDividerEnd(): void {
           <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
+            <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
           </div>
           <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
-          <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
-            <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
-          </div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
             stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
@@ -1954,16 +1950,16 @@ button.icon-btn.muted:hover {
   background: var(--accent-muted);
   color: var(--accent-bright);
 }
-.badge.manager-badge {
-  background: var(--attention-subtle);
+.manager-inline {
+  font-size: 9px;
+  font-weight: 600;
   color: var(--attention-fg);
+  background: var(--attention-subtle);
   border: 1px solid color-mix(in srgb, var(--manager-fg) 35%, transparent);
-  letter-spacing: 0.3px;
-}
-.manager-row {
-  /* Own row beneath .agent-line so the Manager pill never competes for
-   * horizontal space with the agent / role badges. */
-  margin: 2px 0 4px;
+  border-radius: 999px;
+  padding: 1px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .state {
   margin-left: auto;
