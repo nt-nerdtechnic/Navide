@@ -15,6 +15,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'open-file', payload: { filepath: string; line: number | null }): void
+  (e: 'ask-ai-fix', text: string): void
 }>()
 
 const { isReviewing, reviewResult, reviewError, reviewElapsed, startReview, stopReview } = useReview(props.backend)
@@ -108,6 +110,17 @@ function toggleDismiss(id: string) {
   if (s.has(id)) s.delete(id)
   else s.add(id)
   dismissed.value = s
+}
+
+function openFindingFile(f: ReviewFinding): void {
+  if (!f.file) return
+  emit('open-file', { filepath: f.file, line: f.line })
+}
+
+function askAiFix(f: ReviewFinding): void {
+  const loc = f.file ? (f.line ? `\`${f.file}:${f.line}\`` : `\`${f.file}\``) : ''
+  const text = `Fix this code review issue${loc ? ` in ${loc}` : ''}:\n\n**${f.title}**\n\n${f.body}`
+  emit('ask-ai-fix', text)
 }
 
 const countOf = (sev: ReviewFinding['severity']) =>
@@ -267,9 +280,13 @@ const verdictMeta = computed(() =>
             <span class="sev-badge" :class="`sev-badge--${f.severity}`">
               {{ f.severity === 'critical' ? '🔴' : f.severity === 'warning' ? '🟡' : '🔵' }}
             </span>
-            <span class="finding-file">
-              {{ f.file || '(general)' }}<span v-if="f.line" class="finding-line">:{{ f.line }}</span>
-            </span>
+            <span
+              class="finding-file"
+              :class="{ 'finding-file--link': !!f.file }"
+              :title="f.file ? 'Open file' : undefined"
+              @click="openFindingFile(f)"
+            >{{ f.file || '(general)' }}<span v-if="f.line" class="finding-line">:{{ f.line }}</span></span>
+            <button class="finding-ai-btn" title="Ask AI to fix" @click="askAiFix(f)">✦ Ask AI</button>
             <button
               class="dismiss-btn"
               :title="dismissed.has(f.id) ? 'Restore' : 'Dismiss'"
@@ -451,7 +468,15 @@ const verdictMeta = computed(() =>
   flex: 1; font-size: 10px; font-family: monospace;
   color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.finding-file--link { cursor: pointer; }
+.finding-file--link:hover { color: var(--accent-fg, #58a6ff); text-decoration: underline; }
 .finding-line { color: var(--text-muted); }
+.finding-ai-btn {
+  background: transparent; border: 1px solid var(--border-muted); cursor: pointer;
+  color: var(--accent-fg, #58a6ff); font-size: 9px; line-height: 1;
+  padding: 1px 5px; border-radius: 3px; flex-shrink: 0; white-space: nowrap;
+}
+.finding-ai-btn:hover { background: rgba(88,166,255,0.12); }
 .dismiss-btn {
   background: transparent; border: none; cursor: pointer;
   color: var(--text-muted); font-size: 12px; line-height: 1;

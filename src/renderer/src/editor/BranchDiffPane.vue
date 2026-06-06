@@ -13,7 +13,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'open-file', payload: { filepath: string; name: string }): void
+  (e: 'open-file', payload: { filepath: string; name: string; line?: number }): void
+  (e: 'ask-ai-fix', text: string): void
 }>()
 
 function openFile(filename: string) {
@@ -223,6 +224,8 @@ function cellClass(cell: SideRow['left']): string {
         :git-branches="gitBranches"
         :hide-header="true"
         @close="reviewOpen = false"
+        @open-file="(p) => emit('open-file', { filepath: p.filepath, name: p.filepath.split('/').at(-1) ?? p.filepath, line: p.line ?? undefined })"
+        @ask-ai-fix="(text) => emit('ask-ai-fix', text)"
       />
     </div>
     <div v-if="reviewOpen" class="bdp-review-resizer" @mousedown.prevent="startReviewDrag" />
