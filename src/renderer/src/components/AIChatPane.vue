@@ -1302,6 +1302,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:diff',     label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@git:commit',   label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@git:conflict', label: '@git:conflict — files with merge conflicts (<<<<<<< markers)' },
+  { id: '@git:remote',   label: '@git:remote — remote URLs, tracking branches, and push/pull status' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
@@ -4706,24 +4707,44 @@ ${out}`
         command: 'git diff --name-only --diff-filter=U 2>/dev/null',
         workspace_path: props.workspacePath,
       })
-      const conflictedFiles = (resp.payload?.output ?? '').trim().split('\n').filter(Boolean)
-      if (!conflictedFiles.length) {
-        chipContent = '// @git:conflict: no merge conflicts found in working tree'
+      if (!resp.payload?.ok) {
+        chipContent = `// @git:conflict: ${resp.payload?.error ?? 'backend error'}`
       } else {
-        showToast(`Reading ${conflictedFiles.length} conflict file(s)…`)
-        let parts = `// Merge conflicts in ${conflictedFiles.length} file(s):\n`
-        for (const relPath of conflictedFiles.slice(0, 5)) {
-          try {
-            const fResp = await props.backend.send<{ payload?: { content?: string } }>('fs.read_file', { workspace_path: props.workspacePath, rel_path: relPath })
-            const content = fResp.payload?.content ?? ''
-            const conflictBlock = content.split('\n').filter((l) => l.startsWith('<<<<<<<') || l.startsWith('=======') || l.startsWith('>>>>>>>') || l.startsWith('<<<') || content.includes('<<<<<<<'))
-            parts += `\n// ${relPath}\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\`\n`
-          } catch { parts += `\n// ${relPath}: could not read\n` }
+        const conflictedFiles = (resp.payload?.output ?? '').trim().split('\n').filter(Boolean)
+        if (!conflictedFiles.length) {
+          chipContent = '// @git:conflict: no merge conflicts found in working tree'
+        } else {
+          showToast(`Reading ${conflictedFiles.length} conflict file(s)…`)
+          let parts = `// Merge conflicts in ${conflictedFiles.length} file(s):\n`
+          for (const relPath of conflictedFiles.slice(0, 5)) {
+            try {
+              interface FileResp { ok: boolean; content?: string; error?: string }
+              const fResp = await props.backend.send<FileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: relPath })
+              const content = fResp.payload?.ok ? (fResp.payload.content ?? '') : ''
+              parts += `\n// ${relPath}\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\`\n`
+            } catch { parts += `\n// ${relPath}: could not read\n` }
+          }
+          chipContent = parts
         }
-        chipContent = parts
       }
     } catch {
       chipContent = '// @git:conflict: unavailable'
+    }
+  } else if (option.id === '@git:remote') {
+    chipLabel = '@git:remote'
+    try {
+      interface ShellRespRemote { ok: boolean; output?: string }
+      const [remoteResp, statusResp] = await Promise.all([
+        props.backend.send<ShellRespRemote>('shell.run', { command: 'git remote -v 2>/dev/null', workspace_path: props.workspacePath }),
+        props.backend.send<ShellRespRemote>('shell.run', { command: 'git status -sb 2>/dev/null | head -5', workspace_path: props.workspacePath }),
+      ])
+      const remotes = (remoteResp.payload?.output ?? '').trim()
+      const status = (statusResp.payload?.output ?? '').trim()
+      chipContent = remotes
+        ? `// Git remote info:\n${remotes}\n\n// Branch tracking status:\n${status || '(no status)'}`
+        : '// @git:remote: no remotes configured'
+    } catch {
+      chipContent = '// @git:remote: unavailable'
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
@@ -5052,10 +5073,14 @@ ${out}`
         command: 'tmux capture-pane -p -S -500 2>/dev/null | grep -E "(Error|error|Traceback|FAILED|Failed|Exception|exception|SyntaxError|TypeError|ValueError|RuntimeError|\\bERR\\b)" | tail -30 || echo "(no errors found)"',
         workspace_path: props.workspacePath,
       })
-      const raw = (resp.payload?.output ?? '').trim()
-      chipContent = raw && raw !== '(no errors found)'
-        ? `// Last terminal errors:\n\`\`\`\n${raw.slice(-3000)}\n\`\`\``
-        : '// @terminal:error: no error patterns found in recent output'
+      if (!resp.payload?.ok) {
+        chipContent = `// @terminal:error: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const raw = (resp.payload?.output ?? '').trim()
+        chipContent = raw && raw !== '(no errors found)'
+          ? `// Last terminal errors:\n\`\`\`\n${raw.slice(-3000)}\n\`\`\``
+          : '// @terminal:error: no error patterns found in recent output'
+      }
     } catch {
       chipContent = '// @terminal:error: unavailable'
     }
