@@ -482,6 +482,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@file', label: '@file — current open file' },
   { id: '@selection', label: '@selection — editor selection' },
   { id: '@git', label: '@git — current git diff (unstaged)' },
+  { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
+  { id: '@git:log', label: '@git:log — recent commit history (last 20)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -1733,6 +1735,31 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = resp.payload?.diff ? `// git diff (unstaged)\n${resp.payload.diff}` : '// git diff: no changes'
     } catch {
       chipContent = '// git diff: unavailable'
+    }
+  } else if (option.id === '@git:staged') {
+    chipLabel = '@git:staged'
+    try {
+      interface DiffResp { ok: boolean; diff?: string }
+      const resp = await props.backend.send<DiffResp>('git.diff_all', {
+        workspace_path: props.workspacePath,
+        staged: true,
+      })
+      chipContent = resp.payload?.diff ? `// git diff --cached (staged)\n${resp.payload.diff}` : '// git diff --cached: nothing staged'
+    } catch {
+      chipContent = '// @git:staged: unavailable'
+    }
+  } else if (option.id === '@git:log') {
+    chipLabel = '@git:log'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git log --oneline -20 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      const out = (resp.payload?.output ?? '').trim()
+      chipContent = out ? `// git log (last 20 commits):\n${out}` : '// git log: no commits'
+    } catch {
+      chipContent = '// @git:log: unavailable'
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
