@@ -1539,9 +1539,11 @@ async function onWorkspaceCheck(path: string): Promise<void> {
 
 async function checkTmuxAlive(names: string[]): Promise<Record<string, boolean>> {
   if (!names.length) return {}
+  const base = backend.httpUrl.value
+  if (!base) return Object.fromEntries(names.map((n) => [n, false]))
   try {
     const resp = await fetch(
-      `/api/tmux/check?names=${encodeURIComponent(names.join(','))}`
+      `${base}/api/tmux/check?names=${encodeURIComponent(names.join(','))}`
     )
     if (!resp.ok) return Object.fromEntries(names.map((n) => [n, false]))
     const data = await resp.json() as { results: Record<string, boolean> }
