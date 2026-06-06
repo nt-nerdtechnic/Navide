@@ -4423,6 +4423,19 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     return
   }
 
+  // Escape during streaming — stop generation (Cursor/VS Code parity)
+  if (e.key === 'Escape' && sending.value) {
+    e.preventDefault()
+    stopStreaming()
+    return
+  }
+
+  // Escape while diff-apply modal is open — cancel apply
+  if (e.key === 'Escape' && diffApplyState.value) {
+    diffApplyState.value = null
+    return
+  }
+
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     void sendMessage()
@@ -5767,7 +5780,7 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Cmd+/</kbd></td><td>Cycle AI model</td></tr>
           <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git, notepad…)</td></tr>
           <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix, /generate…)</td></tr>
-          <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
+          <tr><td><kbd>Escape</kbd></td><td>Stop generation · close menu · cancel Apply</td></tr>
           <tr><td>Drag file</td><td>Add file to context</td></tr>
           <tr><td>Drag/Paste image</td><td>Add screenshot as context</td></tr>
           <tr><td><kbd>Ctrl+Shift+S</kbd></td><td>Save conversation checkpoint</td></tr>
