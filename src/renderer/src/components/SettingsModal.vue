@@ -102,10 +102,13 @@ const azRechecking = ref(false)
 const azDetecting = ref(false)
 async function azDetectCli() {
   azDetecting.value = true
-  const result = await props.analyzerApi.detectLlamaCli()
-  azDetecting.value = false
-  if (result.recommended) {
-    await props.analyzerApi.saveSettings({ llama_cli: result.recommended })
+  try {
+    const result = await props.analyzerApi.detectLlamaCli()
+    if (result.recommended) {
+      await props.analyzerApi.saveSettings({ llama_cli: result.recommended })
+    }
+  } finally {
+    azDetecting.value = false
   }
 }
 async function azPickCli() {
@@ -129,12 +132,15 @@ async function azPickGguf() {
 }
 async function azRecheck() {
   azRechecking.value = true
-  await Promise.all([
-    props.analyzerApi.refreshHealth(),
-    props.analyzerApi.refreshOllamaHealth(),
-    props.analyzerApi.refreshModels(),
-  ])
-  azRechecking.value = false
+  try {
+    await Promise.all([
+      props.analyzerApi.refreshHealth(),
+      props.analyzerApi.refreshOllamaHealth(),
+      props.analyzerApi.refreshModels(),
+    ])
+  } finally {
+    azRechecking.value = false
+  }
 }
 async function azDoPull() {
   const name = azPullName.value.trim()
