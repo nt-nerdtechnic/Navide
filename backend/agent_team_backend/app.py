@@ -2360,7 +2360,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     # Parse and validate structured JSON result from streamed text
                     full_text = "".join(chunks)
                     try:
-                        mo = _re.search(r"```json\s*(.*)\s*```", full_text, _re.DOTALL)
+                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
                         if mo:
                             raw = _json.loads(mo.group(1))
                             _VALID_VERDICTS = {"approve", "approve_with_comments", "request_changes"}

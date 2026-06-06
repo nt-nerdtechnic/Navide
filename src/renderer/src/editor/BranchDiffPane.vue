@@ -22,15 +22,13 @@ function openFile(filename: string) {
 
 const reviewOpen = ref(false)
 const reviewHeight = ref(300)
-let _dragY = 0
-let _dragH = 0
 
 function startReviewDrag(e: MouseEvent) {
   e.preventDefault()
-  _dragY = e.clientY
-  _dragH = reviewHeight.value
+  const startY = e.clientY
+  const startH = reviewHeight.value
   function onMove(ev: MouseEvent) {
-    reviewHeight.value = Math.max(80, Math.min(700, _dragH + (ev.clientY - _dragY)))
+    reviewHeight.value = Math.max(80, Math.min(700, startH + (ev.clientY - startY)))
   }
   function onUp() {
     window.removeEventListener('mousemove', onMove)
