@@ -74,6 +74,13 @@ function onTerminalDrop(e: DragEvent): void {
   terminal.pasteText(paths.map(shellEscape).join(' '))
 }
 
+// Drag the pane (by its header) onto a tab to move it into that run group.
+function onHeaderDragStart(e: DragEvent): void {
+  if (!e.dataTransfer) return
+  e.dataTransfer.setData('application/x-pane-id', props.paneId)
+  e.dataTransfer.effectAllowed = 'move'
+}
+
 onMounted(() => {
   if (containerRef.value) terminal.mount(containerRef.value)
 })
@@ -82,7 +89,13 @@ onMounted(() => {
 <template>
   <div :class="['pane', { 'pane-focus': isFocus }]">
     <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
-    <header class="pane-header" @click="emit('set-focus')">
+    <header
+      class="pane-header"
+      draggable="true"
+      title="拖曳到上方 tab 可移動到其他分頁"
+      @click="emit('set-focus')"
+      @dragstart="onHeaderDragStart"
+    >
       <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
       <span class="title">{{ title }}</span>
       <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>

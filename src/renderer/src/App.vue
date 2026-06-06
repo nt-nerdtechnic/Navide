@@ -1428,7 +1428,23 @@ interface ProjectManualPane {
   command: string
   spawn_status: string
   session_id?: string
-  run_group_id?: string  // frontend tab this pane belongs to
+  run_group_id?: string
+}
+
+// Unified restore record — covers both pipeline slots and manual panes.
+interface ProjectPane {
+  pane_id: string
+  agent: string
+  role: string
+  command?: string
+  session_id?: string
+  spawn_status: string   // 'pending' | 'spawned' | 'removed'
+  run_group_id?: string
+  origin: 'pipeline' | 'manual'
+  stage_id?: string
+  stage_index?: number
+  slot_label?: string
+  kickoff_status?: string
 }
 
 interface ProjectPayload {
@@ -1441,7 +1457,8 @@ interface ProjectPayload {
     total_stages?: number
     task_description?: string
     stages?: ProjectStage[]
-    manual_panes?: ProjectManualPane[]
+    panes?: ProjectPane[]          // unified restore source (pipeline + manual)
+    manual_panes?: ProjectManualPane[]  // legacy; kept for migration fallback
     updated_at?: string
     layout_mode?: string
     pipeline_id?: string
@@ -1617,110 +1634,111 @@ async function onWorkspaceCheck(path: string): Promise<void> {
 async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string): Promise<void> {
   // Don't restore if pipeline is active or paused — panes are already alive.
   if (pipeline.state === 'running' || pipeline.state === 'aborted') return
-  const stages = payload.project?.stages ?? []
-  const spawned = stages.flatMap((stage, i) =>
-    (stage.slots ?? [])
-      .filter((sl) => sl.spawn_status === 'spawned')
-      .map((sl) => ({ stageIndex: i, stageId: stage.stage_id, slot: sl }))
-  )
-  const manualPanes = (payload.project?.manual_panes ?? []).filter(
-    (p) => p.spawn_status === 'spawned'
-  )
-  if (spawned.length === 0 && manualPanes.length === 0) return
 
-  pipelineLog(
-    `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s)`
-  )
+  // Build unified pane list. Prefer project.panes[] (new format); fall back to
+  // migrating stages[].slots[] + manual_panes[] for old project.json files that
+  // predate the unified schema.
+  let allProjectPanes: ProjectPane[] = payload.project?.panes ?? []
+  if (allProjectPanes.length === 0) {
+    const stages = payload.project?.stages ?? []
+    const fromSlots: ProjectPane[] = stages.flatMap((stage, i) =>
+      (stage.slots ?? [])
+        .filter((sl) => sl.spawn_status === 'spawned' || sl.spawn_status === 'removed')
+        .map((sl) => ({
+          pane_id: sl.pane_id ?? '',
+          agent: sl.agent,
+          role: sl.role,
+          session_id: sl.session_id,
+          spawn_status: sl.spawn_status,
+          run_group_id: sl.run_group_id,
+          origin: 'pipeline' as const,
+          stage_id: stage.stage_id,
+          stage_index: i,
+          slot_label: sl.label,
+          kickoff_status: sl.kickoff_status,
+        }))
+        .filter((p) => p.pane_id)
+    )
+    const fromManual: ProjectPane[] = (payload.project?.manual_panes ?? []).map((mp) => ({
+      pane_id: mp.pane_id,
+      agent: mp.agent,
+      role: mp.role,
+      command: mp.command,
+      session_id: mp.session_id,
+      spawn_status: mp.spawn_status,
+      run_group_id: mp.run_group_id,
+      origin: 'manual' as const,
+    }))
+    allProjectPanes = [...fromSlots, ...fromManual]
+  }
+
+  const toRestore = allProjectPanes.filter((p) => p.spawn_status === 'spawned')
+  if (toRestore.length === 0) return
+
+  pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
   pipeline.workspacePath = workspacePath
 
-  // Fallback group for old project.json records that predate run_group_id
-  // persistence: use the first (default) group so panes land somewhere stable.
-  // New records always carry their own run_group_id and ignore this fallback.
-  const fallbackGroupId = runGroups.value[0]?.id ?? ''
+  // Lazily create one group to house restored pipeline panes whose saved
+  // run_group_id no longer maps to an existing tab (e.g. localStorage cleared
+  // while project.json survived, or records predating run_group_id). Created
+  // once on first need so we don't spawn an empty tab for manual-only restores.
+  let _restoreGroupId = ''
+  const ensureRestoreGroup = (): string => {
+    if (_restoreGroupId) return _restoreGroupId
+    _restoreGroupId = runGroups.value[0]?.id
+      ?? createRunGroup((payload.project?.task_description?.trim() || 'Pipeline').slice(0, 40)).id
+    return _restoreGroupId
+  }
 
-  await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
-    const sessionId = (slot.session_id ?? '').trim()
-    const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
-    const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    // Use the persisted run_group_id so the pane is restored into the correct
-    // tab; fall back to the first (default) group for pre-migration records.
-    const runGroupId = slot.run_group_id || fallbackGroupId
-
-    let commandOverride: string
-    let isResume: boolean
-    let skipRoleInjection: boolean
-    let restoreMode: 'memory-resume' | 'fresh'
-
-    const resumeCmd = buildResumeCommand(slot.agent, sessionId, skipFlag)
-    commandOverride = resumeCmd
-    isResume = !!resumeCmd
-    skipRoleInjection = isResume
-    restoreMode = isResume ? 'memory-resume' : 'fresh'
-
-    const paneId = await spawnPane({
-      agentKey: slot.agent as AgentKey,
-      roleKey: slot.role,
-      stageId: stageId as StageId,
-      slotLabel: slot.label,
-      commandOverride,
-      workspacePath,
-      origin: 'pipeline',
-      runGroupId: runGroupId || undefined,
-      isResume,
-      skipRoleInjection,
-      stageIndex,
-      restoreMode,
-    })
-    if (paneId) {
-      await sendQuiet('pipeline.slot_spawn', {
-        workspace_path: workspacePath,
-        stage_index: stageIndex,
-        slot_label: slot.label,
-        pane_id: paneId,
-        agent: slot.agent,
-        role: slot.role,
-        session_id: sessionId, // preserve the id across the new pane id
-        run_group_id: runGroupId,
-      })
-    }
-  }))
-  await Promise.all(manualPanes.map(async (saved) => {
+  await Promise.all(toRestore.map(async (saved) => {
     const sessionId = (saved.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    const manualRunGroupId = saved.run_group_id || fallbackGroupId
+    // Reuse the saved group only if its tab still exists; otherwise pipeline
+    // panes collapse into one restore group, manual panes stay ungrouped (手動).
+    const savedGid = saved.run_group_id || ''
+    const groupStillExists = !!savedGid && runGroups.value.some((g) => g.id === savedGid)
+    const runGroupId = groupStillExists
+      ? savedGid
+      : (saved.origin === 'pipeline' ? ensureRestoreGroup() : '')
 
-    // Preserve the original fallback command and session_id regardless of restore
-    // mode — if we restart, the next restart needs them to fall back to
-    // memory-resume or command-resume.
-    const fallbackCommand = looksLikeResumeCommand(saved.agent, saved.command) ? '' : saved.command
-
-    let commandOverride: string
-    let isResume: boolean
-    let skipRoleInjection: boolean
-    let restoreMode: 'memory-resume' | 'fresh'
-
+    // Unified session-resume logic for all pane types
     const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
     const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
-    commandOverride = resumeCmd || fallbackCommand || ''
-    isResume = !!resumeCmd
-    skipRoleInjection = isResume
-    restoreMode = isResume ? 'memory-resume' : 'fresh'
+    const fallbackCommand = saved.command && !looksLikeResumeCommand(saved.agent, saved.command)
+      ? saved.command : ''
+    const commandOverride = resumeCmd || fallbackCommand || ''
+    const isResume = !!resumeCmd
 
     const paneId = await spawnPane({
       agentKey: saved.agent as AgentKey,
       roleKey: saved.role,
-      stageId: '',
+      stageId: (saved.stage_id ?? '') as StageId,
+      slotLabel: saved.slot_label,
       commandOverride,
       workspacePath,
-      origin: 'manual',
-      runGroupId: manualRunGroupId || undefined,
+      origin: saved.origin,
+      runGroupId: runGroupId || undefined,
       isResume,
-      skipRoleInjection,
-      restoreMode,
+      skipRoleInjection: isResume,
+      stageIndex: saved.stage_index ?? -1,
+      restoreMode: isResume ? 'memory-resume' : 'fresh',
     })
-    if (paneId) {
-      const canResume = isResume
+
+    if (!paneId) return
+
+    if (saved.origin === 'pipeline') {
+      await sendQuiet('pipeline.slot_spawn', {
+        workspace_path: workspacePath,
+        stage_index: saved.stage_index,
+        slot_label: saved.slot_label,
+        pane_id: paneId,
+        agent: saved.agent,
+        role: saved.role,
+        session_id: sessionId,
+        run_group_id: runGroupId,
+      })
+    } else {
       await sendQuiet<ProjectPayload>('manual_pane.spawn', {
         workspace_path: workspacePath,
         pane_id: paneId,
@@ -1728,8 +1746,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         agent: saved.agent,
         role: saved.role,
         command: fallbackCommand,
-        session_id: canResume ? sessionId : '',
-        run_group_id: manualRunGroupId,
+        session_id: isResume ? sessionId : '',
+        run_group_id: runGroupId,
       })
       if (sessionId && !isResume) {
         await sendQuiet('manual_pane.session', {
@@ -1742,9 +1760,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   }))
 
   // Backfill removed manual panes into spawnHistory so Agent History shows past sessions.
-  // Spawned panes are already added via spawnPane() above; this covers the removed ones.
-  const removedManual = (payload.project?.manual_panes ?? []).filter(
-    (p) => p.spawn_status === 'removed'
+  const removedManual = allProjectPanes.filter(
+    (p) => p.origin === 'manual' && p.spawn_status === 'removed'
   )
   const existingPaneIds = new Set(spawnHistory.value.map((e) => e.paneId))
   const fallbackTs = payload.project?.updated_at ?? new Date().toISOString()
@@ -3957,18 +3974,24 @@ function _saveRunGroups(): void {
   } catch { /* ignore */ }
 }
 
+/** Fixed id for the always-present default tab. Using a constant id (rather than
+ *  a timestamp) makes "預設" idempotent: it can exist at most once per workspace,
+ *  so reloads/re-checks never spawn a duplicate. */
+const DEFAULT_RUN_GROUP_ID = 'rg-default'
+
 function _loadRunGroups(path: string): void {
   try {
     const raw = localStorage.getItem(`agentTeam.runGroups.${path}`)
     runGroups.value = raw ? (JSON.parse(raw) as RunGroup[]) : []
   } catch { runGroups.value = [] }
-  // Always ensure at least one group exists (default tab)
+  // Open with exactly one default tab. Only created when no group exists at all,
+  // and with a fixed id → never duplicated. Each pipeline run still adds its own
+  // tab via createRunGroup; the default acts as the catch-all / landing tab.
   if (runGroups.value.length === 0) {
-    const id = `rg-${Date.now()}`
-    runGroups.value = [{ id, name: '預設', createdAt: Date.now() }]
+    runGroups.value = [{ id: DEFAULT_RUN_GROUP_ID, name: '預設', createdAt: Date.now() }]
     try { localStorage.setItem(`agentTeam.runGroups.${path}`, JSON.stringify(runGroups.value)) } catch { /* ignore */ }
   }
-  currentRunGroupId.value = runGroups.value[runGroups.value.length - 1].id
+  currentRunGroupId.value = runGroups.value[runGroups.value.length - 1]?.id ?? ''
 }
 
 function createRunGroup(name?: string): RunGroup {
@@ -3987,6 +4010,45 @@ function createRunGroup(name?: string): RunGroup {
 
 function renameRunGroup(id: string, name: string): void {
   runGroups.value = runGroups.value.map((g) => (g.id === id ? { ...g, name } : g))
+  _saveRunGroups()
+}
+
+/** Persist a pane's run-group reassignment to project.json (survives restart). */
+async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promise<void> {
+  const ws = pane.workspacePath || currentWorkspace.value
+  if (!ws) return
+  await sendQuiet('pane.set_run_group', {
+    workspace_path: ws,
+    pane_id: pane.id,
+    run_group_id: runGroupId,
+  })
+}
+
+/** Move one pane into another tab (drag-and-drop target). The "manual" tab maps
+ *  to an empty run group (ungrouped). */
+async function movePaneToGroup(paneId: string, targetKey: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const targetGroupId = targetKey === 'manual' ? '' : targetKey
+  if ((pane.runGroupId ?? '') === targetGroupId) return
+  pane.runGroupId = targetGroupId || undefined
+  await persistPaneRunGroup(pane, targetGroupId)
+}
+
+/** Delete a run-group tab. The last remaining run group is kept (never deletable).
+ *  All panes in the deleted group are reassigned to the first remaining group. */
+async function deleteRunGroup(id: string): Promise<void> {
+  if (runGroups.value.length <= 1) return  // keep the last tab
+  const target = runGroups.value.find((g) => g.id !== id)
+  if (!target) return
+  const affected = panes.value.filter((p) => p.runGroupId === id)
+  await Promise.all(affected.map((p) => {
+    p.runGroupId = target.id
+    return persistPaneRunGroup(p, target.id)
+  }))
+  runGroups.value = runGroups.value.filter((g) => g.id !== id)
+  if (currentRunGroupId.value === id) currentRunGroupId.value = target.id
+  if (activeTab.value === id) activeTab.value = target.id
   _saveRunGroups()
 }
 
@@ -4772,6 +4834,8 @@ function paneIsCommander(p: ActivePane): boolean {
         v-model="activeTab"
         @add="createRunGroup()"
         @rename="(key, name) => renameRunGroup(key, name)"
+        @delete="(key) => deleteRunGroup(key)"
+        @move-pane="(paneId, targetKey) => movePaneToGroup(paneId, targetKey)"
       />
       <div v-if="panes.length === 0" class="empty">
         <!-- Pipeline is starting but the first pane hasn't appeared yet.
@@ -5519,8 +5583,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .empty-card.loading-card {
   border-style: solid;
-  border-color: #1f6feb55;
-  background: linear-gradient(180deg, var(--bg-base) 0%, #0d1730 100%);
+  border-color: var(--accent-muted);
+  background: linear-gradient(180deg, var(--bg-base) 0%, var(--accent-subtle) 100%);
 }
 .empty-card.loading-card h2 {
   text-align: center;

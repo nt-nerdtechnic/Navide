@@ -110,6 +110,7 @@ interface ChatMessage {
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
   bookmarked?: boolean
   feedback?: 'up' | 'down'
+  feedbackComment?: string
   commitMsg?: string   // detected conventional-commit message
   followUps?: string[] // suggested follow-up questions (shown below response)
   pendingEdits?: Array<{ relPath: string; code: string }> // detected file edits from Edit mode
@@ -527,7 +528,7 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string; color?: string }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string; color?: string; pinnedChips?: ContextChip[]; forkedFrom?: string }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
@@ -544,6 +545,23 @@ const showThreads = ref(false)
 const threadTab = ref<'chats' | 'pinned' | 'archived'>('chats')
 const threadSearchQuery = ref('')
 const threadBulkMode = ref(false)
+// TTS state for "Read aloud" feature
+const speakingMsgIdx = ref<number | null>(null)
+function readAloud(mi: number, text: string): void {
+  if (!window.speechSynthesis) { showToast('Text-to-speech not supported'); return }
+  if (speakingMsgIdx.value === mi) {
+    window.speechSynthesis.cancel()
+    speakingMsgIdx.value = null
+    return
+  }
+  window.speechSynthesis.cancel()
+  const plain = text.replace(/```[\s\S]*?```/g, 'code block').replace(/[*_#`~]/g, '').replace(/\n{2,}/g, '. ').trim()
+  const utt = new SpeechSynthesisUtterance(plain)
+  utt.onend = () => { speakingMsgIdx.value = null }
+  utt.onerror = () => { speakingMsgIdx.value = null }
+  speakingMsgIdx.value = mi
+  window.speechSynthesis.speak(utt)
+}
 const selectedThreadIds = ref(new Set<string>())
 function toggleThreadSelect(id: string): void {
   const s = new Set(selectedThreadIds.value)
@@ -584,6 +602,30 @@ const threadSortMode = ref<'date' | 'name' | 'model'>(
   (localStorage.getItem('ai-chat-thread-sort') ?? 'date') as 'date' | 'name' | 'model'
 )
 watch(threadSortMode, (v) => localStorage.setItem('ai-chat-thread-sort', v))
+const threadPanelHeight = ref<number | null>(
+  (() => { const v = localStorage.getItem('ai-thread-panel-h'); return v ? parseInt(v, 10) : null })()
+)
+let _panelDragStartY = 0
+let _panelDragStartH = 0
+function onPanelResizeMousedown(e: MouseEvent): void {
+  const panel = (e.currentTarget as HTMLElement).parentElement
+  if (!panel) return
+  _panelDragStartY = e.clientY
+  _panelDragStartH = panel.getBoundingClientRect().height
+  const onMove = (me: MouseEvent) => {
+    const delta = _panelDragStartY - me.clientY
+    const newH = Math.min(Math.max(_panelDragStartH + delta, 120), window.innerHeight * 0.85)
+    threadPanelHeight.value = Math.round(newH)
+  }
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    if (threadPanelHeight.value) localStorage.setItem('ai-thread-panel-h', String(threadPanelHeight.value))
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+  e.preventDefault()
+}
 const renamingThreadId = ref('')
 const renamingTitle = ref('')
 // Per-thread draft: save unsent input when switching threads (Cursor-style)
@@ -780,6 +822,7 @@ function newThread(): void {
 function switchThread(id: string): void {
   if (id === currentThreadId.value) { showThreads.value = false; return }
   _navAssistIdx = -1  // reset message nav index on thread switch
+  feedbackInputMi.value = null; feedbackDraft.value = ''
   // Save unsent draft for current thread before switching (Cursor-style)
   if (inputText.value.trim()) {
     threadDrafts.set(currentThreadId.value, inputText.value)
@@ -792,6 +835,9 @@ function switchThread(id: string): void {
   }
   if (sending.value) stopStreaming()
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  // Save pinned chips to outgoing thread before switching
+  const outThread = allThreads.value.find((t) => t.id === currentThreadId.value)
+  if (outThread) outThread.pinnedChips = contextChips.value.filter((c) => c.pinned)
   _doSave()
   const thread = allThreads.value.find((t) => t.id === id)
   if (!thread) return
@@ -829,6 +875,8 @@ function switchThread(id: string): void {
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
   // Restore saved draft for the destination thread (Cursor-style)
   inputText.value = threadDrafts.get(id) ?? ''
+  // Restore pinned context chips from the destination thread
+  contextChips.value = thread.pinnedChips ? thread.pinnedChips.map((c) => ({ ...c })) : []
   showThreads.value = false
 }
 
@@ -904,6 +952,9 @@ const settingsOaiCompatKey = ref(localStorage.getItem('ai-chat-oai-compat-key') 
 const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-model') ?? 'gpt-4o')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
+const settingsSendMode = ref<'enter' | 'ctrl-enter'>(
+  (localStorage.getItem('ai-chat-send-mode') ?? 'enter') as 'enter' | 'ctrl-enter'
+)
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const testConnStatus = ref<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
 const testConnError = ref<Record<string, string>>({})
@@ -929,6 +980,17 @@ const _SYSTEM_PROFILES: Record<string, string> = {
   refactor: 'You are an expert code refactoring specialist. Focus on: clean code principles, SOLID design, reducing complexity, improving readability, and eliminating duplication.',
 }
 
+const _PERSONA_LABELS: Record<string, string> = {
+  coding: '💻 Coder', concise: '⚡ Concise', security: '🔒 Security',
+  teacher: '🎓 Teacher', refactor: '🔧 Refactor',
+}
+const activePersonaLabel = computed(() => {
+  const sp = settingsSystemPrompt.value
+  for (const [key, text] of Object.entries(_SYSTEM_PROFILES)) {
+    if (sp === text) return _PERSONA_LABELS[key] ?? key
+  }
+  return null
+})
 function applySystemPromptProfile(profile: string): void {
   if (!profile || profile === 'custom') return
   const text = _SYSTEM_PROFILES[profile]
@@ -1232,6 +1294,19 @@ const ctxUsageLevel = computed(() => {
   return 'ok'
 })
 
+// Context window cutoff: index of first message the model can actually see
+const ctxCutoffIdx = computed(() => {
+  if (ctxUsagePct.value < 40) return 0 // all messages fit
+  const reserved = Math.ceil(settingsSystemPrompt.value.length / 4) + chipsTokenTotal.value + 2000
+  const available = Math.max(0, currentModelCtx.value - reserved)
+  let cumulative = 0
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    cumulative += Math.ceil(String(m.rawContent ?? m.content).length / 4)
+    if (cumulative > available) return i + 1
+  }
+  return 0
+})
 // Auto-compact when context exceeds 90% — trigger once per overflow event
 let _autoCompactFired = false
 watch(ctxUsagePct, (pct) => {
@@ -1245,6 +1320,27 @@ watch(ctxUsagePct, (pct) => {
 
 // ── Conversation search ────────────────────────────────────────────────────────
 const showSearch = ref(false)
+const showHistoryPalette = ref(false)
+const historyPaletteQuery = ref('')
+const filteredHistory = computed(() =>
+  historyPaletteQuery.value.trim()
+    ? inputHistory.filter(h => h.toLowerCase().includes(historyPaletteQuery.value.toLowerCase()))
+    : [...inputHistory].reverse()
+)
+function openHistoryPalette(): void {
+  showHistoryPalette.value = true
+  historyPaletteQuery.value = ''
+  nextTick(() => {
+    const el = document.querySelector<HTMLInputElement>('.ai-history-palette-input')
+    el?.focus()
+  })
+}
+function pickHistory(prompt: string): void {
+  inputText.value = prompt
+  showHistoryPalette.value = false
+  nextTick(() => textareaEl.value?.focus())
+}
+
 const searchQuery = ref('')
 const searchMatchIdx = ref(0)
 const searchInput = ref<HTMLInputElement | null>(null)
@@ -1908,6 +2004,11 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     try {
       const code = decodeURIComponent(escape(atob(codeActionBtn.dataset.code ?? '')))
       const action = codeActionBtn.dataset.action ?? 'explain'
+      if (action === 'explainerr') {
+        inputText.value = `Explain this error clearly. What went wrong, what caused it, and how to fix it:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
+        await nextTick(); void sendMessage()
+        return
+      }
       if (action === 'compare') {
         if (!compareStage.value) {
           compareStage.value = { code }
@@ -1938,6 +2039,13 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     return
   }
 
+  // Code block filepath badge — click to open the file
+  const codeFilepath = (e.target as HTMLElement).closest<HTMLElement>('.ai-code-filepath')
+  if (codeFilepath) {
+    const relPath = codeFilepath.dataset.path ?? ''
+    if (relPath && props.openFile) props.openFile(relPath)
+    return
+  }
   // Clickable file path in inline code (supports :line notation)
   // Ctrl/Cmd+click → add as @file context chip; plain click → open in editor
   const fileRef = target.closest<HTMLElement>('.ai-file-ref')
@@ -2103,7 +2211,7 @@ function renderMarkdownLite(rawText: string): string {
       : ''
     const shortFilename = inferredPath ? inferredPath.split('/').pop()!.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''
     const fileLabel = inferredPath
-      ? `<span class="ai-code-filepath" title="${safeInferredPath}">${shortFilename}</span><span class="ai-code-lang-sm">${langLabel}</span>`
+      ? `<span class="ai-code-filepath" data-path="${safeInferredPath}" title="Click to open ${safeInferredPath}">${shortFilename}</span><span class="ai-code-lang-sm">${langLabel}</span>`
       : `<span class="ai-code-lang">${langLabel}</span>`
     // Collapse code blocks that exceed 30 lines
     const lineCount = code.split('\n').length
@@ -2135,16 +2243,20 @@ function renderMarkdownLite(rawText: string): string {
     // Inline code actions (explain/refactor) for code-like languages
     const isCodeLang = !isShell && !['json', 'yaml', 'toml', 'sql', 'md', 'markdown', 'text', ''].includes((lang ?? '').toLowerCase())
     const explainBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="explain" data-code="${encoded}" title="Ask AI to explain this code">Explain</button>`
+      ? `<button class="ai-code-action-btn" data-action="explain" data-code="${encoded}" title="Ask AI to explain this code [Alt+E]">Explain</button>`
       : ''
     const refactorBtn = isCodeLang && code.trim().length > 30
-      ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code">Refactor</button>`
+      ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code [Alt+R]">Refactor</button>`
       : ''
     const newChatBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context">New chat</button>`
+      ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context [Alt+N]">New chat</button>`
       : ''
     const compareBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="compare" data-code="${encoded}" title="Stage / compare with another code block">Compare</button>`
+      ? `<button class="ai-code-action-btn" data-action="compare" data-code="${encoded}" title="Stage / compare with another code block [Alt+C]">Compare</button>`
+      : ''
+    const isErrorBlock = /(?:Error:|Exception:|Traceback|FAILED|\bfatal\b|\bpanic\b)/i.test(code)
+    const explainErrBtn = isErrorBlock
+      ? `<button class="ai-code-action-btn ai-code-action-err" data-action="explainerr" data-code="${encoded}" title="Ask AI to explain this error">Explain Error</button>`
       : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
@@ -2159,7 +2271,7 @@ function renderMarkdownLite(rawText: string): string {
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `<button class="ai-code-wrap-btn" title="Toggle word wrap">↔</button>` +
       `</div>` +
-      `${explainBtn || refactorBtn || newChatBtn || compareBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}${newChatBtn}${compareBtn}</div>` : ''}` +
+      `${explainBtn || refactorBtn || newChatBtn || compareBtn || explainErrBtn ? `<div class="ai-code-actions">${explainErrBtn}${explainBtn}${refactorBtn}${newChatBtn}${compareBtn}</div>` : ''}` +
       `${toggleBtn}` +
       `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code class="has-line-numbers">${numberedLines}</code></pre>` +
       `</div>`,
@@ -2534,6 +2646,7 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   localStorage.setItem('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
+  localStorage.setItem('ai-chat-send-mode', settingsSendMode.value)
   localStorage.setItem('ai-chat-user-rules', settingsUserRules.value)
   localStorage.setItem('ai-chat-custom-docs', JSON.stringify(customDocs.value))
   showSettings.value = false
@@ -3115,7 +3228,7 @@ async function sendMessage(): Promise<void> {
   // Keep the in-memory list bounded so a very long session doesn't exhaust memory.
   if (messages.value.length >= MAX_MESSAGES) messages.value.splice(0, messages.value.length - MAX_MESSAGES + 1)
   const _ctxRefs = contextChips.value.map((c) => c.label)
-  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now(), contextRefs: _ctxRefs.length ? _ctxRefs : undefined })
+  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now(), contextRefs: _ctxRefs.length ? _ctxRefs : undefined, imageData: imageChips.length > 0 ? imageChips[0].imageData : undefined })
   // Auto-name thread from first user message when still "New chat"
   const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
   if (curThread && curThread.title === 'New chat' && rawText) {
@@ -3132,6 +3245,7 @@ async function sendMessage(): Promise<void> {
     historySavedDraft = ''
   }
   inputText.value = ''
+  nextTick(() => { if (textareaEl.value) _autoResizeTextarea(textareaEl.value) })
   sending.value = true
 
   const sessionId = crypto.randomUUID()
@@ -3341,6 +3455,7 @@ function forkFromMessage(idx: number): void {
     title: baseTitle.slice(0, 60),
     messages: forkHistory,
     updatedAt: Date.now(),
+    forkedFrom: currentThreadId.value ?? undefined,
   }
   allThreads.value.unshift(newThread)
   saveCurrentThread()
@@ -3441,8 +3556,7 @@ async function importConversation(): Promise<void> {
 }
 
 function copyMessage(content: string): void {
-  const plain = content.replace(/<[^>]+>/g, '')
-  navigator.clipboard.writeText(plain).then(() => showToast('Copied')).catch(() => showToast('Copy failed'))
+  navigator.clipboard.writeText(content).then(() => showToast('Copied')).catch(() => showToast('Copy failed'))
 }
 
 function quoteMessage(content: string): void {
@@ -3947,10 +4061,42 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     showThreads.value = !showThreads.value
   }
+  // Ctrl+Shift+H / Cmd+Shift+H — open prompt history palette
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
+    e.preventDefault()
+    openHistoryPalette()
+  }
   // Ctrl+Shift+M / Cmd+Shift+M — copy thread as markdown
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
     e.preventDefault()
     copyThreadAsMarkdown()
+  }
+  // Alt+[ / Alt+] — jump to previous / next AI response (Cursor-style message nav)
+  if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === '[' || e.key === ']')) {
+    e.preventDefault()
+    const aiMsgEls = Array.from(messagesEl.value?.querySelectorAll<HTMLElement>('.ai-msg-wrap.assistant') ?? [])
+    if (!aiMsgEls.length) return
+    const scrollTop = messagesEl.value?.scrollTop ?? 0
+    const containerTop = messagesEl.value?.getBoundingClientRect().top ?? 0
+    if (e.key === ']') {
+      const next = aiMsgEls.find(el => el.getBoundingClientRect().top > containerTop + 8)
+      if (next) next.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      else aiMsgEls[aiMsgEls.length - 1]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    } else {
+      const prev = [...aiMsgEls].reverse().find(el => el.getBoundingClientRect().top < containerTop - 8)
+      if (prev) prev.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      else aiMsgEls[0]?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    }
+    return
+  }
+  // Alt+E/R/N/C — code action on last-hovered code block (Cursor-style keyboard nav)
+  if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && lastCodeWrap) {
+    const actionMap: Record<string, string> = { e: 'explain', r: 'refactor', n: 'newchat', c: 'compare' }
+    const action = actionMap[e.key.toLowerCase()]
+    if (action) {
+      const btn = lastCodeWrap.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)
+      if (btn) { btn.click(); e.preventDefault(); return }
+    }
   }
   // Escape — close context menu or diff-apply modal
   if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
@@ -3998,6 +4144,26 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
 
 // ── Backend event listeners ────────────────────────────────────────────────────
 let unsubChunk: (() => void) | null = null
+let lastCodeWrap: HTMLElement | null = null
+function expandAllCodeBlocks(): void {
+  messagesEl.value?.querySelectorAll<HTMLElement>('.ai-code-wrap[data-folded="true"]').forEach(wrap => {
+    const pre = wrap.querySelector<HTMLElement>('pre.ai-code-block')
+    const btn = wrap.querySelector<HTMLButtonElement>('.ai-code-fold-btn')
+    if (pre && btn) { pre.style.display = ''; wrap.dataset.folded = 'false'; btn.textContent = `▼ Collapse (${btn.dataset.lines ?? '?'} lines)` }
+  })
+}
+function collapseAllCodeBlocks(): void {
+  messagesEl.value?.querySelectorAll<HTMLElement>('.ai-code-wrap:not([data-folded="true"]) .ai-code-fold-btn').forEach(btn => {
+    const wrap = btn.closest<HTMLElement>('.ai-code-wrap')
+    const pre = wrap?.querySelector<HTMLElement>('pre.ai-code-block')
+    if (wrap && pre) { pre.style.display = 'none'; wrap.dataset.folded = 'true'; btn.textContent = `▶ Expand (${btn.dataset.lines ?? '?'} lines)` }
+  })
+}
+function onMessagesMouseover(e: MouseEvent): void {
+  const wrap = (e.target as HTMLElement).closest<HTMLElement>('.ai-code-wrap')
+  if (wrap) lastCodeWrap = wrap
+}
+
 let unsubToolCall: (() => void) | null = null
 let unsubToolResult: (() => void) | null = null
 let unsubCommandProposal: (() => void) | null = null
@@ -4516,11 +4682,18 @@ onUnmounted(() => {
   if (toastTimer !== null) clearTimeout(toastTimer)
   if (saveTimer !== null) clearTimeout(saveTimer)
   if (_speechRecognition) { _speechRecognition.stop(); _speechRecognition = null }
+  if (speakingMsgIdx.value !== null) { window.speechSynthesis?.cancel(); speakingMsgIdx.value = null }
+  lastCodeWrap = null
 })
 
 // ── @context system ────────────────────────────────────────────────────────────
+function _autoResizeTextarea(el: HTMLTextAreaElement): void {
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+}
 function onTextareaInput(e: Event): void {
   const el = e.target as HTMLTextAreaElement
+  _autoResizeTextarea(el)
   const val = el.value
   const cur = el.selectionStart ?? val.length
   const beforeCursor = val.slice(0, cur)
@@ -6599,26 +6772,38 @@ ${log || '(no commits)'}`
     inputText.value = ''
     const shortcuts = [
       '**Chat**',
-      'Ctrl+Enter / Cmd+Enter — Send message',
+      'Enter — Send (default) · Ctrl+Enter in alt mode (toggle in Settings)',
+      'Shift+Enter — New line in input',
       'Ctrl+L / Cmd+L — Focus chat input',
       'Ctrl+N / Cmd+N — New thread',
       'Ctrl+/ — Toggle thread sidebar',
+      'Ctrl+F / Cmd+F — Search in current chat',
+      'Ctrl+Shift+F — Search across all chats',
+      'Ctrl+Shift+H — Prompt history palette',
       'Escape — Stop streaming / close panel',
       'Tab — Accept @mention or /command from menu',
       'Up arrow — Edit last user message (inline)',
       '',
+      '**Code blocks**',
+      'Alt+E — Explain last hovered code block',
+      'Alt+R — Refactor last hovered code block',
+      'Alt+N — New chat with last hovered code block',
+      'Alt+C — Compare last hovered code block',
+      'Ctrl+Shift+C — Copy code block',
+      '',
+      '**Thread**',
+      'Alt+[ / Alt+] — Jump to previous / next AI response',
+      'Ctrl+Shift+M / Cmd+Shift+M — Copy thread as Markdown',
+      'Ctrl+Shift+K — Clear current conversation',
+      'Drag top edge of thread panel — Resize panel height',
+      '',
       '**Editor**',
       'Ctrl+Shift+L / Cmd+Shift+L — Toggle AI pane',
-      'Ctrl+K / Cmd+K — Inline AI edit (if supported)',
       'Ctrl+P / Cmd+P — Quick open file',
-      'Ctrl+Shift+F — Search in files',
-      'Ctrl+` — Toggle terminal',
       '',
       '**Context**',
       '@ — Open context menu (@file, @selection, @git, @web…)',
       '/ — Open command menu',
-      'Ctrl+Shift+C — Copy code block',
-      'Ctrl+Shift+M / Cmd+Shift+M — Copy thread as Markdown',
     ].join('\n')
     messages.value.push({ role: 'assistant', content: `## Keyboard Shortcuts\n\n${shortcuts}`, timestamp: Date.now() })
     return
@@ -7223,7 +7408,7 @@ Return only the markdown table.`
   if (cmd.id === '/explain:file' || cmd.id.startsWith('/explain:file ')) {
     const argPath = cmd.id.startsWith('/explain:file ') ? cmd.id.slice('/explain:file '.length).trim() : ''
     inputText.value = ''
-    const targetPath = argPath || activeFilePath.value || ''
+    const targetPath = argPath || props.getActiveRelPath?.() || ''
     if (!targetPath) { showToast('/explain:file: no file open or specified'); return }
     const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
     if (!SAFE_PATH.test(targetPath) || targetPath.includes('..')) { showToast('Invalid file path'); return }
@@ -7246,7 +7431,7 @@ ${preview}
   if (cmd.id === '/git:log:file' || cmd.id.startsWith('/git:log:file ')) {
     const argPath = cmd.id.startsWith('/git:log:file ') ? cmd.id.slice('/git:log:file '.length).trim() : ''
     inputText.value = ''
-    const targetPath = argPath || activeFilePath.value || ''
+    const targetPath = argPath || props.getActiveRelPath?.() || ''
     if (!targetPath) { showToast('/git:log:file: no file open or specified'); return }
     const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
     if (!SAFE_PATH.test(targetPath) || targetPath.includes('..')) { showToast('Invalid file path'); return }
@@ -9720,9 +9905,16 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     return
   }
 
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    void sendMessage()
+  if (settingsSendMode.value === 'ctrl-enter') {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault()
+      void sendMessage()
+    }
+  } else {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void sendMessage()
+    }
   }
   // Prompt history: Up/Down arrow when not in menus
   if (e.key === 'ArrowUp' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -9987,10 +10179,28 @@ function jumpToBookmark(idx: number): void {
 }
 
 // ── Message feedback ──────────────────────────────────────────────────────────
+const feedbackInputMi = ref<number | null>(null)
+const zoomedImageSrc = ref<string | null>(null)
+const feedbackDraft = ref('')
+function submitFeedbackComment(mi: number): void {
+  const msg = messages.value[mi]
+  if (!msg) return
+  if (feedbackDraft.value.trim()) msg.feedbackComment = feedbackDraft.value.trim()
+  feedbackInputMi.value = null
+  feedbackDraft.value = ''
+  saveCurrentThread()
+}
 function toggleFeedback(mi: number, type: 'up' | 'down'): void {
   const msg = messages.value[mi]
   if (!msg) return
-  msg.feedback = msg.feedback === type ? undefined : type
+  const wasSet = msg.feedback === type
+  msg.feedback = wasSet ? undefined : type
+  if (!wasSet && type === 'down') {
+    feedbackInputMi.value = mi
+    feedbackDraft.value = msg.feedbackComment ?? ''
+  } else if (wasSet) {
+    feedbackInputMi.value = null
+  }
   saveCurrentThread()
 }
 
@@ -10079,7 +10289,7 @@ function showModelChange(mi: number): string | null {
       <span>⚠ Backend disconnected — messages won't send until reconnected</span>
     </div>
     <!-- Messages list -->
-    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @contextmenu.prevent="onMsgContextMenu" @scroll.passive="onMessagesScroll">
+    <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @contextmenu.prevent="onMsgContextMenu" @scroll.passive="onMessagesScroll" @mouseover="onMessagesMouseover">
       <div v-if="messages.length === 0" class="ai-empty">
         <svg width="28" height="28" viewBox="0 0 16 16" fill="currentColor" style="opacity:.3">
           <path d="M8 0L9.5 5.5L15 7L9.5 8.5L8 14L6.5 8.5L1 7L6.5 5.5Z"/>
@@ -10124,6 +10334,10 @@ function showModelChange(mi: number): string | null {
         <div v-if="showModelChange(mi)" class="ai-model-sep">
           <span class="ai-model-sep-label">{{ showModelChange(mi) }}</span>
         </div>
+        <!-- Context window cutoff — messages above here are outside the model's context -->
+        <div v-if="ctxCutoffIdx > 0 && mi === ctxCutoffIdx" class="ai-ctx-cutoff">
+          <span class="ai-ctx-cutoff-label" :title="`Estimated context window limit (${currentModelCtx.toLocaleString()} tokens). Messages above may not be visible to the AI.`">⬆ context window starts here</span>
+        </div>
       <div
         class="ai-msg-wrap ai-msg"
         :class="[msg.role, { 'search-match': isSearchMatch(mi), 'search-active': isSearchActive(mi) }]"
@@ -10162,6 +10376,15 @@ function showModelChange(mi: number): string | null {
             @click="toggleMsgFold(mi)"
           >{{ isMsgFolded(mi, msg.content) ? `▼ Show more (${msg.content.split('\n').length} lines)` : '▲ Show less' }}</button>
 
+          <!-- Image thumbnail (user messages with pasted image) -->
+          <img
+            v-if="msg.imageData && msg.role === 'user'"
+            :src="msg.imageData"
+            class="ai-msg-img-thumb"
+            alt="pasted image"
+            title="Click to zoom"
+            @click="zoomedImageSrc = msg.imageData ?? null"
+          />
           <!-- Extended thinking block (collapsible) -->
           <details
             v-if="msg.thinkingContent"
@@ -10354,6 +10577,17 @@ function showModelChange(mi: number): string | null {
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 8.75 4.25V1.5Zm6.75.56v2.19c0 .138.112.25.25.25h2.19Z"/></svg>
           </button>
+          <!-- Read aloud — Web Speech API TTS (VS Code Copilot parity) -->
+          <button
+            v-if="msg.role === 'assistant' && !msg.streaming && 'speechSynthesis' in window"
+            class="ai-msg-action-btn"
+            :title="speakingMsgIdx === mi ? 'Stop reading' : 'Read aloud'"
+            :class="{ 'ai-msg-action-btn--active': speakingMsgIdx === mi }"
+            @click="readAloud(mi, msg.content)"
+          >
+            <svg v-if="speakingMsgIdx !== mi" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.596 8.697l-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/></svg>
+            <svg v-else width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 3.5A1.5 1.5 0 0 1 7 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5zm5 0A1.5 1.5 0 0 1 12 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5z"/></svg>
+          </button>
           <button
             v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
             class="ai-msg-action-btn"
@@ -10463,6 +10697,21 @@ function showModelChange(mi: number): string | null {
         </div>
         <span v-if="msg.bookmarked" class="ai-bookmark-indicator" title="Bookmarked">★</span>
       </div>
+      <!-- Feedback comment input (VS Code Copilot parity: optional text after 👎) -->
+      <div v-if="feedbackInputMi === mi" class="ai-feedback-comment-wrap">
+        <input
+          v-model="feedbackDraft"
+          class="ai-feedback-comment-input"
+          placeholder="What was wrong? (optional, Enter to save)"
+          @keydown.enter.prevent="submitFeedbackComment(mi)"
+          @keydown.escape="feedbackInputMi = null; feedbackDraft = ''"
+        />
+        <button class="ai-feedback-comment-send" @click="submitFeedbackComment(mi)">Save</button>
+        <button class="ai-feedback-comment-skip" @click="feedbackInputMi = null; feedbackDraft = ''">Skip</button>
+      </div>
+      <div v-else-if="msg.feedbackComment && msg.feedback === 'down'" class="ai-feedback-saved-note" :title="msg.feedbackComment">
+        <span class="ai-feedback-saved-icon">👎</span> {{ msg.feedbackComment }}
+      </div>
       <!-- Edit mode: Apply All files button (when AI proposes ≥2 file changes) -->
       <div v-if="msg.role === 'assistant' && msg.pendingEdits?.length && !msg.streaming" class="ai-apply-all-bar">
         <span class="ai-apply-all-label">{{ msg.pendingEdits.length }} files proposed</span>
@@ -10496,6 +10745,14 @@ function showModelChange(mi: number): string | null {
       </template>
     </div>
 
+    <!-- Expand / Collapse all code blocks -->
+    <div
+      v-if="messages.some(m => m.role === 'assistant' && m.content.includes('```'))"
+      class="ai-code-fold-controls"
+    >
+      <button class="ai-code-fold-ctrl-btn" title="Expand all code blocks" @click="expandAllCodeBlocks()">⊞</button>
+      <button class="ai-code-fold-ctrl-btn" title="Collapse all code blocks" @click="collapseAllCodeBlocks()">⊟</button>
+    </div>
     <!-- Scroll-to-bottom button (shown when user has scrolled up during streaming) -->
     <button
       v-if="!autoScroll"
@@ -10679,6 +10936,12 @@ function showModelChange(mi: number): string | null {
           class="ai-rules-badge"
           style="background: var(--bg-muted); cursor: default;"
         >{{ allThreads.find(t => t.id === currentThreadId)?.label }}</span>
+        <span
+          v-if="activePersonaLabel"
+          class="ai-rules-badge ai-persona-badge"
+          :title="`Active persona: ${activePersonaLabel}\nClick to change in Settings`"
+          @click="showSettings = true"
+        >{{ activePersonaLabel }}</span>
         <button class="ai-model-badge-btn" :title="`Model: ${settingsModel}\nCmd+/ to cycle · click to pick`" @click="showModelPicker = !showModelPicker">
           <span v-if="settingsModel === 'auto'" class="ai-model-badge-provider auto">✦</span>
           <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ {'anthropic':'A','openai':'GPT','groq':'G','deepseek':'DS','google':'GG','mistral':'M','xai':'X','openai_compatible':'C','ollama':'O'}[settingsProvider] ?? 'O' }}</span>
@@ -10856,7 +11119,7 @@ function showModelChange(mi: number): string | null {
             v-if="!sending"
             class="ai-send-btn"
             :disabled="!inputText.trim() && contextChips.length === 0"
-            title="Send (Enter)"
+            :title="settingsSendMode === 'ctrl-enter' ? 'Send (Ctrl+Enter)' : 'Send (Enter)'"
             @click="sendMessage"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -11027,8 +11290,15 @@ function showModelChange(mi: number): string | null {
       </div>
     </div>
 
+    <!-- Image zoom modal -->
+    <div v-if="zoomedImageSrc" class="ai-img-zoom-overlay" @click="zoomedImageSrc = null">
+      <img :src="zoomedImageSrc" class="ai-img-zoom-img" alt="zoomed image" @click.stop />
+      <button class="ai-img-zoom-close" @click="zoomedImageSrc = null">✕</button>
+    </div>
+
     <!-- Thread list panel -->
-    <div v-if="showThreads" class="ai-threads-panel">
+    <div v-if="showThreads" class="ai-threads-panel" :style="threadPanelHeight ? { height: threadPanelHeight + 'px', maxHeight: 'none' } : {}">
+      <div class="ai-panel-resize-handle" @mousedown.prevent="onPanelResizeMousedown" title="Drag to resize" />
       <div class="ai-threads-header">
         <div class="ai-threads-tabs">
           <button class="ai-threads-tab" :class="{ active: threadTab === 'chats' }" @click="threadTab = 'chats'">Chats ({{ allThreads.filter(t => !t.archived).length }})</button>
@@ -11096,6 +11366,13 @@ function showModelChange(mi: number): string | null {
                 v-html="highlightSearchMatch(item.thread.title, threadSearchQuery)"
               ></span>
               <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet" v-html="highlightSearchMatch(getThreadMatchSnippet(item.thread, threadSearchQuery), threadSearchQuery)"></span>
+              <!-- Fork origin badge — click to jump to parent thread -->
+              <span
+                v-if="item.thread.forkedFrom && allThreads.find(t => t.id === item.thread.forkedFrom)"
+                class="ai-thread-fork-badge"
+                :title="`Forked from: ${allThreads.find(t => t.id === item.thread.forkedFrom)?.title ?? 'parent thread'}`"
+                @click.stop="switchThread(item.thread.forkedFrom!)"
+              >⤴ fork</span>
             </div>
             <div class="ai-thread-meta">
               <span v-if="item.thread.label" class="ai-thread-label-badge" :title="`Label: ${item.thread.label}`">{{ item.thread.label }}</span>
@@ -11295,6 +11572,31 @@ function showModelChange(mi: number): string | null {
         <div class="ai-modal-footer">
           <button class="ai-cancel-btn" @click="diffApplyState = null">Cancel <kbd>Esc</kbd></button>
           <button class="ai-apply-confirm-btn" title="Apply changes (⌘↵ / Ctrl+↵)" @click="confirmApply">Apply <kbd>⌘↵</kbd></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prompt history palette (Ctrl+Shift+H) -->
+    <div v-if="showHistoryPalette" class="ai-modal-overlay" @click.self="showHistoryPalette = false">
+      <div class="ai-modal ai-history-palette">
+        <div class="ai-modal-header">
+          <span>Prompt History</span>
+          <button class="ai-settings-close" @click="showHistoryPalette = false">✕</button>
+        </div>
+        <input
+          v-model="historyPaletteQuery"
+          class="ai-history-palette-input"
+          placeholder="Search prompt history…"
+          @keydown.escape="showHistoryPalette = false"
+        />
+        <div class="ai-history-palette-list">
+          <div v-if="!filteredHistory.length" class="ai-history-palette-empty">No history yet</div>
+          <button
+            v-for="(h, i) in filteredHistory.slice(0, 50)"
+            :key="i"
+            class="ai-history-palette-item"
+            @click="pickHistory(h)"
+          >{{ h.length > 120 ? h.slice(0, 120) + '…' : h }}</button>
         </div>
       </div>
     </div>
@@ -11601,6 +11903,15 @@ function showModelChange(mi: number): string | null {
           </div>
         </div>
 
+        <!-- Send shortcut preference -->
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Send shortcut</label>
+          <div class="ai-settings-radios">
+            <label><input v-model="settingsSendMode" type="radio" value="enter" /> Enter to send (Shift+Enter = newline)</label>
+            <label><input v-model="settingsSendMode" type="radio" value="ctrl-enter" /> Ctrl+Enter to send (Enter = newline)</label>
+          </div>
+        </div>
+
         <!-- Session usage statistics -->
         <div class="ai-stats-row">
           <span class="ai-stats-title">Session usage</span>
@@ -11895,6 +12206,26 @@ function showModelChange(mi: number): string | null {
   color: var(--text-primary); outline: none;
 }
 .ai-model-picker-custom-input:focus { border-color: var(--accent-emphasis); }
+.ai-feedback-comment-wrap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px 6px; animation: fadeIn 0.15s ease;
+}
+.ai-feedback-comment-input {
+  flex: 1; font-size: 11px; background: var(--bg-subtle); border: 1px solid var(--border-muted);
+  border-radius: 4px; color: var(--text-primary); padding: 3px 7px; outline: none;
+}
+.ai-feedback-comment-input:focus { border-color: var(--accent, #58a6ff); }
+.ai-feedback-comment-send, .ai-feedback-comment-skip {
+  font-size: 10.5px; background: none; border: 1px solid var(--border-muted);
+  border-radius: 3px; color: var(--text-muted); cursor: pointer; padding: 2px 7px;
+}
+.ai-feedback-comment-send:hover { color: var(--accent-fg); border-color: var(--accent, #58a6ff); }
+.ai-feedback-comment-skip:hover { color: var(--text-primary); }
+.ai-feedback-saved-note {
+  font-size: 10px; color: var(--text-muted); padding: 2px 10px 6px; opacity: 0.65;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-feedback-saved-icon { margin-right: 2px; }
 .ai-feedback-btn { font-size: 11px; opacity: 0.3; }
 .ai-feedback-btn:hover { opacity: 0.9; }
 .ai-feedback-up { opacity: 1 !important; filter: none; }
@@ -11971,6 +12302,14 @@ function showModelChange(mi: number): string | null {
   flex-shrink: 0;
 }
 
+.ai-code-fold-controls {
+  position: absolute; right: 36px; bottom: 8px; display: flex; gap: 2px; z-index: 4;
+}
+.ai-code-fold-ctrl-btn {
+  background: var(--bg-overlay); border: 1px solid var(--border-muted); border-radius: 4px;
+  color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 6px; opacity: 0.6;
+}
+.ai-code-fold-ctrl-btn:hover { opacity: 1; color: var(--text-primary); }
 .ai-scroll-to-bottom {
   position: absolute;
   bottom: 130px;
@@ -12038,6 +12377,30 @@ function showModelChange(mi: number): string | null {
   content: ''; flex: 1; height: 1px; background: var(--border-muted); opacity: 0.5;
 }
 .ai-model-sep-label { white-space: nowrap; user-select: none; opacity: 0.7; }
+.ai-ctx-cutoff {
+  display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px;
+  color: var(--warning-fg, #d29922); font-size: 10px;
+}
+.ai-ctx-cutoff::before, .ai-ctx-cutoff::after {
+  content: ''; flex: 1; height: 1px;
+  background: var(--warning-fg, #d29922); opacity: 0.35;
+}
+.ai-ctx-cutoff-label { white-space: nowrap; user-select: none; cursor: help; opacity: 0.8; }
+.ai-history-palette { max-width: 620px; width: 95vw; }
+.ai-history-palette-input {
+  width: 100%; box-sizing: border-box; font-size: 13px;
+  background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: 4px;
+  color: var(--text-primary); padding: 6px 10px; outline: none; margin: 0 0 4px;
+}
+.ai-history-palette-input:focus { border-color: var(--accent, #58a6ff); }
+.ai-history-palette-list { overflow-y: auto; max-height: 55vh; display: flex; flex-direction: column; gap: 2px; }
+.ai-history-palette-empty { font-size: 12px; color: var(--text-muted); padding: 12px; text-align: center; }
+.ai-history-palette-item {
+  text-align: left; font-size: 11.5px; background: none; border: none;
+  color: var(--text-secondary); cursor: pointer; padding: 6px 8px; border-radius: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-history-palette-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
 .ai-stream-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; margin-left: 4px; user-select: none; }
 .ai-text-folded { max-height: 320px; overflow: hidden; position: relative; }
 .ai-text-folded::after {
@@ -12090,6 +12453,11 @@ function showModelChange(mi: number): string | null {
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 200px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.ai-text :deep(.ai-code-filepath:hover) {
+  text-decoration: underline; opacity: 0.85;
 }
 .ai-text :deep(.ai-code-lang-sm) {
   font-family: ui-monospace, Menlo, monospace;
@@ -12198,6 +12566,13 @@ function showModelChange(mi: number): string | null {
 }
 .ai-text :deep(.ai-code-action-btn:hover) {
   opacity: 1; background: var(--bg-subtle); color: var(--accent-fg);
+}
+.ai-text :deep(.ai-code-action-err) {
+  color: var(--danger-fg, #cf222e) !important; opacity: 0.75 !important;
+}
+.ai-text :deep(.ai-code-action-err:hover) { opacity: 1 !important; }
+.ai-text :deep(.ai-code-action-btn:focus-visible) {
+  opacity: 1; outline: 1.5px solid var(--accent, #58a6ff); outline-offset: 1px;
 }
 .ai-text :deep(.ai-code-create-btn) {
   background: none;
@@ -12869,6 +13244,10 @@ function showModelChange(mi: number): string | null {
   letter-spacing: 0.02em;
 }
 .ai-rules-badge:hover { opacity: 1; }
+.ai-persona-badge {
+  background: color-mix(in srgb, #a78bfa 14%, transparent);
+  color: #a78bfa;
+}
 .ai-model-badge-btn {
   display: flex; align-items: center; gap: 4px;
   background: none; border: 1px solid var(--border-muted); border-radius: 10px;
@@ -12965,8 +13344,9 @@ function showModelChange(mi: number): string | null {
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  min-height: 60px;
+  min-height: 38px;
   max-height: 200px;
+  overflow-y: auto;
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-muted);
@@ -13428,6 +13808,57 @@ function showModelChange(mi: number): string | null {
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
 /* ── Shortcuts panel ─────────────────────────────────────────────────────── */
 /* ── Thread list panel ────────────────────────────────────────────────────── */
+.ai-panel-resize-handle {
+  height: 4px;
+  cursor: ns-resize;
+  background: transparent;
+  flex-shrink: 0;
+  user-select: none;
+  transition: background 0.15s;
+}
+.ai-panel-resize-handle:hover { background: var(--accent, #1e88e5); opacity: 0.5; }
+.ai-msg-img-thumb {
+  max-width: 200px;
+  max-height: 120px;
+  border-radius: 4px;
+  cursor: zoom-in;
+  display: block;
+  margin-top: 6px;
+  border: 1px solid var(--border-muted);
+  object-fit: cover;
+}
+.ai-msg-img-thumb:hover { opacity: 0.85; }
+.ai-img-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.ai-img-zoom-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  object-fit: contain;
+  cursor: default;
+}
+.ai-img-zoom-close {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  background: rgba(255,255,255,0.1);
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.ai-img-zoom-close:hover { background: rgba(255,255,255,0.2); }
 .ai-threads-panel {
   position: absolute;
   bottom: 0;
@@ -13536,6 +13967,9 @@ function showModelChange(mi: number): string | null {
 .ai-thread-pin:hover { color: var(--accent-fg); }
 .ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
 .ai-thread-label-badge { font-size: 10px; border-radius: 4px; padding: 0 4px; background: var(--bg-muted); flex-shrink: 0; }
+.ai-thread-fork-badge { font-size: 9px; color: var(--accent); opacity: 0.75; cursor: pointer; margin-left: 3px; white-space: nowrap; flex-shrink: 0; }
+.ai-thread-fork-badge:hover { opacity: 1; text-decoration: underline; }
+.ai-msg-action-btn--active { color: var(--accent) !important; opacity: 1 !important; }
 .ai-thread-model-badge { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); border-radius: 3px; padding: 0 4px; opacity: 0.7; }
 .ai-settings-btn.active { color: var(--accent-fg); }
 

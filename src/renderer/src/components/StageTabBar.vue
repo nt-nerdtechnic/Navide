@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 
 export interface TabItem {
   key: string
@@ -8,12 +8,26 @@ export interface TabItem {
   type: 'stage' | 'manual'
 }
 
-defineProps<{ tabs: TabItem[]; modelValue: string }>()
+const props = defineProps<{ tabs: TabItem[]; modelValue: string }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
   (e: 'add'): void
   (e: 'rename', key: string, name: string): void
+  (e: 'delete', key: string): void
+  (e: 'move-pane', paneId: string, targetKey: string): void
 }>()
+
+// Number of deletable (stage) tabs — the last one is kept, so the ✕ only shows
+// when more than one stage tab exists.
+const stageTabCount = computed(() => props.tabs.filter((t) => t.type === 'stage').length)
+
+// Drag-to-move: a pane dropped onto a tab reassigns it to that tab's run group.
+const dragOverKey = ref<string | null>(null)
+function onTabDrop(e: DragEvent, key: string): void {
+  dragOverKey.value = null
+  const paneId = e.dataTransfer?.getData('application/x-pane-id') || ''
+  if (paneId) emit('move-pane', paneId, key)
+}
 
 const editingKey = ref<string | null>(null)
 const editingName = ref('')
@@ -48,9 +62,13 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
       <button
         role="tab"
         :aria-selected="tab.key === modelValue"
-        :class="['tab-btn', `tab-type-${tab.type}`, { active: tab.key === modelValue }]"
+        :class="['tab-btn', `tab-type-${tab.type}`, { active: tab.key === modelValue, 'drag-over': dragOverKey === tab.key }]"
         @click="emit('update:modelValue', tab.key)"
         @dblclick.prevent="startRename(tab)"
+        @dragover.prevent
+        @dragenter.prevent="dragOverKey = tab.key"
+        @dragleave="dragOverKey = (dragOverKey === tab.key ? null : dragOverKey)"
+        @drop.prevent="onTabDrop($event, tab.key)"
       >
         <template v-if="editingKey === tab.key">
           <input
@@ -65,6 +83,12 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
         <template v-else>
           <span class="tab-label">{{ tab.label }}</span>
           <span class="tab-count">{{ tab.count }}</span>
+          <span
+            v-if="tab.type === 'stage' && stageTabCount > 1"
+            class="tab-close"
+            title="刪除此 tab（pane 會移到第一個剩餘 tab）"
+            @click.stop="emit('delete', tab.key)"
+          >✕</span>
         </template>
       </button>
     </template>
@@ -112,6 +136,30 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
 .tab-btn.active {
   color: var(--accent-bright);
   border-bottom-color: var(--accent-focus);
+}
+.tab-btn.drag-over {
+  background: var(--accent-subtle);
+  border-bottom-color: var(--accent-focus);
+}
+
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
+}
+.tab-btn:hover .tab-close { opacity: 0.7; }
+.tab-close:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  background: var(--bg-muted);
 }
 
 .tab-count {

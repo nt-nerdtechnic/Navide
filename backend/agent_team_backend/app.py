@@ -770,6 +770,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
+        elif msg_type == "pane.set_run_group":
+            project = project_store.set_pane_run_group(
+                payload["workspace_path"],
+                pane_id=payload["pane_id"],
+                run_group_id=payload.get("run_group_id", ""),
+            )
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, _project_payload(project))
+            )
         elif msg_type == "project.set_layout_mode":
             ws_raw = payload.get("workspace_path", "") or ""
             mode = payload.get("layout_mode", "grid")

@@ -40,6 +40,12 @@ _IGNORE_SEGMENTS = frozenset({
     "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "out",
     "target", ".next", ".nuxt", ".turbo", ".cache", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", ".idea", ".gradle",
+    # Our own run artifacts: pipeline panes stream agent output into
+    # .agent-team/runs/.../*.log continuously. git ignores this dir (it ships a
+    # `.gitignore` of `*`), but watchdog doesn't read .gitignore — so without
+    # this, every log write fires git.changed → a 7-request git fan-out in the
+    # frontend, flooding the shared WebSocket and stalling pipeline messages.
+    ".agent-team",
 })
 
 # First-level entries under `.git/` that are pure internal churn — reacting to

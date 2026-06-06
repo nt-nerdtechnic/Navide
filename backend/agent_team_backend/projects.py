@@ -75,6 +75,23 @@ class ManualPaneRecord:
 
 
 @dataclass
+class PaneRecord:
+    """Unified restore record for both pipeline slots and manual panes."""
+    pane_id: str
+    agent: str = ""
+    role: str = ""
+    command: str = ""
+    session_id: str = ""
+    spawn_status: str = "pending"   # pending / spawned / removed
+    run_group_id: str = ""
+    origin: str = "manual"          # "pipeline" | "manual"
+    stage_id: str = ""
+    stage_index: int = -1
+    slot_label: str = ""
+    kickoff_status: str = "none"    # none / sent / failed
+
+
+@dataclass
 class StageRecord:
     stage_id: str
     title: str = ""
@@ -99,7 +116,8 @@ class Project:
     current_stage_index: int = -1
     total_stages: int = 5
     stages: list[StageRecord] = field(default_factory=list)
-    manual_panes: list[ManualPaneRecord] = field(default_factory=list)
+    panes: list[PaneRecord] = field(default_factory=list)   # unified: pipeline slots + manual panes
+    manual_panes: list[ManualPaneRecord] = field(default_factory=list)  # legacy — kept for backward compat
     agents_spawned: int = 0
     backend_version: str = ""
     log_file_name: str = ""  # set by start_pipeline(); e.g. "pipeline-20260527-183000-建立登入頁面.log"
@@ -115,22 +133,56 @@ class Project:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Project":
-        def _slot(s: dict[str, Any]) -> SlotRecord:
-            known = {f for f in SlotRecord.__dataclass_fields__}
-            return SlotRecord(**{k: v for k, v in s.items() if k in known})
-
         def _stage(s: dict[str, Any]) -> StageRecord:
-            slots = [_slot(sl) for sl in s.get("slots", [])]
+            # exclude "slots" — pipeline panes now live in panes[]; old slots are
+            # migrated below and should not be set on StageRecord directly.
             known = {f for f in StageRecord.__dataclass_fields__} - {"slots"}
-            return StageRecord(**{k: v for k, v in s.items() if k in known}, slots=slots)
+            return StageRecord(**{k: v for k, v in s.items() if k in known})
 
         stages = [_stage(s) for s in d.get("stages", [])]
-        manual_panes = [
-            ManualPaneRecord(**{k: v for k, v in p.items() if k in ManualPaneRecord.__dataclass_fields__})
-            for p in d.get("manual_panes", [])
-            if isinstance(p, dict)
-        ]
-        d2 = {**d, "stages": stages, "manual_panes": manual_panes}
+
+        # Unified panes[]: if present use it directly; otherwise migrate from old format.
+        pane_known = {f for f in PaneRecord.__dataclass_fields__}
+        if "panes" in d:
+            panes: list[PaneRecord] = [
+                PaneRecord(**{k: v for k, v in p.items() if k in pane_known})
+                for p in d["panes"] if isinstance(p, dict)
+            ]
+        else:
+            panes = []
+            for i, raw_stage in enumerate(d.get("stages", [])):
+                for slot in raw_stage.get("slots", []):
+                    pid = slot.get("pane_id") or ""
+                    if not pid:
+                        continue
+                    panes.append(PaneRecord(
+                        pane_id=pid,
+                        agent=slot.get("agent", ""),
+                        role=slot.get("role", ""),
+                        session_id=slot.get("session_id", ""),
+                        spawn_status=slot.get("spawn_status", "pending"),
+                        run_group_id=slot.get("run_group_id", ""),
+                        kickoff_status=slot.get("kickoff_status", "none"),
+                        origin="pipeline",
+                        stage_id=raw_stage.get("stage_id", ""),
+                        stage_index=i,
+                        slot_label=slot.get("label", ""),
+                    ))
+            for mp in d.get("manual_panes", []):
+                if not isinstance(mp, dict) or not mp.get("pane_id"):
+                    continue
+                panes.append(PaneRecord(
+                    pane_id=mp["pane_id"],
+                    agent=mp.get("agent", ""),
+                    role=mp.get("role", ""),
+                    command=mp.get("command", ""),
+                    session_id=mp.get("session_id", ""),
+                    spawn_status=mp.get("spawn_status", "spawned"),
+                    run_group_id=mp.get("run_group_id", ""),
+                    origin="manual",
+                ))
+
+        d2 = {**d, "stages": stages, "panes": panes}
         known = {f for f in cls.__dataclass_fields__}
         d2 = {k: v for k, v in d2.items() if k in known}
         return cls(**d2)
@@ -291,6 +343,8 @@ class ProjectStore:
             )
             for s in stage_blueprint
         ]
+        # Clear stale pipeline panes from previous runs; preserve manual panes.
+        project.panes = [p for p in project.panes if p.origin == "manual"]
         # Each pipeline run gets its own log file.
         project.log_file_name = _make_log_filename(task_description)
         self.save(project)
@@ -350,6 +404,13 @@ class ProjectStore:
         )
         return project
 
+    def _find_slot_pane(self, project: "Project", stage_index: int, slot_label: str) -> "PaneRecord | None":
+        return next(
+            (p for p in project.panes
+             if p.origin == "pipeline" and p.stage_index == stage_index and p.slot_label == slot_label),
+            None,
+        )
+
     def record_slot_spawn(
         self,
         workspace_path: str,
@@ -366,22 +427,18 @@ class ProjectStore:
         if stage_index < 0 or stage_index >= len(project.stages):
             raise IndexError(f"stage_index {stage_index} out of range")
         stage = project.stages[stage_index]
-        slot = next((s for s in stage.slots if s.label == slot_label), None)
-        if slot is None:
-            slot = SlotRecord(label=slot_label, agent=agent, role=role)
-            stage.slots.append(slot)
-        slot.pane_id = pane_id
-        slot.spawn_status = "spawned"
-        if agent:
-            slot.agent = agent
-        if role:
-            slot.role = role
-        # Claude pins its session id at spawn, so persist it now; Codex/Gemini
-        # pass "" here and get record_slot_session() later once detected.
-        if session_id:
-            slot.session_id = session_id
-        if run_group_id:
-            slot.run_group_id = run_group_id
+        pane = self._find_slot_pane(project, stage_index, slot_label)
+        if pane is None:
+            pane = PaneRecord(pane_id=pane_id, origin="pipeline",
+                              stage_id=stage.stage_id, stage_index=stage_index, slot_label=slot_label)
+            project.panes.append(pane)
+        pane.pane_id = pane_id
+        pane.spawn_status = "spawned"
+        if agent: pane.agent = agent
+        if role: pane.role = role
+        # Claude pins its session id at spawn; Codex/Gemini use record_slot_session() later.
+        if session_id: pane.session_id = session_id
+        if run_group_id: pane.run_group_id = run_group_id
         self.save(project)
         return project
 
@@ -393,18 +450,12 @@ class ProjectStore:
         slot_label: str,
         session_id: str,
     ) -> Project:
-        """Persist the CLI session id for a slot so it can be resumed on
-        restart. Called later than record_slot_spawn because Codex/Gemini
-        ids are only known once the CLI has written its session file."""
+        """Persist the CLI session id for a slot so it can be resumed on restart."""
         project = self.load_or_create(workspace_path)
-        if stage_index < 0 or stage_index >= len(project.stages):
-            raise IndexError(f"stage_index {stage_index} out of range")
-        stage = project.stages[stage_index]
-        slot = next((s for s in stage.slots if s.label == slot_label), None)
-        if slot is None:
-            return project
-        slot.session_id = session_id
-        self.save(project)
+        pane = self._find_slot_pane(project, stage_index, slot_label)
+        if pane:
+            pane.session_id = session_id
+            self.save(project)
         return project
 
     def record_slot_unspawn(
@@ -414,33 +465,31 @@ class ProjectStore:
         stage_index: int,
         slot_label: str,
     ) -> Project:
-        """Mark a pipeline slot as manually removed so it is not auto-restored.
-
-        The session_id is intentionally preserved. If the slot is spawned again
-        later, record_slot_spawn can reuse/update it as appropriate.
-        """
+        """Mark a pipeline slot as manually removed so it is not auto-restored."""
         project = self.load_or_create(workspace_path)
         if stage_index < 0 or stage_index >= len(project.stages):
             raise IndexError(f"stage_index {stage_index} out of range")
         stage = project.stages[stage_index]
-        slot = next((s for s in stage.slots if s.label == slot_label), None)
-        if slot is None:
+        pane = self._find_slot_pane(project, stage_index, slot_label)
+        if pane is None:
             return project
-        slot.pane_id = None
-        slot.spawn_status = "removed"
-        slot.kickoff_status = "none"
+        pane.spawn_status = "removed"
+        pane.kickoff_status = "none"
         self.save(project)
         self.append_event(
             workspace_path,
-            {
-                "event": "slot_unspawn",
-                "stage_index": stage_index,
-                "stage_id": stage.stage_id,
-                "slot_label": slot_label,
-            },
+            {"event": "slot_unspawn", "stage_index": stage_index,
+             "stage_id": stage.stage_id, "slot_label": slot_label},
             log_file_name=project.log_file_name,
         )
         return project
+
+    def _find_manual_pane(self, project: "Project", pane_id: str, previous_pane_id: str = "") -> "PaneRecord | None":
+        return next(
+            (p for p in project.panes
+             if p.origin == "manual" and (p.pane_id == pane_id or (previous_pane_id and p.pane_id == previous_pane_id))),
+            None,
+        )
 
     def record_manual_pane_spawn(
         self,
@@ -455,34 +504,21 @@ class ProjectStore:
         run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
-        pane = next(
-            (
-                p for p in project.manual_panes
-                if p.pane_id == pane_id or (previous_pane_id and p.pane_id == previous_pane_id)
-            ),
-            None,
-        )
+        pane = self._find_manual_pane(project, pane_id, previous_pane_id)
         if pane is None:
-            pane = ManualPaneRecord(pane_id=pane_id)
-            project.manual_panes.append(pane)
+            pane = PaneRecord(pane_id=pane_id, origin="manual")
+            project.panes.append(pane)
         pane.pane_id = pane_id
         pane.agent = agent
         pane.role = role
         pane.command = command
         pane.spawn_status = "spawned"
-        if session_id:
-            pane.session_id = session_id
-        if run_group_id:
-            pane.run_group_id = run_group_id
+        if session_id: pane.session_id = session_id
+        if run_group_id: pane.run_group_id = run_group_id
         self.save(project)
         self.append_event(
             workspace_path,
-            {
-                "event": "manual_pane_spawn",
-                "pane_id": pane_id,
-                "agent": agent,
-                "role": role,
-            },
+            {"event": "manual_pane_spawn", "pane_id": pane_id, "agent": agent, "role": role},
             log_file_name=project.log_file_name,
         )
         return project
@@ -494,7 +530,7 @@ class ProjectStore:
         pane_id: str,
     ) -> Project:
         project = self.load_or_create(workspace_path)
-        pane = next((p for p in project.manual_panes if p.pane_id == pane_id), None)
+        pane = self._find_manual_pane(project, pane_id)
         if pane is None:
             return project
         pane.spawn_status = "removed"
@@ -514,10 +550,31 @@ class ProjectStore:
         session_id: str,
     ) -> Project:
         project = self.load_or_create(workspace_path)
-        pane = next((p for p in project.manual_panes if p.pane_id == pane_id), None)
+        pane = self._find_manual_pane(project, pane_id)
         if pane is None:
             return project
         pane.session_id = session_id
+        self.save(project)
+        return project
+
+    def set_pane_run_group(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        run_group_id: str,
+    ) -> Project:
+        """Reassign a pane (pipeline or manual) to a run group / tab.
+
+        Looks up by pane_id across all panes regardless of origin. An empty
+        run_group_id is allowed (moves the pane to the ungrouped/手動 tab).
+        No-op if the pane isn't found.
+        """
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.run_group_id = run_group_id
         self.save(project)
         return project
 
@@ -530,12 +587,9 @@ class ProjectStore:
         kickoff_status: str,
     ) -> Project:
         project = self.load_or_create(workspace_path)
-        if stage_index < 0 or stage_index >= len(project.stages):
-            raise IndexError(f"stage_index {stage_index} out of range")
-        stage = project.stages[stage_index]
-        slot = next((s for s in stage.slots if s.label == slot_label), None)
-        if slot:
-            slot.kickoff_status = kickoff_status
+        pane = self._find_slot_pane(project, stage_index, slot_label)
+        if pane:
+            pane.kickoff_status = kickoff_status
             self.save(project)
         return project
 

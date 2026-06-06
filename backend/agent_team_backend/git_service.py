@@ -109,8 +109,14 @@ async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
         return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return 128, "", "git command timed out"
     except FileNotFoundError:
         return 128, "", "git executable not found"
     except Exception as exc:
@@ -127,8 +133,14 @@ async def _run_with_input(args: list[str], cwd: str, stdin_text: str) -> tuple[i
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate(stdin_text.encode("utf-8"))
+        stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_text.encode("utf-8")), timeout=15.0)
         return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return 128, "", "git command timed out"
     except FileNotFoundError:
         return 128, "", "git executable not found"
     except Exception as exc:
