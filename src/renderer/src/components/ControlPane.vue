@@ -622,7 +622,7 @@ function onExplorerDividerEnd(): void {
       </div>
       <div class="part-bottom">
         <section class="block panel-section">
-          <div class="row between">
+          <div class="row between agent-list-hdr">
             <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
             <div class="agent-header-actions">
               <ViewPanel
@@ -638,10 +638,10 @@ function onExplorerDividerEnd(): void {
               <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
                 <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
                 <span class="badge">{{ p.agentLabel }}</span>
-                <span class="badge role">{{ p.roleLabel }}</span>
                 <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
                 <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
               </div>
+              <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
               <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
                 <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
               </div>
@@ -880,7 +880,7 @@ function onExplorerDividerEnd(): void {
 
     <!-- ── Active agents ──────────────────────────────────────────────────── -->
     <section class="block panel-section">
-      <div class="row between">
+      <div class="row between agent-list-hdr">
         <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
         <div class="agent-header-actions">
           <ViewPanel
@@ -896,10 +896,10 @@ function onExplorerDividerEnd(): void {
           <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
-            <span class="badge role">{{ p.roleLabel }}</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
           </div>
+          <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
           <div v-if="p.isCommander && !p.isMinimized" class="manager-row">
             <span class="badge manager-badge" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Manager</span>
           </div>
@@ -1449,6 +1449,14 @@ button.link {
   padding: 2px 4px;
   text-align: left;
 }
+.agent-list-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-base);
+  margin: 0 -14px;
+  padding: 4px 14px 6px;
+}
 .agent-header-actions {
   display: flex;
   gap: 2px;
@@ -1899,12 +1907,21 @@ button.icon-btn.muted:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
-  flex-wrap: wrap;
+  margin-bottom: 2px;
   cursor: pointer;
   border-radius: 4px;
   padding: 2px 4px;
   margin-left: -4px;
+  overflow: hidden;
+}
+.role-line {
+  font-size: 9px;
+  color: var(--accent-bright);
+  margin-bottom: 3px;
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .agent-line:hover {
   background: var(--bg-subtle);
@@ -1987,7 +2004,13 @@ button.icon-btn.muted:hover {
 }
 .agent-cmd {
   margin-bottom: 4px;
-  word-break: break-all;
+  overflow: hidden;
+}
+.agent-cmd code {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .agent-session {
   font-size: 10px;
