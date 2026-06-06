@@ -2,6 +2,8 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import mermaid from 'mermaid'
+import katex from 'katex'
+import 'katex/dist/katex.min.css'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -450,6 +452,7 @@ function switchThread(id: string): void {
       messagesEl.value.scrollTop = messagesEl.value.scrollHeight
       autoScroll.value = true
     }
+    void renderMermaidBlocks()
   })
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
@@ -1206,6 +1209,29 @@ function renderMarkdownLite(rawText: string): string {
     )
     return `\x00B${i}\x00`
   })
+  // Extract LaTeX math blocks before HTML escape so they survive unharmed
+  const mathBlocks: string[] = []
+  // Display math: $$...$$
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
+    try {
+      const rendered = katex.renderToString(expr.trim(), { displayMode: true, throwOnError: false })
+      mathBlocks.push(rendered)
+    } catch {
+      mathBlocks.push(`<span class="ai-latex-err">$$${expr}$$</span>`)
+    }
+    return `\x00M${mathBlocks.length - 1}\x00`
+  })
+  // Inline math: $...$  (avoid false positives: require non-space after opening $)
+  text = text.replace(/\$([^\s$][^$\n]*?)\$/g, (_, expr) => {
+    try {
+      const rendered = katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })
+      mathBlocks.push(rendered)
+    } catch {
+      mathBlocks.push(`<span class="ai-latex-err">$${expr}$</span>`)
+    }
+    return `\x00M${mathBlocks.length - 1}\x00`
+  })
+
   // HTML-escape non-code-block content to prevent XSS via v-html
   text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -1347,6 +1373,11 @@ function renderMarkdownLite(rawText: string): string {
 
   // 4. Restore code blocks
   html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[Number(i)])
+
+  // 5. Restore math blocks
+  if (mathBlocks.length) {
+    html = html.replace(/\x00M(\d+)\x00/g, (_, i) => mathBlocks[Number(i)])
+  }
 
   return html
 }
@@ -2427,7 +2458,7 @@ const _SVG_ALLOWED_TAGS = new Set([
   'tspan','defs','marker','use','title','desc','style','linearGradient',
   'radialGradient','stop','clipPath','mask','foreignObject',
 ])
-const _SVG_FORBIDDEN_ATTR = /^on|^href\s*=\s*(javascript|data|vbscript)/i
+const _SVG_FORBIDDEN_ATTR = /^on/i
 
 function _sanitizeSvgNode(node: Element): void {
   // Remove forbidden attributes
@@ -2476,6 +2507,8 @@ onMounted(() => {
   fetchSettings()
   loadThreads()
   void detectWorkspaceRules()
+  // Render any mermaid diagrams that were persisted in thread history
+  void nextTick(renderMermaidBlocks)
 })
 watch(() => props.workspacePath, () => { void detectWorkspaceRules() })
 watch(() => props.backend.status.value, (s) => {
