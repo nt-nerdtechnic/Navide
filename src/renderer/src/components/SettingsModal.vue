@@ -24,7 +24,7 @@ const emit = defineEmits<{
 }>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'ai_chat'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance'
 const activeTab = ref<Tab>('roles')
 
 // ── AI Chat settings ──────────────────────────────────────────────────────────
@@ -588,7 +588,7 @@ async function mOpenConfig() {
 
 watch(activeTab, (tab) => {
   if (tab === 'mcp' && mServers.value.length === 0) mLoad()
-  if (tab === 'ai_chat') fetchAiChatSettings()
+  if (tab === 'analyzer') fetchAiChatSettings()
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -728,7 +728,6 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">🔌 MCP</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">🧠 Analyzer</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">🎨 Appearance</button>
-            <button :class="['s-tab', { active: activeTab === 'ai_chat' }]" @click="activeTab = 'ai_chat'">💬 AI Chat</button>
           </div>
           <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
@@ -1178,6 +1177,22 @@ async function plDelete(id: string, name: string) {
             </div>
           </div>
 
+          <!-- ⑤ Anthropic API Key -->
+          <div class="az-section">
+            <div class="az-section-title">Anthropic API Key</div>
+            <p class="az-hint">Used when the AI Chat / AI Review provider is set to Anthropic. Stored locally with restricted permissions.</p>
+            <div class="ai-chat-key-row">
+              <input
+                v-model="aiChatApiKey"
+                type="password"
+                class="ai-chat-key-input"
+                placeholder="sk-ant-…"
+                @input="aiChatApiKeyDirty = true"
+              />
+              <button class="ai-chat-key-save" :disabled="!aiChatApiKeyDirty" @click="saveAiChatSettings">Save</button>
+            </div>
+          </div>
+
         </div>
 
         <!-- ── PIPELINES TAB ────────────────────────────────────────────── -->
@@ -1442,24 +1457,6 @@ async function plDelete(id: string, name: string) {
           </section>
         </div>
 
-        <!-- ── AI CHAT TAB ───────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'ai_chat'" class="s-body ai-chat-settings-body">
-          <section class="ap-section">
-            <h3 class="ap-title">Anthropic API Key</h3>
-            <p class="ap-hint">Used when the AI Chat provider is set to Anthropic. Stored locally on disk with restricted permissions.</p>
-            <div class="ai-chat-key-row">
-              <input
-                v-model="aiChatApiKey"
-                type="password"
-                class="ai-chat-key-input"
-                placeholder="sk-ant-…"
-                @input="aiChatApiKeyDirty = true"
-              />
-              <button class="ai-chat-key-save" :disabled="!aiChatApiKeyDirty" @click="saveAiChatSettings">Save</button>
-            </div>
-            <p class="ap-hint" style="margin-top:6px">Provider and model are configurable from the AI Chat panel settings icon.</p>
-          </section>
-        </div>
 
       </div>
     </div>
@@ -2183,8 +2180,6 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .pl-rename-icon:hover { opacity: 1; color: var(--text-bright); background: var(--bg-muted); }
 .pl-detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
 
-/* ── AI Chat settings tab ─────────────────────────────────────────────────── */
-.ai-chat-settings-body { padding: 16px 20px; }
 .ai-chat-key-row { display: flex; gap: 8px; align-items: center; }
 .ai-chat-key-input {
   flex: 1;
