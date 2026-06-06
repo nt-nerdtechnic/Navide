@@ -1836,9 +1836,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             base = payload.get("base") or "main"
             compare = payload.get("compare") or ""
-            if not compare:
-                _rc, _cur, _ = await git_service._run(["git", "rev-parse", "--abbrev-ref", "HEAD"], ws_path)
-                compare = _cur.strip() if _rc == 0 and _cur.strip() else "HEAD"
             result = await git_service.diff_branches(ws_path, base, compare)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 

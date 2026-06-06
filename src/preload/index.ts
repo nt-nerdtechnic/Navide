@@ -68,6 +68,12 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onOpenEditorBranchDiff: (cb: (params: Record<string, string>) => void): void => {
     ipcRenderer.on('editor:openBranchDiff', (_event, params: Record<string, string>) => cb(params))
   },
+  gitDiffHead: (args: {
+    workspace_path: string
+    base?: string
+    compare?: string
+  }): Promise<{ ok: boolean; diff: string; error?: string }> =>
+    ipcRenderer.invoke('git:diff-head', args),
   saveJson: (args: {
     defaultName?: string
     content: string

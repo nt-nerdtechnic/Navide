@@ -174,6 +174,43 @@ ipcMain.handle('window:openBranchDiff', (_event, args: Record<string, string>) =
   return { ok: true }
 })
 
+// Allowlist for git ref names: alphanumeric, dots, slashes, hyphens, underscores.
+// Rejects anything starting with '-' (flag smuggling) and shell metacharacters.
+const GIT_REF_RE = /^[A-Za-z0-9._/\-]+$/
+
+function validateRef(value: string, label: string): string | null {
+  if (!value) return null // empty is OK (means "omit")
+  if (value.startsWith('-')) return `invalid ${label}: must not start with '-'`
+  if (!GIT_REF_RE.test(value)) return `invalid ${label}: contains disallowed characters`
+  return null
+}
+
+// Run git diff directly in main process — no Python backend needed, always up-to-date.
+ipcMain.handle('git:diff-head', async (_event, args: { workspace_path: string; base?: string; compare?: string }) => {
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  const execFileAsync = promisify(execFile)
+  const cwd = (args.workspace_path ?? '').trim()
+  if (!cwd) return { ok: false, diff: '', error: 'workspace_path required' }
+  const compare = (args.compare ?? '').trim()
+  const base = (args.base ?? '').trim()
+  const refErr = validateRef(base, 'base') ?? validateRef(compare, 'compare')
+  if (refErr) return { ok: false, diff: '', error: refErr }
+  try {
+    const gitArgs: string[] = ['-c', 'core.quotePath=false', 'diff']
+    if (compare && base) {
+      gitArgs.push(`${base}...${compare}`)
+    } else {
+      gitArgs.push('HEAD')
+    }
+    const { stdout } = await execFileAsync('git', gitArgs, { cwd, maxBuffer: 4 * 1024 * 1024 })
+    return { ok: true, diff: stdout.slice(0, 100_000) }
+  } catch (err: unknown) {
+    const e = err as { stderr?: string; message?: string }
+    return { ok: false, diff: '', error: e.stderr?.trim() || e.message || 'git error' }
+  }
+})
+
 function openEditorWindow(params: Record<string, string>): void {
   const search = { window: 'editor', ...params }
   if (editorWindow && !editorWindow.isDestroyed()) {

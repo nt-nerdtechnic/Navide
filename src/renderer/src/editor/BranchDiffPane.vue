@@ -54,6 +54,10 @@ function countLines(hunks: Hunk[]) {
   return { added, deleted }
 }
 
+type AgentTeamApi = {
+  gitDiffHead?: (a: { workspace_path: string; base?: string; compare?: string }) => Promise<{ ok: boolean; diff: string; error?: string }>
+}
+
 async function loadDiff() {
   if (!props.workspacePath) return
   const seq = ++_seq
@@ -61,36 +65,54 @@ async function loadDiff() {
   loadError.value = ''
   fileDiffs.value = []
   try {
-    const resp = await props.backend.send<{ ok: boolean; diff: string; error?: string }>('git.diff_branches', {
-      workspace_path: props.workspacePath,
-      base: props.base,
-      compare: props.compare || '',
-    })
-    if (seq !== _seq) return
-    if (resp.ok && resp.payload?.ok) {
-      const raw = resp.payload.diff ?? ''
-      const parts = splitFileDiffs(raw)
-      let ta = 0; let td = 0
-      fileDiffs.value = parts.map(p => {
-        const parsed = parseHunks(p.diff)
-        const { added, deleted } = countLines(parsed.hunks)
-        ta += added; td += deleted
-        const rows = parsed.hunks.map((hunk, i) => ({
-          hunk,
-          sideRows: toSideBySide(hunk),
-          hiddenAbove: i === 0
-            ? hunk.oldStart - 1
-            : hunk.oldStart - (parsed.hunks[i - 1].oldStart + parsed.hunks[i - 1].oldCount),
-        }))
-        return { filename: p.filename, addCount: added, delCount: deleted, hunks: parsed.hunks, rows }
+    const api = (window as Window & { agentTeam?: AgentTeamApi }).agentTeam
+    let raw = ''
+    if (api?.gitDiffHead) {
+      const result = await api.gitDiffHead({
+        workspace_path: props.workspacePath,
+        base: props.base || undefined,
+        compare: props.compare || undefined,
       })
-      totalAdded.value = ta
-      totalDeleted.value = td
-      resolvedCompare.value = props.compare || 'HEAD'
-      collapsed.value = {}
+      if (seq !== _seq) return
+      if (result.ok) {
+        raw = result.diff ?? ''
+      } else {
+        loadError.value = result.error || 'Failed to load diff'
+      }
     } else {
-      loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
+      // Fallback: use Python backend WebSocket
+      const resp = await props.backend.send<{ ok: boolean; diff: string; error?: string }>('git.diff_branches', {
+        workspace_path: props.workspacePath,
+        base: props.base,
+        compare: props.compare || '',
+      })
+      if (seq !== _seq) return
+      if (resp.ok && resp.payload?.ok) {
+        raw = resp.payload.diff ?? ''
+      } else {
+        loadError.value = resp.payload?.error || resp.error?.message || 'Failed to load diff'
+      }
     }
+    if (loadError.value) return
+    const parts = splitFileDiffs(raw)
+    let ta = 0; let td = 0
+    fileDiffs.value = parts.map(p => {
+      const parsed = parseHunks(p.diff)
+      const { added, deleted } = countLines(parsed.hunks)
+      ta += added; td += deleted
+      const rows = parsed.hunks.map((hunk, i) => ({
+        hunk,
+        sideRows: toSideBySide(hunk),
+        hiddenAbove: i === 0
+          ? hunk.oldStart - 1
+          : hunk.oldStart - (parsed.hunks[i - 1].oldStart + parsed.hunks[i - 1].oldCount),
+      }))
+      return { filename: p.filename, addCount: added, delCount: deleted, hunks: parsed.hunks, rows }
+    })
+    totalAdded.value = ta
+    totalDeleted.value = td
+    resolvedCompare.value = props.compare || ''
+    collapsed.value = {}
   } catch (e) {
     if (seq === _seq) loadError.value = e instanceof Error ? e.message : 'Failed to load diff'
   } finally {
@@ -121,7 +143,7 @@ function cellClass(cell: SideRow['left']): string {
     <!-- Top bar -->
     <div class="bdp-bar">
       <span class="bdp-badge">±</span>
-      <span class="bdp-title">{{ base }} → {{ resolvedCompare || compare || 'HEAD' }}</span>
+      <span class="bdp-title">{{ compare ? `${base} → ${resolvedCompare || compare}` : 'Working Changes' }}</span>
       <template v-if="!loading && fileDiffs.length">
         <span class="bdp-meta">{{ fileDiffs.length }} file{{ fileDiffs.length !== 1 ? 's' : '' }}</span>
         <span class="bdp-add">+{{ totalAdded }}</span>
@@ -161,7 +183,7 @@ function cellClass(cell: SideRow['left']): string {
     <div v-if="loading" class="bdp-msg">Loading diff…</div>
     <div v-else-if="loadError" class="bdp-msg bdp-err">{{ loadError }}</div>
     <div v-else-if="!fileDiffs.length" class="bdp-msg">
-      No changes between <strong>{{ base }}</strong> and <strong>{{ resolvedCompare || 'HEAD' }}</strong>
+      {{ compare ? `No changes between ${base} and ${resolvedCompare || compare}` : 'No uncommitted changes' }}
     </div>
 
     <!-- File list -->

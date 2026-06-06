@@ -696,20 +696,26 @@ async def compare_branches(workspace_path: str, base: str, compare: str) -> dict
 
 
 async def diff_branches(workspace_path: str, base: str, compare: str) -> dict[str, Any]:
-    """Return the full unified diff between *base* and *compare* branches.
+    """Return a unified diff.
 
-    Uses three-dot diff (merge-base diff) so only changes unique to *compare*
-    relative to the common ancestor with *base* are shown — matching the typical
-    "what did this branch add?" view. Truncated to 30,000 chars.
+    When *compare* is empty, returns all uncommitted changes (staged + unstaged)
+    via ``git diff HEAD`` — the same files shown in the GitPane file list.
+
+    When *compare* is provided, uses three-dot diff (merge-base) so only
+    committed changes unique to *compare* relative to *base* are shown.
+
+    Truncated to 30,000 chars.
     """
-    if err := _validate_ref_name(base, "base branch"):
-        return {"ok": False, "diff": "", "error": err}
-    if err := _validate_ref_name(compare, "compare branch"):
-        return {"ok": False, "diff": "", "error": err}
-    rc, out, stderr = await _run(
-        ["git", "-c", "core.quotePath=false", "diff", f"{base.strip()}...{compare.strip()}"],
-        workspace_path,
-    )
+    if not compare.strip():
+        # Show all uncommitted changes (staged + unstaged) vs last commit
+        cmd = ["git", "-c", "core.quotePath=false", "diff", "HEAD"]
+    else:
+        if err := _validate_ref_name(base, "base branch"):
+            return {"ok": False, "diff": "", "error": err}
+        if err := _validate_ref_name(compare, "compare branch"):
+            return {"ok": False, "diff": "", "error": err}
+        cmd = ["git", "-c", "core.quotePath=false", "diff", f"{base.strip()}...{compare.strip()}"]
+    rc, out, stderr = await _run(cmd, workspace_path)
     if rc != 0:
         return {"ok": False, "diff": "", "error": stderr.strip()}
     return {"ok": True, "diff": out[:30_000]}
