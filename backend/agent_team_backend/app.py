@@ -2211,6 +2211,33 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 t.cancel()
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
+        elif msg_type == "ai.web.search":
+            query = (payload.get("query") or "").strip()
+            if not query:
+                await session.websocket.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "query is required"))
+            else:
+                try:
+                    import httpx as _httpx
+                    import json as _json
+                    # DuckDuckGo Instant Answers API — no API key required
+                    ddg_url = "https://api.duckduckgo.com/"
+                    params = {"q": query, "format": "json", "no_html": "1", "skip_disambig": "1", "t": "agent-team-ide"}
+                    async with _httpx.AsyncClient(timeout=10.0) as _hc:
+                        resp = await _hc.get(ddg_url, params=params)
+                        resp.raise_for_status()
+                        data = resp.json()
+                    results: list[dict] = []
+                    # Abstract (best single result)
+                    if data.get("AbstractText"):
+                        results.append({"title": data.get("Heading", query), "snippet": data["AbstractText"], "url": data.get("AbstractURL", "")})
+                    # RelatedTopics
+                    for item in (data.get("RelatedTopics") or [])[:6]:
+                        if isinstance(item, dict) and item.get("Text"):
+                            results.append({"title": item.get("Text", "")[:80], "snippet": item.get("Text", ""), "url": item.get("FirstURL", "")})
+                    await session.websocket.send_json(make_response(msg_id, msg_type, {"query": query, "results": results[:7]}))
+                except Exception as _e:
+                    await session.websocket.send_json(make_error(msg_id, msg_type, "SEARCH_ERROR", str(_e)))
+
         elif msg_type == "ai.review.stop":
             for t in list(session._review_tasks):
                 t.cancel()

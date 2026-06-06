@@ -430,6 +430,15 @@ const groupedThreads = computed<GroupedItem[]>(() => {
   return items
 })
 
+function threadTotalTokens(thread: ChatThread): number {
+  let total = 0
+  for (const m of thread.messages) {
+    if (m.inputTokens != null) total += m.inputTokens
+    if (m.outputTokens != null) total += m.outputTokens
+  }
+  return total
+}
+
 function getThreadMatchSnippet(thread: ChatThread, q: string): string {
   if (!q) return ''
   for (const m of thread.messages) {
@@ -1024,6 +1033,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@symbol', label: '@symbol — find a function or class definition' },
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
+  { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -2765,6 +2775,18 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @web:<query> — real-time web search
+  const isWebQuery = /^web:/i.test(fragment)
+  if (isWebQuery) {
+    const webQ = fragment.slice('web:'.length).trim()
+    if (webQ.length >= 1) {
+      atOptions.value = [{ id: `@web:${webQ}`, label: `@web: search "${webQ}"` }]
+    } else {
+      atOptions.value = [{ id: '@web', label: '@web — type a search query' }]
+    }
+    return
+  }
+
   // @symbol:functionName — find a symbol definition across the codebase
   const isSymbolQuery = /^symbol:/i.test(fragment)
   if (isSymbolQuery) {
@@ -3413,6 +3435,38 @@ async function selectAtOption(option: AtOption): Promise<void> {
     chipContent = noteText
       ? `// Workspace Notepad:\n${noteText}`
       : '// @notepad: empty — open the Notepad panel to add notes'
+  } else if (option.id === '@web') {
+    // Prompt user to type search query
+    const newVal = val.slice(0, atIdx) + '@web:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@web:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@web:')) {
+    const query = option.id.slice('@web:'.length).trim()
+    chipLabel = `@web:${query.slice(0, 30)}`
+    if (!query) {
+      chipContent = '// @web: no query'
+    } else {
+      try {
+        showToast(`Searching web for "${query}"…`)
+        interface WebSearchResult { title: string; snippet: string; url: string }
+        interface WebSearchResp { ok: boolean; query?: string; results?: WebSearchResult[] }
+        const resp = await props.backend.send<WebSearchResp>('ai.web.search', { query })
+        const results = resp.payload?.results ?? []
+        if (!results.length) {
+          chipContent = `// @web:"${query}" — no results found`
+        } else {
+          const lines = results.map((r) => `• ${r.title}\n  ${r.snippet.slice(0, 200).replace(/\n/g, ' ')}\n  ${r.url}`)
+          chipContent = `// Web search: "${query}"\n\n${lines.join('\n\n')}`
+        }
+      } catch {
+        chipContent = `// @web: search failed for "${query}"`
+      }
+    }
   } else if (option.id === '@symbol') {
     // Prompt user to type symbol name
     const newVal = val.slice(0, atIdx) + '@symbol:' + val.slice(cur)
@@ -4727,6 +4781,7 @@ function getDateLabel(ts: number): string {
             <div class="ai-thread-meta">
               <span v-if="item.thread.model" class="ai-thread-model-badge" :title="`Thread model: ${item.thread.model}`">{{ MODEL_CATALOG.find(m => m.id === item.thread.model)?.display?.split(' ').slice(-1)[0] ?? item.thread.model }}</span>
               <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
+              <span v-if="threadTotalTokens(item.thread) > 0" class="ai-thread-tokens" :title="`~${threadTotalTokens(item.thread).toLocaleString()} total tokens`">{{ threadTotalTokens(item.thread) >= 1000 ? (threadTotalTokens(item.thread) / 1000).toFixed(1) + 'k' : threadTotalTokens(item.thread) }}t</span>
               <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
               <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
               <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(item.thread.id)">✕</button>
@@ -6547,6 +6602,7 @@ function getDateLabel(ts: number): string {
 }
 .ai-thread-rename-input { flex: 1; font-size: 12.5px; background: var(--bg-input); border: 1px solid var(--accent-emphasis); border-radius: 3px; color: var(--text-bright); padding: 1px 4px; outline: none; min-width: 0; }
 .ai-thread-count { font-size: 10px; color: var(--text-on-emphasis, #fff); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
+.ai-thread-tokens { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); padding: 1px 4px; border-radius: 6px; white-space: nowrap; flex-shrink: 0; opacity: 0.7; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
 .ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
