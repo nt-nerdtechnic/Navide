@@ -514,7 +514,7 @@ const genAttempt = ref(0)
 async function doGenerate(): Promise<void> {
   if (autoCommitRunning.value) return  // yield to in-flight auto-commit
   commitError.value = ''
-  const r = await generateMessage(props.analyzerModel || 'llama3.2', genAttempt.value)
+  const r = await generateMessage(props.analyzerModel || 'qwen2:latest', genAttempt.value)
   if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
   else commitError.value = r.error || 'generation failed'
 }
@@ -569,7 +569,7 @@ async function runAutoCommit(): Promise<void> {
     // Step 3: AI Generate — guard against user having started a manual generate
     if (isGenerating.value || isCommitting.value) return
     autoCommitStep.value = 'generating'
-    const r = await generateMessage(props.analyzerModel || 'llama3.2', 0)
+    const r = await generateMessage(props.analyzerModel || 'qwen2:latest', 0)
     if (!r.ok || !r.message) return
 
     // Step 4: Commit staged files — guard against user having committed manually
@@ -949,9 +949,6 @@ function toggleDiff(path: string, staged: boolean): void {
   })
 }
 
-// File-name interaction: single click toggles inline blame; double click opens
-// the standalone diff window. A short timer distinguishes the two (a dblclick
-// also fires two clicks, so the pending single-click action is cancelled).
 function isConflictFile(path: string): boolean {
   const allFiles = [
     ...(gitStatus.value?.staged ?? []),
@@ -1428,7 +1425,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 @contextmenu="openCtxMenu($event, row.file!, true)"
               >
                 <span class="file-status" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                <span class="file-name-only" :title="row.file!.path" @dblclick.stop="onFileOpen(row.file!.path, true)">{{ row.name }}</span>
+                <span class="file-name-only" :title="row.file!.path">{{ row.name }}</span>
                 <div class="row-actions">
                   <template v-if="row.file!.status === 'U'">
                     <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(row.file!.path)">↰</button>
@@ -1475,8 +1472,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               @contextmenu="openCtxMenu($event, f, true)"
             >
               <span class="file-status" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-              <span class="file-name-main" :title="f.path" @dblclick.stop="onFileOpen(f.path, true)">{{ fileName(f.path) }}</span>
-              <span class="file-path-dim" :title="f.path" @dblclick.stop="onFileOpen(f.path, true)">{{ fileDir(f.path) }}</span>
+              <span class="file-name-main" :title="f.path">{{ fileName(f.path) }}</span>
+              <span class="file-path-dim" :title="f.path">{{ fileDir(f.path) }}</span>
               <div class="row-actions">
                 <template v-if="f.status === 'U'">
                   <button class="row-btn" title="Accept Ours" @click.stop="doResolveOurs(f.path)">↰</button>
@@ -1597,7 +1594,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   @contextmenu="openCtxMenu($event, row.file!, false)"
                 >
                   <span class="file-status unstaged-st" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
-                  <span class="file-name-only" :title="row.file!.path" @dblclick.stop="onFileOpen(row.file!.path, false)">{{ row.name }}</span>
+                  <span class="file-name-only" :title="row.file!.path">{{ row.name }}</span>
                   <div class="row-actions">
                     <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
                     <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">↩</button>
@@ -1639,8 +1636,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 @contextmenu="openCtxMenu($event, f, false)"
               >
                 <span class="file-status unstaged-st" :data-s="f.status">{{ statusLabel(f.status) }}</span>
-                <span class="file-name-main" :title="f.path" @dblclick.stop="onFileOpen(f.path, false)">{{ fileName(f.path) }}</span>
-                <span class="file-path-dim" :title="f.path" @dblclick.stop="onFileOpen(f.path, false)">{{ fileDir(f.path) }}</span>
+                <span class="file-name-main" :title="f.path">{{ fileName(f.path) }}</span>
+                <span class="file-path-dim" :title="f.path">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
                   <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
                   <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">↩</button>
