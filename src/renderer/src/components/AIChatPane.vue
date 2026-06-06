@@ -5558,10 +5558,16 @@ ${out}`
   } else if (option.id.startsWith('@diff:')) {
     const filePath = option.id.slice('@diff:'.length).trim()
     chipLabel = `@diff:${filePath.split('/').pop()}`
+    // Validate: only allow safe path chars, reject .. and leading -
+    if (!/^[A-Za-z0-9_./ -]+$/.test(filePath) || filePath.includes('..') || filePath.startsWith('-')) {
+      chipContent = `// @diff: invalid path "${filePath}" (only alphanumeric, _, ., /, - allowed)`
+    } else {
     try {
       interface ShellRespDiff { ok: boolean; output?: string }
+      // Single-quote the path after escaping any embedded single quotes (none allowed by validation above)
+      const safePath = filePath.replace(/'/g, "'\\''")
       const resp = await props.backend.send<ShellRespDiff>('shell.run', {
-        command: `git diff HEAD -- "${filePath.replace(/"/g, '\\"')}" 2>/dev/null`,
+        command: `git diff HEAD -- '${safePath}' 2>/dev/null`,
         workspace_path: props.workspacePath,
       })
       const raw = (resp.payload?.output ?? '').trim()
@@ -5570,6 +5576,8 @@ ${out}`
         : `// @diff:${filePath}: no changes (or file not tracked)`
     } catch {
       chipContent = `// @diff:${filePath}: unavailable`
+    }
+    }
     }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
     // @file:lineRange — e.g., "src/App.vue:10-50"
