@@ -540,9 +540,13 @@ function closeContextMenu(): void { ctxOpen.value = false }
 let _ctxEscHandler: ((e: KeyboardEvent) => void) | null = null
 watch(ctxOpen, (open) => {
   if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
-  if (!open) return
+  if (!open) {
+    document.removeEventListener('click', closeContextMenu, true)
+    return
+  }
   _ctxEscHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') closeContextMenu() }
   document.addEventListener('keydown', _ctxEscHandler, true)
+  document.addEventListener('click', closeContextMenu, true)
 })
 async function ctxPaste(): Promise<void> {
   closeContextMenu()
@@ -673,6 +677,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
+  document.removeEventListener('click', closeContextMenu, true)
   _unsubGitChanged?.()
   _unsubGitChanged = null
   // Clear keybinding contexts so a closed tab's stale state can't block

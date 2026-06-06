@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, toRef, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, toRef, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useExplorer, type FsEntry } from '../composables/useExplorer'
 import { useGit } from '../composables/useGit'
@@ -220,6 +220,15 @@ function openCtx(e: MouseEvent, entry: FsEntry | null): void {
 function closeCtx(): void {
   ctx.value = null
 }
+
+watch(ctx, (val, old) => {
+  if (val && !old) {
+    document.addEventListener('click', closeCtx, true)
+  } else if (!val && old) {
+    document.removeEventListener('click', closeCtx, true)
+  }
+})
+onUnmounted(() => document.removeEventListener('click', closeCtx, true))
 
 // ── Inline prompt (create / rename) ──────────────────────────────────────────
 const prompt = ref<{
