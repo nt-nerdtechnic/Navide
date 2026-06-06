@@ -1439,8 +1439,8 @@ function renderMarkdownLite(rawText: string): string {
     const i = blocks.length
     // Prefer inferred path from code comment; fall back to active file
     const targetPath = inferredPath ?? props.getActiveRelPath?.() ?? null
-    const insertBtn = targetPath && props.insertTextAtCursor
-      ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor">Insert</button>`
+    const insertBtn = props.insertTextAtCursor
+      ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor position in editor">Insert</button>`
       : ''
     const applyLabel = inferredPath ? `Apply to ${inferredPath.split('/').pop()}` : 'Apply'
     const applyBtn = targetPath
@@ -5923,6 +5923,11 @@ function getDateLabel(ts: number): string {
           <label class="ai-settings-label">Model ID</label>
           <input v-model="settingsOaiCompatModel" type="text" class="ai-settings-input" placeholder="gpt-4o" />
         </div>
+        <!-- Test connection error detail -->
+        <div v-if="testConnStatus[settingsProvider] === 'fail' && testConnError[settingsProvider]" class="ai-settings-test-error-row">
+          <span class="ai-settings-test-fail-icon">✗</span>
+          <span class="ai-settings-test-error-msg">{{ testConnError[settingsProvider] }}</span>
+        </div>
         <div class="ai-settings-row">
           <label class="ai-settings-label">Model</label>
           <select
@@ -7602,6 +7607,9 @@ function getDateLabel(ts: number): string {
 .ai-settings-test-btn:disabled { opacity: 0.5; cursor: default; }
 .ai-settings-test-ok { font-size: 14px; color: var(--success-fg, #22c55e); flex-shrink: 0; }
 .ai-settings-test-fail { font-size: 14px; color: var(--danger-fg, #ef4444); flex-shrink: 0; cursor: help; }
+.ai-settings-test-error-row { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0 2px; }
+.ai-settings-test-fail-icon { color: var(--danger-fg, #ef4444); font-size: 12px; flex-shrink: 0; margin-top: 1px; }
+.ai-settings-test-error-msg { font-size: 11px; color: var(--danger-fg, #ef4444); line-height: 1.4; word-break: break-word; opacity: 0.85; }
 .ai-settings-textarea {
   padding: 5px 9px;
   border-radius: 5px;
