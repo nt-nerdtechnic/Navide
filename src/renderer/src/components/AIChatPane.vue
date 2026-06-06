@@ -4725,6 +4725,16 @@ kbd {
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
 
+/* ── Notes textarea ─────────────────────────────────────────────────────────── */
+.ai-notes-textarea {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg-3, #2a2a2a); border: 1px solid var(--border, #3c3c3c);
+  border-radius: 4px; color: var(--fg, #ccc); font-size: 12px; padding: 8px;
+  resize: vertical; font-family: inherit; line-height: 1.5;
+}
+.ai-notes-textarea:focus { outline: none; border-color: #0078d4; }
+.ai-notes-has-content { color: #3fb950 !important; }
+
 /* ── Apply-code diff preview modal ──────────────────────────────────────────── */
 .ai-modal-overlay {
   position: absolute; inset: 0; background: rgba(0,0,0,.55);
