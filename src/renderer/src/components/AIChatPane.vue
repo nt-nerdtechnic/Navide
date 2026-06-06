@@ -3591,6 +3591,23 @@ function removeChip(id: string): void {
   contextChips.value = contextChips.value.filter((c) => c.id !== id)
 }
 
+function chipIcon(label: string): string {
+  if (label.startsWith('@git')) return '⎇'
+  if (label.startsWith('@symbol')) return '⟨⟩'
+  if (label.startsWith('@web')) return '🌐'
+  if (label.startsWith('@url')) return '🔗'
+  if (label.startsWith('@problems')) return '⚠'
+  if (label.startsWith('@clipboard')) return '📋'
+  if (label.startsWith('@tree')) return '🌲'
+  if (label.startsWith('@codebase')) return '🔍'
+  if (label.startsWith('@folder')) return '📁'
+  if (label.startsWith('@terminal')) return '>'
+  if (label.startsWith('@notepad')) return '📝'
+  if (label.startsWith('@selection')) return '✂'
+  if (label.startsWith('@file') || label.startsWith('@')) return '◻'
+  return ''
+}
+
 // ── Chip drag-to-reorder ───────────────────────────────────────────────────────
 let _chipDragId: string | null = null
 
@@ -4408,7 +4425,7 @@ function getDateLabel(ts: number): string {
           @drop="onChipDrop($event, chip.id)"
         >
           <img v-if="chip.imageData" :src="chip.imageData" class="ai-chip-thumb" alt="pasted image" />
-          {{ chip.label }}
+          <span v-if="!chip.imageData && chipIcon(chip.label)" class="ai-chip-icon">{{ chipIcon(chip.label) }}</span>{{ chip.label }}
           <span v-if="!chip.imageData" class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
           <button class="ai-chip-pin" :title="chip.pinned ? 'Unpin context' : 'Pin — keep in future messages'" @click.stop="chip.pinned = !chip.pinned">{{ chip.pinned ? '📌' : '·' }}</button>
           <button class="ai-chip-remove" @click.stop="removeChip(chip.id)">×</button>
@@ -5925,6 +5942,7 @@ function getDateLabel(ts: number): string {
 }
 .ai-chip-remove:hover { opacity: 1; }
 .ai-chip-tokens { font-size: 9px; opacity: 0.55; margin: 0 3px 0 1px; letter-spacing: 0.02em; }
+.ai-chip-icon { font-size: 10px; opacity: 0.7; margin-right: 3px; flex-shrink: 0; }
 .ai-chip { cursor: pointer; }
 .ai-chip:hover { filter: brightness(1.15); }
 .ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }
