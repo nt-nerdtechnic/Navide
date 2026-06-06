@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { TextModel } from '../model/TextModel'
 import { UndoStack } from '../model/UndoStack'
 import { tokenizerFor } from '../tokenize/index'
+import { getIndent as _getIndentUtil, foldRangeEnd as _foldRangeEndUtil, computeVisibleModelLines } from './foldUtils'
 import { useVirtualScroll } from './useVirtualScroll'
 import type { Position, Range, Token, Decoration, EditOperation } from '../types'
 import { toSnakeCase, toCamelCase, toKebabCase, toPascalCase } from '../textTransforms'
@@ -72,23 +73,9 @@ const sizerMinWidth = computed(() => {
 // ── Fold state (must be before vs so visibleLineCount is available) ──────────
 const foldedLines = ref<Set<number>>(new Set())
 
-function _getIndent(line: string): number {
-  let i = 0
-  while (i < line.length && (line[i] === ' ' || line[i] === '\t')) i++
-  return line.trim() === '' ? -1 : i
-}
+function _getIndent(line: string): number { return _getIndentUtil(line) }
 function _foldRangeEnd(startLine: number): number {
-  const startIndent = _getIndent(model.getLine(startLine))
-  if (startIndent < 0) return startLine
-  let end = startLine
-  let foundContent = false
-  for (let l = startLine + 1; l < model.lineCount(); l++) {
-    const ind = _getIndent(model.getLine(l))
-    if (ind < 0) { end = l; continue }
-    if (ind > startIndent) { foundContent = true; end = l }
-    else break
-  }
-  return foundContent ? end : startLine
+  return _foldRangeEndUtil((l) => model.getLine(l), model.lineCount(), startLine)
 }
 function _isFoldable(line: number): boolean {
   return _foldRangeEnd(line) > line
@@ -97,16 +84,7 @@ function _isFoldable(line: number): boolean {
 // visibleModelLines[displayIndex] = modelLine
 const visibleModelLines = computed<number[]>(() => {
   version.value // re-run on edits
-  const hidden = new Set<number>()
-  for (const startLine of foldedLines.value) {
-    const end = _foldRangeEnd(startLine)
-    for (let l = startLine + 1; l <= end; l++) hidden.add(l)
-  }
-  const result: number[] = []
-  for (let i = 0; i < model.lineCount(); i++) {
-    if (!hidden.has(i)) result.push(i)
-  }
-  return result
+  return computeVisibleModelLines(model.lineCount(), foldedLines.value, _foldRangeEnd)
 })
 
 const modelToDisplayMap = computed<Map<number, number>>(() => {
