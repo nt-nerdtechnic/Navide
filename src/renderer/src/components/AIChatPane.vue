@@ -460,23 +460,27 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; model?: string; checkpoints?: ChatCheckpoint[] }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[] }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
 const showThreads = ref(false)
+const showArchivedThreads = ref(false)
 const threadSearchQuery = ref('')
 const renamingThreadId = ref('')
 const renamingTitle = ref('')
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
+  const pool = showArchivedThreads.value
+    ? allThreads.value.filter((t) => t.archived)
+    : allThreads.value.filter((t) => !t.archived)
   const list = q
-    ? allThreads.value.filter((t) =>
+    ? pool.filter((t) =>
         t.title.toLowerCase().includes(q) ||
         t.messages.some((m) => m.content.toLowerCase().includes(q)),
       )
-    : allThreads.value
+    : pool
   // Pinned threads always at top, then by updatedAt desc (array is already sorted that way)
   return [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]
 })
@@ -542,6 +546,20 @@ function togglePinThread(id: string, e: Event): void {
   e.stopPropagation()
   const t = allThreads.value.find((th) => th.id === id)
   if (t) { t.pinned = !t.pinned; saveCurrentThread() }
+}
+function toggleArchiveThread(id: string, e: Event): void {
+  e.stopPropagation()
+  const t = allThreads.value.find((th) => th.id === id)
+  if (!t) return
+  t.archived = !t.archived
+  if (t.archived) t.pinned = false
+  // Switch to a non-archived thread if we just archived the current one
+  if (t.archived && t.id === currentThreadId.value) {
+    const next = allThreads.value.find((th) => !th.archived && th.id !== t.id)
+    if (next) switchThread(next.id)
+    else newThread()
+  }
+  saveCurrentThread()
 }
 const currentThreadId = ref('')
 const allThreads = ref<ChatThread[]>([])
@@ -6630,14 +6648,17 @@ function getDateLabel(ts: number): string {
     <!-- Thread list panel -->
     <div v-if="showThreads" class="ai-threads-panel">
       <div class="ai-threads-header">
-        <span>Chat history ({{ allThreads.length }})</span>
+        <div class="ai-threads-tabs">
+          <button class="ai-threads-tab" :class="{ active: !showArchivedThreads }" @click="showArchivedThreads = false">Chats ({{ allThreads.filter(t => !t.archived).length }})</button>
+          <button class="ai-threads-tab" :class="{ active: showArchivedThreads }" @click="showArchivedThreads = true">Archive ({{ allThreads.filter(t => t.archived).length }})</button>
+        </div>
         <button class="ai-settings-close" @click="showThreads = false; threadSearchQuery = ''">✕</button>
       </div>
       <div class="ai-threads-search">
         <input
           v-model="threadSearchQuery"
           class="ai-search-input"
-          placeholder="Search chats…"
+          :placeholder="showArchivedThreads ? 'Search archived…' : 'Search chats…'"
           @keydown.escape="showThreads = false; threadSearchQuery = ''"
         />
       </div>
@@ -6676,6 +6697,7 @@ function getDateLabel(ts: number): string {
               <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
               <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
               <button class="ai-thread-dup" title="Duplicate thread" @click.stop="duplicateThread(item.thread.id)">⎘</button>
+              <button class="ai-thread-archive" :title="item.thread.archived ? 'Unarchive' : 'Archive'" @click.stop="toggleArchiveThread(item.thread.id, $event)">{{ item.thread.archived ? '↩' : '⊡' }}</button>
               <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(item.thread.id)">✕</button>
             </div>
             <div v-if="item.thread.messages.length && renamingThreadId !== item.thread.id" class="ai-thread-preview">
@@ -8828,13 +8850,21 @@ function getDateLabel(ts: number): string {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 14px 6px;
+  padding: 4px 10px 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--text-bright);
   border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
+.ai-threads-tabs { display: flex; gap: 0; }
+.ai-threads-tab {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); cursor: pointer; font-size: 11.5px; font-weight: 500;
+  padding: 6px 10px 5px; transition: color 0.1s, border-color 0.1s;
+}
+.ai-threads-tab:hover { color: var(--text-bright); }
+.ai-threads-tab.active { color: var(--accent-fg); border-bottom-color: var(--accent-fg); }
 .ai-threads-search { padding: 6px 10px 4px; flex-shrink: 0; }
 .ai-threads-empty { padding: 10px 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .ai-threads-list { overflow-y: auto; flex: 1; }
@@ -8873,8 +8903,11 @@ function getDateLabel(ts: number): string {
 .ai-thread-dup { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
 .ai-thread-dup:hover { color: var(--text-bright); background: var(--bg-subtle); }
 .ai-thread-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.ai-thread-archive { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.ai-thread-archive:hover { color: var(--text-bright); background: var(--bg-subtle); }
 .ai-thread-item:hover .ai-thread-pin,
-.ai-thread-item:hover .ai-thread-dup { opacity: 1; }
+.ai-thread-item:hover .ai-thread-dup,
+.ai-thread-item:hover .ai-thread-archive { opacity: 1; }
 .ai-thread-pin:hover { color: var(--accent-fg); }
 .ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
 .ai-thread-model-badge { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); border-radius: 3px; padding: 0 4px; opacity: 0.7; }
