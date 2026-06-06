@@ -717,7 +717,8 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
   if (applyBtn) {
     try {
       const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
-      const relPath = props.getActiveRelPath?.()
+      // Prefer path inferred from code block first-line comment
+      const relPath = (applyBtn.dataset.path || null) ?? props.getActiveRelPath?.()
       if (!relPath) { showToast('No file open'); return }
       const newLines = code.split('\n').length
       // Read current file to compute diff stats
@@ -872,6 +873,10 @@ function renderMarkdownLite(rawText: string): string {
     }
     const langLabelRaw = lang ? (LANG_DISPLAY[lang.toLowerCase()] ?? lang) : 'text'
     const langLabel = langLabelRaw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    // Detect file path from first line comment (e.g. `// src/foo.ts` or `# src/foo.py`)
+    const firstLine = code.split('\n')[0].trim()
+    const pathMatch = firstLine.match(/^(?:\/\/|#|\/\*|\*|--)\s*((?:\w[\w.-]*\/)+[\w.-]+\.\w+)/)
+    const inferredPath = pathMatch?.[1] ?? null
     const encoded = btoa(unescape(encodeURIComponent(code.trim())))
     // Apply syntax highlighting; skip auto-detect for large blocks (> 3000 chars) to avoid slowdown
     let highlighted: string
@@ -887,13 +892,14 @@ function renderMarkdownLite(rawText: string): string {
       highlighted = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     }
     const i = blocks.length
-    // Only show Apply/Insert buttons when an active file path is available
-    const hasActiveFile = !!(props.getActiveRelPath?.())
-    const insertBtn = hasActiveFile && props.insertTextAtCursor
+    // Prefer inferred path from code comment; fall back to active file
+    const targetPath = inferredPath ?? props.getActiveRelPath?.() ?? null
+    const insertBtn = targetPath && props.insertTextAtCursor
       ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor">Insert</button>`
       : ''
-    const applyBtn = hasActiveFile
-      ? `<button class="ai-code-apply-btn" data-code="${encoded}" title="Apply to current open file">Apply</button>`
+    const applyLabel = inferredPath ? `Apply to ${inferredPath.split('/').pop()}` : 'Apply'
+    const applyBtn = targetPath
+      ? `<button class="ai-code-apply-btn" data-code="${encoded}" data-path="${inferredPath ?? ''}" title="Apply to ${targetPath}">${applyLabel}</button>`
       : ''
     // Collapse code blocks that exceed 30 lines
     const lineCount = code.split('\n').length
