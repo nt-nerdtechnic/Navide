@@ -84,6 +84,9 @@ const currentBranch = computed(() =>
 )
 
 async function doReview() {
+  dismissed.value = new Set()
+  severityFilter.value = 'all'
+  showDismissed.value = false
   await saveModel()
   await startReview({
     workspacePath: props.workspacePath,
