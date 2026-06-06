@@ -62,6 +62,8 @@ declare global {
       onOpenEditorDiff: (cb: (params: Record<string, string>) => void) => void
       readKeybindings: () => Promise<{ ok: boolean; content?: string }>
       writeKeybindings: (content: string) => Promise<{ ok: boolean; error?: string }>
+      broadcastLanguageChange: (locale: string) => void
+      onLanguageChanged: (cb: (locale: string) => void) => void
     }
   }
 }

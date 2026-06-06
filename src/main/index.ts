@@ -465,6 +465,14 @@ ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number)
   }
 })
 
+ipcMain.on('settings:language-changed', (_event, locale: string) => {
+  for (const win of [mainWindow, rolesWindow, stagesWindow, editorWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('settings:language-changed', locale)
+    }
+  }
+})
+
 // Disable hardware-accelerated rendering entirely.
 // --disable-gpu eliminates the GPU subprocess without running GPU code in-process.
 // Previously we used --in-process-gpu to prevent a separate GPU process from

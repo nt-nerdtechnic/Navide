@@ -821,6 +821,17 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     project.theme_custom = custom
                 project_store.save(project)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.set_language":
+            # Backup-only persistence: localStorage in the renderer is the source
+            # of truth. Unknown workspace → silently no-op.
+            ws_raw = payload.get("workspace_path", "") or ""
+            project = project_store.peek(ws_raw)
+            if project:
+                lang = payload.get("language")
+                if isinstance(lang, str) and lang:
+                    project.language = lang
+                project_store.save(project)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "pipeline.slot_kickoff":
             project = project_store.update_slot_kickoff(
                 payload["workspace_path"],

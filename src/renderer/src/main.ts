@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { i18n } from './i18n'
 
 // Theme token layers — order matters: primitives → semantic roles → theme overrides.
 import './styles/tokens/base.css'
@@ -58,6 +59,7 @@ window.addEventListener('unhandledrejection', (e) => logErr('Unhandled promise r
 
 try {
   const app = createApp(Root)
+  app.use(i18n)
   app.config.errorHandler = (err, _instance, info) => showFatalIfBlank(`Vue error (${info})`, err)
   app.mount('#app')
 } catch (err) {

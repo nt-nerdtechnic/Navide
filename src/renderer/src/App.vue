@@ -22,6 +22,7 @@ import Welcome from './components/Welcome.vue'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
+import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
@@ -53,11 +54,16 @@ const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
 const themeApi = useTheme()
+const settingsApi = useSettings()
 
-// Apply the theme as early as possible (localStorage → default 'dark-github').
-// The backend backup is adopted later, only if localStorage held nothing.
+// Apply the theme and language as early as possible (localStorage → default).
+// The backend backup is adopted later inside onWorkspaceCheck.
 onMounted(() => {
   themeApi.loadTheme()
+  settingsApi.loadLanguage()
+  window.agentTeam?.onLanguageChanged?.((locale) => {
+    settingsApi.setLanguage(locale)
+  })
 })
 
 // ── First-run onboarding gate ────────────────────────────────────────────────
@@ -131,6 +137,12 @@ watch(
   },
   { deep: true },
 )
+// Best-effort backup of language pref to the workspace JSON.
+watch(settingsApi.language, () => {
+  if (currentWorkspace.value) {
+    void settingsApi.syncToBackend(backend.send, currentWorkspace.value)
+  }
+})
 
 function roleLabel(key: string): string {
   if (!key) return 'No role'
@@ -1584,6 +1596,7 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     // (load order: localStorage → backend → default). loadTheme() is a no-op
     // for theme when localStorage already wins, so this is safe to call here.
     themeApi.loadTheme({ theme: resp.project.theme, theme_custom: resp.project.theme_custom })
+    settingsApi.loadLanguage({ language: (resp.project as { language?: string }).language })
     const savedMode = resp.project.layout_mode
     if (savedMode === 'auto' || savedMode === 'grid' || savedMode === 'spotlight' || savedMode === 'fullscreen') {
       layoutMode.value = savedMode

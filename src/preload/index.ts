@@ -105,4 +105,10 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('keybindings:read'),
   writeKeybindings: (content: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('keybindings:write', content),
+  broadcastLanguageChange: (locale: string): void => {
+    ipcRenderer.send('settings:language-changed', locale)
+  },
+  onLanguageChanged: (cb: (locale: string) => void): void => {
+    ipcRenderer.on('settings:language-changed', (_event, locale: string) => cb(locale))
+  },
 })
