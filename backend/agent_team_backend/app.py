@@ -296,8 +296,9 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
     if is_new and _log_watcher is not None:
         # New association → previously-parsed files now have a workspace and
         # need re-emit so cumulative populates. tokens_store dedup makes
-        # already-counted events safe.
-        _log_watcher.force_rescan()
+        # already-counted events safe. Scope to THIS workspace so we don't
+        # re-parse the entire (multi-GB) Claude history and stall the loop.
+        _log_watcher.force_rescan(workspace_path)
 
 
 @app.on_event("startup")

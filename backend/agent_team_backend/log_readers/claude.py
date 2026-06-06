@@ -66,6 +66,27 @@ class ClaudeLogReader(LogReader):
                 log.debug("enumerate %s failed: %s", root, err)
         return out
 
+    def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
+        """Only the jsonl files under this workspace's project subdirectory.
+
+        Claude names each project dir after the cwd with "/" → "-", so one
+        workspace maps to exactly one folder — we can enumerate just that
+        folder instead of the entire (potentially multi-GB) projects root.
+        """
+        encoded = workspace_path.replace("/", "-")  # same hash as cwd_from_file's inverse
+        out: list[Path] = []
+        for root in self.project_dirs():
+            d = root / encoded
+            if not d.is_dir():
+                continue
+            try:
+                for f in d.iterdir():
+                    if f.is_file() and f.suffix == ".jsonl":
+                        out.append(f)
+            except OSError as err:
+                log.debug("enumerate %s failed: %s", d, err)
+        return out
+
     def cwd_from_file(self, path: Path) -> str:
         """Reverse cwd-hash: project-dir-name `-foo-bar-baz` → `/foo/bar/baz`.
 

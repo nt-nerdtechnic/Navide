@@ -93,6 +93,17 @@ class GeminiLogReader(LogReader):
         self._refresh_projects()
         return self._projects_cache.get(project_name, "")
 
+    def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
+        """Only session files whose project maps to this workspace.
+
+        cwd_from_file resolves project-name → cwd via the (cached) projects.json
+        without reading the session files themselves, so scoping stays cheap.
+        """
+        return [
+            p for p in self.session_files()
+            if self.cwd_from_file(p) == workspace_path
+        ]
+
     def parse_session_file(
         self, path: Path, seen_keys: set[str]
     ) -> list[TokenUsage]:

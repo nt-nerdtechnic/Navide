@@ -70,6 +70,43 @@ class CodexLogReader(LogReader):
                 log.debug("rglob %s failed: %s", root, err)
         return out
 
+    def _cwd_from_meta(self, path: Path) -> str:
+        """Read just the session_meta header for this rollout's cwd.
+
+        Codex stores sessions by date, not cwd, but every file opens with a
+        `session_meta` record carrying payload.cwd. We read only the first few
+        lines (not the whole rollout) so per-workspace scoping stays cheap.
+        """
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for _ in range(5):  # session_meta is the first record
+                    line = fh.readline()
+                    if not line:
+                        break
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if rec.get("type") == "session_meta":
+                        payload = rec.get("payload") or {}
+                        if isinstance(payload, dict):
+                            return str(payload.get("cwd") or "")
+        except OSError:
+            return ""
+        return ""
+
+    def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
+        """Only rollouts whose session_meta.cwd matches this workspace.
+
+        Reading each file's header to filter is far cheaper than parsing every
+        full rollout, and keeps a per-workspace rescan from touching unrelated
+        sessions.
+        """
+        return [
+            p for p in self.session_files()
+            if self._cwd_from_meta(p) == workspace_path
+        ]
+
     def parse_session_file(
         self, path: Path, seen_keys: set[str]
     ) -> list[TokenUsage]:

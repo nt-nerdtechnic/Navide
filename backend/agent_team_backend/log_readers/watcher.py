@@ -236,27 +236,51 @@ class LogWatcher:
         except OSError as err:
             log.warning("seen-keys save failed: %s", err)
 
-    def force_rescan(self) -> None:
-        """Re-enqueue every session file IMMEDIATELY, ignoring in-memory dedup.
+    def force_rescan(self, workspace_path: str | None = None) -> None:
+        """Re-enqueue session files for re-parse, ignoring in-memory dedup.
 
         Used when a new workspace registration means previously-parsed
         session files may now belong to that workspace and need re-counting.
         Event-level dedup at tokens_store level prevents double-counting of
         already-recorded events.
+
+        When `workspace_path` is given, only that workspace's files are
+        re-enqueued: readers that map a workspace to a specific folder (Claude)
+        return just that subset; readers that can't (Codex by-date, Gemini
+        by-project) fall back to all their files — those vendors keep far fewer
+        files so the cost stays bounded. This avoids re-parsing the entire
+        (multi-GB) Claude history on every new workspace registration, which
+        would saturate the event loop and stall the whole backend.
+
+        Without `workspace_path`, every file from every reader is re-enqueued
+        (legacy full rescan).
         """
-        # Clear in-memory dedup so the parsers re-emit every event from each
-        # file. Persisted seen.json is left alone (it's a perf cache; the
-        # tokens_store dedup is the correctness gate).
-        self._seen_keys.clear()
         if self._loop is None or self._loop.is_closed():
             return
+        files: list[Path] = []
         for reader in self._readers:
-            for p in reader.session_files():
-                try:
-                    self._loop.call_soon_threadsafe(self._queue.put_nowait, p)
-                except RuntimeError:
-                    return
-        log.info("force_rescan: queued files for re-parse from all readers")
+            scoped = (
+                reader.session_files_for_workspace(workspace_path)
+                if workspace_path
+                else None
+            )
+            files.extend(scoped if scoped is not None else reader.session_files())
+        # Clear in-memory dedup only for the files we're about to re-parse, so
+        # other workspaces' caches survive (avoids needlessly re-emitting them
+        # later). Persisted seen.json is left alone (it's a perf cache; the
+        # tokens_store dedup is the correctness gate).
+        for f in files:
+            self._seen_keys.pop(str(f.resolve()), None)
+        for p in files:
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, p)
+            except RuntimeError:
+                return
+        log.info(
+            "force_rescan: queued %d file(s) for re-parse%s",
+            len(files),
+            f" (workspace={workspace_path})" if workspace_path else " (all readers)",
+        )
 
     async def _rescan_loop(self) -> None:
         """Periodically force a re-enqueue of every known session file.

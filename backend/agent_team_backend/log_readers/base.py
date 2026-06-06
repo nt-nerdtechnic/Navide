@@ -101,6 +101,18 @@ class LogReader(ABC):
         """
         return ""
 
+    def session_files_for_workspace(self, workspace_path: str) -> list[Path] | None:
+        """Return only the session files belonging to `workspace_path`.
+
+        Readers whose on-disk layout maps a workspace to a specific folder
+        (e.g. Claude's ~/.claude/projects/<encoded-cwd>/) override this to
+        return just that subset, so a per-workspace rescan never has to touch
+        unrelated files. Return None to signal "can't scope by path" (e.g.
+        Codex stores sessions by date), letting the caller fall back to
+        session_files(). Default: None.
+        """
+        return None
+
     def parse_activity(
         self, path: Path, seen_keys: set[str]
     ) -> list[ActivityEvent]:
