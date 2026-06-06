@@ -127,6 +127,19 @@ let streamTickInterval: number | null = null
 // Holds messages to re-append after a /compact summary finishes streaming
 const pendingCompactKeep = ref<ChatMessage[]>([])
 
+// ── Notepads (persistent context notes, always injected into system prompt) ───
+const showNotes = ref(false)
+const notesKey = computed(() => `ai-chat-notes:${props.workspacePath}`)
+const notesContent = ref('')
+watch(notesKey, (k) => { notesContent.value = localStorage.getItem(k) ?? '' }, { immediate: true })
+function saveNotes(): void {
+  if (notesContent.value.trim()) {
+    localStorage.setItem(notesKey.value, notesContent.value)
+  } else {
+    localStorage.removeItem(notesKey.value)
+  }
+}
+
 // ── Rotating input placeholder ────────────────────────────────────────────────
 const PLACEHOLDER_HINTS = [
   'Ask anything… (Enter to send, Shift+Enter for new line)',
@@ -1266,11 +1279,12 @@ async function sendMessage(): Promise<void> {
 
   try {
     const lengthHint = RESPONSE_LENGTH_HINTS[responseLength.value]
+    const notesSuffix = notesContent.value.trim() ? `\n\n--- Workspace Notes ---\n${notesContent.value.trim()}` : ''
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
-      ...(lengthHint ? { system_suffix: lengthHint } : {}),
+      ...(lengthHint || notesSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -1278,6 +1292,7 @@ async function sendMessage(): Promise<void> {
       last.streaming = false; last.thinking = false
       last.isError = true; last.errorMsg = 'Unable to connect to backend'
     }
+    if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
     sending.value = false
     currentSessionId.value = null
   }
@@ -3214,6 +3229,14 @@ function getDateLabel(ts: number): string {
           >{{ RESPONSE_LENGTH_LABELS[responseLength] }}</button>
           <button
             class="ai-settings-btn"
+            :class="{ active: showNotes, 'ai-notes-has-content': !!notesContent.trim() }"
+            :title="notesContent.trim() ? 'Workspace notes (active — injected into every message)' : 'Workspace notes'"
+            @click="showNotes = !showNotes"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25ZM3.5 6.25a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm.75 2.25h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1 0-1.5Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
             title="Keyboard shortcuts (?)"
             @click="showShortcuts = !showShortcuts"
           >
@@ -3285,6 +3308,28 @@ function getDateLabel(ts: number): string {
             </div>
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- Notepads panel -->
+    <div v-if="showNotes" class="ai-settings">
+      <div class="ai-settings-header">
+        <span>Workspace Notes <span style="font-weight:400;opacity:.6;font-size:11px">— injected into every message</span></span>
+        <button class="ai-settings-close" @click="showNotes = false">✕</button>
+      </div>
+      <div class="ai-settings-body">
+        <p class="ai-settings-hint">Write anything the AI should always know: project conventions, tech stack, coding rules, todo items. Saved per workspace.</p>
+        <textarea
+          v-model="notesContent"
+          class="ai-notes-textarea"
+          placeholder="e.g. This is a Vue 3 + TypeScript project using Tailwind CSS. Always use composition API with <script setup>. Prefer const over let."
+          rows="10"
+          @input="saveNotes"
+        />
+        <div style="display:flex;justify-content:flex-end;margin-top:8px;gap:8px">
+          <span class="ai-settings-hint" style="flex:1">{{ notesContent.trim() ? `~${Math.ceil(notesContent.length/4)} tokens` : 'Empty — nothing injected' }}</span>
+          <button class="ai-cancel-btn" @click="notesContent = ''; saveNotes()">Clear</button>
+        </div>
       </div>
     </div>
 
