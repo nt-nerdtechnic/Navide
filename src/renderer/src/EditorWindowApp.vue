@@ -1374,6 +1374,17 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
+        :on-ask-ai-about-file="async (relPath: string) => {
+          aiPanelOpen = true
+          await nextTick()
+          const ext = relPath.split('.').pop() ?? ''
+          const label = '@' + relPath.split('/').pop()!
+          try {
+            const r = await backend.send<{ok:boolean;content?:string}>('fs.read_file', { workspace_path: workspacePath, rel_path: relPath })
+            const content = r.payload?.ok ? `// ${relPath}\n\`\`\`${ext}\n${(r.payload.content ?? '').slice(0, 3000)}\n\`\`\`` : `// ${relPath} (read failed)`
+            aiChatRef.value?.addContextChip(label, content)
+          } catch { aiChatRef.value?.addContextChip(label, `// ${relPath}`) }
+        }"
         @open-file="openFile"
       />
       <SearchPane

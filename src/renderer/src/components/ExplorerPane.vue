@@ -11,6 +11,7 @@ const props = defineProps<{
   // When embedded inside the editor window, file opens are handled in-place via
   // the `open-file` event instead of spawning a separate editor window.
   embedded?: boolean
+  onAskAiAboutFile?: (relPath: string) => void
 }>()
 
 const emit = defineEmits<{
@@ -560,6 +561,7 @@ defineExpose({ revealFile, focusTree })
           <div class="exp-ctx-sep" />
           <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
           <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">Open in editor</button>
+          <button v-if="!ctx.entry.is_dir && props.onAskAiAboutFile" class="exp-ctx-item" @click="props.onAskAiAboutFile!(ctx.entry!.rel_path); closeCtx()">Ask AI about this file</button>
           <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">Rename</button>
           <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">Delete</button>
           <div class="exp-ctx-sep" />
