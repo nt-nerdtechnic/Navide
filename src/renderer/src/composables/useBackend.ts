@@ -81,9 +81,13 @@ export function useBackend() {
         return
       }
       const req: WsRequest = { id: uuid(), type, payload, timestamp: nowIso() }
-      pending.set(req.id, { resolve: resolve as (resp: WsResponse) => void, reject })
+      let timerId: ReturnType<typeof setTimeout>
+      pending.set(req.id, {
+        resolve: (resp: WsResponse) => { clearTimeout(timerId); resolve(resp as WsResponse<T>) },
+        reject: (err: Error) => { clearTimeout(timerId); reject(err) },
+      })
       socket.send(JSON.stringify(req))
-      setTimeout(() => {
+      timerId = setTimeout(() => {
         const entry = pending.get(req.id)
         if (entry) {
           pending.delete(req.id)
