@@ -5,6 +5,16 @@ import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 
+function readXtermTheme(): { background: string; foreground: string } {
+  const el = typeof document !== 'undefined' ? document.documentElement : null
+  if (!el) return { background: '#0d1117', foreground: '#e6edf3' }
+  const s = getComputedStyle(el)
+  return {
+    background: s.getPropertyValue('--bg-base').trim() || '#0d1117',
+    foreground: s.getPropertyValue('--text-bright').trim() || '#e6edf3',
+  }
+}
+
 export interface SpawnOptions {
   command: string | string[]
   cwd: string
@@ -23,10 +33,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     fontSize: 12,
     cursorBlink: true,
     convertEol: false,
-    theme: {
-      background: '#0d1117',
-      foreground: '#e6edf3'
-    }
+    theme: readXtermTheme()
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
@@ -299,6 +306,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     try { fit.fit() } catch { /* ignore transient errors */ }
   }
 
+  function updateXtermTheme(): void {
+    term.options.theme = readXtermTheme()
+  }
+
   function cleanupSession(): void {
     inputDisposer?.dispose()
     inputDisposer = null
@@ -336,6 +347,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     lastActivityAt,
     lastRawActivityAt,
     markBufferPosition,
-    recleanBuffer
+    recleanBuffer,
+    updateXtermTheme
   }
 }

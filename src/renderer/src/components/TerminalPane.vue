@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useTerminal } from '../composables/useTerminal'
+import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
 import { extractDropPaths, shellEscape } from '../lib/drop'
 
@@ -23,6 +24,8 @@ const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
 
 const terminal = useTerminal(props.paneId, props.backend)
+const { theme } = useTheme()
+watch(theme, () => terminal.updateXtermTheme())
 
 // Clock tick so the "running → idle" computed becomes reactive against time.
 // 5 s granularity is fine — we only need to flip the badge once after 30 s
