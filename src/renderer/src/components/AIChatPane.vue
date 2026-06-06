@@ -202,24 +202,46 @@ interface DiffApplyState {
 const diffApplyState = ref<DiffApplyState | null>(null)
 
 // Quick inline diff: return first changed lines (added/removed) for preview
-function computeSimpleDiffPreview(oldText: string, newText: string, maxLines = 8): Array<{ type: '+' | '-' | ' '; text: string }> {
-  const oldLines = oldText.split('\n')
-  const newLines = newText.split('\n')
-  const result: Array<{ type: '+' | '-' | ' '; text: string }> = []
-  let changed = 0
-  const limit = Math.min(Math.max(oldLines.length, newLines.length), 60)
-  for (let i = 0; i < limit && result.length < maxLines; i++) {
-    const o = oldLines[i]
-    const n = newLines[i]
-    if (o === n) {
-      if (changed > 0) result.push({ type: ' ', text: o ?? '' })
-    } else {
-      if (o !== undefined) result.push({ type: '-', text: o })
-      if (n !== undefined) result.push({ type: '+', text: n })
-      changed++
+function computeSimpleDiffPreview(oldText: string, newText: string, maxLines = 12): Array<{ type: '+' | '-' | ' '; text: string }> {
+  const A = oldText.split('\n')
+  const B = newText.split('\n')
+  // Myers-style O(N) patience diff via LCS matrix (capped at 200 lines to avoid quadratic blowup)
+  const capA = A.slice(0, 200), capB = B.slice(0, 200)
+  const m = capA.length, n = capB.length
+  // Build LCS length table
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = capA[i - 1] === capB[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
     }
   }
-  return result
+  // Traceback
+  const out: Array<{ type: '+' | '-' | ' '; text: string }> = []
+  let i = m, j = n
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && capA[i - 1] === capB[j - 1]) {
+      out.unshift({ type: ' ', text: capA[i - 1] }); i--; j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      out.unshift({ type: '+', text: capB[j - 1] }); j--
+    } else {
+      out.unshift({ type: '-', text: capA[i - 1] }); i--
+    }
+  }
+  // Collapse unchanged runs, keeping only context around changes
+  const CONTEXT = 2
+  const changed = new Set(out.map((l, idx) => l.type !== ' ' ? idx : -1).filter((x) => x >= 0))
+  const keep = new Set<number>()
+  for (const idx of changed) {
+    for (let k = Math.max(0, idx - CONTEXT); k <= Math.min(out.length - 1, idx + CONTEXT); k++) keep.add(k)
+  }
+  const condensed: Array<{ type: '+' | '-' | ' '; text: string }> = []
+  let prev = -2
+  for (const idx of Array.from(keep).sort((a, b) => a - b)) {
+    if (idx > prev + 1 && condensed.length > 0) condensed.push({ type: ' ', text: '⋯' })
+    condensed.push(out[idx])
+    prev = idx
+  }
+  return condensed.slice(0, maxLines)
 }
 
 async function confirmApply(): Promise<void> {
@@ -1046,6 +1068,15 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     try {
       const code = decodeURIComponent(escape(atob(codeActionBtn.dataset.code ?? '')))
       const action = codeActionBtn.dataset.action ?? 'explain'
+      if (action === 'newchat') {
+        const lang = codeActionBtn.closest<HTMLElement>('.ai-code-wrap')?.querySelector('.ai-code-lang')?.textContent ?? ''
+        newThread()
+        await nextTick()
+        const snippet = code.slice(0, 4000)
+        inputText.value = `\`\`\`${lang.toLowerCase()}\n${snippet}\n\`\`\`\n\n`
+        textareaEl.value?.focus()
+        return
+      }
       const prompt = action === 'explain'
         ? `Explain this code clearly and concisely:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
         : `Refactor this code to improve readability and maintainability. Show the complete refactored version:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
@@ -1207,6 +1238,9 @@ function renderMarkdownLite(rawText: string): string {
     const refactorBtn = isCodeLang && code.trim().length > 30
       ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code">Refactor</button>`
       : ''
+    const newChatBtn = isCodeLang && code.trim().length > 20
+      ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context">New chat</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
@@ -1217,7 +1251,7 @@ function renderMarkdownLite(rawText: string): string {
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `</div>` +
-      `${explainBtn || refactorBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}</div>` : ''}` +
+      `${explainBtn || refactorBtn || newChatBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}${newChatBtn}</div>` : ''}` +
       `${toggleBtn}` +
       `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code class="has-line-numbers">${numberedLines}</code></pre>` +
       `</div>`,
