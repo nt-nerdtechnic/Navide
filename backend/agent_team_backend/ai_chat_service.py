@@ -117,10 +117,17 @@ async def _stream_anthropic(
             # Plain text delta
             if event_type == "content_block_delta":
                 delta = getattr(event, "delta", None)
-                if delta and getattr(delta, "type", None) == "text_delta":
-                    text = getattr(delta, "text", "")
-                    if text:
-                        yield text
+                if delta:
+                    delta_type = getattr(delta, "type", None)
+                    if delta_type == "text_delta":
+                        text = getattr(delta, "text", "")
+                        if text:
+                            yield text
+                    elif delta_type == "thinking_delta":
+                        # Extended thinking — stream as special sentinel so frontend can render
+                        thinking_text = getattr(delta, "thinking", "")
+                        if thinking_text:
+                            yield "\x00THINKING:" + thinking_text
 
             # Tool use block start — emit the sentinel so the agent loop can act
             elif event_type == "content_block_start":

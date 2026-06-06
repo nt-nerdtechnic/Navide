@@ -111,6 +111,8 @@ interface ChatMessage {
   commitMsg?: string   // detected conventional-commit message
   followUps?: string[] // suggested follow-up questions (shown below response)
   pendingEdits?: Array<{ relPath: string; code: string }> // detected file edits from Edit mode
+  thinkingContent?: string // extended thinking (Claude thinking blocks)
+  thinkingExpanded?: boolean
 }
 
 // ── Checkpoint (Cursor-style conversation snapshots) ──────────────────────────
@@ -2244,6 +2246,12 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant' && last.streaming) {
+      // Extended thinking sentinel — accumulate but don't show in main content
+      if (p.text.startsWith('\x00THINKING:')) {
+        last.thinkingContent = (last.thinkingContent ?? '') + p.text.slice(10)
+        void scrollBottom()
+        return
+      }
       if (last.thinking) {
         const now = Date.now()
         last.responseStartMs = now
@@ -3968,6 +3976,21 @@ function getDateLabel(ts: number): string {
             class="ai-fold-btn"
             @click="toggleMsgFold(mi)"
           >{{ isMsgFolded(mi, msg.content) ? `▼ Show more (${msg.content.split('\n').length} lines)` : '▲ Show less' }}</button>
+
+          <!-- Extended thinking block (collapsible) -->
+          <details
+            v-if="msg.thinkingContent"
+            class="ai-thinking-details"
+            :open="msg.thinkingExpanded"
+            @toggle="msg.thinkingExpanded = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary class="ai-thinking-summary">
+              <span class="ai-thinking-icon">🧠</span> Thinking
+              <span class="ai-thinking-tokens">~{{ Math.ceil(msg.thinkingContent.length / 4) }} tokens</span>
+            </summary>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <div class="ai-thinking-content" v-html="renderMarkdownLite(msg.thinkingContent)" />
+          </details>
 
           <!-- Cards (tool calls / edit proposals) -->
           <template v-if="msg.cards">
@@ -6164,6 +6187,38 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-flash { animation: ai-flash 0.4s ease 2; }
 @keyframes ai-flash { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── Extended thinking block ─────────────────────────────────────────────── */
+.ai-thinking-details {
+  margin: 4px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ai-thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-subtle, rgba(255,255,255,0.03));
+  list-style: none;
+  user-select: none;
+}
+.ai-thinking-summary::marker, .ai-thinking-summary::-webkit-details-marker { display: none; }
+.ai-thinking-details[open] .ai-thinking-summary { border-bottom: 1px solid var(--border-subtle); }
+.ai-thinking-icon { font-size: 14px; }
+.ai-thinking-tokens { margin-left: auto; font-size: 10px; opacity: 0.6; }
+.ai-thinking-content {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
 
 /* ── Mermaid diagram ─────────────────────────────────────────────────────── */
 .ai-mermaid-wrap { margin: 6px 0; }
