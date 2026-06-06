@@ -215,11 +215,29 @@ function comparePos(a: Position, b: Position): number {
   return a.col - b.col
 }
 
+// ── Fold-marker shift after line insertions/deletions ──────────────────────
+function _adjustFoldsForEdit(range: Range, text: string): void {
+  const linesRemoved = range.end.line - range.start.line
+  const linesAdded = text.split('\n').length - 1
+  const delta = linesAdded - linesRemoved
+  if (delta === 0 && linesRemoved === 0) return // pure single-line edit
+  const pivot = range.start.line   // folds <= pivot are unchanged
+  const deleteEnd = range.end.line // folds in (pivot, deleteEnd] are removed (if delta < 0)
+  const s = new Set<number>()
+  for (const fl of foldedLines.value) {
+    if (fl <= pivot) { s.add(fl); continue }
+    if (linesRemoved > 0 && fl <= deleteEnd) continue // line was deleted
+    s.add(fl + delta)
+  }
+  foldedLines.value = s
+}
+
 // ── Editing ──────────────────────────────────────────────────────────────────
 function applyEdit(range: Range, text: string): void {
   if (props.readonly) return
   preferredCol = -1
   const isPureInsert = range.start.line === range.end.line && range.start.col === range.end.col
+  _adjustFoldsForEdit(range, text)
   const op = { range, text }
   const { inverse, caret } = model.applyEdit(op)
   undo.push(op, inverse)
@@ -277,6 +295,7 @@ function applyMultiCursorEdit(
 
   for (const e of entries) {
     const op: EditOperation = { range: e.range, text }
+    _adjustFoldsForEdit(e.range, text)
     const { inverse, caret } = model.applyEdit(op)
     pairs.push({ forward: op, inverse })
     if (e.range.start.line < _tokInvalidFrom) _tokInvalidFrom = e.range.start.line
@@ -835,6 +854,13 @@ function doUndo(): void {
   preferredCol = -1
   ghost.value = null
   _clearExtraCursors()
+  // Adjust folds for each inverse op before the model reverts.
+  const ops = undo.peekUndo()
+  if (ops) {
+    // Inverses applied top-to-bottom; adjust folds in the same order.
+    for (let i = ops.length - 1; i >= 0; i--)
+      _adjustFoldsForEdit(ops[i].inverse.range, ops[i].inverse.text)
+  }
   const p = undo.undo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }
@@ -842,6 +868,11 @@ function doRedo(): void {
   preferredCol = -1
   ghost.value = null
   _clearExtraCursors()
+  // Adjust folds for each forward op before the model replays.
+  const ops = undo.peekRedo()
+  if (ops) {
+    for (const op of ops) _adjustFoldsForEdit(op.forward.range, op.forward.text)
+  }
   const p = undo.redo(model)
   if (p) { _maxLineLenCache = -1; _tokInvalidFrom = 0; cursor.value = p; anchor.value = null; afterChange() }
 }

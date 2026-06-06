@@ -119,6 +119,14 @@ export class UndoStack {
     return this.redoStack.length > 0
   }
 
+  peekUndo(): OpPair[] | null {
+    return this.undoStack[this.undoStack.length - 1]?.ops ?? null
+  }
+
+  peekRedo(): OpPair[] | null {
+    return this.redoStack[this.redoStack.length - 1]?.ops ?? null
+  }
+
   clear(): void {
     this.undoStack = []
     this.redoStack = []
