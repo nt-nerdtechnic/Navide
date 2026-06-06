@@ -57,6 +57,7 @@ async def _stream_anthropic(
 
     client = _anthropic.AsyncAnthropic(api_key=api_key or None)
 
+    temperature = settings.get("temperature")
     kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
@@ -66,6 +67,12 @@ async def _stream_anthropic(
         kwargs["system"] = system
     if tools:
         kwargs["tools"] = tools
+    if temperature is not None:
+        try:
+            t = float(temperature)
+        except (TypeError, ValueError):
+            t = 1.0
+        kwargs["temperature"] = max(0.0, min(1.0, t))
 
     async with client.messages.stream(**kwargs) as stream:
         async for event in stream:
