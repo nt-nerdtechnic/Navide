@@ -228,8 +228,9 @@ function _adjustFoldsForEdit(range: Range, text: string): void {
   const s = new Set<number>()
   for (const fl of foldedLines.value) {
     if (fl <= pivot) { s.add(fl); continue }
-    // Lines strictly between pivot and deleteEnd are gone; use exclusive upper bound.
-    if (delta < 0 && fl < deleteEnd) continue
+    // Lines strictly between pivot and deleteEnd are gone regardless of delta sign —
+    // a replacement always destroys those lines even when it adds more lines overall.
+    if (linesRemoved > 0 && fl < deleteEnd) continue
     s.add(fl + delta)
   }
   foldedLines.value = s
