@@ -224,12 +224,12 @@ function closeCtx(): void {
 
 watch(ctx, (val, old) => {
   if (val && !old) {
-    document.addEventListener('click', closeCtx, true)
+    document.addEventListener('click', closeCtx)
   } else if (!val && old) {
-    document.removeEventListener('click', closeCtx, true)
+    document.removeEventListener('click', closeCtx)
   }
 })
-onUnmounted(() => document.removeEventListener('click', closeCtx, true))
+onUnmounted(() => document.removeEventListener('click', closeCtx))
 
 // ── Inline prompt (create / rename) ──────────────────────────────────────────
 const prompt = ref<{
@@ -455,26 +455,26 @@ defineExpose({ revealFile, focusTree })
   <div class="explorer" @click="closeCtx(); clearSelection()">
     <!-- Header -->
     <div class="exp-header">
-      <span class="exp-ws" :title="workspacePath">{{ wsName || 'No workspace' }}</span>
+      <span class="exp-ws" :title="workspacePath">{{ wsName || $t('label.no-workspace') }}</span>
       <div class="exp-actions">
         <button
           class="exp-icon-btn"
           :class="{ on: explorer.showHidden.value }"
-          title="Show hidden files"
+          :title="$t('action.show-hidden-files')"
           @click="explorer.setShowHidden(!explorer.showHidden.value)"
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 2c3.5 0 6.4 2.3 7.5 5.5C14.4 10.7 11.5 13 8 13S1.6 10.7.5 7.5C1.6 4.3 4.5 2 8 2Zm0 1.5C5.4 3.5 3.2 5 2.1 7.5 3.2 10 5.4 11.5 8 11.5s4.8-1.5 5.9-4C12.8 5 10.6 3.5 8 3.5Zm0 1.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
         </button>
-        <button class="exp-icon-btn" title="Refresh" @click="explorer.reloadAll()">
+        <button class="exp-icon-btn" :title="$t('action.refresh')" @click="explorer.reloadAll()">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 1 0 4.546 2.914.75.75 0 0 1 1.364-.626A6.5 6.5 0 1 1 8 1.5V0l3 2-3 2V3Z"/></svg>
         </button>
-        <button class="exp-icon-btn" title="New File" @click.stop="startNew('new-file', null)">
+        <button class="exp-icon-btn" :title="$t('action.new-file')" @click.stop="startNew('new-file', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2H6.5a1 1 0 0 0-1 1v3.5"/><path d="M8.5 14H12a1 1 0 0 0 1-1V5l-3-3"/><path d="M10 2v3h3"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
-        <button class="exp-icon-btn" title="New Folder" @click.stop="startNew('new-folder', null)">
+        <button class="exp-icon-btn" :title="$t('action.new-folder')" @click.stop="startNew('new-folder', null)">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5V4.5a1 1 0 0 1 1-1h3L8 5h4.5a1 1 0 0 1 1 1v1.5"/><path d="M13.5 7.5V12a1 1 0 0 1-1 1H7"/><path d="M3.5 9.5v4M1.5 11.5h4"/></svg>
         </button>
-        <button class="exp-icon-btn" title="Collapse all folders" @click="explorer.expanded.value = new Set()">
+        <button class="exp-icon-btn" :title="$t('action.collapse-all-folders')" @click="explorer.expanded.value = new Set()">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-surface)"/><path d="M4 9.5h5"/></svg>
         </button>
       </div>
@@ -509,12 +509,12 @@ defineExpose({ revealFile, focusTree })
       </div>
 
       <div v-if="rows.length === 0 && workspacePath" class="exp-empty">
-        {{ explorer.error.value || 'No items to display in this directory' }}
+        {{ explorer.error.value || $t('label.no-items') }}
       </div>
-      <div v-if="!workspacePath" class="exp-empty">Select a workspace to get started</div>
+      <div v-if="!workspacePath" class="exp-empty">{{ $t('label.select-workspace') }}</div>
 
       <div v-if="selectedKeys.size >= 2" class="selection-bar" @click.stop>
-        <span class="sel-count">{{ selectedKeys.size }} selected</span>
+        <span class="sel-count">{{ selectedKeys.size }} {{ $t('label.selected-count') }}</span>
         <button class="sel-btn close" @click="clearSelection()">✕</button>
       </div>
     </div>
@@ -529,13 +529,13 @@ defineExpose({ revealFile, focusTree })
           class="exp-prompt-input"
           type="text"
           spellcheck="false"
-          placeholder="Name"
+          :placeholder="$t('label.name-placeholder')"
           @keydown.enter="submitPrompt"
           @keydown.esc="prompt = null"
         />
         <div class="exp-prompt-actions">
-          <button class="exp-btn ghost" @click="prompt = null">Cancel</button>
-          <button class="exp-btn primary" @click="submitPrompt">OK</button>
+          <button class="exp-btn ghost" @click="prompt = null">{{ $t('action.cancel') }}</button>
+          <button class="exp-btn primary" @click="submitPrompt">{{ $t('action.ok') }}</button>
         </div>
       </div>
     </div>

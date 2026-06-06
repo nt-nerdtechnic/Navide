@@ -10,6 +10,7 @@ contents are listed; git status is only an overlay decided elsewhere.
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -291,7 +292,7 @@ def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, An
 
 
 def delete(workspace_path: str, rel_path: str) -> dict[str, Any]:
-    """Delete a file or an EMPTY directory. Non-empty dirs are rejected."""
+    """Delete a file or directory (including non-empty directories)."""
     try:
         target = _resolve_safe(workspace_path, rel_path)
         if target == Path(workspace_path).resolve():
@@ -299,10 +300,7 @@ def delete(workspace_path: str, rel_path: str) -> dict[str, Any]:
         if not target.exists():
             raise FsError("not found")
         if target.is_dir():
-            try:
-                target.rmdir()
-            except OSError:
-                raise FsError("directory is not empty")
+            shutil.rmtree(target)
         else:
             target.unlink()
     except (FsError, OSError) as exc:
