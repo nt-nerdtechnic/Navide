@@ -83,12 +83,13 @@ class MCPClient:
             read, write = await self._stdio_cm.__aenter__()
             self._session_cm = ClientSession(read, write)
             self._session = await self._session_cm.__aenter__()
-            await self._session.initialize()
+            await asyncio.wait_for(self._session.initialize(), timeout=15.0)
             self.ready = True
             log.info("MCP '%s' connected", self.name)
         except Exception as err:  # noqa: BLE001
             log.warning("MCP '%s' failed to start: %s", self.name, err)
             self.ready = False
+            await self.stop()  # ensure spawned subprocess is cleaned up
 
     async def stop(self) -> None:
         """Tear down the session and kill the child process."""
