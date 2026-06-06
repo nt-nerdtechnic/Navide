@@ -2226,9 +2226,12 @@ function getDateLabel(ts: number): string {
           <template v-if="msg.cards">
             <template v-for="(card, ci) in msg.cards" :key="ci">
               <!-- Tool call card -->
-              <div v-if="card.kind === 'tool_call'" class="ai-tool-card">
+              <div v-if="card.kind === 'tool_call'" class="ai-tool-card" :class="{ 'ai-tool-pending': card.result == null }">
                 <div class="ai-tool-header" @click="card.collapsed = !card.collapsed">
-                  <span class="ai-tool-name">⚙ {{ getToolSummary(card.tool_name, card.tool_input) }}</span>
+                  <span class="ai-tool-icon">{{ getToolIcon(card.tool_name) }}</span>
+                  <span class="ai-tool-name">{{ getToolSummary(card.tool_name, card.tool_input) }}</span>
+                  <span v-if="card.result == null" class="ai-tool-spinner" />
+                  <span v-else class="ai-tool-done">✓</span>
                   <span class="ai-tool-toggle">{{ card.collapsed ? '▶' : '▼' }}</span>
                 </div>
                 <div v-if="!card.collapsed" class="ai-tool-body">
@@ -3261,8 +3264,17 @@ function getDateLabel(ts: number): string {
   user-select: none;
 }
 .ai-tool-header:hover { background: var(--bg-subtle); }
-.ai-tool-name { font-family: ui-monospace, Menlo, monospace; color: var(--accent-fg); font-weight: 600; }
+.ai-tool-icon { font-size: 13px; flex-shrink: 0; opacity: 0.8; }
+.ai-tool-name { font-family: ui-monospace, Menlo, monospace; color: var(--accent-fg); font-weight: 600; flex: 1; }
 .ai-tool-toggle { color: var(--text-muted); font-size: 10px; }
+.ai-tool-done { color: #2ea043; font-size: 11px; flex-shrink: 0; }
+.ai-tool-pending { border-color: var(--accent-muted); }
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+.ai-tool-spinner {
+  display: inline-block; width: 10px; height: 10px; flex-shrink: 0;
+  border: 2px solid var(--accent-muted); border-top-color: var(--accent-fg);
+  border-radius: 50%; animation: ai-spin 0.7s linear infinite;
+}
 .ai-tool-body { padding: 0 9px 8px; }
 .ai-tool-pre {
   margin: 4px 0 0;
