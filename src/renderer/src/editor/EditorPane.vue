@@ -44,7 +44,7 @@ const loadError = ref('')
 const loaded = ref(false)
 const editorRef = ref<InstanceType<typeof EditorView> | null>(null)
 
-const model = 'llama3.2' // analyzer's default; rewrite/complete proxy to local LLM
+const model = 'qwen2:latest' // analyzer's default; rewrite/complete proxy to local LLM
 const langOverride = ref<string | null>(null)
 const lang = computed(() => langOverride.value ?? (props.name.split('.').pop() ?? ''))
 

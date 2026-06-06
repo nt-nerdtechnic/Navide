@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
 import { useReview } from '../composables/useReview'
 import type { useBackend } from '../composables/useBackend'
 import type { useGit } from '../composables/useGit'
@@ -21,6 +21,32 @@ const { isReviewing, reviewText, reviewError, startReview, stopReview } = useRev
 const mode = ref<'working' | 'branch'>('working')
 const baseBranch = ref('main')
 const compareBranch = ref('')
+
+// Model picker
+const provider = ref<'ollama' | 'anthropic'>('ollama')
+const ollamaModel = ref('qwen2:latest')
+const anthropicModel = ref('claude-sonnet-4-6')
+const ollamaModels = ref<string[]>([])
+
+onMounted(async () => {
+  const r = await props.backend.send<{ ok: boolean; provider?: string; ollama_model?: string; anthropic_model?: string }>('ai.chat.settings.get', {})
+  if (r.ok && r.payload?.ok) {
+    provider.value = (r.payload.provider as 'ollama' | 'anthropic') ?? 'ollama'
+    if (r.payload.ollama_model) ollamaModel.value = r.payload.ollama_model
+    if (r.payload.anthropic_model) anthropicModel.value = r.payload.anthropic_model
+  }
+  const mr = await props.backend.send<{ ok: boolean; models?: { name: string }[] }>('analyzer.models', {})
+  if (mr.ok && mr.payload?.models) {
+    ollamaModels.value = mr.payload.models.map((m: { name: string }) => m.name).filter(Boolean)
+  }
+})
+
+async function saveModel() {
+  await props.backend.send('ai.chat.settings.set', {
+    provider: provider.value,
+    model: provider.value === 'anthropic' ? anthropicModel.value : ollamaModel.value,
+  })
+}
 
 const outputEl = ref<HTMLElement | null>(null)
 
@@ -133,6 +159,23 @@ function applyInline(s: string): string {
 
     <!-- Controls -->
     <div class="controls">
+      <!-- Model picker row -->
+      <div class="model-row">
+        <select class="model-select" v-model="provider" @change="saveModel">
+          <option value="ollama">Ollama</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+        <select v-if="provider === 'ollama'" class="model-select model-select--flex" v-model="ollamaModel" @change="saveModel">
+          <option v-for="m in ollamaModels" :key="m" :value="m">{{ m }}</option>
+          <option v-if="!ollamaModels.includes(ollamaModel)" :value="ollamaModel">{{ ollamaModel }}</option>
+        </select>
+        <select v-else class="model-select model-select--flex" v-model="anthropicModel" @change="saveModel">
+          <option value="claude-opus-4-8">claude-opus-4-8</option>
+          <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+        </select>
+      </div>
+
       <!-- Mode label + branch toggle -->
       <div class="mode-row">
         <span class="mode-label">
@@ -228,6 +271,15 @@ function applyInline(s: string): string {
   padding: 8px 8px 6px; border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
+.model-row {
+  display: flex; align-items: center; gap: 4px;
+}
+.model-select {
+  padding: 2px 4px; font-size: 11px;
+  background: var(--bg-subtle); border: 1px solid var(--border-default);
+  border-radius: 4px; color: var(--text-primary); cursor: pointer; min-width: 0;
+}
+.model-select--flex { flex: 1; }
 .mode-row {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }

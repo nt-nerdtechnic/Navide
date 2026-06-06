@@ -24,8 +24,23 @@ const emit = defineEmits<{
 }>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'ai_chat'
 const activeTab = ref<Tab>('roles')
+
+// ── AI Chat settings ──────────────────────────────────────────────────────────
+const aiChatApiKey = ref('')
+const aiChatApiKeyDirty = ref(false)
+
+function fetchAiChatSettings(): void {
+  props.backend.send<{ anthropic_api_key?: string }>('ai.chat.settings.get', {})
+    .then(r => { if (r?.anthropic_api_key) aiChatApiKey.value = r.anthropic_api_key })
+    .catch(() => {/* ignore */})
+}
+function saveAiChatSettings(): void {
+  props.backend.send('ai.chat.settings.set', { anthropic_api_key: aiChatApiKey.value })
+    .catch(() => {/* ignore */})
+  aiChatApiKeyDirty.value = false
+}
 
 // ── Appearance (theme) ────────────────────────────────────────────────────────
 const {
@@ -571,7 +586,10 @@ async function mOpenConfig() {
   if (mConfigPath.value) await (window as any).agentTeam.openPath(mConfigPath.value)
 }
 
-watch(activeTab, (tab) => { if (tab === 'mcp' && mServers.value.length === 0) mLoad() })
+watch(activeTab, (tab) => {
+  if (tab === 'mcp' && mServers.value.length === 0) mLoad()
+  if (tab === 'ai_chat') fetchAiChatSettings()
+})
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PIPELINES TAB
@@ -710,6 +728,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">🔌 MCP</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">🧠 Analyzer</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">🎨 Appearance</button>
+            <button :class="['s-tab', { active: activeTab === 'ai_chat' }]" @click="activeTab = 'ai_chat'">💬 AI Chat</button>
           </div>
           <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
@@ -1423,6 +1442,25 @@ async function plDelete(id: string, name: string) {
           </section>
         </div>
 
+        <!-- ── AI CHAT TAB ───────────────────────────────────────────────── -->
+        <div v-show="activeTab === 'ai_chat'" class="s-body ai-chat-settings-body">
+          <section class="ap-section">
+            <h3 class="ap-title">Anthropic API Key</h3>
+            <p class="ap-hint">Used when the AI Chat provider is set to Anthropic. Stored locally on disk with restricted permissions.</p>
+            <div class="ai-chat-key-row">
+              <input
+                v-model="aiChatApiKey"
+                type="password"
+                class="ai-chat-key-input"
+                placeholder="sk-ant-…"
+                @input="aiChatApiKeyDirty = true"
+              />
+              <button class="ai-chat-key-save" :disabled="!aiChatApiKeyDirty" @click="saveAiChatSettings">Save</button>
+            </div>
+            <p class="ap-hint" style="margin-top:6px">Provider and model are configurable from the AI Chat panel settings icon.</p>
+          </section>
+        </div>
+
       </div>
     </div>
 
@@ -1522,7 +1560,8 @@ async function plDelete(id: string, name: string) {
   transition: all 0.15s;
 }
 .s-tab:hover { background: var(--bg-subtle); color: var(--text-bright); }
-.s-tab.active { background: #1f2937; border-color: var(--border-default); color: var(--accent-fg); }
+.s-tab.active { background: var(--bg-muted); border-color: var(--border-default); color: var(--accent-fg); }
+.s-tab:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
 
 /* ── Appearance tab ─────────────────────────────────────────────────────────── */
 .appearance-body { padding: 18px 22px; overflow-y: auto; }
@@ -2143,4 +2182,31 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 }
 .pl-rename-icon:hover { opacity: 1; color: var(--text-bright); background: var(--bg-muted); }
 .pl-detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+
+/* ── AI Chat settings tab ─────────────────────────────────────────────────── */
+.ai-chat-settings-body { padding: 16px 20px; }
+.ai-chat-key-row { display: flex; gap: 8px; align-items: center; }
+.ai-chat-key-input {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text-bright);
+  font-family: monospace;
+}
+.ai-chat-key-input:focus { outline: none; border-color: var(--accent-emphasis); }
+.ai-chat-key-save {
+  padding: 7px 14px;
+  font-size: 12px;
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 6px;
+  background: var(--accent-emphasis);
+  color: #fff;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.ai-chat-key-save:disabled { opacity: 0.4; cursor: not-allowed; }
+.ai-chat-key-save:not(:disabled):hover { opacity: 0.85; }
 </style>

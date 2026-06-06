@@ -1827,6 +1827,8 @@ async def generate_commit_message(
     ollama_url: str,
     model: str = "llama3.2",
     attempt_count: int = 0,
+    *,
+    settings: dict | None = None,
 ) -> dict[str, Any]:
     """Generate a commit message that adapts to the repo's existing style.
 
@@ -1836,6 +1838,9 @@ async def generate_commit_message(
     Mirrors VS Code/Cursor: targets the staged diff when anything is staged,
     otherwise the whole working tree. *attempt_count* raises the temperature on
     retries to escape a repeated bad answer (Copilot does the same).
+
+    If *settings* contains ``provider == "anthropic"``, the Anthropic API is
+    used (non-streaming) instead of Ollama.
     """
     context = await get_commit_context(workspace_path)
     if not context["changes"]:
@@ -1847,6 +1852,37 @@ async def generate_commit_message(
     prompt = commit_message_prompt.build_user_prompt(context, recent, per_file_budget)
     temperature = min(0.2 * (1 + attempt_count), 1.0)
 
+    provider = (settings or {}).get("provider", "ollama")
+
+    if provider == "anthropic":
+        try:
+            import anthropic as _anthropic  # type: ignore
+        except ImportError as exc:
+            return {"ok": False, "error": "anthropic package not installed: " + str(exc), "message": ""}
+        api_key = (settings or {}).get("anthropic_api_key", "").strip()
+        anthropic_model = (settings or {}).get("anthropic_model", model)
+        try:
+            client = _anthropic.AsyncAnthropic(api_key=api_key or None)
+            response = await client.messages.create(
+                model=anthropic_model,
+                max_tokens=256,
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+            )
+            raw = ""
+            for block in response.content:
+                if getattr(block, "type", None) == "text":
+                    raw += block.text
+            message = commit_message_prompt.parse_commit_message(raw)
+            if not message:
+                return {"ok": False, "error": "empty response from Anthropic", "message": ""}
+            return {"ok": True, "message": message}
+        except Exception as exc:
+            log.warning("generate_commit_message (anthropic) failed: %s", exc)
+            return {"ok": False, "error": str(exc), "message": ""}
+
+    # Default: Ollama path
     try:
         async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=45.0) as client:
             resp = await client.post("/api/generate", json={

@@ -1,10 +1,11 @@
 import type { Position, EditOperation } from '../types'
 import type { TextModel } from './TextModel'
 
-/** A single undoable unit: forward edit(s) and the matching inverse(s). */
+type OpPair = { forward: EditOperation; inverse: EditOperation }
+
+/** A single undoable unit: one or more op pairs (multi-cursor = multiple pairs). */
 interface UndoEntry {
-  forward: EditOperation
-  inverse: EditOperation
+  ops: OpPair[]
   /** Timestamp of the last edit folded into this entry (for merge windows). */
   time: number
 }
@@ -21,6 +22,9 @@ const MAX_ENTRIES = 500
  * {@link MERGE_WINDOW_MS} of each other and are adjacent (each typed right where
  * the previous one ended) collapse into one undo unit, so undo removes the whole
  * typed word rather than one keystroke at a time.
+ *
+ * Multi-cursor edits pushed via {@link pushBatch} are stored as a single undo
+ * entry whose ops are applied/reversed together.
  *
  * `now` is injectable so tests can drive the merge window deterministically.
  */
@@ -44,23 +48,34 @@ export class UndoStack {
     const time = this.now()
 
     const prev = this.undoStack[this.undoStack.length - 1]
-    if (!this.breakNext && prev && this.canMerge(prev, forward, time)) {
-      // Extend the existing unit. The forward stays a pure insert (range.start ===
-      // range.end) so that redo inserts at the correct position in the pre-insert
-      // document. Only grow the inverse's end to cover all inserted chars.
-      prev.forward = {
-        range: { start: { ...prev.forward.range.start }, end: { ...prev.forward.range.start } },
-        text: prev.forward.text + forward.text,
+    if (!this.breakNext && prev && prev.ops.length === 1 && this.canMerge(prev, forward, time)) {
+      const p = prev.ops[0]
+      p.forward = {
+        range: { start: { ...p.forward.range.start }, end: { ...p.forward.range.start } },
+        text: p.forward.text + forward.text,
       }
-      prev.inverse = {
-        range: { start: { ...prev.inverse.range.start }, end: { ...inverse.range.end } },
-        text: prev.inverse.text,
+      p.inverse = {
+        range: { start: { ...p.inverse.range.start }, end: { ...inverse.range.end } },
+        text: p.inverse.text,
       }
       prev.time = time
       return
     }
 
-    this.undoStack.push({ forward, inverse, time })
+    this.undoStack.push({ ops: [{ forward, inverse }], time })
+    if (this.undoStack.length > MAX_ENTRIES) this.undoStack.shift()
+    this.breakNext = false
+  }
+
+  /**
+   * Push multiple op pairs as a single atomic undo entry (for multi-cursor edits).
+   * Ops should be ordered bottom-to-top (descending line/col) as they were applied,
+   * so undo can reverse them top-to-bottom.
+   */
+  pushBatch(pairs: OpPair[]): void {
+    if (!pairs.length) return
+    this.redoStack = []
+    this.undoStack.push({ ops: pairs, time: this.now() })
     if (this.undoStack.length > MAX_ENTRIES) this.undoStack.shift()
     this.breakNext = false
   }
@@ -73,9 +88,12 @@ export class UndoStack {
   undo(model: TextModel): Position | null {
     const entry = this.undoStack.pop()
     if (!entry) return null
-    const { caret } = model.applyEdit(entry.inverse)
+    // Apply inverses top-to-bottom (reverse of the bottom-to-top application order).
+    let caret: Position | null = null
+    for (let i = entry.ops.length - 1; i >= 0; i--) {
+      caret = model.applyEdit(entry.ops[i].inverse).caret
+    }
     this.redoStack.push(entry)
-    // After an undo, further typing must not merge into a popped entry.
     this.breakNext = true
     return caret
   }
@@ -83,7 +101,11 @@ export class UndoStack {
   redo(model: TextModel): Position | null {
     const entry = this.redoStack.pop()
     if (!entry) return null
-    const { caret } = model.applyEdit(entry.forward)
+    // Apply forwards bottom-to-top (the original application order).
+    let caret: Position | null = null
+    for (const op of entry.ops) {
+      caret = model.applyEdit(op.forward).caret
+    }
     this.undoStack.push(entry)
     this.breakNext = true
     return caret
@@ -105,11 +127,6 @@ export class UndoStack {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  /**
-   * A pure single-character insertion (empty range, one char, no newline) is
-   * eligible to merge when it lands right where the previous insertion ended
-   * and within the time window.
-   */
   private canMerge(prev: UndoEntry, forward: EditOperation, time: number): boolean {
     if (time - prev.time > MERGE_WINDOW_MS) return false
 
@@ -119,12 +136,9 @@ export class UndoStack {
       samePosition(forward.range.start, forward.range.end)
     if (!isSingleCharInsert) return false
 
-    // The previous unit must also have been a pure typed insertion (empty
-    // inverse text). Its inverse range spans the already-inserted text, so its
-    // end is the caret the previous keystroke left behind; the new char must
-    // start exactly there to count as a continuation.
-    if (prev.inverse.text !== '') return false
-    return samePosition(forward.range.start, prev.inverse.range.end)
+    const p = prev.ops[0]
+    if (p.inverse.text !== '') return false
+    return samePosition(forward.range.start, p.inverse.range.end)
   }
 }
 

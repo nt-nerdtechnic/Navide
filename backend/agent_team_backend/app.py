@@ -1526,9 +1526,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.generate_message":
             ws_path = payload.get("workspace_path") or ""
             ollama_url = _az_base_url()
-            model = payload.get("model") or "llama3.2"
             attempt_count = int(payload.get("attempt_count") or 0)
-            result = await git_service.generate_commit_message(ws_path, ollama_url, model, attempt_count)
+            chat_settings = ai_chat_settings_store.get()
+            model = payload.get("model") or chat_settings.get("model") or ANALYZER_DEFAULT_MODEL
+            result = await git_service.generate_commit_message(ws_path, ollama_url, model, attempt_count, settings=chat_settings)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.discard":
@@ -2072,7 +2073,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "editor.rewrite":
             result = await editor_service.rewrite(
                 _az_base_url(),
-                payload.get("model") or "llama3.2",
+                payload.get("model") or ANALYZER_DEFAULT_MODEL,
                 payload.get("code", "") or "",
                 payload.get("instruction", "") or "",
                 payload.get("language", "") or "",
@@ -2082,7 +2083,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "editor.complete":
             result = await editor_service.complete(
                 _az_base_url(),
-                payload.get("model") or "llama3.2",
+                payload.get("model") or ANALYZER_DEFAULT_MODEL,
                 payload.get("prefix", "") or "",
                 payload.get("suffix", "") or "",
                 payload.get("language", "") or "",

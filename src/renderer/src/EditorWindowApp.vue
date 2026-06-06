@@ -1184,7 +1184,7 @@ function onKbKeydown(e: KeyboardEvent): void {
 registerCommand('workbench.action.openKeyboardShortcuts', openKeyboardShortcuts)
 
 // ── Color theme picker (⌘K ⌘T) ───────────────────────────────────────────────
-const { theme: currentTheme, setTheme } = useTheme()
+const { theme: currentTheme, setTheme, loadTheme } = useTheme()
 const themeOpen = ref(false)
 const themeQuery = ref('')
 const themeIdx = ref(0)
@@ -1268,7 +1268,15 @@ function onAppKeydown(e: KeyboardEvent): void {
   }
 }
 
+function onThemeStorageChange(e: StorageEvent) {
+  if (e.key === 'agent-team:theme' || e.key === 'agent-team:theme-custom') {
+    loadTheme()
+  }
+}
+
 onMounted(() => {
+  loadTheme()
+  window.addEventListener('storage', onThemeStorageChange)
   window.addEventListener('keydown', onAppKeydown)
   window.addEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.addEventListener('click', closeBcDropdown)
@@ -1298,6 +1306,7 @@ onMounted(() => {
   if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
 })
 onUnmounted(() => {
+  window.removeEventListener('storage', onThemeStorageChange)
   window.removeEventListener('keydown', onAppKeydown)
   window.removeEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.removeEventListener('click', closeBcDropdown)

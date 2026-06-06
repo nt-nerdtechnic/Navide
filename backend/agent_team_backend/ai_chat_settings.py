@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "provider": "ollama",                  # "anthropic" | "ollama"
     "anthropic_api_key": "",
     "anthropic_model": "claude-sonnet-4-6",
-    "ollama_model": "llama3.2",
+    "ollama_model": "qwen2:latest",
     "ollama_base_url": "http://localhost:11434",
     "system_prompt": "You are a helpful AI coding assistant.",
     "max_tokens": 4096,

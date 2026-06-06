@@ -6,6 +6,8 @@ import json
 import logging
 from typing import AsyncIterator
 
+from .ai_chat_settings import DEFAULTS as _CHAT_DEFAULTS
+
 log = logging.getLogger("agent_team_backend.ai_chat_service")
 
 
@@ -53,7 +55,7 @@ async def _stream_anthropic(
         ) from exc
 
     api_key = settings.get("anthropic_api_key", "").strip()
-    model = settings.get("anthropic_model", "claude-sonnet-4-6")
+    model = settings.get("anthropic_model", _CHAT_DEFAULTS["anthropic_model"])
 
     client = _anthropic.AsyncAnthropic(api_key=api_key or None)
 
@@ -130,7 +132,7 @@ async def _stream_ollama(
         raise ImportError("The 'httpx' package is required for Ollama streaming.") from exc
 
     base_url = settings.get("ollama_base_url", "http://localhost:11434").rstrip("/")
-    model = settings.get("ollama_model", "llama3.2")
+    model = settings.get("ollama_model", _CHAT_DEFAULTS["ollama_model"])
 
     # Prepend system as a system-role message if provided and not already present
     full_messages = list(messages)
