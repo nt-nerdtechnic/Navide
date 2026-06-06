@@ -664,6 +664,23 @@ function estimateCost(modelId: string, inputTokens: number, outputTokens: number
   return `$${usd.toFixed(3)}`
 }
 
+// ── Session-level token & cost statistics ─────────────────────────────────────
+const sessionStats = computed(() => {
+  let totalIn = 0, totalOut = 0, totalCost = 0, modelsUsed = new Set<string>()
+  for (const thread of allThreads.value) {
+    for (const m of thread.messages) {
+      if (m.inputTokens != null)  totalIn  += m.inputTokens
+      if (m.outputTokens != null) totalOut += m.outputTokens
+      if (m.model) modelsUsed.add(m.model)
+      if (m.model && m.inputTokens != null && m.outputTokens != null) {
+        const costs = MODEL_COSTS[m.model]
+        if (costs) totalCost += (m.inputTokens / 1_000_000) * costs[0] + (m.outputTokens / 1_000_000) * costs[1]
+      }
+    }
+  }
+  return { totalIn, totalOut, totalCost, modelsUsed: Array.from(modelsUsed) }
+})
+
 const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
 const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
 const OPENAI_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'openai').map((m) => m.id)
@@ -4823,6 +4840,14 @@ function getDateLabel(ts: number): string {
         <div v-else class="ai-settings-row ai-rules-notice ai-rules-missing">
           <span>No workspace rules found. Create <code>AGENTS.md</code> or <code>.cursor/rules</code> to add project-specific AI instructions.</span>
         </div>
+        <!-- Session usage statistics -->
+        <div class="ai-stats-row">
+          <span class="ai-stats-title">Session usage</span>
+          <span class="ai-stats-item" title="Total input tokens across all threads">↑ {{ (sessionStats.totalIn / 1000).toFixed(1) }}k in</span>
+          <span class="ai-stats-item" title="Total output tokens across all threads">↓ {{ (sessionStats.totalOut / 1000).toFixed(1) }}k out</span>
+          <span v-if="sessionStats.totalCost > 0" class="ai-stats-item ai-stats-cost" title="Estimated total cost">~${{ sessionStats.totalCost < 0.001 ? '<0.001' : sessionStats.totalCost.toFixed(3) }}</span>
+        </div>
+
         <div class="ai-settings-footer">
           <button class="ai-settings-save" @click="saveSettings">Save</button>
         </div>
@@ -6228,6 +6253,10 @@ function getDateLabel(ts: number): string {
   outline: none;
 }
 .ai-profile-select:hover { border-color: var(--accent-emphasis); }
+.ai-stats-row { display: flex; align-items: center; gap: 10px; padding: 8px 0 4px; border-top: 1px solid var(--border-subtle); margin-top: 6px; flex-wrap: wrap; }
+.ai-stats-title { font-size: 11px; font-weight: 600; color: var(--text-muted); flex: 1; }
+.ai-stats-item { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.ai-stats-cost { color: var(--accent-emphasis); }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
 .ai-tokens-row { display: flex; align-items: center; gap: 8px; }
 .ai-tokens-slider { flex: 1; accent-color: var(--accent-emphasis); }
