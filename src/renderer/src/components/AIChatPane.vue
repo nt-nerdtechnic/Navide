@@ -94,7 +94,9 @@ interface ChatMessage {
   thinking?: boolean   // true until first chunk arrives
   model?: string
   timestamp?: number       // ms since epoch
+  sendMs?: number          // when user sent this message (to compute TTFT)
   responseStartMs?: number // when first chunk arrived
+  ttftMs?: number          // time-to-first-token in ms
   elapsedMs?: number       // total response duration in ms
   inputTokens?: number     // from backend usage data
   outputTokens?: number    // from backend usage data
@@ -659,6 +661,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/continue', label: '/continue', description: 'Continue last response',  template: '' },
   { id: '/compact',  label: '/compact',  description: 'Summarize & compress history to free context', template: '' },
   { id: '/model',    label: '/model',    description: 'Switch model for this conversation',            template: '' },
+  { id: '/rename',   label: '/rename',   description: 'Rename this chat thread',                       template: '' },
+  { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1372,7 +1376,7 @@ async function sendMessage(): Promise<void> {
   history.push({ role: 'user', content: sentContent })
 
   // Push placeholder assistant message for streaming
-  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now() })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now(), sendMs: Date.now() })
   autoScroll.value = true
   await scrollBottom(true)
 
@@ -1403,7 +1407,7 @@ async function sendMessage(): Promise<void> {
         } catch { /* skip unreadable files */ }
       }
       if (files.length) {
-        editSetSuffix = `\n\n[Edit Mode Working Set — propose diffs for these files]\n${files.join('\n\n')}`
+        editSetSuffix = `\n\n[EDIT MODE: Working set of files for targeted editing. For each file you modify, output the COMPLETE updated file content inside a fenced code block with the file path on the first line (e.g. \`\`\`typescript\n// src/foo.ts\n...\n\`\`\`). The user can then apply individual changes.]\n${files.join('\n\n')}`
       }
     }
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
@@ -1615,7 +1619,7 @@ async function regenerate(): Promise<void> {
   currentSessionId.value = sessionId
 
   const history = messages.value.map((m) => ({ role: m.role, content: m.rawContent ?? m.content }))
-  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now() })
+  messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], model: settingsModel.value, timestamp: Date.now(), sendMs: Date.now() })
   autoScroll.value = true
   await scrollBottom(true)
 
@@ -1758,7 +1762,11 @@ function setupListeners(): void {
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.role === 'assistant' && last.streaming) {
-      if (last.thinking) last.responseStartMs = Date.now()
+      if (last.thinking) {
+        const now = Date.now()
+        last.responseStartMs = now
+        if (last.sendMs) last.ttftMs = now - last.sendMs
+      }
       last.thinking = false
       last.content += p.text
       void scrollBottom()
@@ -2244,6 +2252,27 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     inputText.value = ''
     showModelPicker.value = true
     nextTick(() => textareaEl.value?.focus())
+    return
+  }
+
+  if (cmd.id === '/rename') {
+    inputText.value = ''
+    const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+    if (!ct) { showToast('No active thread'); return }
+    // Pre-fill from first user message (smart suggestion)
+    const firstUser = messages.value.find((m) => m.role === 'user')
+    const suggested = firstUser
+      ? firstUser.content.replace(/@\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
+      : ct.title
+    const newTitle = window.prompt('Rename chat thread:', suggested)
+    if (newTitle?.trim()) { ct.title = newTitle.trim(); saveCurrentThread(); showToast('Thread renamed') }
+    return
+  }
+
+  if (cmd.id === '/pin') {
+    inputText.value = ''
+    const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+    if (ct) { ct.pinned = !ct.pinned; saveCurrentThread(); showToast(ct.pinned ? 'Thread pinned' : 'Thread unpinned') }
     return
   }
 
@@ -3260,6 +3289,7 @@ function getDateLabel(ts: number): string {
             :title="msg.bookmarked ? 'Remove bookmark' : 'Bookmark'"
             @click="toggleBookmark(mi)"
           >{{ msg.bookmarked ? '★' : '☆' }}</button>
+          <span v-if="msg.ttftMs" class="ai-msg-ttft" :title="`Time to first token: ${msg.ttftMs}ms`">{{ msg.ttftMs }}ms</span>
           <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
           <span
             v-if="msg.role === 'assistant' && msg.outputTokens && msg.elapsedMs && msg.elapsedMs > 0 && !msg.streaming"
@@ -3975,6 +4005,7 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-msg-tokspeed { font-size: 10px; color: var(--text-muted); opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums; }
+.ai-msg-ttft { font-size: 10px; color: var(--text-muted); opacity: 0.4; user-select: none; font-variant-numeric: tabular-nums; }
 
 .ai-regen-model-wrap { position: relative; display: inline-flex; }
 .ai-regen-model-btn { font-size: 10px; display: flex; align-items: center; }

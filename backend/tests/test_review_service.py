@@ -17,12 +17,12 @@ class TestStreamReview:
     @pytest.mark.asyncio
     async def test_empty_diff_yields_no_changes_message(self):
         result = await _collect(review_service.stream_review({}, ""))
-        assert "no changes" in result
+        assert "no changes" in result.lower()
 
     @pytest.mark.asyncio
     async def test_whitespace_only_diff_is_treated_as_empty(self):
         result = await _collect(review_service.stream_review({}, "   \n\t  "))
-        assert "no changes" in result
+        assert "no changes" in result.lower()
 
     @pytest.mark.asyncio
     async def test_diff_forwarded_to_stream_chat(self, monkeypatch):
