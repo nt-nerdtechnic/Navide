@@ -1024,6 +1024,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
+  { id: '@git:diff',  label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -1091,6 +1092,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
   { id: '/generate', label: '/generate', description: 'Generate a new file from description',          template: '' },
   { id: '/search',   label: '/search',   description: 'Search codebase for a symbol or string',        template: '' },
+  { id: '/fixtests', label: '/fixtests', description: 'Run tests, then auto-ask AI to fix failures',    template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1828,6 +1830,66 @@ async function sendMessage(): Promise<void> {
       messages.value.push({ role: 'assistant', content, timestamp: Date.now() })
     } catch {
       messages.value.push({ role: 'assistant', content: 'Test command failed', isError: true, timestamp: Date.now() })
+    }
+    return
+  }
+
+  // /fixtests — run test suite and auto-ask AI to fix any failures
+  if (rawText === '/fixtests' || rawText.startsWith('/fixtests ')) {
+    if (!props.workspacePath) { showToast('/fixtests requires an open workspace'); return }
+    const extra = rawText.slice('/fixtests'.length).trim()
+    let testCmd = 'npm test -- --no-coverage 2>&1 | tail -100'
+    try {
+      const hasPytest = await props.backend.send<{ok:boolean}>('fs.read_file', {
+        workspace_path: props.workspacePath, rel_path: 'pytest.ini',
+      }).catch(() => ({ payload: { ok: false } }))
+      const hasPyproject = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
+        workspace_path: props.workspacePath, rel_path: 'pyproject.toml',
+      }).catch(() => ({ payload: { ok: false, content: '' } }))
+      const isPytest = hasPytest.payload?.ok ||
+        (hasPyproject.payload?.ok && hasPyproject.payload.content?.includes('[tool.pytest'))
+      if (isPytest) {
+        testCmd = `python3 -m pytest ${extra} -q --tb=short 2>&1 | tail -100`
+      } else {
+        const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
+          workspace_path: props.workspacePath, rel_path: 'package.json',
+        }).catch(() => ({ payload: { ok: false, content: '{}' } }))
+        const pkg = JSON.parse(hasPkg.payload?.content ?? '{}') as Record<string, unknown>
+        const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
+        const deps = (pkg.dependencies ?? {}) as Record<string, string>
+        if ('vitest' in devDeps || 'vitest' in deps) {
+          testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
+        } else if (extra) {
+          testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+        }
+      }
+    } catch { /* keep default */ }
+    inputText.value = ''
+    messages.value.push({ role: 'user', content: `/fixtests${extra ? ' ' + extra : ''}`, timestamp: Date.now() })
+    showToast('Running tests…')
+    try {
+      interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: testCmd, workspace_path: props.workspacePath,
+      })
+      const r = resp.payload
+      const exitCode = r?.exit_code ?? 0
+      const out = r?.output?.trim() ?? '(no output)'
+      if (exitCode === 0) {
+        messages.value.push({ role: 'assistant', content: '✓ All tests pass — nothing to fix!', timestamp: Date.now() })
+        return
+      }
+      // Tests failed — add failure output as a context chip then ask AI to fix
+      const truncated = out.length > 3000 ? '…(truncated)\n' + out.slice(-3000) : out
+      contextChips.value.push({
+        id: crypto.randomUUID(),
+        label: '@test-failures',
+        content: `// Test failures (exit ${exitCode}):\n\`\`\`\n${truncated}\n\`\`\``,
+      })
+      inputText.value = 'Fix the failing tests shown in @test-failures. Identify the root cause and provide the corrected code.'
+      void sendMessage()
+    } catch {
+      messages.value.push({ role: 'assistant', content: 'Test runner failed', isError: true, timestamp: Date.now() })
     }
     return
   }
@@ -2832,6 +2894,28 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @git:diff:<branch> — compare current HEAD vs a specific branch
+  if (/^git:diff$/i.test(fragment)) {
+    atOptions.value = [
+      { id: '@git:diff:main',        label: '@git:diff:main — diff vs main' },
+      { id: '@git:diff:master',      label: '@git:diff:master — diff vs master' },
+      { id: '@git:diff:origin/main', label: '@git:diff:origin/main — diff vs origin/main' },
+    ]
+    return
+  }
+  const isGitDiffQuery = /^git:diff:/i.test(fragment)
+  if (isGitDiffQuery) {
+    const branchName = fragment.slice('git:diff:'.length)
+    atOptions.value = branchName.length >= 1
+      ? [{ id: `@git:diff:${branchName}`, label: `@git:diff:${branchName} — diff vs ${branchName}` }]
+      : [
+          { id: '@git:diff:main',        label: '@git:diff:main — diff vs main' },
+          { id: '@git:diff:master',      label: '@git:diff:master — diff vs master' },
+          { id: '@git:diff:origin/main', label: '@git:diff:origin/main — diff vs origin/main' },
+        ]
+    return
+  }
+
   // @symbol:functionName — find a symbol definition across the codebase
   const isSymbolQuery = /^symbol:/i.test(fragment)
   if (isSymbolQuery) {
@@ -3258,6 +3342,38 @@ async function selectAtOption(option: AtOption): Promise<void> {
     } catch {
       chipContent = '// @git:recent: unavailable'
     }
+  } else if (option.id === '@git:diff') {
+    // Static option — expand to @git:diff: in textarea so user can type the branch name
+    const newVal = val.slice(0, atIdx) + '@git:diff:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@git:diff:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@git:diff:')) {
+    const branchName = option.id.slice('@git:diff:'.length).trim()
+    chipLabel = `@git:diff:${branchName}`
+    if (!/^[A-Za-z0-9_./-]+$/.test(branchName)) {
+      chipContent = `// @git:diff:${branchName}: invalid branch name`
+    } else {
+      try {
+        showToast(`Fetching diff vs ${branchName}…`)
+        interface DiffBranchResp { ok: boolean; diff?: string; error?: string }
+        const resp = await props.backend.send<DiffBranchResp>('git.diff_branches', {
+          workspace_path: props.workspacePath,
+          base: branchName,
+          compare: 'HEAD',
+        })
+        const diff = resp.payload?.diff
+        chipContent = diff
+          ? `// git diff ${branchName}...HEAD\n${diff}`
+          : `// @git:diff:${branchName}: ${resp.payload?.error ?? 'no diff found'}`
+      } catch {
+        chipContent = `// @git:diff:${branchName}: unavailable`
+      }
+    }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
     const newVal = val.slice(0, atIdx) + '@codebase ' + val.slice(cur)
@@ -3683,6 +3799,7 @@ function chipIcon(label: string): string {
   if (label.startsWith('@web')) return '🌐'
   if (label.startsWith('@url')) return '🔗'
   if (label.startsWith('@docs')) return '📖'
+  if (label.startsWith('@test-')) return '✗'
   if (label.startsWith('@problems')) return '⚠'
   if (label.startsWith('@clipboard')) return '📋'
   if (label.startsWith('@tree')) return '🌲'
