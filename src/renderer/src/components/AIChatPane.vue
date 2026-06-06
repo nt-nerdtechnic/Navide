@@ -1516,34 +1516,24 @@ const DOCS_CATALOG: Record<string, { label: string; url: string }> = {
 const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 
 // Flat list with group-header sentinels injected when showing unfiltered static list.
-// Each real option also carries _realIdx so the template can match atMenuIdx.
-interface AtDisplayItem extends AtOption { _isGroupHeader?: boolean; _realIdx?: number }
+// Each real option also carries _realIdx (= its index in atOptions.value) so
+// keyboard nav (atMenuIdx) maps correctly, and _isRecent for a visual badge.
+interface AtDisplayItem extends AtOption { _isGroupHeader?: boolean; _realIdx?: number; _isRecent?: boolean }
 const atOptionsDisplay = computed<AtDisplayItem[]>(() => {
   const opts = atOptions.value
-  // Only inject headers for the full static list (not dynamic search results)
+  // Only inject group headers for the full static list (not dynamic search results)
   if (opts.length === AT_OPTIONS_STATIC.length && opts[0]?.group !== undefined) {
+    const recentSet = new Set(recentAtIds.value)
     const result: AtDisplayItem[] = []
-    let ri = 0
-    // Prepend "Recent" group if we have recently used static @ options
-    const recentItems = recentAtIds.value
-      .map((id) => AT_OPTIONS_STATIC.find((o) => o.id === id))
-      .filter((o): o is AtOption => o !== undefined)
-      .slice(0, 5)
-    if (recentItems.length > 0) {
-      result.push({ id: '__group__Recent', label: 'Recent', _isGroupHeader: true })
-      for (const opt of recentItems) {
-        result.push({ ...opt, _realIdx: ri++ })
-      }
-    }
-    // All items grouped by category
     let lastGroup = ''
+    let ri = 0
     for (const opt of opts) {
       const g = opt.group ?? ''
       if (g && g !== lastGroup) {
         result.push({ id: `__group__${g}`, label: g, _isGroupHeader: true })
         lastGroup = g
       }
-      result.push({ ...opt, _realIdx: ri++ })
+      result.push({ ...opt, _realIdx: ri++, _isRecent: recentSet.has(opt.id) })
     }
     return result
   }
@@ -1686,6 +1676,13 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/format:json',     label: '/format:json',     description: 'Pretty-print / validate JSON in the current selection or file',                                          template: '' },
   { id: '/git:stash:apply', label: '/git:stash:apply', description: 'List git stashes and apply the most recent one (or /git:stash:apply <index>)',                            template: '' },
   { id: '/doc:project',     label: '/doc:project',     description: 'Generate project-level documentation: architecture, modules, and data flow',                              template: '' },
+  { id: '/improve:prompt',  label: '/improve:prompt',  description: 'AI rewrites and improves your current draft input for better clarity and results',                        template: '' },
+  { id: '/explain:file',    label: '/explain:file',    description: 'Explain what a specific file does (e.g. /explain:file src/App.vue)',                                     template: '' },
+  { id: '/git:log:file',    label: '/git:log:file',    description: 'Show git commit history for the current open file (or a specific path)',                                  template: '' },
+  { id: '/gen:env',         label: '/gen:env',         description: 'Scan codebase for env var usage and generate a .env.example file',                                        template: '' },
+  { id: '/ask:selection',   label: '/ask:selection',   description: 'Ask any question about the currently selected code in the editor',                                        template: '' },
+  { id: '/debug:console',   label: '/debug:console',   description: 'Paste console output / log lines and get AI interpretation and fix suggestions',                          template: '' },
+  { id: '/convert:types',   label: '/convert:types',   description: 'Convert between type systems: Zod ↔ TypeScript, Pydantic ↔ TypeScript, JSON Schema ↔ types',             template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2596,6 +2593,7 @@ async function sendMessage(): Promise<void> {
     '/agent:task', '/coverage:report',
     '/thread:stats', '/lint:fix:auto', '/note:add', '/gen:table',
     '/format:json', '/git:stash:apply', '/doc:project',
+    '/improve:prompt', '/gen:env', '/ask:selection', '/debug:console', '/convert:types',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -2693,6 +2691,24 @@ async function sendMessage(): Promise<void> {
     inputText.value = ''
     const syntheticCmdGSA: SlashCommand = { id: `/git:stash:apply ${stashIdx}`, label: `/git:stash:apply ${stashIdx}`, description: '', template: '' }
     void selectSlashCommand(syntheticCmdGSA)
+    return
+  }
+
+  // /explain:file <path> — with inline path argument
+  if (rawText.startsWith('/explain:file ')) {
+    inputText.value = ''
+    const filePath = rawText.slice('/explain:file '.length).trim()
+    const syntheticCmdEF: SlashCommand = { id: `/explain:file ${filePath}`, label: `/explain:file ${filePath}`, description: '', template: '' }
+    void selectSlashCommand(syntheticCmdEF)
+    return
+  }
+
+  // /ask:selection <question> — quick question about selection
+  if (rawText.startsWith('/ask:selection ')) {
+    inputText.value = ''
+    const question = rawText.slice('/ask:selection '.length).trim()
+    const syntheticCmdAS: SlashCommand = { id: `/ask:selection ${question}`, label: `/ask:selection ${question}`, description: '', template: '' }
+    void selectSlashCommand(syntheticCmdAS)
     return
   }
 
@@ -7108,6 +7124,135 @@ Return only the markdown table.`
     }
   }
 
+  // /improve:prompt — AI rewrites the current draft input
+  if (cmd.id === '/improve:prompt') {
+    const draft = inputText.value.trim()
+    if (!draft) { showToast('Type a draft message first, then use /improve:prompt'); return }
+    inputText.value = ''
+    addMsg({ role: 'user', content: `[improve:prompt] Rewrite and improve the following AI chat prompt for better clarity and results. Return ONLY the improved prompt text, no explanation:\n\n${draft}` })
+    void sendToBackend()
+    return
+  }
+
+  // /explain:file [path] — explain what a file does
+  if (cmd.id === '/explain:file' || cmd.id.startsWith('/explain:file ')) {
+    const argPath = cmd.id.startsWith('/explain:file ') ? cmd.id.slice('/explain:file '.length).trim() : ''
+    inputText.value = ''
+    const targetPath = argPath || activeFilePath.value || ''
+    if (!targetPath) { showToast('/explain:file: no file open or specified'); return }
+    const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+    if (!SAFE_PATH.test(targetPath) || targetPath.includes('..')) { showToast('Invalid file path'); return }
+    ;(async () => {
+      try {
+        const res = await window.api.invoke('fs.read_file', { path: targetPath })
+        const content = typeof res === 'string' ? res : (res as { content?: string })?.content ?? ''
+        const preview = content.length > 6000 ? content.slice(0, 6000) + '\n…[truncated]' : content
+        addMsg({ role: 'user', content: `Explain what the file \`${targetPath}\` does. Here is its content:
+\`\`\`
+${preview}
+\`\`\`` })
+        void sendToBackend()
+      } catch { showToast(`Cannot read file: ${targetPath}`) }
+    })()
+    return
+  }
+
+  // /git:log:file [path] — git log for a specific file
+  if (cmd.id === '/git:log:file' || cmd.id.startsWith('/git:log:file ')) {
+    const argPath = cmd.id.startsWith('/git:log:file ') ? cmd.id.slice('/git:log:file '.length).trim() : ''
+    inputText.value = ''
+    const targetPath = argPath || activeFilePath.value || ''
+    if (!targetPath) { showToast('/git:log:file: no file open or specified'); return }
+    const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+    if (!SAFE_PATH.test(targetPath) || targetPath.includes('..')) { showToast('Invalid file path'); return }
+    ;(async () => {
+      try {
+        const safeQ = targetPath.replace(/'/g, "'\''")
+        const res = await window.api.invoke('shell.run', { cmd: `git log --oneline --follow -20 -- '${safeQ}'` })
+        const log = (res as { stdout?: string })?.stdout?.trim() || '(no commits found)'
+        addMsg({ role: 'user', content: `Here is the git log for \`${targetPath}\` (last 20 commits):
+\`\`\`
+${log}
+\`\`\`
+Summarise the change history and explain the purpose of recent changes.` })
+        void sendToBackend()
+      } catch { showToast('git log failed') }
+    })()
+    return
+  }
+
+  // /gen:env — scan codebase for env var usage, generate .env.example
+  if (cmd.id === '/gen:env') {
+    inputText.value = ''
+    ;(async () => {
+      try {
+        const res = await window.api.invoke('shell.run', { cmd: "grep -rh --include='*.ts' --include='*.tsx' --include='*.vue' --include='*.py' --include='*.js' -o 'process\.env\.[A-Z_][A-Z0-9_]*\|os\.environ\[[^]]*\]\|os\.getenv([^)]*)' . 2>/dev/null | sort -u | head -80" })
+        const raw = (res as { stdout?: string })?.stdout?.trim() || ''
+        addMsg({ role: 'user', content: `I scanned my codebase for environment variable usage and found:
+\`\`\`
+${raw || '(none found)'}
+\`\`\`
+Please generate a well-commented \`.env.example\` file that documents all these variables with placeholder values and helpful comments for each one.` })
+        void sendToBackend()
+      } catch { showToast('env scan failed') }
+    })()
+    return
+  }
+
+  // /ask:selection [question] — ask about editor selection
+  if (cmd.id === '/ask:selection' || cmd.id.startsWith('/ask:selection ')) {
+    const question = cmd.id.startsWith('/ask:selection ') ? cmd.id.slice('/ask:selection '.length).trim() : 'Explain this code'
+    inputText.value = ''
+    ;(async () => {
+      try {
+        const selRes = await window.api.invoke('editor.get_selection', {})
+        const sel = (selRes as { text?: string; file?: string })
+        const selText = sel?.text?.trim() || ''
+        if (!selText) { showToast('/ask:selection: no text selected in editor'); return }
+        const filePart = sel?.file ? ` (from \`${sel.file}\`)` : ''
+        addMsg({ role: 'user', content: `${question}
+
+Selected code${filePart}:
+\`\`\`
+${selText.slice(0, 8000)}
+\`\`\`` })
+        void sendToBackend()
+      } catch {
+        showToast('/ask:selection requires editor selection support')
+      }
+    })()
+    return
+  }
+
+  // /debug:console — paste console output for AI interpretation
+  if (cmd.id === '/debug:console') {
+    inputText.value = ''
+    const termBuf = (() => { try { return localStorage.getItem('ai-chat-terminal-buffer') || '' } catch { return '' } })()
+    const preview = termBuf ? termBuf.slice(-4000) : ''
+    if (preview) {
+      addMsg({ role: 'user', content: `Here is recent console/terminal output. Please interpret the errors and suggest fixes:
+\`\`\`
+${preview}
+\`\`\`` })
+      void sendToBackend()
+    } else {
+      inputText.value = '[debug:console] Paste console output / log lines here, then press Enter for AI interpretation and fix suggestions:
+
+'
+      nextTick(() => { textareaEl.value?.focus() })
+    }
+    return
+  }
+
+  // /convert:types — convert between type systems
+  if (cmd.id === '/convert:types') {
+    inputText.value = '[convert:types] Paste the type definition to convert (e.g. Zod schema → TypeScript interface, Pydantic model → TypeScript, JSON Schema → types):
+
+'
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
   nextTick(() => {
     textareaEl.value?.focus()
     const len = inputText.value.length
@@ -10098,6 +10243,7 @@ function getDateLabel(ts: number): string {
           >
             <span class="ai-at-icon">{{ chipIcon(opt.id) || '◻' }}</span>
             <span class="ai-at-label-text">{{ opt.label }}</span>
+            <span v-if="opt._isRecent" class="ai-at-recent-badge" title="Recently used">↵</span>
           </div>
         </template>
       </div>
@@ -12206,6 +12352,14 @@ function getDateLabel(ts: number): string {
   user-select: none;
   border-top: 1px solid var(--border-muted);
   margin-top: 2px;
+}
+.ai-at-recent-badge {
+  font-size: 9px;
+  color: var(--accent-fg);
+  opacity: 0.65;
+  margin-left: auto;
+  padding-left: 4px;
+  user-select: none;
 }
 .ai-at-group-header:first-child {
   border-top: none;
