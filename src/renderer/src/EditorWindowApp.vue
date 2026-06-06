@@ -6,6 +6,7 @@ import SearchPane from './components/SearchPane.vue'
 import GitPane from './components/GitPane.vue'
 import EditorPane from './editor/EditorPane.vue'
 import DiffPane from './editor/DiffPane.vue'
+import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import AIChatPane from './components/AIChatPane.vue'
@@ -76,7 +77,8 @@ function onAiResizeEnd(): void {
 //    edits/undo survive tab switches. ──────────────────────────────────────────
 // kind='diff': relPath is a synthetic key (\x00diff:<staged>:<filepath>), filepath/staged hold the real values.
 // kind='conflict': relPath is a synthetic key (\x00conflict:<filepath>), filepath holds the real path.
-interface OpenFile { kind: 'file' | 'diff' | 'conflict'; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean }
+// kind='branch-diff': relPath is a synthetic key (\x00branch-diff:<base>), base holds the base branch.
+interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
 const initialSidebar = (['explorer', 'search', 'git'] as const).find(
@@ -281,6 +283,16 @@ function openConflict(p: { filepath: string; name?: string }): void {
   const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
   if (!openFiles.value.find((f) => f.relPath === tabKey)) {
     openFiles.value.push({ kind: 'conflict', relPath: tabKey, filepath: p.filepath, name, line: 0, dirty: false, revealSeq: 0 })
+  }
+  activeRel.value = tabKey
+}
+
+function openBranchDiff(p: { base: string; compare?: string }): void {
+  const base = p.base || 'main'
+  const tabKey = `\x00branch-diff:${base}`
+  const name = `Diff with ${base}`
+  if (!openFiles.value.find((f) => f.relPath === tabKey)) {
+    openFiles.value.push({ kind: 'branch-diff', relPath: tabKey, base, compare: p.compare ?? '', name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
 }
@@ -700,7 +712,8 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectCurrentWord',       label: 'Select Current Word' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
-  { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol',     keys: '⌘⇧O' },
+  { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol in File',     keys: '⌘⇧O' },
+  { id: 'workbench.action.gotoWorkspaceSymbol', label: 'Go to Symbol in Workspace', keys: '⌘T' },
   { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
   { id: 'editor.action.fontZoomIn',    label: 'Increase Font Size',     keys: '⌘=' },
   { id: 'editor.action.fontZoomOut',   label: 'Decrease Font Size',     keys: '⌘-' },
@@ -929,6 +942,51 @@ registerCommand('editor.action.fontZoomOut',   () => activeEditor()?.zoomOut())
 registerCommand('editor.action.fontZoomReset', () => activeEditor()?.zoomReset())
 registerCommand('editor.action.toggleLineNumbers', () => activeEditor()?.toggleLineNumbers())
 
+// ── Go to Symbol in Workspace (⌘T) ──────────────────────────────────────────
+interface WsymItem { name: string; kind: string; relPath: string; line: number }
+const wsymOpen = ref(false)
+const wsymQuery = ref('')
+const wsymIdx = ref(0)
+const wsymInputEl = ref<HTMLInputElement | null>(null)
+const wsymItems = computed<WsymItem[]>(() => {
+  if (!wsymOpen.value) return []
+  const all: WsymItem[] = []
+  for (const f of openFiles.value) {
+    if (f.kind !== 'file') continue
+    const content = editorPaneRefs.get(f.relPath)?.getContent?.() ?? ''
+    const ext = f.name.split('.').pop() ?? ''
+    for (const s of _extractSymbols(content, ext)) {
+      all.push({ name: s.name, kind: s.kind ?? '', relPath: f.relPath, line: s.line ?? 0 })
+    }
+    if (all.length >= 500) break
+  }
+  const q = wsymQuery.value.toLowerCase()
+  return q ? all.filter((s) => s.name.toLowerCase().includes(q)) : all
+})
+function openWorkspaceSymbol(): void {
+  wsymOpen.value = true
+  wsymQuery.value = ''
+  wsymIdx.value = 0
+  void nextTick(() => wsymInputEl.value?.focus())
+}
+function closeWorkspaceSymbol(): void { wsymOpen.value = false }
+function confirmWorkspaceSymbol(): void {
+  const item = wsymItems.value[wsymIdx.value]
+  if (item) {
+    openFile({ filepath: item.relPath, name: item.relPath.split('/').pop() ?? item.relPath, line: item.line })
+    void nextTick(() => activeEditor()?.jumpToLine(item.line))
+  }
+  closeWorkspaceSymbol()
+}
+function onWsymKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') { e.stopPropagation(); closeWorkspaceSymbol() }
+  else if (e.key === 'Enter') { e.preventDefault(); confirmWorkspaceSymbol() }
+  else if (e.key === 'ArrowDown') { e.preventDefault(); wsymIdx.value = Math.min(wsymIdx.value + 1, wsymItems.value.length - 1) }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); wsymIdx.value = Math.max(0, wsymIdx.value - 1) }
+}
+watch(wsymQuery, () => { wsymIdx.value = 0 })
+registerCommand('workbench.action.gotoWorkspaceSymbol', openWorkspaceSymbol)
+
 // ── Go to Symbol (⌘⇧O) ──────────────────────────────────────────────────────
 const symOpen = ref(false)
 const symQuery = ref('')
@@ -1073,7 +1131,7 @@ watch(themeQuery, () => { themeIdx.value = 0 })
 registerCommand('workbench.action.selectTheme', openThemePicker)
 
 // ── Modal context (any overlay open) → Escape can close via keybinding ────────
-const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || langOpen.value || kbOpen.value || themeOpen.value)
+const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || wsymOpen.value || langOpen.value || kbOpen.value || themeOpen.value)
 watch(anyOverlayOpen, (v) => setContext('modalOpen', v))
 
 // ── Close modal (Escape when any overlay is open) ────────────────────────────
@@ -1081,6 +1139,7 @@ registerCommand('workbench.action.closeModal', () => {
   if (paletteOpen.value) { closePalette(); return }
   if (qoOpen.value) { closeQuickOpen(); return }
   if (symOpen.value) { closeGotoSymbol(); return }
+  if (wsymOpen.value) { closeWorkspaceSymbol(); return }
   if (langOpen.value) { closeLangPicker(); return }
   if (kbOpen.value) { closeKeyboardShortcuts(); return }
   if (themeOpen.value) { closeThemePicker(true); return }
@@ -1399,6 +1458,32 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span v-if="l.ext" class="ide-palette-key">{{ l.ext }}</span>
         </li>
       </ul>
+    </div>
+  </div>
+  <!-- Go to Symbol in Workspace (⌘T) -->
+  <div v-if="wsymOpen" class="ide-palette-overlay" @mousedown.self="closeWorkspaceSymbol">
+    <div class="ide-palette">
+      <input
+        ref="wsymInputEl"
+        v-model="wsymQuery"
+        class="ide-palette-input"
+        placeholder="Go to symbol in workspace…"
+        @keydown="onWsymKeydown"
+      />
+      <ul v-if="wsymItems.length" class="ide-palette-list">
+        <li
+          v-for="(s, i) in wsymItems"
+          :key="s.relPath + s.name + s.line"
+          class="ide-palette-item"
+          :class="{ active: i === wsymIdx }"
+          @mouseover="wsymIdx = i"
+          @click="confirmWorkspaceSymbol"
+        >
+          <span class="ide-palette-label">{{ s.name }}</span>
+          <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · {{ s.relPath.split('/').pop() }}:{{ s.line }}</span>
+        </li>
+      </ul>
+      <div v-else class="ide-palette-empty">No symbols found in open files</div>
     </div>
   </div>
   <!-- Go to Symbol -->
