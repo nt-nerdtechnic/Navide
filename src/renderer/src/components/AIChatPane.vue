@@ -1810,6 +1810,25 @@ function selectSlashCommand(cmd: SlashCommand): void {
     return
   }
   inputText.value = cmd.template + ' '
+
+  // Auto-inject current file chip for code-focused commands when no chip exists yet
+  const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve'])
+  if (CODE_CMDS.has(cmd.id) && contextChips.value.length === 0) {
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (relPath && content !== undefined) {
+      const ext = relPath.split('.').pop() ?? ''
+      const label = `@${relPath.split('/').pop()}`
+      if (!contextChips.value.some((c) => c.label === label)) {
+        contextChips.value.push({
+          id: crypto.randomUUID(),
+          label,
+          content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``,
+        })
+      }
+    }
+  }
+
   nextTick(() => {
     textareaEl.value?.focus()
     const len = inputText.value.length
