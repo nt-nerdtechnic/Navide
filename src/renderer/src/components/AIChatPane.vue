@@ -371,6 +371,8 @@ async function confirmApply(): Promise<void> {
         }).catch(() => showToast('Revert failed'))
       })
       s.btn.insertAdjacentElement('afterend', revertBtn)
+    } else {
+      window.setTimeout(() => { s.btn.textContent = 'Apply'; s.btn.style.color = '' }, 2000)
     }
   }).catch(() => showToast('Apply failed'))
 }
@@ -2556,6 +2558,10 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     if (messages.value.length > 0) saveCheckpoint()
   }
+  // Escape while diff-apply modal is open — cancel apply regardless of focus
+  if (e.key === 'Escape' && diffApplyState.value) {
+    diffApplyState.value = null
+  }
 }
 
 // ── Backend event listeners ────────────────────────────────────────────────────
@@ -4450,12 +4456,6 @@ function onTextareaKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && sending.value) {
     e.preventDefault()
     stopStreaming()
-    return
-  }
-
-  // Escape while diff-apply modal is open — cancel apply
-  if (e.key === 'Escape' && diffApplyState.value) {
-    diffApplyState.value = null
     return
   }
 
