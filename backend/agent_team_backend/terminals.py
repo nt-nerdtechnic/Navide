@@ -201,6 +201,7 @@ class TerminalService:
                     env=final_env,
                     check=True,
                     capture_output=True,
+                    timeout=10,
                 )
                 _session_created = True
                 proc = subprocess.Popen(
@@ -213,13 +214,13 @@ class TerminalService:
                     close_fds=True,
                     start_new_session=True,
                 )
-            except (subprocess.CalledProcessError, OSError) as err:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
                 log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
                 if _session_created:
                     # new-session succeeded but attach failed — clean up to avoid orphan session
                     subprocess.run(
                         ["tmux", "kill-session", "-t", tmux_name],
-                        capture_output=True, check=False,
+                        capture_output=True, check=False, timeout=5,
                     )
                 tmux_name = ""
                 proc = subprocess.Popen(
@@ -361,9 +362,9 @@ class TerminalService:
                 subprocess.run(
                     ["tmux", "resize-window", "-t", session.tmux_name,
                      "-x", str(cols), "-y", str(rows)],
-                    capture_output=True,
+                    capture_output=True, timeout=5,
                 )
-            except OSError:
+            except (OSError, subprocess.TimeoutExpired):
                 pass
 
     def interrupt(self, session_id: str) -> None:
@@ -389,9 +390,9 @@ class TerminalService:
             try:
                 subprocess.run(
                     ["tmux", "kill-session", "-t", tmux_name],
-                    capture_output=True,
+                    capture_output=True, timeout=5,
                 )
-            except OSError:
+            except (OSError, subprocess.TimeoutExpired):
                 pass
 
     def shutdown(self) -> None:
