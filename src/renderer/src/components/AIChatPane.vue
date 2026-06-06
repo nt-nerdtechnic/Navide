@@ -2242,6 +2242,17 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // /rename <title> — rename current thread
+  if (rawText.startsWith('/rename ')) {
+    const newTitle = rawText.slice('/rename '.length).trim()
+    if (newTitle) {
+      const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+      if (ct) { ct.title = newTitle; saveCurrentThread(); showToast('Thread renamed') }
+    }
+    inputText.value = ''
+    return
+  }
+
   // /checkpoint [name] — save current conversation snapshot
   if (rawText === '/checkpoint' || rawText.startsWith('/checkpoint ')) {
     const name = rawText.slice('/checkpoint'.length).trim()
@@ -3815,16 +3826,14 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   }
 
   if (cmd.id === '/rename') {
-    inputText.value = ''
     const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
     if (!ct) { showToast('No active thread'); return }
-    // Pre-fill from first user message (smart suggestion)
     const firstUser = messages.value.find((m) => m.role === 'user')
     const suggested = firstUser
       ? firstUser.content.replace(/@\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 60)
       : ct.title
-    const newTitle = window.prompt('Rename chat thread:', suggested)
-    if (newTitle?.trim()) { ct.title = newTitle.trim(); saveCurrentThread(); showToast('Thread renamed') }
+    inputText.value = `/rename ${suggested}`
+    nextTick(() => { textareaEl.value?.focus(); textareaEl.value?.select() })
     return
   }
 
