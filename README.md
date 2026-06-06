@@ -1,4 +1,4 @@
-# Navide (Navide (Agent-Team))
+# Navide (Agent-Team)
 
 > **Run Claude Code, Codex, and Gemini CLI simultaneously — orchestrated across an SDLC pipeline with automated handoffs and multi-agent coordination.**
 
@@ -12,12 +12,12 @@
 
 ---
 
-## Why Navide (Navide (Agent-Team))?
+## Why Navide (Agent-Team)?
 
 A single AI coding agent has its limits — complex tasks require waiting, context is finite, and a single role can only cover so much.
-**Navide (Navide (Agent-Team)) lets you run multiple agents in parallel, each with a dedicated role, passing outputs to one another like a real engineering team.**
+**Navide (Agent-Team) lets you run multiple agents in parallel, each with a dedicated role, passing outputs to one another like a real engineering team.**
 
-| Pain point | Navide (Navide (Agent-Team))'s solution |
+| Pain point | Navide (Agent-Team)'s solution |
 |---|---|
 | One agent must finish requirements before design, then implementation — lots of waiting | Multiple agents run **in parallel** within a Stage; the next Stage starts automatically when all complete |
 | Different tasks need different mindsets (PM, Backend, QA) | Each pane automatically injects the matching **Role System Prompt** |
@@ -31,7 +31,7 @@ A single AI coding agent has its limits — complex tasks require waiting, conte
 
 ### 🚀 4-Stage SDLC Pipeline (Fully Automated)
 
-Give it a task description and Navide (Navide (Agent-Team)) automatically runs Requirements → Design → Implementation → Testing, using the right agent and role at each stage.
+Give it a task description and Navide (Agent-Team) automatically runs Requirements → Design → Implementation → Testing, using the right agent and role at each stage.
 
 ```
 ▶ Run pipeline  →  Stage 01 Requirements  →  Stage 02 Design       →  Stage 03 Implementation  →  Stage 04 QA

@@ -1,4 +1,4 @@
-# Navide (Navide (Agent-Team))
+# Navide (Agent-Team)
 
 > **把 Claude Code、Codex、Gemini CLI 同時跑起來，讓它們照 SDLC 流程分工、協作、自動推進。**
 
@@ -12,12 +12,12 @@
 
 ---
 
-## 為什麼需要 Navide (Navide (Agent-Team))？
+## 為什麼需要 Navide (Agent-Team)？
 
 單一 AI coding agent 有它的極限——複雜任務需要等待、上下文有限、角色單一。
-**Navide (Navide (Agent-Team)) 讓你同時開多個 agent、各司其職、輸出互相傳遞，像一支真正的工程團隊。**
+**Navide (Agent-Team) 讓你同時開多個 agent、各司其職、輸出互相傳遞，像一支真正的工程團隊。**
 
-| 痛點 | Navide (Navide (Agent-Team)) 的解法 |
+| 痛點 | Navide (Agent-Team) 的解法 |
 |---|---|
 | 一個 agent 做完需求再做設計、再做實作，排隊等待 | 多 agent **並行**跑同一 Stage，完成後自動推進下一 Stage |
 | 不同任務需要不同思維（PM、Backend、QA）| 每個 pane 自動注入對應 **Role System Prompt** |
@@ -31,7 +31,7 @@
 
 ### 🚀 4-Stage SDLC Pipeline（全自動）
 
-給一段任務描述，Navide (Navide (Agent-Team)) 自動依序跑完需求分析 → 設計 → 實作 → 測試，每個 Stage 用對的 agent + 對的角色。
+給一段任務描述，Navide (Agent-Team) 自動依序跑完需求分析 → 設計 → 實作 → 測試，每個 Stage 用對的 agent + 對的角色。
 
 ```
 ▶ Run pipeline  →  Stage 01 需求分析  →  Stage 02 設計規劃  →  Stage 03 實作  →  Stage 04 測試驗收
