@@ -518,6 +518,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/improve',   label: '/improve',   description: 'Suggest improvements', template: 'Suggest concrete improvements for the following code in terms of readability, maintainability, and best practices:\n\n' },
   { id: '/commit',    label: '/commit',    description: 'AI commit message',   template: 'Generate a concise git commit message (conventional commits format) for the following changes:\n\n' },
   { id: '/summarize', label: '/summarize', description: 'Summarize conversation', template: '' },
+  { id: '/run',      label: '/run',      description: 'Run shell command',       template: '' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
 ]
@@ -1049,6 +1050,30 @@ async function sendMessage(): Promise<void> {
   const rawText = inputText.value.trim()
   if (!rawText && contextChips.value.length === 0) return
   if (sending.value) return
+
+  // /run <cmd> — execute shell command and add output as message
+  if (rawText.startsWith('/run ')) {
+    const cmd = rawText.slice('/run '.length).trim()
+    if (!cmd) { showToast('Usage: /run <command>'); return }
+    if (!props.workspacePath) { showToast('/run requires an open workspace'); return }
+    if (!window.confirm(`Run in workspace?\n\n${cmd}`)) return
+    inputText.value = ''
+    messages.value.push({ role: 'user', content: `/run ${cmd}`, timestamp: Date.now() })
+    try {
+      interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: cmd, workspace_path: props.workspacePath,
+      })
+      const r = resp.payload
+      const out = r?.ok
+        ? `\`\`\`\n${r.output ?? '(no output)'}\n\`\`\`\n_Exit code: ${r.exit_code ?? 0}_`
+        : `Error: ${r?.error ?? 'unknown'}`
+      messages.value.push({ role: 'assistant', content: out, timestamp: Date.now() })
+    } catch { messages.value.push({ role: 'assistant', content: 'Command failed', isError: true, timestamp: Date.now() }) }
+    _scheduleSave()
+    return
+  }
+
   followUps.value = []
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
@@ -1604,6 +1629,12 @@ function onTextareaInput(e: Event): void {
 
 function selectSlashCommand(cmd: SlashCommand): void {
   showSlashMenu.value = false
+  if (cmd.id === '/run') {
+    // Let user type the command after /run
+    inputText.value = '/run '
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
   if (cmd.id === '/summarize') {
     if (messages.value.length < 2) { showToast('Nothing to summarize yet'); return }
     const count = messages.value.length
@@ -1892,13 +1923,26 @@ async function selectAtOption(option: AtOption): Promise<void> {
       } else {
         try {
           showToast('Fetching URL…')
-          const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-          // Cap at 256 KB before processing to avoid memory DoS
-          const contentLength = parseInt(resp.headers.get('content-length') ?? '0', 10)
-          if (contentLength > 262_144) {
-            chipContent = `// @url: response too large (${(contentLength / 1024).toFixed(0)} KB, limit 256 KB)`
+          // redirect:'error' prevents server redirect bypassing host allowlist
+          const resp = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10_000) })
+          // Stream body with hard 256 KB cap — Content-Length is untrustworthy
+          const reader = resp.body?.getReader()
+          let bodyText = ''
+          if (reader) {
+            let total = 0
+            const dec = new TextDecoder()
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              total += value.byteLength
+              if (total > 262_144) { await reader.cancel(); bodyText = ''; break }
+              bodyText += dec.decode(value, { stream: true })
+            }
+          }
+          if (!bodyText) {
+            chipContent = '// @url: response too large or unreadable (limit 256 KB)'
           } else {
-            const text = await resp.text()
+            const text = bodyText
             // Use DOMParser for proper HTML-to-text (handles entities, avoids regex bypass)
             const doc = new DOMParser().parseFromString(text.slice(0, 512_000), 'text/html')
             doc.querySelectorAll('script,style,noscript').forEach((el) => el.remove())
@@ -1908,7 +1952,8 @@ async function selectAtOption(option: AtOption): Promise<void> {
               .replace(/\s{2,}/g, ' ')
               .trim()
               .slice(0, 4000)
-            // Wrap in explicit fence so AI knows this is untrusted data, not instructions
+              // Prevent escaping the untrusted fence tag
+              .replace(/<\/?untrusted_web_content[^>]*>/gi, '')
             chipContent = `<untrusted_web_content url="${url}">\n${raw}\n</untrusted_web_content>`
           }
         } catch {
@@ -2457,7 +2502,7 @@ function getDateLabel(ts: number): string {
           v-for="chip in contextChips"
           :key="chip.id"
           class="ai-chip"
-          :title="`~${Math.ceil(chip.content.length / 4).toLocaleString()} tokens`"
+          :title="`${chip.content.slice(0, 200)}${chip.content.length > 200 ? '…' : ''}\n\n~${Math.ceil(chip.content.length / 4).toLocaleString()} tokens`"
         >
           {{ chip.label }}
           <span class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
