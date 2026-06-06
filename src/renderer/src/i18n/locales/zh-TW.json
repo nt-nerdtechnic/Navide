@@ -81,7 +81,21 @@
     "add-stage": "+ 新增階段",
     "add-slot": "+ 新增插槽",
     "remove-slot": "移除插槽",
-    "create": "建立"
+    "create": "建立",
+    "rename": "重新命名",
+    "close-settings-run": "關閉設定並前往執行",
+    "clear-color-override": "清除此顏色覆蓋",
+    "click-to-zoom": "點擊放大",
+    "quote-reply": "引用回覆",
+    "add-as-context": "將回應加入下一則訊息的上下文",
+    "delete-exchange": "刪除此對話",
+    "regenerate": "重新生成",
+    "regenerate-with-model": "以不同模型重新生成",
+    "good-response": "良好回應",
+    "bad-response": "不良回應",
+    "clear-working-set": "清除工作集",
+    "add-memory": "新增記憶",
+    "pin-file-path": "固定檔案路徑以永遠包含"
   },
   "settings": {
     "appearance": {
