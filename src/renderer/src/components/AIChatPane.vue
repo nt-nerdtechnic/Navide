@@ -991,7 +991,18 @@ function buildFileTree(files: string[]): string {
   return lines.join('\n')
 }
 
-// ── Tool call human-readable summary ─────────────────────────────────────────
+// ── Tool call human-readable summary + icon ──────────────────────────────────
+function getToolIcon(name: string): string {
+  switch (name) {
+    case 'read_file':      return '▤'
+    case 'search_files':   return '⌕'
+    case 'edit_file':      return '✎'
+    case 'run_command':    return '▶'
+    case 'list_directory': return '⊞'
+    default:               return '⚙'
+  }
+}
+
 function getToolSummary(name: string, input: unknown): string {
   if (typeof input !== 'object' || input === null) return name
   const inp = input as Record<string, unknown>
@@ -1839,21 +1850,44 @@ async function selectAtOption(option: AtOption): Promise<void> {
   } else if (option.id.startsWith('@url:')) {
     const url = option.id.slice('@url:'.length).trim()
     chipLabel = `@url:${url.replace(/^https?:\/\//, '').slice(0, 40)}`
-    try {
-      showToast('Fetching URL…')
-      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) })
-      const text = await resp.text()
-      // Strip HTML tags for cleaner context
-      const stripped = text
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s{2,}/g, ' ')
-        .trim()
-        .slice(0, 4000)
-      chipContent = `// URL: ${url}\n${stripped}`
-    } catch {
-      chipContent = `// @url: failed to fetch ${url}`
+    // Validate: only allow http/https and reject obviously private/internal hosts
+    let parsedUrl: URL
+    try { parsedUrl = new URL(url) } catch { chipContent = '// @url: invalid URL'; /* falls through */ parsedUrl = null as unknown as URL }
+    if (!parsedUrl) {
+      // chipContent already set above
+    } else if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      chipContent = '// @url: only http/https URLs are allowed'
+    } else {
+      const host = parsedUrl.hostname.toLowerCase()
+      const BLOCKED = /^(localhost|127\.|0\.0\.0\.0|::1|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|100\.6[4-9]\.|100\.[7-9]\d\.|fc00:|fe80:)/
+      if (BLOCKED.test(host)) {
+        chipContent = `// @url: private/internal addresses are not allowed (${host})`
+      } else {
+        try {
+          showToast('Fetching URL…')
+          const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+          // Cap at 256 KB before processing to avoid memory DoS
+          const contentLength = parseInt(resp.headers.get('content-length') ?? '0', 10)
+          if (contentLength > 262_144) {
+            chipContent = `// @url: response too large (${(contentLength / 1024).toFixed(0)} KB, limit 256 KB)`
+          } else {
+            const text = await resp.text()
+            // Use DOMParser for proper HTML-to-text (handles entities, avoids regex bypass)
+            const doc = new DOMParser().parseFromString(text.slice(0, 512_000), 'text/html')
+            doc.querySelectorAll('script,style,noscript').forEach((el) => el.remove())
+            // Normalize invisible/bidi override Unicode that could be used for prompt injection
+            const raw = (doc.body?.textContent ?? doc.documentElement.textContent ?? '')
+              .replace(/[ ---​-‏‪-‮﻿]/g, '')
+              .replace(/\s{2,}/g, ' ')
+              .trim()
+              .slice(0, 4000)
+            // Wrap in explicit fence so AI knows this is untrusted data, not instructions
+            chipContent = `<untrusted_web_content url="${url}">\n${raw}\n</untrusted_web_content>`
+          }
+        } catch {
+          chipContent = `// @url: failed to fetch ${url}`
+        }
+      }
     }
   } else if (option.id === '@clipboard') {
     chipLabel = '@clipboard'
