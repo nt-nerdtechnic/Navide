@@ -1822,6 +1822,8 @@ onUnmounted(() => {
 watch(() => props.modelValue, (v) => {
   if (v !== model.getValue()) {
     model.setValue(v)
+    undo.clear()
+    foldedLines.value = new Set()
     _maxLineLenCache = -1
     _tokCache = []
     _tokInvalidFrom = 0
