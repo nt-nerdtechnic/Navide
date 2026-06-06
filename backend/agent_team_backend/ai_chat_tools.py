@@ -532,9 +532,9 @@ async def run_agent_loop(
     max_tokens = int(settings.get("max_tokens", 4096))
     provider = settings.get("provider", "ollama")
 
-    # Tools are supported for Anthropic and OpenAI-compatible providers
-    # (Ollama supports tool-calling only on select models; disable to keep it simple)
-    _TOOL_PROVIDERS = {"anthropic", "openai", "groq", "deepseek", "mistral", "xai", "openai_compatible"}
+    # Tools are supported for Anthropic, OpenAI-compatible providers, and Ollama
+    # (Ollama supports function calling on llama3.1+, qwen2.5-coder, etc.)
+    _TOOL_PROVIDERS = {"anthropic", "openai", "groq", "deepseek", "mistral", "xai", "openai_compatible", "ollama"}
     tools = TOOL_DEFS if provider in _TOOL_PROVIDERS else None
 
     # Work on a copy so we don't mutate the caller's list

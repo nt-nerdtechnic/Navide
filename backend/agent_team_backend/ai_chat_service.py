@@ -56,7 +56,7 @@ async def stream_chat(
         async for chunk in _stream_openai_compatible(provider, settings, messages, system, max_tokens, tools):
             yield chunk
     else:
-        async for chunk in _stream_ollama(settings, messages, system, max_tokens):
+        async for chunk in _stream_ollama(settings, messages, system, max_tokens, tools):
             yield chunk
 
 
@@ -354,11 +354,24 @@ async def _stream_openai_compatible(
 
 # ── Ollama ───────────────────────────────────────────────────────────────────
 
+def _convert_messages_to_ollama(messages: list[dict]) -> list[dict]:
+    """Convert Anthropic-format multi-turn messages to Ollama format.
+
+    Ollama accepts the same structure as OpenAI except:
+    - tool_calls[].function.arguments must be a JSON *string* (Ollama also sends
+      it as a dict on the response side, but for requests it accepts either form).
+    We reuse the OpenAI converter since Ollama tolerates tool_call_id in tool
+    result messages and accepts the same assistant/tool message shapes.
+    """
+    return _convert_messages_to_openai(messages)
+
+
 async def _stream_ollama(
     settings: dict,
     messages: list[dict],
     system: str,
     max_tokens: int,
+    tools: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     try:
         import httpx
@@ -368,17 +381,22 @@ async def _stream_ollama(
     base_url = settings.get("ollama_base_url", "http://localhost:11434").rstrip("/")
     model = settings.get("ollama_model", _CHAT_DEFAULTS["ollama_model"])
 
-    # Prepend system as a system-role message if provided and not already present
-    full_messages = list(messages)
+    # Convert Anthropic-format messages to Ollama format
+    converted = _convert_messages_to_ollama(list(messages))
+    full_messages = converted
     if system and (not full_messages or full_messages[0].get("role") != "system"):
         full_messages = [{"role": "system", "content": system}] + full_messages
 
-    body = {
+    body: dict = {
         "model": model,
         "messages": full_messages,
         "stream": True,
         "options": {"num_predict": max_tokens},
     }
+    if tools:
+        body["tools"] = _to_openai_tools(tools)
+
+    done_message: dict = {}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream("POST", f"{base_url}/api/chat", json=body) as resp:
@@ -391,9 +409,29 @@ async def _stream_ollama(
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                text = data.get("message", {}).get("content", "")
+                msg = data.get("message") or {}
+                text = msg.get("content", "")
                 if text:
                     yield text
                 if data.get("done"):
-                    yield "\x00DONE:" + json.dumps({"model": model})
+                    done_message = msg
                     break
+
+    # Emit tool calls from the final done-message (Ollama accumulates them there)
+    for tc in done_message.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        # Ollama returns arguments as a dict; OpenAI returns a JSON string — handle both
+        raw_args = fn.get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                raw_args = {}
+        tc_id = tc.get("id") or f"ollama-{fn.get('name', 'tool')}"
+        yield "\x00TOOL:" + json.dumps({
+            "id": tc_id,
+            "name": fn.get("name", ""),
+            "input": raw_args,
+        })
+
+    yield "\x00DONE:" + json.dumps({"model": model})

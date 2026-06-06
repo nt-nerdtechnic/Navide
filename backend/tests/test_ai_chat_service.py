@@ -71,7 +71,7 @@ async def test_stream_chat_max_tokens_capped() -> None:
     """max_tokens above 16 000 must be clamped."""
     captured: list[int] = []
 
-    async def fake_ollama(settings, messages, system, max_tokens):
+    async def fake_ollama(settings, messages, system, max_tokens, tools=None):
         captured.append(max_tokens)
         return
         yield  # make it a generator

@@ -189,40 +189,52 @@ class TerminalService:
         if env:
             final_env.update(env)
 
-        tmux_name = ""
-        if self._use_tmux and not skip_tmux:
-            tmux_name = _make_tmux_name(pane_id)
-            _session_created = False
-            try:
-                subprocess.run(
-                    ["tmux", "new-session", "-d", "-s", tmux_name,
-                     "-x", str(cols), "-y", str(rows)] + argv,
-                    cwd=cwd,
-                    env=final_env,
-                    check=True,
-                    capture_output=True,
-                    timeout=10,
-                )
-                _session_created = True
-                proc = subprocess.Popen(
-                    ["tmux", "attach-session", "-t", tmux_name, "-d"],
-                    stdin=slave,
-                    stdout=slave,
-                    stderr=slave,
-                    cwd=cwd,
-                    env=final_env,
-                    close_fds=True,
-                    start_new_session=True,
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
-                log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
-                if _session_created:
-                    # new-session succeeded but attach failed — clean up to avoid orphan session
+        try:
+            tmux_name = ""
+            if self._use_tmux and not skip_tmux:
+                tmux_name = _make_tmux_name(pane_id)
+                _session_created = False
+                try:
                     subprocess.run(
-                        ["tmux", "kill-session", "-t", tmux_name],
-                        capture_output=True, check=False, timeout=5,
+                        ["tmux", "new-session", "-d", "-s", tmux_name,
+                         "-x", str(cols), "-y", str(rows)] + argv,
+                        cwd=cwd,
+                        env=final_env,
+                        check=True,
+                        capture_output=True,
+                        timeout=10,
                     )
-                tmux_name = ""
+                    _session_created = True
+                    proc = subprocess.Popen(
+                        ["tmux", "attach-session", "-t", tmux_name, "-d"],
+                        stdin=slave,
+                        stdout=slave,
+                        stderr=slave,
+                        cwd=cwd,
+                        env=final_env,
+                        close_fds=True,
+                        start_new_session=True,
+                    )
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as err:
+                    log.warning("tmux spawn failed (%s); falling back to plain PTY", err)
+                    if _session_created:
+                        # new-session succeeded but attach failed — clean up to avoid orphan session
+                        subprocess.run(
+                            ["tmux", "kill-session", "-t", tmux_name],
+                            capture_output=True, check=False, timeout=5,
+                        )
+                    tmux_name = ""
+                    proc = subprocess.Popen(
+                        argv,
+                        stdin=slave,
+                        stdout=slave,
+                        stderr=slave,
+                        cwd=cwd,
+                        env=final_env,
+                        close_fds=True,
+                        start_new_session=True,
+                    )
+            else:
                 proc = subprocess.Popen(
                     argv,
                     stdin=slave,
@@ -233,17 +245,10 @@ class TerminalService:
                     close_fds=True,
                     start_new_session=True,
                 )
-        else:
-            proc = subprocess.Popen(
-                argv,
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                cwd=cwd,
-                env=final_env,
-                close_fds=True,
-                start_new_session=True,
-            )
+        except Exception:
+            os.close(master)
+            os.close(slave)
+            raise
         os.close(slave)
 
         # Open output log file if requested (pipeline panes pass a path).
