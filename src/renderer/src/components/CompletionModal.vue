@@ -53,6 +53,8 @@ onMounted(() => {
   const canvas = canvasRef.value
   if (!canvas) return
   const ctx = canvas.getContext('2d')!
+  const isLight = document.documentElement.dataset.theme === 'light'
+  const trailFill = isLight ? 'rgba(240, 245, 255, 0.26)' : 'rgba(10, 10, 20, 0.18)'
 
   _resizeFn = () => {
     canvas!.width = window.innerWidth
@@ -69,7 +71,7 @@ onMounted(() => {
 
   function tick(t: number) {
     // Semi-transparent fill for trail effect
-    ctx.fillStyle = 'rgba(10, 10, 20, 0.18)'
+    ctx.fillStyle = trailFill
     ctx.fillRect(0, 0, canvas!.width, canvas!.height)
 
     // New burst every ~700 ms
@@ -135,9 +137,14 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Transparent so canvas shows through */
   background: transparent;
   -webkit-app-region: no-drag;
+}
+
+:root[data-theme='light'] .comp-overlay {
+  background: rgba(210, 225, 255, 0.5);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .comp-canvas {
@@ -160,6 +167,15 @@ onUnmounted(() => {
   max-width: 420px;
   width: 90%;
   animation: pop-in 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+:root[data-theme='light'] .comp-card {
+  background: linear-gradient(145deg, #ffffff 0%, #f5f0ff 55%, #fff9e8 100%);
+  border: 1.5px solid rgba(130, 80, 220, 0.22);
+  box-shadow:
+    0 0 0 5px rgba(255, 215, 0, 0.07),
+    0 0 60px rgba(130, 80, 220, 0.13),
+    0 24px 60px rgba(31, 35, 40, 0.1);
 }
 
 @keyframes pop-in {
@@ -201,6 +217,14 @@ onUnmounted(() => {
   font-size: 13px;
   color: rgba(255,255,255,0.45);
   margin: 0 0 28px;
+}
+
+:root[data-theme='light'] .comp-sub {
+  color: var(--text-primary);
+}
+
+:root[data-theme='light'] .comp-sub2 {
+  color: var(--text-secondary);
 }
 
 .comp-btn {

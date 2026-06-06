@@ -1363,7 +1363,7 @@ async function plDelete(id: string, name: string) {
                       </div>
                       <div class="item-label">
                         {{ s.shortTitle }}
-                        <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`Commander: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
+                        <span v-if="s.slots.some(sl => sl.isCommander)" class="manager-badge" :title="`Manager: ${s.slots.find(sl => sl.isCommander)?.label}`">🎯</span>
                       </div>
                       <div class="item-sub">
                         {{ s.slots.length === 1 ? `${s.slots[0].agentKey} · ${s.slots[0].roleKey}` : `${s.slots.length} parallel slots` }}
@@ -1402,7 +1402,7 @@ async function plDelete(id: string, name: string) {
                     <template v-for="(slot, i) in sDraft.slots" :key="i">
                       <div v-if="sEditingSlotIndex !== i" class="slot-item slot-clickable" @click="sStartEditSlot(i)">
                         <div class="row-g spread">
-                          <span class="item-label">{{ slot.label }}<span v-if="slot.isCommander" class="manager-badge">🎯 Commander</span></span>
+                          <span class="item-label">{{ slot.label }}<span v-if="slot.isCommander" class="manager-badge">🎯 Manager</span></span>
                           <button class="ghost danger-link" @click.stop="sRemoveSlot(i)" :disabled="sDraft.slots.length <= 1" title="Cannot delete the last slot">✕</button>
                         </div>
                         <div class="item-sub">{{ slot.agentKey }} · {{ slot.roleKey }}</div>
@@ -1420,7 +1420,7 @@ async function plDelete(id: string, name: string) {
                         </div>
                         <label class="check-row manager-toggle">
                           <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                          <span><strong>🎯 Designate as global commander</strong> — This slot finishes its own work, prints <code>---MANAGER-READY---</code>, then coordinates across stages. Only one commander per pipeline.</span>
+                          <span><strong>🎯 Designate as global manager</strong> — This slot finishes its own work, prints <code>---MANAGER-READY---</code>, then coordinates across stages. Only one manager per pipeline.</span>
                         </label>
                         <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                         <div class="row-g gap">
@@ -1442,7 +1442,7 @@ async function plDelete(id: string, name: string) {
                       </div>
                       <label class="check-row manager-toggle">
                         <input type="checkbox" v-model="sSlotDraft.isCommander" />
-                        <span><strong>🎯 Designate as global commander</strong> — Only one per pipeline.</span>
+                        <span><strong>🎯 Designate as global manager</strong> — Only one per pipeline.</span>
                       </label>
                       <div class="field"><label class="lbl">Kickoff body</label><textarea v-model="sSlotDraft.kickoffBody" rows="4" spellcheck="false"></textarea></div>
                       <div class="row-g gap">

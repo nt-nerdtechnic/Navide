@@ -629,7 +629,7 @@ function onExplorerDividerEnd(): void {
                 :model-value="layoutMode ?? 'auto'"
                 @update:model-value="emit('update:layoutMode', $event)"
               />
-              <button class="history-btn" @click="emit('open-history')">📋 History</button>
+              <button class="history-btn" title="History" @click="emit('open-history')">📋</button>
             </div>
           </div>
           <div v-if="panes.length === 0" class="empty">No agents running.</div>
@@ -1454,8 +1454,9 @@ button.link {
   top: 0;
   z-index: 2;
   background: var(--bg-base);
-  margin: 0 -14px;
-  padding: 4px 14px 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-muted);
+  margin-bottom: 4px;
 }
 .agent-header-actions {
   display: flex;
@@ -1466,13 +1467,15 @@ button.history-btn {
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
-  font-size: 12px;
-  padding: 0 8px;
+  font-size: 14px;
+  padding: 0;
+  width: 32px;
   height: 32px;
   border-radius: 4px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 button.history-btn:hover {
   color: var(--text-bright);

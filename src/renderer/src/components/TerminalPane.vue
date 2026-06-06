@@ -78,18 +78,18 @@ onMounted(() => {
       @click="emit('set-focus')"
       @dragstart="onHeaderDragStart"
     >
-      <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
-      <span class="title">{{ title }}</span>
-      <span v-if="subtitle" class="subtitle">{{ subtitle }}</span>
-      <span
-        class="status"
-        :data-status="displayStatus"
-        :title="displayStatus === 'idle' ? 'Process still alive, but agent has finished the last turn and is at an interactive prompt' : ''"
-      >{{ displayStatus }}</span>
+      <div class="header-main">
+        <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
+        <span class="title">{{ title }}</span>
+        <span v-if="isCommander" class="commander-inline" title="Global Manager — coordinates across stages, decides ---STAGE-DONE---">🎯 Mgr</span>
+        <span
+          class="status"
+          :data-status="displayStatus"
+          :title="displayStatus === 'idle' ? 'Process still alive, but agent has finished the last turn and is at an interactive prompt' : ''"
+        >{{ displayStatus }}</span>
+      </div>
+      <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
     </header>
-    <div v-if="isCommander" class="manager-row">
-      <span class="manager-tag" title="Global Commander — coordinates across stages, decides ---STAGE-DONE---">🎯 Commander</span>
-    </div>
     <div
       ref="containerRef"
       class="xterm-host"
@@ -160,38 +160,41 @@ onMounted(() => {
 }
 .pane-header {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 32px 6px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 5px 32px 5px 12px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   font-size: 12px;
   color: var(--text-primary);
 }
+.header-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-sub {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .title {
   font-weight: 600;
 }
-.manager-row {
-  /* Own row below header so the 🎯 Manager pill doesn't squeeze the title /
-   * subtitle / status into wrapping. */
-  padding: 4px 12px 6px;
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border-muted);
-}
-.manager-tag {
-  display: inline-block;
-  font-size: 10px;
+.commander-inline {
+  font-size: 9px;
   font-weight: 600;
   color: var(--attention-fg);
   background: var(--attention-subtle);
   border: 1px solid var(--attention-muted);
-  border-radius: 10px;
-  padding: 1px 8px;
-  letter-spacing: 0.3px;
-}
-.subtitle {
-  color: var(--text-secondary);
-  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 6px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .status {
   margin-left: auto;
