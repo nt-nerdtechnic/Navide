@@ -1370,12 +1370,12 @@ function _pushSettingsToBackend(): void {
 function saveSettings(): void {
   _pushSettingsToBackend()
   localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
-  if (settingsOpenAiKey.value) localStorage.setItem('ai-chat-openai-key', settingsOpenAiKey.value)
-  if (settingsGroqKey.value) localStorage.setItem('ai-chat-groq-key', settingsGroqKey.value)
-  if (settingsDeepSeekKey.value) localStorage.setItem('ai-chat-deepseek-key', settingsDeepSeekKey.value)
-  if (settingsOaiCompatUrl.value) localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
-  if (settingsOaiCompatKey.value) localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
-  if (settingsOaiCompatModel.value) localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
+  localStorage.setItem('ai-chat-openai-key', settingsOpenAiKey.value)
+  localStorage.setItem('ai-chat-groq-key', settingsGroqKey.value)
+  localStorage.setItem('ai-chat-deepseek-key', settingsDeepSeekKey.value)
+  localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
+  localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
+  localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   showSettings.value = false
   showToast('Settings saved')
 }
