@@ -1408,6 +1408,23 @@ function quoteMessage(content: string): void {
 }
 
 // ── Regenerate last AI response ────────────────────────────────────────────────
+function undoLastSend(): void {
+  if (sending.value) return
+  // Find the last user message and remove it plus any trailing assistant messages
+  let lastUserIdx = -1
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    if (messages.value[i].role === 'user') { lastUserIdx = i; break }
+  }
+  if (lastUserIdx === -1) return
+  const userMsg = messages.value[lastUserIdx]
+  // Restore the user's message text into the input box
+  inputText.value = userMsg.content
+  messages.value = messages.value.slice(0, lastUserIdx)
+  saveCurrentThread()
+  nextTick(() => textareaEl.value?.focus())
+  showToast('Message removed — edit and resend')
+}
+
 async function regenerate(): Promise<void> {
   if (sending.value) return
   // Find last user message index
@@ -3229,6 +3246,14 @@ function getDateLabel(ts: number): string {
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
             </svg>
+          </button>
+          <button
+            v-if="messages.length > 0 && !sending"
+            class="ai-settings-btn"
+            title="Undo last send — remove last message and restore text to input"
+            @click="undoLastSend"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.22 6.28a.749.749 0 0 0 0 1.06l5.5 5.5a.749.749 0 1 0 1.06-1.06L3.561 7.75H12.5a3.25 3.25 0 0 1 0 6.5h-1.5a.75.75 0 0 0 0 1.5h1.5a4.75 4.75 0 0 0 0-9.5H3.56l4.22-4.22a.749.749 0 1 0-1.06-1.06Z"/></svg>
           </button>
           <button
             class="ai-response-length-btn"

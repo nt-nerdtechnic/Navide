@@ -132,18 +132,17 @@ function applyInline(s: string): string {
 
     <!-- Controls -->
     <div class="controls">
-      <!-- Mode toggle -->
+      <!-- Mode label + branch toggle -->
       <div class="mode-row">
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'working' }"
-          @click="mode = 'working'"
-        >Working Changes</button>
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'branch' }"
-          @click="mode = 'branch'"
-        >Branch Diff</button>
+        <span class="mode-label">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px;opacity:0.7">
+            <path d="M2 2.5A2.5 2.5 0 1 1 5 5H4v1h6V5h-1a2.5 2.5 0 1 1 2.5-2.5v.085l.447.224A1.5 1.5 0 0 1 13 4.5V8a1.5 1.5 0 0 1-1.5 1.5H10v1h.5A1.5 1.5 0 0 1 12 12v1.5a2.5 2.5 0 1 1-1 0V12a.5.5 0 0 0-.5-.5H5.5A.5.5 0 0 0 5 12v1.5a2.5 2.5 0 1 1-1 0V12a1.5 1.5 0 0 1 1.5-1.5H6v-1H4.5A1.5 1.5 0 0 1 3 8V4.5a1.5 1.5 0 0 1 .553-1.191L4 3.085V2.5A2.5 2.5 0 0 1 2 2.5z"/>
+          </svg>
+          {{ mode === 'working' ? 'Working Changes' : `${baseBranch} → ${compareBranch || currentBranch}` }}
+        </span>
+        <button class="branch-toggle" @click="mode = mode === 'branch' ? 'working' : 'branch'">
+          {{ mode === 'branch' ? '✕ Cancel' : '↔ Branch Diff' }}
+        </button>
       </div>
 
       <!-- Branch selectors (branch mode only) -->
@@ -155,7 +154,6 @@ function applyInline(s: string): string {
           <option v-if="!localBranches.includes('master')" value="master">master</option>
         </select>
         <span class="branch-arrow">→</span>
-        <span class="branch-label">Compare</span>
         <select class="branch-select" v-model="compareBranch">
           <option value="">{{ currentBranch || 'HEAD' }} (current)</option>
           <option v-for="b in localBranches" :key="b" :value="b">{{ b }}</option>
@@ -189,7 +187,7 @@ function applyInline(s: string): string {
         <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" style="opacity:0.3;margin-bottom:8px">
           <path d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h9.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 12.75 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H3.25A1.75 1.75 0 0 1 1.5 10.25v-7.5zm1.5 0v7.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25h-9.5a.25.25 0 0 0-.25.25z"/>
         </svg>
-        <p>Select a mode and click <strong>Start Review</strong> to get an AI analysis of your changes.</p>
+        <p>Click <strong>Start Review</strong> to analyse your working changes, or use <strong>↔ Branch Diff</strong> to compare branches.</p>
       </div>
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div v-else class="md-body" v-html="renderMd(reviewText)" />
@@ -230,18 +228,18 @@ function applyInline(s: string): string {
   flex-shrink: 0;
 }
 .mode-row {
-  display: flex; gap: 3px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }
-.mode-btn {
-  flex: 1; padding: 3px 6px; font-size: 11px; border-radius: 4px;
+.mode-label {
+  display: flex; align-items: center; font-size: 11px; font-weight: 600;
+  color: var(--text-primary);
+}
+.branch-toggle {
+  padding: 2px 7px; font-size: 10px; border-radius: 4px;
   border: 1px solid var(--border-default); background: transparent;
-  color: var(--text-secondary); cursor: pointer;
+  color: var(--text-muted); cursor: pointer; white-space: nowrap;
 }
-.mode-btn:hover { background: rgba(177,186,196,0.08); color: var(--text-primary); }
-.mode-btn.active {
-  background: var(--accent-subtle); border-color: var(--accent-emphasis);
-  color: var(--accent-fg); font-weight: 600;
-}
+.branch-toggle:hover { color: var(--accent-fg); border-color: var(--accent-emphasis); }
 .branch-row {
   display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
 }
