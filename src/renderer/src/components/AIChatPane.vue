@@ -300,6 +300,21 @@ const showNewNotepadInput = ref(false)
 const newNotepadName = ref('')
 // Two-click confirmation map for shell run buttons (avoids window.confirm)
 const pendingRunBtn = new Map<HTMLButtonElement, ReturnType<typeof setTimeout>>()
+// Generic two-click confirm for named actions (avoids window.confirm)
+const pendingConfirm = new Map<string, ReturnType<typeof setTimeout>>()
+function twoClick(key: string, action: () => void, label = 'Confirm?', toastMsg?: string): boolean {
+  if (!pendingConfirm.has(key)) {
+    showToast(toastMsg ?? `${label} — click again to confirm`)
+    const t = setTimeout(() => { pendingConfirm.delete(key) }, 2500)
+    pendingConfirm.set(key, t)
+    return false
+  }
+  const t = pendingConfirm.get(key)!
+  clearTimeout(t)
+  pendingConfirm.delete(key)
+  action()
+  return true
+}
 
 // ── Rotating input placeholder (mode-aware) ───────────────────────────────────
 const PLACEHOLDER_HINTS_ASK = [
@@ -425,7 +440,10 @@ async function confirmApply(): Promise<void> {
 async function applyAllEdits(msg: ChatMessage): Promise<void> {
   const edits = msg.pendingEdits
   if (!edits?.length) return
-  if (!window.confirm(`Apply ${edits.length} file changes?\n\n${edits.map((e) => e.relPath).join('\n')}`)) return
+  const files = edits.map((e) => e.relPath).join(', ')
+  let proceeded = false
+  twoClick(`apply-${msg.timestamp}`, () => { proceeded = true }, 'Apply', `Apply ${edits.length} file(s): ${files} — click again to confirm`)
+  if (!proceeded) return
   let ok = 0
   for (const edit of edits) {
     try {
@@ -1546,7 +1564,9 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
 // ── Run git commit from AI-detected commit message ────────────────────────────
 async function runCommit(msg: ChatMessage): Promise<void> {
   if (!msg.commitMsg) return
-  if (!window.confirm(`Run git commit with message:\n\n${msg.commitMsg}\n\nThis will commit all staged changes.`)) return
+  let proceeded = false
+  twoClick(`commit-${msg.timestamp}`, () => { proceeded = true }, 'Commit', `git commit: "${msg.commitMsg.slice(0, 60)}" — click again to confirm`)
+  if (!proceeded) return
   try {
     interface CommitResp { ok: boolean; error?: string }
     const resp = await props.backend.send<CommitResp>('git.commit', {
@@ -2265,7 +2285,6 @@ async function sendMessage(): Promise<void> {
     const cmd = rawText.slice('/run '.length).trim()
     if (!cmd) { showToast('Usage: /run <command>'); return }
     if (!props.workspacePath) { showToast('/run requires an open workspace'); return }
-    if (!window.confirm(`Run in workspace?\n\n${cmd}`)) return
     inputText.value = ''
     messages.value.push({ role: 'user', content: `/run ${cmd}`, timestamp: Date.now() })
     try {
@@ -5700,7 +5719,9 @@ function saveCheckpoint(name?: string): void {
 }
 
 function restoreCheckpoint(cp: ChatCheckpoint): void {
-  if (!window.confirm(`Restore to checkpoint "${cp.name}"?\nThis will replace the current conversation (${messages.value.length} messages).`)) return
+  let proceeded = false
+  twoClick(`restore-${cp.id}`, () => { proceeded = true }, 'Restore', `Restore "${cp.name}"? Will replace ${messages.value.length} messages — click again to confirm`)
+  if (!proceeded) return
   messages.value = cp.messagesSnapshot.map((m) => ({ ...m, streaming: false, thinking: false }))
   // Clear any in-flight /compact state so its handler doesn't overwrite the restored messages
   pendingCompactKeep.value = []
