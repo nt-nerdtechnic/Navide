@@ -1,4 +1,4 @@
-import { ref, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 import type { useBackend } from './useBackend'
 
 export interface ReviewOptions {
@@ -74,6 +74,9 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
     _teardown()
   }
 
+  watch(() => backend.status.value, (s) => {
+    if ((s === 'disconnected' || s === 'error') && isReviewing.value) stopReview()
+  })
   onUnmounted(_teardown)
 
   return { isReviewing, reviewText, reviewError, startReview, stopReview }
