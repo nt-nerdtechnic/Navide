@@ -2212,7 +2212,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.web.search":
-            query = (payload.get("query") or "").strip()
+            query = (payload.get("query") or "").strip()[:200]
             if not query:
                 await session.websocket.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "query is required"))
             else:
