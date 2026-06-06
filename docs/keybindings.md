@@ -1,0 +1,385 @@
+# Keyboard Shortcuts Reference
+
+This Mini-IDE's keybindings align with VS Code / Cursor conventions.
+All rules are defined in `src/renderer/src/keybindings/defaults.ts` and resolved
+via `useKeybindings` (capture-phase), with support for chord keys (e.g. `⌘K ⌘K`)
+and when-clause conditions.
+
+> **macOS symbols:** `⌘` Cmd · `⌥` Option/Alt · `⌃` Ctrl · `⇧` Shift · `↩` Enter
+
+---
+
+## Workbench
+
+### File Operations
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘S` | Save current file |
+| `⌘⇧S` | Save all |
+| `⌘W` | Close active editor |
+| `⌘K ⌘W` | Close all editors |
+| `⌘O` | Open file |
+| `⌘N` | New file |
+| `⌘⇧N` | New window |
+| `⌘⇧T` | Reopen closed editor |
+
+### Panels & Sidebar
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘B` | Toggle sidebar |
+| `⌘⇧E` | Focus Explorer |
+| `⌘⇧G` | Focus Source Control (when find is closed) |
+| `⌘J` | Toggle AI Chat panel |
+| `⌘⇧A` | Toggle AI Chat panel |
+| `` ⌃` `` | Toggle AI Chat panel |
+| `Escape` | Close modal dialog |
+
+### Quick Open
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘P` | Quick open file |
+| `⌘⇧P` / `F1` | Command palette |
+| `⌘⇧O` | Go to symbol in file |
+| `⌘T` | Go to symbol in workspace (scans all open files) |
+| `⌘L` / `⌃G` | Go to line |
+
+### Settings
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘,` | Open settings |
+| `⌘K ⌘S` | Open keyboard shortcuts |
+| `⌘K ⌘T` | Select theme |
+| `⌘K ⌘M` | Change language mode |
+
+### Font Zoom
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘=` | Zoom in |
+| `⌘-` | Zoom out |
+| `⌘0` | Reset zoom |
+
+---
+
+## Editor Tabs
+
+| Shortcut | Action |
+|----------|--------|
+| `⌃Tab` | Next editor |
+| `⌃⇧Tab` | Previous editor |
+| `⌘⇧]` | Move tab right |
+| `⌘⇧[` | Move tab left |
+| `⌘1` – `⌘9` | Jump to tab 1–9 |
+
+---
+
+## Navigation
+
+| Shortcut | Action |
+|----------|--------|
+| `⌃-` | Navigate back |
+| `⌃⇧-` | Navigate forward |
+| `⌘K ⌘Q` | Go to last edit location |
+| `F12` | Open imported file at cursor (go to definition) |
+| `⇧F12` | Find all references |
+| `F2` | Rename symbol (select all occurrences) |
+
+---
+
+## Search & Replace
+
+| Shortcut | Action | Condition |
+|----------|--------|-----------|
+| `⌘F` | Open find | editor open |
+| `⌘E` | Use selection as find term | editor open |
+| `⌘H` | Open replace | editor open |
+| `⌘⇧F` | Find in files | — |
+| `⌘⇧H` | Find and replace in files | — |
+| `⌘G` / `F3` | Next match | find open |
+| `⌘⇧G` / `⇧F3` | Previous match | find open |
+
+---
+
+## Cursor Movement
+
+### Basic Navigation
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘↑` | Go to file start |
+| `⌘↓` | Go to file end |
+| `Home` | Go to line start (smart: first non-whitespace, then col 0) |
+| `End` | Go to line end |
+| `⌃Home` | Go to file start (cross-platform alias for `⌘↑`) |
+| `⌃End` | Go to file end (cross-platform alias for `⌘↓`) |
+| `⌥←` | Move word left |
+| `⌥→` | Move word right |
+| `⌃↑` | Scroll view up one line (cursor stays) |
+| `⌃↓` | Scroll view down one line (cursor stays) |
+| `PageUp` | Page up |
+| `PageDown` | Page down |
+
+### Navigation with Selection
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘⇧↑` | Select to file start |
+| `⌘⇧↓` | Select to file end |
+| `⇧Home` | Select to line start |
+| `⇧End` | Select to line end |
+| `⌃⇧Home` | Select to file start (cross-platform) |
+| `⌃⇧End` | Select to file end (cross-platform) |
+| `⌃⇧←` | Select word left (Windows/Linux style) |
+| `⌃⇧→` | Select word right (Windows/Linux style) |
+
+---
+
+## Selection
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘A` | Select all |
+| `⌃L` | Select current line |
+| `⌘⇧L` / `⌘F2` | Select all occurrences |
+| `⌘D` | Add selection to next find match |
+| `⌘K ⌘D` | Move selection to next find match (skip) |
+| `⇧⌥←` | Shrink smart selection |
+| `⇧⌥→` | Expand smart selection |
+| `⌘⇧\|` | Jump to matching bracket |
+
+### Multi-cursor
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘⌥↑` | Add cursor above |
+| `⌘⌥↓` | Add cursor below |
+| `⇧⌥I` | Add cursors to end of each selected line |
+
+> Any arrow key, Home, End, PageUp/Down, or Undo clears all extra cursors.
+
+---
+
+## Editing
+
+### Basic
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘Z` | Undo |
+| `⌘⇧Z` / `⌘Y` | Redo |
+| `⌘↩` | Insert line below |
+| `⌘⇧↩` | Insert line above |
+| `⌃T` | Transpose characters around cursor |
+
+### Line Operations
+
+| Shortcut | Action |
+|----------|--------|
+| `⌥↑` | Move line(s) up |
+| `⌥↓` | Move line(s) down |
+| `⇧⌥↑` | Copy line(s) up |
+| `⇧⌥↓` | Copy line(s) down |
+| `⌘⇧K` | Delete line |
+| `⌃J` | Join next line onto current line |
+
+### Indentation
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘]` | Indent line(s) |
+| `⌘[` | Outdent line(s) |
+| `Tab` (with selection) | Indent selected lines |
+| `⇧Tab` (with selection) | Outdent selected lines |
+
+### Deletion
+
+| Shortcut | Action |
+|----------|--------|
+| `⌥Backspace` | Delete word left |
+| `⌥Delete` | Delete word right |
+| `⌘Backspace` | Delete to line start |
+| `⌘Delete` | Delete to line end |
+
+---
+
+## Code Folding
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘⌥[` | Fold block at cursor |
+| `⌘⌥]` | Unfold block at cursor |
+| `⌘K ⌘[` | Fold recursively (fold cursor block and all children) |
+| `⌘K ⌘]` | Unfold recursively |
+| `⌘K ⌘0` | Fold all |
+| `⌘K ⌘J` | Unfold all |
+| `⌘K ⌘1` | Fold to level 1 |
+| `⌘K ⌘2` | Fold to level 2 |
+| `⌘K ⌘3` | Fold to level 3 |
+| `⌘K ⌘4` | Fold to level 4 |
+| `⌘K ⌘5` | Fold to level 5 |
+| `⌘K ⌘6` | Fold to level 6 |
+| `⌘K ⌘7` | Fold to level 7 |
+
+> Fold ranges are detected by indentation. A foldable line has at least one following line with greater indentation. Folded blocks show `…` at the end of the fold-start line. Click the `▶/▼` gutter icon to toggle folding.
+
+---
+
+## Comments
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘/` | Toggle line comment |
+| `⌘⌥/` / `⇧⌥A` | Toggle block comment (`/* ... */`) |
+| `⌘K ⌘C` | Add line comment |
+| `⌘K ⌘U` | Remove line comment |
+
+---
+
+## Formatting
+
+| Shortcut | Action |
+|----------|--------|
+| `⇧⌥F` | Format document (JSON gets pretty-printed) |
+| `⌘K ⌘F` | Format selection |
+| `⌘K ⌘X` | Trim trailing whitespace |
+
+---
+
+## Text Transforms (Command Palette only)
+
+Run these via `⌘⇧P`. No default keybinding.
+
+| Command | Action |
+|---------|--------|
+| Transform to Uppercase | UPPERCASE |
+| Transform to Lowercase | lowercase |
+| Transform to Title Case | Title Case |
+| Transform to Snake Case | snake_case |
+| Transform to Camel Case | camelCase |
+| Transform to Kebab Case | kebab-case |
+| Transform to Pascal Case | PascalCase |
+| Transform to Base64 | Base64-encode selection |
+| Transform from Base64 | Base64-decode selection |
+| URL Encode Selection | Percent-encode selection |
+| URL Decode Selection | Percent-decode selection |
+| Sort Lines Ascending | Sort selected lines A → Z |
+| Sort Lines Descending | Sort selected lines Z → A |
+| Reverse Lines | Reverse order of selected lines |
+| Remove Duplicate Lines | Remove duplicate lines in selection |
+| Join Lines | Merge lines into one (same as `⌃J`) |
+
+---
+
+## Line Endings & Indentation (Command Palette only)
+
+| Command | Action |
+|---------|--------|
+| Change End of Line to CRLF | Switch to Windows line endings |
+| Change End of Line to LF | Switch to Unix/macOS line endings |
+| Convert Indentation to Spaces | Replace tab indents with spaces |
+| Convert Indentation to Tabs | Replace space indents with tabs |
+
+> The current EOL and indentation settings are also shown in the status bar at the bottom of the editor — click to toggle.
+
+---
+
+## AI Features
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘I` / `⌃Space` | Trigger AI inline completion (Ghost Text) |
+| `⌘K ⌘K` / `⌃⇧I` | AI inline rewrite (select code, then type instruction) |
+| `⌘⇧A` / `⌘J` / `` ⌃` `` | Open / close AI Chat panel |
+| `⌘⇧L` | Add current selection or word to AI Chat context (when editor is open but text area is not focused) |
+| `Tab` (Ghost Text visible) | Accept full AI suggestion |
+| `→` (Ghost Text visible) | Accept one character of AI suggestion |
+| `⌘→` / `⌥→` (Ghost Text visible) | Accept one word of AI suggestion |
+
+---
+
+## File Utilities
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘K ⌘P` | Copy absolute file path |
+| `⌘⇧⌥C` | Copy relative file path |
+| `⌘K ⌘R` | Reveal file in Explorer sidebar |
+| `⇧⌥R` | Reveal file in Finder |
+| `F12` | Open imported/required file at cursor |
+| `⌘⌥↩` | Open URL under cursor in browser |
+| `⌘K ⌘Z` | Toggle Zen Mode (hides sidebar and tab bar) |
+| `⌘K ⌘L` | Toggle line numbers |
+| `⌘K ⌘E` | Focus active editor |
+| `⌘K ⌘O` | Open folder |
+
+---
+
+## Chord Key Reference (`⌘K …`)
+
+`⌘K` is a chord prefix. In editor text focus, pressing `⌘K` enters chord mode (300 ms timeout); the next key completes the command.
+
+| Prefix | Second Key | Action |
+|--------|-----------|--------|
+| `⌘K` | `⌘K` | AI inline rewrite |
+| `⌘K` | `⌘C` | Add line comment |
+| `⌘K` | `⌘U` | Remove line comment |
+| `⌘K` | `⌘X` | Trim trailing whitespace |
+| `⌘K` | `⌘F` | Format selection |
+| `⌘K` | `⌘M` | Change language mode |
+| `⌘K` | `⌘P` | Copy absolute path |
+| `⌘K` | `⌘R` | Reveal in Explorer |
+| `⌘K` | `⌘S` | Keyboard shortcuts settings |
+| `⌘K` | `⌘T` | Select theme |
+| `⌘K` | `⌘Z` | Toggle Zen Mode |
+| `⌘K` | `⌘O` | Open folder |
+| `⌘K` | `⌘E` | Focus editor |
+| `⌘K` | `⌘L` | Toggle line numbers |
+| `⌘K` | `⌘Q` | Go to last edit location |
+| `⌘K` | `⌘D` | Move to next find match (skip) |
+| `⌘K` | `⌘W` | Close all editors |
+| `⌘K` | `⌘[` | Fold recursively |
+| `⌘K` | `⌘]` | Unfold recursively |
+| `⌘K` | `⌘0` | Fold all |
+| `⌘K` | `⌘J` | Unfold all |
+| `⌘K` | `⌘1`–`⌘7` | Fold to indentation level 1–7 |
+
+---
+
+## When-Clause Conditions
+
+Keybindings can be gated by context conditions:
+
+| Condition | Description |
+|-----------|-------------|
+| `editorOpen` | At least one editor tab is open |
+| `editorTextFocus` | The editor text area has keyboard focus |
+| `findOpen` | The find widget is currently open |
+| `modalOpen` | A modal dialog is currently open |
+| `terminalFocus` | The terminal area has focus |
+| `!editorTextFocus` | Editor open but text area not focused |
+
+Conditions support `&&` (and), `||` (or), `!` (not).
+
+---
+
+## Implementation Architecture
+
+```
+KeybindingRule (defaults.ts)
+    ↓  resolved by KeyResolver
+useKeybindings — window.addEventListener('keydown', handler, { capture: true })
+    ↓  match found → stopPropagation
+executeCommand (useKeybindings.ts)
+    ↓
+registerCommand handlers
+    ↓
+EditorWindowApp → activeEditor() → EditorPane → EditorView
+```
+
+- **Capture phase** — interception happens before the event reaches any target element, allowing chords to override native browser/OS behaviour.
+- **Command registry** — commands are decoupled from UI; the palette and keybindings share the same `registerCommand` registry.
+- **No-op safety** — unregistered commands return `false` without calling `stopPropagation`, so native element behaviour falls through unaffected.
