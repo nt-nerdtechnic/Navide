@@ -3830,7 +3830,7 @@ ${historyText}`
 
   // /translate — add language context and translate code comments/strings
   if (cmd.id === '/translate') {
-    const lang = rawText.slice('/translate'.length).trim() || ''
+    const lang = inputText.value.slice('/translate'.length).trim() || ''
     const targetLang = lang || (window.prompt('Translate to language:') ?? '').trim()
     if (!targetLang) return
     inputText.value = ''
@@ -4471,7 +4471,9 @@ ${out}`
       if (!text.trim()) {
         showToast('Clipboard is empty'); return
       }
-      chipContent = `// Clipboard content:\n${text.slice(0, 5000)}`
+      const clipped = text.slice(0, 5000)
+      if (text.length > 5000) showToast(`Clipboard truncated to 5000 chars (was ${text.length})`)
+      chipContent = `// Clipboard content:\n${clipped}`
     } catch {
       chipContent = '// @clipboard: read failed (check browser permissions)'
     }
