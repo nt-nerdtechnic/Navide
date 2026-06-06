@@ -311,8 +311,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const sid = sessionId.value
       const doSpawnFit = () => {
         const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width
-        const elW = containerRef.value?.clientWidth
-        console.log('[spawn-fit] cell.width:', cellW, 'el.clientWidth:', elW, 'term.cols before:', term.cols)
+        const el = containerRef.value
+        console.log('[spawn-fit] cell.width:', cellW,
+          'xterm-host.clientWidth:', el?.clientWidth,
+          'pane.clientWidth:', el?.parentElement?.clientWidth,
+          'xterm el width:', (term as any).element?.offsetWidth,
+          'term.cols before:', term.cols)
         try { fit.fit() } catch { /* ignore */ }
         console.log('[spawn-fit] term.cols after fit:', term.cols, 'rows:', term.rows)
         void backend.send('terminal.resize', {

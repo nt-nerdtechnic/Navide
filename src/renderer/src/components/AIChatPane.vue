@@ -1314,6 +1314,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@symbol', label: '@symbol — find a function or class definition' },
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
   { id: '@terminal:error', label: '@terminal:error — last error/exception from terminal output' },
+  { id: '@test:results', label: '@test:results — run test suite and attach output (vitest/pytest/jest)' },
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
   { id: '@docs',     label: '@docs — fetch official documentation as context' },
@@ -5057,6 +5058,29 @@ ${out}`
         : '// @terminal:error: no error patterns found in recent output'
     } catch {
       chipContent = '// @terminal:error: unavailable'
+    }
+  } else if (option.id === '@test:results') {
+    chipLabel = '@test:results'
+    try {
+      interface ShellRespTest { ok: boolean; output?: string }
+      showToast('Running tests…')
+      // Auto-detect test runner: vitest, pytest, jest, cargo test, go test
+      const resp = await props.backend.send<ShellRespTest>('shell.run', {
+        command: [
+          '(npx vitest run --reporter=verbose 2>&1 | tail -60)',
+          '|| (python -m pytest -q 2>&1 | tail -40)',
+          '|| (npx jest --no-coverage 2>&1 | tail -50)',
+          '|| echo "(no test runner found: install vitest, pytest, or jest)"',
+        ].join(' '),
+        workspace_path: props.workspacePath,
+        timeout_ms: 60000,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      chipContent = raw
+        ? `// Test results:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
+        : '// @test:results: no output returned'
+    } catch {
+      chipContent = '// @test:results: unavailable'
     }
   } else if (option.id === '@notepad') {
     chipLabel = '@notepad'
