@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
+import mermaid from 'mermaid'
 import hljs from 'highlight.js/lib/core'
 import javascript from 'highlight.js/lib/languages/javascript'
 import typescript from 'highlight.js/lib/languages/typescript'
@@ -1090,6 +1091,12 @@ function renderMarkdownLite(rawText: string): string {
     }
     const langLabelRaw = lang ? (LANG_DISPLAY[lang.toLowerCase()] ?? lang) : 'text'
     const langLabel = langLabelRaw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    // Mermaid diagrams — defer rendering to avoid innerHTML XSS
+    if (lang?.toLowerCase() === 'mermaid') {
+      const i = blocks.length
+      blocks.push(`<div class="ai-mermaid-wrap"><div class="ai-mermaid" data-graph="${encodeURIComponent(code.trim())}"><span class="ai-mermaid-loading">Rendering diagram…</span></div></div>`)
+      return `\x00B${i}\x00`
+    }
     // Detect file path from first line comment (e.g. `// src/foo.ts` or `# src/foo.py`)
     const firstLine = code.split('\n')[0].trim()
     const pathMatch = firstLine.match(/^(?:\/\/|#|\/\*|\*|--)\s*((?:\w[\w.-]*\/)+[\w.-]+\.\w+)/)
@@ -1347,6 +1354,7 @@ async function scrollBottom(force = false): Promise<void> {
   if (messagesEl.value && (autoScroll.value || force)) {
     messagesEl.value.scrollTop = messagesEl.value.scrollHeight
   }
+  void renderMermaidBlocks()
 }
 
 function onMessagesScroll(): void {
@@ -2379,6 +2387,59 @@ async function detectWorkspaceRules(): Promise<void> {
   }
   workspaceRulesFile.value = null
   workspaceRulesContent.value = ''
+}
+
+// Mermaid: strict security level strips script/foreignObject from the output SVG
+mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict', fontFamily: 'inherit' })
+
+// Allowed SVG elements and attributes (conservative whitelist to prevent XSS)
+const _SVG_ALLOWED_TAGS = new Set([
+  'svg','g','path','rect','circle','ellipse','line','polyline','polygon','text',
+  'tspan','defs','marker','use','title','desc','style','linearGradient',
+  'radialGradient','stop','clipPath','mask','foreignObject',
+])
+const _SVG_FORBIDDEN_ATTR = /^on|^href\s*=\s*(javascript|data|vbscript)/i
+
+function _sanitizeSvgNode(node: Element): void {
+  // Remove forbidden attributes
+  for (const attr of Array.from(node.attributes)) {
+    if (_SVG_FORBIDDEN_ATTR.test(attr.name) || (attr.name === 'href' && /^(javascript|data|vbscript)/i.test(attr.value))) {
+      node.removeAttribute(attr.name)
+    }
+  }
+  // Recurse but strip non-whitelisted tags
+  for (const child of Array.from(node.children)) {
+    if (!_SVG_ALLOWED_TAGS.has(child.tagName.toLowerCase())) {
+      child.remove()
+    } else {
+      _sanitizeSvgNode(child)
+    }
+  }
+}
+
+async function renderMermaidBlocks(): Promise<void> {
+  const els = messagesEl.value?.querySelectorAll<HTMLElement>('.ai-mermaid[data-graph]:not([data-rendered])')
+  if (!els?.length) return
+  for (const el of Array.from(els)) {
+    el.setAttribute('data-rendered', '1') // prevent double-render even on error
+    try {
+      const code = decodeURIComponent(el.dataset.graph ?? '')
+      const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`
+      const { svg } = await mermaid.render(id, code)
+      // Parse SVG safely via DOMParser (no innerHTML on the visible element)
+      const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
+      const svgEl = doc.querySelector('svg')
+      if (svgEl) {
+        _sanitizeSvgNode(svgEl)
+        el.replaceChildren(svgEl)
+      }
+    } catch (err) {
+      const errSpan = document.createElement('span')
+      errSpan.className = 'ai-mermaid-err'
+      errSpan.textContent = `Diagram error: ${String(err)}`
+      el.replaceChildren(errSpan)
+    }
+  }
 }
 
 onMounted(() => {
@@ -5784,6 +5845,20 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-flash { animation: ai-flash 0.4s ease 2; }
 @keyframes ai-flash { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ── Mermaid diagram ─────────────────────────────────────────────────────── */
+.ai-mermaid-wrap { margin: 6px 0; }
+.ai-mermaid {
+  background: var(--bg-code, #0d1117);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+  text-align: center;
+}
+.ai-mermaid svg { max-width: 100%; height: auto; }
+.ai-mermaid-loading { color: var(--text-muted); font-size: 12px; font-style: italic; }
+.ai-mermaid-err { color: #f87171; font-size: 12px; }
 
 /* ── Settings panel ────────────────────────────────────────────────────────── */
 .ai-settings {
