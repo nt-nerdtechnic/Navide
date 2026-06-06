@@ -2255,7 +2255,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     # Parse structured JSON result from streamed text
                     full_text = "".join(chunks)
                     try:
-                        mo = _re.search(r"```json\s*(.*)\s*```", full_text, _re.DOTALL)
+                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
                         if mo:
                             result = _json.loads(mo.group(1))
                             await broadcast(make_event("ai.review.result", {"review_id": rid, "result": result}))
