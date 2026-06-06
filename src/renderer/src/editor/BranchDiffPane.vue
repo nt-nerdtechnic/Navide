@@ -21,7 +21,7 @@ function openFile(filename: string) {
   emit('open-file', { filepath: filename, name: filename.split('/').at(-1) ?? filename })
 }
 
-const reviewOpen = ref(false)
+const reviewOpen = ref(true)
 const reviewHeight = ref(300)
 
 function startReviewDrag(e: MouseEvent) {
@@ -216,7 +216,7 @@ function cellClass(cell: SideRow['left']): string {
         <path d="M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427z"/>
       </svg>
     </div>
-    <div v-if="reviewOpen" class="bdp-review-body" :style="{ height: reviewHeight + 'px' }">
+    <div v-show="reviewOpen" class="bdp-review-body" :style="{ height: reviewHeight + 'px' }">
       <ReviewPane
         :workspace-path="workspacePath"
         :backend="backend"
@@ -228,7 +228,7 @@ function cellClass(cell: SideRow['left']): string {
         @ask-ai-fix="(text) => emit('ask-ai-fix', text)"
       />
     </div>
-    <div v-if="reviewOpen" class="bdp-review-resizer" @mousedown.prevent="startReviewDrag" />
+    <div v-show="reviewOpen" class="bdp-review-resizer" @mousedown.prevent="startReviewDrag" />
 
     <!-- States -->
     <div v-if="loading" class="bdp-msg">Loading diff…</div>

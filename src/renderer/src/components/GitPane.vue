@@ -2231,10 +2231,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .btn-ghost.sm { font-size: 11px; padding: 3px 7px; }
 .btn-ghost.icon-only { display: inline-flex; align-items: center; justify-content: center; padding: 4px 6px; flex: 0 0 auto; }
 .btn-danger {
-  background: #6e1111; border: 1px solid var(--danger-muted); border-radius: 4px;
-  color: #f4d2d2; font-size: 11px; padding: 4px 10px; cursor: pointer;
+  background: var(--danger-emphasis); border: 1px solid transparent; border-radius: 4px;
+  color: var(--text-on-emphasis); font-size: 11px; padding: 4px 10px; cursor: pointer;
 }
-.btn-danger:hover { background: var(--danger-muted); }
+.btn-danger:hover { background: var(--danger-bright); }
 
 /* ── Panel header ───────────────────────────────────────────────────────────── */
 .panel-header {
