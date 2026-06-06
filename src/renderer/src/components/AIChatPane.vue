@@ -1395,6 +1395,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/import',       label: '/import',       description: 'Import a chat from a JSON file (exported via /export)',   template: '' },
   { id: '/pr',           label: '/pr',           description: 'Generate a pull request title + description from current git changes', template: '' },
   { id: '/changelog',    label: '/changelog',    description: 'Generate a CHANGELOG entry from recent git commits',                   template: '' },
+  { id: '/perf',         label: '/perf',         description: 'Analyze code for performance bottlenecks and suggest optimizations',   template: 'Analyze the following code for performance bottlenecks. For each issue: identify the problem, estimate its impact, and provide a concrete optimized version with explanation:\n\n' },
+  { id: '/security',     label: '/security',     description: 'Audit code for security vulnerabilities (OWASP, injection, etc.)',    template: 'Perform a security audit on the following code. Check for OWASP Top 10 vulnerabilities, injection flaws, authentication issues, data exposure, and any other security risks. For each finding provide: severity (Critical/High/Medium/Low), description, and fix:\n\n' },
+  { id: '/types',        label: '/types',        description: 'Generate or improve TypeScript type definitions for the code',        template: 'Generate comprehensive TypeScript type definitions for the following code. Include interfaces, type aliases, and generics where appropriate. Ensure strict typing with no implicit any:\n\n' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -4374,7 +4377,7 @@ ${log || '(no commits)'}`
   inputText.value = cmd.template + ' '
 
   // Auto-inject current file chip for code-focused commands when no chip exists yet
-  const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve'])
+  const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve', '/perf', '/security', '/types'])
   if (CODE_CMDS.has(cmd.id) && contextChips.value.length === 0) {
     const relPath = props.getActiveRelPath?.()
     const content = props.getEditorContent?.()
