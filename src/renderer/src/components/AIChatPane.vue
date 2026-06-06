@@ -664,6 +664,8 @@ const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-mode
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
+const testConnStatus = ref<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
+const testConnError = ref<Record<string, string>>({})
 
 const _SYSTEM_PROFILES: Record<string, string> = {
   coding:   'You are a helpful AI coding assistant. Be concise, use code examples, and always explain your reasoning.',
@@ -1853,6 +1855,35 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   showSettings.value = false
   showToast('Settings saved')
+}
+
+async function testConnection(provider: string): Promise<void> {
+  testConnStatus.value = { ...testConnStatus.value, [provider]: 'testing' }
+  testConnError.value = { ...testConnError.value, [provider]: '' }
+  try {
+    const keyMap: Record<string, string> = {
+      anthropic: settingsApiKey.value,
+      openai: settingsOpenAiKey.value,
+      groq: settingsGroqKey.value,
+      deepseek: settingsDeepSeekKey.value,
+      google: settingsGoogleKey.value,
+      mistral: settingsMistralKey.value,
+      xai: settingsXaiKey.value,
+      openai_compatible: settingsOaiCompatKey.value,
+    }
+    const res = await props.backend.send<{ ok: boolean; error?: string }>('ai.chat.test_connection', {
+      provider,
+      api_key: keyMap[provider] ?? '',
+      base_url: settingsOaiCompatUrl.value,
+      ollama_base_url: settingsOllamaUrl.value,
+    }, 15_000)
+    const ok = res.payload?.ok === true
+    testConnStatus.value = { ...testConnStatus.value, [provider]: ok ? 'ok' : 'fail' }
+    if (!ok) testConnError.value = { ...testConnError.value, [provider]: res.payload?.error ?? 'Connection failed' }
+  } catch (e) {
+    testConnStatus.value = { ...testConnStatus.value, [provider]: 'fail' }
+    testConnError.value = { ...testConnError.value, [provider]: String(e) }
+  }
 }
 
 // ── Send message ───────────────────────────────────────────────────────────────
@@ -5782,31 +5813,66 @@ function getDateLabel(ts: number): string {
         </div>
         <div v-if="settingsProvider === 'anthropic'" class="ai-settings-row">
           <label class="ai-settings-label">Anthropic API Key</label>
-          <input v-model="settingsApiKey" type="password" class="ai-settings-input" placeholder="sk-ant-…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsApiKey" type="password" class="ai-settings-input" placeholder="sk-ant-…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['anthropic'] === 'testing'" @click="testConnection('anthropic')">{{ testConnStatus['anthropic'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['anthropic'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['anthropic'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['anthropic']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'openai'" class="ai-settings-row">
           <label class="ai-settings-label">OpenAI API Key</label>
-          <input v-model="settingsOpenAiKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsOpenAiKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['openai'] === 'testing'" @click="testConnection('openai')">{{ testConnStatus['openai'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['openai'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['openai'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['openai']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'groq'" class="ai-settings-row">
           <label class="ai-settings-label">Groq API Key</label>
-          <input v-model="settingsGroqKey" type="password" class="ai-settings-input" placeholder="gsk_…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsGroqKey" type="password" class="ai-settings-input" placeholder="gsk_…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['groq'] === 'testing'" @click="testConnection('groq')">{{ testConnStatus['groq'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['groq'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['groq'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['groq']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'deepseek'" class="ai-settings-row">
           <label class="ai-settings-label">DeepSeek API Key</label>
-          <input v-model="settingsDeepSeekKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsDeepSeekKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['deepseek'] === 'testing'" @click="testConnection('deepseek')">{{ testConnStatus['deepseek'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['deepseek'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['deepseek'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['deepseek']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'google'" class="ai-settings-row">
           <label class="ai-settings-label">Google API Key</label>
-          <input v-model="settingsGoogleKey" type="password" class="ai-settings-input" placeholder="AIza…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsGoogleKey" type="password" class="ai-settings-input" placeholder="AIza…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['google'] === 'testing'" @click="testConnection('google')">{{ testConnStatus['google'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['google'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['google'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['google']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'mistral'" class="ai-settings-row">
           <label class="ai-settings-label">Mistral API Key</label>
-          <input v-model="settingsMistralKey" type="password" class="ai-settings-input" placeholder="…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsMistralKey" type="password" class="ai-settings-input" placeholder="…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['mistral'] === 'testing'" @click="testConnection('mistral')">{{ testConnStatus['mistral'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['mistral'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['mistral'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['mistral']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'xai'" class="ai-settings-row">
           <label class="ai-settings-label">xAI API Key</label>
-          <input v-model="settingsXaiKey" type="password" class="ai-settings-input" placeholder="xai-…" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsXaiKey" type="password" class="ai-settings-input" placeholder="xai-…" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['xai'] === 'testing'" @click="testConnection('xai')">{{ testConnStatus['xai'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['xai'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['xai'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['xai']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
           <label class="ai-settings-label">Base URL</label>
@@ -5814,7 +5880,12 @@ function getDateLabel(ts: number): string {
         </div>
         <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
           <label class="ai-settings-label">API Key</label>
-          <input v-model="settingsOaiCompatKey" type="password" class="ai-settings-input" placeholder="optional" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsOaiCompatKey" type="password" class="ai-settings-input" placeholder="optional" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['openai_compatible'] === 'testing'" @click="testConnection('openai_compatible')">{{ testConnStatus['openai_compatible'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['openai_compatible'] === 'ok'" class="ai-settings-test-ok" title="Connection OK">✓</span>
+            <span v-if="testConnStatus['openai_compatible'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['openai_compatible']">✗</span>
+          </div>
         </div>
         <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
           <label class="ai-settings-label">Model ID</label>
@@ -5864,7 +5935,12 @@ function getDateLabel(ts: number): string {
         </div>
         <div v-if="settingsProvider === 'ollama'" class="ai-settings-row">
           <label class="ai-settings-label">Ollama URL</label>
-          <input v-model="settingsOllamaUrl" type="text" class="ai-settings-input" placeholder="http://localhost:11434" />
+          <div class="ai-settings-key-row">
+            <input v-model="settingsOllamaUrl" type="text" class="ai-settings-input" placeholder="http://localhost:11434" />
+            <button class="ai-settings-test-btn" :disabled="testConnStatus['ollama'] === 'testing'" @click="testConnection('ollama')">{{ testConnStatus['ollama'] === 'testing' ? '…' : 'Test' }}</button>
+            <span v-if="testConnStatus['ollama'] === 'ok'" class="ai-settings-test-ok" title="Ollama reachable">✓</span>
+            <span v-if="testConnStatus['ollama'] === 'fail'" class="ai-settings-test-fail" :title="testConnError['ollama']">✗</span>
+          </div>
         </div>
         <div class="ai-settings-row ai-settings-row--column">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -7462,6 +7538,23 @@ function getDateLabel(ts: number): string {
 .ai-settings-select:focus { border-color: var(--accent-emphasis); }
 .ai-settings-input--custom { margin-top: 5px; }
 .ai-settings-row--column { flex-direction: column; }
+.ai-settings-key-row { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.ai-settings-key-row .ai-settings-input { flex: 1; min-width: 0; }
+.ai-settings-test-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-muted);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-settings-test-btn:hover:not(:disabled) { border-color: var(--accent-emphasis); color: var(--accent-fg, var(--accent-emphasis)); }
+.ai-settings-test-btn:disabled { opacity: 0.5; cursor: default; }
+.ai-settings-test-ok { font-size: 14px; color: var(--success-fg, #22c55e); flex-shrink: 0; }
+.ai-settings-test-fail { font-size: 14px; color: var(--danger-fg, #ef4444); flex-shrink: 0; cursor: help; }
 .ai-settings-textarea {
   padding: 5px 9px;
   border-radius: 5px;

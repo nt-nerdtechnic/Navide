@@ -2232,6 +2232,46 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 t.cancel()
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
+        elif msg_type == "ai.chat.test_connection":
+            _tc_provider = (payload.get("provider") or "").strip()
+            _tc_key = (payload.get("api_key") or "").strip()
+            _tc_base_url = (payload.get("base_url") or "").strip().rstrip("/")
+            _tc_ollama_url = (payload.get("ollama_base_url") or "http://localhost:11434").strip().rstrip("/")
+            _tc_ok = False
+            _tc_err = ""
+            try:
+                import httpx as _httpx
+                if _tc_provider == "anthropic":
+                    import anthropic as _ant
+                    _ant_client = _ant.AsyncAnthropic(api_key=_tc_key or None)
+                    async with asyncio.timeout(10):
+                        await _ant_client.models.list(limit=1)
+                    _tc_ok = True
+                elif _tc_provider == "ollama":
+                    async with _httpx.AsyncClient(timeout=8.0) as _hc:
+                        _r = await _hc.get(f"{_tc_ollama_url}/api/tags")
+                        _r.raise_for_status()
+                    _tc_ok = True
+                else:
+                    from .ai_chat_service import _OPENAI_COMPAT_CONFIGS
+                    _cfg = _OPENAI_COMPAT_CONFIGS.get(_tc_provider, {})
+                    if "base_url_field" in _cfg:
+                        _url = _tc_base_url
+                    else:
+                        _url = _cfg.get("base_url", "")
+                    if not _url:
+                        raise ValueError(f"No base URL for provider '{_tc_provider}'")
+                    _headers: dict = {}
+                    if _tc_key:
+                        _headers["Authorization"] = f"Bearer {_tc_key}"
+                    async with _httpx.AsyncClient(timeout=8.0) as _hc:
+                        _r = await _hc.get(f"{_url}/models", headers=_headers)
+                        _r.raise_for_status()
+                    _tc_ok = True
+            except Exception as _e:
+                _tc_err = str(_e)
+            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": _tc_ok, "error": _tc_err}))
+
         elif msg_type == "ai.web.search":
             query = (payload.get("query") or "").strip()[:200]
             if not query:
