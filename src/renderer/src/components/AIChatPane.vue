@@ -1909,6 +1909,17 @@ function renderMarkdownLite(rawText: string): string {
     }
     return `<code class="ai-inline-code">${escaped}</code>`
   })
+  // Plain-text bare file paths (e.g. "Edit src/App.vue:42 to fix this")
+  // Only active when openFile prop is available; guards against HTML attr contexts.
+  if (props.openFile) {
+    const BARE_PATH_RE = /(?<![='">\w/\\])((?:\.{0,2}\/)?(?:[\w.\-]+\/)+[\w.\-]+\.(?:ts|tsx|js|jsx|vue|py|go|rs|rb|java|kt|swift|c|cpp|cs|php|sh|md|json|yaml|yml|toml|html|css|scss|sql))(?::(\d+))?(?=[^\w/\\]|$)/g
+    html = html.replace(BARE_PATH_RE, (_match, path, line) => {
+      const lineAttr = line ? ` data-line="${line}"` : ''
+      const lineLabel = line ? `<span class="ai-file-ref-line">:${line}</span>` : ''
+      const escapedPath = path.replace(/"/g, '&quot;')
+      return `<code class="ai-inline-code ai-file-ref ai-file-ref-bare" data-path="${escapedPath}"${lineAttr} title="Click to open · Ctrl+click to add to context">${path}${lineLabel}</code>`
+    })
+  }
   // Auto-link URLs (not inside existing tags)
   html = html.replace(/(?<![="'])https?:\/\/[^\s<>"')\]]+/g,
     (url) => `<a class="ai-link" href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
@@ -2176,7 +2187,10 @@ async function sendMessage(): Promise<void> {
   }
 
   // Delegate other slash-only commands to selectSlashCommand so typing them directly works
-  const _delegateSlash = ['/clear', '/compact', '/diff', '/model', '/pin', '/summarize', '/checkpoints']
+  const _delegateSlash = [
+    '/clear', '/compact', '/diff', '/model', '/pin', '/summarize', '/checkpoints',
+    '/save-summary', '/spell', '/git', '/pr', '/changelog', '/prompts', '/import', '/generate', '/commit',
+  ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
     const found = SLASH_COMMANDS.find((c) => c.id === rawText)
@@ -7770,6 +7784,7 @@ function getDateLabel(ts: number): string {
   text-underline-offset: 2px;
 }
 .ai-text :deep(code.ai-file-ref:hover) { background: var(--bg-subtle); }
+.ai-text :deep(code.ai-file-ref-bare) { background: transparent; padding: 0 1px; font-size: 0.9em; }
 .ai-text :deep(.ai-file-ref-line) { opacity: 0.65; font-size: 0.85em; }
 .ai-text :deep(ul.ai-ul),
 .ai-text :deep(ol.ai-ol) {
