@@ -64,7 +64,7 @@ log = logging.getLogger("agent_team_backend")
 
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 
-app = FastAPI(title="agent-team-backend", version=__version__)
+app = FastAPI(title="navide-backend", version=__version__)
 
 project_store = ProjectStore()
 recent_workspaces_store = RecentWorkspacesStore()

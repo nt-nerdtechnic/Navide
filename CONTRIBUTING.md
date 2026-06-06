@@ -1,7 +1,7 @@
-# Contributing to Agent-Team
+# Contributing to Navide (Agent-Team)
 
 Thank you for your interest in contributing!
-<!-- 感謝你對 Agent-Team 的貢獻興趣！ -->
+<!-- 感謝你對 Navide (Agent-Team) 的貢獻興趣！ -->
 
 ---
 
@@ -40,7 +40,7 @@ Describe the problem you are trying to solve and the solution you have in mind.
 
 ```bash
 git clone https://github.com/nt-nerdtechnic/agent-team
-cd agent-team
+cd Navide (Agent-Team)
 
 pnpm install
 uv --project backend sync

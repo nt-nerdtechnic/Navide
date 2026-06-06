@@ -14,7 +14,7 @@ from .applog import backend_port_file, setup_file_logging
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="agent-team-backend")
+    parser = argparse.ArgumentParser(prog="navide-backend")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0, help="0 = pick a free port")
     parser.add_argument("--log-level", default="info")

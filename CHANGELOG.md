@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Agent-Team will be documented in this file.
+All notable changes to Navide (Agent-Team) will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 <!-- 所有重要的版本變更都會記錄在這裡，格式遵循 Keep a Changelog。 -->
@@ -30,4 +30,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Stage Editor** — customize slot configuration, kickoff body, and sentinel strings per Stage
 - Initial open-source release under MIT license
 
-[0.1.8]: https://github.com/nt-nerdtechnic/Agent-Team/releases/tag/v0.1.8
+[0.1.8]: https://github.com/nt-nerdtechnic/Navide (Agent-Team)/releases/tag/v0.1.8

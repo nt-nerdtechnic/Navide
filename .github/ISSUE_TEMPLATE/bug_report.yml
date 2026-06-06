@@ -40,7 +40,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: Agent-Team version / 版本
+      label: Navide (Agent-Team) version / 版本
       placeholder: e.g. v0.1.8
     validations:
       required: true

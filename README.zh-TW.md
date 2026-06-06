@@ -155,8 +155,8 @@ ollama pull qwen2.5-coder
 ### 安裝
 
 ```bash
-git clone https://github.com/nt-nerdtechnic/Navide (Agent-Team)
-cd Navide (Agent-Team)
+git clone https://github.com/nt-nerdtechnic/Agent-Team
+cd Agent-Team
 
 pnpm install
 uv --project backend sync

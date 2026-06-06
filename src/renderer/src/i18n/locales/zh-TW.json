@@ -95,7 +95,21 @@
     "bad-response": "不良回應",
     "clear-working-set": "清除工作集",
     "add-memory": "新增記憶",
-    "pin-file-path": "固定檔案路徑以永遠包含"
+    "pin-file-path": "固定檔案路徑以永遠包含",
+    "browse": "瀏覽…",
+    "add-to-grid": "+ 加入網格",
+    "abort": "中止",
+    "remove": "移除",
+    "interrupt": "中斷",
+    "reapply-role": "重新套用角色",
+    "run-pipeline": "▶ 執行流程",
+    "reset": "重設",
+    "wipe-restart": "↺ 清除並重新開始",
+    "export": "💾 匯出",
+    "open-file": "📂 開啟檔案",
+    "collapse": "收合",
+    "restore": "↑ 還原",
+    "retry": "↻ 重試"
   },
   "settings": {
     "appearance": {
