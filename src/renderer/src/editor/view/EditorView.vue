@@ -1683,6 +1683,7 @@ watch(fontZoom, () => void nextTick(measureChar))
 function onScroll(e: Event): void {
   vs.onScroll(e)
   scrollLeftVal.value = (e.target as HTMLElement).scrollLeft
+  if (suggestOpen.value) _closeSuggest()
 }
 
 function syncViewport(): void {
@@ -1802,16 +1803,14 @@ let _suggestTimer: number | null = null
 
 const suggestStyle = computed(() => {
   const x = xFor(cursor.value.col) - scrollLeftVal.value
-  // Same coordinate system as ghost text: subtract offsetY (not scrollTop)
-  const y = (m2d(cursor.value.line) + 1) * lineHeightPx.value - vs.offsetY.value
-  // Flip above cursor if too close to the bottom of the viewport
-  const viewY = y + vs.offsetY.value - vs.scrollTop.value
-  const flipY = vs.viewportHeight.value - viewY < 160 && viewY > 160
-  return {
-    left: Math.max(0, x) + 'px',
-    top: flipY ? 'auto' : y + 'px',
-    bottom: flipY ? (y - lineHeightPx.value * 2) + 'px' : 'auto',
-  }
+  // Same coordinate system as ghost text: (model line → display line) * lh - offsetY
+  const lineY = m2d(cursor.value.line) * lineHeightPx.value - vs.offsetY.value
+  // viewport-relative cursor top (used to decide whether to flip above)
+  const viewportCursorY = lineY + vs.offsetY.value - vs.scrollTop.value
+  const dropdownHeight = 152
+  const shouldFlip = vs.viewportHeight.value - viewportCursorY - lineHeightPx.value < dropdownHeight && viewportCursorY > dropdownHeight
+  const y = shouldFlip ? lineY - dropdownHeight : lineY + lineHeightPx.value
+  return { left: Math.max(0, x) + 'px', top: Math.max(0, y) + 'px' }
 })
 
 function _closeSuggest(): void {
