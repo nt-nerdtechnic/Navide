@@ -1324,6 +1324,10 @@ function stopStreaming(): void {
   sending.value = false
   currentSessionId.value = null
   if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
+  if (pendingCompactAllMessages.value.length > 0) {
+    messages.value = pendingCompactAllMessages.value
+    pendingCompactAllMessages.value = []
+  }
   pendingCompactKeep.value = []
 }
 
@@ -1719,8 +1723,11 @@ function setupListeners(): void {
       const placeholder = messages.value.find((m) => m.content === '[Compacting history…]')
       if (placeholder) placeholder.content = '[History compacted]'
       messages.value.push(...kept)
+      pendingCompactAllMessages.value = []
       saveCurrentThread()
       showToast(`History compacted — kept last ${kept.length} messages`)
+    } else {
+      pendingCompactAllMessages.value = []
     }
   })
 
@@ -1739,6 +1746,7 @@ function setupListeners(): void {
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
     // If a compact operation was in progress, restore state
     if (pendingCompactKeep.value.length > 0) pendingCompactKeep.value = []
+    pendingCompactAllMessages.value = []
     void scrollBottom()
   })
 
