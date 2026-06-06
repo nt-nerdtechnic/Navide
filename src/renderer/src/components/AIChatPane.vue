@@ -530,6 +530,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
   { id: '/help',     label: '/help',     description: 'Show all commands',       template: '' },
   { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
+  { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1259,6 +1260,29 @@ function editMessage(idx: number): void {
   nextTick(() => textareaEl.value?.focus())
 }
 
+// ── Fork conversation from a message (create a new thread from this point) ────
+function forkFromMessage(idx: number): void {
+  if (sending.value) return
+  const msg = messages.value[idx]
+  if (!msg || msg.role !== 'user') return
+  // Save a new thread with messages UP TO (not including) this message
+  const forkHistory = messages.value.slice(0, idx).filter((m) => !m.streaming)
+  const baseTitle = (allThreads.value.find((t) => t.id === currentThreadId.value)?.title ?? 'Chat') + ' (fork)'
+  const newThread: ChatThread = {
+    id: crypto.randomUUID(),
+    title: baseTitle.slice(0, 60),
+    messages: forkHistory,
+    updatedAt: Date.now(),
+  }
+  allThreads.value.unshift(newThread)
+  saveCurrentThread()
+  // Switch to the new thread with the forked message in the input box
+  switchThread(newThread.id)
+  inputText.value = msg.content
+  nextTick(() => textareaEl.value?.focus())
+  showToast('Forked to new chat')
+}
+
 // ── Copy message ───────────────────────────────────────────────────────────────
 // ── Export conversation ────────────────────────────────────────────────────────
 async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Promise<void> {
@@ -1809,6 +1833,39 @@ function selectSlashCommand(cmd: SlashCommand): void {
     })()
     return
   }
+  // /diff: auto-add @git chip and set prompt
+  if (cmd.id === '/diff') {
+    inputText.value = 'Explain these changes and their potential impact on the codebase:'
+    void (async () => {
+      try {
+        interface DiffResp { ok: boolean; diff?: string }
+        let resp = await props.backend.send<DiffResp>('git.diff_all', {
+          workspace_path: props.workspacePath,
+          staged: true,
+        })
+        let diff = resp.payload?.diff
+        let label = '@git(staged)'
+        let header = '// git diff --staged'
+        if (!diff) {
+          resp = await props.backend.send<DiffResp>('git.diff_all', {
+            workspace_path: props.workspacePath,
+            staged: false,
+          })
+          diff = resp.payload?.diff
+          label = '@git(diff)'
+          header = '// git diff (unstaged)'
+        }
+        if (!diff) {
+          showToast('No changes found'); return
+        }
+        contextChips.value.push({ id: crypto.randomUUID(), label, content: `${header}\n${diff}` })
+      } catch { showToast('/diff: git unavailable') }
+      await nextTick()
+      textareaEl.value?.focus()
+    })()
+    return
+  }
+
   inputText.value = cmd.template + ' '
 
   // Auto-inject current file chip for code-focused commands when no chip exists yet
@@ -2672,6 +2729,14 @@ function getDateLabel(ts: number): string {
             @click="editMessage(mi)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/></svg>
+          </button>
+          <button
+            v-if="msg.role === 'user' && !sending && mi > 0"
+            class="ai-msg-action-btn"
+            title="Fork — continue from here in a new chat"
+            @click="forkFromMessage(mi)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 2.122a2.25 2.25 0 1 0-1.5 0v.878A2.25 2.25 0 0 0 5.75 8.5h1.5v2.128a2.251 2.251 0 1 0 1.5 0V8.5h1.5a2.25 2.25 0 0 0 2.25-2.25v-.878a2.25 2.25 0 1 0-1.5 0v.878a.75.75 0 0 1-.75.75h-4.5A.75.75 0 0 1 5 6.25v-.878Zm3.75 7.378a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm3-8.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/></svg>
           </button>
           <button class="ai-msg-action-btn" title="Copy" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
