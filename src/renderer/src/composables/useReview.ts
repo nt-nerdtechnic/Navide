@@ -74,8 +74,8 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
     isReviewing.value = true
     const rid = crypto.randomUUID()
     currentReviewId.value = rid
-    _elapsedTimer = setInterval(() => { reviewElapsed.value++ }, 1000)
     _setup(rid)
+    _elapsedTimer = setInterval(() => { reviewElapsed.value++ }, 1000)
 
     try {
       await backend.send('ai.review.start', {
