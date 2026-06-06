@@ -2218,7 +2218,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             else:
                 try:
                     import httpx as _httpx
-                    import html as _html_mod
                     from html.parser import HTMLParser as _HTMLParser
 
                     class _DDGLiteParser(_HTMLParser):
