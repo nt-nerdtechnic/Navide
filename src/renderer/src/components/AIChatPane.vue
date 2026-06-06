@@ -2679,7 +2679,7 @@ function forkFromMessage(idx: number): void {
 
 // ── Copy message ───────────────────────────────────────────────────────────────
 // ── Export conversation ────────────────────────────────────────────────────────
-async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Promise<void> {
+async function exportConversation(format: 'markdown' | 'json' | 'html' = 'markdown'): Promise<void> {
   const msgs = messages.value.filter((m) => !m.streaming)
   if (msgs.length === 0) {
     showToast('No messages to export')
@@ -2691,6 +2691,27 @@ async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Pro
     const data = msgs.map((m) => ({ role: m.role, content: m.content, model: m.model, timestamp: m.timestamp }))
     content = JSON.stringify({ messages: data, exportedAt: new Date().toISOString() }, null, 2)
     defaultName = 'ai-chat-export.json'
+  } else if (format === 'html') {
+    const title = currentThread.value?.title ?? 'AI Chat Export'
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    let body = ''
+    for (const msg of msgs) {
+      const role = msg.role === 'user' ? 'user' : 'assistant'
+      const label = msg.role === 'user' ? 'User' : `Assistant${msg.model ? ` (${msg.model})` : ''}`
+      const ts = new Date(msg.timestamp).toLocaleString()
+      body += `<div class="msg ${role}"><div class="role">${esc(label)} <span class="ts">${esc(ts)}</span></div><pre class="content">${esc(msg.content)}</pre></div>\n`
+    }
+    content = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+body{font-family:system-ui,-apple-system,sans-serif;max-width:860px;margin:40px auto;padding:0 20px;color:#1f2328;background:#fff}
+h1{font-size:1.3em;border-bottom:1px solid #d0d7de;padding-bottom:8px}
+.msg{margin:16px 0;border-radius:8px;overflow:hidden;border:1px solid #d0d7de}
+.role{padding:6px 14px;font-size:.78em;font-weight:600;background:#f6f8fa;border-bottom:1px solid #d0d7de;color:#656d76}
+.ts{font-weight:400;color:#8c959f}
+.content{margin:0;padding:12px 14px;white-space:pre-wrap;word-break:break-word;font-family:inherit;font-size:.9em;line-height:1.6}
+.user .role{background:#ddf4ff;color:#0969da}
+.assistant .role{background:#f0f0ff;color:#6e40c9}
+</style></head><body><h1>${esc(title)}</h1>\n${body}</body></html>`
+    defaultName = 'ai-chat-export.html'
   } else {
     let md = '# AI Chat Export\n\n'
     for (const msg of msgs) {
@@ -4002,11 +4023,12 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   if (cmd.id === '/export') {
     const existing = inputText.value.slice('/export'.length).trim().toLowerCase()
     if (existing === 'json') { inputText.value = ''; void exportConversation('json'); return }
+    if (existing === 'html') { inputText.value = ''; void exportConversation('html'); return }
     // Default to markdown (or if user typed '/export markdown')
     if (existing === '' || existing === 'markdown' || existing === 'md') { inputText.value = ''; void exportConversation('markdown'); return }
     // Unknown arg — hint and wait
     inputText.value = '/export '
-    showToast('Type: /export markdown  or  /export json')
+    showToast('Type: /export markdown  /export json  or  /export html')
     nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
     return
   }
