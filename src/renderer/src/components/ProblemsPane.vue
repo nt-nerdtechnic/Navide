@@ -5,6 +5,7 @@ import type { Diagnostic } from '../editor/diagnostics'
 
 const emit = defineEmits<{
   (e: 'open-file', payload: { filepath: string; line: number }): void
+  (e: 'fix-with-ai', payload: { diag: Diagnostic }): void
 }>()
 
 const all = computed(() => allDiagnosticsSorted())
@@ -58,6 +59,11 @@ function openItem(d: Diagnostic): void {
           <span class="prob-msg">{{ d.message }}</span>
           <span class="prob-loc">{{ d.line }}{{ d.col ? ':' + d.col : '' }}</span>
           <span v-if="d.source" class="prob-src">{{ d.source }}</span>
+          <button
+            class="prob-fix-btn"
+            title="Fix with AI"
+            @click.stop="emit('fix-with-ai', { diag: d })"
+          >Fix</button>
         </div>
       </div>
     </div>
@@ -149,4 +155,18 @@ function openItem(d: Diagnostic): void {
   font-size: 10px;
   font-style: italic;
 }
+.prob-fix-btn {
+  flex-shrink: 0;
+  display: none;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.prob-fix-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.prob-item:hover .prob-fix-btn { display: inline-block; }
 </style>

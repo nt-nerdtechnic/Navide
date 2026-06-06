@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
+import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -278,6 +279,13 @@ const displayedTemplates = computed(() =>
   promptTemplates.value.length > 0 ? promptTemplates.value : DEFAULT_PROMPT_TEMPLATES
 )
 
+// ── Memories (Cursor-style persistent facts, injected into every system prompt) ─
+const MEMORIES_KEY = 'ai-chat-memories'
+const memories = ref<string[]>(JSON.parse(localStorage.getItem(MEMORIES_KEY) ?? '[]') as string[])
+watch(memories, (v) => { try { localStorage.setItem(MEMORIES_KEY, JSON.stringify(v)) } catch { /* quota */ } }, { deep: true })
+function addMemory(fact: string): void { const f = fact.trim(); if (f && !memories.value.includes(f)) { memories.value.push(f) } }
+function removeMemory(idx: number): void { memories.value.splice(idx, 1) }
+
 // ── Notepads (persistent context notes, always injected into system prompt) ───
 interface Notepad { id: string; name: string; content: string; updatedAt: number }
 const showNotes = ref(false)
@@ -487,14 +495,26 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[] }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
+const THREAD_LABELS = ['🐛 Bug', '✨ Feature', '❓ Question', '📝 Docs', '🔧 Refactor', '⚡ Perf', '🔒 Security', '🧪 Tests'] as const
+type ThreadLabel = typeof THREAD_LABELS[number] | ''
+
+function setThreadLabel(id: string, label: ThreadLabel): void {
+  const t = allThreads.value.find((th) => th.id === id)
+  if (t) { t.label = label || undefined; saveCurrentThread() }
+}
+
 const showThreads = ref(false)
 const showArchivedThreads = ref(false)
 const threadSearchQuery = ref('')
+const threadSortMode = ref<'date' | 'name' | 'model'>(
+  (localStorage.getItem('ai-chat-thread-sort') ?? 'date') as 'date' | 'name' | 'model'
+)
+watch(threadSortMode, (v) => localStorage.setItem('ai-chat-thread-sort', v))
 const renamingThreadId = ref('')
 const renamingTitle = ref('')
 const filteredThreads = computed(() => {
@@ -508,8 +528,13 @@ const filteredThreads = computed(() => {
         t.messages.some((m) => m.content.toLowerCase().includes(q)),
       )
     : pool
-  // Pinned threads always at top, then by updatedAt desc (array is already sorted that way)
-  return [...list.filter((t) => t.pinned), ...list.filter((t) => !t.pinned)]
+  const sorted = [...list].sort((a, b) => {
+    if (threadSortMode.value === 'name') return a.title.localeCompare(b.title)
+    if (threadSortMode.value === 'model') return (a.model ?? '').localeCompare(b.model ?? '')
+    return b.updatedAt - a.updatedAt // date (default)
+  })
+  // Pinned threads always at top
+  return [...sorted.filter((t) => t.pinned), ...sorted.filter((t) => !t.pinned)]
 })
 
 type GroupedItem = { kind: 'thread'; thread: ChatThread } | { kind: 'label'; label: string }
@@ -1293,7 +1318,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
   { id: '@git:log', label: '@git:log — recent commit history (last 20, or @git:log:50 / @git:log:verbose)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
-  { id: '@git:blame',   label: '@git:blame — blame for current open file' },
+  { id: '@git:blame',     label: '@git:blame — blame for current open file' },
+  { id: '@git:file-log', label: '@git:file-log — commit history for the current open file' },
   { id: '@git:recent',   label: '@git:recent — recently committed files (last 5)' },
   { id: '@git:modified', label: '@git:modified — list all uncommitted changed files' },
   { id: '@git:stash',        label: '@git:stash — list all git stashes' },
@@ -1304,6 +1330,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:commit',   label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@git:conflict', label: '@git:conflict — files with merge conflicts (<<<<<<< markers)' },
   { id: '@git:remote',   label: '@git:remote — remote URLs, tracking branches, and push/pull status' },
+  { id: '@git:author',   label: '@git:author — git blame for current file (author + timestamp per line)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
@@ -1312,6 +1339,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
+  { id: '@workspace', label: '@workspace — full project overview (README + tree + deps + rules)' },
   { id: '@tree', label: '@tree — workspace file tree structure' },
   { id: '@symbol', label: '@symbol — find a function or class definition' },
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
@@ -1329,6 +1357,9 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@diff:',      label: '@diff:path — git diff of a specific file (e.g. @diff:src/App.vue)' },
   { id: '@ci',         label: '@ci — last CI/CD run status (GitHub Actions / .github/workflows)' },
   { id: '@lock',       label: '@lock — package lock file summary (key deps & versions)' },
+  { id: '@port',       label: '@port — active dev servers & listening ports in this workspace' },
+  { id: '@coverage',   label: '@coverage — test coverage report (vitest/pytest-cov/jest)' },
+  { id: '@rules',      label: '@rules — project AI rules (.cursorrules / AGENTS.md / .cursor/rules/*.mdc)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1398,6 +1429,22 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/perf',         label: '/perf',         description: 'Analyze code for performance bottlenecks and suggest optimizations',   template: 'Analyze the following code for performance bottlenecks. For each issue: identify the problem, estimate its impact, and provide a concrete optimized version with explanation:\n\n' },
   { id: '/security',     label: '/security',     description: 'Audit code for security vulnerabilities (OWASP, injection, etc.)',    template: 'Perform a security audit on the following code. Check for OWASP Top 10 vulnerabilities, injection flaws, authentication issues, data exposure, and any other security risks. For each finding provide: severity (Critical/High/Medium/Low), description, and fix:\n\n' },
   { id: '/types',        label: '/types',        description: 'Generate or improve TypeScript type definitions for the code',        template: 'Generate comprehensive TypeScript type definitions for the following code. Include interfaces, type aliases, and generics where appropriate. Ensure strict typing with no implicit any:\n\n' },
+  { id: '/mock',         label: '/mock',         description: 'Generate mocks / stubs for a class, interface, or function',         template: 'Generate complete test mocks and stubs for the following code. Use the project\'s existing test framework (jest/vitest/pytest). Include factory functions, type-safe mock implementations, and example usage in a test:\n\n' },
+  { id: '/scaffold',     label: '/scaffold',     description: 'Scaffold a new file, component, or module from description',         template: '' },
+  { id: '/diagram',      label: '/diagram',      description: 'Generate a Mermaid diagram (flowchart, sequence, class, ER, etc.)',  template: 'Generate a Mermaid diagram that visualizes the following. Choose the most appropriate diagram type (flowchart, sequenceDiagram, classDiagram, erDiagram, stateDiagram, or gitGraph). Return only the Mermaid code block:\n\n' },
+  { id: '/migrate',        label: '/migrate',        description: 'Suggest migration steps between API versions or framework upgrades', template: 'Provide a step-by-step migration plan for the following. For each step: describe the change, show before/after code, and flag any breaking changes or caveats:\n\n' },
+  { id: '/review:staged',  label: '/review:staged',  description: 'Code review staged changes (git diff --cached)',                    template: '' },
+  { id: '/review:branch',  label: '/review:branch',  description: 'Code review all changes on current branch vs main',                 template: '' },
+  { id: '/fix:lint',       label: '/fix:lint',       description: 'Run linter, inject errors, ask AI to fix them',                     template: '' },
+  { id: '/coverage',       label: '/coverage',       description: 'Run test coverage and show uncovered lines for current file',        template: '' },
+  { id: '/label',          label: '/label',          description: 'Set a label for this thread (🐛 Bug, ✨ Feature, ❓ Question, …)',     template: '' },
+  { id: '/recap',          label: '/recap',          description: 'Quick 3-bullet recap of key decisions in this conversation',          template: '' },
+  { id: '/instructions',   label: '/instructions',   description: 'Set custom AI instructions for this thread only',                     template: '' },
+  { id: '/ask',            label: '/ask',            description: 'Ask a question about the codebase (auto-injects @codebase search)',   template: '' },
+  { id: '/commit:amend',   label: '/commit:amend',   description: 'Improve the last git commit message with AI',                        template: '' },
+  { id: '/memory',         label: '/memory',         description: 'Add a persistent memory fact (auto-injected into every conversation)',   template: '' },
+  { id: '/memory:clear',   label: '/memory:clear',   description: 'Clear all memories',                                                    template: '' },
+  { id: '/refactor:extract', label: '/refactor:extract', description: 'Extract selected code into a named function/variable',              template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2131,7 +2178,7 @@ function _pushSettingsToBackend(): void {
     openai_compatible_model: settingsOaiCompatModel.value,
     model,
     ollama_base_url: settingsOllamaUrl.value,
-    system_prompt: settingsSystemPrompt.value,
+    system_prompt: allThreads.value.find((t) => t.id === currentThreadId.value)?.systemPrompt || settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
     max_agent_iterations: Math.max(1, Math.min(20, settingsMaxAgentIter.value)),
   }
@@ -2231,7 +2278,10 @@ async function sendMessage(): Promise<void> {
   const _delegateSlash = [
     '/clear', '/compact', '/diff', '/model', '/pin', '/summarize',
     '/save-summary', '/spell', '/git', '/pr', '/changelog', '/prompts', '/import', '/generate', '/commit',
-    '/run', '/search', '/translate', '/rename', '/save-prompt',
+    '/run', '/search', '/translate', '/rename', '/save-prompt', '/scaffold',
+    '/review:staged', '/review:branch', '/fix:lint', '/coverage',
+    '/label', '/recap', '/instructions', '/ask', '/commit:amend',
+    '/memory', '/memory:clear', '/refactor:extract',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -2540,6 +2590,7 @@ async function sendMessage(): Promise<void> {
   try {
     const lengthHint = RESPONSE_LENGTH_HINTS[responseLength.value]
     const notesSuffix = notesContent.value.trim() ? `\n\n--- Workspace Notes ---\n${notesContent.value.trim()}` : ''
+    const memoriesSuffix = memories.value.length ? `\n\n--- Memories (Persistent Facts) ---\n${memories.value.map((m, i) => `${i + 1}. ${m}`).join('\n')}` : ''
     // Smart Context: inject active file as ambient context (capped at 200 lines)
     let smartCtxSuffix = ''
     if (settingsSmartContext.value && props.getActiveRelPath && props.getEditorContent) {
@@ -2597,7 +2648,7 @@ async function sendMessage(): Promise<void> {
       messages: history,
       workspace_path: props.workspacePath,
       ...(rulesPrefix ? { system_prefix: rulesPrefix } : {}),
-      ...(lengthHint || notesSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + smartCtxSuffix + editSetSuffix } : {}),
+      ...(lengthHint || notesSuffix || memoriesSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + memoriesSuffix + smartCtxSuffix + editSetSuffix } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -2800,6 +2851,22 @@ function quoteMessage(content: string): void {
   showToast('Quoted — add your question below')
 }
 
+function saveResponseToNotepad(msg: ChatMessage): void {
+  const plain = msg.content.trim()
+  if (!plain) return
+  const timestamp = new Date().toLocaleString('sv').replace('T', ' ')
+  const snippet = plain.slice(0, 60).replace(/\n/g, ' ')
+  const entry = `\n---\n_Saved from AI Chat · ${timestamp}_\n\n${plain}\n`
+  if (!namedNotepads.value.length) {
+    const np = createNotepad('AI Responses')
+    updateNotepadContent(np.id, entry)
+  } else {
+    const target = activeNotepad.value ?? namedNotepads.value[0]
+    updateNotepadContent(target.id, (target.content ? target.content : '') + entry)
+  }
+  showToast(`Saved: "${snippet}…" → Notepad`)
+}
+
 // ── Message right-click context menu ──────────────────────────────────────────
 function onMsgContextMenu(e: MouseEvent): void {
   const wrap = (e.target as Element).closest<HTMLElement>('.ai-msg-wrap')
@@ -2897,6 +2964,19 @@ function regenWithModel(modelId: string): void {
       settingsModel.value = prevModel
       saveSettings()
     }
+  })
+}
+
+function regenWithHigherTemp(): void {
+  regenModelOpen.value = false
+  if (reasoningModelSelected.value) { showToast('Temperature not supported for reasoning models'); return }
+  const prev = settingsTemperature.value
+  const boosted = Math.min(1.0, (prev ?? 0.7) + 0.3)
+  settingsTemperature.value = boosted
+  _pushSettingsToBackend()
+  void regenerate().finally(() => {
+    settingsTemperature.value = prev
+    _pushSettingsToBackend()
   })
 }
 
@@ -3163,6 +3243,18 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
+  }
+  // ArrowUp / ArrowDown — navigate thread list when thread panel is open
+  if (showThreads.value && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    const visible = filteredThreads.value
+    if (!visible.length) return
+    const curIdx = visible.findIndex((t) => t.id === currentThreadId.value)
+    const nextIdx = e.key === 'ArrowUp'
+      ? (curIdx <= 0 ? visible.length - 1 : curIdx - 1)
+      : (curIdx >= visible.length - 1 ? 0 : curIdx + 1)
+    const next = visible[nextIdx]
+    if (next) { e.preventDefault(); switchThread(next.id) }
+    return
   }
   // Alt+Up / Alt+Down — navigate between AI assistant messages (Cursor-style)
   if (e.altKey && !e.metaKey && !e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -4346,6 +4438,217 @@ ${historyText}`
     return
   }
 
+  if (cmd.id === '/review:staged' || cmd.id === '/review:branch') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast(`${cmd.id} requires an open workspace`); return }
+    try {
+      showToast('Fetching diff…')
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      const isStaged = cmd.id === '/review:staged'
+      const diffCmd = isStaged
+        ? 'git diff --cached --stat 2>&1 | head -20 && echo "---" && git diff --cached 2>&1 | head -300'
+        : 'git diff $(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~5) HEAD --stat 2>&1 | head -20 && echo "---" && git diff $(git merge-base HEAD origin/main 2>/dev/null || git merge-base HEAD main 2>/dev/null || echo HEAD~5) HEAD 2>&1 | head -400'
+      const resp = await props.backend.send<ShellResp>('shell.run', { command: diffCmd, workspace_path: props.workspacePath })
+      if (!resp.payload?.ok) {
+        showToast(`${cmd.id}: ${resp.payload?.error ?? 'backend error'}`)
+        return
+      }
+      const diff = (resp.payload.output ?? '').trim()
+      if (!diff || diff.startsWith('fatal')) {
+        showToast(`${cmd.id}: no diff found`)
+        return
+      }
+      contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@git:diff'))
+      const label = isStaged ? '@git:staged' : '@git:branch-diff'
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// ${isStaged ? 'Staged changes' : 'Branch diff vs main'}:\n${diff}` })
+      inputText.value = `Review the following ${isStaged ? 'staged' : 'branch'} changes for: correctness, potential bugs, security issues, and code quality. Be specific and actionable.`
+    } catch { showToast(`${cmd.id}: unavailable`) }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/ask') {
+    inputText.value = 'How does '
+    showToast('Type your question — use @codebase to search across the project')
+    await nextTick()
+    textareaEl.value?.focus()
+    const l = inputText.value.length
+    textareaEl.value?.setSelectionRange(l, l)
+    return
+  }
+
+  if (cmd.id === '/memory') {
+    inputText.value = ''
+    const fact = window.prompt('Add a persistent memory fact (one sentence):')
+    if (fact?.trim()) { addMemory(fact.trim()); showToast(`Memory saved: "${fact.trim().slice(0, 50)}…"`) }
+    return
+  }
+
+  if (cmd.id === '/memory:clear') {
+    inputText.value = ''
+    if (!memories.value.length) { showToast('No memories to clear'); return }
+    const ok = window.confirm(`Clear all ${memories.value.length} memories?`)
+    if (ok) { memories.value = []; showToast('Memories cleared') }
+    return
+  }
+
+  if (cmd.id === '/refactor:extract') {
+    inputText.value = ''
+    const sel = window.getSelection()?.toString().trim() ?? ''
+    if (sel) {
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: `// Selected code:\n\`\`\`\n${sel}\n\`\`\`` })
+      inputText.value = 'Extract the selected code into a well-named function. Keep the original call site working. Use the same language and style as the surrounding code.'
+    } else {
+      const relPath = props.getActiveRelPath?.()
+      const content = props.getEditorContent?.()
+      if (relPath && content !== undefined) {
+        const ext = relPath.split('.').pop() ?? ''
+        const label = `@${relPath.split('/').pop()}`
+        if (!contextChips.value.some((c) => c.label === label)) {
+          contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\`` })
+        }
+      }
+      inputText.value = 'Identify the best candidate for extraction in this file. Extract it into a well-named function or variable, keeping all existing behavior identical.'
+    }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/commit:amend') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/commit:amend requires an open workspace'); return }
+    try {
+      showToast('Fetching last commit…')
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git log -1 --format="%H%n%s%n%n%b" 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      if (!resp.payload?.ok) { showToast(`/commit:amend: ${resp.payload?.error ?? 'backend error'}`); return }
+      const log = (resp.payload.output ?? '').trim()
+      if (!log || log.startsWith('fatal')) { showToast('/commit:amend: no commits found'); return }
+      const [hash, ...rest] = log.split('\n')
+      const msg = rest.join('\n').trim()
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git:last-commit', content: `// Last commit (${hash.slice(0, 7)}):\n${msg}` })
+      inputText.value = 'Rewrite this commit message to be clearer and follow conventional commits format (type(scope): description). Keep it concise. Return only the new message, no explanation.'
+    } catch { showToast('/commit:amend: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/label') {
+    const labelList = THREAD_LABELS.map((l, i) => `${i + 1}. ${l}`).join('  ')
+    const existing = allThreads.value.find((t) => t.id === currentThreadId.value)?.label ?? ''
+    inputText.value = ''
+    const raw = window.prompt(
+      `Set thread label:\n${labelList}\n\nType the label text (or clear to remove):\nCurrent: ${existing || '(none)'}`,
+      existing,
+    )
+    if (raw !== null) {
+      const choice = raw.trim() as ThreadLabel
+      const matched = THREAD_LABELS.find((l) => l === choice) ?? (choice === '' ? '' : null)
+      if (matched !== null) {
+        setThreadLabel(currentThreadId.value, matched as ThreadLabel)
+        showToast(matched ? `Label set: ${matched}` : 'Label removed')
+      } else {
+        showToast('Invalid label — choose from the list')
+      }
+    }
+    return
+  }
+
+  if (cmd.id === '/recap') {
+    inputText.value = ''
+    if (messages.value.length < 2) { showToast('/recap: no conversation yet'); return }
+    const recent = messages.value.filter((m) => !m.streaming && m.content.trim()).slice(-20)
+    const historyText = recent.map((m) => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content.slice(0, 300)}`).join('\n---\n')
+    contextChips.value.push({ id: crypto.randomUUID(), label: '@history', content: `// Recent conversation:\n${historyText}` })
+    inputText.value = 'Give me a quick 3-bullet recap of the key decisions and outcomes from this conversation so far. Be concise — one sentence per bullet.'
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/instructions') {
+    inputText.value = ''
+    const t = allThreads.value.find((th) => th.id === currentThreadId.value)
+    const current = t?.systemPrompt ?? ''
+    const rawInstr = window.prompt(
+      'Set custom AI instructions for this thread only\n(overrides global system prompt while this thread is active):\n\nLeave blank to use global setting.',
+      current,
+    )
+    if (rawInstr !== null && t) {
+      const newInstr = rawInstr.trim()
+      t.systemPrompt = newInstr || undefined
+      saveCurrentThread()
+      _pushSettingsToBackend()
+      showToast(newInstr ? 'Thread instructions set' : 'Thread instructions cleared')
+    }
+    return
+  }
+
+  if (cmd.id === '/fix:lint') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/fix:lint requires an open workspace'); return }
+    try {
+      showToast('Running linter…')
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      const rawPath = props.getActiveRelPath?.() ?? ''
+      // Validate: only safe path characters, reject .. and leading -
+      const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+      const safeRelPath = SAFE_PATH.test(rawPath) && !rawPath.includes('..') && !rawPath.startsWith('-') ? rawPath : ''
+      // Single-quote shell quoting: replace ' with '\''
+      const sqPath = safeRelPath.replace(/'/g, "'\\''")
+      const eslintCmd = safeRelPath
+        ? `npx eslint '${sqPath}' --format compact 2>&1 | head -60 || echo "(eslint not available)"`
+        : 'npx eslint . --format compact 2>&1 | head -60 || echo "(eslint not available)"'
+      const ruffCmd = safeRelPath && safeRelPath.endsWith('.py')
+        ? `python -m ruff check '${sqPath}' 2>&1 | head -40 || echo "(ruff not available)"`
+        : 'python -m ruff check . 2>&1 | head -40 || echo "(ruff not available)"'
+      const [eslintResp, ruffResp] = await Promise.all([
+        props.backend.send<ShellResp>('shell.run', { command: eslintCmd, workspace_path: props.workspacePath }),
+        props.backend.send<ShellResp>('shell.run', { command: ruffCmd, workspace_path: props.workspacePath }),
+      ])
+      const eslint = (eslintResp.payload?.output ?? '').trim()
+      const ruff = (ruffResp.payload?.output ?? '').trim()
+      let lintErrors = ''
+      if (eslint && !eslint.includes('not available')) lintErrors += `// ESLint:\n${eslint}\n`
+      if (ruff && !ruff.includes('not available') && !ruff.includes('error: ')) lintErrors += `\n// Ruff:\n${ruff}\n`
+      if (!lintErrors.trim()) { showToast('/fix:lint: no errors found'); return }
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@lint')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@lint', content: lintErrors.trim() })
+      inputText.value = 'Fix all the lint errors shown above. For each fix, briefly explain what was wrong and what you changed.'
+    } catch { showToast('/fix:lint: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/coverage') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/coverage requires an open workspace'); return }
+    try {
+      showToast('Running coverage…')
+      interface ShellResp { ok: boolean; output?: string }
+      const rawPath = props.getActiveRelPath?.() ?? ''
+      const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+      const safeRelPath = SAFE_PATH.test(rawPath) && !rawPath.includes('..') && !rawPath.startsWith('-') ? rawPath : ''
+      const sqPath = safeRelPath.replace(/'/g, "'\\''")
+      const isPy = safeRelPath.endsWith('.py')
+      const covCmd = isPy && safeRelPath
+        ? `python -m pytest --cov='${sqPath}' --cov-report=term-missing -q 2>&1 | tail -30`
+        : `npx vitest run --reporter=verbose --coverage 2>&1 | grep -A100 "Coverage report" | head -40 || npx jest --coverage --coverageReporters=text 2>&1 | tail -30`
+      const resp = await props.backend.send<ShellResp>('shell.run', { command: covCmd, workspace_path: props.workspacePath })
+      if (!resp.payload?.ok) { showToast(`/coverage: ${resp.payload?.error ?? 'backend error'}`); return }
+      const cov = (resp.payload.output ?? '').trim()
+      if (!cov) { showToast('/coverage: no output'); return }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@coverage', content: `// Coverage report:\n${cov}` })
+      inputText.value = safeRelPath
+        ? `Analyze the coverage report above for ${safeRelPath.split('/').pop()}. Identify the uncovered lines and write tests to cover them.`
+        : 'Analyze the coverage report above. Identify the most critical uncovered code and write tests to improve coverage.'
+    } catch { showToast('/coverage: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
   if (cmd.id === '/git') {
     inputText.value = ''
     if (!props.workspacePath) { showToast('/git requires an open workspace'); return }
@@ -4374,10 +4677,18 @@ ${log || '(no commits)'}`
     return
   }
 
+  if (cmd.id === '/scaffold') {
+    inputText.value = 'Scaffold a new '
+    await nextTick(); textareaEl.value?.focus()
+    const len = inputText.value.length
+    textareaEl.value?.setSelectionRange(len, len)
+    return
+  }
+
   inputText.value = cmd.template + ' '
 
   // Auto-inject current file chip for code-focused commands when no chip exists yet
-  const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve', '/perf', '/security', '/types'])
+  const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve', '/perf', '/security', '/types', '/mock', '/diagram', '/migrate'])
   if (CODE_CMDS.has(cmd.id) && contextChips.value.length === 0) {
     const relPath = props.getActiveRelPath?.()
     const content = props.getEditorContent?.()
@@ -4576,6 +4887,26 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     } catch {
       chipContent = `// @git:blame: unavailable`
     }
+  } else if (option.id === '@git:file-log') {
+    chipLabel = '@git:file-log'
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('@git:file-log: no file open in editor'); return }
+    try {
+      interface ShellRespFL { ok: boolean; output?: string }
+      const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+      const safeRelPath = SAFE_PATH.test(relPath) && !relPath.includes('..') && !relPath.startsWith('-') ? relPath : null
+      if (!safeRelPath) { chipContent = '// @git:file-log: invalid file path'; } else {
+        const sqPath = safeRelPath.replace(/'/g, "'\\''")
+        const resp = await props.backend.send<ShellRespFL>('shell.run', {
+          command: `git log --follow --oneline --date=short --format="%h %ad %an — %s" -- '${sqPath}' 2>/dev/null | head -30`,
+          workspace_path: props.workspacePath,
+        })
+        const log = (resp.payload?.output ?? '').trim()
+        chipContent = log
+          ? `// git log: ${relPath} (last ${log.split('\n').length} commits)\n${log}`
+          : `// @git:file-log: no history for ${relPath}`
+      }
+    } catch { chipContent = '// @git:file-log: unavailable' }
   } else if (option.id === '@git:recent') {
     chipLabel = '@git:recent'
     try {
@@ -4819,6 +5150,27 @@ ${out}`
     } catch {
       chipContent = '// @git:remote: unavailable'
     }
+  } else if (option.id === '@git:author') {
+    chipLabel = '@git:author'
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('@git:author: no file open in editor'); return }
+    try {
+      interface ShellRespBlame { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespBlame>('shell.run', {
+        command: `git blame --line-porcelain -- '${relPath.replace(/'/g, "'\\''")}' 2>/dev/null | awk '/^author / {a=$0} /^author-time / {t=$2} /^filename / {f=$2} /^\t/ {gsub(/^author /,"",a); printf "%s | %s | %s\\n", strftime("%Y-%m-%d", t+0), a, substr($0,2)}' | head -80`,
+        workspace_path: props.workspacePath,
+      })
+      if (!resp.payload?.ok) {
+        chipContent = `// @git:author: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const blame = (resp.payload.output ?? '').trim()
+        chipContent = blame
+          ? `// git blame: ${relPath}\n// date       | author            | line content\n${blame}`
+          : `// @git:author: no blame info for ${relPath}`
+      }
+    } catch {
+      chipContent = '// @git:author: unavailable'
+    }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
     const newVal = val.slice(0, atIdx) + '@codebase ' + val.slice(cur)
@@ -5028,6 +5380,15 @@ ${out}`
     if (!props.workspacePath) {
       chipContent = '// @problems: no workspace open'
     } else {
+      // First, show instant in-memory diagnostics from the editor
+      const liveDiags = allDiagnosticsSorted()
+      const liveParts: string[] = []
+      if (liveDiags.length > 0) {
+        for (const d of liveDiags.slice(0, 60)) {
+          const loc = `${d.relPath}:${d.line}${d.col ? ':' + d.col : ''}`
+          liveParts.push(`[${d.severity.toUpperCase()}] ${d.message} (${loc})${d.source ? ' — ' + d.source : ''}`)
+        }
+      }
       try {
         showToast('Running type check…')
         interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
@@ -5035,14 +5396,25 @@ ${out}`
           command: 'npx vue-tsc --noEmit 2>&1 | head -120',
           workspace_path: props.workspacePath,
         })
-        const out = (resp.payload?.output ?? '').trim()
-        if (!out || resp.payload?.exit_code === 0) {
-          chipContent = '// @problems: no TypeScript errors found ✓'
+        const liveSec = liveParts.length > 0 ? `// Live diagnostics (${liveParts.length}):\n${liveParts.join('\n')}\n\n` : ''
+        if (!resp.payload?.ok) {
+          chipContent = liveParts.length > 0
+            ? `${liveSec}// TypeScript (vue-tsc): unavailable — ${resp.payload?.error ?? 'backend error'}`
+            : `// @problems: type check unavailable — ${resp.payload?.error ?? 'backend error'}`
         } else {
-          chipContent = `// TypeScript errors in workspace:\n${out}`
+          const tsOut = (resp.payload.output ?? '').trim()
+          if (!tsOut || resp.payload.exit_code === 0) {
+            chipContent = liveParts.length > 0
+              ? `${liveSec}// TypeScript (vue-tsc): no errors ✓`
+              : '// @problems: no errors detected ✓'
+          } else {
+            chipContent = `${liveSec}// TypeScript errors (vue-tsc):\n${tsOut}`
+          }
         }
       } catch {
-        chipContent = '// @problems: type check unavailable'
+        chipContent = liveParts.length > 0
+          ? `// Live diagnostics:\n${liveParts.join('\n')}`
+          : '// @problems: type check unavailable'
       }
     }
   } else if (option.id === '@url') {
@@ -5127,6 +5499,46 @@ ${out}`
       chipContent = `// Clipboard content:\n${clipped}`
     } catch {
       chipContent = '// @clipboard: read failed (check browser permissions)'
+    }
+  } else if (option.id === '@workspace') {
+    chipLabel = '@workspace'
+    if (!props.workspacePath) { chipContent = '// @workspace: no workspace open' } else {
+      try {
+        interface FlatResp { ok: boolean; files?: string[] }
+        interface ReadResp3 { payload?: { ok?: boolean; content?: string } }
+        interface ShellRespWs { ok: boolean; output?: string }
+        // Gather: tree, README, package.json or pyproject.toml, rules
+        const [treeResp, readmeResp, pkgResp, pyResp] = await Promise.all([
+          props.backend.send<FlatResp>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' }),
+          props.backend.send<ReadResp3>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'README.md' }),
+          props.backend.send<ReadResp3>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }),
+          props.backend.send<ReadResp3>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'pyproject.toml' }),
+        ])
+        const projectName = props.workspacePath.split('/').pop() ?? 'project'
+        let out = `// Project: ${projectName}\n// Workspace: ${props.workspacePath}\n\n`
+        // File tree (top 150 files)
+        const files = (treeResp.payload?.files ?? []).slice(0, 150)
+        if (files.length) out += `// File tree (${files.length} files):\n${buildFileTree(files)}\n\n`
+        // README
+        const readme = (readmeResp.payload?.content ?? '').trim()
+        if (readme) out += `// README.md (first 600 chars):\n${readme.slice(0, 600)}${readme.length > 600 ? '\n…' : ''}\n\n`
+        // package.json — just deps
+        const pkg = (pkgResp.payload?.content ?? '').trim()
+        if (pkg) {
+          try {
+            const p = JSON.parse(pkg) as { name?: string; version?: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+            const deps = Object.keys(p.dependencies ?? {}).slice(0, 20).join(', ')
+            const devDeps = Object.keys(p.devDependencies ?? {}).slice(0, 10).join(', ')
+            out += `// package.json: ${p.name ?? ''} v${p.version ?? '?'}\n// deps: ${deps || '(none)'}\n// devDeps: ${devDeps || '(none)'}\n\n`
+          } catch { /* skip */ }
+        }
+        // pyproject.toml — short summary
+        const py = (pyResp.payload?.content ?? '').trim()
+        if (py) out += `// pyproject.toml:\n${py.slice(0, 400)}\n\n`
+        // Workspace rules
+        if (workspaceRulesContent.value) out += `// Workspace rules (${workspaceRulesFile.value ?? '.cursorrules'}):\n${workspaceRulesContent.value.slice(0, 500)}\n`
+        chipContent = out.trim() || '// @workspace: no information available'
+      } catch { chipContent = '// @workspace: unavailable' }
     }
   } else if (option.id === '@tree') {
     chipLabel = '@tree'
@@ -5662,6 +6074,72 @@ ${out}`
     } catch {
       chipContent = '// @lock: unavailable'
     }
+  } else if (option.id === '@port') {
+    chipLabel = '@port'
+    try {
+      interface ShellRespPort { ok: boolean; output?: string }
+      // lsof lists LISTEN ports; grep for workspace-related processes when possible
+      const [lsofResp, psResp] = await Promise.all([
+        props.backend.send<ShellRespPort>('shell.run', {
+          command: 'lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null | awk \'NR>1 {printf "%s\\t%s\\n", $9, $1}\' | sort -u | head -20 || netstat -tlnp 2>/dev/null | grep LISTEN | head -20',
+          workspace_path: props.workspacePath,
+        }),
+        props.backend.send<ShellRespPort>('shell.run', {
+          command: 'ps aux 2>/dev/null | grep -E "node|python|deno|bun|vite|webpack|next|nuxt|fastapi|uvicorn|django|flask|rails|go run" | grep -v grep | awk \'{print $2, $11, $12, $13}\' | head -15',
+          workspace_path: props.workspacePath,
+        }),
+      ])
+      if (!lsofResp.payload?.ok && !psResp.payload?.ok) {
+        chipContent = `// @port: ${lsofResp.payload?.error ?? 'backend error'}`
+      } else {
+        const ports = (lsofResp.payload?.ok ? lsofResp.payload.output ?? '' : '').trim()
+        const procs = (psResp.payload?.ok ? psResp.payload.output ?? '' : '').trim()
+        if (!ports && !procs) {
+          chipContent = '// @port: no listening ports detected'
+        } else {
+          let out = ''
+          if (ports) out += `// Listening ports:\n${ports.split('\n').map((l) => `  ${l}`).join('\n')}\n`
+          if (procs) out += `\n// Dev processes:\n${procs.split('\n').map((l) => `  ${l}`).join('\n')}`
+          chipContent = out.trim()
+        }
+      }
+    } catch {
+      chipContent = '// @port: unavailable'
+    }
+  } else if (option.id === '@coverage') {
+    chipLabel = '@coverage'
+    try {
+      interface ShellRespCov { ok: boolean; output?: string }
+      // Try vitest coverage first, then jest, then pytest-cov
+      const [vitestResp, pytestResp] = await Promise.all([
+        props.backend.send<ShellRespCov>('shell.run', {
+          command: 'npx vitest run --reporter=verbose --coverage 2>&1 | tail -40 || echo "(vitest not available)"',
+          workspace_path: props.workspacePath,
+        }),
+        props.backend.send<ShellRespCov>('shell.run', {
+          command: 'python -m pytest --cov --cov-report=term-missing -q 2>&1 | tail -30 || echo "(pytest-cov not available)"',
+          workspace_path: props.workspacePath,
+        }),
+      ])
+      const vitest = (vitestResp.payload?.ok ? vitestResp.payload.output ?? '' : '').trim()
+      const pytest = (pytestResp.payload?.ok ? pytestResp.payload.output ?? '' : '').trim()
+      let out = ''
+      if (vitest && !vitest.includes('not available')) out += `// Vitest coverage:\n${vitest}\n`
+      if (pytest && !pytest.includes('not available') && !pytest.includes('ERROR')) out += `\n// pytest coverage:\n${pytest}\n`
+      chipContent = out.trim() || '// @coverage: no coverage data available (run tests with --coverage first)'
+    } catch {
+      chipContent = '// @coverage: unavailable'
+    }
+  } else if (option.id === '@rules') {
+    chipLabel = '@rules'
+    if (workspaceRulesContent.value.trim()) {
+      chipContent = `// Project rules (${workspaceRulesFile.value ?? '.cursorrules'}):\n${workspaceRulesContent.value.slice(0, 8000)}`
+    } else {
+      await detectWorkspaceRules()
+      chipContent = workspaceRulesContent.value.trim()
+        ? `// Project rules (${workspaceRulesFile.value}):\n${workspaceRulesContent.value.slice(0, 8000)}`
+        : '// @rules: no rules file found (.cursorrules / AGENTS.md / .cursor/rules/*.mdc)'
+    }
   } else if (option.id === '@diff:') {
     // Bare @diff: — prompt user to type a file path
     const newVal = val.slice(0, atIdx) + '@diff:' + val.slice(cur)
@@ -5692,7 +6170,6 @@ ${out}`
         : `// @diff:${filePath}: no changes (or file not tracked)`
     } catch {
       chipContent = `// @diff:${filePath}: unavailable`
-    }
     }
     }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
@@ -6560,6 +7037,14 @@ function getDateLabel(ts: number): string {
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
+            v-if="msg.role === 'assistant' && !msg.streaming && workspacePath"
+            class="ai-msg-action-btn"
+            title="Save response to Notepad"
+            @click="saveResponseToNotepad(msg)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 8.75 4.25V1.5Zm6.75.56v2.19c0 .138.112.25.25.25h2.19Z"/></svg>
+          </button>
+          <button
             v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
             class="ai-msg-action-btn"
             title="Regenerate"
@@ -6580,6 +7065,14 @@ function getDateLabel(ts: number): string {
               <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>▾
             </button>
             <div v-if="regenModelOpen" class="ai-regen-model-menu">
+              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px">Creativity</div>
+              <div
+                v-if="!reasoningModelSelected"
+                class="ai-regen-model-item"
+                title="Regenerate with +0.3 temperature for more diverse output"
+                @mousedown.prevent="regenWithHigherTemp()"
+              >🎲 More creative (temp +0.3)</div>
+              <div class="ai-model-picker-group" style="font-size:9px;padding:4px 8px 2px;margin-top:2px">Model</div>
               <template v-for="grp in [
                 { label: 'Anthropic',    filter: 'anthropic' },
                 { label: 'OpenAI',       filter: 'openai'    },
@@ -6847,6 +7340,18 @@ function getDateLabel(ts: number): string {
           :title="`Workspace rules active from ${workspaceRulesFile}`"
           @click="showSettings = true"
         >✦ rules</span>
+        <span
+          v-if="allThreads.find(t => t.id === currentThreadId)?.systemPrompt"
+          class="ai-rules-badge"
+          style="background: color-mix(in srgb, #4a9eff 15%, transparent); color: #4a9eff;"
+          :title="`Thread instructions:\n${allThreads.find(t => t.id === currentThreadId)?.systemPrompt}`"
+          @click="selectSlashCommand(SLASH_COMMANDS.find(c => c.id === '/instructions')!)"
+        >⚙ instr</span>
+        <span
+          v-if="allThreads.find(t => t.id === currentThreadId)?.label"
+          class="ai-rules-badge"
+          style="background: var(--bg-muted); cursor: default;"
+        >{{ allThreads.find(t => t.id === currentThreadId)?.label }}</span>
         <button class="ai-model-badge-btn" :title="`Model: ${settingsModel}\nCmd+/ to cycle · click to pick`" @click="showModelPicker = !showModelPicker">
           <span v-if="settingsModel === 'auto'" class="ai-model-badge-provider auto">✦</span>
           <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ {'anthropic':'A','openai':'GPT','groq':'G','deepseek':'DS','google':'GG','mistral':'M','xai':'X','openai_compatible':'C','ollama':'O'}[settingsProvider] ?? 'O' }}</span>
@@ -7160,6 +7665,14 @@ function getDateLabel(ts: number): string {
           <button class="ai-threads-tab" :class="{ active: !showArchivedThreads }" @click="showArchivedThreads = false">Chats ({{ allThreads.filter(t => !t.archived).length }})</button>
           <button class="ai-threads-tab" :class="{ active: showArchivedThreads }" @click="showArchivedThreads = true">Archive ({{ allThreads.filter(t => t.archived).length }})</button>
         </div>
+        <div class="ai-thread-sort-wrap">
+          <button class="ai-thread-sort-btn" :title="`Sort: ${threadSortMode}`" @click="threadSortMode = threadSortMode === 'date' ? 'name' : threadSortMode === 'name' ? 'model' : 'date'">
+            <svg v-if="threadSortMode === 'date'" width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 3.75a.25.25 0 0 1 .25-.25h8.5a.25.25 0 0 1 0 .5h-8.5a.25.25 0 0 1-.25-.25Zm0 4a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 0 .5h-5.5a.25.25 0 0 1-.25-.25Zm0 4a.25.25 0 0 1 .25-.25h2.5a.25.25 0 0 1 0 .5h-2.5a.25.25 0 0 1-.25-.25Z"/></svg>
+            <svg v-else-if="threadSortMode === 'name'" width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 2a.75.75 0 0 1 .75.75v9.5a.75.75 0 0 1-1.5 0v-9.5A.75.75 0 0 1 3.75 2Zm8.854 2.646a.5.5 0 0 1 0 .708L10.707 7.25H15.5a.5.5 0 0 1 0 1h-4.793l1.897 1.896a.5.5 0 1 1-.708.708l-2.75-2.75a.5.5 0 0 1 0-.708l2.75-2.75a.5.5 0 0 1 .708 0Z"/></svg>
+            <svg v-else width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"/></svg>
+            <span style="font-size:9px;margin-left:2px;opacity:.7">{{ threadSortMode }}</span>
+          </button>
+        </div>
         <button class="ai-settings-close" @click="showThreads = false; threadSearchQuery = ''">✕</button>
       </div>
       <div class="ai-threads-search">
@@ -7199,6 +7712,7 @@ function getDateLabel(ts: number): string {
               <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(item.thread, threadSearchQuery) }}</span>
             </div>
             <div class="ai-thread-meta">
+              <span v-if="item.thread.label" class="ai-thread-label-badge" :title="`Label: ${item.thread.label}`">{{ item.thread.label }}</span>
               <span v-if="item.thread.model" class="ai-thread-model-badge" :title="`Thread model: ${item.thread.model}`">{{ MODEL_CATALOG.find(m => m.id === item.thread.model)?.display?.split(' ').slice(-1)[0] ?? item.thread.model }}</span>
               <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
               <span v-if="threadTotalTokens(item.thread) > 0" class="ai-thread-tokens" :title="`~${threadTotalTokens(item.thread).toLocaleString()} total tokens`">{{ threadTotalTokens(item.thread) >= 1000 ? (threadTotalTokens(item.thread) / 1000).toFixed(1) + 'k' : threadTotalTokens(item.thread) }}t</span>
@@ -7267,6 +7781,25 @@ function getDateLabel(ts: number): string {
               rows="5"
               @input="updateNotepadContent(np.id, ($event.target as HTMLTextAreaElement).value)"
             />
+          </div>
+        </div>
+
+        <!-- Memories — Cursor-style persistent facts injected into every conversation -->
+        <div class="ai-notepad-section">
+          <div class="ai-notepad-section-header">
+            <span>Memories <span style="opacity:.6;font-size:10.5px">— injected into every conversation (cross-session)</span></span>
+            <button
+              class="ai-notepad-add-btn"
+              title="Add memory"
+              @click="() => { const f = window.prompt('New memory fact (one sentence):'); if (f?.trim()) addMemory(f.trim()) }"
+            >+</button>
+          </div>
+          <div v-if="memories.length === 0" class="ai-settings-hint" style="padding:6px 0">No memories yet — click + to add a persistent fact.</div>
+          <div v-for="(mem, mi) in memories" :key="mi" class="ai-notepad-item" style="cursor:default">
+            <div class="ai-notepad-item-header">
+              <span class="ai-notepad-item-name" style="font-weight:400;font-size:12px">{{ mem }}</span>
+              <button class="ai-notepad-item-del" title="Remove memory" @click="removeMemory(mi)">✕</button>
+            </div>
           </div>
         </div>
       </div>
@@ -9382,6 +9915,13 @@ function getDateLabel(ts: number): string {
 }
 .ai-threads-tab:hover { color: var(--text-bright); }
 .ai-threads-tab.active { color: var(--accent-fg); border-bottom-color: var(--accent-fg); }
+.ai-thread-sort-wrap { display: flex; align-items: center; margin-left: auto; }
+.ai-thread-sort-btn {
+  background: none; border: 1px solid transparent; border-radius: 4px; color: var(--text-muted);
+  cursor: pointer; display: flex; align-items: center; font-size: 10px; padding: 3px 5px;
+  transition: background 0.1s, color 0.1s;
+}
+.ai-thread-sort-btn:hover { background: var(--bg-subtle); color: var(--text-bright); }
 .ai-threads-search { padding: 6px 10px 4px; flex-shrink: 0; }
 .ai-threads-empty { padding: 10px 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .ai-threads-list { overflow-y: auto; flex: 1; }
@@ -9427,6 +9967,7 @@ function getDateLabel(ts: number): string {
 .ai-thread-item:hover .ai-thread-archive { opacity: 1; }
 .ai-thread-pin:hover { color: var(--accent-fg); }
 .ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
+.ai-thread-label-badge { font-size: 10px; border-radius: 4px; padding: 0 4px; background: var(--bg-muted); flex-shrink: 0; }
 .ai-thread-model-badge { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); border-radius: 3px; padding: 0 4px; opacity: 0.7; }
 .ai-settings-btn.active { color: var(--accent-fg); }
 

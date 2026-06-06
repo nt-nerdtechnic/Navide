@@ -1568,6 +1568,15 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <ProblemsPane
         v-show="sidebarView === 'problems'"
         @open-file="(p) => openFile({ filepath: p.filepath, line: p.line })"
+        @fix-with-ai="(p) => {
+          const loc = `${p.diag.relPath}:${p.diag.line}${p.diag.col ? ':' + p.diag.col : ''}`
+          const chipContent = `// ${p.diag.severity.toUpperCase()}: ${p.diag.message}\n// at ${loc}${p.diag.source ? ' (' + p.diag.source + ')' : ''}`
+          aiPanelOpen.value = true
+          nextTick(() => {
+            aiChatRef.value?.addContextChip('@problems', chipContent)
+            aiChatRef.value?.injectDraft('/fix')
+          })
+        }"
       />
     </div>
     <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
