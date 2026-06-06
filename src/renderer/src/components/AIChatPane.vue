@@ -1034,9 +1034,23 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
+  { id: '@docs',     label: '@docs — fetch official documentation as context' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
+
+const DOCS_CATALOG: Record<string, { label: string; url: string }> = {
+  'vue':        { label: 'Vue 3 Docs',       url: 'https://vuejs.org/guide/introduction.html' },
+  'react':      { label: 'React Docs',        url: 'https://react.dev/learn' },
+  'typescript': { label: 'TypeScript Handbook', url: 'https://www.typescriptlang.org/docs/handbook/intro.html' },
+  'vite':       { label: 'Vite Docs',         url: 'https://vitejs.dev/guide/' },
+  'electron':   { label: 'Electron Docs',     url: 'https://www.electronjs.org/docs/latest/api/app' },
+  'python':     { label: 'Python Docs',       url: 'https://docs.python.org/3/library/index.html' },
+  'fastapi':    { label: 'FastAPI Docs',      url: 'https://fastapi.tiangolo.com/' },
+  'nodejs':     { label: 'Node.js Docs',      url: 'https://nodejs.org/en/docs/' },
+  'tailwind':   { label: 'Tailwind CSS Docs', url: 'https://tailwindcss.com/docs/installation' },
+  'mdn':        { label: 'MDN Web Docs',      url: 'https://developer.mozilla.org/en-US/docs/Web' },
+}
 
 const atOptions = ref<AtOption[]>([...AT_OPTIONS_STATIC])
 
@@ -2790,6 +2804,21 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @docs:<name> — fetch official documentation
+  const isDocsQuery = /^docs:/i.test(fragment)
+  if (isDocsQuery) {
+    const docName = fragment.slice('docs:'.length).trim().toLowerCase()
+    const matched = Object.entries(DOCS_CATALOG)
+      .filter(([k]) => k.startsWith(docName) || DOCS_CATALOG[k].label.toLowerCase().includes(docName))
+      .map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
+    atOptions.value = matched.length ? matched : [{ id: '@docs', label: '@docs — type a doc name (vue, react, ts, python…)' }]
+    return
+  }
+  if (/^docs$/i.test(fragment)) {
+    atOptions.value = Object.entries(DOCS_CATALOG).map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
+    return
+  }
+
   // @symbol:functionName — find a symbol definition across the codebase
   const isSymbolQuery = /^symbol:/i.test(fragment)
   if (isSymbolQuery) {
@@ -3438,6 +3467,50 @@ async function selectAtOption(option: AtOption): Promise<void> {
     chipContent = noteText
       ? `// Workspace Notepad:\n${noteText}`
       : '// @notepad: empty — open the Notepad panel to add notes'
+  } else if (option.id === '@docs') {
+    const newVal = val.slice(0, atIdx) + '@docs:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@docs:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@docs:')) {
+    const docKey = option.id.slice('@docs:'.length).trim()
+    const docEntry = DOCS_CATALOG[docKey]
+    chipLabel = `@docs:${docKey}`
+    if (!docEntry) {
+      chipContent = `// @docs: unknown documentation "${docKey}"`
+    } else {
+      try {
+        showToast(`Fetching ${docEntry.label}…`)
+        const resp = await fetch(docEntry.url, { signal: AbortSignal.timeout(12_000) })
+        const reader = resp.body?.getReader()
+        let bodyText = ''
+        if (reader) {
+          let total = 0
+          const dec = new TextDecoder()
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            total += value.byteLength
+            if (total > 262_144) { await reader.cancel(); bodyText = ''; break }
+            bodyText += dec.decode(value, { stream: true })
+          }
+        }
+        if (!bodyText) {
+          chipContent = `// @docs:${docKey}: response too large`
+        } else {
+          const doc = new DOMParser().parseFromString(bodyText.slice(0, 512_000), 'text/html')
+          doc.querySelectorAll('script,style,noscript,nav,header,footer').forEach((e) => e.remove())
+          const raw = (doc.body?.textContent ?? '').replace(/\s{2,}/g, ' ').trim().slice(0, 5000)
+          chipContent = `// ${docEntry.label} (${docEntry.url})\n\n${raw}`
+        }
+      } catch {
+        chipContent = `// @docs:${docKey}: failed to fetch documentation`
+      }
+    }
   } else if (option.id === '@web') {
     // Prompt user to type search query
     const newVal = val.slice(0, atIdx) + '@web:' + val.slice(cur)
@@ -3596,6 +3669,7 @@ function chipIcon(label: string): string {
   if (label.startsWith('@symbol')) return '⟨⟩'
   if (label.startsWith('@web')) return '🌐'
   if (label.startsWith('@url')) return '🔗'
+  if (label.startsWith('@docs')) return '📖'
   if (label.startsWith('@problems')) return '⚠'
   if (label.startsWith('@clipboard')) return '📋'
   if (label.startsWith('@tree')) return '🌲'
