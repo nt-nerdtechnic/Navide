@@ -347,6 +347,7 @@ function afterChange(): void {
   version.value++
   emit('update:modelValue', model.getValue())
   void nextTick(scrollCursorIntoView)
+  _triggerSuggest()
 }
 // Like afterChange() but does NOT emit update:modelValue.
 // Used when the content arrives from the parent prop — emitting back would
@@ -396,9 +397,9 @@ function moveCursor(dLine: number, dCol: number, extend: boolean): void {
     }
   }
   if (dLine !== 0) {
-    if (preferredCol < 0) preferredCol = col
+    if (preferredCol < 0) preferredCol = visColFromOffset(model.getLine(line), col, tabSize.value)
     line = Math.max(0, Math.min(line + dLine, model.lineCount() - 1))
-    col = Math.min(preferredCol, model.getLine(line).length)
+    col = offsetFromVisCol(model.getLine(line), preferredCol, tabSize.value)
   }
   cursor.value = { line, col }
   // Auto-unfold if cursor lands on a hidden line
@@ -536,6 +537,23 @@ const tabSize = ref(2)
 const useSpaces = ref(true)
 const INDENT = computed(() => useSpaces.value ? ' '.repeat(tabSize.value) : '\t')
 
+function visColFromOffset(lineText: string, col: number, ts: number): number {
+  let vis = 0
+  const end = Math.min(col, lineText.length)
+  for (let i = 0; i < end; i++) {
+    vis += lineText[i] === '\t' ? ts - (vis % ts) : 1
+  }
+  return vis
+}
+function offsetFromVisCol(lineText: string, targetVis: number, ts: number): number {
+  let vis = 0
+  for (let i = 0; i < lineText.length; i++) {
+    if (vis >= targetVis) return i
+    vis += lineText[i] === '\t' ? ts - (vis % ts) : 1
+  }
+  return lineText.length
+}
+
 function indentLines(startLine: number, endLine: number): void {
   const savedAnchor = anchor.value ? { ...anchor.value } : null
   const savedCursor = { ...cursor.value }
@@ -581,6 +599,13 @@ function dedentLines(startLine: number, endLine: number): void {
 // ── Keyboard ─────────────────────────────────────────────────────────────────
 function onKeydown(e: KeyboardEvent): void {
   if (composing) return
+  // Suggest dropdown intercepts
+  if (suggestOpen.value) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); suggestIdx.value = (suggestIdx.value + 1) % suggestItems.value.length; return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); suggestIdx.value = (suggestIdx.value - 1 + suggestItems.value.length) % suggestItems.value.length; return }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); _acceptSuggest(); return }
+    if (e.key === 'Escape') { e.preventDefault(); _closeSuggest(); return }
+  }
   const mod = e.metaKey || e.ctrlKey
   const shift = e.shiftKey
 
@@ -725,7 +750,7 @@ function onKeydown(e: KeyboardEvent): void {
       }
       break
     }
-    case 'Escape': ghost.value = null; break
+    case 'Escape': ghost.value = null; _closeSuggest(); break
     default: break
   }
 }
@@ -1705,6 +1730,139 @@ watch(() => props.modelValue, (v) => {
 
 watch(cursor, (pos) => emit('cursor-change', { ...pos }))
 
+// ── Bracket pair highlight ────────────────────────────────────────────────────
+const _BRACKET_DEC_IDS = ['bracket-left', 'bracket-right']
+watch([cursor, version], () => {
+  const { line, col } = cursor.value
+  // Try cursor position then one before
+  let bLine = line, bCol = -1, bChar = ''
+  for (const c of [col, col - 1]) {
+    if (c < 0) continue
+    const ch = (model.getLine(line) ?? '')[c]
+    if (ch && (BRACKET_OPEN.has(ch) || BRACKET_CLOSE.has(ch))) {
+      // Skip if inside string/comment token
+      _ensureTokensUpTo(line)
+      const toks = _tokCache[line]?.tokens ?? []
+      let inStrCmt = false
+      for (const tok of toks) {
+        if (tok.start <= c && c < tok.end && (tok.type === 'string' || tok.type === 'comment')) {
+          inStrCmt = true; break
+        }
+      }
+      if (!inStrCmt) { bCol = c; bChar = ch; break }
+    }
+  }
+  if (bCol === -1) {
+    const cur = decorations.value.filter(d => !_BRACKET_DEC_IDS.includes(d.id))
+    if (cur.length !== decorations.value.length) decorations.value = cur
+    return
+  }
+  const isOpen = BRACKET_OPEN.has(bChar)
+  const matchChar = BRACKET_MATCH[bChar]
+  let depth = 0
+  let mLine = -1, mCol = -1
+  if (isOpen) {
+    outer: for (let l = bLine; l < model.lineCount(); l++) {
+      const text = model.getLine(l)
+      const startC = l === bLine ? bCol : 0
+      for (let c = startC; c < text.length; c++) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { mLine = l; mCol = c; break outer } }
+      }
+    }
+  } else {
+    outer: for (let l = bLine; l >= 0; l--) {
+      const text = model.getLine(l)
+      const endC = l === bLine ? bCol : text.length - 1
+      for (let c = endC; c >= 0; c--) {
+        const ch = text[c]
+        if (ch === bChar) depth++
+        else if (ch === matchChar) { depth--; if (depth === 0) { mLine = l; mCol = c; break outer } }
+      }
+    }
+  }
+  const nonBracket = decorations.value.filter(d => !_BRACKET_DEC_IDS.includes(d.id))
+  if (mLine === -1) {
+    if (nonBracket.length !== decorations.value.length) decorations.value = nonBracket
+    return
+  }
+  decorations.value = [
+    ...nonBracket,
+    { id: 'bracket-left',  type: 'highlight' as const, range: { start: { line: bLine, col: bCol }, end: { line: bLine, col: bCol + 1 } }, className: 'bracket-match' },
+    { id: 'bracket-right', type: 'highlight' as const, range: { start: { line: mLine, col: mCol }, end: { line: mLine, col: mCol + 1 } }, className: 'bracket-match' },
+  ]
+}, { flush: 'post' })
+
+// ── Suggest (completions) dropdown ────────────────────────────────────────────
+const suggestOpen = ref(false)
+const suggestItems = ref<string[]>([])
+const suggestIdx = ref(0)
+let _suggestTimer: number | null = null
+
+const suggestStyle = computed(() => {
+  const x = xFor(cursor.value.col) - scrollLeftVal.value
+  // Same coordinate system as ghost text: subtract offsetY (not scrollTop)
+  const y = (m2d(cursor.value.line) + 1) * lineHeightPx.value - vs.offsetY.value
+  // Flip above cursor if too close to the bottom of the viewport
+  const viewY = y + vs.offsetY.value - vs.scrollTop.value
+  const flipY = vs.viewportHeight.value - viewY < 160 && viewY > 160
+  return {
+    left: Math.max(0, x) + 'px',
+    top: flipY ? 'auto' : y + 'px',
+    bottom: flipY ? (y - lineHeightPx.value * 2) + 'px' : 'auto',
+  }
+})
+
+function _closeSuggest(): void {
+  suggestOpen.value = false
+  suggestItems.value = []
+}
+
+function _acceptSuggest(): void {
+  const item = suggestItems.value[suggestIdx.value]
+  if (!item) { _closeSuggest(); return }
+  const { line, col } = cursor.value
+  const lineText = model.getLine(line)
+  let wordStart = col
+  while (wordStart > 0 && isWordChar(lineText[wordStart - 1])) wordStart--
+  _closeSuggest()
+  applyEdit({ start: { line, col: wordStart }, end: { line, col } }, item)
+}
+
+function _triggerSuggest(): void {
+  if (_suggestTimer !== null) { clearTimeout(_suggestTimer); _suggestTimer = null }
+  _suggestTimer = window.setTimeout(() => {
+    _suggestTimer = null
+    if (composing || props.readonly) { _closeSuggest(); return }
+    const word = getWordAtCursor()
+    if (!word || word.length < 2) { _closeSuggest(); return }
+    // Skip inside string/comment
+    const { line, col } = cursor.value
+    _ensureTokensUpTo(line)
+    for (const tok of (_tokCache[line]?.tokens ?? [])) {
+      if (tok.start < col && col <= tok.end) {
+        if (tok.type === 'string' || tok.type === 'comment') { _closeSuggest(); return }
+      }
+    }
+    const lower = word.toLowerCase()
+    const seen = new Set<string>()
+    const items: string[] = []
+    for (let i = 0; i < model.lineCount() && items.length < 20; i++) {
+      for (const m of model.getLine(i).matchAll(/[a-zA-Z_]\w{2,}/g)) {
+        const w = m[0]
+        if (w !== word && !seen.has(w) && w.toLowerCase().startsWith(lower)) {
+          seen.add(w); items.push(w)
+        }
+      }
+    }
+    if (!items.length) { _closeSuggest(); return }
+    suggestItems.value = items.sort((a, b) => a.length - b.length || a.localeCompare(b))
+    suggestIdx.value = 0
+    suggestOpen.value = true
+  }, 150)
+}
+
 // ── Imperative API for AI features / host (Phase E/F/G) ───────────────────────
 function focus(): void { textareaEl.value?.focus() }
 function getValue(): string { return model.getValue() }
@@ -1943,6 +2101,20 @@ defineExpose({
             class="ev-ghost"
             :style="{ left: ghostStyle.left, top: (m2d(ghost.pos.line) * lineHeightPx - vs.offsetY.value) + 'px' }"
           >{{ ghost.text }}</div>
+          <!-- suggest dropdown -->
+          <div
+            v-if="suggestOpen && suggestItems.length"
+            class="ev-suggest"
+            :style="suggestStyle"
+          >
+            <div
+              v-for="(item, i) in suggestItems"
+              :key="item"
+              class="ev-suggest-item"
+              :class="{ active: i === suggestIdx }"
+              @mousedown.prevent="suggestIdx = i; _acceptSuggest()"
+            >{{ item }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -2056,5 +2228,35 @@ defineExpose({
   opacity: 0.6;
   font-style: italic;
   margin-left: 4px;
+}
+.bracket-match {
+  background: rgba(100, 160, 255, 0.22);
+  border: 1px solid rgba(100, 160, 255, 0.6);
+  border-radius: 2px;
+}
+.ev-suggest {
+  position: absolute;
+  z-index: 20;
+  background: var(--bg-panel, #1e1e2e);
+  border: 1px solid var(--border-color, #3a3a5c);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  min-width: 160px;
+  max-width: 320px;
+  max-height: 152px;
+  overflow-y: auto;
+  font-size: var(--ev-fs);
+}
+.ev-suggest-item {
+  padding: 2px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.ev-suggest-item.active, .ev-suggest-item:hover {
+  background: var(--accent, #5a9eff);
+  color: #fff;
 }
 </style>

@@ -20,6 +20,7 @@ const emit = defineEmits<{
   (e: 'open-workspace', path: string): void
   (e: 'open-file', payload: { filepath: string; name: string }): void
   (e: 'open-conflict', payload: { filepath: string; name: string }): void
+  (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string }): void
   (e: 'open-branch-diff', payload: { base: string; compare: string }): void
 }>()
 
@@ -959,19 +960,32 @@ function isConflictFile(path: string): boolean {
   return allFiles.some((f) => f.path === path && f.status === 'U')
 }
 
-// Single click = select; double click = open diff/conflict (onFileOpen).
+// Plain click = open diff; modifier click (Shift/Meta) = multi-select for batch ops.
 function handleFileRowClick(e: MouseEvent, path: string, staged: boolean): void {
   const key = `${staged ? 'staged' : 'changes'}:${path}`
   if (e.shiftKey) {
     rangeSelect(key)
-  } else if (e.metaKey || e.ctrlKey) {
+    return
+  }
+  if (e.metaKey || e.ctrlKey) {
     const next = new Set(selectedKeys.value)
     if (next.has(key)) next.delete(key); else next.add(key)
     selectedKeys.value = next
     lastClickKey.value = key
+    return
+  }
+  // Plain click — open diff immediately
+  selectedKeys.value = new Set([key])
+  lastClickKey.value = key
+  if (isConflictFile(path)) {
+    if (props.embedded) emit('open-conflict', { filepath: path, name: fileName(path) })
+    else onFileOpen(path, staged)
+    return
+  }
+  if (props.embedded) {
+    emit('open-diff', { filepath: path, staged, name: fileName(path) })
   } else {
-    selectedKeys.value = new Set([key])
-    lastClickKey.value = key
+    toggleDiff(path, staged)
   }
 }
 function rangeSelect(toKey: string): void {

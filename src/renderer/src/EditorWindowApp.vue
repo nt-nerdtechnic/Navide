@@ -1330,6 +1330,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :backend="backend"
         embedded
         @open-file="openFile"
+        @open-diff="openDiff"
         @open-conflict="openConflict"
         @open-branch-diff="openBranchDiff"
         @changes-count="changesCount = $event"
