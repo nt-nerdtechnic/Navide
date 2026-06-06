@@ -1036,6 +1036,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@notepad',  label: '@notepad — persistent workspace notepad (cross-session)' },
   { id: '@web',      label: '@web — real-time web search (DuckDuckGo)' },
   { id: '@docs',     label: '@docs — fetch official documentation as context' },
+  { id: '@usages',   label: '@usages — find all call sites of a symbol (e.g. @usages:MyFunc)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -2916,6 +2917,22 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @usages:<symbol> — find all call sites / references of a symbol across the codebase
+  if (/^usages$/i.test(fragment)) {
+    atOptions.value = [{ id: '@usages', label: '@usages — type a symbol name after the colon' }]
+    return
+  }
+  const isUsagesQuery = /^usages:/i.test(fragment)
+  if (isUsagesQuery) {
+    const symbolName = fragment.slice('usages:'.length).trim()
+    if (symbolName.length >= 1) {
+      atOptions.value = [{ id: `@usages:${symbolName}`, label: `@usages:${symbolName} — find all usages of "${symbolName}"` }]
+    } else {
+      atOptions.value = [{ id: '@usages', label: '@usages — type a symbol name (e.g. @usages:MyFunction)' }]
+    }
+    return
+  }
+
   // @symbol:functionName — find a symbol definition across the codebase
   const isSymbolQuery = /^symbol:/i.test(fragment)
   if (isSymbolQuery) {
@@ -3740,6 +3757,69 @@ async function selectAtOption(option: AtOption): Promise<void> {
         chipContent = `// @symbol:${symbolName}: unavailable`
       }
     }
+  } else if (option.id === '@usages') {
+    // Prompt user to type a symbol name in the textarea
+    const newVal = val.slice(0, atIdx) + '@usages:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick(); el.focus()
+    const pos = atIdx + '@usages:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@usages:')) {
+    const symbolName = option.id.slice('@usages:'.length).trim()
+    chipLabel = `@usages:${symbolName}`
+    if (!props.workspacePath) {
+      chipContent = '// @usages: no workspace open'
+    } else {
+      try {
+        showToast(`Finding all usages of "${symbolName}"…`)
+        interface SearchMatch { line: number; col: number; text: string }
+        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        const resp = await props.backend.send<SearchResp>('search.find_in_files', {
+          workspace_path: props.workspacePath,
+          query: symbolName,
+          is_regex: false,
+          case_sensitive: true,
+          max_results: 60,
+        })
+        const results = resp.payload?.results ?? []
+        if (results.length === 0) {
+          chipContent = `// @usages:${symbolName}: no usages found`
+        } else {
+          // Separate definitions from call sites
+          const DEF_RE = /^\s*(export\s+)?(default\s+)?(function|class|const|let|var|type|interface|def|async\s+function)\s/
+          const callSites: Array<{ path: string; line: number; text: string }> = []
+          for (const r of results) {
+            for (const m of r.matches) {
+              // Include call site (has the symbol name + "(") but skip bare definitions
+              const isCallSite = m.text.includes(`${symbolName}(`) || m.text.includes(`${symbolName} (`)
+              const isDef = DEF_RE.test(m.text)
+              if (isCallSite || !isDef) {
+                callSites.push({ path: r.rel_path, line: m.line, text: m.text.trim() })
+              }
+            }
+          }
+          const usages = callSites.length ? callSites : results.flatMap((r) => r.matches.map((m) => ({ path: r.rel_path, line: m.line, text: m.text.trim() })))
+          const totalFiles = new Set(usages.map((u) => u.path)).size
+          chipContent = `// @usages:${symbolName} — ${usages.length} usage(s) in ${totalFiles} file(s)\n`
+          // Group by file; show up to 5 files × 5 usages each
+          const byFile = new Map<string, typeof usages>()
+          for (const u of usages) {
+            if (!byFile.has(u.path)) byFile.set(u.path, [])
+            byFile.get(u.path)!.push(u)
+          }
+          for (const [filePath, fileUsages] of Array.from(byFile.entries()).slice(0, 8)) {
+            chipContent += `\n// ${filePath}\n`
+            for (const u of fileUsages.slice(0, 6)) {
+              chipContent += `  ${u.line}: ${u.text}\n`
+            }
+          }
+        }
+      } catch {
+        chipContent = `// @usages:${symbolName}: unavailable`
+      }
+    }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
     // @file:lineRange — e.g., "src/App.vue:10-50"
     const lineMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(option.id)!
@@ -3800,6 +3880,7 @@ function chipIcon(label: string): string {
   if (label.startsWith('@url')) return '🔗'
   if (label.startsWith('@docs')) return '📖'
   if (label.startsWith('@test-')) return '✗'
+  if (label.startsWith('@usages')) return '↗'
   if (label.startsWith('@problems')) return '⚠'
   if (label.startsWith('@clipboard')) return '📋'
   if (label.startsWith('@tree')) return '🌲'
