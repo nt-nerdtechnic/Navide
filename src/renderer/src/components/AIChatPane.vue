@@ -57,6 +57,7 @@ const props = defineProps<{
   getEditorContent?: () => string
   getEditorSelection?: () => string
   getActiveRelPath?: () => string
+  getOpenFiles?: () => string[]
   insertTextAtCursor?: (text: string) => void
   openFile?: (relPath: string, line?: number) => void
 }>()
@@ -1204,6 +1205,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
   { id: '@model', label: '@model — switch model for next message (e.g. @model:gpt-4o)' },
+  { id: '@tabs', label: '@tabs — all currently open editor tabs as context' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
@@ -2457,6 +2459,7 @@ function stopStreaming(): void {
 
 // ── Clear conversation (clear current thread) ──────────────────────────────────
 function clearConversation(): void {
+  if (messages.value.length === 0) return
   if (sending.value) stopStreaming()
   _navAssistIdx = -1
   messages.value = []
@@ -2465,6 +2468,7 @@ function clearConversation(): void {
   const idx = allThreads.value.findIndex((t) => t.id === currentThreadId.value)
   if (idx !== -1) allThreads.value[idx].title = 'New chat'
   saveCurrentThread()
+  showToast('Chat cleared')
 }
 
 // ── Edit a previous user message (truncate history from that point) ────────────
@@ -4571,6 +4575,28 @@ ${out}`
     await nextTick()
     el.focus()
     return
+  } else if (option.id === '@tabs') {
+    chipLabel = '@tabs'
+    const tabPaths = props.getOpenFiles?.() ?? []
+    if (tabPaths.length === 0) {
+      chipContent = '// @tabs: no files open in the editor'
+    } else {
+      const MAX_TABS = 8
+      const taken = tabPaths.slice(0, MAX_TABS)
+      const results: string[] = []
+      for (const filePath of taken) {
+        try {
+          interface ReadResp { ok: boolean; content?: string }
+          const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
+          if (fr.payload?.ok) {
+            const ext = filePath.split('.').pop() ?? ''
+            results.push(`// ${filePath}\n\`\`\`${ext}\n${(fr.payload?.content ?? '').slice(0, 2000)}\n\`\`\``)
+          }
+        } catch { /* skip unreadable files */ }
+      }
+      const truncNote = tabPaths.length > MAX_TABS ? ` (showing ${taken.length} of ${tabPaths.length})` : ` (${taken.length} file${taken.length !== 1 ? 's' : ''})`
+      chipContent = `// @tabs — open editor files${truncNote}\n\n${results.join('\n\n')}`
+    }
   } else if (option.id === '@glob:' || option.id.startsWith('@glob:')) {
     // If bare @glob: (no pattern yet), rewrite input to @glob: and wait for user to type pattern
     if (option.id === '@glob:') {
