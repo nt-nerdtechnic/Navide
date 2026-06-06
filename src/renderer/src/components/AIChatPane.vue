@@ -833,7 +833,7 @@ const ctxUsageLevel = computed(() => {
 // Auto-compact when context exceeds 90% — trigger once per overflow event
 let _autoCompactFired = false
 watch(ctxUsagePct, (pct) => {
-  if (pct >= 90 && !_autoCompactFired && !sending.value && messages.value.length >= 4) {
+  if (pct >= 90 && !_autoCompactFired && !sending.value && messages.value.filter((m) => !m.streaming).length >= 6) {
     _autoCompactFired = true
     showToast('Context 90% — auto-compacting conversation history…')
     triggerCompact()
@@ -6456,6 +6456,39 @@ function getDateLabel(ts: number): string {
   font-size: 12px;
 }
 .ai-settings-save:hover { opacity: 0.85; }
+.ai-settings-hint { font-size: 11px; color: var(--text-muted); }
+
+/* ── Prompt Templates panel ─────────────────────────────────────────────── */
+.ai-pt-actions {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.ai-pt-save-btn {
+  font-size: 11px; padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  background: var(--accent-emphasis); color: #fff; border: none; white-space: nowrap;
+}
+.ai-pt-save-btn:disabled { opacity: 0.4; cursor: default; }
+.ai-pt-save-btn:not(:disabled):hover { filter: brightness(1.1); }
+.ai-pt-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+.ai-pt-item { display: flex; align-items: stretch; gap: 4px; }
+.ai-pt-use {
+  flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 6px 10px; border-radius: 5px; border: 1px solid var(--border-muted);
+  background: var(--bg-muted); cursor: pointer; text-align: left; min-width: 0;
+}
+.ai-pt-use:hover { border-color: var(--accent-emphasis); background: var(--bg-subtle); }
+.ai-pt-name { font-size: 12px; font-weight: 600; color: var(--text-bright); }
+.ai-pt-preview { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ai-pt-del {
+  flex-shrink: 0; padding: 0 8px; border-radius: 5px; border: 1px solid var(--border-muted);
+  background: var(--bg-muted); color: var(--text-muted); cursor: pointer; font-size: 12px;
+}
+.ai-pt-del:hover { border-color: #b91c1c; color: #ef4444; }
+.ai-cancel-btn {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-left: auto;
+  background: var(--bg-muted); color: var(--text-muted); border: 1px solid var(--border-muted);
+}
+.ai-cancel-btn:hover { color: #ef4444; border-color: #b91c1c; }
 
 /* ── Toast ─────────────────────────────────────────────────────────────────── */
 /* ── Shortcuts panel ─────────────────────────────────────────────────────── */
