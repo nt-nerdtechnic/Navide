@@ -2036,19 +2036,23 @@ async function selectAtOption(option: AtOption): Promise<void> {
     if (!relPath) {
       showToast('@git:blame requires an open file'); return
     }
+    // Strict path validation: only safe chars, no .. segments, no leading -
+    if (!/^[A-Za-z0-9_./-]+$/.test(relPath) || relPath.split('/').some(s => s === '..' || s === '' || s.startsWith('-'))) {
+      showToast('Invalid file path for git blame'); return
+    }
     chipLabel = `@git:blame(${relPath.split('/').pop()})`
     try {
       interface ShellResp { ok: boolean; output?: string }
       showToast('Running git blame…')
       const blameResp = await props.backend.send<ShellResp>('shell.run', {
-        command: `git blame --line-porcelain "${relPath}" 2>&1 | grep -E "^(author |summary |[0-9a-f]{40} )" | awk '/^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9); print h" "a": "s}' | sort -u | head -60`,
+        command: `git blame --line-porcelain -- "${relPath}" 2>&1 | grep -E "^(author |summary |[0-9a-f]{40} )" | awk '/^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9); print h" "a": "s}' | sort -u | head -60`,
         workspace_path: props.workspacePath,
       })
       const out = (blameResp.payload?.output ?? '').trim()
       if (!out) {
         // Fallback: simple blame summary
         const fallback = await props.backend.send<ShellResp>('shell.run', {
-          command: `git blame --date=short -e "${relPath}" 2>&1 | head -80`,
+          command: `git blame --date=short -- "${relPath}" 2>&1 | head -80`,
           workspace_path: props.workspacePath,
         })
         chipContent = (fallback.payload?.output ?? '').trim()
