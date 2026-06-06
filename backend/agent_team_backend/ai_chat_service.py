@@ -105,8 +105,8 @@ async def _stream_anthropic(
         try:
             budget_tokens = max(1024, min(32000, int(thinking_budget)))
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
-            # Extended thinking requires temperature=1 per Anthropic API
-            kwargs.pop("temperature", None)
+            # Extended thinking requires temperature=1 exactly; override any user value
+            kwargs["temperature"] = 1
         except (TypeError, ValueError):
             pass
 
