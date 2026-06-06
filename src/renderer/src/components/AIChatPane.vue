@@ -124,6 +124,32 @@ const followUps = ref<string[]>([])
 const streamNow = ref(Date.now())
 let streamTickInterval: number | null = null
 
+// ── Apply-code diff preview modal ────────────────────────────────────────────
+interface DiffApplyState {
+  code: string
+  relPath: string
+  oldLines: number
+  newLines: number
+  btn: HTMLButtonElement
+}
+const diffApplyState = ref<DiffApplyState | null>(null)
+
+async function confirmApply(): Promise<void> {
+  const s = diffApplyState.value
+  if (!s) return
+  diffApplyState.value = null
+  props.backend.send('fs.write_file', {
+    workspace_path: props.workspacePath,
+    rel_path: s.relPath,
+    content: s.code,
+  }).then(() => {
+    s.btn.textContent = 'Applied ✓'
+    s.btn.style.color = 'var(--success-fg, #3fb950)'
+    window.setTimeout(() => { s.btn.textContent = 'Apply'; s.btn.style.color = '' }, 2000)
+    showToast(`Applied to ${s.relPath}`)
+  }).catch(() => showToast('Apply failed'))
+}
+
 // ── Conversation thread persistence ──────────────────────────────────────────
 interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean }
 const MAX_THREADS = 20
@@ -499,6 +525,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
   { id: '@tree', label: '@tree — workspace file tree structure' },
   { id: '@symbol', label: '@symbol — find a function or class definition' },
+  { id: '@terminal', label: '@terminal — last terminal output (tmux scrollback)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -583,18 +610,18 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       const code = decodeURIComponent(escape(atob(applyBtn.dataset.code ?? '')))
       const relPath = props.getActiveRelPath?.()
       if (!relPath) { showToast('No file open'); return }
-      const lineCount = code.split('\n').length
-      if (!window.confirm(`Apply ${lineCount} lines of code to "${relPath}"?\n\nNote: This will overwrite the entire file.`)) return
-      props.backend.send('fs.write_file', {
-        workspace_path: props.workspacePath,
-        rel_path: relPath,
-        content: code,
-      }).then(() => {
-        applyBtn.textContent = 'Applied ✓'
-        applyBtn.style.color = 'var(--success-fg, #3fb950)'
-        window.setTimeout(() => { applyBtn.textContent = 'Apply'; applyBtn.style.color = '' }, 2000)
-        showToast(`Applied to ${relPath}`)
-      }).catch(() => showToast('Apply failed'))
+      const newLines = code.split('\n').length
+      // Read current file to compute diff stats
+      let oldLines = 0
+      try {
+        interface ReadResp { ok: boolean; content?: string }
+        const r = await props.backend.send<ReadResp>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: relPath,
+        })
+        oldLines = (r.payload?.content ?? '').split('\n').length
+      } catch { /* file may not exist yet */ }
+      diffApplyState.value = { code, relPath, oldLines, newLines, btn: applyBtn }
     } catch { showToast('Apply failed') }
   }
 
@@ -1478,6 +1505,15 @@ async function rejectCommand(card: CommandProposalCard): Promise<void> {
   }).catch(() => { card.status = 'pending' })
 }
 
+// ── Global keyboard shortcuts ─────────────────────────────────────────────────
+function _onGlobalKeydown(e: KeyboardEvent): void {
+  // Ctrl+L / Cmd+L — focus AI chat textarea (mirrors VS Code's chat focus)
+  if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
+    e.preventDefault()
+    textareaEl.value?.focus()
+  }
+}
+
 // ── Backend event listeners ────────────────────────────────────────────────────
 let unsubChunk: (() => void) | null = null
 let unsubToolCall: (() => void) | null = null
@@ -1488,6 +1524,7 @@ let unsubError: (() => void) | null = null
 let unsubSettingsGet: (() => void) | null = null
 
 function setupListeners(): void {
+  document.addEventListener('keydown', _onGlobalKeydown)
   unsubChunk = props.backend.on('ai.chat.chunk', (payload) => {
     const p = payload as { session_id: string; text: string }
     if (p.session_id !== currentSessionId.value) return
@@ -1653,6 +1690,7 @@ function setupListeners(): void {
 }
 
 function teardownListeners(): void {
+  document.removeEventListener('keydown', _onGlobalKeydown)
   unsubChunk?.()
   unsubToolCall?.()
   unsubToolResult?.()
@@ -2262,6 +2300,23 @@ async function selectAtOption(option: AtOption): Promise<void> {
       } catch {
         chipContent = '// @tree: unavailable'
       }
+    }
+  } else if (option.id === '@terminal') {
+    chipLabel = '@terminal'
+    try {
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      showToast('Capturing terminal output…')
+      // Try tmux capture-pane for the most recent pane in the current session
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'tmux capture-pane -p -S -100 2>/dev/null || echo "(tmux not available)"',
+        workspace_path: props.workspacePath,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      chipContent = raw && raw !== '(tmux not available)'
+        ? `// Terminal output (last ~100 lines):\n\`\`\`\n${raw.slice(-4000)}\n\`\`\``
+        : '// @terminal: no terminal output available (tmux required)'
+    } catch {
+      chipContent = '// @terminal: unavailable'
     }
   } else if (option.id === '@symbol') {
     // Prompt user to type symbol name
@@ -3152,6 +3207,34 @@ function getDateLabel(ts: number): string {
             </div>
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- Apply-code diff preview modal -->
+    <div v-if="diffApplyState" class="ai-modal-overlay" @click.self="diffApplyState = null">
+      <div class="ai-modal">
+        <div class="ai-modal-header">
+          <span>Apply code to <code>{{ diffApplyState.relPath }}</code>?</span>
+          <button class="ai-settings-close" @click="diffApplyState = null">✕</button>
+        </div>
+        <div class="ai-modal-body">
+          <div class="ai-diff-stats">
+            <span class="ai-diff-old">{{ diffApplyState.oldLines }} lines currently</span>
+            <span class="ai-diff-arrow">→</span>
+            <span class="ai-diff-new">{{ diffApplyState.newLines }} lines proposed</span>
+            <span
+              class="ai-diff-delta"
+              :class="diffApplyState.newLines > diffApplyState.oldLines ? 'add' : diffApplyState.newLines < diffApplyState.oldLines ? 'del' : 'same'"
+            >
+              {{ diffApplyState.newLines > diffApplyState.oldLines ? '+' : '' }}{{ diffApplyState.newLines - diffApplyState.oldLines }}
+            </span>
+          </div>
+          <p class="ai-modal-warning">This will overwrite the entire file.</p>
+        </div>
+        <div class="ai-modal-footer">
+          <button class="ai-cancel-btn" @click="diffApplyState = null">Cancel</button>
+          <button class="ai-apply-confirm-btn" @click="confirmApply">Apply</button>
+        </div>
       </div>
     </div>
 
@@ -4518,6 +4601,50 @@ kbd {
   z-index: 30;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
+
+/* ── Apply-code diff preview modal ──────────────────────────────────────────── */
+.ai-modal-overlay {
+  position: absolute; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; z-index: 60;
+}
+.ai-modal {
+  background: var(--bg-2, #1e1e1e); border: 1px solid var(--border, #3c3c3c);
+  border-radius: 8px; min-width: 320px; max-width: 480px; width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5); display: flex; flex-direction: column;
+}
+.ai-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border, #3c3c3c);
+  font-size: 13px; font-weight: 600; gap: 8px;
+}
+.ai-modal-header code { font-size: 12px; opacity: .8; word-break: break-all; }
+.ai-modal-body { padding: 16px; }
+.ai-diff-stats {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap;
+}
+.ai-diff-old { opacity: .6; }
+.ai-diff-arrow { opacity: .4; }
+.ai-diff-new { font-weight: 600; }
+.ai-diff-delta { font-weight: 700; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.ai-diff-delta.add { color: #3fb950; background: rgba(63,185,80,.15); }
+.ai-diff-delta.del { color: #f85149; background: rgba(248,81,73,.15); }
+.ai-diff-delta.same { opacity: .5; }
+.ai-modal-warning { font-size: 12px; opacity: .55; margin: 8px 0 0; }
+.ai-modal-footer {
+  display: flex; gap: 8px; justify-content: flex-end;
+  padding: 12px 16px; border-top: 1px solid var(--border, #3c3c3c);
+}
+.ai-cancel-btn {
+  padding: 5px 14px; border-radius: 4px; font-size: 12px; cursor: pointer;
+  background: transparent; border: 1px solid var(--border, #3c3c3c);
+  color: var(--fg, #ccc);
+}
+.ai-cancel-btn:hover { background: var(--bg-3, #2a2a2a); }
+.ai-apply-confirm-btn {
+  padding: 5px 14px; border-radius: 4px; font-size: 12px; cursor: pointer;
+  background: #0078d4; border: none; color: #fff; font-weight: 600;
+}
+.ai-apply-confirm-btn:hover { background: #106ebe; }
 </style>
 
 <style>
