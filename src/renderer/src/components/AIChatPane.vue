@@ -4490,7 +4490,8 @@ function getDateLabel(ts: number): string {
           @mousedown.prevent="selectAtOption(opt)"
           @mouseover="atMenuIdx = i"
         >
-          {{ opt.label }}
+          <span class="ai-at-icon">{{ chipIcon(opt.id) || '◻' }}</span>
+          <span class="ai-at-label-text">{{ opt.label }}</span>
         </div>
       </div>
 
@@ -6014,8 +6015,13 @@ function getDateLabel(ts: number): string {
   font-size: 12px;
   cursor: pointer;
   color: var(--text-bright);
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
 .ai-at-item:hover, .ai-at-item.active { background: var(--bg-muted); }
+.ai-at-icon { font-size: 11px; opacity: 0.65; flex-shrink: 0; width: 14px; text-align: center; }
+.ai-at-label-text { flex: 1; }
 
 .ai-slash-item {
   display: flex;
