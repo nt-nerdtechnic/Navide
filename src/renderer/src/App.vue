@@ -2382,6 +2382,7 @@ async function onPipelineNext(): Promise<void> {
     // quiet before firing 🎉 so we don't claim "done" while a worker is
     // still flushing files / writing a final commit.
     await waitForStagePanesSettled(currentIndex)
+    if (pipeline.state !== 'running') return // abort fired during settle
     stopGlobalManagerRouter()
     pipeline.state = 'completed'
     currentMode.value = 'completed'

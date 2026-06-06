@@ -162,7 +162,8 @@ function navigateToLastEdit(): void {
 
 async function save(): Promise<void> {
   if (!dirty.value) return
-  const snapshot = convertToEOL(content.value, eol.value)
+  const preContent = content.value // capture before the async write
+  const snapshot = convertToEOL(preContent, eol.value)
   try {
     const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
       workspace_path: props.workspacePath,
@@ -174,7 +175,7 @@ async function save(): Promise<void> {
       return
     }
     // Only clear dirty when no further edits landed while the request was in-flight.
-    if (content.value === snapshot) dirty.value = false
+    if (content.value === preContent) dirty.value = false
     toast('Saved', { type: 'success' })
   } catch (err) {
     void alert(err instanceof Error ? err.message : 'Save failed', { title: 'Save error' })
