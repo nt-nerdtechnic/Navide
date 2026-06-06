@@ -1885,6 +1885,27 @@ const activeToolCard = computed(() => {
   return null
 })
 
+// Context-aware thinking label — matches what Cursor/VS Code show during streaming
+const thinkingLabel = computed(() => {
+  if (activeToolCard.value) {
+    return getToolSummary(activeToolCard.value.tool_name, activeToolCard.value.tool_input)
+  }
+  if (chatMode.value === 'agent') return 'Agent thinking…'
+  // Detect context from the last user message (chips are cleared on send)
+  const lastUser = [...messages.value].reverse().find((m) => m.role === 'user')
+  const userText = typeof lastUser?.rawContent === 'string' ? lastUser.rawContent : lastUser?.content ?? ''
+  if (userText.includes('[Context: @codebase')) return 'Searching codebase…'
+  if (userText.includes('[Context: @git')) return 'Reading git context…'
+  if (userText.includes('[Context: @terminal')) return 'Reading terminal output…'
+  // Multimodal: rawContent is an array with image blocks
+  if (Array.isArray(lastUser?.rawContent) && (lastUser.rawContent as unknown[]).some((b) => (b as { type?: string }).type === 'image')) return 'Analyzing image…'
+  if (userText.includes('[Context:')) return 'Processing context…'
+  // Show model name to make it feel responsive
+  const modelEntry = MODEL_CATALOG.find((m) => m.id === settingsModel.value)
+  const modelShort = modelEntry?.display.replace(/^Claude /, '').replace(/ \d+\.\d+$/, '') ?? settingsModel.value
+  return `${modelShort} thinking…`
+})
+
 // ── Diff expand/collapse ──────────────────────────────────────────────────────
 const expandedDiffs = ref(new Set<string>())
 function isDiffExpanded(toolId: string): boolean { return expandedDiffs.value.has(toolId) }
@@ -3491,6 +3512,12 @@ function getDateLabel(ts: number): string {
           <button class="ai-empty-btn" @click="inputText = '/tests '; nextTick(() => textareaEl?.focus())">/tests — generate unit tests</button>
           <button class="ai-empty-btn" @click="inputText = '/review '; nextTick(() => textareaEl?.focus())">/review — code review</button>
         </div>
+        <!-- Cursor-style: show active file suggestion when one is open -->
+        <div v-if="props.getActiveRelPath?.()" class="ai-empty-file-hint">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="opacity:.5;flex-shrink:0"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"/></svg>
+          <span>Active: <code>{{ props.getActiveRelPath?.()?.split('/').pop() }}</code></span>
+          <button class="ai-empty-file-btn" @click="inputText = '@file '; nextTick(() => textareaEl?.focus())">Add to context</button>
+        </div>
       </div>
 
       <template v-for="(msg, mi) in messages" :key="mi">
@@ -3579,7 +3606,7 @@ function getDateLabel(ts: number): string {
             <span class="ai-thinking-dot" />
             <span class="ai-thinking-dot" />
             <span class="ai-thinking-dot" />
-            <span class="ai-thinking-label">Thinking…</span>
+            <span class="ai-thinking-label">{{ thinkingLabel }}</span>
           </div>
           <span v-else-if="msg.streaming" class="ai-cursor">▍</span>
           <span v-if="msg.streaming && msg.content.length > 0" class="ai-stream-tokens">
@@ -4457,6 +4484,19 @@ function getDateLabel(ts: number): string {
   cursor: pointer; white-space: nowrap;
 }
 .ai-empty-btn:hover { border-color: var(--accent-emphasis); color: var(--accent-fg); background: var(--bg-inset); }
+.ai-empty-file-hint {
+  display: flex; align-items: center; gap: 6px; margin-top: 10px;
+  padding: 5px 10px; border-radius: 6px;
+  background: var(--bg-subtle); border: 1px solid var(--border-muted);
+  font-size: 11px; color: var(--text-secondary);
+}
+.ai-empty-file-hint code { font-size: 11px; color: var(--fg, #ccc); }
+.ai-empty-file-btn {
+  margin-left: auto; padding: 2px 8px; border-radius: 4px; font-size: 10px;
+  cursor: pointer; border: 1px solid var(--border-muted);
+  background: transparent; color: var(--text-secondary);
+}
+.ai-empty-file-btn:hover { background: #0078d4; color: #fff; border-color: #0078d4; }
 
 .ai-msg-wrap { display: flex; flex-direction: column; position: relative; }
 .ai-msg-wrap.user { align-items: flex-end; }
@@ -4519,6 +4559,10 @@ function getDateLabel(ts: number): string {
 .ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-msg-tokspeed { font-size: 10px; color: var(--text-muted); opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-msg-ttft { font-size: 10px; color: var(--text-muted); opacity: 0.4; user-select: none; font-variant-numeric: tabular-nums; }
+.ai-msg-cost {
+  font-size: 9px; padding: 1px 4px; border-radius: 3px; user-select: none;
+  background: rgba(16,185,129,0.12); color: #10b981; font-variant-numeric: tabular-nums;
+}
 
 .ai-regen-model-wrap { position: relative; display: inline-flex; }
 .ai-regen-model-btn { font-size: 10px; display: flex; align-items: center; }

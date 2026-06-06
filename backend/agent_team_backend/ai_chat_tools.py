@@ -294,7 +294,7 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
             text = candidate.read_text(encoding="utf-8", errors="ignore")
             if query in text:
                 results.append(str(candidate.relative_to(root)))
-        except OSError:
+        except (OSError, ValueError):
             continue
 
     if not results:
@@ -468,7 +468,9 @@ async def run_agent_loop(
     conversation = list(messages)
 
     max_iterations = 10  # guard against infinite loops
-    done_meta: dict = {}  # populated from \x00DONE: sentinel
+    done_meta: dict = {}  # populated from \x00DONE: sentinel (last iteration)
+    total_input_tokens = 0
+    total_output_tokens = 0
     for _iteration in range(max_iterations):
         assistant_text_parts: list[str] = []
         tool_calls: list[dict] = []  # {"id": ..., "name": ..., "input": ...}
@@ -490,7 +492,10 @@ async def run_agent_loop(
                         log.warning("failed to parse tool call JSON: %s", err)
                 elif chunk.startswith("\x00DONE:"):
                     try:
-                        done_meta.update(json.loads(chunk[len("\x00DONE:"):]))
+                        meta = json.loads(chunk[len("\x00DONE:"):])
+                        done_meta.update(meta)
+                        total_input_tokens += meta.get("input_tokens") or 0
+                        total_output_tokens += meta.get("output_tokens") or 0
                     except json.JSONDecodeError as err:
                         log.warning("failed to parse done meta JSON: %s", err)
                 else:
@@ -557,6 +562,6 @@ async def run_agent_loop(
     await emit("ai.chat.done", {
         "session_id": session_id,
         "model": done_meta.get("model"),
-        "input_tokens": done_meta.get("input_tokens"),
-        "output_tokens": done_meta.get("output_tokens"),
+        "input_tokens": total_input_tokens or None,
+        "output_tokens": total_output_tokens or None,
     })
