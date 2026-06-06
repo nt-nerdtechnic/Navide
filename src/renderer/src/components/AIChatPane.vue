@@ -3228,6 +3228,7 @@ ${historyText}`
     } catch {
       unsubSave()
       messages.value.splice(-2)
+      if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
       sending.value = false
       showToast('Summary generation failed')
     }
@@ -3832,7 +3833,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
       try {
         showToast(`Finding all usages of "${symbolName}"…`)
         interface SearchMatch { line: number; col: number; text: string }
-        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        interface SearchResp { results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
         const resp = await props.backend.send<SearchResp>('search.find_in_files', {
           workspace_path: props.workspacePath,
           query: symbolName,
@@ -3840,6 +3841,9 @@ async function selectAtOption(option: AtOption): Promise<void> {
           case_sensitive: true,
           max_results: 60,
         })
+        if (!resp.ok) {
+          chipContent = `// @usages:${symbolName}: search error — ${resp.error?.message ?? 'unknown error'}`
+        } else {
         const results = resp.payload?.results ?? []
         if (results.length === 0) {
           chipContent = `// @usages:${symbolName}: no usages found`
@@ -3872,6 +3876,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
               chipContent += `  ${u.line}: ${u.text}\n`
             }
           }
+        }
         }
       } catch {
         chipContent = `// @usages:${symbolName}: unavailable`
