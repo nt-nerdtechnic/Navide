@@ -473,6 +473,8 @@ interface ContextChip {
   content: string
 }
 const contextChips = ref<ContextChip[]>([])
+const previewChipId = ref<string | null>(null)
+const previewChip = computed(() => contextChips.value.find((c) => c.id === previewChipId.value) ?? null)
 const showAtMenu = ref(false)
 const atMenuFilter = ref('')
 const atMenuIdx = ref(0)
@@ -522,6 +524,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/run',      label: '/run',      description: 'Run shell command',       template: '' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
   { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
+  { id: '/help',     label: '/help',     description: 'Show all commands',       template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1053,6 +1056,21 @@ async function sendMessage(): Promise<void> {
   if (!rawText && contextChips.value.length === 0) return
   if (sending.value) return
 
+  // /help — show all available slash commands and @ contexts
+  if (rawText === '/help') {
+    inputText.value = ''
+    messages.value.push({ role: 'user', content: '/help', timestamp: Date.now() })
+    const cmdList = SLASH_COMMANDS.filter((c) => c.id !== '/help')
+      .map((c) => `**${c.id}** — ${c.description}`)
+      .join('\n')
+    const ctxList = AT_OPTIONS_STATIC
+      .map((o) => `**${o.id}** — ${o.label.split(' — ')[1] ?? ''}`)
+      .join('\n')
+    const helpText = `## Slash Commands\n${cmdList}\n\n## Context Providers (@)\n${ctxList}\n\n_Tip: type \`@filename:10-50\` to include specific lines from a file._`
+    messages.value.push({ role: 'assistant', content: helpText, timestamp: Date.now() })
+    return
+  }
+
   // /run <cmd> — execute shell command and add output as message
   if (rawText.startsWith('/run ')) {
     const cmd = rawText.slice('/run '.length).trim()
@@ -1546,6 +1564,9 @@ onMounted(() => {
   void detectWorkspaceRules()
 })
 watch(() => props.workspacePath, () => { void detectWorkspaceRules() })
+watch(() => props.backend.status.value, (s) => {
+  if ((s === 'disconnected' || s === 'error') && sending.value) stopStreaming()
+})
 
 onUnmounted(() => {
   teardownListeners()
@@ -1603,6 +1624,16 @@ function onTextareaInput(e: Event): void {
   if (isUrlFragment) {
     const urlVal = fragment.slice('url:'.length).trim()
     atOptions.value = [{ id: `@url:${urlVal}`, label: `@url: fetch "${urlVal.slice(0, 60)}"` }]
+    return
+  }
+
+  // @file:lineRange — e.g., @App.vue:10-50 or @src/foo.ts:25
+  const lineRangeMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(fragment)
+  if (lineRangeMatch) {
+    const filePath = lineRangeMatch[1]
+    const lineSpec = lineRangeMatch[3] ? `${lineRangeMatch[2]}-${lineRangeMatch[3]}` : lineRangeMatch[2]
+    const fileName = filePath.split('/').pop() ?? filePath
+    atOptions.value = [{ id: `${filePath}:${lineSpec}`, label: `@${fileName}:${lineSpec} — lines ${lineSpec}` }]
     return
   }
 
@@ -1993,6 +2024,27 @@ async function selectAtOption(option: AtOption): Promise<void> {
         chipContent = '// @tree: unavailable'
       }
     }
+  } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
+    // @file:lineRange — e.g., "src/App.vue:10-50"
+    const lineMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(option.id)!
+    const filePath = lineMatch[1]
+    const startLine = parseInt(lineMatch[2]) - 1
+    const endLine = lineMatch[3] ? parseInt(lineMatch[3]) - 1 : startLine
+    const lineSpec = lineMatch[3] ? `${lineMatch[2]}-${lineMatch[3]}` : lineMatch[2]
+    chipLabel = `@${filePath.split('/').pop()}:${lineSpec}`
+    try {
+      interface ReadResp { ok: boolean; content?: string }
+      const resp = await props.backend.send<ReadResp>('fs.read_file', {
+        workspace_path: props.workspacePath,
+        rel_path: filePath,
+      })
+      const allLines = (resp.payload?.content ?? '').split('\n')
+      const sliced = allLines.slice(startLine, endLine + 1)
+      const ext = filePath.split('.').pop() ?? ''
+      chipContent = `// ${filePath} (lines ${lineSpec})\n\`\`\`${ext}\n${sliced.join('\n')}\n\`\`\``
+    } catch {
+      chipContent = `// ${filePath}:${lineSpec}\n(unable to read)`
+    }
   } else {
     // It's a file path
     chipLabel = `@${option.id.split('/').pop()}`
@@ -2114,6 +2166,11 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       showAtMenu.value = false
       return
     }
+  }
+
+  if (e.key === 'Escape' && previewChipId.value) {
+    previewChipId.value = null
+    return
   }
 
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -2504,12 +2561,22 @@ function getDateLabel(ts: number): string {
           v-for="chip in contextChips"
           :key="chip.id"
           class="ai-chip"
-          :title="`${chip.content.slice(0, 200)}${chip.content.length > 200 ? '…' : ''}\n\n~${Math.ceil(chip.content.length / 4).toLocaleString()} tokens`"
+          :class="{ 'ai-chip-active': previewChipId === chip.id }"
+          @click.stop="previewChipId = previewChipId === chip.id ? null : chip.id"
         >
           {{ chip.label }}
           <span class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
-          <button class="ai-chip-remove" @click="removeChip(chip.id)">×</button>
+          <button class="ai-chip-remove" @click.stop="removeChip(chip.id)">×</button>
         </span>
+        <!-- Chip preview popover -->
+        <div v-if="previewChip" class="ai-chip-popover" @click.stop>
+          <div class="ai-chip-popover-header">
+            <span class="ai-chip-popover-label">{{ previewChip.label }}</span>
+            <span class="ai-chip-popover-tokens">~{{ Math.ceil(previewChip.content.length / 4).toLocaleString() }} tokens</span>
+            <button class="ai-chip-popover-close" @click="previewChipId = null">×</button>
+          </div>
+          <pre class="ai-chip-popover-content">{{ previewChip.content.slice(0, 1200) }}{{ previewChip.content.length > 1200 ? '\n…' : '' }}</pre>
+        </div>
       </div>
 
       <!-- Slash command menu -->
@@ -3541,6 +3608,50 @@ function getDateLabel(ts: number): string {
 }
 .ai-chip-remove:hover { opacity: 1; }
 .ai-chip-tokens { font-size: 9px; opacity: 0.55; margin: 0 3px 0 1px; letter-spacing: 0.02em; }
+.ai-chip { cursor: pointer; }
+.ai-chip:hover { filter: brightness(1.15); }
+.ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }
+
+.ai-chip-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.55);
+  z-index: 12;
+  overflow: hidden;
+}
+.ai-chip-popover-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border-muted);
+  font-size: 12px;
+}
+.ai-chip-popover-label { font-weight: 600; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-chip-popover-tokens { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
+.ai-chip-popover-close {
+  border: none; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
+}
+.ai-chip-popover-close:hover { color: var(--text-primary); }
+.ai-chip-popover-content {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, Menlo, 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 240px;
+  overflow-y: auto;
+}
 
 .ai-at-menu {
   position: absolute;
