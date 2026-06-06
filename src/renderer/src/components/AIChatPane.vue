@@ -486,6 +486,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
+  { id: '@clipboard', label: '@clipboard — paste clipboard content' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1819,6 +1820,17 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = `// URL: ${url}\n${stripped}`
     } catch {
       chipContent = `// @url: failed to fetch ${url}`
+    }
+  } else if (option.id === '@clipboard') {
+    chipLabel = '@clipboard'
+    try {
+      const text = await navigator.clipboard.readText()
+      if (!text.trim()) {
+        showToast('Clipboard is empty'); return
+      }
+      chipContent = `// Clipboard content:\n${text.slice(0, 5000)}`
+    } catch {
+      chipContent = '// @clipboard: read failed (check browser permissions)'
     }
   } else {
     // It's a file path
