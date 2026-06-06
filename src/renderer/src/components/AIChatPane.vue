@@ -1446,6 +1446,31 @@ function undoLastSend(): void {
   showToast('Message removed — edit and resend')
 }
 
+// ── Fix Problems shortcut ──────────────────────────────────────────────────────
+async function fixProblems(): Promise<void> {
+  if (sending.value || !props.workspacePath) return
+  showToast('Running type check…')
+  try {
+    interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
+    const resp = await props.backend.send<ShellResp>('shell.run', {
+      command: 'npx vue-tsc --noEmit 2>&1 | head -120',
+      workspace_path: props.workspacePath,
+    })
+    const out = (resp.payload?.output ?? '').trim()
+    if (!out || resp.payload?.exit_code === 0) {
+      showToast('No TypeScript errors found ✓')
+      return
+    }
+    const chipContent = `// TypeScript errors in workspace:\n${out}`
+    contextChips.value = contextChips.value.filter((c) => c.label !== '@problems')
+    contextChips.value.push({ id: crypto.randomUUID(), label: '@problems', content: chipContent })
+    inputText.value = 'Fix the TypeScript errors shown in @problems above.'
+    nextTick(() => textareaEl.value?.focus())
+  } catch {
+    showToast('Type check unavailable')
+  }
+}
+
 async function regenerate(): Promise<void> {
   if (sending.value) return
   // Find last user message index
@@ -3277,6 +3302,14 @@ function getDateLabel(ts: number): string {
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/>
             </svg>
+          </button>
+          <button
+            v-if="!sending && workspacePath"
+            class="ai-settings-btn"
+            title="Fix TypeScript errors — run type check and pre-fill a fix request"
+            @click="fixProblems"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.72.22a.749.749 0 0 1 1.06 0l1.25 1.25a.749.749 0 0 1 0 1.06L5.78 3.78a.749.749 0 0 1-1.06 0L3.47 2.53a.749.749 0 0 1 0-1.06ZM5 5.5a.5.5 0 0 1 .5-.5H8a.5.5 0 0 1 0 1H5.5A.5.5 0 0 1 5 5.5Zm-1.5 5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1H4a.5.5 0 0 1-.5-.5Zm1-2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5Zm8.25-6.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 12.75 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H3.25A1.75 1.75 0 0 1 1.5 10.25v-7.5C1.5 1.784 2.284 1 3.25 1ZM3.25 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
             v-if="messages.length > 0 && !sending"
