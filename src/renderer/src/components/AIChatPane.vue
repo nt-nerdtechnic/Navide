@@ -1331,13 +1331,35 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
   }
 
   // Clickable file path in inline code (supports :line notation)
+  // Ctrl/Cmd+click → add as @file context chip; plain click → open in editor
   const fileRef = target.closest<HTMLElement>('.ai-file-ref')
   if (fileRef) {
     const relPath = fileRef.dataset.path ?? ''
     const line = fileRef.dataset.line ? parseInt(fileRef.dataset.line, 10) : undefined
-    if (relPath && props.openFile) {
+    if (!relPath) return
+    if ((e as MouseEvent).ctrlKey || (e as MouseEvent).metaKey) {
+      // Add as @file context chip
+      void (async () => {
+        try {
+          interface FileResp { ok?: boolean; content?: string; payload?: { content?: string } }
+          const r = await props.backend.send<FileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: relPath })
+          const content = (r as { payload?: { content?: string } }).payload?.content ?? ''
+          const ext = relPath.split('.').pop() ?? ''
+          const chipLabel = `@${relPath}`
+          contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
+          contextChips.value.push({
+            id: crypto.randomUUID(),
+            label: chipLabel,
+            content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 80_000)}\n\`\`\``,
+          })
+          showToast(`Added ${relPath.split('/').pop()} to context`)
+        } catch {
+          showToast('Could not read file')
+        }
+      })()
+    } else if (props.openFile) {
       props.openFile(relPath, line)
-    } else if (relPath) {
+    } else {
       showToast(`File: ${relPath}${line ? `:${line}` : ''}`)
     }
   }
@@ -1666,7 +1688,7 @@ function renderMarkdownLite(rawText: string): string {
     if (m && c.includes('/')) {
       const lineAttr = m[2] ? ` data-line="${m[2]}"` : ''
       const lineLabel = m[2] ? `<span class="ai-file-ref-line">:${m[2]}</span>` : ''
-      return `<code class="ai-inline-code ai-file-ref" data-path="${m[1]}"${lineAttr}>${escaped.replace(/:(\d+)$/, '')}${lineLabel}</code>`
+      return `<code class="ai-inline-code ai-file-ref" data-path="${m[1]}"${lineAttr} title="Click to open · Ctrl+click to add to context">${escaped.replace(/:(\d+)$/, '')}${lineLabel}</code>`
     }
     return `<code class="ai-inline-code">${escaped}</code>`
   })
@@ -2789,13 +2811,41 @@ function setupListeners(): void {
         if (edits.length >= 2) last.pendingEdits = edits
       }
     }
-    // Auto-generate thread title from first user message
+    // Auto-generate thread title from first exchange
     const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
     if (curThread && curThread.title === 'New chat' && messages.value.length === 2) {
       const firstUser = messages.value[0]
+      const firstAi = messages.value[1]
       if (firstUser?.role === 'user' && firstUser.content.trim()) {
-        const raw = firstUser.content.replace(/@\S+/g, '').trim()
-        curThread.title = raw.length > 50 ? raw.slice(0, 47) + '…' : raw || 'New chat'
+        const raw = firstUser.content.replace(/@\S+/g, '').replace(/\[Context:[^\]]+\]/g, '').trim()
+        const aiText = firstAi?.content ?? ''
+        // Try to extract a meaningful title: prefer topic phrase over raw truncation
+        let title = ''
+        // 1. If the message is short enough, use it as-is
+        if (raw.length <= 50) {
+          title = raw
+        } else {
+          // 2. First sentence or clause
+          const firstClause = raw.split(/[.!?\n]/)[0].trim()
+          if (firstClause.length >= 8 && firstClause.length <= 50) {
+            title = firstClause
+          } else {
+            // 3. Strip common filler words from start and truncate
+            title = raw.replace(/^(can you|please|could you|help me|i need|i want)\s+/i, '').slice(0, 47)
+            if (raw.length > 47) title += '…'
+          }
+        }
+        // 4. Append a key file or function name from the AI response if short room remains
+        if (title.length < 35) {
+          const entityMatch = aiText.match(/`((?:[\w.-]+\/)*[\w.-]+\.(?:ts|tsx|js|vue|py|go|rs|md))`/)
+          if (entityMatch) {
+            const entity = entityMatch[1].split('/').pop() ?? ''
+            if (entity && !title.toLowerCase().includes(entity.toLowerCase())) {
+              title = `${title} (${entity})`
+            }
+          }
+        }
+        curThread.title = title.slice(0, 60) || 'New chat'
       }
     }
     sending.value = false

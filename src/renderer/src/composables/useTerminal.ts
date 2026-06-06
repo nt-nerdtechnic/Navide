@@ -139,6 +139,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     let selAnchorX = -1
     let selAnchorY = -1
 
+    // Prevent xterm from converting wheel scroll to ArrowUp/Down escape codes
+    // (alternate scroll mode). Always scroll the viewport instead, so the
+    // agent's readline input history is not navigated by trackpad swipes.
+    term.attachCustomWheelEventHandler((e: WheelEvent) => {
+      const lines = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? Math.round(e.deltaY)
+        : Math.round(e.deltaY / 20)
+      if (lines !== 0) term.scrollLines(lines)
+      return false
+    })
+
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
       const buf = term.buffer.active
