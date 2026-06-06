@@ -5131,7 +5131,7 @@ function getDateLabel(ts: number): string {
         >✦ rules</span>
         <button class="ai-model-badge-btn" :title="`Model: ${settingsModel}\nCmd+/ to cycle · click to pick`" @click="showModelPicker = !showModelPicker">
           <span v-if="settingsModel === 'auto'" class="ai-model-badge-provider auto">✦</span>
-          <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ {'anthropic':'A','openai':'GPT','groq':'G','deepseek':'DS','openai_compatible':'C','ollama':'O'}[settingsProvider] ?? 'O' }}</span>
+          <span v-else class="ai-model-badge-provider" :class="settingsProvider">{{ {'anthropic':'A','openai':'GPT','groq':'G','deepseek':'DS','google':'GG','mistral':'M','xai':'X','openai_compatible':'C','ollama':'O'}[settingsProvider] ?? 'O' }}</span>
           <span class="ai-model-badge-name">{{ MODEL_CATALOG.find(m => m.id === settingsModel)?.display ?? settingsModel }}</span>
           <span class="ai-model-badge-caret">{{ showModelPicker ? '▲' : '▼' }}</span>
         </button>
@@ -5548,6 +5548,9 @@ function getDateLabel(ts: number): string {
             <label><input v-model="settingsProvider" type="radio" value="openai" /> OpenAI</label>
             <label><input v-model="settingsProvider" type="radio" value="groq" /> Groq</label>
             <label><input v-model="settingsProvider" type="radio" value="deepseek" /> DeepSeek</label>
+            <label><input v-model="settingsProvider" type="radio" value="google" /> Google</label>
+            <label><input v-model="settingsProvider" type="radio" value="mistral" /> Mistral</label>
+            <label><input v-model="settingsProvider" type="radio" value="xai" /> xAI</label>
             <label><input v-model="settingsProvider" type="radio" value="ollama" /> Ollama</label>
             <label><input v-model="settingsProvider" type="radio" value="openai_compatible" /> Custom (OpenAI-compat)</label>
           </div>
@@ -5567,6 +5570,18 @@ function getDateLabel(ts: number): string {
         <div v-if="settingsProvider === 'deepseek'" class="ai-settings-row">
           <label class="ai-settings-label">DeepSeek API Key</label>
           <input v-model="settingsDeepSeekKey" type="password" class="ai-settings-input" placeholder="sk-…" />
+        </div>
+        <div v-if="settingsProvider === 'google'" class="ai-settings-row">
+          <label class="ai-settings-label">Google API Key</label>
+          <input v-model="settingsGoogleKey" type="password" class="ai-settings-input" placeholder="AIza…" />
+        </div>
+        <div v-if="settingsProvider === 'mistral'" class="ai-settings-row">
+          <label class="ai-settings-label">Mistral API Key</label>
+          <input v-model="settingsMistralKey" type="password" class="ai-settings-input" placeholder="…" />
+        </div>
+        <div v-if="settingsProvider === 'xai'" class="ai-settings-row">
+          <label class="ai-settings-label">xAI API Key</label>
+          <input v-model="settingsXaiKey" type="password" class="ai-settings-input" placeholder="xai-…" />
         </div>
         <div v-if="settingsProvider === 'openai_compatible'" class="ai-settings-row">
           <label class="ai-settings-label">Base URL</label>
@@ -5599,6 +5614,15 @@ function getDateLabel(ts: number): string {
             </optgroup>
             <optgroup label="DeepSeek">
               <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'deepseek')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="Google Gemini">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'google')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="Mistral AI">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'mistral')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
+            </optgroup>
+            <optgroup label="xAI Grok">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'xai')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
             </optgroup>
             <optgroup label="Ollama (Local)">
               <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')" :key="m.id" :value="m.id">{{ m.display }} — {{ m.note }}</option>
@@ -5907,6 +5931,9 @@ function getDateLabel(ts: number): string {
 .ai-model-badge-provider.openai           { background: rgba(16,185,129,0.2);  color: #10b981; font-size: 8px; width: auto; padding: 0 3px; }
 .ai-model-badge-provider.groq             { background: rgba(251,146,60,0.2);  color: #fb923c; }
 .ai-model-badge-provider.deepseek         { background: rgba(59,130,246,0.2);  color: #3b82f6; font-size: 8px; width: auto; padding: 0 3px; }
+.ai-model-badge-provider.google           { background: rgba(234,67,53,0.2);   color: #ea4335; font-size: 8px; width: auto; padding: 0 3px; }
+.ai-model-badge-provider.mistral          { background: rgba(255,115,0,0.2);   color: #ff7300; }
+.ai-model-badge-provider.xai              { background: rgba(220,220,220,0.15); color: #d0d0d0; }
 .ai-model-badge-provider.openai_compatible{ background: rgba(148,163,184,0.2); color: #94a3b8; }
 
 /* Model picker grouped items */
