@@ -673,6 +673,19 @@ const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const testConnStatus = ref<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
 const testConnError = ref<Record<string, string>>({})
 
+const providerHasKey = computed<Record<string, boolean>>(() => ({
+  anthropic:        (settingsApiKey.value ?? '').trim().length > 0,
+  openai:           (settingsOpenAiKey.value ?? '').trim().length > 0,
+  groq:             (settingsGroqKey.value ?? '').trim().length > 0,
+  deepseek:         (settingsDeepSeekKey.value ?? '').trim().length > 0,
+  google:           (settingsGoogleKey.value ?? '').trim().length > 0,
+  mistral:          (settingsMistralKey.value ?? '').trim().length > 0,
+  xai:              (settingsXaiKey.value ?? '').trim().length > 0,
+  openai_compatible:(settingsOaiCompatUrl.value ?? '').trim().length > 0,
+  ollama:           true,  // always available (local)
+  auto:             true,
+}))
+
 const _SYSTEM_PROFILES: Record<string, string> = {
   coding:   'You are a helpful AI coding assistant. Be concise, use code examples, and always explain your reasoning.',
   concise:  'You are a helpful AI assistant. Be extremely concise. No preamble, no filler words. Answer directly.',
@@ -3846,11 +3859,15 @@ ${historyText}`
     inputText.value = ''
     if (!props.workspacePath) { showToast('/git requires an open workspace'); return }
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const [statusResp, logResp] = await Promise.all([
         props.backend.send<ShellResp>('shell.run', { command: 'git status --short 2>&1', workspace_path: props.workspacePath }),
         props.backend.send<ShellResp>('shell.run', { command: 'git log --oneline -10 2>&1', workspace_path: props.workspacePath }),
       ])
+      if (!statusResp.payload?.ok || !logResp.payload?.ok) {
+        showToast('/git: ' + (statusResp.payload?.error ?? logResp.payload?.error ?? 'backend error'))
+        return
+      }
       const status = (statusResp.payload?.output ?? '').trim()
       const log = (logResp.payload?.output ?? '').trim()
       const chipContent = `// git status:
@@ -5855,7 +5872,10 @@ function getDateLabel(ts: number): string {
             { label: 'Ollama (Local)', filter: 'ollama' },
           ]" :key="group.label">
             <div class="ai-model-picker-sep" />
-            <div class="ai-model-picker-group">{{ group.label }}</div>
+            <div class="ai-model-picker-group">
+              {{ group.label }}
+              <span v-if="!providerHasKey[group.filter]" class="ai-picker-no-key" title="No API key configured — set in Settings">no key</span>
+            </div>
             <div
               v-for="m in MODEL_CATALOG.filter(e => e.provider === group.filter)"
               :key="m.id"
