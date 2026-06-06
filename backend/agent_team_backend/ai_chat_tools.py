@@ -253,7 +253,12 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(root),
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise
         if proc.returncode in (0, 1):  # 0=found, 1=no match
             matching_files = stdout.decode(errors="replace").splitlines()
             for fpath in matching_files[:max_results]:
