@@ -187,9 +187,10 @@ class RolesStore:
             return new_roles
 
     def reset(self) -> list[dict[str, Any]]:
-        seed = default_roles()
-        self._write(seed)
-        return seed
+        with self._lock:
+            seed = default_roles()
+            self._write(seed)
+            return seed
 
     def _validate_key(self, key: str) -> None:
         if not _KEY_RE.match(key):

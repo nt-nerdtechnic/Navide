@@ -534,13 +534,19 @@ async def health(
     cli_path = shutil.which(cli)
     if not cli_path:
         return {"ok": False, "error": f"'{cli}' not found in PATH"}
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             cli_path, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            raise
         raw = (stdout_b or stderr_b).decode("utf-8", errors="replace").strip()
         version = raw.splitlines()[0] if raw else "unknown"
     except Exception as err:
