@@ -55,7 +55,7 @@ const staticModels = computed(() => PROVIDER_MODELS[provider.value] ?? [])
 
 onMounted(async () => {
   const r = await props.backend.send<Record<string, string>>('ai.chat.settings.get', {})
-  if (r.ok && r.payload?.ok) {
+  if (r.ok && r.payload) {
     const p = r.payload.provider as ProviderKey
     if (p) provider.value = p
     if (r.payload.model) currentModel.value = r.payload.model

@@ -52,10 +52,10 @@ const aiChatApiKeyDirty = computed(() => aiKeysDirty.value)
 function fetchAiChatSettings(): void {
   props.backend.send<Record<string, string>>('ai.chat.settings.get', {})
     .then(r => {
-      if (!r?.ok) return
-      const p = r.payload ?? r
+      if (!r?.ok || !r.payload) return
+      const p = r.payload
       for (const k of Object.keys(aiProviderKeys.value) as (keyof typeof aiProviderKeys.value)[]) {
-        if (p[k] !== undefined) (aiProviderKeys.value as Record<string, string>)[k] = p[k]
+        if (p[k] !== undefined) aiProviderKeys.value[k] = p[k] as string
       }
       aiKeysDirty.value = false
     })

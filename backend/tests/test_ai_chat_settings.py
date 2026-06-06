@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend.ai_chat_settings import AIChatSettingsStore, DEFAULTS
+from agent_team_backend.ai_chat_settings import (
+    AIChatSettingsStore,
+    DEFAULTS,
+    _VALID_PROVIDERS,
+    _PROVIDER_MODEL_FIELD,
+)
 
 
 def make_store(tmp_path: Path) -> AIChatSettingsStore:
@@ -74,3 +79,89 @@ def test_set_returns_model_alias(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     result = store.set({"provider": "anthropic", "model": "claude-opus-4-8"})
     assert result.get("model") == "claude-opus-4-8"
+
+
+# ── New multi-provider tests ──────────────────────────────────────────────────
+
+@pytest.mark.parametrize("provider,expected_field,model", [
+    ("openai",           "openai_model",           "gpt-4o"),
+    ("google",           "google_model",           "gemini-2.5-pro"),
+    ("groq",             "groq_model",             "llama-3.3-70b-versatile"),
+    ("deepseek",         "deepseek_model",         "deepseek-chat"),
+    ("mistral",          "mistral_model",          "mistral-large-latest"),
+    ("xai",              "xai_model",              "grok-3-mini"),
+    ("openai_compatible","openai_compatible_model", "my-custom-model"),
+])
+def test_model_alias_all_providers(tmp_path: Path, provider: str, expected_field: str, model: str) -> None:
+    """Setting model for each provider writes to the correct provider-specific field."""
+    store = make_store(tmp_path)
+    result = store.set({"provider": provider, "model": model})
+    assert result["provider"] == provider
+    assert result["model"] == model
+    assert result[expected_field] == model
+
+
+def test_all_new_providers_in_valid_providers() -> None:
+    """Every new provider must be in _VALID_PROVIDERS and _PROVIDER_MODEL_FIELD."""
+    new_providers = {"openai", "google", "groq", "deepseek", "mistral", "xai", "openai_compatible"}
+    assert new_providers.issubset(set(_VALID_PROVIDERS))
+    assert new_providers.issubset(set(_PROVIDER_MODEL_FIELD.keys()))
+
+
+def test_new_providers_have_defaults() -> None:
+    """Each new cloud provider must have key and model entries in DEFAULTS."""
+    for prov in ("openai", "google", "groq", "deepseek", "mistral", "xai"):
+        assert f"{prov}_api_key" in DEFAULTS, f"Missing {prov}_api_key in DEFAULTS"
+        assert f"{prov}_model"   in DEFAULTS, f"Missing {prov}_model in DEFAULTS"
+    # Custom OpenAI-compatible has three fields
+    for field in ("openai_compatible_base_url", "openai_compatible_api_key", "openai_compatible_model"):
+        assert field in DEFAULTS
+
+
+def test_api_keys_not_in_defaults_values() -> None:
+    """All API key DEFAULTS must be empty strings (no hardcoded secrets)."""
+    key_fields = [k for k in DEFAULTS if k.endswith("_api_key")]
+    for field in key_fields:
+        assert DEFAULTS[field] == "", f"{field} should default to ''"
+
+
+def test_model_key_not_persisted_for_new_providers(tmp_path: Path) -> None:
+    """The computed `model` alias must NOT appear in the persisted JSON for any provider."""
+    for prov in _VALID_PROVIDERS:
+        store = AIChatSettingsStore(path=tmp_path / f"s_{prov}.json")
+        store.set({"provider": prov, "model": "test-model"})
+        raw = json.loads((tmp_path / f"s_{prov}.json").read_text())
+        assert "model" not in raw, f"'model' alias leaked to disk for provider={prov}"
+
+
+def test_switch_provider_preserves_other_keys(tmp_path: Path) -> None:
+    """Switching provider must not wipe out keys for other providers."""
+    store = make_store(tmp_path)
+    store.set({"provider": "anthropic", "anthropic_api_key": "sk-ant-test"})
+    store.set({"provider": "openai", "openai_api_key": "sk-oai-test"})
+    result = store.get()
+    assert result["provider"] == "openai"
+    assert result["anthropic_api_key"] == "sk-ant-test"
+    assert result["openai_api_key"] == "sk-oai-test"
+
+
+def test_openai_compatible_fields(tmp_path: Path) -> None:
+    """Custom OpenAI-compatible provider stores base_url, key, and model."""
+    store = make_store(tmp_path)
+    store.set({
+        "provider": "openai_compatible",
+        "openai_compatible_base_url": "http://localhost:1234/v1",
+        "openai_compatible_api_key": "my-secret",
+        "openai_compatible_model": "llama-3.3-70b",
+    })
+    result = store.get()
+    assert result["openai_compatible_base_url"] == "http://localhost:1234/v1"
+    assert result["openai_compatible_api_key"] == "my-secret"
+    assert result["model"] == "llama-3.3-70b"
+
+
+def test_invalid_provider_still_falls_back_to_ollama(tmp_path: Path) -> None:
+    """Unknown provider values are still rejected (backward compat)."""
+    store = make_store(tmp_path)
+    result = store.set({"provider": "some_future_provider"})
+    assert result["provider"] == "ollama"
