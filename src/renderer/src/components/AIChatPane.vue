@@ -1913,7 +1913,7 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       if (!pendingRunBtn.has(runCodeBtn)) {
         const prev = runCodeBtn.textContent
         runCodeBtn.textContent = '⚠ Click again to run'
-        runCodeBtn.style.color = '#e5c07b'
+        runCodeBtn.style.color = 'var(--attention-bright)'
         const t = setTimeout(() => {
           pendingRunBtn.delete(runCodeBtn)
           runCodeBtn.textContent = prev ?? '▶ Run'
@@ -10923,7 +10923,7 @@ function showModelChange(mi: number): string | null {
         <span
           v-if="allThreads.find(t => t.id === currentThreadId)?.systemPrompt"
           class="ai-rules-badge"
-          style="background: color-mix(in srgb, #4a9eff 15%, transparent); color: #4a9eff;"
+          style="background: color-mix(in srgb, var(--accent-fg) 15%, transparent); color: var(--accent-fg);"
           :title="`Thread instructions:\n${allThreads.find(t => t.id === currentThreadId)?.systemPrompt}`"
           @click="selectSlashCommand(SLASH_COMMANDS.find(c => c.id === '/instructions')!)"
         >⚙ instr</span>

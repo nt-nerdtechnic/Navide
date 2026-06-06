@@ -225,7 +225,7 @@ header {
   height: 10px;
   border-radius: 50%;
   background: var(--attention-fg);
-  box-shadow: 0 0 0 4px rgba(210, 153, 34, 0.2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--attention-fg) 20%, transparent);
 }
 .title strong {
   color: var(--attention-fg);
@@ -243,8 +243,8 @@ header {
 .queue-badge {
   font-size: 11px;
   color: var(--warning-fg);
-  background: rgba(240, 136, 62, 0.15);
-  border: 1px solid rgba(240, 136, 62, 0.35);
+  background: color-mix(in srgb, var(--warning-fg) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning-fg) 35%, transparent);
   border-radius: 10px;
   padding: 1px 7px;
   margin-left: 6px;

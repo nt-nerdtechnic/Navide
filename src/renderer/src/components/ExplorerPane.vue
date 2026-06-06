@@ -745,8 +745,8 @@ defineExpose({ revealFile, focusTree })
 .exp-ctx-sep { height: 1px; background: var(--border-muted); margin: 4px 0; }
 
 /* Multi-select */
-.exp-row.row-selected { background: rgba(88, 166, 255, 0.12); }
-.exp-row.row-selected:hover { background: rgba(88, 166, 255, 0.18); }
+.exp-row.row-selected { background: color-mix(in srgb, var(--accent-fg) 12%, transparent); }
+.exp-row.row-selected:hover { background: color-mix(in srgb, var(--accent-fg) 18%, transparent); }
 .exp-row.row-focused { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }
 .exp-tree:focus { outline: none; }
 

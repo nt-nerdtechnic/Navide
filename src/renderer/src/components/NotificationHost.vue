@@ -172,11 +172,11 @@ header {
   height: 10px;
   border-radius: 50%;
   background: var(--accent-fg);
-  box-shadow: 0 0 0 4px rgba(88, 166, 255, 0.2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-fg) 20%, transparent);
 }
 .card.confirm .dot {
   background: var(--attention-fg);
-  box-shadow: 0 0 0 4px rgba(210, 153, 34, 0.2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--attention-fg) 20%, transparent);
 }
 header strong {
   color: var(--text-bright);
