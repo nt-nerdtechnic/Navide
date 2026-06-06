@@ -487,6 +487,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
+  { id: '@tree', label: '@tree — workspace file tree structure' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -955,6 +956,39 @@ function onMessagesScroll(): void {
   const el = messagesEl.value
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
   autoScroll.value = atBottom
+}
+
+// ── Build tree string from flat file paths ────────────────────────────────────
+function buildFileTree(files: string[]): string {
+  type Node = { [key: string]: Node | null }
+  const root: Node = {}
+  for (const f of files) {
+    const parts = f.split('/')
+    let cur = root
+    for (const part of parts) {
+      if (!cur[part]) cur[part] = {}
+      cur = cur[part] as Node
+    }
+  }
+  const lines: string[] = []
+  function walk(node: Node, prefix: string): void {
+    const keys = Object.keys(node).sort((a, b) => {
+      const aDir = Object.keys(node[a] as Node).length > 0
+      const bDir = Object.keys(node[b] as Node).length > 0
+      if (aDir !== bDir) return aDir ? -1 : 1
+      return a.localeCompare(b)
+    })
+    keys.forEach((key, i) => {
+      const isLast = i === keys.length - 1
+      lines.push(`${prefix}${isLast ? '└── ' : '├── '}${key}`)
+      const child = node[key] as Node
+      if (child && Object.keys(child).length > 0) {
+        walk(child, prefix + (isLast ? '    ' : '│   '))
+      }
+    })
+  }
+  walk(root, '')
+  return lines.join('\n')
 }
 
 // ── Tool call human-readable summary ─────────────────────────────────────────
@@ -1831,6 +1865,25 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = `// Clipboard content:\n${text.slice(0, 5000)}`
     } catch {
       chipContent = '// @clipboard: read failed (check browser permissions)'
+    }
+  } else if (option.id === '@tree') {
+    chipLabel = '@tree'
+    if (!props.workspacePath) {
+      chipContent = '// @tree: no workspace open'
+    } else {
+      try {
+        interface FlatResp { ok: boolean; files?: string[] }
+        const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
+          workspace_path: props.workspacePath,
+          query: '',
+        })
+        const files = (resp.payload?.files ?? []).slice(0, 300)
+        // Build tree string from flat file list
+        const tree = buildFileTree(files)
+        chipContent = `// Workspace file tree:\n${tree}`
+      } catch {
+        chipContent = '// @tree: unavailable'
+      }
     }
   } else {
     // It's a file path
