@@ -1875,9 +1875,13 @@ async function sendMessage(): Promise<void> {
     return
   }
 
-  // /continue — append "Please continue" to ask AI to keep going after truncation
+  // /continue — ask AI to keep going when response was truncated
   if (rawText === '/continue') {
-    inputText.value = 'Please continue from where you left off.'
+    if (!messages.value.some((m) => m.role === 'assistant' && m.content.trim())) {
+      showToast('No AI response to continue')
+      return
+    }
+    inputText.value = 'Please continue your response from where you left off.'
     void sendMessage()
     return
   }
@@ -3388,6 +3392,24 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     inputText.value = ''
     const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
     if (ct) { ct.pinned = !ct.pinned; saveCurrentThread(); showToast(ct.pinned ? 'Thread pinned' : 'Thread unpinned') }
+    return
+  }
+
+  if (cmd.id === '/continue') {
+    inputText.value = '/continue'
+    void sendMessage()
+    return
+  }
+
+  if (cmd.id === '/test') {
+    inputText.value = '/test'
+    void sendMessage()
+    return
+  }
+
+  if (cmd.id === '/fixtests') {
+    inputText.value = '/fixtests'
+    void sendMessage()
     return
   }
 
