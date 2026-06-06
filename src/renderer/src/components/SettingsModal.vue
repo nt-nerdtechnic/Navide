@@ -646,17 +646,23 @@ async function plReloadStages() {
 async function plCreate() {
   if (!plNewName.value.trim() || plBusy.value) return
   plBusy.value = true
-  const p = await props.pipelinesApi?.createPipeline(plNewName.value.trim())
-  plBusy.value = false
-  if (p) { plNewName.value = ''; plCreating.value = false; plSummary.value = `Created "${p.name}"` }
+  try {
+    const p = await props.pipelinesApi?.createPipeline(plNewName.value.trim())
+    if (p) { plNewName.value = ''; plCreating.value = false; plSummary.value = `Created "${p.name}"` }
+  } finally {
+    plBusy.value = false
+  }
 }
 
 async function plSetActive(id: string) {
   if (plBusy.value) return
   plBusy.value = true
-  await props.pipelinesApi?.setActivePipeline(id)
-  plBusy.value = false
-  plSummary.value = 'Default pipeline updated'
+  try {
+    await props.pipelinesApi?.setActivePipeline(id)
+    plSummary.value = 'Default pipeline updated'
+  } finally {
+    plBusy.value = false
+  }
 }
 
 function plStartRename(id: string, currentName: string) {
@@ -667,19 +673,25 @@ function plStartRename(id: string, currentName: string) {
 async function plConfirmRename() {
   if (!plRenameText.value.trim() || plBusy.value) return
   plBusy.value = true
-  await props.pipelinesApi?.renamePipeline(plRenamingId.value, plRenameText.value.trim())
-  plBusy.value = false
-  plSummary.value = 'Renamed'
-  plRenamingId.value = ''
+  try {
+    await props.pipelinesApi?.renamePipeline(plRenamingId.value, plRenameText.value.trim())
+    plSummary.value = 'Renamed'
+    plRenamingId.value = ''
+  } finally {
+    plBusy.value = false
+  }
 }
 
 async function plDelete(id: string, name: string) {
   if (!(await notifyConfirm(`Delete "${name}"? This cannot be undone.`, { title: 'Delete Pipeline', confirmText: 'Delete' }))) return
   plBusy.value = true
-  await props.pipelinesApi?.deletePipeline(id)
-  plBusy.value = false
-  plSummary.value = `Deleted "${name}"`
-  plBackToList()
+  try {
+    await props.pipelinesApi?.deletePipeline(id)
+    plSummary.value = `Deleted "${name}"`
+    plBackToList()
+  } finally {
+    plBusy.value = false
+  }
 }
 
 </script>
