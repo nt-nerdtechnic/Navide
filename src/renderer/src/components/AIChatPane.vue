@@ -1237,8 +1237,8 @@ function renderMarkdownLite(rawText: string): string {
     }
     return `\x00M${mathBlocks.length - 1}\x00`
   })
-  // Inline math: $...$  (avoid false positives: require non-space after opening $)
-  text = text.replace(/\$([^\s$][^$\n]*?)\$/g, (_, expr) => {
+  // Inline math: $...$  (require non-space at both ends to avoid false positives like "$50 and $30")
+  text = text.replace(/\$([^\s$][^$\n]*?[^\s$]|[^\s$])\$/g, (_, expr) => {
     try {
       const rendered = katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false })
       mathBlocks.push(rendered)
@@ -3483,21 +3483,18 @@ async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
     if (file) _addImageFile(file)
     return
   }
-  // Rich paste: auto-wrap multi-line code-like text in code block
-  const textItem = items.find((it) => it.type === 'text/plain')
-  if (textItem) {
-    textItem.getAsString((pasted) => {
-      if (!_looksLikeCode(pasted)) return
-      // Only auto-wrap if it doesn't already look like it's inside a code block
-      const cur = inputText.value
-      if (cur.includes('```')) return
+  // Rich paste: auto-wrap multi-line code-like text in code block.
+  // Use getData() (synchronous) so e.preventDefault() fires before the default paste.
+  const pasted = e.clipboardData?.getData('text/plain') ?? ''
+  if (_looksLikeCode(pasted)) {
+    const cur = inputText.value
+    if (!cur.includes('```')) {
       e.preventDefault()
       const lang = _detectCodeLang(pasted)
-      const wrapped = `\`\`\`${lang}\n${pasted.trim()}\n\`\`\``
-      inputText.value = cur + wrapped
+      inputText.value = cur + `\`\`\`${lang}\n${pasted.trim()}\n\`\`\``
       showToast('Code detected — wrapped in code block')
       nextTick(() => textareaEl.value?.focus())
-    })
+    }
   }
 }
 
