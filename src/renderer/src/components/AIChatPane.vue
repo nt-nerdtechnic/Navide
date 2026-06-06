@@ -3920,6 +3920,12 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
   }
+  // Cmd+Enter / Ctrl+Enter — accept diff-apply modal (VS Code Copilot parity)
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && diffApplyState.value) {
+    e.preventDefault()
+    confirmApply()
+    return
+  }
   // ArrowUp / ArrowDown — navigate thread list when thread panel is open
   if (showThreads.value && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
     const visible = filteredThreads.value
@@ -4763,7 +4769,13 @@ function onTextareaInput(e: Event): void {
       .slice(0, 5)
     atOptions.value = [...filtered, ...recent]
   } else {
-    atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
+    if (filtered.length) {
+      const rOrder = new Map(recentAtIds.value.map((id, i): [string, number] => [id, i]))
+      filtered.sort((a, b) => (rOrder.get(a.id) ?? 999) - (rOrder.get(b.id) ?? 999))
+      atOptions.value = filtered
+    } else {
+      atOptions.value = AT_OPTIONS_STATIC
+    }
   }
 
   if (fragment.length >= 1 && !fragment.startsWith('@')) {
@@ -7603,7 +7615,13 @@ async function searchFiles(query: string): Promise<void> {
       ...AT_OPTIONS_STATIC.filter((o) => o.label.toLowerCase().includes(lower)),
       ...atDirItems.value,
     ]
-    atOptions.value = filtered.length ? filtered : AT_OPTIONS_STATIC
+    if (filtered.length) {
+      const rOrder = new Map(recentAtIds.value.map((id, i): [string, number] => [id, i]))
+      filtered.sort((a, b) => (rOrder.get(a.id) ?? 999) - (rOrder.get(b.id) ?? 999))
+      atOptions.value = filtered
+    } else {
+      atOptions.value = AT_OPTIONS_STATIC
+    }
   } catch {
     // ignore
   }
@@ -9952,6 +9970,20 @@ function getDateLabel(ts: number): string {
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
+function showModelChange(mi: number): string | null {
+  const msg = messages.value[mi]
+  if (!msg || msg.role !== 'assistant' || !msg.model) return null
+  for (let i = mi - 1; i >= 0; i--) {
+    const prev = messages.value[i]
+    if (prev.role === 'assistant' && prev.model) {
+      if (prev.model !== msg.model) {
+        return MODEL_CATALOG.find(m => m.id === msg.model)?.display ?? msg.model
+      }
+      return null
+    }
+  }
+  return null
+}
 </script>
 
 <template>
@@ -10045,6 +10077,10 @@ function getDateLabel(ts: number): string {
         <!-- Date separator -->
         <div v-if="msg.timestamp && showDateSep(mi)" class="ai-date-sep">
           <span class="ai-date-sep-label">{{ getDateLabel(msg.timestamp) }}</span>
+        </div>
+        <!-- Model change separator -->
+        <div v-if="showModelChange(mi)" class="ai-model-sep">
+          <span class="ai-model-sep-label">{{ showModelChange(mi) }}</span>
         </div>
       <div
         class="ai-msg-wrap ai-msg"
@@ -11208,8 +11244,8 @@ function getDateLabel(ts: number): string {
           <p class="ai-modal-warning">This will overwrite the entire file.</p>
         </div>
         <div class="ai-modal-footer">
-          <button class="ai-cancel-btn" @click="diffApplyState = null">Cancel</button>
-          <button class="ai-apply-confirm-btn" @click="confirmApply">Apply</button>
+          <button class="ai-cancel-btn" @click="diffApplyState = null">Cancel <kbd>Esc</kbd></button>
+          <button class="ai-apply-confirm-btn" title="Apply changes (⌘↵ / Ctrl+↵)" @click="confirmApply">Apply <kbd>⌘↵</kbd></button>
         </div>
       </div>
     </div>
@@ -11924,6 +11960,14 @@ function getDateLabel(ts: number): string {
   content: ''; flex: 1; height: 1px; background: var(--border-muted);
 }
 .ai-date-sep-label { white-space: nowrap; user-select: none; }
+.ai-model-sep {
+  display: flex; align-items: center; gap: 8px; margin: 8px 8px 4px;
+  color: var(--text-muted); font-size: 10px;
+}
+.ai-model-sep::before, .ai-model-sep::after {
+  content: ''; flex: 1; height: 1px; background: var(--border-muted); opacity: 0.5;
+}
+.ai-model-sep-label { white-space: nowrap; user-select: none; opacity: 0.7; }
 .ai-stream-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; margin-left: 4px; user-select: none; }
 .ai-text-folded { max-height: 320px; overflow: hidden; position: relative; }
 .ai-text-folded::after {
@@ -13572,6 +13616,11 @@ kbd {
   background: #0078d4; border: none; color: #fff; font-weight: 600;
 }
 .ai-apply-confirm-btn:hover { background: #106ebe; }
+.ai-modal-footer kbd {
+  display: inline-block; font-family: inherit; font-size: 9px;
+  background: rgba(255,255,255,0.12); border-radius: 3px;
+  padding: 1px 4px; margin-left: 4px; opacity: 0.75; letter-spacing: 0;
+}
 
 /* ── Checkpoints panel ───────────────────────────────────────────── */
 .ai-checkpoints-panel {

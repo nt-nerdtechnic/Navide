@@ -1588,6 +1588,20 @@ async function onWorkspaceCheck(path: string): Promise<void> {
         activeTab.value = stageTabs.value[0]?.key ?? ''
       }
     } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
+    // If the active tab has no panes (e.g. old project.json panes landed in a
+    // different group via fallback), switch to the first tab that has panes so
+    // the user is not greeted with an empty grid.
+    if (activeTab.value && stageTabs.value.length > 0) {
+      const paneCountByGroup: Record<string, number> = {}
+      for (const p of panes.value) {
+        if (p.runGroupId) paneCountByGroup[p.runGroupId] = (paneCountByGroup[p.runGroupId] ?? 0) + 1
+      }
+      const activeHasPanes = (paneCountByGroup[activeTab.value] ?? 0) > 0
+      if (!activeHasPanes) {
+        const firstFull = stageTabs.value.find((t) => (paneCountByGroup[t.key] ?? 0) > 0)
+        if (firstFull) activeTab.value = firstFull.key
+      }
+    }
   }
 }
 
@@ -1619,8 +1633,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   )
   pipeline.workspacePath = workspacePath
 
-  // Fallback group: use the first (oldest) run group so panes without a
-  // persisted run_group_id land in the default tab, not the newest tab.
+  // Fallback group for old project.json records that predate run_group_id
+  // persistence: use the first (default) group so panes land somewhere stable.
+  // New records always carry their own run_group_id and ignore this fallback.
   const fallbackGroupId = runGroups.value[0]?.id ?? ''
 
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
