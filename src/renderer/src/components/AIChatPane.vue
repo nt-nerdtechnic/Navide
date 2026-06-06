@@ -597,6 +597,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
   { id: '/continue', label: '/continue', description: 'Continue last response',  template: '' },
   { id: '/compact',  label: '/compact',  description: 'Summarize & compress history to free context', template: '' },
+  { id: '/model',    label: '/model',    description: 'Switch model for this conversation',            template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1446,6 +1447,23 @@ function undoLastSend(): void {
   showToast('Message removed — edit and resend')
 }
 
+// ── Regenerate with a different model ─────────────────────────────────────────
+const regenModelOpen = ref(false)
+
+function regenWithModel(model: string): void {
+  regenModelOpen.value = false
+  const prev = settingsModel.value
+  settingsModel.value = model
+  saveSettings()
+  void regenerate().then(() => {
+    // Restore previous model if user hasn't changed it themselves
+    if (settingsModel.value === model) {
+      settingsModel.value = prev
+      saveSettings()
+    }
+  })
+}
+
 // ── Fix Problems shortcut ──────────────────────────────────────────────────────
 async function fixProblems(): Promise<void> {
   if (sending.value || !props.workspacePath) return
@@ -2098,6 +2116,13 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
       await nextTick()
       textareaEl.value?.focus()
     })()
+    return
+  }
+
+  if (cmd.id === '/model') {
+    inputText.value = ''
+    showModelPicker.value = true
+    nextTick(() => textareaEl.value?.focus())
     return
   }
 
@@ -2804,6 +2829,10 @@ function onClickOutside(e: MouseEvent): void {
   if (modelBar && !modelBar.contains(e.target as Node)) {
     showModelPicker.value = false
   }
+  const regenWrap = document.querySelector('.ai-regen-model-wrap')
+  if (regenWrap && !regenWrap.contains(e.target as Node)) {
+    regenModelOpen.value = false
+  }
 }
 
 onMounted(() => document.addEventListener('click', onClickOutside))
@@ -3010,7 +3039,6 @@ function getDateLabel(ts: number): string {
         </div>
         <!-- Message action bar (copy / regenerate / model badge) -->
         <div class="ai-msg-actions" :class="msg.role">
-          <span v-if="msg.role === 'assistant' && msg.model" class="ai-model-badge">{{ msg.model }}</span>
           <button
             v-if="msg.role === 'user' && !sending"
             class="ai-msg-action-btn"
@@ -3038,6 +3066,28 @@ function getDateLabel(ts: number): string {
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
           </button>
+          <!-- Regenerate with a different model — dropdown -->
+          <div
+            v-if="msg.role === 'assistant' && mi === lastAssistantIdx && !sending"
+            class="ai-regen-model-wrap"
+          >
+            <button
+              class="ai-msg-action-btn ai-regen-model-btn"
+              title="Regenerate with a different model"
+              @click.stop="regenModelOpen = !regenModelOpen"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:2px"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>▾
+            </button>
+            <div v-if="regenModelOpen" class="ai-regen-model-menu">
+              <div
+                v-for="m in currentModelOptions"
+                :key="m"
+                class="ai-regen-model-item"
+                :class="{ active: m === settingsModel }"
+                @mousedown.prevent="regenWithModel(m)"
+              >{{ m.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</div>
+            </div>
+          </div>
           <button
             v-if="msg.role === 'assistant' && !msg.streaming"
             class="ai-msg-action-btn"
@@ -3695,6 +3745,20 @@ function getDateLabel(ts: number): string {
   opacity: 0.75;
 }
 .ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
+
+.ai-regen-model-wrap { position: relative; display: inline-flex; }
+.ai-regen-model-btn { font-size: 10px; display: flex; align-items: center; }
+.ai-regen-model-menu {
+  position: absolute; bottom: calc(100% + 4px); right: 0;
+  background: var(--bg-overlay); border: 1px solid var(--border-default);
+  border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.28);
+  padding: 4px 0; min-width: 170px; z-index: 60;
+}
+.ai-regen-model-item {
+  padding: 5px 12px; font-size: 11.5px; cursor: pointer;
+  color: var(--text-primary); white-space: nowrap;
+}
+.ai-regen-model-item:hover, .ai-regen-model-item.active { background: var(--accent-muted); color: var(--accent-fg); }
 .ai-feedback-btn { font-size: 11px; opacity: 0.3; }
 .ai-feedback-btn:hover { opacity: 0.9; }
 .ai-feedback-up { opacity: 1 !important; filter: none; }
