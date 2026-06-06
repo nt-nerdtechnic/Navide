@@ -1259,6 +1259,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/git',          label: '/git',          description: 'Quick git status + recent commits summary',               template: '' },
   { id: '/save-prompt',  label: '/save-prompt',  description: 'Save current input as a reusable prompt template (e.g. /save-prompt Code Review)', template: '' },
   { id: '/prompts',      label: '/prompts',      description: 'Browse and load saved prompt templates',                  template: '' },
+  { id: '/import',       label: '/import',       description: 'Import a chat from a JSON file (exported via /export)',   template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1279,6 +1280,18 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
         window.setTimeout(() => { copyBtn.textContent = 'Copy' }, 1500)
       }).catch(() => {/* ignore */})
     } catch {/* ignore */}
+    return
+  }
+  // Code block word-wrap toggle
+  const wrapBtn = target.closest<HTMLButtonElement>('.ai-code-wrap-btn')
+  if (wrapBtn) {
+    const pre = wrapBtn.closest('.ai-code-wrap')?.querySelector<HTMLElement>('pre.ai-code-block')
+    if (!pre) return
+    const wrapped = pre.style.whiteSpace === 'pre-wrap'
+    pre.style.whiteSpace = wrapped ? '' : 'pre-wrap'
+    pre.style.overflowX = wrapped ? '' : 'hidden'
+    wrapBtn.classList.toggle('active', !wrapped)
+    wrapBtn.title = wrapped ? 'Toggle word wrap' : 'Disable word wrap'
     return
   }
   // Code fold/expand toggle
@@ -1614,6 +1627,7 @@ function renderMarkdownLite(rawText: string): string {
       `${insertBtn}` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
+      `<button class="ai-code-wrap-btn" title="Toggle word wrap">↔</button>` +
       `</div>` +
       `${explainBtn || refactorBtn || newChatBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}${newChatBtn}</div>` : ''}` +
       `${toggleBtn}` +
@@ -2431,6 +2445,33 @@ async function exportConversation(format: 'markdown' | 'json' = 'markdown'): Pro
     if (r && !r.ok && !r.canceled) showToast('Export failed')
     else if (r?.ok) showToast('Chat exported')
   } catch { showToast('Export failed') }
+}
+
+async function importConversation(): Promise<void> {
+  try {
+    const r = await window.agentTeam?.openJson({ title: 'Import chat (JSON)' })
+    if (!r || r.canceled || !r.ok) return
+    const raw = r.content
+    if (!raw) { showToast('Import failed: empty file'); return }
+    let parsed: { messages?: Array<{ role: string; content: string; model?: string; timestamp?: number }> }
+    try { parsed = JSON.parse(raw) } catch { showToast('Import failed: invalid JSON'); return }
+    const msgs = parsed?.messages
+    if (!Array.isArray(msgs) || msgs.length === 0) { showToast('Import failed: no messages found'); return }
+    const imported: ChatMessage[] = msgs
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        model: m.model,
+        timestamp: m.timestamp ?? Date.now(),
+      }))
+    if (imported.length === 0) { showToast('Import failed: no valid messages'); return }
+    newThread()
+    await nextTick()
+    messages.value = imported
+    saveCurrentThread()
+    showToast(`Imported ${imported.length} messages`)
+  } catch { showToast('Import failed') }
 }
 
 function copyMessage(content: string): void {
@@ -3895,20 +3936,24 @@ ${historyText}`
   if (cmd.id === '/save-prompt') {
     const rawText = inputText.value.trim()
     const nameArg = rawText.slice('/save-prompt'.length).trim()
-    const promptText = nameArg || rawText
-    if (!promptText) { showToast('/save-prompt: type a prompt name or write a prompt first'); return }
-    const name = nameArg || promptText.slice(0, 40)
-    const tmpl: PromptTemplate = { id: `pt-${Date.now()}`, name, text: nameArg ? '' : promptText }
+    if (!nameArg) { showToast('/save-prompt: type a name, e.g. /save-prompt Code Review'); return }
+    const tmpl: PromptTemplate = { id: `pt-${Date.now()}`, name: nameArg, text: '' }
     promptTemplates.value = [tmpl, ...promptTemplates.value]
     savePromptTemplates()
     inputText.value = ''
-    showToast(`Saved: "${name}" — open Prompt Templates to edit`)
+    showToast(`Saved: "${nameArg}" — open Prompt Templates to edit`)
     return
   }
 
   if (cmd.id === '/prompts') {
     inputText.value = ''
     showPromptTemplates.value = true
+    return
+  }
+
+  if (cmd.id === '/import') {
+    inputText.value = ''
+    void importConversation()
     return
   }
 
@@ -7186,6 +7231,21 @@ function getDateLabel(ts: number): string {
   border-radius: 4px;
 }
 .ai-text :deep(.ai-code-copy-btn:hover) {
+  background: var(--bg-subtle);
+  color: var(--text-bright);
+}
+.ai-text :deep(.ai-code-wrap-btn) {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+.ai-text :deep(.ai-code-wrap-btn:hover),
+.ai-text :deep(.ai-code-wrap-btn.active) {
   background: var(--bg-subtle);
   color: var(--text-bright);
 }
