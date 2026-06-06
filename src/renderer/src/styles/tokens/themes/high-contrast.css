@@ -14,6 +14,11 @@
   --bg-hover: rgba(255, 255, 255, 0.12);
   --bg-active: rgba(255, 255, 255, 0.18);
   --bg-selected: rgba(64, 156, 255, 0.28);
+  --bg-hover-faint: rgba(255, 255, 255, 0.08);
+  --bg-hover-strong: rgba(255, 255, 255, 0.22);
+  --overlay-soft: rgba(255, 255, 255, 0.2);
+  --overlay-medium: rgba(255, 255, 255, 0.3);
+  --overlay-ring: rgba(255, 255, 255, 0.7);
 
   /* Text — high luminance for strong contrast */
   --text-primary: #f0f3f6;   /* ~17:1 on bg-base */

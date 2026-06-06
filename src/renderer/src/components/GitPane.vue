@@ -2252,7 +2252,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   width: 22px; height: 22px; background: transparent; border: none;
   border-radius: 4px; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0;
 }
-.hdr-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.hdr-btn:hover { color: var(--text-primary); background: var(--bg-active); }
 .hdr-btn.active { color: var(--accent-fg); }
 .hdr-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -2362,7 +2362,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .commit-main-btn:hover { background: var(--success-strong); }
 .commit-main-btn:disabled { background: var(--bg-subtle); border-color: var(--border-default); color: var(--text-muted); cursor: not-allowed; }
 .commit-arrow-btn {
-  background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong); border-left: 1px solid #1a6b27;
+  background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong); border-left: 1px solid var(--success-emphasis);
   border-radius: 0 5px 5px 0; font-size: 11px; padding: 6px 8px; cursor: pointer;
 }
 .commit-arrow-btn:hover { background: var(--success-strong); }
@@ -2374,14 +2374,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   padding: 3px 8px; min-height: 22px;
 }
 .sec-hdr.clickable { cursor: pointer; user-select: none; }
-.sec-hdr:hover { background: rgba(177,186,196,0.06); }
+.sec-hdr:hover { background: var(--bg-hover-faint); }
 .sec-caret { font-size: 9px; color: var(--text-muted); width: 10px; flex-shrink: 0; }
 .sec-label {
   font-size: 11px; font-weight: 600; color: var(--text-secondary);
   letter-spacing: 0.3px;
 }
 .sec-badge {
-  font-size: 10px; color: var(--text-secondary); background: rgba(177,186,196,0.1);
+  font-size: 10px; color: var(--text-secondary); background: var(--bg-active);
   border-radius: 10px; padding: 0 6px; flex-shrink: 0;
 }
 .sec-actions { display: flex; align-items: center; gap: 1px; }
@@ -2390,7 +2390,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   width: 20px; height: 20px; background: transparent; border: none;
   border-radius: 3px; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 0;
 }
-.sec-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.08); }
+.sec-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .sec-btn.danger:hover { color: var(--danger-fg); }
 .sec-btn.always { opacity: 1; }
 
@@ -2419,7 +2419,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; align-items: center; height: 22px;
   padding: 0 8px 0 16px; gap: 0; cursor: default; position: relative;
 }
-.file-row:hover { background: rgba(177,186,196,0.06); }
+.file-row:hover { background: var(--bg-hover-faint); }
 .row-conflict { background: color-mix(in srgb, var(--danger-fg) 5%, transparent) !important; }
 .row-selected { background: color-mix(in srgb, var(--accent-fg) 10%, transparent) !important; }
 .row-selected:hover { background: color-mix(in srgb, var(--accent-fg) 15%, transparent) !important; }
@@ -2430,10 +2430,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .sel-count { font-size: 11px; color: var(--text-muted); margin-right: 4px; white-space: nowrap; }
 .sel-btn {
-  font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(177,186,196,0.2);
-  background: rgba(177,186,196,0.08); color: var(--text-primary); cursor: pointer;
+  font-size: 11px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--bg-hover-strong);
+  background: var(--bg-hover); color: var(--text-primary); cursor: pointer;
 }
-.sel-btn:hover { background: rgba(177,186,196,0.15); }
+.sel-btn:hover { background: var(--bg-hover-strong); }
 .sel-btn.primary { border-color: color-mix(in srgb, var(--accent-fg) 40%, transparent); color: var(--accent-fg); }
 .sel-btn.primary:hover { background: color-mix(in srgb, var(--accent-fg) 12%, transparent); }
 .sel-btn.danger { border-color: color-mix(in srgb, var(--danger-fg) 40%, transparent); color: var(--danger-fg); }
@@ -2475,7 +2475,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   min-width: 20px; height: 20px; background: transparent; border: none;
   border-radius: 3px; color: var(--text-secondary); font-size: 11px; cursor: pointer; padding: 0 2px;
 }
-.row-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.row-btn:hover { color: var(--text-primary); background: var(--bg-active); }
 .row-btn.danger:hover { color: var(--danger-fg); }
 .row-btn.always { opacity: 1; }
 /* Stage = primary action, emphasised and rightmost */
@@ -2490,7 +2490,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; align-items: center; height: 22px; gap: 4px;
   padding: 0 8px 0 16px; cursor: pointer;
 }
-.folder-row:hover { background: rgba(177,186,196,0.06); }
+.folder-row:hover { background: var(--bg-hover-faint); }
 .folder-caret { font-size: 9px; color: var(--text-muted); width: 10px; flex-shrink: 0; }
 .folder-icon { color: var(--text-primary); flex-shrink: 0; }
 .folder-name {
@@ -2498,7 +2498,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .folder-count {
-  font-size: 10px; color: var(--text-muted); background: rgba(177,186,196,0.08);
+  font-size: 10px; color: var(--text-muted); background: var(--bg-hover);
   border-radius: 8px; padding: 0 5px; flex-shrink: 0;
 }
 
@@ -2561,14 +2561,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   cursor: pointer; padding: 2px 5px; border-radius: 4px; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.branch-pill:hover, .branch-pill.active { color: var(--text-primary); background: rgba(177,186,196,0.08); }
+.branch-pill:hover, .branch-pill.active { color: var(--text-primary); background: var(--bg-hover); }
 .ab-text { font-size: 10px; color: var(--attention-fg); flex-shrink: 0; }
 .remote-btn {
   display: flex; align-items: center; gap: 2px; background: transparent; border: none;
   color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 3px 5px; border-radius: 4px;
   flex-shrink: 0; white-space: nowrap;
 }
-.remote-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.08); }
+.remote-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .remote-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .remote-btn.busy { opacity: 1; color: var(--accent-fg); cursor: progress; }
 .publish-btn { color: var(--attention-fg); font-size: 10px; }
@@ -2597,7 +2597,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; align-items: center; gap: 4px;
   padding: 2px 0; font-size: 11px; border-radius: 3px;
 }
-.branch-row:hover { background: rgba(177,186,196,0.05); }
+.branch-row:hover { background: var(--bg-hover-faint); }
 .branch-row.current .b-name { color: var(--accent-bright); font-weight: 600; }
 .b-check { width: 14px; color: var(--success-bright); font-size: 10px; text-align: center; flex-shrink: 0; }
 .b-name { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
@@ -2661,7 +2661,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; align-items: flex-start; gap: 0;
   padding: 0 8px 0 0; cursor: pointer;
 }
-.commit-row:hover { background: rgba(177,186,196,0.05); }
+.commit-row:hover { background: var(--bg-hover-faint); }
 .graph-col {
   position: relative; flex-shrink: 0; align-self: stretch; min-height: 28px;
 }
@@ -2703,7 +2703,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; align-items: center; gap: 6px;
   padding: 3px 0; font-size: 11px;
 }
-.generic-row:hover { background: rgba(177,186,196,0.04); }
+.generic-row:hover { background: var(--bg-hover-faint); }
 .stash-ref { color: var(--text-muted); font-size: 10px; flex-shrink: 0; }
 .stash-msg { color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remote-name { color: var(--text-muted); font-size: 10px; flex-shrink: 0; min-width: 44px; }

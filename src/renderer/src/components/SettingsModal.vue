@@ -1810,7 +1810,7 @@ button {
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.primary { background: var(--success-emphasis); border-color: var(--success-strong); color: var(--text-on-emphasis); font-weight: 600; }
 button.primary:not(:disabled):hover { background: var(--success-strong); }
-button.danger { background: var(--danger-deep); border-color: var(--danger-muted); color: #f4d2d2; }
+button.danger { background: var(--danger-deep); border-color: var(--danger-muted); color: var(--text-on-emphasis); }
 button.danger:hover { background: var(--danger-muted); }
 button.ghost { background: transparent; }
 button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
@@ -1823,10 +1823,10 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .hint-msg { color: var(--text-secondary); font-size: 11px; margin: 0; }
 
 /* ── Manager designation (per-slot) ───────────────────────────────────────── */
-.manager-toggle { font-size: 11px; line-height: 1.55; padding: 6px 8px; border: 1px solid rgba(216, 180, 109, 0.25); border-radius: 6px; background: rgba(216, 180, 109, 0.04); }
-.manager-toggle strong { color: #d8b46d; }
+.manager-toggle { font-size: 11px; line-height: 1.55; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--manager-fg) 25%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--manager-fg) 4%, transparent); }
+.manager-toggle strong { color: var(--manager-fg); }
 .manager-toggle code { background: var(--bg-subtle); padding: 1px 4px; border-radius: 3px; font-size: 10px; color: var(--text-bright); }
-.manager-badge { font-size: 9px; color: #d8b46d; background: rgba(216, 180, 109, 0.12); border: 1px solid rgba(216, 180, 109, 0.3); border-radius: 8px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
+.manager-badge { font-size: 9px; color: var(--manager-fg); background: color-mix(in srgb, var(--manager-fg) 12%, transparent); border: 1px solid color-mix(in srgb, var(--manager-fg) 30%, transparent); border-radius: 8px; padding: 1px 6px; margin-left: 6px; font-weight: 600; }
 
 /* ── Slots ────────────────────────────────────────────────────────────────── */
 .slots-section { border-top: 1px solid var(--border-muted); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }

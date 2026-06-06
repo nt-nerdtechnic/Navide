@@ -388,7 +388,7 @@ function cellClass(cell: SideRow['left']): string {
   opacity: 0; transition: opacity 0.1s;
 }
 .bdp-file-hdr:hover .bdp-open-btn { opacity: 1; }
-.bdp-open-btn:hover { color: var(--accent-fg); background: rgba(177,186,196,0.15); }
+.bdp-open-btn:hover { color: var(--accent-fg); background: var(--bg-hover-strong); }
 .bdp-fname {
   flex: 1; font-size: 12px; font-weight: 600; color: var(--text-primary);
   font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

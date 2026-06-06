@@ -13070,11 +13070,11 @@ function showModelChange(mi: number): string | null {
 .ai-chips-warn-critical { color: var(--danger-fg); background: color-mix(in srgb, var(--danger-fg) 15%, transparent); border-color: color-mix(in srgb, var(--danger-fg) 30%, transparent); }
 .ai-chip { cursor: pointer; }
 .ai-chip:hover { filter: brightness(1.15); }
-.ai-chip-active { outline: 2px solid rgba(255,255,255,0.5); }
+.ai-chip-active { outline: 2px solid var(--overlay-ring); }
 .ai-chip-image { padding: 2px 6px 2px 3px; }
 .ai-chip-thumb { width: 22px; height: 16px; object-fit: cover; border-radius: 3px; vertical-align: middle; flex-shrink: 0; }
 .ai-chip-popover-img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 8px auto; }
-.ai-chip-pinned { outline: 1.5px solid rgba(255,255,255,0.6); }
+.ai-chip-pinned { outline: 1.5px solid var(--overlay-ring); }
 .ai-chip-dragging { opacity: 0.4; cursor: grabbing; }
 .ai-chip-pin { border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; font-size: 11px; line-height: 1; opacity: 0.6; }
 .ai-chip-pin:hover { opacity: 1; }
@@ -13260,7 +13260,7 @@ function showModelChange(mi: number): string | null {
   box-shadow: 0 4px 16px rgba(0,0,0,0.3); z-index: 200; min-width: 220px; overflow: hidden;
   max-height: 380px; overflow-y: auto;
 }
-.ai-model-picker-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06)); }
+.ai-model-picker-search-wrap { padding: 6px 8px; border-bottom: 1px solid var(--border-muted); }
 .ai-model-picker-search { width: 100%; box-sizing: border-box; background: var(--bg-muted); border: 1px solid var(--border-muted); border-radius: 4px; color: var(--text-primary); font-size: 11px; padding: 4px 7px; outline: none; }
 .ai-model-picker-search:focus { border-color: var(--accent-emphasis); }
 .ai-model-picker-item {
@@ -13577,7 +13577,7 @@ function showModelChange(mi: number): string | null {
   cursor: pointer;
   font-size: 12px;
   color: var(--text-muted);
-  background: var(--bg-subtle, rgba(255,255,255,0.03));
+  background: var(--bg-subtle);
   list-style: none;
   user-select: none;
 }
@@ -13743,7 +13743,7 @@ function showModelChange(mi: number): string | null {
 .ai-rules-missing { opacity: 0.8; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ai-create-rules-btn { flex-shrink: 0; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--accent-emphasis); background: transparent; color: var(--accent-fg); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .ai-create-rules-btn:hover { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
-.ai-custom-doc-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06)); }
+.ai-custom-doc-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border-muted); }
 .ai-custom-doc-key { font-family: monospace; font-size: 10px; opacity: .8; flex-shrink: 0; }
 .ai-custom-doc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
 .ai-custom-doc-remove { border: none; background: transparent; color: var(--danger-fg); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; opacity: .7; }
@@ -13846,7 +13846,7 @@ function showModelChange(mi: number): string | null {
   position: absolute;
   top: 16px;
   right: 20px;
-  background: rgba(255,255,255,0.1);
+  background: var(--overlay-soft);
   border: none;
   color: var(--text-on-emphasis);
   font-size: 18px;
@@ -13854,7 +13854,7 @@ function showModelChange(mi: number): string | null {
   padding: 4px 8px;
   border-radius: 4px;
 }
-.ai-img-zoom-close:hover { background: rgba(255,255,255,0.2); }
+.ai-img-zoom-close:hover { background: var(--overlay-medium); }
 .ai-threads-panel {
   position: absolute;
   bottom: 0;
@@ -14125,7 +14125,7 @@ kbd {
 }
 .ai-modal-footer kbd {
   display: inline-block; font-family: inherit; font-size: 9px;
-  background: rgba(255,255,255,0.12); border-radius: 3px;
+  background: var(--overlay-soft); border-radius: 3px;
   padding: 1px 4px; margin-left: 4px; opacity: 0.75; letter-spacing: 0;
 }
 

@@ -499,7 +499,7 @@ const verdictMeta = computed(() =>
   color: var(--text-muted); font-size: 12px; line-height: 1;
   padding: 0 2px; border-radius: 3px; flex-shrink: 0;
 }
-.dismiss-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.15); }
+.dismiss-btn:hover { color: var(--text-primary); background: var(--bg-hover-strong); }
 
 .finding-title {
   padding: 5px 10px 2px; font-size: 11px; font-weight: 600; color: var(--text-primary);

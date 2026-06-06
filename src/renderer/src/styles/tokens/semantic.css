@@ -22,6 +22,13 @@
   --bg-hover: rgba(177, 186, 196, 0.08);
   --bg-active: rgba(177, 186, 196, 0.1);
   --bg-selected: rgba(56, 139, 253, 0.16);
+  --bg-hover-faint: rgba(177, 186, 196, 0.05);   /* subtler list-row hover */
+  --bg-hover-strong: rgba(177, 186, 196, 0.16);  /* button / icon hover */
+
+  /* ── Light overlays (raised highlight on dark / colored surfaces) ── */
+  --overlay-soft: rgba(255, 255, 255, 0.12);
+  --overlay-medium: rgba(255, 255, 255, 0.2);
+  --overlay-ring: rgba(255, 255, 255, 0.55);     /* emphasis outline ring */
 
   /* ── Text ─────────────────────────────────────────────────── */
   --text-primary: var(--gray-2);      /* #c9d1d9 — body text */
@@ -67,6 +74,7 @@
   --attention-muted: var(--yellow-6); /* #6f5b1f */
   --attention-subtle: var(--yellow-7);/* #2d2100 */
   --warning-fg: var(--yellow-4);      /* #f0883e — orange warnings */
+  --manager-fg: var(--yellow-2);      /* #d8b46d — manager / admin designation */
 
   /* ── Done (purple) ────────────────────────────────────────── */
   --done-fg: var(--purple-0);         /* #bc8cff */

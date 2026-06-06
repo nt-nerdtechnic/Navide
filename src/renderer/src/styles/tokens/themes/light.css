@@ -14,6 +14,11 @@
   --bg-hover: rgba(31, 35, 40, 0.06);
   --bg-active: rgba(31, 35, 40, 0.1);
   --bg-selected: rgba(9, 105, 218, 0.12);
+  --bg-hover-faint: rgba(31, 35, 40, 0.04);
+  --bg-hover-strong: rgba(31, 35, 40, 0.12);
+  --overlay-soft: rgba(31, 35, 40, 0.1);
+  --overlay-medium: rgba(31, 35, 40, 0.16);
+  --overlay-ring: rgba(31, 35, 40, 0.45);
 
   /* Text — all >= 4.5:1 on bg-base #ffffff */
   --text-primary: #1f2328;   /* ~15.3:1 */
@@ -59,6 +64,7 @@
   --attention-muted: #fae17d;
   --attention-subtle: #fff8c5;
   --warning-fg: #bc4c00;
+  --manager-fg: #8a6d3b;     /* darker tan, AA on light bg */
 
   /* Done (purple) */
   --done-fg: #8250df;        /* ~4.5:1 */

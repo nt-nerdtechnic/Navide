@@ -1657,19 +1657,19 @@ button.icon-btn.muted:hover {
 }
 .pipeline {
   background: var(--bg-inset);
-  border: 1px solid #1f3a3f;
+  border: 1px solid var(--accent-muted);
   padding: 10px;
   border-radius: 6px;
 }
 .manual-spawn {
   background: var(--bg-inset);
-  border: 1px solid #1f3a3f;
+  border: 1px solid var(--accent-muted);
   padding: 10px;
   border-radius: 6px;
 }
 .resume-card {
   background: var(--bg-elevated);
-  border: 1px solid #2d3f5f;
+  border: 1px solid var(--accent-muted);
   border-left: 3px solid var(--accent-fg);
   border-radius: 4px;
   padding: 8px 10px;
@@ -1893,7 +1893,7 @@ button.icon-btn.muted:hover {
 }
 .agent-item.manager {
   border-color: var(--attention-muted);
-  box-shadow: 0 0 0 1px rgba(216, 180, 109, 0.15) inset;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--manager-fg) 15%, transparent) inset;
 }
 .agent-line {
   display: flex;
@@ -1937,7 +1937,7 @@ button.icon-btn.muted:hover {
 .badge.manager-badge {
   background: var(--attention-subtle);
   color: var(--attention-fg);
-  border: 1px solid rgba(216, 180, 109, 0.35);
+  border: 1px solid color-mix(in srgb, var(--manager-fg) 35%, transparent);
   letter-spacing: 0.3px;
 }
 .manager-row {
@@ -1980,7 +1980,7 @@ button.icon-btn.muted:hover {
   margin-left: auto;
   font-size: 10px;
   color: var(--accent-fg);
-  background: #1a2d4a;
+  background: var(--accent-subtle);
   border: 1px solid color-mix(in srgb, var(--accent-emphasis) 33%, transparent);
   border-radius: 999px;
   padding: 2px 8px;

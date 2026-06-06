@@ -14,6 +14,8 @@
   --bg-hover: rgba(120, 160, 220, 0.08);
   --bg-active: rgba(120, 160, 220, 0.12);
   --bg-selected: rgba(56, 139, 253, 0.2);
+  --bg-hover-faint: rgba(120, 160, 220, 0.05);
+  --bg-hover-strong: rgba(120, 160, 220, 0.16);
 
   /* Text */
   --text-primary: #c5d0e6;
