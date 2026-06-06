@@ -92,6 +92,12 @@ contextBridge.exposeInMainWorld('agentTeam', {
     defaultPath?: string
   }): Promise<{ ok: boolean; path?: string; canceled?: boolean }> =>
     ipcRenderer.invoke('dialog:pickFile', args),
+  pickFiles: (args?: {
+    title?: string
+    filters?: Array<{ name: string; extensions: string[] }>
+    defaultPath?: string
+  }): Promise<{ ok: boolean; paths?: string[]; canceled?: boolean }> =>
+    ipcRenderer.invoke('dialog:pickFiles', args),
   openExternal: (url: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openExternal', url),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),

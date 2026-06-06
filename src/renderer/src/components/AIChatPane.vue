@@ -2235,59 +2235,73 @@ async function fixProblems(): Promise<void> {
   }
 }
 
-// ── Attach File ───────────────────────────────────────────────────────────────
+// ── Attach File(s) ───────────────────────────────────────────────────────────
 async function attachFile(): Promise<void> {
-  const api = (window as Window & { agentTeam?: Record<string, (...a: unknown[]) => unknown> }).agentTeam
-  if (!api?.pickFile) return
-  interface PickResult { ok: boolean; path?: string; canceled?: boolean }
-  const result = await (api.pickFile as (a: Record<string, unknown>) => Promise<PickResult>)({
-    title: 'Attach File to Chat',
-    defaultPath: props.workspacePath ?? undefined,
-  })
-  if (!result.ok || !result.path) return
+  type AgentApi = Record<string, (...a: unknown[]) => unknown>
+  const api = (window as Window & { agentTeam?: AgentApi }).agentTeam
+  if (!api) return
 
-  const absPath = result.path
-  const relPath = props.workspacePath
-    ? absPath.startsWith(props.workspacePath)
+  // Prefer multi-file picker; fall back to single-file picker
+  interface PickMultiResult { ok: boolean; paths?: string[]; canceled?: boolean }
+  interface PickSingleResult { ok: boolean; path?: string; canceled?: boolean }
+
+  let absPaths: string[] = []
+  if (api.pickFiles) {
+    const result = await (api.pickFiles as (a: Record<string, unknown>) => Promise<PickMultiResult>)({
+      title: 'Attach Files to Chat',
+      defaultPath: props.workspacePath ?? undefined,
+    })
+    if (!result.ok || !result.paths?.length) return
+    absPaths = result.paths
+  } else if (api.pickFile) {
+    const result = await (api.pickFile as (a: Record<string, unknown>) => Promise<PickSingleResult>)({
+      title: 'Attach File to Chat',
+      defaultPath: props.workspacePath ?? undefined,
+    })
+    if (!result.ok || !result.path) return
+    absPaths = [result.path]
+  } else {
+    return
+  }
+
+  for (const absPath of absPaths) {
+    const relPath = props.workspacePath && absPath.startsWith(props.workspacePath)
       ? absPath.slice(props.workspacePath.length).replace(/^\//, '')
       : absPath
-    : absPath
-
-  const ext = relPath.split('.').pop() ?? ''
-  const fileName = relPath.split('/').pop() ?? relPath
-  try {
-    let fileContent = ''
-    const isInsideWorkspace = props.workspacePath && absPath.startsWith(props.workspacePath)
-    if (isInsideWorkspace) {
-      interface ReadResp { ok: boolean; content?: string }
-      const r = await props.backend.send<ReadResp>('fs.read_file', {
-        workspace_path: props.workspacePath,
-        rel_path: relPath,
+    const ext = relPath.split('.').pop() ?? ''
+    const fileName = relPath.split('/').pop() ?? relPath
+    try {
+      let fileContent = ''
+      const isInsideWorkspace = props.workspacePath && absPath.startsWith(props.workspacePath)
+      if (isInsideWorkspace) {
+        interface ReadResp { ok: boolean; content?: string }
+        const r = await props.backend.send<ReadResp>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: relPath,
+        })
+        if (!r.payload?.ok) { showToast(`Could not read: ${fileName}`); continue }
+        fileContent = r.payload?.content ?? ''
+      } else {
+        if (!api.readFileFrom) { showToast('Cannot read file outside workspace'); continue }
+        interface RfResp { ok: boolean; content: string }
+        const r = await (api.readFileFrom as (p: string, b: number) => Promise<RfResp>)(absPath, 0)
+        if (!r.ok) { showToast(`Could not read: ${fileName}`); continue }
+        fileContent = r.content
+      }
+      const MAX = 80_000
+      const truncated = fileContent.length > MAX ? fileContent.slice(0, MAX) + '\n// … truncated' : fileContent
+      const chipLabel = `@${fileName}`
+      contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
+      contextChips.value.push({
+        id: crypto.randomUUID(),
+        label: chipLabel,
+        content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
       })
-      if (!r.payload?.ok) { showToast(`Could not read file: ${relPath}`); return }
-      fileContent = r.payload?.content ?? ''
-    } else {
-      // File is outside workspace — use absolute-path reader
-      const api = (window as Window & { agentTeam?: Record<string, (...a: unknown[]) => unknown> }).agentTeam
-      if (!api?.readFileFrom) { showToast('Cannot read file outside workspace'); return }
-      interface RfResp { ok: boolean; content: string }
-      const r = await (api.readFileFrom as (p: string, b: number) => Promise<RfResp>)(absPath, 0)
-      if (!r.ok) { showToast(`Could not read file: ${fileName}`); return }
-      fileContent = r.content
+    } catch {
+      showToast(`Could not read: ${fileName}`)
     }
-    const MAX = 80_000
-    const truncated = fileContent.length > MAX ? fileContent.slice(0, MAX) + '\n// … truncated' : fileContent
-    const chipLabel = `@${fileName}`
-    contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
-    contextChips.value.push({
-      id: crypto.randomUUID(),
-      label: chipLabel,
-      content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
-    })
-    nextTick(() => textareaEl.value?.focus())
-  } catch {
-    showToast(`Could not read file: ${fileName}`)
   }
+  nextTick(() => textareaEl.value?.focus())
 }
 
 async function regenerate(): Promise<void> {

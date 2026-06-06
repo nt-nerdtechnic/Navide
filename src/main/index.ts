@@ -335,6 +335,27 @@ ipcMain.handle(
   }
 )
 
+ipcMain.handle(
+  'dialog:pickFiles',
+  async (
+    _event,
+    args?: { title?: string; filters?: Electron.FileFilter[]; defaultPath?: string }
+  ): Promise<{ ok: boolean; paths?: string[]; canceled?: boolean }> => {
+    const opts: Electron.OpenDialogOptions = {
+      title: args?.title ?? 'Select Files',
+      properties: ['openFile', 'multiSelections'],
+      filters: args?.filters ?? [{ name: 'All Files', extensions: ['*'] }],
+    }
+    if (args?.defaultPath) opts.defaultPath = args.defaultPath
+    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+    const result = win
+      ? await dialog.showOpenDialog(win, opts)
+      : await dialog.showOpenDialog(opts)
+    if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true }
+    return { ok: true, paths: result.filePaths }
+  }
+)
+
 ipcMain.handle('shell:openTerminal', async (_event, command: string) => {
   if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
   // Open Terminal.app and run the install command interactively (sudo / OAuth
