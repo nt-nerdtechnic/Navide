@@ -2196,6 +2196,52 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // /search <query> — search workspace (inline flow: /search → user types → Enter)
+  if (rawText.startsWith('/search ')) {
+    const query = rawText.slice('/search '.length).trim()
+    if (!query) { showToast('Usage: /search <query>'); return }
+    inputText.value = ''
+    try {
+      interface SearchResp2 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+      const resp = await props.backend.send<SearchResp2>('search.find_in_files', {
+        workspace_path: props.workspacePath,
+        query,
+        is_regex: false,
+        case_sensitive: false,
+        max_results: 40,
+      })
+      const results = resp.payload?.results ?? []
+      if (results.length === 0) { showToast(`No results for "${query}"`); return }
+      let chipContent = `// Workspace search: "${query}" — ${results.length} files\n`
+      for (const r of results.slice(0, 10)) {
+        chipContent += `\n// ${r.rel_path}\n`
+        for (const m of r.matches.slice(0, 4)) chipContent += `${m.line}: ${m.text}\n`
+      }
+      contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@search:'))
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: chipContent })
+      showToast(`Found in ${results.length} file(s)`)
+    } catch { showToast('/search: unavailable') }
+    return
+  }
+
+  // /translate <lang> — inline flow: user types /translate Spanish → Enter
+  if (rawText.startsWith('/translate ')) {
+    const targetLang = rawText.slice('/translate '.length).trim()
+    if (!targetLang) { showToast('Usage: /translate <language>'); return }
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const fileContent = props.getEditorContent?.()
+    if (relPath && fileContent !== undefined && contextChips.value.length === 0) {
+      const ext = relPath.split('.').pop() ?? ''
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@${relPath.split('/').pop()}`, content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent.slice(0, 60_000)}\n\`\`\`` })
+    }
+    inputText.value = contextChips.value.length
+      ? `Translate all code comments, string literals, and documentation in the attached file(s) to ${targetLang}. Preserve code logic and formatting exactly. Output the complete translated file.`
+      : `Translate the following text to ${targetLang}:`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
   // /checkpoint [name] — save current conversation snapshot
   if (rawText === '/checkpoint' || rawText.startsWith('/checkpoint ')) {
     const name = rawText.slice('/checkpoint'.length).trim()
@@ -3814,28 +3860,13 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   }
 
   if (cmd.id === '/search') {
-    const query = window.prompt('Search workspace for:')
-    if (!query?.trim()) return
-    inputText.value = ''
-    try {
-      interface SearchResp2 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
-      const resp = await props.backend.send<SearchResp2>('search.find_in_files', {
-        workspace_path: props.workspacePath,
-        query: query.trim(),
-        is_regex: false,
-        case_sensitive: false,
-        max_results: 40,
-      })
-      const results = resp.payload?.results ?? []
-      if (results.length === 0) { showToast(`No results for "${query}"`); return }
-      let chipContent = `// Workspace search: "${query}" — ${results.length} files\n`
-      for (const r of results.slice(0, 10)) {
-        chipContent += `\n// ${r.rel_path}\n`
-        for (const m of r.matches.slice(0, 4)) chipContent += `${m.line}: ${m.text}\n`
-      }
-      contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: chipContent })
-      showToast(`Found in ${results.length} file(s)`)
-    } catch { showToast('/search: unavailable') }
+    const existing = inputText.value.slice('/search'.length).trim()
+    if (existing) {
+      void sendMessage()
+      return
+    }
+    inputText.value = '/search '
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
     return
   }
 
@@ -3892,22 +3923,13 @@ ${historyText}`
 
   // /translate — add language context and translate code comments/strings
   if (cmd.id === '/translate') {
-    const lang = inputText.value.slice('/translate'.length).trim() || ''
-    const targetLang = lang || (window.prompt('Translate to language:') ?? '').trim()
-    if (!targetLang) return
-    inputText.value = ''
-    // Auto-attach current file if no chips
-    const relPath = props.getActiveRelPath?.()
-    const fileContent = props.getEditorContent?.()
-    if (relPath && fileContent !== undefined && contextChips.value.length === 0) {
-      const ext = relPath.split('.').pop() ?? ''
-      contextChips.value.push({ id: crypto.randomUUID(), label: `@${relPath.split('/').pop()}`, content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent.slice(0, 60_000)}\n\`\`\`` })
+    const existing = inputText.value.slice('/translate'.length).trim()
+    if (existing) {
+      void sendMessage()
+      return
     }
-    const prompt = contextChips.value.length
-      ? `Translate all code comments, string literals, and documentation in the attached file(s) to ${targetLang}. Preserve code logic and formatting exactly. Output the complete translated file.`
-      : `Translate the following text to ${targetLang}:`
-    inputText.value = prompt
-    nextTick(() => { textareaEl.value?.focus() })
+    inputText.value = '/translate '
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
     return
   }
 
