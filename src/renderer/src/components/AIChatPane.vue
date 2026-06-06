@@ -747,6 +747,7 @@ interface GlobalSearchResult {
 const showGlobalSearch = ref(false)
 const globalSearchQuery = ref('')
 const globalSearchInput = ref<HTMLInputElement | null>(null)
+const globalSearchActiveIdx = ref(-1)
 
 const globalSearchResults = computed<GlobalSearchResult[]>(() => {
   const q = globalSearchQuery.value.trim().toLowerCase()
@@ -772,13 +773,41 @@ const globalSearchResults = computed<GlobalSearchResult[]>(() => {
 function openGlobalSearch(): void {
   showGlobalSearch.value = true
   globalSearchQuery.value = ''
+  globalSearchActiveIdx.value = -1
   nextTick(() => globalSearchInput.value?.focus())
 }
 
 function closeGlobalSearch(): void {
   showGlobalSearch.value = false
   globalSearchQuery.value = ''
+  globalSearchActiveIdx.value = -1
 }
+
+function onGlobalSearchKeydown(e: KeyboardEvent): void {
+  const len = globalSearchResults.value.length
+  if (!len) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    globalSearchActiveIdx.value = Math.min(globalSearchActiveIdx.value + 1, len - 1)
+    nextTick(() => {
+      const el = document.querySelector<HTMLElement>(`.ai-global-search-result.gsr-active`)
+      el?.scrollIntoView({ block: 'nearest' })
+    })
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    globalSearchActiveIdx.value = Math.max(globalSearchActiveIdx.value - 1, 0)
+    nextTick(() => {
+      const el = document.querySelector<HTMLElement>(`.ai-global-search-result.gsr-active`)
+      el?.scrollIntoView({ block: 'nearest' })
+    })
+  } else if (e.key === 'Enter' && globalSearchActiveIdx.value >= 0) {
+    e.preventDefault()
+    const r = globalSearchResults.value[globalSearchActiveIdx.value]
+    if (r) jumpToGlobalResult(r)
+  }
+}
+
+watch(globalSearchQuery, () => { globalSearchActiveIdx.value = -1 })
 
 function jumpToGlobalResult(r: GlobalSearchResult): void {
   closeGlobalSearch()
@@ -3628,6 +3657,7 @@ function getDateLabel(ts: number): string {
             class="ai-global-search-input"
             placeholder="Search all chats…"
             @keydown.escape="closeGlobalSearch"
+            @keydown="onGlobalSearchKeydown"
           />
           <button class="ai-global-search-close" @click="closeGlobalSearch">✕</button>
         </div>
@@ -3639,7 +3669,9 @@ function getDateLabel(ts: number): string {
             v-for="(r, i) in globalSearchResults"
             :key="i"
             class="ai-global-search-result"
+            :class="{ 'gsr-active': i === globalSearchActiveIdx }"
             @click="jumpToGlobalResult(r)"
+            @mouseenter="globalSearchActiveIdx = i"
           >
             <span class="ai-gsr-thread">{{ r.threadTitle }}</span>
             <span class="ai-gsr-role">{{ r.role === 'user' ? 'You' : 'AI' }}</span>
@@ -5832,7 +5864,7 @@ function getDateLabel(ts: number): string {
   color: var(--text-normal);
   font-family: inherit;
 }
-.ai-global-search-result:hover { background: var(--bg-hover); }
+.ai-global-search-result:hover, .ai-global-search-result.gsr-active { background: var(--bg-hover); }
 .ai-gsr-thread { font-size: 11px; font-weight: 600; color: var(--accent-emphasis); opacity: 0.85; }
 .ai-gsr-role { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 .ai-gsr-snippet { font-size: 12px; color: var(--text-normal); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
