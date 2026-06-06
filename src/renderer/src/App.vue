@@ -4935,14 +4935,14 @@ function paneIsCommander(p: ActivePane): boolean {
   overflow: hidden;
 }
 .spotlight-thumb:hover {
-  border-color: #388bfd66;
+  border-color: var(--accent-muted);
   box-shadow: 0 2px 12px rgba(56, 139, 253, 0.15);
-  background: #1a2332;
+  background: var(--bg-elevated);
 }
 .spotlight-thumb--active {
   border-color: var(--accent-focus);
   box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.25);
-  background: #1a2332;
+  background: var(--bg-elevated);
 }
 .spotlight-thumb-info {
   flex: 1;
@@ -5028,18 +5028,18 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .meeting-item:hover {
   background: var(--bg-subtle);
-  border-color: #388bfd66;
+  border-color: var(--accent-muted);
 }
 .meeting-item--active {
   border-color: var(--accent-focus);
-  background: #1a2332;
+  background: var(--bg-elevated);
   box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
 }
 .meeting-avatar {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #1a2332;
+  background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   color: var(--accent-fg);
   display: flex;
@@ -5272,7 +5272,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .history-killall {
   background: transparent;
-  border: 1px solid #6e363666;
+  border: 1px solid var(--danger-muted);
   color: var(--danger-fg);
   font-size: 11px;
   padding: 2px 10px;
@@ -5281,7 +5281,7 @@ function paneIsCommander(p: ActivePane): boolean {
   opacity: 0.7;
 }
 .history-killall:hover {
-  background: #6e363622;
+  background: var(--danger-subtle);
   border-color: var(--danger-fg);
   opacity: 1;
 }
@@ -5336,7 +5336,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .ah-badge.ah-role {
   color: var(--accent-bright);
-  border-color: #388bfd55;
+  border-color: var(--accent-muted);
 }
 .ah-origin {
   font-size: 10px;
@@ -5367,14 +5367,14 @@ function paneIsCommander(p: ActivePane): boolean {
   letter-spacing: 0.2px;
 }
 .ah-restore-badge.ah-tmux {
-  background: rgba(35, 134, 54, 0.18);
-  color: #3fb950;
-  border: 1px solid rgba(63, 185, 80, 0.35);
+  background: var(--success-subtle);
+  color: var(--success-fg);
+  border: 1px solid var(--success-muted);
 }
 .ah-restore-badge.ah-resume {
-  background: rgba(31, 111, 235, 0.15);
-  color: #58a6ff;
-  border: 1px solid rgba(88, 166, 255, 0.3);
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-muted);
 }
 .agent-history-actions {
   display: flex;
@@ -5389,16 +5389,16 @@ function paneIsCommander(p: ActivePane): boolean {
   font-weight: 500;
   padding: 3px 10px;
   border-radius: 20px;
-  border: 1px solid #388bfd66;
-  background: #388bfd14;
+  border: 1px solid var(--accent-muted);
+  background: var(--accent-subtle);
   color: var(--accent-bright);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 .ah-revive:hover {
-  background: #388bfd28;
+  background: var(--bg-selected);
   border-color: var(--accent-bright);
-  color: #cae8ff;
+  color: var(--accent-bright);
 }
 .stall-overlay {
   position: fixed;
@@ -5455,8 +5455,8 @@ function paneIsCommander(p: ActivePane): boolean {
   font-family: Menlo, Monaco, monospace;
   font-size: 12px;
   color: var(--warning-fg);
-  background: #21130d;
-  border: 1px solid #4d2818;
+  background: var(--attention-subtle);
+  border: 1px solid var(--attention-muted);
   border-radius: 4px;
   padding: 8px 10px;
 }
@@ -5501,12 +5501,12 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--success-emphasis);
 }
 .stall-btn.danger {
-  background: var(--danger-muted);
-  border-color: var(--danger-muted);
-  color: #f4d2d2;
+  background: var(--danger-emphasis);
+  border-color: transparent;
+  color: var(--text-on-emphasis);
 }
 .stall-btn.danger:hover {
-  background: var(--danger-muted);
+  background: var(--danger-bright);
 }
 </style>
 <style>

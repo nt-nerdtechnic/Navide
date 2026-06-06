@@ -1477,7 +1477,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :compare="f.compare ?? ''"
             :backend="backend"
             @open-file="openFile"
-            @ask-ai-fix="(text) => { aiPanelOpen = true; nextTick(() => aiChatRef?.value?.injectDraft(text)) }"
+            @ask-ai-fix="(text) => { aiPanelOpen = true; nextTick(() => aiChatRef?.injectDraft(text)) }"
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">

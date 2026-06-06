@@ -2198,24 +2198,24 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 /* In-progress operation banner */
 .op-banner {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  background: #3d1d00; border-bottom: 1px solid #d2902633;
+  background: var(--attention-subtle); border-bottom: 1px solid var(--attention-muted);
   padding: 5px 10px; font-size: 11px;
 }
 .op-text { color: var(--attention-bright); font-weight: 600; text-transform: capitalize; }
 .op-abort-btn {
-  background: #f8514922; color: var(--danger-fg); border: 1px solid var(--danger-fg);
+  background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-fg);
   border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; text-transform: capitalize;
 }
-.op-abort-btn:hover { background: #f8514933; }
-.op-banner-conflict { background: #1a0f00; border-bottom-color: #d2922633; }
+.op-abort-btn:hover { background: var(--danger-muted); }
+.op-banner-conflict { background: var(--attention-subtle); border-bottom-color: var(--attention-muted); }
 .op-banner-conflict .op-text { color: var(--warning-fg, #d29922); }
-.op-banner-ready { background: #0d1f12; border-bottom-color: #3fb95033; }
+.op-banner-ready { background: var(--success-subtle); border-bottom-color: var(--success-muted); }
 .op-banner-ready .op-text { color: var(--success-fg, #3fb950); font-weight: 600; }
 .op-commit-btn {
-  background: #3fb95022; color: var(--success-fg, #3fb950); border: 1px solid var(--success-fg, #3fb950);
+  background: var(--success-subtle); color: var(--success-fg, #3fb950); border: 1px solid var(--success-fg, #3fb950);
   border-radius: 4px; font-size: 11px; padding: 2px 8px; cursor: pointer; margin-left: auto;
 }
-.op-commit-btn:hover { background: #3fb95033; }
+.op-commit-btn:hover { background: var(--success-muted); }
 .btn-primary {
   background: var(--success-emphasis); color: var(--text-on-emphasis); border: 1px solid var(--success-strong);
   border-radius: 5px; font-size: 12px; padding: 5px 10px; cursor: pointer;
@@ -2408,7 +2408,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: var(--bg-subtle);
 }
 .card-hdr.clickable { cursor: pointer; user-select: none; }
-.card-hdr.clickable:hover { background: #1c2330; }
+.card-hdr.clickable:hover { background: var(--bg-elevated); }
 .git-card:has(.card-body) .card-hdr { border-bottom: 1px solid var(--border-muted); }
 .card-body { padding: 4px 2px 6px; }
 
@@ -2434,9 +2434,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: rgba(177,186,196,0.08); color: var(--text-primary); cursor: pointer;
 }
 .sel-btn:hover { background: rgba(177,186,196,0.15); }
-.sel-btn.primary { border-color: rgba(88,166,255,0.4); color: #58a6ff; }
+.sel-btn.primary { border-color: rgba(88,166,255,0.4); color: var(--accent-fg); }
 .sel-btn.primary:hover { background: rgba(88,166,255,0.12); }
-.sel-btn.danger { border-color: rgba(248,81,73,0.4); color: #f85149; }
+.sel-btn.danger { border-color: rgba(248,81,73,0.4); color: var(--danger-fg); }
 .sel-btn.danger:hover { background: rgba(248,81,73,0.12); }
 .sel-clear { margin-left: auto; opacity: 0.6; }
 
@@ -2444,7 +2444,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   flex-shrink: 0; width: 14px; text-align: center;
   font-size: 11px; font-weight: 700; margin-right: 5px; color: var(--success-bright);
 }
-.unstaged-st { color: #e2c08d; }
+.unstaged-st { color: var(--attention-fg); }
 [data-s="D"] { color: var(--danger-fg) !important; }
 [data-s="U"] { color: var(--danger-fg) !important; }
 [data-s="?"] { color: var(--success-bright) !important; }

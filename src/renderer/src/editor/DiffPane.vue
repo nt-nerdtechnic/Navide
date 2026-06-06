@@ -235,8 +235,8 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
   border-radius: 999px;
   flex-shrink: 0;
 }
-.dp-badge.staged { background: #1f3a2f; color: #56d364; }
-.dp-badge.unstaged { background: #3a2f1f; color: #e3b341; }
+.dp-badge.staged { background: var(--success-subtle); color: var(--success-fg); }
+.dp-badge.unstaged { background: var(--attention-subtle); color: var(--attention-fg); }
 .dp-filepath {
   flex: 1;
   color: var(--text-muted);
