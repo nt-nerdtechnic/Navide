@@ -1311,6 +1311,16 @@ function moveLineUp(): void {
     { start: { line: startLine - 1, col: 0 }, end: { line: endLine, col: model.getLine(endLine).length } },
     [...blockLines, aboveLine].join('\n'),
   )
+  // Re-map fold markers: block lines shift -1, the pushed-down line moves to endLine.
+  if (foldedLines.value.size > 0) {
+    const s = new Set<number>()
+    for (const fl of foldedLines.value) {
+      if (fl === startLine - 1) s.add(endLine)
+      else if (fl >= startLine && fl <= endLine) s.add(fl - 1)
+      else s.add(fl)
+    }
+    foldedLines.value = s
+  }
   cursor.value = clampPos({ line: savedCursor.line - 1, col: savedCursor.col })
   anchor.value = savedAnchor ? clampPos({ line: savedAnchor.line - 1, col: savedAnchor.col }) : null
 }
@@ -1332,6 +1342,16 @@ function moveLineDown(): void {
     { start: { line: startLine, col: 0 }, end: { line: endLine + 1, col: model.getLine(endLine + 1).length } },
     [belowLine, ...blockLines].join('\n'),
   )
+  // Re-map fold markers: block lines shift +1, the pulled-up line moves to startLine.
+  if (foldedLines.value.size > 0) {
+    const s = new Set<number>()
+    for (const fl of foldedLines.value) {
+      if (fl === endLine + 1) s.add(startLine)
+      else if (fl >= startLine && fl <= endLine) s.add(fl + 1)
+      else s.add(fl)
+    }
+    foldedLines.value = s
+  }
   cursor.value = clampPos({ line: savedCursor.line + 1, col: savedCursor.col })
   anchor.value = savedAnchor ? clampPos({ line: savedAnchor.line + 1, col: savedAnchor.col }) : null
 }
