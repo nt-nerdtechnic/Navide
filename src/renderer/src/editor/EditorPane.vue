@@ -601,6 +601,8 @@ function onKeydown(e: KeyboardEvent): void {
   else if (mod && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); openGoto() }
 }
 
+let _unsubGitChanged: (() => void) | null = null
+
 onMounted(() => {
   // The host (IDE shell) owns the window title when embedded.
   if (!props.embedded) document.title = `Editor · ${props.name}`
@@ -615,10 +617,33 @@ onMounted(() => {
     },
     { immediate: true },
   )
+  // Reload from disk when git changes the working tree (checkout, reset, etc.)
+  // but only if the user hasn't made local edits.
+  _unsubGitChanged = props.backend.on('git.changed', (raw) => {
+    const ev = raw as { workspace_path?: string }
+    if (ev?.workspace_path !== props.workspacePath) return
+    if (!loaded.value || dirty.value) return
+    void (async () => {
+      try {
+        const resp = await props.backend.send<FsRead>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: props.relPath,
+        })
+        if (!resp.payload?.ok) return
+        const fresh = resp.payload.content ?? ''
+        if (fresh !== content.value) {
+          eol.value = detectEOL(fresh)
+          content.value = fresh
+        }
+      } catch { /* ignore — WS transient error */ }
+    })()
+  })
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
+  _unsubGitChanged?.()
+  _unsubGitChanged = null
   // Clear keybinding contexts so a closed tab's stale state can't block
   // shortcuts in other panes.
   setContext('findOpen', false)
