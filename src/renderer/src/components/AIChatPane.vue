@@ -124,6 +124,9 @@ const followUps = ref<string[]>([])
 const streamNow = ref(Date.now())
 let streamTickInterval: number | null = null
 
+// Holds messages to re-append after a /compact summary finishes streaming
+const pendingCompactKeep = ref<ChatMessage[]>([])
+
 // ── Apply-code diff preview modal ────────────────────────────────────────────
 interface DiffApplyState {
   code: string
@@ -561,6 +564,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
   { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
   { id: '/continue', label: '/continue', description: 'Continue last response',  template: '' },
+  { id: '/compact',  label: '/compact',  description: 'Summarize & compress history to free context', template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -1634,6 +1638,20 @@ function setupListeners(): void {
     sending.value = false
     currentSessionId.value = null
     if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
+    // /compact: after the summary arrives, replace the placeholder and splice in kept messages
+    if (pendingCompactKeep.value.length > 0) {
+      const kept = pendingCompactKeep.value
+      pendingCompactKeep.value = []
+      const summaryMsg = messages.value.find((m) => m.role === 'assistant' && !m.streaming)
+      if (summaryMsg) {
+        summaryMsg.content = `**[Compacted history summary]**\n\n${summaryMsg.content}`
+      }
+      const placeholder = messages.value.find((m) => m.content === '[Compacting history…]')
+      if (placeholder) placeholder.content = '[History compacted]'
+      messages.value.push(...kept)
+      saveCurrentThread()
+      showToast(`History compacted — kept last ${kept.length} messages`)
+    }
   })
 
   unsubError = props.backend.on('ai.chat.error', (payload) => {
@@ -1838,6 +1856,11 @@ function onTextareaInput(e: Event): void {
   }
 }
 
+function triggerCompact(): void {
+  const cmd = SLASH_COMMANDS.find((c) => c.id === '/compact')
+  if (cmd) selectSlashCommand(cmd)
+}
+
 function selectSlashCommand(cmd: SlashCommand): void {
   showSlashMenu.value = false
   if (cmd.id === '/run') {
@@ -1851,6 +1874,42 @@ function selectSlashCommand(cmd: SlashCommand): void {
     const count = messages.value.length
     inputText.value = `Summarize our conversation so far (${count} messages) into 3-5 bullet points covering the main topics, decisions, and any code changes made. Be concise.`
     void sendMessage()
+    return
+  }
+  if (cmd.id === '/compact') {
+    // Keep only the last 4 messages; replace the rest with an AI summary
+    const all = messages.value.filter((m) => !m.streaming && m.role !== 'system')
+    if (all.length < 6) { showToast('Not enough history to compact (need 6+ messages)'); return }
+    inputText.value = ''
+    const keepLast = 4
+    const toCompress = all.slice(0, all.length - keepLast)
+    const keepMessages = all.slice(all.length - keepLast)
+    const historyText = toCompress.map((m) => `${m.role}: ${m.content.slice(0, 500)}`).join('\n---\n')
+    const summaryPrompt = `Create a dense technical context summary of the following conversation history. Focus on: decisions made, code changes, file names, key findings. Be concise (max 300 words).\n\n${historyText}`
+    // Push a placeholder and start compact operation
+    messages.value = [
+      { role: 'user', content: '[Compacting history…]', timestamp: Date.now() },
+      { role: 'assistant', content: '', streaming: true, thinking: true, cards: [], timestamp: Date.now() },
+    ]
+    sending.value = true
+    const sessionId = crypto.randomUUID()
+    currentSessionId.value = sessionId
+    try {
+      await props.backend.send('ai.chat.start', {
+        session_id: sessionId,
+        messages: [{ role: 'user', content: summaryPrompt }],
+        workspace_path: props.workspacePath,
+      })
+    } catch {
+      messages.value = all
+      sending.value = false
+      showToast('Compact failed')
+      return
+    }
+    // After streaming completes the AI message will have the summary.
+    // We'll splice in the kept messages via a watcher on the done event below.
+    // Store kept messages for the compaction done handler.
+    pendingCompactKeep.value = keepMessages
     return
   }
   if (cmd.id === '/clear') {
@@ -3044,6 +3103,7 @@ function getDateLabel(ts: number): string {
           <div class="ai-ctx-bar-fill" :style="{ width: ctxUsagePct + '%' }" />
         </div>
         <span class="ai-ctx-label">context {{ ctxUsagePct }}%</span>
+        <button v-if="ctxUsagePct >= 70 && !sending" class="ai-ctx-new-btn" title="Compress old messages to free context" @click="triggerCompact">Compact</button>
         <button v-if="ctxUsagePct >= 80" class="ai-ctx-new-btn" title="Start new chat to free context" @click="newThread">+ New chat</button>
       </div>
 
