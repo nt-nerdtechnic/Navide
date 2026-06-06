@@ -113,7 +113,7 @@ interface ChatMessage {
   pendingEdits?: Array<{ relPath: string; code: string }> // detected file edits from Edit mode
   thinkingContent?: string // extended thinking (Claude thinking blocks)
   thinkingExpanded?: boolean
-}
+  contextRefs?: string[]   // labels of context chips used when this message was sent (Cursor-style "used references")
 
 // ── Checkpoint (Cursor-style conversation snapshots) ──────────────────────────
 interface ChatCheckpoint {
@@ -1108,6 +1108,7 @@ interface ContextChip {
   content: string
   imageData?: string // base64 data URL for pasted images (e.g. data:image/png;base64,...)
   pinned?: boolean   // pinned chips survive message sends — always included in context
+  sourceId?: string  // original option.id used to create this chip — enables refresh
 }
 const contextChips = ref<ContextChip[]>([])
 const previewChipId = ref<string | null>(null)
@@ -2172,7 +2173,8 @@ async function sendMessage(): Promise<void> {
 
   // Keep the in-memory list bounded so a very long session doesn't exhaust memory.
   if (messages.value.length >= MAX_MESSAGES) messages.value.splice(0, messages.value.length - MAX_MESSAGES + 1)
-  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now() })
+  const _ctxRefs = contextChips.value.map((c) => c.label)
+  messages.value.push({ role: 'user', content: displayText, rawContent: sentContent, timestamp: Date.now(), contextRefs: _ctxRefs.length ? _ctxRefs : undefined })
   // Auto-name thread from first user message when still "New chat"
   const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
   if (curThread && curThread.title === 'New chat' && rawText) {
@@ -3795,10 +3797,10 @@ async function searchFiles(query: string): Promise<void> {
   }
 }
 
-async function selectAtOption(option: AtOption): Promise<void> {
+async function selectAtOption(option: AtOption, refreshTargetId?: string): Promise<void> {
   // Remove the @fragment from textarea
   const el = textareaEl.value
-  if (!el) { showAtMenu.value = false; return }
+  if (!el && !refreshTargetId) { showAtMenu.value = false; return }
   const val = el.value
   const cur = el.selectionStart ?? val.length
   const beforeCursor = val.slice(0, cur)
@@ -4593,20 +4595,40 @@ ${out}`
     }
   }
 
+  // Refresh mode: update existing chip content, skip textarea cleanup
+  if (refreshTargetId) {
+    const chip = contextChips.value.find((c) => c.id === refreshTargetId)
+    if (chip) { chip.content = chipContent; showToast(`↻ ${chipLabel}`) }
+    return
+  }
+
   if (contextChips.value.some((c) => c.label === chipLabel)) return
-  contextChips.value.push({ id: crypto.randomUUID(), label: chipLabel, content: chipContent })
+  contextChips.value.push({ id: crypto.randomUUID(), label: chipLabel, content: chipContent, sourceId: option.id })
 
   // Remove @fragment from textarea
-  const newVal = val.slice(0, atIdx) + val.slice(cur)
+  const newVal = val!.slice(0, atIdx) + val!.slice(cur)
   inputText.value = newVal
   showAtMenu.value = false
 
   await nextTick()
-  el.focus()
+  el!.focus()
 }
 
 function removeChip(id: string): void {
   contextChips.value = contextChips.value.filter((c) => c.id !== id)
+}
+
+const refreshingChipId = ref<string | null>(null)
+
+async function refreshChip(id: string): Promise<void> {
+  const chip = contextChips.value.find((c) => c.id === id)
+  if (!chip?.sourceId || chip.imageData) return
+  refreshingChipId.value = id
+  try {
+    await selectAtOption({ id: chip.sourceId, label: chip.label }, id)
+  } finally {
+    refreshingChipId.value = null
+  }
 }
 
 function clearNonPinnedChips(): void {
@@ -5324,6 +5346,13 @@ function getDateLabel(ts: number): string {
             <button class="ai-error-retry" @click="retryAfterError">Retry</button>
           </div>
         </div>
+        <!-- Used references (Cursor-style context indicator under user messages) -->
+        <div v-if="msg.role === 'user' && msg.contextRefs?.length" class="ai-used-refs">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1h8.5c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 10.25 10H7.061l-2.574 2.573A1.458 1.458 0 0 1 2 11.543V10h-.25A1.75 1.75 0 0 1 0 8.25v-5.5C0 1.784.784 1 1.75 1ZM1.5 2.75v5.5c0 .138.112.25.25.25h1a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h3.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25Z"/></svg>
+          <span class="ai-used-refs-count">{{ msg.contextRefs.length }} {{ msg.contextRefs.length === 1 ? 'reference' : 'references' }}</span>
+          <span v-for="ref in msg.contextRefs.slice(0, 5)" :key="ref" class="ai-used-ref-chip">{{ ref }}</span>
+          <span v-if="msg.contextRefs.length > 5" class="ai-used-refs-more">+{{ msg.contextRefs.length - 5 }} more</span>
+        </div>
         <!-- Detected commit message — show "Run Commit" button -->
         <div v-if="msg.role === 'assistant' && msg.commitMsg && !msg.streaming" class="ai-commit-action">
           <span class="ai-commit-msg-preview">{{ msg.commitMsg }}</span>
@@ -5550,6 +5579,7 @@ function getDateLabel(ts: number): string {
           <span v-if="!chip.imageData && chipIcon(chip.label)" class="ai-chip-icon">{{ chipIcon(chip.label) }}</span>{{ chip.label }}
           <span v-if="!chip.imageData" class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
           <button class="ai-chip-pin" :title="chip.pinned ? 'Unpin context' : 'Pin — keep in future messages'" @click.stop="chip.pinned = !chip.pinned">{{ chip.pinned ? '📌' : '·' }}</button>
+          <button v-if="chip.sourceId && !chip.imageData" class="ai-chip-refresh" :class="{ 'ai-chip-refreshing': refreshingChipId === chip.id }" title="Re-fetch context" @click.stop="refreshChip(chip.id)">↻</button>
           <button class="ai-chip-remove" @click.stop="removeChip(chip.id)">×</button>
         </span>
         <!-- Chip preview popover -->
@@ -7321,6 +7351,10 @@ function getDateLabel(ts: number): string {
 .ai-chip-dragging { opacity: 0.4; cursor: grabbing; }
 .ai-chip-pin { border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; font-size: 11px; line-height: 1; opacity: 0.6; }
 .ai-chip-pin:hover { opacity: 1; }
+.ai-chip-refresh { border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; font-size: 11px; line-height: 1; opacity: 0.6; }
+.ai-chip-refresh:hover { opacity: 1; }
+@keyframes ai-chip-spin { to { transform: rotate(360deg); } }
+.ai-chip-refreshing { display: inline-block; animation: ai-chip-spin 0.6s linear infinite; opacity: 1; }
 
 .ai-chip-popover {
   position: absolute;
