@@ -249,6 +249,38 @@ and when-clause conditions.
 
 ---
 
+## Editor Groups (Split Editor)
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘\` | Split editor (opens current file in secondary group) |
+| `⌘K ⌘←` | Focus previous editor group |
+| `⌘K ⌘→` | Focus next editor group |
+
+> Close all tabs in the secondary group to dismiss it. Click inside a group to make it active.
+
+---
+
+## Problems Panel
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘⇧M` | Show Problems panel |
+| `F8` | Go to next problem |
+| `⇧F8` | Go to previous problem |
+
+> Diagnostics come from AI Code Review findings and JSON parse errors detected on format. Affected lines show `●` (error) or `▲` (warning) in the gutter.
+
+---
+
+## Code Intelligence
+
+| Shortcut | Action |
+|----------|--------|
+| `⌘.` | Quick Fix — shows AI Fix options for the current line's diagnostics |
+
+---
+
 ## Text Transforms (Command Palette only)
 
 Run these via `⌘⇧P`. No default keybinding.

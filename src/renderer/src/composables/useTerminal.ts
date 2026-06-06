@@ -305,17 +305,28 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       tmuxName.value = resp.payload.tmux_name ?? ''
       status.value = 'running'
 
-      // Authoritative resize: defer one frame so xterm has rendered and measured
-      // its character cell dimensions before we fit. This is the only size sync
-      // needed — ResizeObserver handles all subsequent container changes.
+      // Authoritative resize: sync PTY to actual container size after spawn.
+      // Defer one frame so xterm has measured its character cell dimensions;
+      // retry one more frame if measurement isn't ready yet.
       const sid = sessionId.value
-      requestAnimationFrame(() => {
+      const doSpawnFit = () => {
+        const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width
+        const elW = containerRef.value?.clientWidth
+        console.log('[spawn-fit] cell.width:', cellW, 'el.clientWidth:', elW, 'term.cols before:', term.cols)
         try { fit.fit() } catch { /* ignore */ }
+        console.log('[spawn-fit] term.cols after fit:', term.cols, 'rows:', term.rows)
         void backend.send('terminal.resize', {
           terminal_session_id: sid,
           cols: term.cols,
           rows: term.rows
         })
+      }
+      requestAnimationFrame(() => {
+        if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
+          requestAnimationFrame(doSpawnFit)
+        } else {
+          doSpawnFit()
+        }
       })
 
       // Auto-focus once the PTY is wired up so the user can immediately type
