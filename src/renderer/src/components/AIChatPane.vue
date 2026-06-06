@@ -107,6 +107,7 @@ interface ChatMessage {
   feedback?: 'up' | 'down'
   commitMsg?: string   // detected conventional-commit message
   followUps?: string[] // suggested follow-up questions (shown below response)
+  pendingEdits?: Array<{ relPath: string; code: string }> // detected file edits from Edit mode
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -208,6 +209,25 @@ async function confirmApply(): Promise<void> {
     window.setTimeout(() => { s.btn.textContent = 'Apply'; s.btn.style.color = '' }, 2000)
     showToast(`Applied to ${s.relPath}`)
   }).catch(() => showToast('Apply failed'))
+}
+
+async function applyAllEdits(msg: ChatMessage): Promise<void> {
+  const edits = msg.pendingEdits
+  if (!edits?.length) return
+  if (!window.confirm(`Apply ${edits.length} file changes?\n\n${edits.map((e) => e.relPath).join('\n')}`)) return
+  let ok = 0
+  for (const edit of edits) {
+    try {
+      await props.backend.send('fs.write_file', {
+        workspace_path: props.workspacePath,
+        rel_path: edit.relPath,
+        content: edit.code,
+      })
+      ok++
+    } catch { /* skip */ }
+  }
+  msg.pendingEdits = undefined
+  showToast(`Applied ${ok}/${edits.length} files`)
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
@@ -1947,6 +1967,17 @@ function setupListeners(): void {
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
+      // Edit mode: detect code blocks with inferred file paths for "Apply All" UX
+      if (chatMode.value === 'edit') {
+        const edits: Array<{ relPath: string; code: string }> = []
+        const codeBlockRe = /```[\w]*\n((?:\/\/|#)\s*((?:\w[\w.-]*\/)+[\w.-]+\.\w+)[^\n]*\n[\s\S]*?)```/g
+        let m: RegExpExecArray | null
+        while ((m = codeBlockRe.exec(last.content)) !== null) {
+          const pathMatch = m[1].match(/^(?:\/\/|#)\s*((?:\w[\w.-]*\/)+[\w.-]+\.\w+)/)
+          if (pathMatch) edits.push({ relPath: pathMatch[1], code: m[1].trim() })
+        }
+        if (edits.length >= 2) last.pendingEdits = edits
+      }
     }
     // Auto-generate thread title from first user message
     const curThread = allThreads.value.find((t) => t.id === currentThreadId.value)
@@ -3496,6 +3527,12 @@ function getDateLabel(ts: number): string {
         </div>
         <span v-if="msg.bookmarked" class="ai-bookmark-indicator" title="Bookmarked">★</span>
       </div>
+      <!-- Edit mode: Apply All files button (when AI proposes ≥2 file changes) -->
+      <div v-if="msg.role === 'assistant' && msg.pendingEdits?.length && !msg.streaming" class="ai-apply-all-bar">
+        <span class="ai-apply-all-label">{{ msg.pendingEdits.length }} files proposed</span>
+        <button class="ai-apply-all-btn" @click="applyAllEdits(msg)">Apply All {{ msg.pendingEdits.length }} files</button>
+        <button class="ai-apply-all-dismiss" @click="msg.pendingEdits = undefined" title="Dismiss">✕</button>
+      </div>
       <!-- Per-message follow-up suggestions (only on last assistant message when not streaming) -->
       <div
         v-if="msg.role === 'assistant' && msg.followUps?.length && !msg.streaming && mi === lastAssistantIdx"
@@ -4091,10 +4128,12 @@ function getDateLabel(ts: number): string {
           <tr><td><kbd>Ctrl+Shift+A</kbd></td><td>Add current file to context</td></tr>
           <tr><td><kbd>Ctrl+F</kbd></td><td>Search chat</td></tr>
           <tr><td><kbd>Ctrl+Enter</kbd></td><td>Regenerate last response (empty input)</td></tr>
-          <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git)</td></tr>
-          <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix…)</td></tr>
+          <tr><td><kbd>Cmd+/</kbd></td><td>Cycle AI model</td></tr>
+          <tr><td><kbd>@</kbd></td><td>Insert context (file, selection, git, notepad…)</td></tr>
+          <tr><td><kbd>/</kbd></td><td>Slash commands (/explain, /fix, /generate…)</td></tr>
           <tr><td><kbd>Escape</kbd></td><td>Close menu / search bar</td></tr>
           <tr><td>Drag file</td><td>Add file to context</td></tr>
+          <tr><td>Paste image</td><td>Add screenshot as context</td></tr>
         </tbody>
       </table>
     </div>
@@ -4277,6 +4316,21 @@ function getDateLabel(ts: number): string {
   padding: 4px 14px 6px;
   background: transparent;
 }
+.ai-apply-all-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 14px; background: rgba(31,111,235,0.08);
+  border-top: 1px solid rgba(31,111,235,0.25);
+}
+.ai-apply-all-label { font-size: 11px; color: var(--text-muted); flex: 1; }
+.ai-apply-all-btn {
+  font-size: 11.5px; padding: 3px 10px; border-radius: 4px;
+  background: var(--accent-emphasis); color: #fff; border: none; cursor: pointer;
+}
+.ai-apply-all-btn:hover { filter: brightness(1.1); }
+.ai-apply-all-dismiss {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; opacity: 0.6;
+}
+.ai-apply-all-dismiss:hover { opacity: 1; }
 .ai-followup-btn {
   text-align: left;
   background: none;
