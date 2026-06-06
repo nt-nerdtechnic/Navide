@@ -96,6 +96,8 @@ interface ChatMessage {
   timestamp?: number       // ms since epoch
   responseStartMs?: number // when first chunk arrived
   elapsedMs?: number       // total response duration in ms
+  inputTokens?: number     // from backend usage data
+  outputTokens?: number    // from backend usage data
   isError?: boolean        // true when last chunk was an error
   errorMsg?: string
   cards?: Array<ToolCallCard | EditProposalCard | CommandProposalCard>
@@ -1665,12 +1667,15 @@ function setupListeners(): void {
   })
 
   unsubDone = props.backend.on('ai.chat.done', (payload) => {
-    const p = payload as { session_id: string }
+    const p = payload as { session_id: string; model?: string; input_tokens?: number; output_tokens?: number }
     if (p.session_id !== currentSessionId.value) return
     const last = messages.value[messages.value.length - 1]
     if (last?.streaming) {
       last.streaming = false; last.thinking = false
       if (last.responseStartMs) last.elapsedMs = Date.now() - last.responseStartMs
+      if (p.model) last.model = p.model
+      if (p.input_tokens != null) last.inputTokens = p.input_tokens
+      if (p.output_tokens != null) last.outputTokens = p.output_tokens
       followUps.value = extractFollowUps(last.content)
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
@@ -3012,7 +3017,8 @@ function getDateLabel(ts: number): string {
             @click="toggleBookmark(mi)"
           >{{ msg.bookmarked ? '★' : '☆' }}</button>
           <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
-          <span v-if="msg.role === 'assistant' && !msg.streaming && msg.content.length > 100" class="ai-msg-elapsed">~{{ Math.ceil(msg.content.length / 4).toLocaleString() }}t</span>
+          <span v-if="msg.role === 'assistant' && msg.model && !msg.streaming" class="ai-msg-model-badge" :title="msg.model">{{ msg.model.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</span>
+          <span v-if="msg.role === 'assistant' && (msg.inputTokens || msg.outputTokens) && !msg.streaming" class="ai-msg-tokens" :title="`Input: ${(msg.inputTokens ?? 0).toLocaleString()} tokens\nOutput: ${(msg.outputTokens ?? 0).toLocaleString()} tokens`">↑{{ (msg.inputTokens ?? 0).toLocaleString() }} ↓{{ (msg.outputTokens ?? 0).toLocaleString() }}</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
@@ -3616,6 +3622,14 @@ function getDateLabel(ts: number): string {
 }
 .ai-msg-wrap:hover .ai-msg-time { opacity: 1; }
 .ai-msg-elapsed { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; }
+.ai-msg-model-badge {
+  font-size: 9.5px; font-weight: 600; letter-spacing: .02em;
+  padding: 1px 5px; border-radius: 3px;
+  background: var(--accent-subtle); color: var(--accent-fg);
+  border: 1px solid var(--accent-muted); user-select: none;
+  opacity: 0.75;
+}
+.ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-feedback-btn { font-size: 11px; opacity: 0.3; }
 .ai-feedback-btn:hover { opacity: 0.9; }
 .ai-feedback-up { opacity: 1 !important; filter: none; }

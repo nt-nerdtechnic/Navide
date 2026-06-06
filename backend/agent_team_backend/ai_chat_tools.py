@@ -468,6 +468,7 @@ async def run_agent_loop(
     conversation = list(messages)
 
     max_iterations = 10  # guard against infinite loops
+    done_meta: dict = {}  # populated from \x00DONE: sentinel
     for _iteration in range(max_iterations):
         assistant_text_parts: list[str] = []
         tool_calls: list[dict] = []  # {"id": ..., "name": ..., "input": ...}
@@ -487,6 +488,11 @@ async def run_agent_loop(
                         })
                     except json.JSONDecodeError as err:
                         log.warning("failed to parse tool call JSON: %s", err)
+                elif chunk.startswith("\x00DONE:"):
+                    try:
+                        done_meta.update(json.loads(chunk[len("\x00DONE:"):]))
+                    except json.JSONDecodeError as err:
+                        log.warning("failed to parse done meta JSON: %s", err)
                 else:
                     assistant_text_parts.append(chunk)
                     await emit("ai.chat.chunk", {
@@ -548,4 +554,9 @@ async def run_agent_loop(
         # Append tool results as a user turn
         conversation.append({"role": "user", "content": tool_results})
 
-    await emit("ai.chat.done", {"session_id": session_id})
+    await emit("ai.chat.done", {
+        "session_id": session_id,
+        "model": done_meta.get("model"),
+        "input_tokens": done_meta.get("input_tokens"),
+        "output_tokens": done_meta.get("output_tokens"),
+    })

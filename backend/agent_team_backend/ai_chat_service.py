@@ -108,6 +108,12 @@ async def _stream_anthropic(
                     "name": block.name,
                     "input": block.input,
                 })
+        usage = getattr(final, "usage", None)
+        yield "\x00DONE:" + json.dumps({
+            "model": model,
+            "input_tokens": getattr(usage, "input_tokens", 0) if usage else 0,
+            "output_tokens": getattr(usage, "output_tokens", 0) if usage else 0,
+        })
 
 
 # ── Ollama ───────────────────────────────────────────────────────────────────
@@ -153,4 +159,5 @@ async def _stream_ollama(
                 if text:
                     yield text
                 if data.get("done"):
+                    yield "\x00DONE:" + json.dumps({"model": model})
                     break
