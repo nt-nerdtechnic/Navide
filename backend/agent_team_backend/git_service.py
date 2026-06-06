@@ -826,13 +826,13 @@ async def push_only(workspace_path: str, remote: str = "", branch: str = "") -> 
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    rc, out, stderr = await _run(cmd, workspace_path)
+    rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
 async def pull_rebase(workspace_path: str) -> dict[str, Any]:
     """Run `git pull --rebase` (replay local commits on top of upstream)."""
-    rc, out, stderr = await _run(["git", "pull", "--rebase"], workspace_path)
+    rc, out, stderr = await _run_with_timeout(["git", "pull", "--rebase"], workspace_path, timeout=60.0)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -850,7 +850,7 @@ async def push_force(workspace_path: str, remote: str = "", branch: str = "") ->
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    rc, out, stderr = await _run(cmd, workspace_path)
+    rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
