@@ -193,6 +193,7 @@ const cmdk = ref<{ open: boolean; instruction: string; busy: boolean; range: Ran
   { open: false, instruction: '', busy: false, range: null, code: '' }
 )
 const proposal = ref<{ range: Range; oldText: string; newText: string } | null>(null)
+const proposalEl = ref<HTMLDivElement | null>(null)
 const cmdkInput = ref<HTMLInputElement | null>(null)
 
 function computeProposalDiff(oldText: string, newText: string): Array<{ type: '+' | '-' | ' '; text: string }> {
@@ -262,6 +263,7 @@ async function submitCmdK(): Promise<void> {
     }
     proposal.value = { range: cmdk.value.range, oldText: cmdk.value.code, newText: resp.payload.text }
     cmdk.value.open = false
+    void nextTick(() => proposalEl.value?.focus())
   } catch {
     void alert('Connection error', { title: 'Cmd+K' })
   } finally {
@@ -973,9 +975,16 @@ defineExpose({
     </div>
 
     <!-- AI diff proposal -->
-    <div v-if="proposal" class="ep-proposal">
+    <div
+      v-if="proposal"
+      ref="proposalEl"
+      class="ep-proposal"
+      tabindex="-1"
+      @keydown.tab.prevent="acceptProposal"
+      @keydown.esc.prevent="rejectProposal"
+    >
       <div class="ep-prop-head">
-        <span>AI suggested rewrite</span>
+        <span>AI suggested rewrite <span class="ep-prop-hint">Tab to accept · Esc to reject</span></span>
         <div class="ep-prop-actions">
           <button class="ep-act success" @click="acceptProposal">✓ Accept</button>
           <button class="ep-act" @click="rejectProposal">✕ Reject</button>
@@ -1159,6 +1168,7 @@ defineExpose({
   background: var(--bg-subtle);
 }
 .ep-prop-actions { display: flex; gap: 6px; }
+.ep-prop-hint { font-size: 10px; color: var(--text-muted); margin-left: 8px; font-weight: 400; }
 .ep-prop-diff {
   display: flex;
   flex-direction: column;

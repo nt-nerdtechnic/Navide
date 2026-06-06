@@ -5470,13 +5470,9 @@ Requirements:
       const found = results.filter((r) => r.content.length > 0)
       if (!found.length) { showToast('/rules:show: no AI rule files found (AGENTS.md, .cursorrules, etc.)'); return }
       const chip = found.map((r) => {
-        const snippet = r.content.length > 2000 ? r.content.slice(0, 2000) + '
-// …truncated' : r.content
-        return `--- ${r.path} ---
-${snippet}`
-      }).join('
-
-')
+        const snippet = r.content.length > 2000 ? r.content.slice(0, 2000) + '\n// …truncated' : r.content
+        return `--- ${r.path} ---\n${snippet}`
+      }).join('\n\n')
       contextChips.value = contextChips.value.filter((c) => c.label !== '@rules:active')
       contextChips.value.push({ id: crypto.randomUUID(), label: '@rules:active', content: chip })
       inputText.value = `Summarize the active AI rules shown in @rules:active — what conventions, constraints, or instructions are currently applied to AI interactions in this project? Flag any conflicting or redundant rules.`
@@ -5537,7 +5533,7 @@ ${snippet}`
 ${hasSchema ? 'Use the schema in @schema above.' : 'Infer reasonable column/table names from the description.'}
 
 Respond with:
-1. The SQL query in a \\`\\`\\`sql code block
+1. The SQL query in a \`\`\`sql code block
 2. A brief explanation of each clause
 3. Performance notes (indexes, potential N+1, etc.)
 4. Alternative approaches if relevant`
@@ -5590,7 +5586,7 @@ Fix all errors, starting with the most critical.`
           workspace_path: props.workspacePath,
         }),
         props.backend.send<ShellRespArch>('shell.run', {
-          command: 'cat package.json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps({k:d.get(k,{}) for k in ['name','description','dependencies','devDependencies','scripts']}, indent=2))" 2>/dev/null | head -60 || echo "(no package.json)"',
+          command: `cat package.json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps({k:d.get(k,{}) for k in ['name','description','dependencies','devDependencies','scripts']}, indent=2))" 2>/dev/null | head -60 || echo "(no package.json)"`,
           workspace_path: props.workspacePath,
         }),
       ])
