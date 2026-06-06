@@ -271,6 +271,33 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
+  function measureDims(): { cols: number; rows: number } {
+    const el = containerRef.value
+    if (!el || el.clientWidth === 0) return { cols: term.cols, rows: term.rows }
+
+    // FitAddon might already have correct dims if xterm has measured cell sizes
+    const proposed = fit.proposeDimensions()
+    if (proposed && proposed.cols > 2) return { cols: proposed.cols, rows: proposed.rows }
+
+    // Synchronously measure actual character size via DOM probe — no async wait needed
+    const probe = document.createElement('span')
+    probe.style.cssText =
+      'position:absolute;top:-9999px;visibility:hidden;white-space:nowrap;' +
+      'font-family:Menlo,Monaco,"Courier New",monospace;font-size:12px;'
+    probe.textContent = 'W'.repeat(20)
+    document.body.appendChild(probe)
+    const charWidth = probe.offsetWidth / 20
+    const charHeight = probe.offsetHeight
+    document.body.removeChild(probe)
+
+    if (charWidth === 0 || charHeight === 0) return { cols: term.cols, rows: term.rows }
+
+    const overviewRulerW = 14  // FitAddon reserves this for the overview ruler
+    const cols = Math.max(2, Math.floor((el.clientWidth - overviewRulerW) / charWidth))
+    const rows = Math.max(1, Math.floor(el.clientHeight / charHeight))
+    return { cols, rows }
+  }
+
   async function spawn(opts: SpawnOptions): Promise<{ tmuxName: string }> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
@@ -278,6 +305,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    const { cols: spawnCols, rows: spawnRows } = measureDims()
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -289,8 +317,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        cols: term.cols,
-        rows: term.rows,
+        cols: spawnCols,
+        rows: spawnRows,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
         skip_tmux: opts.skipTmux ?? false,
@@ -310,15 +338,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // retry one more frame if measurement isn't ready yet.
       const sid = sessionId.value
       const doSpawnFit = () => {
-        const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width
-        const el = containerRef.value
-        console.log('[spawn-fit] cell.width:', cellW,
-          'xterm-host.clientWidth:', el?.clientWidth,
-          'pane.clientWidth:', el?.parentElement?.clientWidth,
-          'xterm el width:', (term as any).element?.offsetWidth,
-          'term.cols before:', term.cols)
         try { fit.fit() } catch { /* ignore */ }
-        console.log('[spawn-fit] term.cols after fit:', term.cols, 'rows:', term.rows)
         void backend.send('terminal.resize', {
           terminal_session_id: sid,
           cols: term.cols,
