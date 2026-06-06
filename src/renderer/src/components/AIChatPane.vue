@@ -1237,7 +1237,8 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       const code = decodeURIComponent(escape(atob(codeActionBtn.dataset.code ?? '')))
       const action = codeActionBtn.dataset.action ?? 'explain'
       if (action === 'newchat') {
-        const lang = codeActionBtn.closest<HTMLElement>('.ai-code-wrap')?.querySelector('.ai-code-lang')?.textContent ?? ''
+        const wrap = codeActionBtn.closest<HTMLElement>('.ai-code-wrap')
+        const lang = (wrap?.querySelector('.ai-code-lang') ?? wrap?.querySelector('.ai-code-lang-sm'))?.textContent ?? ''
         newThread()
         await nextTick()
         const snippet = code.slice(0, 4000)
@@ -4341,7 +4342,7 @@ function onTextareaKeydown(e: KeyboardEvent): void {
       atMenuIdx.value = (atMenuIdx.value - 1 + atOptions.value.length) % atOptions.value.length
       return
     }
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault()
       const opt = atOptions.value[atMenuIdx.value]
       if (opt) void selectAtOption(opt)
