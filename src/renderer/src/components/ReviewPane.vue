@@ -151,8 +151,8 @@ function applyInline(s: string): string {
         <span class="branch-label">Base</span>
         <select class="branch-select" v-model="baseBranch">
           <option v-for="b in localBranches" :key="b" :value="b">{{ b }}</option>
-          <option value="main">main</option>
-          <option value="master">master</option>
+          <option v-if="!localBranches.includes('main')" value="main">main</option>
+          <option v-if="!localBranches.includes('master')" value="master">master</option>
         </select>
         <span class="branch-arrow">→</span>
         <span class="branch-label">Compare</span>
