@@ -220,13 +220,16 @@ function _adjustFoldsForEdit(range: Range, text: string): void {
   const linesRemoved = range.end.line - range.start.line
   const linesAdded = text.split('\n').length - 1
   const delta = linesAdded - linesRemoved
-  if (delta === 0 && linesRemoved === 0) return // pure single-line edit
+  // No line-count change: folds don't shift (callers like moveLineUp handle
+  // line-reorder edits by re-mapping folds themselves before calling applyEdit).
+  if (delta === 0) return
   const pivot = range.start.line   // folds <= pivot are unchanged
-  const deleteEnd = range.end.line // folds in (pivot, deleteEnd] are removed (if delta < 0)
+  const deleteEnd = range.end.line // folds in (pivot, deleteEnd) are removed; deleteEnd itself is shifted
   const s = new Set<number>()
   for (const fl of foldedLines.value) {
     if (fl <= pivot) { s.add(fl); continue }
-    if (linesRemoved > 0 && fl <= deleteEnd) continue // line was deleted
+    // Lines strictly between pivot and deleteEnd are gone; use exclusive upper bound.
+    if (delta < 0 && fl < deleteEnd) continue
     s.add(fl + delta)
   }
   foldedLines.value = s
