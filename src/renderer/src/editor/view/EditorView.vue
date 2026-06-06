@@ -4,7 +4,7 @@ import { TextModel } from '../model/TextModel'
 import { UndoStack } from '../model/UndoStack'
 import { tokenizerFor } from '../tokenize/index'
 import { useVirtualScroll } from './useVirtualScroll'
-import type { Position, Range, Token, Decoration } from '../types'
+import type { Position, Range, Token, Decoration, EditOperation } from '../types'
 import { toSnakeCase, toCamelCase, toKebabCase, toPascalCase } from '../textTransforms'
 
 const props = withDefaults(defineProps<{ modelValue?: string; readonly?: boolean; language?: string }>(), {
@@ -243,6 +243,7 @@ function applyEdit(range: Range, text: string): void {
 // Returns true when multi-cursor was active and all edits were applied.
 // getRange is called on the ORIGINAL document state for each cursor (pre-sort).
 // Edits are applied bottom-to-top so upper positions stay valid.
+// All ops are pushed as a single batch so Cmd+Z undoes them all at once.
 function applyMultiCursorEdit(
   getRange: (pos: Position, anch: Position | null) => Range | null,
   text: string,
@@ -250,7 +251,6 @@ function applyMultiCursorEdit(
   if (extraCursors.value.length === 0) return false
   if (props.readonly) return true // multi-cursor active but readonly → consume event
   preferredCol = -1
-  undo.beginGroup()
 
   type Entry = { range: Range; isPrimary: boolean; extraIdx: number }
   const entries: Entry[] = []
@@ -268,15 +268,17 @@ function applyMultiCursorEdit(
 
   const newPrimary = { ...cursor.value }
   const newExtras = extraCursors.value.map(p => ({ ...p }))
+  const pairs: Array<{ forward: EditOperation; inverse: EditOperation }> = []
 
   for (const e of entries) {
-    const op = { range: e.range, text }
+    const op: EditOperation = { range: e.range, text }
     const { inverse, caret } = model.applyEdit(op)
-    undo.push(op, inverse)
+    pairs.push({ forward: op, inverse })
     if (e.range.start.line < _tokInvalidFrom) _tokInvalidFrom = e.range.start.line
     if (e.isPrimary) { newPrimary.line = caret.line; newPrimary.col = caret.col }
     else { newExtras[e.extraIdx] = caret }
   }
+  undo.pushBatch(pairs)
 
   _maxLineLenCache = -1
   cursor.value = newPrimary
