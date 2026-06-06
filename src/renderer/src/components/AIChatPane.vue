@@ -298,6 +298,8 @@ const activeNotepad = computed(() =>
 )
 const showNewNotepadInput = ref(false)
 const newNotepadName = ref('')
+// Two-click confirmation map for shell run buttons (avoids window.confirm)
+const pendingRunBtn = new Map<HTMLButtonElement, ReturnType<typeof setTimeout>>()
 
 // ── Rotating input placeholder (mode-aware) ───────────────────────────────────
 const PLACEHOLDER_HINTS_ASK = [
@@ -1412,12 +1414,28 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     } catch { showToast('Insert failed') }
   }
 
-  // Run shell code block
+  // Run shell code block — two-click confirmation (avoids window.confirm)
   const runCodeBtn = target.closest<HTMLButtonElement>('.ai-code-run-btn')
   if (runCodeBtn) {
     try {
       const code = decodeURIComponent(escape(atob(runCodeBtn.dataset.code ?? '')))
-      if (!window.confirm(`Run this command in workspace?\n\n${code}\n\nNote: This will execute in your workspace directory.`)) return
+      // First click: arm confirmation state; second click within 2.5s: execute
+      if (!pendingRunBtn.has(runCodeBtn)) {
+        const prev = runCodeBtn.textContent
+        runCodeBtn.textContent = '⚠ Click again to run'
+        runCodeBtn.style.color = '#e5c07b'
+        const t = setTimeout(() => {
+          pendingRunBtn.delete(runCodeBtn)
+          runCodeBtn.textContent = prev ?? '▶ Run'
+          runCodeBtn.style.color = ''
+        }, 2500)
+        pendingRunBtn.set(runCodeBtn, t)
+        return
+      }
+      const pending = pendingRunBtn.get(runCodeBtn)
+      if (pending !== undefined) clearTimeout(pending)
+      pendingRunBtn.delete(runCodeBtn)
+      runCodeBtn.style.color = ''
       runCodeBtn.textContent = '⏳ Running…'
       runCodeBtn.disabled = true
       interface ShellResp { ok: boolean; output?: string; exit_code?: number; error?: string }
