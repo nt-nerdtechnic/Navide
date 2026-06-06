@@ -67,8 +67,7 @@ function fileDir(path: string): string {
 // ── view / sort ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list' | 'tree'>('tree')
 const sortBy = ref<'name' | 'path' | 'status'>('path')
-const showReview = ref(false)
-const showDiff = ref(false)
+const activePanel = ref<'review' | 'diff' | null>(null)
 const diffBase = ref('main')
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
@@ -1232,29 +1231,39 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
     </div>
 
-    <!-- AI Review panel -->
-    <ReviewPane
-      v-else-if="showReview"
-      :workspace-path="workspacePath"
-      :backend="backend"
-      :git-status="gitStatus"
-      :git-branches="gitBranches"
-      @close="showReview = false"
-    />
-
-    <!-- Branch Diff panel -->
-    <div v-else-if="showDiff" class="review-panel">
+    <!-- Unified Review panel (AI Review + Diff tabs) -->
+    <div v-else-if="activePanel !== null" class="review-panel">
       <div class="panel-header">
-        <span class="panel-title">DIFF WITH {{ diffBase.toUpperCase() }}</span>
+        <button
+          class="review-tab"
+          :class="{ active: activePanel === 'review' }"
+          @click.stop="activePanel = 'review'"
+        >AI Review</button>
+        <button
+          class="review-tab"
+          :class="{ active: activePanel === 'diff' }"
+          @click.stop="activePanel = 'diff'"
+        >Diff with main</button>
         <div class="spacer" />
-        <button class="hdr-btn" title="Close" @click.stop="showDiff = false">✕</button>
+        <button class="hdr-btn" title="Close" @click.stop="activePanel = null">✕</button>
       </div>
+      <ReviewPane
+        v-show="activePanel === 'review'"
+        :workspace-path="workspacePath"
+        :backend="backend"
+        :git-status="gitStatus"
+        :git-branches="gitBranches"
+        :hide-header="true"
+        @close="activePanel = null"
+        style="flex: 1; min-height: 0;"
+      />
       <BranchDiffPane
+        v-show="activePanel === 'diff'"
         :workspace-path="workspacePath"
         :base="diffBase"
         compare=""
         :backend="backend"
-        style="flex: 1; overflow: hidden;"
+        style="flex: 1; min-height: 0; overflow: hidden;"
       />
     </div>
 
@@ -1280,24 +1289,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <!-- Diff with main toggle -->
+        <!-- Review / Diff unified toggle -->
         <button
           class="hdr-btn"
-          :class="{ active: showDiff }"
-          title="Diff with main"
-          @click.stop="showDiff = !showDiff; if (showDiff) showReview = false"
-        >
-          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M2.75 1a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H2.75zm5.5 0a.75.75 0 0 0 0 1.5h.75v7.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H8.25zm-5 7a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V9.5h.75a.75.75 0 0 0 0-1.5H3.25zM8 9.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5H8z"/>
-          </svg>
-        </button>
-        <!-- AI Review toggle (mini-IDE only) -->
-        <button
-          v-if="embedded"
-          class="hdr-btn"
-          :class="{ active: showReview }"
-          title="AI Review"
-          @click.stop="showReview = !showReview; if (showReview) showDiff = false"
+          :class="{ active: activePanel !== null }"
+          title="AI Review & Diff"
+          @click.stop="activePanel = activePanel !== null ? null : 'review'"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
