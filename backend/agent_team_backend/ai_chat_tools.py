@@ -415,7 +415,7 @@ async def _run_command_with_approval(
     })
 
     key = f"{session_id}:{tool_id}"
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut: asyncio.Future[bool] = loop.create_future()
     _pending_approvals[key] = fut
     try:
