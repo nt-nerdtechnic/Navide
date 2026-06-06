@@ -99,6 +99,7 @@ class LogWatcher:
         # to "replay" history — old events have no semantic value to a
         # newly-started watcher anyway.
         self._activity_seen: dict[str, set[str]] = {}
+        self._scan_mtimes: dict[str, float] = {}
         self._save_pending = False
         self._queue: asyncio.Queue[Path] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -287,16 +288,14 @@ class LogWatcher:
             f" (workspace={workspace_path})" if workspace_path else " (all readers)",
         )
 
-    def _files_to_scan(self) -> list[Path]:
-        """Files for periodic/startup backfill, scoped to opened workspaces.
+    def _candidate_files(self) -> list[Path]:
+        """Backfill candidates scoped to opened workspaces (no mtime filter).
 
         When a workspace_provider is set we only enumerate files belonging to
         the workspaces the user has actually opened (readers that can't map a
         workspace to a subset fall back to their full list — those vendors keep
-        far fewer files). This stops the drain task from re-stat'ing the entire
-        multi-GB Claude history every cycle, which used to saturate the event
-        loop and stall the backend. No provider / nothing registered yet →
-        full scan (legacy).
+        far fewer files). No provider / nothing registered yet → full scan
+        (legacy).
         """
         provider = self._workspace_provider
         workspaces = list(provider()) if provider else []
@@ -317,6 +316,27 @@ class LogWatcher:
                         seen.add(k)
                         files.append(p)
         return files
+
+    def _files_to_scan(self) -> list[Path]:
+        """Backfill candidates whose mtime changed since the last sweep.
+
+        Workspace scoping (_candidate_files) bounds which files we look at;
+        this mtime gate stops us from re-enqueueing unchanged files. Without
+        it every 30-second cycle re-reads every workspace session file —
+        including 100 MB+ Claude histories — saturating the drain task.
+        """
+        out: list[Path] = []
+        for p in self._candidate_files():
+            try:
+                mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            k = str(p)
+            if self._scan_mtimes.get(k) == mtime:
+                continue
+            self._scan_mtimes[k] = mtime
+            out.append(p)
+        return out
 
     async def _rescan_loop(self) -> None:
         """Periodically re-enqueue session files for opened workspaces.
