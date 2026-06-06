@@ -204,6 +204,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   display: flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: no-drag;
 }
 .ob-modal {
   width: 680px;

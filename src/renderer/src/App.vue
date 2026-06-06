@@ -5635,6 +5635,7 @@ function paneIsCommander(p: ActivePane): boolean {
   align-items: center;
   justify-content: center;
   z-index: 1100;
+  -webkit-app-region: no-drag;
 }
 .history-modal {
   background: var(--bg-base);

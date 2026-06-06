@@ -137,6 +137,7 @@ onUnmounted(() => {
   justify-content: center;
   /* Transparent so canvas shows through */
   background: transparent;
+  -webkit-app-region: no-drag;
 }
 
 .comp-canvas {

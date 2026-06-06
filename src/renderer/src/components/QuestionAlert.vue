@@ -189,6 +189,7 @@ const queueBadge = computed(() =>
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  -webkit-app-region: no-drag;
 }
 .card {
   background: var(--bg-base);

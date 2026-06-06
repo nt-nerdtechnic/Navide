@@ -1579,6 +1579,7 @@ async function plDelete(id: string, name: string) {
   display: flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: no-drag;
 }
 .s-overlay.confirm { z-index: 9000; }
 
