@@ -715,9 +715,12 @@ const branchCreating = ref(false)
 async function doCreateBranch(): Promise<void> {
   if (!newBranchName.value.trim()) return
   branchError.value = ''; branchCreating.value = true
-  const r = await createBranch(newBranchName.value.trim())
-  branchCreating.value = false
-  if (r.ok) newBranchName.value = ''; else branchError.value = r.error || 'failed'
+  try {
+    const r = await createBranch(newBranchName.value.trim())
+    if (r.ok) newBranchName.value = ''; else branchError.value = r.error || 'failed'
+  } finally {
+    branchCreating.value = false
+  }
 }
 async function doSwitch(name: string): Promise<void> {
   branchError.value = ''
@@ -1000,13 +1003,18 @@ async function toggleHistoryPanel(path: string, staged: boolean): Promise<void> 
   diffBlamePath.value = ''; diffBlameHunks.value = []
   if (isOpen) return
   fileHistoryPath.value = path; fileHistoryLoading.value = true
-  fileHistoryCommits.value = await fileLog(path)
-  if (fileHistoryPath.value !== path) return // user toggled the panel closed while waiting
-  fileHistoryLoading.value = false
-  diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
-  diffBlameHunks.value = await diffBlame(path, staged)
-  if (diffBlamePath.value !== path) return
-  diffBlameLoading.value = false
+  try {
+    fileHistoryCommits.value = await fileLog(path)
+    if (fileHistoryPath.value !== path) return // user toggled the panel closed while waiting
+    fileHistoryLoading.value = false
+    diffBlamePath.value = path; diffBlameStaged.value = staged; diffBlameLoading.value = true
+    diffBlameHunks.value = await diffBlame(path, staged)
+    if (diffBlamePath.value !== path) return
+    diffBlameLoading.value = false
+  } finally {
+    fileHistoryLoading.value = false
+    diffBlameLoading.value = false
+  }
 }
 
 // ── conflict ──────────────────────────────────────────────────────────────────
@@ -1049,7 +1057,11 @@ const expandedCommitHash = ref(''), commitDetailData = ref<import('../composable
 async function toggleCommitDetail(hash: string): Promise<void> {
   if (expandedCommitHash.value === hash) { expandedCommitHash.value = ''; commitDetailData.value = null; return }
   expandedCommitHash.value = hash; commitDetailLoading.value = true
-  commitDetailData.value = await showCommit(hash); commitDetailLoading.value = false
+  try {
+    commitDetailData.value = await showCommit(hash)
+  } finally {
+    commitDetailLoading.value = false
+  }
 }
 
 // ── cherry-pick / revert ──────────────────────────────────────────────────────
