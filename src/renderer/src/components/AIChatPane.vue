@@ -1299,8 +1299,9 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:stash',        label: '@git:stash — list all git stashes' },
   { id: '@git:tag',          label: '@git:tag — list recent git tags' },
   { id: '@git:contributors', label: '@git:contributors — top contributors (git shortlog)' },
-  { id: '@git:diff',   label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
-  { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
+  { id: '@git:diff',     label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
+  { id: '@git:commit',   label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
+  { id: '@git:conflict', label: '@git:conflict — files with merge conflicts (<<<<<<< markers)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
@@ -4695,6 +4696,33 @@ ${out}`
       } catch {
         chipContent = `// @git:commit:${hash}: unavailable`
       }
+    }
+  } else if (option.id === '@git:conflict') {
+    chipLabel = '@git:conflict'
+    try {
+      interface ShellRespConflict { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespConflict>('shell.run', {
+        command: 'git diff --name-only --diff-filter=U 2>/dev/null',
+        workspace_path: props.workspacePath,
+      })
+      const conflictedFiles = (resp.payload?.output ?? '').trim().split('\n').filter(Boolean)
+      if (!conflictedFiles.length) {
+        chipContent = '// @git:conflict: no merge conflicts found in working tree'
+      } else {
+        showToast(`Reading ${conflictedFiles.length} conflict file(s)…`)
+        let parts = `// Merge conflicts in ${conflictedFiles.length} file(s):\n`
+        for (const relPath of conflictedFiles.slice(0, 5)) {
+          try {
+            const fResp = await props.backend.send<{ payload?: { content?: string } }>('fs.read_file', { workspace_path: props.workspacePath, rel_path: relPath })
+            const content = fResp.payload?.content ?? ''
+            const conflictBlock = content.split('\n').filter((l) => l.startsWith('<<<<<<<') || l.startsWith('=======') || l.startsWith('>>>>>>>') || l.startsWith('<<<') || content.includes('<<<<<<<'))
+            parts += `\n// ${relPath}\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\`\n`
+          } catch { parts += `\n// ${relPath}: could not read\n` }
+        }
+        chipContent = parts
+      }
+    } catch {
+      chipContent = '// @git:conflict: unavailable'
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
