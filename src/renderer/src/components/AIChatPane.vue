@@ -2459,12 +2459,16 @@ const _SVG_ALLOWED_TAGS = new Set([
   'tspan','defs','marker','use','title','desc','style','linearGradient',
   'radialGradient','stop','clipPath','mask','foreignObject',
 ])
-const _SVG_FORBIDDEN_ATTR = /^on/i
+// Only http(s), relative paths, and anchor fragments are safe URL values
+const _SAFE_URL = /^(https?:\/\/|\/|\.\.?\/|#)/i
 
 function _sanitizeSvgNode(node: Element): void {
-  // Remove forbidden attributes
   for (const attr of Array.from(node.attributes)) {
-    if (_SVG_FORBIDDEN_ATTR.test(attr.name) || (attr.name === 'href' && /^(javascript|data|vbscript)/i.test(attr.value))) {
+    const name = attr.name.toLowerCase()
+    // Strip all event handlers
+    if (/^on/.test(name)) { node.removeAttribute(attr.name); continue }
+    // Strip href / xlink:href unless value is a safe URL
+    if ((name === 'href' || name === 'xlink:href') && !_SAFE_URL.test(attr.value.trim())) {
       node.removeAttribute(attr.name)
     }
   }
