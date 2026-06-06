@@ -6,6 +6,7 @@ import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
 import ReviewPane from './ReviewPane.vue'
+import BranchDiffPane from '../editor/BranchDiffPane.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -67,6 +68,8 @@ function fileDir(path: string): string {
 const viewMode = ref<'list' | 'tree'>('tree')
 const sortBy = ref<'name' | 'path' | 'status'>('path')
 const showReview = ref(false)
+const showDiff = ref(false)
+const diffBase = ref('main')
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
 const showCommitMenuPos = ref({ top: 0, right: 0 })
@@ -1229,7 +1232,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
     </div>
 
-    <!-- AI Review overlay -->
+    <!-- AI Review panel -->
     <ReviewPane
       v-else-if="showReview"
       :workspace-path="workspacePath"
@@ -1238,6 +1241,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       :git-branches="gitBranches"
       @close="showReview = false"
     />
+
+    <!-- Branch Diff panel -->
+    <div v-else-if="showDiff" class="review-panel">
+      <div class="panel-header">
+        <span class="panel-title">DIFF WITH {{ diffBase.toUpperCase() }}</span>
+        <div class="spacer" />
+        <button class="hdr-btn" title="Close" @click.stop="showDiff = false">✕</button>
+      </div>
+      <BranchDiffPane
+        :workspace-path="workspacePath"
+        :base="diffBase"
+        compare=""
+        :backend="backend"
+        style="flex: 1; overflow: hidden;"
+      />
+    </div>
 
     <template v-else>
 
@@ -1261,23 +1280,24 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <!-- Diff with main (mini-IDE only) -->
+        <!-- Diff with main toggle -->
         <button
-          v-if="showBranchDiff"
           class="hdr-btn"
+          :class="{ active: showDiff }"
           title="Diff with main"
-          @click.stop="openBranchDiffTab()"
+          @click.stop="showDiff = !showDiff; if (showDiff) showReview = false"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M2.75 1a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H2.75zm5.5 0a.75.75 0 0 0 0 1.5h.75v7.25a.75.75 0 0 0 1.5 0V2.5h.75a.75.75 0 0 0 0-1.5H8.25zm-5 7a.75.75 0 0 0 0 1.5h.75v1.25a.75.75 0 0 0 1.5 0V9.5h.75a.75.75 0 0 0 0-1.5H3.25zM8 9.5a.75.75 0 0 0 0 1.5h4a.75.75 0 0 0 0-1.5H8z"/>
           </svg>
         </button>
-        <!-- AI Review toggle -->
+        <!-- AI Review toggle (mini-IDE only) -->
         <button
+          v-if="embedded"
           class="hdr-btn"
           :class="{ active: showReview }"
           title="AI Review"
-          @click.stop="showReview = !showReview"
+          @click.stop="showReview = !showReview; if (showReview) showDiff = false"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
@@ -2882,4 +2902,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .ignore-modal-text { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
 .ignore-modal .btn-ghost { align-self: flex-end; }
+.review-panel {
+  display: flex; flex-direction: column;
+  flex: 1; min-height: 0; overflow: hidden;
+}
 </style>
