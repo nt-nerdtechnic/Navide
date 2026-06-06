@@ -1,4 +1,4 @@
-# Agent-Team
+# Navide (Navide (Agent-Team))
 
 > **Run Claude Code, Codex, and Gemini CLI simultaneously — orchestrated across an SDLC pipeline with automated handoffs and multi-agent coordination.**
 
@@ -12,12 +12,12 @@
 
 ---
 
-## Why Agent-Team?
+## Why Navide (Navide (Agent-Team))?
 
 A single AI coding agent has its limits — complex tasks require waiting, context is finite, and a single role can only cover so much.
-**Agent-Team lets you run multiple agents in parallel, each with a dedicated role, passing outputs to one another like a real engineering team.**
+**Navide (Navide (Agent-Team)) lets you run multiple agents in parallel, each with a dedicated role, passing outputs to one another like a real engineering team.**
 
-| Pain point | Agent-Team's solution |
+| Pain point | Navide (Navide (Agent-Team))'s solution |
 |---|---|
 | One agent must finish requirements before design, then implementation — lots of waiting | Multiple agents run **in parallel** within a Stage; the next Stage starts automatically when all complete |
 | Different tasks need different mindsets (PM, Backend, QA) | Each pane automatically injects the matching **Role System Prompt** |
@@ -31,7 +31,7 @@ A single AI coding agent has its limits — complex tasks require waiting, conte
 
 ### 🚀 4-Stage SDLC Pipeline (Fully Automated)
 
-Give it a task description and Agent-Team automatically runs Requirements → Design → Implementation → Testing, using the right agent and role at each stage.
+Give it a task description and Navide (Navide (Agent-Team)) automatically runs Requirements → Design → Implementation → Testing, using the right agent and role at each stage.
 
 ```
 ▶ Run pipeline  →  Stage 01 Requirements  →  Stage 02 Design       →  Stage 03 Implementation  →  Stage 04 QA
@@ -72,7 +72,7 @@ Parses token usage directly from CLI log files for all three providers, categori
 
 ### 📚 Context7 Doc Injection
 
-Before each Stage starts, Agent-Team detects the tech stack in the task (Next.js, Laravel, Flutter…), fetches the latest framework docs from Context7, and injects them into the kickoff prompt so agents start with accurate API knowledge.
+Before each Stage starts, Navide (Agent-Team) detects the tech stack in the task (Next.js, Laravel, Flutter…), fetches the latest framework docs from Context7, and injects them into the kickoff prompt so agents start with accurate API knowledge.
 
 ### 🔄 Pipeline Resume
 
@@ -159,8 +159,8 @@ ollama pull qwen2.5-coder
 ### Install
 
 ```bash
-git clone https://github.com/nt-nerdtechnic/Agent-Team
-cd Agent-Team
+git clone https://github.com/nt-nerdtechnic/Navide (Agent-Team)
+cd Navide (Agent-Team)
 
 pnpm install
 uv --project backend sync
@@ -212,7 +212,7 @@ Toolbar gear → Settings:
 - **Role Manager** — edit system prompts for each role, or add custom roles
 - **Stage Editor** — adjust the slot configuration, kickoff body, and sentinel string for each Stage
 
-All settings are stored locally in `~/Library/Application Support/Agent-Team/` and are not committed to the repository.
+All settings are stored locally in `~/Library/Application Support/Navide (Agent-Team)/` and are not committed to the repository.
 
 ---
 
@@ -343,11 +343,11 @@ agent-team/
 
 ## Local Data & Privacy
 
-Agent-Team is a local developer tool. All computation and data stay on your machine.
+Navide (Agent-Team) is a local developer tool. All computation and data stay on your machine.
 
 - **No external service dependencies** (beyond the Claude / Codex / Gemini CLIs you choose to run)
 - **No telemetry, no accounts** — no API keys required
-- Runtime settings stored in `~/Library/Application Support/Agent-Team/` (not committed)
+- Runtime settings stored in `~/Library/Application Support/Navide (Agent-Team)/` (not committed)
 - Workspace state written to `<workspace>/.agent-team/` (`project.json`, pipeline log, pane conversation history)
 
 ### YOLO Mode Notice
@@ -364,7 +364,7 @@ These flags let agents skip interactive confirmations. **Agents have unrestricte
 
 ### Claude Code Hooks
 
-On first launch, Agent-Team adds three lifecycle hooks (`PreToolUse` / `Stop` / `Notification`) to `~/.claude/settings.json` so the backend receives precise agent activity signals. Installation is merge-safe (does not overwrite existing settings), and the original `settings.json` is backed up as `.pre-agent-team.bak`.
+On first launch, Navide (Agent-Team) adds three lifecycle hooks (`PreToolUse` / `Stop` / `Notification`) to `~/.claude/settings.json` so the backend receives precise agent activity signals. Installation is merge-safe (does not overwrite existing settings), and the original `settings.json` is backed up as `.pre-agent-team.bak`.
 
 ### Unimplemented Security Features
 
@@ -411,8 +411,8 @@ See [SECURITY.md](SECURITY.md) for the vulnerability reporting policy.
 
 **Safe-use reminders:**
 - YOLO Mode grants agents unrestricted filesystem access. Only use it in workspaces you trust.
-- The Claude Code hooks installed by Agent-Team are merge-safe; your original `~/.claude/settings.json` is backed up before any changes.
-- Agent-Team never stores API keys. All CLI credentials remain in the respective tool's own config (`~/.claude/`, `~/.codex/`, etc.).
+- The Claude Code hooks installed by Navide (Agent-Team) are merge-safe; your original `~/.claude/settings.json` is backed up before any changes.
+- Navide (Agent-Team) never stores API keys. All CLI credentials remain in the respective tool's own config (`~/.claude/`, `~/.codex/`, etc.).
 
 ---
 

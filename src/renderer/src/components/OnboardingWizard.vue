@@ -57,7 +57,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   <div class="ob-overlay">
     <div class="ob-modal">
       <header class="ob-header">
-        <div class="ob-title">Agent-Team · Environment Setup</div>
+        <div class="ob-title">Navide (Agent-Team) · Environment Setup</div>
         <ol class="ob-steps">
           <li
             v-for="s in STEPS"
@@ -72,7 +72,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       <div class="ob-body">
         <!-- Step 1 -->
         <section v-if="step === 1">
-          <p class="ob-hint">Install the foundational tools required to run Agent-Team. Already-installed items show a green checkmark.</p>
+          <p class="ob-hint">Install the foundational tools required to run Navide (Agent-Team). Already-installed items show a green checkmark.</p>
           <OnboardingDepRow
             v-for="d in ob.foundationDeps.value"
             :key="d.id"
@@ -189,7 +189,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           :disabled="!ob.allRequiredReady.value"
           :title="ob.allRequiredReady.value ? '' : 'Some required items are not yet ready'"
           @click="ob.markComplete().then(() => emit('complete')).catch(() => emit('complete'))"
-        >Open Agent-Team</button>
+        >Open Navide (Agent-Team)</button>
       </footer>
     </div>
   </div>

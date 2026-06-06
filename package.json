@@ -2,7 +2,7 @@
   "name": "agent-team",
   "version": "0.1.8",
   "private": true,
-  "description": "macOS desktop terminal manager for Claude Code, Codex, and Gemini CLI",
+  "description": "Navide (Agent-Team): macOS desktop terminal manager for Claude Code, Codex, and Gemini CLI",
   "main": "out/main/index.js",
   "packageManager": "pnpm@10.0.0",
   "engines": {
@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "com.nerdtechnic.agent-team",
-    "productName": "Agent-Team",
+    "productName": "Navide (Agent-Team)",
     "directories": {
       "output": "dist-release"
     },

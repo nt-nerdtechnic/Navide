@@ -34,7 +34,7 @@ CONTEXT_SIZE = int(os.environ.get("LLAMA_CONTEXT_SIZE", "4096"))
 
 # ─── System prompt ────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """你是 Agent-Team pipeline 的判讀器。給你一段另一個 AI agent 剛剛輸出的文字，判斷它的意圖並回傳結構化 JSON。
+SYSTEM_PROMPT = """你是 Navide (Agent-Team) pipeline 的判讀器。給你一段另一個 AI agent 剛剛輸出的文字，判斷它的意圖並回傳結構化 JSON。
 
 重要前提：你看到的文字是 agent **已經停止輸出後**的畫面快照，不是即時串流。所以「文字裡有完整內容、agent 卻沒有繼續動作」代表它在等使用者，不是還在跑。
 
@@ -329,7 +329,7 @@ _BENCHMARK_TASKS: list[dict[str, Any]] = [
             "直接輸出摘要，不要額外說明。"
         ),
         "user": (
-            "這個專案叫做 Agent-Team，包含：Electron 前端（Vue 3 + TypeScript）、"
+            "這個專案叫做 Navide (Agent-Team)，包含：Electron 前端（Vue 3 + TypeScript）、"
             "Python FastAPI 後端、llama-cli 本地 LLM 模組、WebSocket 通訊層。"
             "功能是管理多個 AI agent（Claude Code、Codex、Gemini）協同開發。"
         ),
@@ -352,7 +352,7 @@ _BENCHMARK_TASKS: list[dict[str, Any]] = [
         "id": "T4",
         "name": "CLI 意圖解析",
         "system": (
-            "你是 Agent-Team pipeline 的判讀器。"
+            "你是 Navide (Agent-Team) pipeline 的判讀器。"
             "給你一段 CLI agent 的輸出文字，判斷意圖並回傳 JSON：\n"
             "{\"intent\": \"question\", "
             "\"questions\": [{\"prompt\": \"問題文字\", \"type\": \"choice|text\", \"options\": [...]}], "
@@ -728,7 +728,7 @@ async def classify(
 
 # ─── Auto-answer system prompt ────────────────────────────────────────────────
 
-_AUTO_ANSWER_SYSTEM_PROMPT = """你是 Agent-Team pipeline 的全自動決策者。
+_AUTO_ANSWER_SYSTEM_PROMPT = """你是 Navide (Agent-Team) pipeline 的全自動決策者。
 給你一個 AI agent 提出的問題清單以及當前任務背景，替使用者自動選出或填入最佳答案。
 
 輸出格式規則（嚴格遵守）：

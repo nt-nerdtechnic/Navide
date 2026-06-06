@@ -1324,9 +1324,9 @@ const confirmKillAll = ref(false)
 
 // ── Titlebar & Status Bar ─────────────────────────────────────────────────────
 const workspaceBaseName = computed(() => {
-  if (!currentWorkspace.value) return 'Agent-Team'
+  if (!currentWorkspace.value) return 'Navide (Agent-Team)'
   const parts = currentWorkspace.value.replace(/\\/g, '/').split('/')
-  return parts.filter(Boolean).at(-1) || 'Agent-Team'
+  return parts.filter(Boolean).at(-1) || 'Navide (Agent-Team)'
 })
 
 interface StatusBarGit {

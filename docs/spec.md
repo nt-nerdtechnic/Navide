@@ -1,4 +1,4 @@
-# Agent-Team — Master Spec & Progress
+# Navide (Agent-Team) — Master Spec & Progress
 
 > **單一真實來源**（Single Source of Truth）of project status, milestones, and feature roadmap. Detail design docs and per-feature plans are linked from each section — they are reference material, not the source of truth.
 

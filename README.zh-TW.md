@@ -1,4 +1,4 @@
-# Agent-Team
+# Navide (Navide (Agent-Team))
 
 > **把 Claude Code、Codex、Gemini CLI 同時跑起來，讓它們照 SDLC 流程分工、協作、自動推進。**
 
@@ -12,12 +12,12 @@
 
 ---
 
-## 為什麼需要 Agent-Team？
+## 為什麼需要 Navide (Navide (Agent-Team))？
 
 單一 AI coding agent 有它的極限——複雜任務需要等待、上下文有限、角色單一。
-**Agent-Team 讓你同時開多個 agent、各司其職、輸出互相傳遞，像一支真正的工程團隊。**
+**Navide (Navide (Agent-Team)) 讓你同時開多個 agent、各司其職、輸出互相傳遞，像一支真正的工程團隊。**
 
-| 痛點 | Agent-Team 的解法 |
+| 痛點 | Navide (Navide (Agent-Team)) 的解法 |
 |---|---|
 | 一個 agent 做完需求再做設計、再做實作，排隊等待 | 多 agent **並行**跑同一 Stage，完成後自動推進下一 Stage |
 | 不同任務需要不同思維（PM、Backend、QA）| 每個 pane 自動注入對應 **Role System Prompt** |
@@ -31,7 +31,7 @@
 
 ### 🚀 4-Stage SDLC Pipeline（全自動）
 
-給一段任務描述，Agent-Team 自動依序跑完需求分析 → 設計 → 實作 → 測試，每個 Stage 用對的 agent + 對的角色。
+給一段任務描述，Navide (Navide (Agent-Team)) 自動依序跑完需求分析 → 設計 → 實作 → 測試，每個 Stage 用對的 agent + 對的角色。
 
 ```
 ▶ Run pipeline  →  Stage 01 需求分析  →  Stage 02 設計規劃  →  Stage 03 實作  →  Stage 04 測試驗收
@@ -155,8 +155,8 @@ ollama pull qwen2.5-coder
 ### 安裝
 
 ```bash
-git clone https://github.com/nt-nerdtechnic/Agent-Team
-cd Agent-Team
+git clone https://github.com/nt-nerdtechnic/Navide (Agent-Team)
+cd Navide (Agent-Team)
 
 pnpm install
 uv --project backend sync
@@ -208,7 +208,7 @@ pnpm dev
 - **Role Manager**：編輯各角色的 system prompt，或新增自訂角色
 - **Stage Editor**：調整每個 Stage 的 slot 組合、kickoff body、sentinel 字串
 
-所有設定儲存在本機 `~/Library/Application Support/Agent-Team/`，不進版本庫。
+所有設定儲存在本機 `~/Library/Application Support/Navide (Agent-Team)/`，不進版本庫。
 
 ---
 
@@ -337,11 +337,11 @@ agent-team/
 
 ## 本機資料與隱私
 
-Agent-Team 是本機開發者工具，所有運算和資料都留在你自己的機器上。
+Navide (Agent-Team) 是本機開發者工具，所有運算和資料都留在你自己的機器上。
 
 - **沒有外部服務依賴**（除了你主動啟動的 Claude / Codex / Gemini CLI 本身）
 - **沒有遙測、沒有帳號**，不需要任何 API key
-- Runtime 設定存於 `~/Library/Application Support/Agent-Team/`（不進版本庫）
+- Runtime 設定存於 `~/Library/Application Support/Navide (Agent-Team)/`（不進版本庫）
 - Workspace 狀態寫入 `<workspace>/.agent-team/`（`project.json`、pipeline log、pane 對話記錄）
 
 ### YOLO Mode 注意事項
@@ -358,7 +358,7 @@ Agent-Team 是本機開發者工具，所有運算和資料都留在你自己的
 
 ### Claude Code Hooks
 
-首次啟動時，Agent-Team 會在 `~/.claude/settings.json` 新增三個 lifecycle hooks（`PreToolUse` / `Stop` / `Notification`），讓 backend 接收更精確的 agent 活動訊號。安裝是 merge-safe（不覆蓋你的現有設定），且原始 settings.json 會備份為 `.pre-agent-team.bak`。
+首次啟動時，Navide (Agent-Team) 會在 `~/.claude/settings.json` 新增三個 lifecycle hooks（`PreToolUse` / `Stop` / `Notification`），讓 backend 接收更精確的 agent 活動訊號。安裝是 merge-safe（不覆蓋你的現有設定），且原始 settings.json 會備份為 `.pre-agent-team.bak`。
 
 ### 尚未實作的安全功能
 
@@ -405,8 +405,8 @@ pnpm backend:dev    # 單獨啟動 Python backend（debug 用）
 
 **使用提醒：**
 - YOLO Mode 下 agent 擁有完整檔案系統讀寫權，僅在信任的 workspace 下使用。
-- Agent-Team 安裝的 Claude Code hooks 是 merge-safe，原始 `~/.claude/settings.json` 會先備份。
-- Agent-Team 不儲存任何 API key，所有 CLI 憑證留在各自工具的設定中（`~/.claude/`、`~/.codex/` 等）。
+- Navide (Agent-Team) 安裝的 Claude Code hooks 是 merge-safe，原始 `~/.claude/settings.json` 會先備份。
+- Navide (Agent-Team) 不儲存任何 API key，所有 CLI 憑證留在各自工具的設定中（`~/.claude/`、`~/.codex/` 等）。
 
 ---
 
