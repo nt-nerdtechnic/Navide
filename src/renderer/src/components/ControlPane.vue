@@ -1483,12 +1483,12 @@ button.primary:not(:disabled):hover {
   background: var(--success-strong);
 }
 button.danger {
-  background: var(--danger-deep);
-  border-color: var(--danger-muted);
-  color: #f4d2d2;
+  background: var(--danger-emphasis);
+  border-color: transparent;
+  color: var(--text-on-emphasis);
 }
 button.danger:hover {
-  background: var(--danger-muted);
+  background: var(--danger-bright);
 }
 button.ghost {
   background: transparent;
@@ -1688,7 +1688,7 @@ button.icon-btn.muted:hover {
 .active-tag {
   font-size: 10px;
   color: var(--success-fg);
-  background: #1a2e1a;
+  background: var(--success-subtle);
   border: 1px solid #2ea04355;
   border-radius: 3px;
   padding: 1px 5px;
@@ -1711,19 +1711,19 @@ button.icon-btn.muted:hover {
   font-size: 10px;
 }
 .pipeline {
-  background: #0b1a1f;
+  background: var(--bg-inset);
   border: 1px solid #1f3a3f;
   padding: 10px;
   border-radius: 6px;
 }
 .manual-spawn {
-  background: #0b1a1f;
+  background: var(--bg-inset);
   border: 1px solid #1f3a3f;
   padding: 10px;
   border-radius: 6px;
 }
 .resume-card {
-  background: #1a2030;
+  background: var(--bg-elevated);
   border: 1px solid #2d3f5f;
   border-left: 3px solid var(--accent-fg);
   border-radius: 4px;
@@ -1758,11 +1758,11 @@ button.icon-btn.muted:hover {
 }
 .resume-state[data-state='running'] {
   background: var(--success-muted);
-  color: #d2f4dc;
+  color: var(--success-fg);
 }
 .resume-state[data-state='aborted'] {
   background: var(--danger-deep);
-  color: #f4d2d2;
+  color: var(--danger-fg);
 }
 .resume-state[data-state='completed'] {
   background: var(--accent-muted);
@@ -1944,10 +1944,10 @@ button.icon-btn.muted:hover {
 }
 .agent-item.pipeline {
   border-color: var(--accent-muted);
-  background: linear-gradient(180deg, #0d1f2f 0%, var(--bg-subtle) 100%);
+  background: linear-gradient(180deg, var(--accent-subtle) 0%, var(--bg-subtle) 100%);
 }
 .agent-item.manager {
-  border-color: rgba(216, 180, 109, 0.5);
+  border-color: var(--attention-muted);
   box-shadow: 0 0 0 1px rgba(216, 180, 109, 0.15) inset;
 }
 .agent-line {
@@ -1990,8 +1990,8 @@ button.icon-btn.muted:hover {
   color: var(--accent-bright);
 }
 .badge.manager-badge {
-  background: rgba(216, 180, 109, 0.15);
-  color: #d8b46d;
+  background: var(--attention-subtle);
+  color: var(--attention-fg);
   border: 1px solid rgba(216, 180, 109, 0.35);
   letter-spacing: 0.3px;
 }
@@ -2011,18 +2011,18 @@ button.icon-btn.muted:hover {
 }
 .state[data-state='running'] {
   background: var(--success-muted);
-  color: #d2f4dc;
+  color: var(--success-fg);
 }
 .state[data-state='starting'] {
   background: var(--attention-muted);
-  color: #f4ecd2;
+  color: var(--attention-fg);
 }
 .state[data-state='error'] {
   background: var(--danger-deep);
-  color: #f4d2d2;
+  color: var(--danger-fg);
 }
 .state[data-state='exited'] {
-  background: #3a3a3a;
+  background: var(--bg-muted);
 }
 /* Override ViewPanel's absolute positioning when used inline in the sidebar */
 .agent-header-actions :deep(.view-panel) {

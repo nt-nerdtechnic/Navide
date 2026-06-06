@@ -235,6 +235,14 @@ function onResizeMove(e: MouseEvent): void {
   }
 }
 
+function refitAllTerminals(): void {
+  void nextTick(() => requestAnimationFrame(() => {
+    for (const ref of Object.values(paneRefs)) {
+      (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
+    }
+  }))
+}
+
 function onResizeEnd(): void {
   _dragTarget = null
   isDragging.value = false
@@ -242,6 +250,7 @@ function onResizeEnd(): void {
   document.body.style.cursor = ''
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
+  refitAllTerminals()
 }
 
 function makeStickyStr(key: string, fallback: string) {
@@ -4277,6 +4286,7 @@ function onGridHandleEnd(): void {
   document.body.style.userSelect = ''
   document.removeEventListener('mousemove', onGridHandleMove)
   document.removeEventListener('mouseup', onGridHandleEnd)
+  refitAllTerminals()
 }
 
 // Resolved focus pane: skips minimized panes, falls back to first visible

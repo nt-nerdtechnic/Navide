@@ -138,7 +138,7 @@ onMounted(() => {
   box-shadow: 0 0 0 2px #388bfd44;
 }
 .pane.pane-focus .pane-header {
-  background: #1a2332;
+  background: var(--bg-elevated);
 }
 .minimize-btn {
   position: absolute;
@@ -188,9 +188,9 @@ onMounted(() => {
   display: inline-block;
   font-size: 10px;
   font-weight: 600;
-  color: #d8b46d;
-  background: rgba(216, 180, 109, 0.12);
-  border: 1px solid rgba(216, 180, 109, 0.35);
+  color: var(--attention-fg);
+  background: var(--attention-subtle);
+  border: 1px solid var(--attention-muted);
   border-radius: 10px;
   padding: 1px 8px;
   letter-spacing: 0.3px;
@@ -210,23 +210,23 @@ onMounted(() => {
 }
 .status[data-status='running'] {
   background: var(--success-muted);
-  color: #d2f4dc;
+  color: var(--success-fg);
 }
 .status[data-status='starting'] {
   background: var(--attention-muted);
-  color: #f4ecd2;
+  color: var(--attention-fg);
 }
 .status[data-status='error'] {
   background: var(--danger-deep);
-  color: #f4d2d2;
+  color: var(--danger-fg);
 }
 .status[data-status='exited'] {
-  background: #3a3a3a;
+  background: var(--bg-muted);
   color: var(--text-primary);
 }
 .status[data-status='idle'] {
   background: var(--attention-muted);
-  color: #f4ecd2;
+  color: var(--attention-fg);
 }
 .xterm-host {
   flex: 1;
@@ -245,7 +245,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(56, 139, 253, 0.12);
+  background: var(--accent-subtle);
   color: var(--accent-bright);
   font-size: 13px;
   font-family: inherit;

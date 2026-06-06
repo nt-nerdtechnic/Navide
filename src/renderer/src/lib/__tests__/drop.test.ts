@@ -119,6 +119,41 @@ describe('extractDropPaths', () => {
     const f = new File([], '我的專案 v2')
     expect(extractDropPaths(makeEvent([f]))).toEqual(['/Users/test/我的專案 v2'])
   })
+
+  it('falls back to text/plain when no file sources (in-app drag)', () => {
+    const e = {
+      dataTransfer: {
+        items: { length: 0 } as unknown as DataTransferItemList,
+        files: makeFileList([]),
+        getData: (type: string) => type === 'text/plain' ? '/Users/test/in-app.ts' : '',
+      },
+    } as unknown as DragEvent
+    expect(extractDropPaths(e)).toEqual(['/Users/test/in-app.ts'])
+  })
+
+  it('text/plain fallback supports multiple paths separated by newline', () => {
+    const e = {
+      dataTransfer: {
+        items: { length: 0 } as unknown as DataTransferItemList,
+        files: makeFileList([]),
+        getData: (type: string) => type === 'text/plain' ? '/Users/a.ts\n/Users/b.ts' : '',
+      },
+    } as unknown as DragEvent
+    expect(extractDropPaths(e)).toEqual(['/Users/a.ts', '/Users/b.ts'])
+  })
+
+  it('native file sources take priority over text/plain', () => {
+    mockGetPath.mockReturnValue('/Users/test/native.ts')
+    const f = new File([], 'native.ts')
+    const e = {
+      dataTransfer: {
+        items: makeItemList([f]),
+        files: makeFileList([f]),
+        getData: (type: string) => type === 'text/plain' ? '/Users/test/should-be-ignored.ts' : '',
+      },
+    } as unknown as DragEvent
+    expect(extractDropPaths(e)).toEqual(['/Users/test/native.ts'])
+  })
 })
 
 // ── shellEscape ───────────────────────────────────────────────────────────────

@@ -5,14 +5,48 @@ import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 
-function readXtermTheme(): { background: string; foreground: string } {
-  const el = typeof document !== 'undefined' ? document.documentElement : null
-  if (!el) return { background: '#0d1117', foreground: '#e6edf3' }
-  const s = getComputedStyle(el)
-  return {
-    background: s.getPropertyValue('--bg-base').trim() || '#0d1117',
-    foreground: s.getPropertyValue('--text-bright').trim() || '#e6edf3',
-  }
+import type { ITheme } from '@xterm/xterm'
+
+// Per-app-theme xterm palettes. CSS vars can't be used directly because
+// getPropertyValue returns the raw `var(--gray-12)` token, not the resolved hex.
+// The light palette remaps ANSI white/brightWhite so TUI apps (designed for dark
+// terminals) stay readable on a light background.
+const XTERM_THEMES: Record<string, ITheme> = {
+  'dark-github': {
+    background: '#0d1117', foreground: '#e6edf3',
+    cursor: '#58a6ff', selectionBackground: 'rgba(56,139,253,0.35)',
+  },
+  'dark-midnight': {
+    background: '#0a0e14', foreground: '#c5d0e6',
+    cursor: '#6cb0ff', selectionBackground: 'rgba(56,139,253,0.3)',
+  },
+  'dark-forest': {
+    background: '#0c130d', foreground: '#e9f2e7',
+    cursor: '#6fc28a', selectionBackground: 'rgba(111,194,138,0.3)',
+  },
+  'light': {
+    background: '#ffffff', foreground: '#1f2328',
+    cursor: '#0969da', selectionBackground: 'rgba(9,105,218,0.2)',
+    black: '#1f2328',    brightBlack: '#59636e',
+    red: '#cf222e',      brightRed: '#a40e26',
+    green: '#1a7f37',    brightGreen: '#22863a',
+    yellow: '#9a6700',   brightYellow: '#7d4e00',
+    blue: '#0969da',     brightBlue: '#0550ae',
+    magenta: '#8250df',  brightMagenta: '#6639ba',
+    cyan: '#1b7c83',     brightCyan: '#3192aa',
+    white: '#d0d7de',    brightWhite: '#8c959f',  // NOT pure white — readable on light bg
+  },
+  'high-contrast': {
+    background: '#000000', foreground: '#ffffff',
+    cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
+  },
+}
+
+function readXtermTheme(): ITheme {
+  const id = typeof document !== 'undefined'
+    ? (document.documentElement.getAttribute('data-theme') ?? 'dark-github')
+    : 'dark-github'
+  return XTERM_THEMES[id] ?? XTERM_THEMES['dark-github']
 }
 
 export interface SpawnOptions {
@@ -95,6 +129,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let outputUnsub: (() => void) | null = null
   let exitUnsub: (() => void) | null = null
   let resizeObserver: ResizeObserver | null = null
+  let resizeRafId = 0
   let mounted = false
 
   function mount(el: HTMLElement): void {
@@ -189,18 +224,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       fit.fit()
     })
     resizeObserver = new ResizeObserver(() => {
-      try {
-        fit.fit()
-        if (sessionId.value) {
-          void backend.send('terminal.resize', {
-            terminal_session_id: sessionId.value,
-            cols: term.cols,
-            rows: term.rows
-          })
+      cancelAnimationFrame(resizeRafId)
+      resizeRafId = requestAnimationFrame(() => {
+        try {
+          fit.fit()
+          if (sessionId.value) {
+            void backend.send('terminal.resize', {
+              terminal_session_id: sessionId.value,
+              cols: term.cols,
+              rows: term.rows
+            })
+          }
+        } catch (err) {
+          // ignore transient fit errors during teardown
         }
-      } catch (err) {
-        // ignore transient fit errors during teardown
-      }
+      })
     })
     resizeObserver.observe(el)
     mounted = true
@@ -321,6 +359,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   onScopeDispose(() => {
     cleanupSession()
+    cancelAnimationFrame(resizeRafId)
     resizeObserver?.disconnect()
     term.dispose()
     if (sessionId.value) {
