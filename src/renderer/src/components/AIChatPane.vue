@@ -615,7 +615,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
   { id: '@git:log', label: '@git:log — recent commit history (last 20)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
-  { id: '@git:blame', label: '@git:blame — blame for current open file' },
+  { id: '@git:blame',   label: '@git:blame — blame for current open file' },
+  { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -2444,6 +2445,19 @@ async function selectAtOption(option: AtOption): Promise<void> {
       }
     } catch {
       chipContent = `// @git:blame: unavailable`
+    }
+  } else if (option.id === '@git:recent') {
+    chipLabel = '@git:recent'
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'git log --name-only --pretty=format: -5 2>&1 | grep -v "^$" | sort -u | head -20',
+        workspace_path: props.workspacePath,
+      })
+      const out = (resp.payload?.output ?? '').trim()
+      chipContent = out ? `// recently committed files (last 5 commits):\n${out}` : '// @git:recent: no recent commits'
+    } catch {
+      chipContent = '// @git:recent: unavailable'
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
