@@ -1182,6 +1182,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:commit', label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
+  { id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
@@ -3514,6 +3515,18 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @glob:pattern — match files by glob pattern (e.g. @glob:src/**/*.ts)
+  if (/^glob:?$/i.test(fragment)) {
+    atOptions.value = [{ id: '@glob:', label: '@glob:pattern — add files matching glob (e.g. @glob:src/**/*.ts)' }]
+    return
+  }
+  const isGlobQuery = /^glob:.+/i.test(fragment)
+  if (isGlobQuery) {
+    const globPattern = fragment.slice('glob:'.length)
+    atOptions.value = [{ id: `@glob:${globPattern}`, label: `@glob:${globPattern} — add matching files` }]
+    return
+  }
+
   // @file:lineRange — e.g., @App.vue:10-50 or @src/foo.ts:25
   const lineRangeMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(fragment)
   if (lineRangeMatch) {
@@ -4313,6 +4326,51 @@ ${out}`
       }
     } catch {
       chipContent = `// @folder:${folderPath}: unavailable`
+    }
+  } else if (option.id === '@glob:' || option.id.startsWith('@glob:')) {
+    // If bare @glob: (no pattern yet), rewrite input to @glob: and wait for user to type pattern
+    if (option.id === '@glob:') {
+      const newVal = val.slice(0, atIdx) + '@glob:' + val.slice(cur)
+      inputText.value = newVal
+      showAtMenu.value = false
+      await nextTick()
+      el.focus()
+      const pos = atIdx + '@glob:'.length
+      el.setSelectionRange(pos, pos)
+      return
+    }
+    const globPattern = option.id.slice('@glob:'.length).trim()
+    chipLabel = `@glob:${globPattern}`
+    try {
+      interface GlobResp { ok: boolean; files?: string[]; truncated?: boolean; error?: string }
+      const resp = await props.backend.send<GlobResp>('fs.glob_files', {
+        workspace_path: props.workspacePath,
+        pattern: globPattern,
+      })
+      if (!resp.payload?.ok) {
+        chipContent = `// @glob:${globPattern}: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const files = resp.payload?.files ?? []
+        if (files.length === 0) {
+          chipContent = `// @glob:${globPattern}: no files matched`
+        } else {
+          const MAX_FILES = 10
+          const taken = files.slice(0, MAX_FILES)
+          const results: string[] = []
+          for (const filePath of taken) {
+            try {
+              interface ReadResp { ok: boolean; content?: string }
+              const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
+              const ext = filePath.split('.').pop() ?? ''
+              results.push(`// ${filePath}\n\`\`\`${ext}\n${(fr.payload?.content ?? '').slice(0, 2000)}\n\`\`\``)
+            } catch { /* skip unreadable files */ }
+          }
+          const truncNote = resp.payload?.truncated || files.length > MAX_FILES ? ` (showing ${taken.length} of ${files.length}+)` : ` (${taken.length} file${taken.length !== 1 ? 's' : ''})`
+          chipContent = `// @glob:${globPattern}${truncNote}\n\n${results.join('\n\n')}`
+        }
+      }
+    } catch {
+      chipContent = `// @glob:${globPattern}: unavailable`
     }
   } else if (option.id === '@problems') {
     chipLabel = '@problems'

@@ -147,6 +147,42 @@ def list_files_flat(
     return {"ok": True, "files": results, "truncated": False}
 
 
+def glob_files(
+    workspace_path: str,
+    pattern: str,
+    max_results: int = 50,
+) -> dict[str, Any]:
+    """Return rel_paths matching *pattern* (glob) under the workspace root.
+
+    Noise directories are excluded. At most *max_results* files are returned.
+    """
+    root = Path(workspace_path).resolve()
+    if not root.is_dir():
+        return {"ok": False, "error": "workspace not found"}
+    if not pattern:
+        return {"ok": False, "error": "pattern required"}
+    _BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2",
+                   ".ttf", ".eot", ".mp4", ".mp3", ".zip", ".gz", ".tar", ".pdf",
+                   ".bin", ".lock", ".pyc"}
+    try:
+        matches: list[str] = []
+        for fp in sorted(root.glob(pattern)):
+            if not fp.is_file():
+                continue
+            # skip noise dirs inside the match
+            parts = fp.relative_to(root).parts
+            if any(p in _NOISE_SEGMENTS or p.startswith(".") for p in parts[:-1]):
+                continue
+            if fp.suffix.lower() in _BINARY_EXT:
+                continue
+            matches.append(str(fp.relative_to(root)))
+            if len(matches) >= max_results:
+                return {"ok": True, "files": matches, "truncated": True}
+        return {"ok": True, "files": matches, "truncated": False}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def mkdir(workspace_path: str, rel_path: str) -> dict[str, Any]:
     try:
         target = _resolve_safe(workspace_path, rel_path)
