@@ -1093,7 +1093,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
   { id: '/generate', label: '/generate', description: 'Generate a new file from description',          template: '' },
   { id: '/search',   label: '/search',   description: 'Search codebase for a symbol or string',        template: '' },
-  { id: '/fixtests', label: '/fixtests', description: 'Run tests, then auto-ask AI to fix failures',    template: '' },
+  { id: '/fixtests',     label: '/fixtests',     description: 'Run tests, then auto-ask AI to fix failures',       template: '' },
+  { id: '/save-summary', label: '/save-summary', description: 'Summarize key decisions & save to Notepad',             template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -3174,6 +3175,56 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
       contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: chipContent })
       showToast(`Found in ${results.length} file(s)`)
     } catch { showToast('/search: unavailable') }
+    return
+  }
+
+  if (cmd.id === '/save-summary') {
+    inputText.value = ''
+    const all = messages.value.filter((m) => !m.streaming && m.content.trim())
+    if (all.length < 2) { showToast('Nothing to summarize yet'); return }
+    const historyText = all.map((m) => `${m.role === 'user' ? 'You' : 'AI'}: ${m.content.slice(0, 400)}`).join('\n---\n')
+    const summaryPrompt = `Summarize this conversation into a concise "session notes" block (max 200 words). Focus on:
+- Key decisions made
+- Files modified or created
+- Technical solutions found
+- Open questions or next steps
+
+Format as a brief bullet list. This will be saved to the workspace Notepad for future AI context.
+
+Conversation:
+${historyText}`
+    // Ask AI to generate the summary, then append to notepad on done
+    const sessionId = crypto.randomUUID()
+    currentSessionId.value = sessionId
+    sending.value = true
+    streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
+    messages.value.push({ role: 'user', content: '[Saving session summary to Notepad…]', timestamp: Date.now() })
+    messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], timestamp: Date.now() })
+    // One-shot listener: when this session's done event fires, append summary to notepad
+    const unsubSave = props.backend.on('ai.chat.done', (payload) => {
+      const p = payload as { session_id: string }
+      if (p.session_id !== sessionId) return
+      unsubSave()
+      const last = messages.value[messages.value.length - 1]
+      if (!last?.content) return
+      const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      const newNote = `\n\n---\n### Session Notes (${dateStr})\n${last.content.trim()}`
+      notesContent.value = (notesContent.value || '').trimEnd() + newNote
+      saveNotes()
+      showToast('Session summary saved to Notepad ✓')
+    })
+    try {
+      await props.backend.send('ai.chat.start', {
+        session_id: sessionId,
+        messages: [{ role: 'user', content: summaryPrompt }],
+        workspace_path: props.workspacePath,
+      })
+    } catch {
+      unsubSave()
+      messages.value.splice(-2)
+      sending.value = false
+      showToast('Summary generation failed')
+    }
     return
   }
 
