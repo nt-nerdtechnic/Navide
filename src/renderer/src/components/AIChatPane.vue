@@ -485,6 +485,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
+  { id: '@url', label: '@url — fetch a web page as context' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1523,6 +1524,13 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  const isUrlFragment = /^url:https?:\/\//i.test(fragment)
+  if (isUrlFragment) {
+    const urlVal = fragment.slice('url:'.length).trim()
+    atOptions.value = [{ id: `@url:${urlVal}`, label: `@url: fetch "${urlVal.slice(0, 60)}"` }]
+    return
+  }
+
   const lower = fragment.toLowerCase()
   const filtered: AtOption[] = AT_OPTIONS_STATIC.filter(
     (o) => o.label.toLowerCase().includes(lower) || o.id.toLowerCase().includes(lower),
@@ -1782,6 +1790,35 @@ async function selectAtOption(option: AtOption): Promise<void> {
       } catch {
         chipContent = '// @problems: type check unavailable'
       }
+    }
+  } else if (option.id === '@url') {
+    // Prompt user to type URL by rewriting textarea
+    const newVal = val.slice(0, atIdx) + '@url:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@url:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@url:')) {
+    const url = option.id.slice('@url:'.length).trim()
+    chipLabel = `@url:${url.replace(/^https?:\/\//, '').slice(0, 40)}`
+    try {
+      showToast('Fetching URL…')
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+      const text = await resp.text()
+      // Strip HTML tags for cleaner context
+      const stripped = text
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
+        .slice(0, 4000)
+      chipContent = `// URL: ${url}\n${stripped}`
+    } catch {
+      chipContent = `// @url: failed to fetch ${url}`
     }
   } else {
     // It's a file path
