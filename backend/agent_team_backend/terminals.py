@@ -483,7 +483,7 @@ class TerminalService:
                 end = min(pos + _MAX_BYTES, len(encoded))
                 # Walk back to the start of a multi-byte sequence if we landed
                 # inside one (continuation bytes have the form 10xxxxxx).
-                while end > pos and (encoded[end] & 0xC0) == 0x80:
+                while end > pos and end < len(encoded) and (encoded[end] & 0xC0) == 0x80:
                     end -= 1
                 self._send_chunk(session, encoded[pos:end].decode("utf-8"))
                 pos = end
