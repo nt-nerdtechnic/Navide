@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import { useNotify } from './composables/useNotify'
 import { useKeybindings } from './keybindings/useKeybindings'
+import { useTheme } from './composables/useTheme'
 import NotificationHost from './components/NotificationHost.vue'
 import { useRoles, type Role } from './composables/useRoles'
 
@@ -10,6 +11,7 @@ const backend = useBackend()
 const rolesApi = useRoles(backend)
 const notify = useNotify()
 useKeybindings()
+useTheme().loadTheme()
 
 interface DraftRole {
   key: string
@@ -314,17 +316,13 @@ async function doReset(): Promise<void> {
   if (ok) selectKey(sorted.value[0]?.key ?? null)
 }
 
-const statusColor = computed(() => {
+const statusClass = computed(() => {
   switch (backend.status.value) {
-    case 'connected':
-      return '#3fb950'
+    case 'connected': return 'status-connected'
     case 'connecting':
-    case 'starting':
-      return '#d29922'
-    case 'disconnected':
-      return '#8b949e'
-    default:
-      return '#f85149'
+    case 'starting': return 'status-starting'
+    case 'disconnected': return 'status-disconnected'
+    default: return 'status-error'
   }
 })
 </script>
@@ -334,7 +332,7 @@ const statusColor = computed(() => {
     <header class="top">
       <div class="title">🎭 Role Manager</div>
       <div class="meta">
-        <span class="dot" :style="{ background: statusColor }"></span>
+        <span class="dot" :class="statusClass"></span>
         <span>backend {{ backend.status.value }}</span>
         <span v-if="rolesApi.path.value" class="path" :title="rolesApi.path.value">
           · {{ rolesApi.path.value }}
@@ -505,8 +503,8 @@ const statusColor = computed(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #010409;
-  color: #e6edf3;
+  background: var(--bg-inset);
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
   overflow: hidden;
@@ -516,8 +514,8 @@ const statusColor = computed(() => {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  background: #0d1117;
-  border-bottom: 1px solid #21262d;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-muted);
 }
 .title {
   font-size: 14px;
@@ -529,7 +527,7 @@ const statusColor = computed(() => {
   gap: 6px;
   margin-left: 8px;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .meta .path {
   font-family: Menlo, Monaco, monospace;
@@ -544,6 +542,10 @@ const statusColor = computed(() => {
   height: 8px;
   border-radius: 50%;
 }
+.dot.status-connected { background: var(--success-fg); }
+.dot.status-starting { background: var(--attention-fg); }
+.dot.status-disconnected { background: var(--text-secondary); }
+.dot.status-error { background: var(--danger-fg); }
 .body {
   flex: 1;
   display: grid;
@@ -553,8 +555,8 @@ const statusColor = computed(() => {
 .list {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #21262d;
-  background: #0d1117;
+  border-right: 1px solid var(--border-muted);
+  background: var(--bg-base);
   overflow-y: auto;
 }
 .new-btn {
@@ -567,14 +569,14 @@ const statusColor = computed(() => {
 }
 .list li {
   padding: 10px 14px;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--bg-subtle);
   cursor: pointer;
 }
 .list li:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .list li.active {
-  background: #1f3a5f;
+  background: var(--accent-subtle);
 }
 .list .row {
   display: flex;
@@ -584,11 +586,11 @@ const statusColor = computed(() => {
 .key {
   font-family: Menlo, Monaco, monospace;
   font-size: 10px;
-  color: #79c0ff;
+  color: var(--accent-bright);
 }
 .badge {
-  background: #21262d;
-  color: #8b949e;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
@@ -598,7 +600,7 @@ const statusColor = computed(() => {
   margin-top: 2px;
 }
 .list .one {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
   margin-top: 2px;
 }
@@ -612,7 +614,7 @@ const statusColor = computed(() => {
 .detail.empty {
   align-items: center;
   justify-content: center;
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .form-header {
   display: flex;
@@ -634,14 +636,14 @@ label {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 input[type='text'],
 textarea {
-  background: #161b22;
-  border: 1px solid #30363d;
-  color: #e6edf3;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-bright);
   padding: 8px 10px;
   border-radius: 4px;
   font-family: inherit;
@@ -658,7 +660,7 @@ textarea {
 input:focus,
 textarea:focus {
   outline: none;
-  border-color: #1f6feb;
+  border-color: var(--accent-emphasis);
 }
 input:disabled {
   opacity: 0.6;
@@ -675,9 +677,9 @@ input:disabled {
   gap: 4px;
 }
 button {
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #e6edf3;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-bright);
   font-size: 12px;
   padding: 7px 14px;
   border-radius: 4px;
@@ -688,27 +690,27 @@ button:disabled {
   cursor: not-allowed;
 }
 button.primary {
-  background: #238636;
-  border-color: #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border-color: var(--success-strong);
+  color: var(--text-on-emphasis);
   font-weight: 600;
 }
 button.primary:not(:disabled):hover {
-  background: #2ea043;
+  background: var(--success-strong);
 }
 button.danger {
-  background: #6f1f1f;
-  border-color: #8a2929;
-  color: #f4d2d2;
+  background: var(--danger-deep);
+  border-color: var(--danger-muted);
+  color: var(--text-on-emphasis);
 }
 button.danger:hover {
-  background: #8a2929;
+  background: var(--danger-muted);
 }
 button.ghost {
   background: transparent;
 }
 button.ghost:hover:not(:disabled) {
-  background: #21262d;
+  background: var(--bg-muted);
 }
 .toolbar {
   margin-left: auto;
@@ -721,30 +723,30 @@ button.ghost:hover:not(:disabled) {
   padding: 5px 10px;
 }
 .danger-link {
-  color: #f85149;
+  color: var(--danger-fg);
 }
 .hint {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
   margin: 4px 0 0;
 }
 .warn {
-  color: #d29922;
+  color: var(--attention-fg);
   font-size: 11px;
   margin: 4px 0 0;
 }
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
 }
 .modal-card {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 20px 22px;
   max-width: 460px;
@@ -756,7 +758,7 @@ button.ghost:hover:not(:disabled) {
   margin: -6px 0 12px;
   font-family: Menlo, Monaco, monospace;
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   word-break: break-all;
 }
 .import-stats {
@@ -780,26 +782,26 @@ button.ghost:hover:not(:disabled) {
   margin-right: 6px;
 }
 .tag.new {
-  background: #1f6f43;
-  color: #d2f4dc;
+  background: var(--success-muted);
+  color: var(--success-bright);
 }
 .tag.overwrite {
-  background: #6f5b1f;
-  color: #f4ecd2;
+  background: var(--attention-muted);
+  color: var(--attention-bright);
 }
 .import-detail {
   margin-bottom: 8px;
   font-size: 11px;
-  color: #c9d1d9;
+  color: var(--text-primary);
 }
 .import-detail summary {
   cursor: pointer;
-  color: #58a6ff;
+  color: var(--accent-fg);
   margin-bottom: 4px;
 }
 .import-detail code {
   display: block;
-  background: #010409;
+  background: var(--bg-inset);
   padding: 6px 8px;
   border-radius: 3px;
   font-size: 10px;
@@ -818,13 +820,13 @@ button.ghost:hover:not(:disabled) {
   width: 14px;
   height: 14px;
   margin-top: 2px;
-  accent-color: #d29922;
+  accent-color: var(--attention-fg);
 }
 .checkbox-row strong {
-  color: #d29922;
+  color: var(--attention-fg);
 }
 .muted {
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 11px;
 }
 .modal-card h3 {
@@ -833,7 +835,7 @@ button.ghost:hover:not(:disabled) {
 }
 .modal-card p {
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   margin: 0 0 14px;
   line-height: 1.6;
 }

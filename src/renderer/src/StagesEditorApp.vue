@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useBackend } from './composables/useBackend'
 import { useNotify } from './composables/useNotify'
 import { useKeybindings } from './keybindings/useKeybindings'
+import { useTheme } from './composables/useTheme'
 import NotificationHost from './components/NotificationHost.vue'
 import { useStages } from './composables/useStages'
 import { stageToBackend, type AgentKey, type Stage, type StageSlot } from './data/stages'
@@ -11,6 +12,7 @@ const backend = useBackend()
 const stagesApi = useStages(backend)
 const notify = useNotify()
 useKeybindings()
+useTheme().loadTheme()
 
 const AGENT_OPTIONS: { key: AgentKey; label: string }[] = [
   { key: 'claude', label: 'Claude Code' },
@@ -263,13 +265,13 @@ async function importStages(): Promise<void> {
 
 // ── Status dot ─────────────────────────────────────────────────────────────
 
-const statusColor = computed(() => {
+const statusClass = computed(() => {
   switch (backend.status.value) {
-    case 'connected': return '#3fb950'
+    case 'connected': return 'status-connected'
     case 'connecting':
-    case 'starting': return '#d29922'
-    case 'disconnected': return '#8b949e'
-    default: return '#f85149'
+    case 'starting': return 'status-starting'
+    case 'disconnected': return 'status-disconnected'
+    default: return 'status-error'
   }
 })
 </script>
@@ -279,7 +281,7 @@ const statusColor = computed(() => {
     <header class="top">
       <div class="title">⚙ Stage Manager</div>
       <div class="meta">
-        <span class="dot" :style="{ background: statusColor }"></span>
+        <span class="dot" :class="statusClass"></span>
         <span>backend {{ backend.status.value }}</span>
         <span v-if="stagesApi.stagesPath.value" class="path" :title="stagesApi.stagesPath.value">
           · {{ stagesApi.stagesPath.value }}
@@ -455,8 +457,8 @@ const statusColor = computed(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #010409;
-  color: #e6edf3;
+  background: var(--bg-inset);
+  color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 13px;
   overflow: hidden;
@@ -466,8 +468,8 @@ const statusColor = computed(() => {
   align-items: center;
   gap: 12px;
   padding: 10px 16px;
-  background: #0d1117;
-  border-bottom: 1px solid #21262d;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0;
 }
 .title {
@@ -480,7 +482,7 @@ const statusColor = computed(() => {
   gap: 6px;
   margin-left: 8px;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 .meta .path {
   font-family: Menlo, Monaco, monospace;
@@ -495,6 +497,10 @@ const statusColor = computed(() => {
   height: 8px;
   border-radius: 50%;
 }
+.dot.status-connected { background: var(--success-fg); }
+.dot.status-starting { background: var(--attention-fg); }
+.dot.status-disconnected { background: var(--text-secondary); }
+.dot.status-error { background: var(--danger-fg); }
 .toolbar {
   margin-left: auto;
   display: flex;
@@ -514,8 +520,8 @@ const statusColor = computed(() => {
 .list {
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #21262d;
-  background: #0d1117;
+  border-right: 1px solid var(--border-muted);
+  background: var(--bg-base);
   overflow-y: auto;
 }
 .new-btn {
@@ -529,14 +535,14 @@ const statusColor = computed(() => {
 }
 .list li {
   padding: 8px 12px;
-  border-bottom: 1px solid #161b22;
+  border-bottom: 1px solid var(--bg-subtle);
   cursor: pointer;
 }
 .list li:hover {
-  background: #161b22;
+  background: var(--bg-subtle);
 }
 .list li.active {
-  background: #1f3a5f;
+  background: var(--accent-subtle);
 }
 .stage-row {
   display: flex;
@@ -545,7 +551,7 @@ const statusColor = computed(() => {
 }
 .stage-num {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   width: 16px;
   text-align: right;
   flex-shrink: 0;
@@ -566,22 +572,22 @@ const statusColor = computed(() => {
 .icon-btn {
   border: none;
   background: transparent;
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
   padding: 2px 4px;
   cursor: pointer;
   border-radius: 3px;
 }
 .icon-btn:hover:not(:disabled) {
-  background: #21262d;
-  color: #e6edf3;
+  background: var(--bg-muted);
+  color: var(--text-bright);
 }
 .icon-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
 }
 .danger-icon {
-  color: #f85149;
+  color: var(--danger-fg);
 }
 .stage-pills {
   display: flex;
@@ -596,12 +602,12 @@ const statusColor = computed(() => {
   border-radius: 3px;
 }
 .pill.agent {
-  background: #21262d;
-  color: #8b949e;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
 }
 .pill.role {
-  background: #1f3a5f;
-  color: #79c0ff;
+  background: var(--accent-subtle);
+  color: var(--accent-bright);
 }
 .detail {
   padding: 16px 20px;
@@ -613,7 +619,7 @@ const statusColor = computed(() => {
 .detail.empty {
   align-items: center;
   justify-content: center;
-  color: #6e7681;
+  color: var(--text-muted);
 }
 .form-header {
   display: flex;
@@ -635,7 +641,7 @@ label {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-top: 4px;
   display: block;
 }
@@ -644,14 +650,14 @@ label {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 input[type='text'],
 select,
 textarea {
-  background: #161b22;
-  border: 1px solid #30363d;
-  color: #e6edf3;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-bright);
   padding: 8px 10px;
   border-radius: 4px;
   font-family: inherit;
@@ -672,7 +678,7 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: #1f6feb;
+  border-color: var(--accent-emphasis);
 }
 input:disabled {
   opacity: 0.6;
@@ -696,16 +702,16 @@ input:disabled {
 .checkbox-row input[type='checkbox'] {
   width: 14px;
   height: 14px;
-  accent-color: #d29922;
+  accent-color: var(--attention-fg);
 }
 .muted {
-  color: #6e7681;
+  color: var(--text-muted);
   font-size: 11px;
 }
 button {
-  border: 1px solid #30363d;
-  background: #21262d;
-  color: #e6edf3;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-bright);
   font-size: 12px;
   padding: 7px 14px;
   border-radius: 4px;
@@ -716,48 +722,48 @@ button:disabled {
   cursor: not-allowed;
 }
 button.primary {
-  background: #238636;
-  border-color: #2ea043;
-  color: #fff;
+  background: var(--success-emphasis);
+  border-color: var(--success-strong);
+  color: var(--text-on-emphasis);
   font-weight: 600;
 }
 button.primary:not(:disabled):hover {
-  background: #2ea043;
+  background: var(--success-strong);
 }
 button.danger {
-  background: #6f1f1f;
-  border-color: #8a2929;
-  color: #f4d2d2;
+  background: var(--danger-deep);
+  border-color: var(--danger-muted);
+  color: var(--text-on-emphasis);
 }
 button.danger:hover {
-  background: #8a2929;
+  background: var(--danger-muted);
 }
 button.ghost {
   background: transparent;
 }
 button.ghost:hover:not(:disabled) {
-  background: #21262d;
+  background: var(--bg-muted);
 }
 button.small {
   font-size: 11px;
   padding: 4px 10px;
 }
 .danger-link {
-  color: #f85149;
+  color: var(--danger-fg);
 }
 .hint {
-  color: #8b949e;
+  color: var(--text-secondary);
   font-size: 11px;
   margin: 0;
 }
 .warn {
-  color: #d29922;
+  color: var(--attention-fg);
   font-size: 11px;
   margin: 4px 0 0;
 }
 .slots-section {
   margin-top: 8px;
-  border: 1px solid #21262d;
+  border: 1px solid var(--border-muted);
   border-radius: 6px;
   padding: 10px 12px;
   display: flex;
@@ -775,8 +781,8 @@ button.small {
   gap: 6px;
 }
 .slot-card {
-  background: #161b22;
-  border: 1px solid #21262d;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
   border-radius: 4px;
   padding: 8px 10px;
 }
@@ -789,16 +795,16 @@ button.small {
 .slot-body {
   font-family: Menlo, Monaco, monospace;
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin: 0;
   white-space: pre-wrap;
   word-break: break-all;
 }
 .slot-form {
-  border: 1px solid #30363d;
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   padding: 10px;
-  background: #0d1117;
+  background: var(--bg-base);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -814,15 +820,15 @@ button.small {
 .modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--shadow-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
 }
 .modal-card {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
   padding: 20px 22px;
   max-width: 460px;
@@ -833,7 +839,7 @@ button.small {
 }
 .modal-card p {
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   margin: 0 0 14px;
   line-height: 1.6;
 }
