@@ -3454,14 +3454,18 @@ async function selectAtOption(option: AtOption): Promise<void> {
       try {
         showToast(`Searching web for "${query}"…`)
         interface WebSearchResult { title: string; snippet: string; url: string }
-        interface WebSearchResp { ok: boolean; query?: string; results?: WebSearchResult[] }
+        interface WebSearchResp { query?: string; results?: WebSearchResult[] }
         const resp = await props.backend.send<WebSearchResp>('ai.web.search', { query })
-        const results = resp.payload?.results ?? []
-        if (!results.length) {
-          chipContent = `// @web:"${query}" — no results found`
+        if (!resp.ok) {
+          chipContent = `// @web: search error — ${resp.error?.message ?? 'unknown error'}`
         } else {
-          const lines = results.map((r) => `• ${r.title}\n  ${r.snippet.slice(0, 200).replace(/\n/g, ' ')}\n  ${r.url}`)
-          chipContent = `// Web search: "${query}"\n\n${lines.join('\n\n')}`
+          const results = resp.payload?.results ?? []
+          if (!results.length) {
+            chipContent = `// @web:"${query}" — no results found`
+          } else {
+            const lines = results.map((r) => `• ${r.title}\n  ${r.snippet.slice(0, 200).replace(/\n/g, ' ')}\n  ${r.url}`)
+            chipContent = `// Web search: "${query}"\n\n${lines.join('\n\n')}`
+          }
         }
       } catch {
         chipContent = `// @web: search failed for "${query}"`
