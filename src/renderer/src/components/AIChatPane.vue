@@ -3570,6 +3570,7 @@ function getDateLabel(ts: number): string {
 .ai-settings-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
 .ai-settings-row { display: flex; flex-direction: column; gap: 4px; }
 .ai-settings-label { font-size: 11px; color: var(--text-muted); }
+.ai-toggle-label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-bright); cursor: pointer; }
 .ai-settings-radios {
   display: flex;
   gap: 12px;
