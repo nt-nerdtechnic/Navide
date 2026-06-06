@@ -472,6 +472,7 @@ interface ContextChip {
   label: string
   content: string
   imageData?: string // base64 data URL for pasted images (e.g. data:image/png;base64,...)
+  pinned?: boolean   // pinned chips survive message sends — always included in context
 }
 const contextChips = ref<ContextChip[]>([])
 const previewChipId = ref<string | null>(null)
@@ -495,6 +496,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@url', label: '@url — fetch a web page as context' },
   { id: '@clipboard', label: '@clipboard — paste clipboard content' },
   { id: '@tree', label: '@tree — workspace file tree structure' },
+  { id: '@symbol', label: '@symbol — find a function or class definition' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1176,7 +1178,8 @@ async function sendMessage(): Promise<void> {
     const firstLine = (stripped || rawText).split('\n')[0].trim()
     curThread.title = firstLine.slice(0, 50) + (firstLine.length > 50 ? '…' : '')
   }
-  contextChips.value = []
+  // Keep pinned chips across sends; clear the rest
+  contextChips.value = contextChips.value.filter((c) => c.pinned)
   if (rawText) {
     inputHistory.push(rawText)
     if (inputHistory.length > 50) inputHistory.shift()
@@ -1699,6 +1702,18 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @symbol:functionName — find a symbol definition across the codebase
+  const isSymbolQuery = /^symbol:/i.test(fragment)
+  if (isSymbolQuery) {
+    const symbolName = fragment.slice('symbol:'.length).trim()
+    if (symbolName.length >= 1) {
+      atOptions.value = [{ id: `@symbol:${symbolName}`, label: `@symbol: search for "${symbolName}"` }]
+    } else {
+      atOptions.value = [{ id: '@symbol', label: '@symbol — type a function or class name' }]
+    }
+    return
+  }
+
   // @file:lineRange — e.g., @App.vue:10-50 or @src/foo.ts:25
   const lineRangeMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(fragment)
   if (lineRangeMatch) {
@@ -2108,6 +2123,70 @@ async function selectAtOption(option: AtOption): Promise<void> {
         chipContent = `// Workspace file tree:\n${tree}`
       } catch {
         chipContent = '// @tree: unavailable'
+      }
+    }
+  } else if (option.id === '@symbol') {
+    // Prompt user to type symbol name
+    const newVal = val.slice(0, atIdx) + '@symbol:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    const pos = atIdx + '@symbol:'.length
+    el.setSelectionRange(pos, pos)
+    return
+  } else if (option.id.startsWith('@symbol:')) {
+    const symbolName = option.id.slice('@symbol:'.length).trim()
+    chipLabel = `@symbol:${symbolName}`
+    if (!props.workspacePath) {
+      chipContent = '// @symbol: no workspace open'
+    } else {
+      try {
+        showToast(`Searching for "${symbolName}"…`)
+        interface SearchMatch { line: number; col: number; text: string }
+        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        // Search for function/class/const definitions containing the symbol name
+        const resp = await props.backend.send<SearchResp>('search.find_in_files', {
+          workspace_path: props.workspacePath,
+          query: symbolName,
+          is_regex: false,
+          case_sensitive: true,
+          max_results: 20,
+        })
+        const results = resp.payload?.results ?? []
+        // Filter to definition-looking lines (function/class/const/type/export)
+        const DEF_RE = /^\s*(export\s+)?(default\s+)?(function|class|const|let|var|type|interface|def|async\s+function)\s/
+        const defs: Array<{ path: string; line: number; text: string }> = []
+        for (const r of results) {
+          for (const m of r.matches) {
+            if (DEF_RE.test(m.text) || m.text.includes(`${symbolName}(`)) {
+              defs.push({ path: r.rel_path, line: m.line, text: m.text.trim() })
+            }
+          }
+        }
+        if (defs.length === 0) {
+          chipContent = `// @symbol:${symbolName}: no definition found\n// (tried: function/class/const patterns)\n// Raw matches: ${results.length} files`
+        } else {
+          // For each definition, read context (10 lines around it)
+          const parts: string[] = []
+          for (const d of defs.slice(0, 4)) {
+            try {
+              interface ReadResp { ok: boolean; content?: string }
+              const fr = await props.backend.send<ReadResp>('fs.read_file', {
+                workspace_path: props.workspacePath,
+                rel_path: d.path,
+              })
+              const allLines = (fr.payload?.content ?? '').split('\n')
+              const start = Math.max(0, d.line - 2)
+              const end = Math.min(allLines.length, d.line + 20)
+              const ext = d.path.split('.').pop() ?? ''
+              parts.push(`// ${d.path}:${d.line}\n\`\`\`${ext}\n${allLines.slice(start, end).join('\n')}\n\`\`\``)
+            } catch { parts.push(`// ${d.path}:${d.line}\n${d.text}`) }
+          }
+          chipContent = `// @symbol:${symbolName} — ${defs.length} definition(s)\n\n${parts.join('\n\n')}`
+        }
+      } catch {
+        chipContent = `// @symbol:${symbolName}: unavailable`
       }
     }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
@@ -2676,12 +2755,13 @@ function getDateLabel(ts: number): string {
           v-for="chip in contextChips"
           :key="chip.id"
           class="ai-chip"
-          :class="{ 'ai-chip-active': previewChipId === chip.id, 'ai-chip-image': !!chip.imageData }"
+          :class="{ 'ai-chip-active': previewChipId === chip.id, 'ai-chip-image': !!chip.imageData, 'ai-chip-pinned': chip.pinned }"
           @click.stop="previewChipId = previewChipId === chip.id ? null : chip.id"
         >
           <img v-if="chip.imageData" :src="chip.imageData" class="ai-chip-thumb" alt="pasted image" />
           {{ chip.label }}
           <span v-if="!chip.imageData" class="ai-chip-tokens">~{{ Math.ceil(chip.content.length / 4) > 999 ? (Math.ceil(chip.content.length / 4000)).toFixed(0) + 'k' : Math.ceil(chip.content.length / 4) }}t</span>
+          <button class="ai-chip-pin" :title="chip.pinned ? 'Unpin context' : 'Pin — keep in future messages'" @click.stop="chip.pinned = !chip.pinned">{{ chip.pinned ? '📌' : '·' }}</button>
           <button class="ai-chip-remove" @click.stop="removeChip(chip.id)">×</button>
         </span>
         <!-- Chip preview popover -->
@@ -3753,6 +3833,9 @@ function getDateLabel(ts: number): string {
 .ai-chip-image { padding: 2px 6px 2px 3px; }
 .ai-chip-thumb { width: 22px; height: 16px; object-fit: cover; border-radius: 3px; vertical-align: middle; flex-shrink: 0; }
 .ai-chip-popover-img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 8px auto; }
+.ai-chip-pinned { outline: 1.5px solid rgba(255,255,255,0.6); }
+.ai-chip-pin { border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; font-size: 11px; line-height: 1; opacity: 0.6; }
+.ai-chip-pin:hover { opacity: 1; }
 
 .ai-chip-popover {
   position: absolute;
