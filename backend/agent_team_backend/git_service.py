@@ -1323,10 +1323,28 @@ async def stage_all(workspace_path: str) -> dict[str, Any]:
 async def _run_with_timeout(
     args: list[str], cwd: str, timeout: float = 30.0
 ) -> tuple[int, str, str]:
+    proc: asyncio.subprocess.Process | None = None
     try:
-        return await asyncio.wait_for(_run(args, cwd), timeout=timeout)
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
     except asyncio.TimeoutError:
         return 1, "", f"timed out after {int(timeout)}s"
+    except FileNotFoundError:
+        return 128, "", "git executable not found"
+    except Exception as exc:
+        return 128, "", str(exc)
+    finally:
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 async def check_staged(workspace_path: str) -> dict[str, Any]:
