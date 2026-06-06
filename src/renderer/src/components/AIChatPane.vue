@@ -149,18 +149,32 @@ function saveNotes(): void {
   }
 }
 
-// ── Rotating input placeholder ────────────────────────────────────────────────
-const PLACEHOLDER_HINTS = [
+// ── Rotating input placeholder (mode-aware) ───────────────────────────────────
+const PLACEHOLDER_HINTS_ASK = [
   'Ask anything… (Enter to send, Shift+Enter for new line)',
   'Type @ to add context: @file, @git, @terminal, @symbol…',
   'Try /explain, /fix, /tests, /review, /compact…',
   'Ctrl+L to focus · Ctrl+F to search · Ctrl+N for new chat',
   'Paste an image to include it as context',
-  'Drag a file here to add it as context',
   '@file:10-50 to include specific line ranges',
 ]
+const PLACEHOLDER_HINTS_EDIT = [
+  'Describe the change — AI will edit the working set files',
+  'Add files to the working set, then describe what to change',
+  'Try: "Extract this function into a helper" or "Add error handling"',
+]
+const PLACEHOLDER_HINTS_AGENT = [
+  'Describe a task — Agent will use tools to complete it',
+  'Try: "Run tests and fix any failures" or "Refactor this module"',
+  'Agent can read files, run commands, and apply changes automatically',
+]
 const placeholderIdx = ref(0)
-const inputPlaceholder = computed(() => PLACEHOLDER_HINTS[placeholderIdx.value])
+const inputPlaceholder = computed(() => {
+  const hints = chatMode.value === 'edit' ? PLACEHOLDER_HINTS_EDIT
+    : chatMode.value === 'agent' ? PLACEHOLDER_HINTS_AGENT
+    : PLACEHOLDER_HINTS_ASK
+  return hints[placeholderIdx.value % hints.length]
+})
 let placeholderInterval: number | null = null
 
 // ── Apply-code diff preview modal ────────────────────────────────────────────
