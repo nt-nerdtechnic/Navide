@@ -1784,19 +1784,32 @@ async function sendMessage(): Promise<void> {
   if (rawText === '/test' || rawText.startsWith('/test ')) {
     if (!props.workspacePath) { showToast('/test requires an open workspace'); return }
     const extra = rawText.slice('/test'.length).trim()
-    // Detect test runner: vitest if vitest.config exists, else npm test
+    // Auto-detect test runner: vitest > pytest > npm test
     let testCmd = 'npm test -- --no-coverage 2>&1 | tail -80'
     try {
-      const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
-        workspace_path: props.workspacePath, rel_path: 'package.json',
-      })
-      const pkg = JSON.parse(hasPkg.payload?.content ?? '{}') as Record<string, unknown>
-      const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
-      const deps = (pkg.dependencies ?? {}) as Record<string, string>
-      if ('vitest' in devDeps || 'vitest' in deps) {
-        testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
-      } else if (extra) {
-        testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+      // Check for Python test runner first (pytest)
+      const hasPytest = await props.backend.send<{ok:boolean}>('fs.read_file', {
+        workspace_path: props.workspacePath, rel_path: 'pytest.ini',
+      }).catch(() => ({ payload: { ok: false } }))
+      const hasPyproject = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
+        workspace_path: props.workspacePath, rel_path: 'pyproject.toml',
+      }).catch(() => ({ payload: { ok: false, content: '' } }))
+      const isPytest = hasPytest.payload?.ok ||
+        (hasPyproject.payload?.ok && hasPyproject.payload.content?.includes('[tool.pytest'))
+      if (isPytest) {
+        testCmd = `python3 -m pytest ${extra} -q --tb=short 2>&1 | tail -100`
+      } else {
+        const hasPkg = await props.backend.send<{ok:boolean;content?:string}>('fs.read_file', {
+          workspace_path: props.workspacePath, rel_path: 'package.json',
+        })
+        const pkg = JSON.parse(hasPkg.payload?.content ?? '{}') as Record<string, unknown>
+        const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
+        const deps = (pkg.dependencies ?? {}) as Record<string, string>
+        if ('vitest' in devDeps || 'vitest' in deps) {
+          testCmd = `npx vitest run ${extra} 2>&1 | tail -100`
+        } else if (extra) {
+          testCmd = `npm test -- ${extra} 2>&1 | tail -100`
+        }
       }
     } catch { /* keep default */ }
     inputText.value = ''
