@@ -131,6 +131,46 @@ let historyIdx = -1
 let historySavedDraft = ''  // input text saved before first ArrowUp
 const sending = ref(false)
 const currentSessionId = ref<string | null>(null)
+
+// ── Voice input (Web Speech API) ───────────────────────────────────────────────
+const voiceListening = ref(false)
+let _speechRecognition: SpeechRecognition | null = null
+const voiceSupported = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+
+function toggleVoiceInput(): void {
+  if (!voiceSupported) { showToast('Voice input not supported in this environment'); return }
+  if (voiceListening.value) {
+    _speechRecognition?.stop()
+    voiceListening.value = false
+    return
+  }
+  const SpeechRecognitionCtor = (window.SpeechRecognition ?? (window as unknown as Record<string, unknown>)['webkitSpeechRecognition']) as typeof SpeechRecognition
+  _speechRecognition = new SpeechRecognitionCtor()
+  _speechRecognition.continuous = false
+  _speechRecognition.interimResults = true
+  _speechRecognition.lang = navigator.language || 'en-US'
+  let interimText = ''
+  _speechRecognition.onresult = (e: SpeechRecognitionEvent) => {
+    let interim = '', final = ''
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript
+      if (e.results[i].isFinal) final += t
+      else interim += t
+    }
+    if (final) {
+      inputText.value = inputText.value.slice(0, inputText.value.length - interimText.length) + final + ' '
+      interimText = ''
+    } else {
+      inputText.value = inputText.value.slice(0, inputText.value.length - interimText.length) + interim
+      interimText = interim
+    }
+  }
+  _speechRecognition.onend = () => { voiceListening.value = false; interimText = '' }
+  _speechRecognition.onerror = () => { voiceListening.value = false; interimText = '' }
+  _speechRecognition.start()
+  voiceListening.value = true
+  nextTick(() => textareaEl.value?.focus())
+}
 const messagesEl = ref<HTMLElement | null>(null)
 const textareaEl = ref<HTMLTextAreaElement | null>(null)
 const showSettings = ref(false)
@@ -2574,6 +2614,7 @@ onUnmounted(() => {
   if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
   if (toastTimer !== null) clearTimeout(toastTimer)
   if (saveTimer !== null) clearTimeout(saveTimer)
+  if (_speechRecognition) { _speechRecognition.stop(); _speechRecognition = null }
 })
 
 // ── @context system ────────────────────────────────────────────────────────────
@@ -4359,6 +4400,18 @@ function getDateLabel(ts: number): string {
           </span>
         </div>
         <div class="ai-input-btns">
+          <!-- Voice input button (Web Speech API) -->
+          <button
+            v-if="voiceSupported && !sending"
+            class="ai-voice-btn"
+            :class="{ 'ai-voice-active': voiceListening }"
+            :title="voiceListening ? 'Stop listening' : 'Voice input'"
+            @click="toggleVoiceInput"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 10a3 3 0 0 0 3-3V4a3 3 0 0 0-6 0v3a3 3 0 0 0 3 3Zm5-3a.75.75 0 0 0-1.5 0A3.5 3.5 0 0 1 8 10.5a3.5 3.5 0 0 1-3.5-3.5.75.75 0 0 0-1.5 0A5 5 0 0 0 7.25 11.9V14H6a.75.75 0 0 0 0 1.5h4A.75.75 0 0 0 10 14H8.75v-2.1A5 5 0 0 0 13 7Z"/>
+            </svg>
+          </button>
           <button
             v-if="!sending"
             class="ai-send-btn"
@@ -5878,6 +5931,20 @@ function getDateLabel(ts: number): string {
   gap: 4px;
   flex-shrink: 0;
 }
+.ai-voice-btn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+.ai-voice-btn:hover { background: var(--bg-hover); color: var(--text-bright); }
+.ai-voice-active { background: rgba(220,38,38,0.15) !important; color: #ef4444 !important; border-color: #ef4444 !important; animation: ai-voice-pulse 1.2s infinite; }
+@keyframes ai-voice-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 .ai-send-btn, .ai-stop-btn, .ai-settings-btn {
   width: 30px;
   height: 30px;
