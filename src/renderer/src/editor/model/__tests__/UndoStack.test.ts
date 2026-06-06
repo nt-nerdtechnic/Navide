@@ -170,6 +170,60 @@ describe('UndoStack redo invalidation', () => {
   })
 })
 
+describe('UndoStack pushBatch (multi-cursor)', () => {
+  it('undoes all ops in a batch as a single unit', () => {
+    const m = new TextModel('abc\ndef\nghi')
+    const s = new UndoStack()
+
+    // Simulate multi-cursor: insert 'X' at line 2 col 0, then line 0 col 0 (bottom-to-top)
+    const op2: EditOperation = { range: { start: { line: 2, col: 0 }, end: { line: 2, col: 0 } }, text: 'X' }
+    const { inverse: inv2 } = m.applyEdit(op2) // 'abc\ndef\nXghi'
+    const op0: EditOperation = { range: { start: { line: 0, col: 0 }, end: { line: 0, col: 0 } }, text: 'X' }
+    const { inverse: inv0 } = m.applyEdit(op0) // 'Xabc\ndef\nXghi'
+
+    s.pushBatch([{ forward: op2, inverse: inv2 }, { forward: op0, inverse: inv0 }])
+
+    expect(m.getValue()).toBe('Xabc\ndef\nXghi')
+    s.undo(m)
+    expect(m.getValue()).toBe('abc\ndef\nghi') // both ops reverted in one undo
+    expect(s.canUndo()).toBe(false)
+  })
+
+  it('redoes a batch correctly', () => {
+    const m = new TextModel('abc\ndef')
+    const s = new UndoStack()
+
+    const op1: EditOperation = { range: { start: { line: 1, col: 0 }, end: { line: 1, col: 0 } }, text: 'X' }
+    const { inverse: inv1 } = m.applyEdit(op1)
+    const op0: EditOperation = { range: { start: { line: 0, col: 0 }, end: { line: 0, col: 0 } }, text: 'X' }
+    const { inverse: inv0 } = m.applyEdit(op0)
+
+    s.pushBatch([{ forward: op1, inverse: inv1 }, { forward: op0, inverse: inv0 }])
+    s.undo(m)
+    expect(m.getValue()).toBe('abc\ndef')
+    s.redo(m)
+    expect(m.getValue()).toBe('Xabc\nXdef')
+  })
+
+  it('does not merge a batch with adjacent single-char pushes', () => {
+    const m = new TextModel('ab')
+    let t = 0
+    const s = new UndoStack(() => (t += 10)) // within merge window
+
+    typeChar(m, s, { line: 0, col: 0 }, 'X') // single push
+    const op: EditOperation = { range: { start: { line: 0, col: 2 }, end: { line: 0, col: 2 } }, text: 'Y' }
+    const { inverse } = m.applyEdit(op)
+    s.pushBatch([{ forward: op, inverse }])
+
+    // undo batch first
+    s.undo(m)
+    expect(m.getValue()).toBe('Xab')
+    // then undo single char
+    s.undo(m)
+    expect(m.getValue()).toBe('ab')
+  })
+})
+
 describe('UndoStack MAX_ENTRIES cap', () => {
   it('caps undo stack at 500 entries when pushing distinct edits', () => {
     const m = new TextModel('')
