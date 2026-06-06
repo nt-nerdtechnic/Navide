@@ -490,6 +490,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
   { id: '@git:log', label: '@git:log — recent commit history (last 20)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
+  { id: '@git:blame', label: '@git:blame — blame for current open file' },
   { id: '@codebase', label: '@codebase — search workspace code' },
   { id: '@folder', label: '@folder — all files in a directory' },
   { id: '@problems', label: '@problems — TypeScript & lint errors' },
@@ -2001,6 +2002,35 @@ async function selectAtOption(option: AtOption): Promise<void> {
         : '// git branch: no info'
     } catch {
       chipContent = '// @git:branch: unavailable'
+    }
+  } else if (option.id === '@git:blame') {
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) {
+      showToast('@git:blame requires an open file'); return
+    }
+    chipLabel = `@git:blame(${relPath.split('/').pop()})`
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      showToast('Running git blame…')
+      const blameResp = await props.backend.send<ShellResp>('shell.run', {
+        command: `git blame --line-porcelain "${relPath}" 2>&1 | grep -E "^(author |author-time |summary |[0-9a-f]{40} )" | awk 'BEGIN{h=""} /^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9)} /^author-time /{print h" "a": "s}' | sort -u | head -60`,
+        workspace_path: props.workspacePath,
+      })
+      const out = (blameResp.payload?.output ?? '').trim()
+      if (!out) {
+        // Fallback: simple blame summary
+        const fallback = await props.backend.send<ShellResp>('shell.run', {
+          command: `git blame --date=short -e "${relPath}" 2>&1 | head -80`,
+          workspace_path: props.workspacePath,
+        })
+        chipContent = (fallback.payload?.output ?? '').trim()
+          ? `// git blame: ${relPath}\n${(fallback.payload?.output ?? '').trim()}`
+          : `// git blame: ${relPath}: no history`
+      } else {
+        chipContent = `// git blame summary: ${relPath}\n// (unique commit→author→message)\n${out}`
+      }
+    } catch {
+      chipContent = `// @git:blame: unavailable`
     }
   } else if (option.id === '@codebase') {
     // Static option selected without a query — replace with a prompt hint in input
