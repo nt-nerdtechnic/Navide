@@ -624,12 +624,15 @@ function cancelRenameThread(): void {
 watch(messages, saveCurrentThread, { deep: true })
 
 // ── Settings ───────────────────────────────────────────────────────────────────
-type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'openai_compatible'
+type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'google' | 'mistral' | 'xai' | 'openai_compatible'
 const settingsProvider = ref<ProviderName>('anthropic')
 const settingsApiKey = ref('')
 const settingsOpenAiKey = ref(localStorage.getItem('ai-chat-openai-key') ?? '')
 const settingsGroqKey = ref(localStorage.getItem('ai-chat-groq-key') ?? '')
 const settingsDeepSeekKey = ref(localStorage.getItem('ai-chat-deepseek-key') ?? '')
+const settingsGoogleKey = ref(localStorage.getItem('ai-chat-google-key') ?? '')
+const settingsMistralKey = ref(localStorage.getItem('ai-chat-mistral-key') ?? '')
+const settingsXaiKey = ref(localStorage.getItem('ai-chat-xai-key') ?? '')
 const settingsOaiCompatUrl = ref(localStorage.getItem('ai-chat-oai-compat-url') ?? '')
 const settingsOaiCompatKey = ref(localStorage.getItem('ai-chat-oai-compat-key') ?? '')
 const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-model') ?? 'gpt-4o')
@@ -676,7 +679,7 @@ const showModelPicker = ref(false)
 
 interface ModelEntry {
   id: string
-  provider: 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'openai_compatible' | 'auto'
+  provider: 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'google' | 'mistral' | 'xai' | 'openai_compatible' | 'auto'
   display: string
   note: string   // speed/capability hint
   ctx?: number   // context window in tokens
@@ -699,6 +702,17 @@ const MODEL_CATALOG: ModelEntry[] = [
   // DeepSeek
   { id: 'deepseek-chat',              provider: 'deepseek',  display: 'DeepSeek Chat',            note: 'DeepSeek',           ctx: 64_000 },
   { id: 'deepseek-reasoner',          provider: 'deepseek',  display: 'DeepSeek Reasoner',        note: 'DeepSeek · R1',      ctx: 64_000 },
+  // Google Gemini
+  { id: 'gemini-2.5-pro',             provider: 'google',    display: 'Gemini 2.5 Pro',           note: 'Google',             ctx: 1_048_576 },
+  { id: 'gemini-2.5-flash',           provider: 'google',    display: 'Gemini 2.5 Flash',         note: 'Google · Fast',      ctx: 1_048_576 },
+  { id: 'gemini-2.0-flash',           provider: 'google',    display: 'Gemini 2.0 Flash',         note: 'Google · Fast',      ctx: 1_048_576 },
+  // Mistral AI
+  { id: 'mistral-large-latest',       provider: 'mistral',   display: 'Mistral Large',            note: 'Mistral',            ctx: 131_072 },
+  { id: 'mistral-small-latest',       provider: 'mistral',   display: 'Mistral Small',            note: 'Mistral · Fast',     ctx: 131_072 },
+  { id: 'codestral-latest',           provider: 'mistral',   display: 'Codestral',                note: 'Mistral · Code',     ctx: 256_000 },
+  // xAI Grok
+  { id: 'grok-3',                     provider: 'xai',       display: 'Grok 3',                   note: 'xAI',                ctx: 131_072 },
+  { id: 'grok-3-mini',                provider: 'xai',       display: 'Grok 3 Mini',              note: 'xAI · Fast',         ctx: 131_072 },
   // Ollama (local)
   { id: 'llama3.2',                   provider: 'ollama',    display: 'Llama 3.2',               note: 'Local',              ctx: 128_000 },
   { id: 'llama3.1',                   provider: 'ollama',    display: 'Llama 3.1',               note: 'Local',              ctx: 128_000 },
@@ -721,6 +735,14 @@ const MODEL_COSTS: Record<string, [number, number]> = {
   'deepseek-reasoner':          [0.55,  2.19 ],
   'llama-3.3-70b-versatile':    [0.59,  0.79 ],
   'mixtral-8x7b-32768':         [0.24,  0.24 ],
+  'gemini-2.5-pro':             [1.25,  10   ],
+  'gemini-2.5-flash':           [0.15,  0.6  ],
+  'gemini-2.0-flash':           [0.1,   0.4  ],
+  'mistral-large-latest':       [2,     6    ],
+  'mistral-small-latest':       [0.1,   0.3  ],
+  'codestral-latest':           [0.3,   0.9  ],
+  'grok-3':                     [3,     15   ],
+  'grok-3-mini':                [0.3,   0.5  ],
 }
 
 function estimateCost(modelId: string, inputTokens: number, outputTokens: number): string | null {
@@ -754,12 +776,18 @@ const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').m
 const OPENAI_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'openai').map((m) => m.id)
 const GROQ_MODELS       = MODEL_CATALOG.filter((m) => m.provider === 'groq').map((m) => m.id)
 const DEEPSEEK_MODELS   = MODEL_CATALOG.filter((m) => m.provider === 'deepseek').map((m) => m.id)
+const GOOGLE_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'google').map((m) => m.id)
+const MISTRAL_MODELS    = MODEL_CATALOG.filter((m) => m.provider === 'mistral').map((m) => m.id)
+const XAI_MODELS        = MODEL_CATALOG.filter((m) => m.provider === 'xai').map((m) => m.id)
 const currentModelOptions = computed(() => {
   switch (settingsProvider.value) {
     case 'anthropic': return ANTHROPIC_MODELS
     case 'openai':    return OPENAI_MODELS
     case 'groq':      return GROQ_MODELS
     case 'deepseek':  return DEEPSEEK_MODELS
+    case 'google':    return GOOGLE_MODELS
+    case 'mistral':   return MISTRAL_MODELS
+    case 'xai':       return XAI_MODELS
     case 'openai_compatible': return []
     default:          return OLLAMA_MODELS
   }
@@ -1742,6 +1770,9 @@ function resolveModel(): { provider: string; model: string } {
   if ((settingsOpenAiKey.value ?? '').trim().length > 0) return { provider: 'openai', model: OPENAI_MODELS[0] ?? 'gpt-4o' }
   if ((settingsGroqKey.value ?? '').trim().length > 0) return { provider: 'groq', model: GROQ_MODELS[0] ?? 'llama-3.3-70b-versatile' }
   if ((settingsDeepSeekKey.value ?? '').trim().length > 0) return { provider: 'deepseek', model: DEEPSEEK_MODELS[0] ?? 'deepseek-chat' }
+  if ((settingsGoogleKey.value ?? '').trim().length > 0) return { provider: 'google', model: GOOGLE_MODELS[0] ?? 'gemini-2.5-flash' }
+  if ((settingsMistralKey.value ?? '').trim().length > 0) return { provider: 'mistral', model: MISTRAL_MODELS[0] ?? 'mistral-large-latest' }
+  if ((settingsXaiKey.value ?? '').trim().length > 0) return { provider: 'xai', model: XAI_MODELS[0] ?? 'grok-3-mini' }
   return { provider: 'ollama', model: OLLAMA_MODELS[0] ?? 'llama3.2' }
 }
 
@@ -1755,6 +1786,9 @@ function _pushSettingsToBackend(): void {
     openai_api_key: settingsOpenAiKey.value,
     groq_api_key: settingsGroqKey.value,
     deepseek_api_key: settingsDeepSeekKey.value,
+    google_api_key: settingsGoogleKey.value,
+    mistral_api_key: settingsMistralKey.value,
+    xai_api_key: settingsXaiKey.value,
     openai_compatible_base_url: settingsOaiCompatUrl.value,
     openai_compatible_api_key: settingsOaiCompatKey.value,
     openai_compatible_model: settingsOaiCompatModel.value,
@@ -1778,6 +1812,9 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-openai-key', settingsOpenAiKey.value)
   localStorage.setItem('ai-chat-groq-key', settingsGroqKey.value)
   localStorage.setItem('ai-chat-deepseek-key', settingsDeepSeekKey.value)
+  localStorage.setItem('ai-chat-google-key', settingsGoogleKey.value)
+  localStorage.setItem('ai-chat-mistral-key', settingsMistralKey.value)
+  localStorage.setItem('ai-chat-xai-key', settingsXaiKey.value)
   localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
   localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
@@ -3679,6 +3716,9 @@ async function selectAtOption(option: AtOption): Promise<void> {
           showToast('Fetching URL…')
           // redirect:'error' prevents server redirect bypassing host allowlist
           const resp = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10_000) })
+          if (!resp.ok) {
+            chipContent = `// @url: HTTP ${resp.status} from ${url}`
+          } else {
           // Stream body with hard 256 KB cap — Content-Length is untrustworthy
           const reader = resp.body?.getReader()
           let bodyText = ''
@@ -3710,6 +3750,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
               .replace(/<\/?untrusted_web_content[^>]*>/gi, '')
             chipContent = `<untrusted_web_content url="${url}">\n${raw}\n</untrusted_web_content>`
           }
+          } // end resp.ok else
         } catch {
           chipContent = `// @url: failed to fetch ${url}`
         }
@@ -3787,6 +3828,9 @@ async function selectAtOption(option: AtOption): Promise<void> {
       try {
         showToast(`Fetching ${docEntry.label}…`)
         const resp = await fetch(docEntry.url, { signal: AbortSignal.timeout(12_000) })
+        if (!resp.ok) {
+          chipContent = `// @docs:${docKey}: HTTP ${resp.status}`
+        } else {
         const reader = resp.body?.getReader()
         let bodyText = ''
         if (reader) {
@@ -3808,6 +3852,7 @@ async function selectAtOption(option: AtOption): Promise<void> {
           const raw = (doc.body?.textContent ?? '').replace(/\s{2,}/g, ' ').trim().slice(0, 5000)
           chipContent = `// ${docEntry.label} (${docEntry.url})\n\n${raw}`
         }
+        } // end resp.ok else
       } catch {
         chipContent = `// @docs:${docKey}: failed to fetch documentation`
       }
