@@ -2795,6 +2795,10 @@ function getDateLabel(ts: number): string {
 
 <template>
   <div class="ai-chat">
+    <!-- Backend offline banner -->
+    <div v-if="props.backend.status.value === 'disconnected' || props.backend.status.value === 'error'" class="ai-offline-banner">
+      <span>⚠ Backend disconnected — messages won't send until reconnected</span>
+    </div>
     <!-- Messages list -->
     <div ref="messagesEl" class="ai-messages" @click="onMessagesClick" @scroll.passive="onMessagesScroll">
       <div v-if="messages.length === 0" class="ai-empty">
@@ -4727,6 +4731,13 @@ kbd {
   pointer-events: none;
   z-index: 30;
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+
+/* ── Offline banner ─────────────────────────────────────────────────────────── */
+.ai-offline-banner {
+  background: rgba(248,81,73,.15); border-bottom: 1px solid rgba(248,81,73,.3);
+  color: #f85149; font-size: 12px; padding: 6px 12px; text-align: center;
+  flex-shrink: 0;
 }
 
 /* ── Notes textarea ─────────────────────────────────────────────────────────── */
