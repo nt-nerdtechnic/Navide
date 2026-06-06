@@ -128,6 +128,8 @@ let streamTickInterval: number | null = null
 
 // Holds messages to re-append after a /compact summary finishes streaming
 const pendingCompactKeep = ref<ChatMessage[]>([])
+// Holds ALL pre-compact messages so stopStreaming() can restore them on user abort
+const pendingCompactAllMessages = ref<ChatMessage[]>([])
 
 // ── Notepads (persistent context notes, always injected into system prompt) ───
 const showNotes = ref(false)
@@ -390,6 +392,7 @@ const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
+const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
 const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const showModelPicker = ref(false)
@@ -1282,11 +1285,23 @@ async function sendMessage(): Promise<void> {
   try {
     const lengthHint = RESPONSE_LENGTH_HINTS[responseLength.value]
     const notesSuffix = notesContent.value.trim() ? `\n\n--- Workspace Notes ---\n${notesContent.value.trim()}` : ''
+    // Smart Context: inject active file as ambient context (capped at 200 lines)
+    let smartCtxSuffix = ''
+    if (settingsSmartContext.value && props.getActiveRelPath && props.getEditorContent) {
+      const relPath = props.getActiveRelPath()
+      const fileContent = props.getEditorContent()
+      const alreadyMentioned = contextChips.value.some((c) => c.label.startsWith('@') && c.label.includes(relPath?.split('/').pop() ?? ''))
+      if (relPath && fileContent && !alreadyMentioned) {
+        const lines = fileContent.split('\n').slice(0, 200).join('\n')
+        smartCtxSuffix = `\n\n--- Current open file: ${relPath} ---\n\`\`\`\n${lines}\n\`\`\``
+      }
+    }
+    localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
-      ...(lengthHint || notesSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix } : {}),
+      ...(lengthHint || notesSuffix || smartCtxSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + smartCtxSuffix } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -1944,7 +1959,8 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     const keepMessages = all.slice(all.length - keepLast)
     const historyText = toCompress.map((m) => `${m.role}: ${m.content.slice(0, 500)}`).join('\n---\n')
     const summaryPrompt = `Create a dense technical context summary of the following conversation history. Focus on: decisions made, code changes, file names, key findings. Be concise (max 300 words).\n\n${historyText}`
-    // Push a placeholder and start compact operation
+    // Push a placeholder and start compact operation; keep full snapshot for abort
+    pendingCompactAllMessages.value = all
     messages.value = [
       { role: 'user', content: '[Compacting history…]', timestamp: Date.now() },
       { role: 'assistant', content: '', streaming: true, thinking: true, cards: [], timestamp: Date.now() },
@@ -1961,6 +1977,7 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     } catch {
       messages.value = all
       pendingCompactKeep.value = []
+      pendingCompactAllMessages.value = []
       sending.value = false
       showToast('Compact failed')
       return
@@ -3456,6 +3473,13 @@ function getDateLabel(ts: number): string {
           <label class="ai-toggle-label">
             <input v-model="settingsAutoAccept" type="checkbox" />
             Auto-accept file edits
+          </label>
+        </div>
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Smart Context</label>
+          <label class="ai-toggle-label">
+            <input v-model="settingsSmartContext" type="checkbox" />
+            Auto-inject active file (≤200 lines) if not already in context
           </label>
         </div>
         <div class="ai-settings-row">
