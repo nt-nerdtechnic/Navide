@@ -4642,22 +4642,27 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     chipLabel = '@git:pr'
     try {
       interface ShellResp { ok: boolean; output?: string; error?: string }
-      // Try gh CLI first; fall back to showing branch + remote URL
+      // Check gh availability, then fetch PR; distinguish "no PR" from "gh missing"
+      const ghCheck = await props.backend.send<ShellResp>('shell.run', {
+        command: 'command -v gh >/dev/null 2>&1 && echo "__GH_OK__" || echo "__GH_MISSING__"',
+        workspace_path: props.workspacePath,
+      })
+      const ghAvailable = (ghCheck.payload?.output ?? '').trim() === '__GH_OK__'
       const resp = await props.backend.send<ShellResp>('shell.run', {
-        command: 'gh pr view --json number,title,body,state,reviewDecision,labels,author,url 2>/dev/null || echo "__NO_GH__"',
+        command: 'gh pr view --json number,title,body,state,reviewDecision,labels,author,url 2>/dev/null || echo "__NO_PR__"',
         workspace_path: props.workspacePath,
       })
       const raw = (resp.payload?.output ?? '').trim()
-      if (!raw || raw === '__NO_GH__') {
-        // Fallback: show branch name and remote URL
+      if (!raw || raw === '__NO_PR__' || raw === '__GH_MISSING__') {
         const branchResp = await props.backend.send<ShellResp>('shell.run', {
           command: 'git branch --show-current && git remote get-url origin 2>/dev/null',
           workspace_path: props.workspacePath,
         })
         const branchOut = (branchResp.payload?.output ?? '').trim()
+        const reason = ghAvailable ? 'no open PR for this branch' : 'gh CLI not installed'
         chipContent = branchOut
-          ? `// PR context (gh CLI not available):\n// Branch: ${branchOut}`
-          : '// @git:pr: no PR found (gh CLI not installed)'
+          ? `// @git:pr: ${reason}\n// Branch: ${branchOut}`
+          : `// @git:pr: ${reason}`
       } else {
         try {
           interface PrJson { number?: number; title?: string; body?: string; state?: string; reviewDecision?: string; labels?: Array<{name: string}>; author?: {login: string}; url?: string }
