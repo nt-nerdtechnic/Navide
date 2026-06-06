@@ -702,6 +702,7 @@ function removeFromWorkingSet(idx: number): void {
   editWorkingSet.value.splice(idx, 1)
 }
 const settingsMaxTokens = ref(4096)
+const settingsMaxAgentIter = ref(parseInt(localStorage.getItem('ai-chat-max-agent-iter') ?? '10', 10) || 10)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const settingsThinkingBudget = ref<number | null>(null) // null = disabled; token budget for extended thinking
 const settingsReasoningEffort = ref<'low' | 'medium' | 'high' | null>(null)
@@ -1091,7 +1092,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@selection', label: '@selection — editor selection' },
   { id: '@git', label: '@git — current git diff (unstaged)' },
   { id: '@git:staged', label: '@git:staged — staged changes (git diff --cached)' },
-  { id: '@git:log', label: '@git:log — recent commit history (last 20, or @git:log:50)' },
+  { id: '@git:log', label: '@git:log — recent commit history (last 20, or @git:log:50 / @git:log:verbose)' },
   { id: '@git:branch', label: '@git:branch — current branch & last commit' },
   { id: '@git:blame',   label: '@git:blame — blame for current open file' },
   { id: '@git:recent', label: '@git:recent — recently committed files (last 5)' },
@@ -1841,6 +1842,7 @@ function _pushSettingsToBackend(): void {
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
+    max_agent_iterations: Math.max(1, Math.min(20, settingsMaxAgentIter.value)),
   }
   if (settingsTemperature.value !== null && !reasoningModelSelected.value) {
     payload.temperature = Math.max(0, Math.min(1, settingsTemperature.value))
@@ -1866,6 +1868,7 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
   localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
+  localStorage.setItem('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -3183,19 +3186,24 @@ function onTextareaInput(e: Event): void {
     return
   }
 
-  // @git:log:N — show last N commits (custom count)
+  // @git:log:N / @git:log:verbose — show last N commits (custom count or verbose format)
   if (/^git:log$/i.test(fragment)) {
     atOptions.value = [
-      { id: '@git:log',    label: '@git:log — last 20 commits' },
-      { id: '@git:log:5',  label: '@git:log:5 — last 5 commits' },
-      { id: '@git:log:10', label: '@git:log:10 — last 10 commits' },
-      { id: '@git:log:50', label: '@git:log:50 — last 50 commits' },
+      { id: '@git:log',         label: '@git:log — last 20 commits (oneline)' },
+      { id: '@git:log:5',       label: '@git:log:5 — last 5 commits' },
+      { id: '@git:log:10',      label: '@git:log:10 — last 10 commits' },
+      { id: '@git:log:50',      label: '@git:log:50 — last 50 commits' },
+      { id: '@git:log:verbose', label: '@git:log:verbose — last 10 commits with author & date' },
     ]
     return
   }
   if (/^git:log:\d+$/i.test(fragment)) {
     const n = fragment.slice('git:log:'.length)
     atOptions.value = [{ id: `@git:log:${n}`, label: `@git:log:${n} — last ${n} commits` }]
+    return
+  }
+  if (/^git:log:verbose$/i.test(fragment)) {
+    atOptions.value = [{ id: '@git:log:verbose', label: '@git:log:verbose — last 10 commits with author, date & body' }]
     return
   }
 
@@ -3680,19 +3688,34 @@ async function selectAtOption(option: AtOption): Promise<void> {
       chipContent = '// @git:staged: unavailable'
     }
   } else if (option.id === '@git:log' || option.id.startsWith('@git:log:')) {
-    const rawN = option.id.startsWith('@git:log:') ? option.id.slice('@git:log:'.length) : '20'
-    const n = Math.min(Math.max(parseInt(rawN, 10) || 20, 1), 500)
-    chipLabel = `@git:log:${n}`
-    try {
-      interface ShellResp { ok: boolean; output?: string }
-      const resp = await props.backend.send<ShellResp>('shell.run', {
-        command: `git log --oneline -${n} 2>&1`,
-        workspace_path: props.workspacePath,
-      })
-      const out = (resp.payload?.output ?? '').trim()
-      chipContent = out ? `// git log (last ${n} commits):\n${out}` : '// git log: no commits'
-    } catch {
-      chipContent = '// @git:log: unavailable'
+    if (option.id === '@git:log:verbose') {
+      chipLabel = '@git:log:verbose'
+      try {
+        interface ShellResp { ok: boolean; output?: string }
+        const resp = await props.backend.send<ShellResp>('shell.run', {
+          command: 'git log --format="%H%n  Author: %an <%ae>%n  Date:   %ar%n  %s%n%b" -10 2>&1',
+          workspace_path: props.workspacePath,
+        })
+        const out = (resp.payload?.output ?? '').trim()
+        chipContent = out ? `// git log (last 10 commits, verbose):\n${out}` : '// git log: no commits'
+      } catch {
+        chipContent = '// @git:log:verbose: unavailable'
+      }
+    } else {
+      const rawN = option.id.startsWith('@git:log:') ? option.id.slice('@git:log:'.length) : '20'
+      const n = Math.min(Math.max(parseInt(rawN, 10) || 20, 1), 500)
+      chipLabel = `@git:log:${n}`
+      try {
+        interface ShellResp { ok: boolean; output?: string }
+        const resp = await props.backend.send<ShellResp>('shell.run', {
+          command: `git log --oneline -${n} 2>&1`,
+          workspace_path: props.workspacePath,
+        })
+        const out = (resp.payload?.output ?? '').trim()
+        chipContent = out ? `// git log (last ${n} commits):\n${out}` : '// git log: no commits'
+      } catch {
+        chipContent = '// @git:log: unavailable'
+      }
     }
   } else if (option.id === '@git:branch') {
     chipLabel = '@git:branch'
@@ -6018,6 +6041,13 @@ function getDateLabel(ts: number): string {
           <div class="ai-tokens-row">
             <input v-model.number="settingsMaxTokens" type="range" min="256" max="16000" step="256" class="ai-tokens-slider" />
             <span class="ai-tokens-val">{{ settingsMaxTokens.toLocaleString() }}</span>
+          </div>
+        </div>
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Max agent tool calls (1–20)</label>
+          <div class="ai-tokens-row">
+            <input v-model.number="settingsMaxAgentIter" type="range" min="1" max="20" step="1" class="ai-tokens-slider" />
+            <span class="ai-tokens-val">{{ settingsMaxAgentIter }}</span>
           </div>
         </div>
         <!-- Reasoning effort (OpenAI o1/o3/o4 models) -->

@@ -594,7 +594,7 @@ async def run_agent_loop(
     # Work on a copy so we don't mutate the caller's list
     conversation = list(messages)
 
-    max_iterations = 10  # guard against infinite loops
+    max_iterations = max(1, min(20, int(settings.get("max_agent_iterations", 10) or 10)))
     done_meta: dict = {}  # populated from \x00DONE: sentinel (last iteration)
     total_input_tokens = 0
     total_output_tokens = 0

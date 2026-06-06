@@ -2100,7 +2100,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 }
 .az-del-btn:hover { color: var(--danger-fg); background: var(--bg-muted); }
 
-.az-benchmark-section { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0; }
+.az-benchmark-section { flex-shrink: 0; display: flex; flex-direction: column; gap: 0; }
 
 .az-version { font-size: 11px; color: var(--text-secondary); }
 .az-version.offline { color: var(--danger-fg); }
