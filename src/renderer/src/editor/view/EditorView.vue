@@ -722,6 +722,7 @@ function onKeydown(e: KeyboardEvent): void {
   // Arrow + modifier combos (must precede switch to capture modifiers)
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     e.preventDefault()
+    if (suggestOpen.value) _closeSuggest()
     const left = e.key === 'ArrowLeft'
     if (e.altKey) { left ? moveWordLeft(shift) : moveWordRight(shift) }
     else if (mod)  { left ? homeKey(shift)      : endKey(shift)       }
@@ -734,6 +735,7 @@ function onKeydown(e: KeyboardEvent): void {
     if (e.altKey && !mod) { if (up) moveLineUp(); else moveLineDown() }
     else if (mod) {
       // Shift+Cmd+Up/Down: select to file start/end (Cmd-only is handled by keybindings)
+      if (suggestOpen.value) _closeSuggest()
       ghost.value = null
       startOrClearSelection(shift)
       preferredCol = -1
@@ -746,14 +748,14 @@ function onKeydown(e: KeyboardEvent): void {
   }
 
   switch (e.key) {
-    case 'Home': e.preventDefault(); homeKey(shift); break
+    case 'Home': e.preventDefault(); if (suggestOpen.value) _closeSuggest(); homeKey(shift); break
     case 'PageUp': case 'PageDown': {
       e.preventDefault()
       const pageLines = Math.max(1, Math.floor(vs.viewportHeight.value / lineHeightPx.value) - 1)
       moveCursor(e.key === 'PageUp' ? -pageLines : pageLines, 0, shift)
       break
     }
-    case 'End': e.preventDefault(); endKey(shift); break
+    case 'End': e.preventDefault(); if (suggestOpen.value) _closeSuggest(); endKey(shift); break
     case 'Backspace': e.preventDefault(); mod ? deleteLineLeft() : e.altKey ? deleteWordLeft() : deleteBackward(); break
     case 'Delete': e.preventDefault(); mod ? deleteLineRight() : e.altKey ? deleteWordRight() : deleteForward(); break
     case 'Enter': {

@@ -481,7 +481,8 @@ function cancelRenameThread(): void {
 watch(messages, saveCurrentThread, { deep: true })
 
 // ── Settings ───────────────────────────────────────────────────────────────────
-const settingsProvider = ref<'anthropic' | 'ollama'>('anthropic')
+type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'openai_compatible'
+const settingsProvider = ref<ProviderName>('anthropic')
 const settingsApiKey = ref('')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
@@ -508,24 +509,36 @@ const showModelPicker = ref(false)
 
 interface ModelEntry {
   id: string
-  provider: 'anthropic' | 'ollama' | 'auto'
+  provider: 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'openai_compatible' | 'auto'
   display: string
   note: string   // speed/capability hint
   ctx?: number   // context window in tokens
 }
 const MODEL_CATALOG: ModelEntry[] = [
-  { id: 'auto',                       provider: 'auto',      display: 'Auto',                    note: 'Best available' },
-  { id: 'claude-opus-4-8',           provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable',   ctx: 200_000 },
-  { id: 'claude-sonnet-4-6',         provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced',        ctx: 200_000 },
-  { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast',            ctx: 200_000 },
-  { id: 'claude-3-5-sonnet-20241022',provider: 'anthropic', display: 'Claude 3.5 Sonnet',       note: 'Stable',          ctx: 200_000 },
-  { id: 'claude-3-5-haiku-20241022', provider: 'anthropic', display: 'Claude 3.5 Haiku',        note: 'Fast · Stable',   ctx: 200_000 },
-  { id: 'llama3.2',                  provider: 'ollama',    display: 'Llama 3.2',               note: 'Local',           ctx: 128_000 },
-  { id: 'llama3.1',                  provider: 'ollama',    display: 'Llama 3.1',               note: 'Local',           ctx: 128_000 },
-  { id: 'qwen2.5-coder',             provider: 'ollama',    display: 'Qwen 2.5 Coder',          note: 'Local · Code',    ctx: 128_000 },
-  { id: 'mistral',                   provider: 'ollama',    display: 'Mistral',                 note: 'Local',           ctx: 32_000 },
-  { id: 'codellama',                 provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code',    ctx: 16_000 },
-  { id: 'gemma2',                    provider: 'ollama',    display: 'Gemma 2',                 note: 'Local',           ctx: 8_000 },
+  { id: 'auto',                        provider: 'auto',      display: 'Auto',                    note: 'Best available' },
+  // Anthropic
+  { id: 'claude-opus-4-8',            provider: 'anthropic', display: 'Claude Opus 4.8',         note: 'Most capable',      ctx: 200_000 },
+  { id: 'claude-sonnet-4-6',          provider: 'anthropic', display: 'Claude Sonnet 4.6',       note: 'Balanced',           ctx: 200_000 },
+  { id: 'claude-haiku-4-5-20251001',  provider: 'anthropic', display: 'Claude Haiku 4.5',        note: 'Fast',               ctx: 200_000 },
+  { id: 'claude-3-5-sonnet-20241022', provider: 'anthropic', display: 'Claude 3.5 Sonnet',       note: 'Stable',             ctx: 200_000 },
+  { id: 'claude-3-5-haiku-20241022',  provider: 'anthropic', display: 'Claude 3.5 Haiku',        note: 'Fast · Stable',      ctx: 200_000 },
+  // OpenAI
+  { id: 'gpt-4o',                      provider: 'openai',    display: 'GPT-4o',                  note: 'OpenAI',             ctx: 128_000 },
+  { id: 'gpt-4o-mini',                 provider: 'openai',    display: 'GPT-4o Mini',             note: 'OpenAI · Fast',      ctx: 128_000 },
+  { id: 'o3-mini',                     provider: 'openai',    display: 'o3-mini',                 note: 'OpenAI · Reasoning', ctx: 128_000 },
+  // Groq
+  { id: 'llama-3.3-70b-versatile',    provider: 'groq',      display: 'Llama 3.3 70B',           note: 'Groq · Fast',        ctx: 128_000 },
+  { id: 'mixtral-8x7b-32768',          provider: 'groq',      display: 'Mixtral 8x7B',            note: 'Groq',               ctx: 32_000 },
+  // DeepSeek
+  { id: 'deepseek-chat',              provider: 'deepseek',  display: 'DeepSeek Chat',            note: 'DeepSeek',           ctx: 64_000 },
+  { id: 'deepseek-reasoner',          provider: 'deepseek',  display: 'DeepSeek Reasoner',        note: 'DeepSeek · R1',      ctx: 64_000 },
+  // Ollama (local)
+  { id: 'llama3.2',                   provider: 'ollama',    display: 'Llama 3.2',               note: 'Local',              ctx: 128_000 },
+  { id: 'llama3.1',                   provider: 'ollama',    display: 'Llama 3.1',               note: 'Local',              ctx: 128_000 },
+  { id: 'qwen2.5-coder',              provider: 'ollama',    display: 'Qwen 2.5 Coder',          note: 'Local · Code',       ctx: 128_000 },
+  { id: 'mistral',                    provider: 'ollama',    display: 'Mistral',                 note: 'Local',              ctx: 32_000  },
+  { id: 'codellama',                  provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code',       ctx: 16_000  },
+  { id: 'gemma2',                     provider: 'ollama',    display: 'Gemma 2',                 note: 'Local',              ctx: 8_000   },
 ]
 const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
 const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
