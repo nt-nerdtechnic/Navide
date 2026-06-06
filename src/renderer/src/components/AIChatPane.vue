@@ -1299,6 +1299,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:stash',        label: '@git:stash — list all git stashes' },
   { id: '@git:tag',          label: '@git:tag — list recent git tags' },
   { id: '@git:contributors', label: '@git:contributors — top contributors (git shortlog)' },
+  { id: '@git:pr',       label: '@git:pr — current branch PR title, body & review status (requires gh CLI)' },
   { id: '@git:diff',     label: '@git:diff — diff current branch vs another (e.g. @git:diff:main)' },
   { id: '@git:commit',   label: '@git:commit — show a specific commit by hash (e.g. @git:commit:abc1234)' },
   { id: '@git:conflict', label: '@git:conflict — files with merge conflicts (<<<<<<< markers)' },
@@ -1324,6 +1325,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@package',    label: '@package — package.json scripts & dependencies overview' },
   { id: '@dependents', label: '@dependents — find all files that import the current open file' },
   { id: '@lint',       label: '@lint — run ESLint / ruff / mypy and attach errors' },
+  { id: '@readme',     label: '@readme — inject README.md from workspace root as context' },
+  { id: '@diff:',      label: '@diff:path — git diff of a specific file (e.g. @diff:src/App.vue)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -2223,6 +2226,7 @@ async function sendMessage(): Promise<void> {
   const _delegateSlash = [
     '/clear', '/compact', '/diff', '/model', '/pin', '/summarize',
     '/save-summary', '/spell', '/git', '/pr', '/changelog', '/prompts', '/import', '/generate', '/commit',
+    '/run', '/search', '/translate', '/rename', '/save-prompt',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
@@ -3929,6 +3933,17 @@ function onTextareaInput(e: Event): void {
     return
   }
 
+  // @diff:file — e.g., @diff:src/App.vue
+  if (/^diff:?$/i.test(fragment)) {
+    atOptions.value = [{ id: '@diff:', label: '@diff:path — git diff of a specific file' }]
+    return
+  }
+  if (/^diff:.+/i.test(fragment)) {
+    const filePath = fragment.slice('diff:'.length)
+    atOptions.value = [{ id: `@diff:${filePath}`, label: `@diff:${filePath} — git diff for this file` }]
+    return
+  }
+
   // @file:lineRange — e.g., @App.vue:10-50 or @src/foo.ts:25
   const lineRangeMatch = /^(.+):(\d+)(?:-(\d+))?$/.exec(fragment)
   if (lineRangeMatch) {
@@ -4617,6 +4632,47 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
       }
     } catch {
       chipContent = '// @git:contributors: unavailable'
+    }
+  } else if (option.id === '@git:pr') {
+    chipLabel = '@git:pr'
+    try {
+      interface ShellResp { ok: boolean; output?: string; error?: string }
+      // Try gh CLI first; fall back to showing branch + remote URL
+      const resp = await props.backend.send<ShellResp>('shell.run', {
+        command: 'gh pr view --json number,title,body,state,reviewDecision,labels,author,url 2>/dev/null || echo "__NO_GH__"',
+        workspace_path: props.workspacePath,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      if (!raw || raw === '__NO_GH__') {
+        // Fallback: show branch name and remote URL
+        const branchResp = await props.backend.send<ShellResp>('shell.run', {
+          command: 'git branch --show-current && git remote get-url origin 2>/dev/null',
+          workspace_path: props.workspacePath,
+        })
+        const branchOut = (branchResp.payload?.output ?? '').trim()
+        chipContent = branchOut
+          ? `// PR context (gh CLI not available):\n// Branch: ${branchOut}`
+          : '// @git:pr: no PR found (gh CLI not installed)'
+      } else {
+        try {
+          interface PrJson { number?: number; title?: string; body?: string; state?: string; reviewDecision?: string; labels?: Array<{name: string}>; author?: {login: string}; url?: string }
+          const pr = JSON.parse(raw) as PrJson
+          const labels = pr.labels?.map((l) => l.name).join(', ') ?? ''
+          chipContent = [
+            `// PR #${pr.number ?? '?'}: ${pr.title ?? ''}`,
+            `// State: ${pr.state ?? '?'}${pr.reviewDecision ? ' · Review: ' + pr.reviewDecision : ''}`,
+            pr.author ? `// Author: @${pr.author.login}` : '',
+            labels ? `// Labels: ${labels}` : '',
+            pr.url ? `// URL: ${pr.url}` : '',
+            '',
+            pr.body?.trim() ? `## Description\n${pr.body.trim().slice(0, 3000)}` : '(no description)',
+          ].filter((l) => l !== undefined && l !== null).join('\n').trim()
+        } catch {
+          chipContent = `// @git:pr (raw):\n${raw.slice(0, 2000)}`
+        }
+      }
+    } catch {
+      chipContent = '// @git:pr: unavailable'
     }
   } else if (option.id === '@git:modified') {
     chipLabel = '@git:modified'
@@ -5470,6 +5526,50 @@ ${out}`
         : '// @lint: no output (no errors, or linter not found)'
     } catch {
       chipContent = '// @lint: unavailable'
+    }
+  } else if (option.id === '@readme') {
+    chipLabel = '@readme'
+    try {
+      interface ReadResp { ok?: boolean; content?: string; payload?: { ok?: boolean; content?: string } }
+      // Try README.md, then readme.md, then README.txt
+      let found = false
+      for (const name of ['README.md', 'readme.md', 'README.txt', 'README']) {
+        const r = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: name })
+        const content = (r as { payload?: { content?: string } }).payload?.content ?? ''
+        if (content) {
+          chipContent = `// ${name}:\n\`\`\`markdown\n${content.slice(0, 8000)}\n\`\`\``
+          found = true
+          break
+        }
+      }
+      if (!found) chipContent = '// @readme: no README file found in workspace root'
+    } catch {
+      chipContent = '// @readme: unavailable'
+    }
+  } else if (option.id === '@diff:') {
+    // Bare @diff: — prompt user to type a file path
+    const newVal = val.slice(0, atIdx) + '@diff:' + val.slice(cur)
+    inputText.value = newVal
+    showAtMenu.value = false
+    await nextTick()
+    el.focus()
+    el.setSelectionRange(atIdx + '@diff:'.length, atIdx + '@diff:'.length)
+    return
+  } else if (option.id.startsWith('@diff:')) {
+    const filePath = option.id.slice('@diff:'.length).trim()
+    chipLabel = `@diff:${filePath.split('/').pop()}`
+    try {
+      interface ShellRespDiff { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespDiff>('shell.run', {
+        command: `git diff HEAD -- "${filePath.replace(/"/g, '\\"')}" 2>/dev/null`,
+        workspace_path: props.workspacePath,
+      })
+      const raw = (resp.payload?.output ?? '').trim()
+      chipContent = raw
+        ? `// git diff HEAD -- ${filePath}:\n\`\`\`diff\n${raw.slice(0, 8000)}\n\`\`\``
+        : `// @diff:${filePath}: no changes (or file not tracked)`
+    } catch {
+      chipContent = `// @diff:${filePath}: unavailable`
     }
   } else if (/^[^@].+:\d+(?:-\d+)?$/.test(option.id)) {
     // @file:lineRange — e.g., "src/App.vue:10-50"
