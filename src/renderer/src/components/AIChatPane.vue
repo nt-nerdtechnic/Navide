@@ -8285,6 +8285,38 @@ kbd {
 .ai-ctx-sep { height: 1px; background: var(--border, #454545); margin: 3px 4px; }
 .ai-ctx-danger { color: #e05050; }
 .ai-ctx-danger:hover { background: rgba(220,50,50,.14); color: #e05050; }
+
+/* ── Used references (Cursor-style context indicators) ──────────────────────── */
+.ai-used-refs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px 10px 5px;
+  opacity: 0.65;
+}
+.ai-used-refs:hover { opacity: 1; }
+.ai-used-refs-count {
+  font-size: 10px;
+  color: var(--text-muted, #8b949e);
+  margin-right: 2px;
+}
+.ai-used-ref-chip {
+  font-size: 10px;
+  background: var(--bg-input, #1a1a2e);
+  border: 1px solid var(--border, #3a3a4a);
+  border-radius: 10px;
+  padding: 1px 7px;
+  color: var(--text-muted, #8b949e);
+  white-space: nowrap;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-used-refs-more {
+  font-size: 10px;
+  color: var(--text-muted, #8b949e);
+}
 </style>
 
 <style>
