@@ -21,6 +21,24 @@ function openFile(filename: string) {
 }
 
 const reviewOpen = ref(false)
+const reviewHeight = ref(300)
+let _dragY = 0
+let _dragH = 0
+
+function startReviewDrag(e: MouseEvent) {
+  e.preventDefault()
+  _dragY = e.clientY
+  _dragH = reviewHeight.value
+  function onMove(ev: MouseEvent) {
+    reviewHeight.value = Math.max(80, Math.min(700, _dragH + (ev.clientY - _dragY)))
+  }
+  function onUp() {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
 const { gitStatus, gitBranches } = useGit(() => props.workspacePath, props.backend)
 
 interface FileDiff {
@@ -199,7 +217,7 @@ function cellClass(cell: SideRow['left']): string {
         <path d="M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427z"/>
       </svg>
     </div>
-    <div v-if="reviewOpen" class="bdp-review-body">
+    <div v-if="reviewOpen" class="bdp-review-body" :style="{ height: reviewHeight + 'px' }">
       <ReviewPane
         :workspace-path="workspacePath"
         :backend="backend"
@@ -209,6 +227,7 @@ function cellClass(cell: SideRow['left']): string {
         @close="reviewOpen = false"
       />
     </div>
+    <div v-if="reviewOpen" class="bdp-review-resizer" @mousedown.prevent="startReviewDrag" />
 
     <!-- States -->
     <div v-if="loading" class="bdp-msg">Loading diff…</div>
@@ -323,10 +342,15 @@ function cellClass(cell: SideRow['left']): string {
   flex: 1; font-size: 11px; font-weight: 600; color: var(--text-primary);
 }
 .bdp-review-body {
-  flex-shrink: 0; max-height: 340px; overflow: hidden;
-  border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0; overflow: hidden;
   display: flex; flex-direction: column;
 }
+.bdp-review-resizer {
+  height: 4px; flex-shrink: 0; cursor: ns-resize;
+  background: var(--border-muted);
+  transition: background 0.15s;
+}
+.bdp-review-resizer:hover { background: var(--accent-fg); opacity: 0.5; }
 
 /* States */
 .bdp-msg {

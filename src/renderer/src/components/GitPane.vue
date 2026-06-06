@@ -1691,7 +1691,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div><!-- /part-top -->
 
       <!-- ── selection action bar ──────────────────────────────── -->
-      <div v-if="selectedKeys.size > 0" class="selection-bar" @click.stop>
+      <div v-if="selectedKeys.size > 1" class="selection-bar" @click.stop>
         <span class="sel-count">{{ selectedKeys.size }} selected</span>
         <button class="sel-btn sel-clear" @click="clearSelection">✕</button>
       </div>
