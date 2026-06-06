@@ -17,7 +17,7 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const { isReviewing, reviewResult, reviewError, startReview, stopReview } = useReview(props.backend)
+const { isReviewing, reviewResult, reviewError, reviewElapsed, startReview, stopReview } = useReview(props.backend)
 
 const mode = ref<'working' | 'branch'>('working')
 const baseBranch = ref('main')
@@ -221,7 +221,7 @@ const verdictMeta = computed(() =>
     <!-- Analyzing spinner -->
     <div v-if="isReviewing" class="analyzing-state">
       <div class="spinner" />
-      <span>Analyzing changes…</span>
+      <span>Analyzing… <span class="elapsed-time">({{ reviewElapsed }}s)</span></span>
     </div>
 
     <!-- Empty hint -->
@@ -377,6 +377,7 @@ const verdictMeta = computed(() =>
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.elapsed-time { color: var(--text-muted); font-size: 10px; }
 
 /* Empty hint */
 .empty-hint {

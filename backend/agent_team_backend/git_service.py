@@ -718,7 +718,7 @@ async def diff_branches(workspace_path: str, base: str, compare: str) -> dict[st
     rc, out, stderr = await _run(cmd, workspace_path)
     if rc != 0:
         return {"ok": False, "diff": "", "error": stderr.strip()}
-    return {"ok": True, "diff": out[:30_000]}
+    return {"ok": True, "diff": out[:30_000], "truncated": len(out) > 30_000}
 
 
 async def rebase_on(workspace_path: str, branch: str) -> dict[str, Any]:

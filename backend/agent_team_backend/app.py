@@ -2332,20 +2332,42 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         # working mode: staged + unstaged (git diff HEAD)
                         diff_result = await git_service.diff_branches(ws, "", "")
                         diff = diff_result.get("diff", "") if diff_result.get("ok") else ""
+                    _truncated = diff_result.get("truncated", False) if diff_result.get("ok") else False
                     chunks: list[str] = []
-                    async for chunk in stream_review(s, diff):
+                    async for chunk in stream_review(s, diff, truncated=_truncated):
                         chunks.append(chunk)
-                        await broadcast(make_event("ai.review.chunk", {"review_id": rid, "text": chunk}))
-                    # Parse structured JSON result from streamed text
+                    # Parse and validate structured JSON result from streamed text
                     full_text = "".join(chunks)
                     try:
-                        mo = _re.search(r"```json\s*(.*)\s*```", full_text, _re.DOTALL)
+                        mo = _re.search(r"```json\s*(.*?)\s*```", full_text, _re.DOTALL)
                         if mo:
-                            result = _json.loads(mo.group(1))
-                            await broadcast(make_event("ai.review.result", {"review_id": rid, "result": result}))
+                            raw = _json.loads(mo.group(1))
+                            _VALID_VERDICTS = {"approve", "approve_with_comments", "request_changes"}
+                            _VALID_SEVS = {"critical", "warning", "suggestion"}
+                            validated: dict = {
+                                "summary": str(raw.get("summary", "")),
+                                "verdict": raw.get("verdict") if raw.get("verdict") in _VALID_VERDICTS else "approve_with_comments",
+                                "findings": [],
+                            }
+                            for _i, _f in enumerate(raw.get("findings") or []):
+                                if not isinstance(_f, dict):
+                                    continue
+                                validated["findings"].append({
+                                    "id": str(_f.get("id") or f"f{_i}"),
+                                    "file": str(_f.get("file") or ""),
+                                    "line": _f["line"] if isinstance(_f.get("line"), int) else None,
+                                    "severity": _f.get("severity") if _f.get("severity") in _VALID_SEVS else "suggestion",
+                                    "title": str(_f.get("title") or ""),
+                                    "body": str(_f.get("body") or ""),
+                                })
+                            await broadcast(make_event("ai.review.result", {"review_id": rid, "result": validated}))
+                        else:
+                            log.warning("ai.review: no ```json block found in LLM output")
                     except Exception:
                         log.warning("ai.review: failed to parse JSON from streamed output")
                     await broadcast(make_event("ai.review.end", {"review_id": rid}))
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     log.exception("ai.review.start failed: %s", exc)
                     await broadcast(make_event("ai.review.error", {"review_id": rid, "message": str(exc)}))

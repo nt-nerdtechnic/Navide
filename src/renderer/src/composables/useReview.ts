@@ -28,12 +28,15 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   const reviewResult = ref<ReviewResult | null>(null)
   const reviewError = ref('')
   const currentReviewId = ref('')
+  const reviewElapsed = ref(0)
+  let _elapsedTimer: ReturnType<typeof setInterval> | null = null
 
   let _unsubResult: (() => void) | null = null
   let _unsubEnd: (() => void) | null = null
   let _unsubError: (() => void) | null = null
 
   function _teardown() {
+    if (_elapsedTimer !== null) { clearInterval(_elapsedTimer); _elapsedTimer = null }
     _unsubResult?.(); _unsubResult = null
     _unsubEnd?.(); _unsubEnd = null
     _unsubError?.(); _unsubError = null
@@ -67,9 +70,11 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   async function startReview(options: ReviewOptions): Promise<void> {
     reviewResult.value = null
     reviewError.value = ''
+    reviewElapsed.value = 0
     isReviewing.value = true
     const rid = crypto.randomUUID()
     currentReviewId.value = rid
+    _elapsedTimer = setInterval(() => { reviewElapsed.value++ }, 1000)
     _setup(rid)
 
     try {
@@ -100,5 +105,5 @@ export function useReview(backend: ReturnType<typeof useBackend>) {
   })
   onUnmounted(_teardown)
 
-  return { isReviewing, reviewResult, reviewError, startReview, stopReview }
+  return { isReviewing, reviewResult, reviewError, reviewElapsed, startReview, stopReview }
 }

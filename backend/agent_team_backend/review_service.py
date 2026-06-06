@@ -42,11 +42,13 @@ Return NO text outside the ```json block.\
 async def stream_review(
     settings: dict,
     diff: str,
+    truncated: bool = False,
 ) -> AsyncIterator[str]:
     """Stream an AI code review for *diff*.
 
     Yields raw text chunks (JSON wrapped in a ```json block).
     The caller collects chunks, parses the JSON, and emits a structured result.
+    *truncated* signals that *diff* was cut by the caller before being passed in.
     """
     from .ai_chat_service import stream_chat
 
@@ -54,10 +56,10 @@ async def stream_review(
         yield '```json\n{"summary":"No changes to review.","findings":[],"verdict":"approve"}\n```'
         return
 
-    truncated = diff[:_MAX_REVIEW_DIFF_CHARS]
+    truncated_diff = diff[:_MAX_REVIEW_DIFF_CHARS]
     truncation_note = (
-        f"\n\n*(diff truncated to {_MAX_REVIEW_DIFF_CHARS} chars)*"
-        if len(diff) > _MAX_REVIEW_DIFF_CHARS
+        f"\n\n*(diff truncated to {_MAX_REVIEW_DIFF_CHARS} chars — some changes not shown)*"
+        if (truncated or len(diff) > _MAX_REVIEW_DIFF_CHARS)
         else ""
     )
 
@@ -66,7 +68,7 @@ async def stream_review(
             "role": "user",
             "content": (
                 f"Please review the following git diff:{truncation_note}\n\n"
-                f"```diff\n{truncated}\n```"
+                f"```diff\n{truncated_diff}\n```"
             ),
         }
     ]
