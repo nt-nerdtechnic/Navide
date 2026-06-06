@@ -604,6 +604,9 @@ function removeFromWorkingSet(idx: number): void {
 }
 const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
+const settingsThinkingBudget = ref<number | null>(null) // null = disabled; token budget for extended thinking
+const THINKING_SUPPORTED_MODELS = new Set(['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-3-7-sonnet-20250219'])
+const thinkingSupported = computed(() => THINKING_SUPPORTED_MODELS.has(settingsModel.value))
 const showModelPicker = ref(false)
 
 interface ModelEntry {
@@ -1211,7 +1214,7 @@ function extractFollowUps(content: string, userContent?: string): string[] {
 function renderMarkdownLite(rawText: string): string {
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
-  let text = rawText.replace(/```([\w]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+  let text = rawText.replace(/```([^\s\n]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const LANG_DISPLAY: Record<string, string> = {
       ts: 'TypeScript', tsx: 'TSX', js: 'JavaScript', jsx: 'JSX',
       py: 'Python', python: 'Python', rb: 'Ruby', go: 'Go',
@@ -1638,6 +1641,9 @@ function _pushSettingsToBackend(): void {
   }
   if (settingsTemperature.value !== null) {
     payload.temperature = Math.max(0, Math.min(1, settingsTemperature.value))
+  }
+  if (settingsThinkingBudget.value !== null && thinkingSupported.value) {
+    payload.thinking_budget_tokens = Math.max(1024, Math.min(32000, settingsThinkingBudget.value))
   }
   props.backend.send('ai.chat.settings.set', payload).catch(() => {/* ignore */})
 }
@@ -4833,6 +4839,21 @@ function getDateLabel(ts: number): string {
             </template>
           </div>
         </div>
+        <!-- Extended thinking (Cursor parity — Claude only) -->
+        <div v-if="thinkingSupported" class="ai-settings-row">
+          <label class="ai-settings-label">Extended thinking (Claude only)</label>
+          <div class="ai-tokens-row">
+            <label class="ai-toggle-label" style="margin-right:8px">
+              <input type="checkbox" :checked="settingsThinkingBudget !== null" @change="settingsThinkingBudget = settingsThinkingBudget === null ? 8000 : null" />
+              Enable
+            </label>
+            <template v-if="settingsThinkingBudget !== null">
+              <input v-model.number="settingsThinkingBudget" type="range" min="1024" max="32000" step="1024" class="ai-tokens-slider" />
+              <span class="ai-tokens-val">{{ (settingsThinkingBudget / 1000).toFixed(1) }}k tokens</span>
+            </template>
+          </div>
+        </div>
+
         <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
           <span class="ai-rules-icon">✦</span>
           <span>Workspace rules auto-applied from <code>{{ workspaceRulesFile }}</code></span>
