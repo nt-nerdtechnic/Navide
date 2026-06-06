@@ -3340,6 +3340,37 @@ function removeChip(id: string): void {
   contextChips.value = contextChips.value.filter((c) => c.id !== id)
 }
 
+// ── Chip drag-to-reorder ───────────────────────────────────────────────────────
+let _chipDragId: string | null = null
+
+function onChipDragStart(e: DragEvent, id: string): void {
+  _chipDragId = id
+  e.dataTransfer?.setData('text/plain', id)
+  ;(e.currentTarget as HTMLElement).classList.add('ai-chip-dragging')
+}
+
+function onChipDragEnd(e: DragEvent): void {
+  _chipDragId = null
+  ;(e.currentTarget as HTMLElement).classList.remove('ai-chip-dragging')
+}
+
+function onChipDragOver(e: DragEvent, targetId: string): void {
+  if (!_chipDragId || _chipDragId === targetId) return
+  e.preventDefault()
+}
+
+function onChipDrop(e: DragEvent, targetId: string): void {
+  e.preventDefault()
+  if (!_chipDragId || _chipDragId === targetId) return
+  const chips = [...contextChips.value]
+  const fromIdx = chips.findIndex((c) => c.id === _chipDragId)
+  const toIdx = chips.findIndex((c) => c.id === targetId)
+  if (fromIdx < 0 || toIdx < 0) return
+  const [moved] = chips.splice(fromIdx, 1)
+  chips.splice(toIdx, 0, moved)
+  contextChips.value = chips
+}
+
 // ── Drag & drop file → context chip ──────────────────────────────────────────
 const isDraggingOver = ref(false)
 
@@ -4064,7 +4095,12 @@ function getDateLabel(ts: number): string {
           :key="chip.id"
           class="ai-chip"
           :class="{ 'ai-chip-active': previewChipId === chip.id, 'ai-chip-image': !!chip.imageData, 'ai-chip-pinned': chip.pinned }"
+          draggable="true"
           @click.stop="previewChipId = previewChipId === chip.id ? null : chip.id"
+          @dragstart="onChipDragStart($event, chip.id)"
+          @dragend="onChipDragEnd($event)"
+          @dragover="onChipDragOver($event, chip.id)"
+          @drop="onChipDrop($event, chip.id)"
         >
           <img v-if="chip.imageData" :src="chip.imageData" class="ai-chip-thumb" alt="pasted image" />
           {{ chip.label }}
@@ -5510,6 +5546,7 @@ function getDateLabel(ts: number): string {
 .ai-chip-thumb { width: 22px; height: 16px; object-fit: cover; border-radius: 3px; vertical-align: middle; flex-shrink: 0; }
 .ai-chip-popover-img { display: block; max-width: 100%; max-height: 300px; object-fit: contain; margin: 8px auto; }
 .ai-chip-pinned { outline: 1.5px solid rgba(255,255,255,0.6); }
+.ai-chip-dragging { opacity: 0.4; cursor: grabbing; }
 .ai-chip-pin { border: none; background: transparent; color: inherit; cursor: pointer; padding: 0; font-size: 11px; line-height: 1; opacity: 0.6; }
 .ai-chip-pin:hover { opacity: 1; }
 
