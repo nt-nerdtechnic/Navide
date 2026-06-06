@@ -67,6 +67,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     fontSize: 12,
     cursorBlink: true,
     convertEol: false,
+    scrollback: 10000,
     theme: readXtermTheme()
   })
   const fit = new FitAddon()
@@ -132,6 +133,59 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let resizeRafId = 0
   let mounted = false
 
+  // Debounce the size we push to the backend PTY/tmux. Layout transitions and
+  // app startup churn the pane size repeatedly (e.g. grid→spotlight); pushing
+  // every intermediate size resizes the live CLI's TUI over and over, and any
+  // output it printed at a transient narrow width can't reflow when it grows
+  // back. Only the size that survives RESIZE_QUIET_MS of stillness is sent.
+  const RESIZE_QUIET_MS = 250
+  let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
+  function pushResize(): void {
+    if (!sessionId.value) return
+    if (resizeSendTimer) clearTimeout(resizeSendTimer)
+    const cols = term.cols
+    const rows = term.rows
+    resizeSendTimer = setTimeout(() => {
+      resizeSendTimer = null
+      // Re-read in case xterm changed again; send the latest stable size.
+      void backend.send('terminal.resize', {
+        terminal_session_id: sessionId.value,
+        cols: term.cols || cols,
+        rows: term.rows || rows
+      })
+    }, RESIZE_QUIET_MS)
+  }
+
+  // Single source of truth for sizing: fit xterm to its container, then push the
+  // (debounced) size to the backend. The only entry point used by the
+  // ResizeObserver, the post-spawn frame, and fitTerminal().
+  function fitAndSend(): void {
+    cancelAnimationFrame(resizeRafId)
+    let poked = false
+    const run = (): void => {
+      const el = containerRef.value
+      // Hidden (display:none ancestor → clientWidth 0): nothing to fit. It will
+      // be retried by the ResizeObserver when the pane is shown.
+      if (!el || el.clientWidth === 0) return
+      // xterm hasn't measured its character cell yet — happens when the pane was
+      // opened while hidden. fit.fit() is a no-op while cell.width is 0, so poke
+      // xterm once to force measurement, then retry next frame until it's ready.
+      if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
+        if (!poked) {
+          try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
+          poked = true
+        }
+        resizeRafId = requestAnimationFrame(run)
+        return
+      }
+      try {
+        fit.fit()
+        pushResize()
+      } catch { /* ignore transient fit errors during teardown */ }
+    }
+    resizeRafId = requestAnimationFrame(run)
+  }
+
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
@@ -139,13 +193,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     let selAnchorX = -1
     let selAnchorY = -1
 
-    // Prevent xterm from converting wheel scroll to ArrowUp/Down escape codes
-    // (alternate scroll mode). Always scroll the viewport instead, so the
-    // agent's readline input history is not navigated by trackpad swipes.
+    // Intercept wheel events to scroll xterm's scrollback buffer.
+    // Prevents xterm's alternateScroll mode from converting trackpad swipes
+    // into arrow-key escape codes that navigate readline history.
+    let scrollRemainder = 0
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
-      const lines = e.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? Math.round(e.deltaY)
-        : Math.round(e.deltaY / 20)
+      const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? e.deltaY
+        : e.deltaY / 3
+      scrollRemainder += delta
+      const lines = Math.trunc(scrollRemainder)
+      scrollRemainder -= lines
       if (lines !== 0) term.scrollLines(lines)
       return false
     })
@@ -231,31 +289,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         /* ignore */
       }
     })
-    resizeObserver = new ResizeObserver(() => {
-      cancelAnimationFrame(resizeRafId)
-      const doFit = () => {
-        try {
-          fit.fit()
-          if (sessionId.value) {
-            void backend.send('terminal.resize', {
-              terminal_session_id: sessionId.value,
-              cols: term.cols,
-              rows: term.rows
-            })
-          }
-        } catch {
-          // ignore transient fit errors during teardown
-        }
-      }
-      resizeRafId = requestAnimationFrame(() => {
-        // If xterm hasn't measured character cell dimensions yet, retry next frame
-        if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
-          resizeRafId = requestAnimationFrame(doFit)
-        } else {
-          doFit()
-        }
-      })
-    })
+    resizeObserver = new ResizeObserver(() => fitAndSend())
     resizeObserver.observe(el)
     mounted = true
   }
@@ -271,37 +305,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  function measureDims(): { cols: number; rows: number } {
-    const el = containerRef.value
-    if (!el || el.clientWidth === 0) return { cols: term.cols, rows: term.rows }
-
-    // FitAddon might already have correct dims if xterm has measured cell sizes
-    const proposed = fit.proposeDimensions()
-    if (proposed && proposed.cols > 2) return { cols: proposed.cols, rows: proposed.rows }
-
-    // Synchronously measure actual character size via DOM probe — no async wait needed
-    const probe = document.createElement('span')
-    probe.style.cssText =
-      'position:absolute;top:-9999px;visibility:hidden;white-space:nowrap;' +
-      'font-family:Menlo,Monaco,"Courier New",monospace;font-size:12px;'
-    probe.textContent = 'W'.repeat(20)
-    document.body.appendChild(probe)
-    const charWidth = probe.offsetWidth / 20
-    const charHeight = probe.offsetHeight
-    document.body.removeChild(probe)
-
-    if (charWidth === 0 || charHeight === 0) return { cols: term.cols, rows: term.rows }
-
-    // Use content-box width to match FitAddon's getComputedStyle().width calculation
-    const style = window.getComputedStyle(el)
-    const paddingH = parseInt(style.paddingLeft) + parseInt(style.paddingRight)
-    const paddingV = parseInt(style.paddingTop) + parseInt(style.paddingBottom)
-    const overviewRulerW = 14  // FitAddon reserves this for the overview ruler
-    const cols = Math.max(2, Math.floor((el.clientWidth - paddingH - overviewRulerW) / charWidth))
-    const rows = Math.max(1, Math.floor((el.clientHeight - paddingV) / charHeight))
-    return { cols, rows }
-  }
-
   async function spawn(opts: SpawnOptions): Promise<{ tmuxName: string }> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
@@ -309,7 +312,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
-    const { cols: spawnCols, rows: spawnRows } = measureDims()
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -321,8 +323,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        cols: spawnCols,
-        rows: spawnRows,
+        // Provisional size only — fitAndSend() pushes the real container size as
+        // soon as the pane is visible. The few ms at 80×24 are never seen.
+        cols: 80,
+        rows: 24,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
         skip_tmux: opts.skipTmux ?? false,
@@ -337,25 +341,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       tmuxName.value = resp.payload.tmux_name ?? ''
       status.value = 'running'
 
-      // Authoritative resize: sync PTY to actual container size after spawn.
-      // Defer one frame so xterm has measured its character cell dimensions;
-      // retry one more frame if measurement isn't ready yet.
-      const sid = sessionId.value
-      const doSpawnFit = () => {
-        try { fit.fit() } catch { /* ignore */ }
-        void backend.send('terminal.resize', {
-          terminal_session_id: sid,
-          cols: term.cols,
-          rows: term.rows
-        })
-      }
-      requestAnimationFrame(() => {
-        if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
-          requestAnimationFrame(doSpawnFit)
-        } else {
-          doSpawnFit()
-        }
-      })
+      // Push the real size now that sessionId exists. The ResizeObserver's
+      // initial fire happened before spawn (no session yet, so it bailed), so
+      // this is what syncs the backend to the actual container on first paint.
+      fitAndSend()
 
       // Auto-focus once the PTY is wired up so the user can immediately type
       // without having to click the pane.
@@ -410,7 +399,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   function fitTerminal(): void {
     if (!mounted) return
-    try { fit.fit() } catch { /* ignore transient errors */ }
+    fitAndSend()
   }
 
   function updateXtermTheme(): void {
@@ -429,6 +418,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   onScopeDispose(() => {
     cleanupSession()
     cancelAnimationFrame(resizeRafId)
+    if (resizeSendTimer) clearTimeout(resizeSendTimer)
     resizeObserver?.disconnect()
     term.dispose()
     if (sessionId.value) {

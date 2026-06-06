@@ -286,8 +286,28 @@ watch(memories, (v) => { try { localStorage.setItem(MEMORIES_KEY, JSON.stringify
 function addMemory(fact: string): void { const f = fact.trim(); if (f && !memories.value.includes(f)) { memories.value.push(f) } }
 function removeMemory(idx: number): void { memories.value.splice(idx, 1) }
 
+// ── Global Context Pins (Cursor-style always-include files, cross-session) ──────
+interface GlobalContextPin { id: string; label: string; relPath: string }
+const GLOBAL_CTX_KEY = 'ai-chat-global-context-pins'
+const globalContextPins = ref<GlobalContextPin[]>((() => {
+  try { return JSON.parse(localStorage.getItem(GLOBAL_CTX_KEY) ?? '[]') as GlobalContextPin[] }
+  catch { return [] }
+})())
+watch(globalContextPins, (v) => {
+  try { localStorage.setItem(GLOBAL_CTX_KEY, JSON.stringify(v)) } catch { /* quota */ }
+}, { deep: true })
+function addGlobalPin(relPath: string): void {
+  const label = `@${relPath.split('/').pop()}`
+  if (!globalContextPins.value.some((p) => p.relPath === relPath)) {
+    globalContextPins.value.push({ id: crypto.randomUUID(), label, relPath })
+  }
+}
+function removeGlobalPin(id: string): void {
+  globalContextPins.value = globalContextPins.value.filter((p) => p.id !== id)
+}
+
 // ── Notepads (persistent context notes, always injected into system prompt) ───
-interface Notepad { id: string; name: string; content: string; updatedAt: number }
+interface Notepad { id: string; name: string; content: string; updatedAt: number; pinned?: boolean }
 const showNotes = ref(false)
 const notesKey = computed(() => `ai-chat-notes:${props.workspacePath}`)
 const notepadKey = computed(() => `ai-chat-notepads:${props.workspacePath}`)
@@ -323,6 +343,10 @@ function deleteNotepad(id: string): void {
   namedNotepads.value = namedNotepads.value.filter((n) => n.id !== id)
   if (activeNotepadId.value === id) activeNotepadId.value = namedNotepads.value[0]?.id ?? null
   saveNamedNotepads()
+}
+function toggleNotepadPin(id: string): void {
+  const np = namedNotepads.value.find((n) => n.id === id)
+  if (np) { np.pinned = !np.pinned; saveNamedNotepads(); showToast(np.pinned ? `"${np.name}" always-inject on` : `"${np.name}" always-inject off`) }
 }
 function updateNotepadContent(id: string, content: string): void {
   const np = namedNotepads.value.find((n) => n.id === id)
@@ -445,6 +469,8 @@ async function confirmApply(): Promise<void> {
     s.btn.textContent = 'Applied ✓'
     s.btn.style.color = 'var(--success-fg, #3fb950)'
     showToast(`Applied to ${s.relPath}`)
+    // Open/refresh the file in the editor after apply (VS Code parity)
+    if (props.openFile) props.openFile(s.relPath)
     // Add a transient "Revert" button next to the Apply button (Cursor-style undo)
     if (s.oldContent && s.btn.parentElement && !s.btn.parentElement.querySelector('.ai-code-revert-btn')) {
       const revertBtn = document.createElement('button')
@@ -495,7 +521,7 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string; color?: string }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
@@ -511,12 +537,51 @@ function setThreadLabel(id: string, label: ThreadLabel): void {
 const showThreads = ref(false)
 const showArchivedThreads = ref(false)
 const threadSearchQuery = ref('')
+const threadBulkMode = ref(false)
+const selectedThreadIds = ref(new Set<string>())
+function toggleThreadSelect(id: string): void {
+  const s = new Set(selectedThreadIds.value)
+  if (s.has(id)) s.delete(id); else s.add(id)
+  selectedThreadIds.value = s
+}
+function bulkDeleteThreads(): void {
+  const ids = [...selectedThreadIds.value]
+  if (!ids.length) { showToast('No threads selected'); return }
+  if (!window.confirm(`Delete ${ids.length} thread(s)?`)) return
+  const needSwitch = ids.includes(currentThreadId.value)
+  for (const id of ids) {
+    const idx = allThreads.value.findIndex((t) => t.id === id)
+    if (idx !== -1) allThreads.value.splice(idx, 1)
+  }
+  if (needSwitch) {
+    const next = allThreads.value.find((t) => !t.archived)
+    if (next) { switchThread(next.id) } else { newThread() }
+  }
+  selectedThreadIds.value = new Set()
+  threadBulkMode.value = false
+  saveCurrentThread()
+  showToast(`Deleted ${ids.length} thread(s)`)
+}
+function bulkArchiveThreads(): void {
+  const ids = [...selectedThreadIds.value]
+  if (!ids.length) { showToast('No threads selected'); return }
+  for (const id of ids) {
+    const t = allThreads.value.find((th) => th.id === id)
+    if (t) t.archived = true
+  }
+  selectedThreadIds.value = new Set()
+  threadBulkMode.value = false
+  saveCurrentThread()
+  showToast(`Archived ${ids.length} thread(s)`)
+}
 const threadSortMode = ref<'date' | 'name' | 'model'>(
   (localStorage.getItem('ai-chat-thread-sort') ?? 'date') as 'date' | 'name' | 'model'
 )
 watch(threadSortMode, (v) => localStorage.setItem('ai-chat-thread-sort', v))
 const renamingThreadId = ref('')
 const renamingTitle = ref('')
+// Per-thread draft: save unsent input when switching threads (Cursor-style)
+const threadDrafts = new Map<string, string>()
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
   const pool = showArchivedThreads.value
@@ -598,6 +663,15 @@ function togglePinThread(id: string, e: Event): void {
   e.stopPropagation()
   const t = allThreads.value.find((th) => th.id === id)
   if (t) { t.pinned = !t.pinned; saveCurrentThread() }
+}
+const THREAD_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#14b8a6','#3b82f6','#8b5cf6','#ec4899']
+function cycleThreadColor(id: string, e: Event): void {
+  e.stopPropagation()
+  const t = allThreads.value.find((th) => th.id === id)
+  if (!t) return
+  const idx = t.color ? THREAD_COLORS.indexOf(t.color) : -1
+  t.color = idx >= 0 && idx < THREAD_COLORS.length - 1 ? THREAD_COLORS[idx + 1] : (idx === THREAD_COLORS.length - 1 ? undefined : THREAD_COLORS[0])
+  saveCurrentThread()
 }
 function toggleArchiveThread(id: string, e: Event): void {
   e.stopPropagation()
@@ -699,6 +773,12 @@ function newThread(): void {
 function switchThread(id: string): void {
   if (id === currentThreadId.value) { showThreads.value = false; return }
   _navAssistIdx = -1  // reset message nav index on thread switch
+  // Save unsent draft for current thread before switching (Cursor-style)
+  if (inputText.value.trim()) {
+    threadDrafts.set(currentThreadId.value, inputText.value)
+  } else {
+    threadDrafts.delete(currentThreadId.value)
+  }
   // Save current thread's scroll position before switching
   if (messagesEl.value) {
     threadScrollPositions.set(currentThreadId.value, messagesEl.value.scrollTop)
@@ -740,6 +820,8 @@ function switchThread(id: string): void {
   })
   // Move selected thread to front
   allThreads.value = [thread, ...allThreads.value.filter((t) => t.id !== id)]
+  // Restore saved draft for the destination thread (Cursor-style)
+  inputText.value = threadDrafts.get(id) ?? ''
   showThreads.value = false
 }
 
@@ -1083,6 +1165,31 @@ function toggleMsgFold(mi: number): void {
   expandedMsgIdxs.value = new Set(expandedMsgIdxs.value)
 }
 
+// Inline user-bubble editing (Cursor-style: double-click to edit + resend)
+const editingMsgIdx = ref<number | null>(null)
+const editingMsgText = ref('')
+function startInlineEdit(mi: number): void {
+  if (sending.value) return
+  const msg = messages.value[mi]
+  if (!msg || msg.role !== 'user') return
+  editingMsgIdx.value = mi
+  editingMsgText.value = msg.content
+  nextTick(() => {
+    const el = document.getElementById(`ai-inline-edit-${mi}`) as HTMLTextAreaElement | null
+    if (el) { el.focus(); el.select() }
+  })
+}
+function cancelInlineEdit(): void { editingMsgIdx.value = null; editingMsgText.value = '' }
+function submitInlineEdit(mi: number): void {
+  const text = editingMsgText.value.trim()
+  if (!text) { cancelInlineEdit(); return }
+  messages.value[mi].content = text
+  messages.value = messages.value.slice(0, mi + 1)
+  cancelInlineEdit()
+  saveCurrentThread()
+  void regenerate()
+}
+
 // Response length preference — prepended to system prompt when sending
 const responseLengths = ['normal', 'concise', 'detailed'] as const
 type ResponseLength = typeof responseLengths[number]
@@ -1322,6 +1429,7 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@git:file-log', label: '@git:file-log — commit history for the current open file' },
   { id: '@git:recent',   label: '@git:recent — recently committed files (last 5)' },
   { id: '@git:modified', label: '@git:modified — list all uncommitted changed files' },
+  { id: '@git:conflicts', label: '@git:conflicts — show unresolved merge conflict markers' },
   { id: '@git:stash',        label: '@git:stash — list all git stashes' },
   { id: '@git:tag',          label: '@git:tag — list recent git tags' },
   { id: '@git:contributors', label: '@git:contributors — top contributors (git shortlog)' },
@@ -1360,6 +1468,13 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@port',       label: '@port — active dev servers & listening ports in this workspace' },
   { id: '@coverage',   label: '@coverage — test coverage report (vitest/pytest-cov/jest)' },
   { id: '@rules',      label: '@rules — project AI rules (.cursorrules / AGENTS.md / .cursor/rules/*.mdc)' },
+  { id: '@schema',     label: '@schema — database schema (Prisma, SQL migrations, TypeORM entities)' },
+  { id: '@changelog',  label: '@changelog — CHANGELOG.md or CHANGES.md from workspace root' },
+  { id: '@todos',      label: '@todos — grep TODO/FIXME/HACK comments across the workspace' },
+  { id: '@memories',   label: '@memories — your saved persistent memory facts' },
+  { id: '@config',     label: '@config — project config files (tsconfig, eslint, vite, prettier, jest)' },
+  { id: '@tests',      label: '@tests — test files related to the current open file' },
+  { id: '@related',    label: '@related — files that import or are imported by the current file' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -1415,7 +1530,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/rename',   label: '/rename',   description: 'Rename this chat thread',                       template: '' },
   { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
   { id: '/generate', label: '/generate', description: 'Generate a new file from description',          template: '' },
-  { id: '/search',   label: '/search',   description: 'Search codebase for a symbol or string',        template: '' },
+  { id: '/search',       label: '/search',       description: 'Search codebase for a symbol or string',              template: '' },
+  { id: '/search:regex', label: '/search:regex', description: 'Search codebase using a regular expression pattern',    template: '' },
   { id: '/fixtests',     label: '/fixtests',     description: 'Run tests, then auto-ask AI to fix failures',       template: '' },
   { id: '/save-summary', label: '/save-summary', description: 'Summarize key decisions & save to Notepad',             template: '' },
   { id: '/translate',    label: '/translate',    description: 'Translate code comments/strings to another language (e.g. /translate Spanish)', template: '' },
@@ -1426,6 +1542,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/import',       label: '/import',       description: 'Import a chat from a JSON file (exported via /export)',   template: '' },
   { id: '/pr',           label: '/pr',           description: 'Generate a pull request title + description from current git changes', template: '' },
   { id: '/changelog',    label: '/changelog',    description: 'Generate a CHANGELOG entry from recent git commits',                   template: '' },
+  { id: '/explain:imports', label: '/explain:imports', description: 'Explain what each import/dependency in the current file does and why it is used', template: '' },
   { id: '/perf',         label: '/perf',         description: 'Analyze code for performance bottlenecks and suggest optimizations',   template: 'Analyze the following code for performance bottlenecks. For each issue: identify the problem, estimate its impact, and provide a concrete optimized version with explanation:\n\n' },
   { id: '/security',     label: '/security',     description: 'Audit code for security vulnerabilities (OWASP, injection, etc.)',    template: 'Perform a security audit on the following code. Check for OWASP Top 10 vulnerabilities, injection flaws, authentication issues, data exposure, and any other security risks. For each finding provide: severity (Critical/High/Medium/Low), description, and fix:\n\n' },
   { id: '/types',        label: '/types',        description: 'Generate or improve TypeScript type definitions for the code',        template: 'Generate comprehensive TypeScript type definitions for the following code. Include interfaces, type aliases, and generics where appropriate. Ensure strict typing with no implicit any:\n\n' },
@@ -1445,12 +1562,49 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/memory',         label: '/memory',         description: 'Add a persistent memory fact (auto-injected into every conversation)',   template: '' },
   { id: '/memory:clear',   label: '/memory:clear',   description: 'Clear all memories',                                                    template: '' },
   { id: '/refactor:extract', label: '/refactor:extract', description: 'Extract selected code into a named function/variable',              template: '' },
+  { id: '/init:rules',       label: '/init:rules',       description: 'Analyze codebase & generate .cursorrules / AI instructions file',    template: '' },
+  { id: '/explain:commit',   label: '/explain:commit',   description: 'Explain the last N commits in plain English (e.g. /explain:commit 5)', template: '' },
+  { id: '/format',           label: '/format',           description: 'Run code formatter (prettier/black) on current file and show changes', template: '' },
+  { id: '/docgen',           label: '/docgen',           description: 'Generate JSDoc/docstring documentation for the current file',          template: '' },
+  { id: '/optimize:imports', label: '/optimize:imports', description: 'Remove unused imports and sort them in the current file',             template: '' },
+  { id: '/test:update',      label: '/test:update',      description: 'Run failing tests and ask AI to update assertions or fix failures',     template: '' },
+  { id: '/api',              label: '/api',              description: 'Detect and list all API routes in the project',                         template: '' },
+  { id: '/todo',             label: '/todo',             description: 'Find all TODO/FIXME comments and ask AI to resolve them',               template: '' },
+  { id: '/size',             label: '/size',             description: 'Analyze file size, complexity, and suggest splits for large files',      template: '' },
+  { id: '/stash',            label: '/stash',            description: 'List git stashes, or push/pop — e.g. /stash push "WIP"',                 template: '' },
+  { id: '/review:pr',        label: '/review:pr',        description: 'Fetch current PR details + diff and ask AI to review (requires gh CLI)', template: '' },
+  { id: '/deps:check',       label: '/deps:check',       description: 'Check for outdated or vulnerable dependencies',                           template: '' },
+  { id: '/debug:stack',      label: '/debug:stack',      description: 'Paste a stack trace and ask AI to explain and suggest a fix',            template: '' },
+  { id: '/rename:symbol',    label: '/rename:symbol',    description: 'Rename a symbol (function/variable/class) across the codebase with AI',  template: '' },
+  { id: '/coverage:add',     label: '/coverage:add',     description: 'Identify uncovered lines in the current file and generate missing tests',  template: '' },
+  { id: '/open',             label: '/open',             description: 'Open a file in the editor by name or pattern (e.g. /open App.vue)',         template: '' },
+  { id: '/branch',           label: '/branch',           description: 'List, create, or switch git branches (e.g. /branch feat/my-feature)',       template: '' },
+  { id: '/env:check',        label: '/env:check',        description: 'Compare .env.example with .env and find missing variables',                  template: '' },
+  { id: '/fixall',           label: '/fixall',           description: 'Fix all errors/warnings from the Problems panel in one AI pass',              template: '' },
+  { id: '/worktree',         label: '/worktree',         description: 'Manage git worktrees: /worktree list | add <path> <branch> | remove <path>',  template: '' },
+  { id: '/accessibility',    label: '/accessibility',    description: 'Audit HTML/JSX/Vue template for WCAG accessibility issues and suggest fixes',  template: '' },
+  { id: '/regex',            label: '/regex',            description: 'Build, explain, or test a regex pattern (e.g. /regex email validator)',        template: '' },
+  { id: '/pin:file',         label: '/pin:file',         description: 'Pin current open file to Always-Include (injected into every conversation)',     template: '' },
+  { id: '/context:clear',    label: '/context:clear',    description: 'Clear all context chips from the input area',                                    template: '' },
+  { id: '/gen:component',    label: '/gen:component',    description: 'Generate a Vue/React component from a description (e.g. /gen:component Modal)',  template: '' },
+  { id: '/rules:show',       label: '/rules:show',       description: 'Show all active AI rule files (.cursorrules, AGENTS.md, .cursor/rules/*.mdc)',       template: '' },
+  { id: '/mode',             label: '/mode',             description: 'Switch chat mode: /mode ask | /mode edit | /mode agent',                               template: '' },
+  { id: '/session:stats',    label: '/session:stats',    description: 'Show token usage and estimated cost for this conversation session',                     template: '' },
+  { id: '/gen:sql',          label: '/gen:sql',          description: 'Generate SQL query from description (e.g. /gen:sql users who signed up last month)',    template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
 const slashMenuIdx = ref(0)
 const slashMenuEl = ref<HTMLElement | null>(null)
 const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
+// Recently used commands — shown at top of slash menu (VS Code parity)
+const recentCmds = ref<string[]>(
+  (() => { try { return JSON.parse(localStorage.getItem('ai-recent-cmds') ?? '[]'  ) as string[] } catch { return [] } })(),
+)
+function trackRecentCmd(id: string): void {
+  recentCmds.value = [id, ...recentCmds.value.filter((c) => c !== id)].slice(0, 6)
+  try { localStorage.setItem('ai-recent-cmds', JSON.stringify(recentCmds.value)) } catch { /* ignore */ }
+}
 
 // ── Code-block copy via event delegation ─────────────────────────────────────
 async function onMessagesClick(e: MouseEvent): Promise<void> {
@@ -1606,6 +1760,29 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     return
   }
 
+  // Create file from AI suggestion (code block "Create file" button)
+  const createFileBtn = target.closest<HTMLButtonElement>('.ai-code-create-btn')
+  if (createFileBtn) {
+    const relPath = (createFileBtn.dataset.path ?? '').trim()
+    if (!relPath || !props.workspacePath) { showToast('Create file: no path'); return }
+    const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+    if (!SAFE_PATH.test(relPath) || relPath.includes('..') || relPath.startsWith('-')) { showToast('Create file: invalid path'); return }
+    try {
+      const code = decodeURIComponent(escape(atob(createFileBtn.dataset.code ?? '')))
+      const confirmed = window.confirm(`Create file "${relPath}"?\n\n${code.slice(0, 200)}${code.length > 200 ? '\n…' : ''}`)
+      if (!confirmed) return
+      interface WriteResp { ok: boolean; error?: string }
+      const r = await props.backend.send<WriteResp>('fs.write_file', { workspace_path: props.workspacePath, rel_path: relPath, content: code })
+      if (r.payload?.ok) {
+        showToast(`Created: ${relPath}`)
+        if (props.openFile) props.openFile(relPath)
+      } else {
+        showToast(`Create failed: ${r.payload?.error ?? 'unknown error'}`)
+      }
+    } catch { showToast('Create file: unavailable') }
+    return
+  }
+
   // Inline code action buttons (Explain / Refactor)
   const codeActionBtn = target.closest<HTMLButtonElement>('.ai-code-action-btn')
   if (codeActionBtn) {
@@ -1745,6 +1922,19 @@ function renderMarkdownLite(rawText: string): string {
       blocks.push(`<div class="ai-mermaid-wrap"><div class="ai-mermaid" data-graph="${encodeURIComponent(code.trim())}"><span class="ai-mermaid-loading">Rendering diagram…</span></div></div>`)
       return `\x00B${i}\x00`
     }
+    // Diff/patch blocks — render with dedicated diff renderer (green/red line highlighting)
+    if (['diff', 'patch'].includes((lang ?? '').toLowerCase())) {
+      const i = blocks.length
+      const encoded = btoa(unescape(encodeURIComponent(code.trim())))
+      blocks.push(
+        `<div class="ai-code-wrap">` +
+        `<div class="ai-code-header"><span class="ai-code-lang">Diff</span>` +
+        `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button></div>` +
+        `<div class="ai-diff-view ai-diff-inline">${renderDiff(code)}</div>` +
+        `</div>`,
+      )
+      return `\x00B${i}\x00`
+    }
     // Detect file path from first line comment (e.g. `// src/foo.ts` or `# src/foo.py`)
     const firstLine = code.split('\n')[0].trim()
     const pathMatch = firstLine.match(/^(?:\/\/|#|\/\*|\*|--)\s*((?:\w[\w.-]*\/)+[\w.-]+\.\w+)/)
@@ -1775,6 +1965,10 @@ function renderMarkdownLite(rawText: string): string {
       : ''
     // Open-file button and file path chip (Cursor-style code block header)
     const safeInferredPath = inferredPath ? inferredPath.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : ''
+    // "Create file" button — shown when code block has an inferred path (for new files)
+    const createBtn = inferredPath && props.workspacePath
+      ? `<button class="ai-code-create-btn" data-code="${encoded}" data-path="${safeInferredPath}" title="Create new file: ${safeInferredPath}">Create</button>`
+      : ''
     const openBtn = inferredPath && props.openFile
       ? `<button class="ai-code-open-btn" data-path="${safeInferredPath}" title="Open ${safeInferredPath} in editor">↗</button>`
       : ''
@@ -1828,6 +2022,7 @@ function renderMarkdownLite(rawText: string): string {
       `${runBtn}` +
       `${saveBtn}` +
       `${insertBtn}` +
+      `${createBtn}` +
       `${applyBtn}` +
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `<button class="ai-code-wrap-btn" title="Toggle word wrap">↔</button>` +
@@ -2278,15 +2473,83 @@ async function sendMessage(): Promise<void> {
   const _delegateSlash = [
     '/clear', '/compact', '/diff', '/model', '/pin', '/summarize',
     '/save-summary', '/spell', '/git', '/pr', '/changelog', '/prompts', '/import', '/generate', '/commit',
-    '/run', '/search', '/translate', '/rename', '/save-prompt', '/scaffold',
+    '/run', '/search', '/search:regex', '/translate', '/rename', '/save-prompt', '/scaffold',
     '/review:staged', '/review:branch', '/fix:lint', '/coverage',
     '/label', '/recap', '/instructions', '/ask', '/commit:amend',
     '/memory', '/memory:clear', '/refactor:extract',
+    '/init:rules', '/explain:commit',
+    '/todo', '/size',
+    '/format', '/docgen', '/optimize:imports',
+    '/test:update', '/api',
+    '/stash', '/review:pr', '/deps:check', '/debug:stack',
+    '/rename:symbol', '/coverage:add',
+    '/branch', '/env:check',
+    '/explain:imports',
+    '/fixall', '/worktree',
+    '/accessibility', '/regex',
+    '/pin:file', '/context:clear', '/gen:component',
+    '/rules:show', '/mode', '/session:stats', '/gen:sql',
   ]
   if (_delegateSlash.includes(rawText)) {
     inputText.value = ''
     const found = SLASH_COMMANDS.find((c) => c.id === rawText)
     if (found) void selectSlashCommand(found)
+    return
+  }
+
+  // /explain:commit [N] — explain last N commits (supports /explain:commit 10)
+  if (rawText === '/explain:commit' || /^\/explain:commit\s+\d+$/.test(rawText)) {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/explain:commit requires an open workspace'); return }
+    const nArg = parseInt(rawText.replace('/explain:commit', '').trim() || '5', 10)
+    const n = Math.max(1, Math.min(50, nArg))
+    try {
+      showToast(`Fetching last ${n} commits…`)
+      interface ShellRespEC { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespEC>('shell.run', {
+        command: `git log -${n} --format="commit %H%nauthor: %an%ndate: %ad%nsubject: %s%n%nbody:%n%b%n---" --date=short 2>&1`,
+        workspace_path: props.workspacePath,
+      })
+      if (resp.payload?.ok && resp.payload.output?.trim()) {
+        contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@git:log:'))
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@git:log:${n}`, content: `// Last ${n} commits:\n${resp.payload.output.slice(0, 8000)}` })
+        inputText.value = `Explain these ${n} commits in plain English. For each: what changed, why it likely happened, and any risks or notable patterns.`
+      } else {
+        inputText.value = 'Explain the recent git commits in plain English. Describe what changed and why.'
+      }
+    } catch { inputText.value = 'Explain the recent git commits in plain English.' }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /open <filename> — open a file in the editor by fuzzy name
+  if (rawText === '/open' || rawText.startsWith('/open ')) {
+    const query = rawText.slice('/open'.length).trim()
+    inputText.value = ''
+    if (!query) {
+      showToast('Usage: /open <filename or pattern>')
+      inputText.value = '/open '
+      await nextTick(); textareaEl.value?.focus()
+      return
+    }
+    if (!props.workspacePath) { showToast('/open requires an open workspace'); return }
+    try {
+      interface FlatRespOpen { ok: boolean; files?: string[] }
+      const resp = await props.backend.send<FlatRespOpen>('fs.list_files_flat', { workspace_path: props.workspacePath, query })
+      if (!resp.payload?.ok) { showToast(`/open: ${resp.payload?.error ?? 'backend error'}`); return }
+      const files = resp.payload.files ?? []
+      const lower = query.toLowerCase()
+      const matches = files.filter((f) => f.toLowerCase().includes(lower)).slice(0, 1)
+      if (matches.length && props.openFile) {
+        props.openFile(matches[0])
+        showToast(`Opened: ${matches[0].split('/').pop()}`)
+      } else if (matches.length) {
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@${query}`, content: `// Matching file: ${matches[0]}` })
+        showToast(`Found: ${matches[0]}`)
+      } else {
+        showToast(`/open: no match for "${query}"`)
+      }
+    } catch { showToast('/open: unavailable') }
     return
   }
 
@@ -2417,10 +2680,20 @@ async function sendMessage(): Promise<void> {
         command: cmd, workspace_path: props.workspacePath,
       })
       const r = resp.payload
+      const exitCode = r?.exit_code ?? 0
+      const hasError = !r?.ok || exitCode !== 0
       const out = r?.ok
-        ? `\`\`\`\n${r.output ?? '(no output)'}\n\`\`\`\n_Exit code: ${r.exit_code ?? 0}_`
+        ? `\`\`\`\n${r.output ?? '(no output)'}\n\`\`\`\n_Exit code: ${exitCode}_`
         : `Error: ${r?.error ?? 'unknown'}`
       messages.value.push({ role: 'assistant', content: out, timestamp: Date.now() })
+      // If command failed, auto-inject output as context chip and offer explain
+      if (hasError && r?.output?.trim()) {
+        const errOutput = r.output.trim()
+        contextChips.value = contextChips.value.filter((c) => c.label !== '@run:error')
+        contextChips.value.push({ id: crypto.randomUUID(), label: '@run:error', content: `// Failed command: ${cmd}\n// Exit code: ${exitCode}\n\`\`\`\n${errOutput.slice(0, 3000)}\n\`\`\`` })
+        inputText.value = `Explain this error and suggest how to fix it.`
+        nextTick(() => { textareaEl.value?.focus() })
+      }
     } catch { messages.value.push({ role: 'assistant', content: 'Command failed', isError: true, timestamp: Date.now() }) }
     return
   }
@@ -2456,8 +2729,40 @@ async function sendMessage(): Promise<void> {
       }
       contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@search:'))
       contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: chipContent })
+      inputText.value = `How is "${query}" used across the codebase? Explain the key usages found in @search results.`
       showToast(`Found in ${results.length} file(s)`)
     } catch { showToast('/search: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /search:regex <pattern> — regex search (inline flow)
+  if (rawText.startsWith('/search:regex ')) {
+    const pattern = rawText.slice('/search:regex '.length).trim()
+    if (!pattern) { showToast('Usage: /search:regex <pattern>'); return }
+    inputText.value = ''
+    try {
+      interface SearchResp3 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+      const resp = await props.backend.send<SearchResp3>('search.find_in_files', {
+        workspace_path: props.workspacePath,
+        query: pattern,
+        is_regex: true,
+        case_sensitive: false,
+        max_results: 40,
+      })
+      const results = resp.payload?.results ?? []
+      if (results.length === 0) { showToast(`No regex matches for /${pattern}/`); return }
+      let chipContent = `// Regex search: /${pattern}/ — ${results.length} files\n`
+      for (const r of results.slice(0, 10)) {
+        chipContent += `\n// ${r.rel_path}\n`
+        for (const m of r.matches.slice(0, 4)) chipContent += `${m.line}: ${m.text}\n`
+      }
+      contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@search:'))
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@search:/${pattern.slice(0, 18)}/`, content: chipContent })
+      inputText.value = `Explain all matches of /${pattern}/ found in @search results above.`
+      showToast(`Regex matched in ${results.length} file(s)`)
+    } catch { showToast('/search:regex: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
     return
   }
 
@@ -2590,6 +2895,10 @@ async function sendMessage(): Promise<void> {
   try {
     const lengthHint = RESPONSE_LENGTH_HINTS[responseLength.value]
     const notesSuffix = notesContent.value.trim() ? `\n\n--- Workspace Notes ---\n${notesContent.value.trim()}` : ''
+    const pinnedNotepads = namedNotepads.value.filter((n) => n.pinned && n.content.trim())
+    const pinnedNotepadsSuffix = pinnedNotepads.length
+      ? '\n\n' + pinnedNotepads.map((n) => `--- Pinned Notepad: ${n.name} ---\n${n.content.trim().slice(0, 4000)}`).join('\n\n')
+      : ''
     const memoriesSuffix = memories.value.length ? `\n\n--- Memories (Persistent Facts) ---\n${memories.value.map((m, i) => `${i + 1}. ${m}`).join('\n')}` : ''
     // Smart Context: inject active file as ambient context (capped at 200 lines)
     let smartCtxSuffix = ''
@@ -2642,13 +2951,28 @@ async function sendMessage(): Promise<void> {
       ? `--- User Rules (applies to all projects) ---\n${settingsUserRules.value.trim()}\n---\n\n`
       : ''
     const rulesPrefix = userRulesPrefix + projectRulesPrefix
+    // Global context pins: read pinned files and inject into system suffix
+    let globalPinsSuffix = ''
+    if (globalContextPins.value.length > 0 && props.workspacePath) {
+      const pinParts: string[] = []
+      for (const pin of globalContextPins.value) {
+        try {
+          interface PinFileResp { ok: boolean; payload?: { content?: string } }
+          const pr = await props.backend.send<PinFileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: pin.relPath })
+          const content = pr.payload?.content ?? ''
+          const ext = pin.relPath.split('.').pop() ?? ''
+          if (content) pinParts.push(`--- Always-Include: ${pin.relPath} ---\n\`\`\`${ext}\n${content.slice(0, 8000)}\n\`\`\``)
+        } catch { /* skip unreadable */ }
+      }
+      if (pinParts.length) globalPinsSuffix = `\n\n${pinParts.join('\n\n')}`
+    }
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
       ...(rulesPrefix ? { system_prefix: rulesPrefix } : {}),
-      ...(lengthHint || notesSuffix || memoriesSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + memoriesSuffix + smartCtxSuffix + editSetSuffix } : {}),
+      ...(lengthHint || notesSuffix || pinnedNotepadsSuffix || memoriesSuffix || globalPinsSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + pinnedNotepadsSuffix + memoriesSuffix + globalPinsSuffix + smartCtxSuffix + editSetSuffix } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -2702,6 +3026,33 @@ function editMessage(idx: number): void {
   // Remove this message and everything after it
   messages.value.splice(idx)
   saveCurrentThread()
+  nextTick(() => textareaEl.value?.focus())
+}
+
+// ── Delete a message pair (user + following assistant response) ─────────────
+function deleteMessagePair(idx: number): void {
+  if (sending.value) return
+  const msg = messages.value[idx]
+  if (!msg || msg.role !== 'user') return
+  const next = messages.value[idx + 1]
+  const count = next?.role === 'assistant' ? 2 : 1
+  if (!window.confirm(`Delete this ${count === 2 ? 'message exchange' : 'message'}?`)) return
+  messages.value.splice(idx, count)
+  saveCurrentThread()
+}
+
+// ── Add AI response text as a context chip ─────────────────────────────────
+function addResponseAsContext(msg: ChatMessage): void {
+  const text = (msg.rawContent ?? msg.content).trim().slice(0, 8000)
+  if (!text) return
+  const label = `@ai:response`
+  if (!contextChips.value.some((c) => c.label === label)) {
+    contextChips.value.push({ id: crypto.randomUUID(), label, content: `// Previous AI response:\n${text}` })
+  } else {
+    showToast('@ai:response already in context')
+    return
+  }
+  showToast('AI response added as context chip')
   nextTick(() => textareaEl.value?.focus())
 }
 
@@ -2929,6 +3280,16 @@ async function ctxMenuSaveToRules(): Promise<void> {
     } catch { /* try next */ }
   }
   showToast('Could not save rule — create AGENTS.md first')
+}
+function ctxMenuSaveToMemory(): void {
+  if (!msgCtxMenu.value) return
+  const content = messages.value[msgCtxMenu.value.mi]?.content ?? ''
+  msgCtxMenu.value = null
+  const sel = window.getSelection()?.toString().trim()
+  const fact = sel || content.replace(/```[\s\S]*?```/g, '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  if (!fact) { showToast('No content to save as memory'); return }
+  addMemory(fact)
+  showToast(`Memory saved: "${fact.slice(0, 60)}…"`)
 }
 
 // ── Regenerate last AI response ────────────────────────────────────────────────
@@ -3805,9 +4166,20 @@ function onTextareaInput(e: Event): void {
       description: `My template: ${t.name}`,
       template: t.text,
     }))
-    slashOptions.value = [...SLASH_COMMANDS, ...templateCmds].filter(
+    const allCmds = [...SLASH_COMMANDS, ...templateCmds]
+    const filtered = allCmds.filter(
       (c) => c.id.slice(1).includes(fragment) || (c.description ?? '').toLowerCase().includes(fragment),
     )
+    // Promote recently used commands to the top when there is no filter fragment
+    if (!fragment && recentCmds.value.length > 0) {
+      const recent = recentCmds.value
+        .map((id) => allCmds.find((c) => c.id === id))
+        .filter((c): c is SlashCommand => c !== undefined)
+      const recentIds = new Set(recent.map((c) => c.id))
+      slashOptions.value = [...recent, ...filtered.filter((c) => !recentIds.has(c.id))]
+    } else {
+      slashOptions.value = filtered
+    }
     showSlashMenu.value = slashOptions.value.length > 0
     return
   }
@@ -4081,6 +4453,7 @@ function triggerCompact(): void {
 
 async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   showSlashMenu.value = false
+  trackRecentCmd(cmd.id)
   if (cmd.id === '/run') {
     // Let user type the command after /run
     inputText.value = '/run '
@@ -4270,12 +4643,73 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   }
 
   if (cmd.id === '/search') {
-    const existing = inputText.value.slice('/search'.length).trim()
+    // If user is in raw-text flow (typed "/search query" directly), extract query
+    const existing = inputText.value.startsWith('/search') ? inputText.value.slice('/search'.length).trim() : ''
     if (existing) {
-      void sendMessage()
+      // Do a real codebase search and inject results as a chip
+      const query = existing
+      inputText.value = ''
+      if (!props.workspacePath) { showToast('/search requires an open workspace'); return }
+      showToast(`Searching for "${query}"…`)
+      try {
+        interface SearchMatch { line: number; col: number; text: string }
+        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        const resp = await props.backend.send<SearchResp>('search.find_in_files', {
+          workspace_path: props.workspacePath,
+          query,
+          is_regex: false,
+          case_sensitive: false,
+          max_results: 30,
+        })
+        const results = resp.payload?.results ?? []
+        if (!results.length) { showToast(`/search: no matches for "${query}"`); return }
+        const lines = [`// /search "${query}" — ${results.length} file${results.length === 1 ? '' : 's'}`]
+        for (const r of results.slice(0, 8)) {
+          lines.push(`
+// ${r.rel_path}`)
+          r.matches.slice(0, 3).forEach((m) => lines.push(`  ${m.line}: ${m.text.trim()}`))
+        }
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@search:${query.slice(0, 20)}`, content: lines.join('\n') })
+        inputText.value = `Explain the usages of "${query}" shown in @search results above.`
+      } catch { showToast('/search: unavailable') }
+      nextTick(() => { textareaEl.value?.focus() })
       return
     }
     inputText.value = '/search '
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    return
+  }
+
+  if (cmd.id === '/search:regex') {
+    const existing = inputText.value.startsWith('/search:regex') ? inputText.value.slice('/search:regex'.length).trim() : ''
+    if (existing) {
+      const pattern = existing
+      inputText.value = ''
+      if (!props.workspacePath) { showToast('/search:regex requires an open workspace'); return }
+      showToast(`Searching regex /${pattern}/…`)
+      try {
+        interface SearchRegexResp { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; col: number; text: string }> }> }
+        const resp = await props.backend.send<SearchRegexResp>('search.find_in_files', {
+          workspace_path: props.workspacePath,
+          query: pattern,
+          is_regex: true,
+          case_sensitive: false,
+          max_results: 30,
+        })
+        const results = resp.payload?.results ?? []
+        if (!results.length) { showToast(`/search:regex: no matches for /${pattern}/`); return }
+        const lines = [`// /search:regex /${pattern}/ — ${results.length} file${results.length === 1 ? '' : 's'}`]
+        for (const r of results.slice(0, 8)) {
+          lines.push(`\n// ${r.rel_path}`)
+          r.matches.slice(0, 3).forEach((m) => lines.push(`  ${m.line}: ${m.text.trim()}`))
+        }
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@search:/${pattern.slice(0, 18)}/`, content: lines.join('\n') })
+        inputText.value = `Explain all matches of /${pattern}/ shown in @search results above.`
+      } catch { showToast('/search:regex: unavailable') }
+      nextTick(() => { textareaEl.value?.focus() })
+      return
+    }
+    inputText.value = '/search:regex '
     nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
     return
   }
@@ -4348,7 +4782,7 @@ ${historyText}`
     inputText.value = ''
     const relPath = props.getActiveRelPath?.()
     const fileContent = props.getEditorContent?.()
-    const selection = props.getActiveSelection?.()
+    const selection = props.getEditorSelection?.()
     if (selection && selection.trim()) {
       contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: `// Selection:\n${selection}` })
       inputText.value = 'Fix all spelling and grammar errors in the selected text above. Return only the corrected text, preserving all formatting and line breaks.'
@@ -4494,9 +4928,11 @@ ${historyText}`
 
   if (cmd.id === '/refactor:extract') {
     inputText.value = ''
-    const sel = window.getSelection()?.toString().trim() ?? ''
+    const sel = (props.getEditorSelection?.() || window.getSelection()?.toString() || '').trim()
     if (sel) {
-      contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: `// Selected code:\n\`\`\`\n${sel}\n\`\`\`` })
+      const relPath = props.getActiveRelPath?.()
+      const ext = relPath?.split('.').pop() ?? ''
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: `// Selected code:\n\`\`\`${ext}\n${sel}\n\`\`\`` })
       inputText.value = 'Extract the selected code into a well-named function. Keep the original call site working. Use the same language and style as the surrounding code.'
     } else {
       const relPath = props.getActiveRelPath?.()
@@ -4509,6 +4945,720 @@ ${historyText}`
         }
       }
       inputText.value = 'Identify the best candidate for extraction in this file. Extract it into a well-named function or variable, keeping all existing behavior identical.'
+    }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/format') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/format requires an open workspace'); return }
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('/format: no file open'); return }
+    const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
+    const safeRelPath = SAFE_PATH.test(relPath) && !relPath.includes('..') && !relPath.startsWith('-') ? relPath : null
+    if (!safeRelPath) { showToast('/format: invalid file path'); return }
+    try {
+      showToast('Formatting…')
+      interface ShellRespFmt { ok: boolean; output?: string }
+      const sqPath = safeRelPath.replace(/'/g, "'\\''")
+      const isPy = safeRelPath.endsWith('.py')
+      const isTs = /\.(ts|tsx|js|jsx|vue|css|scss|json|md)$/.test(safeRelPath)
+      const fmtCmd = isPy
+        ? `python -m black '${sqPath}' --diff 2>&1 | head -60 || python -m autopep8 --diff '${sqPath}' 2>&1 | head -60`
+        : isTs
+        ? `npx prettier --write '${sqPath}' 2>&1 && git diff HEAD -- '${sqPath}' 2>/dev/null | head -60`
+        : `echo "(no formatter available for ${safeRelPath})"`
+      const resp = await props.backend.send<ShellRespFmt>('shell.run', { command: fmtCmd, workspace_path: props.workspacePath })
+      if (!resp.payload?.ok) { showToast(`/format: ${resp.payload?.error ?? 'backend error'}`); return }
+      const out = (resp.payload.output ?? '').trim()
+      if (!out) { showToast('/format: no changes or formatter unavailable'); return }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@format:diff', content: `// Format changes for ${safeRelPath}:\n\`\`\`diff\n${out}\n\`\`\`` })
+      inputText.value = `Review the format changes above for ${safeRelPath.split('/').pop()}. Were all changes correct?`
+    } catch { showToast('/format: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/docgen') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (!relPath || !content) { showToast('/docgen: no file open'); return }
+    const ext = relPath.split('.').pop() ?? ''
+    const label = `@${relPath.split('/').pop()}`
+    if (!contextChips.value.some((c) => c.label === label)) {
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\`` })
+    }
+    inputText.value = `Generate complete JSDoc/docstring documentation for every exported function, class, and type in ${relPath.split('/').pop()}. Follow the existing code style. Return the full file with documentation added.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/optimize:imports') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (!relPath || !content) { showToast('/optimize:imports: no file open'); return }
+    const ext = relPath.split('.').pop() ?? ''
+    const label = `@${relPath.split('/').pop()}`
+    if (!contextChips.value.some((c) => c.label === label)) {
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\`` })
+    }
+    inputText.value = `Remove all unused imports from ${relPath.split('/').pop()}, sort the remaining imports (stdlib → third-party → internal), and return the complete updated file. Do not change any other code.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/test:update') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/test:update requires an open workspace'); return }
+    try {
+      showToast('Running tests…')
+      interface ShellRespTest { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespTest>('shell.run', {
+        command: 'npx vitest run 2>&1 | tail -80 || npx jest --no-coverage 2>&1 | tail -80 || python -m pytest -x -q 2>&1 | tail -60',
+        workspace_path: props.workspacePath,
+      })
+      if (!resp.payload?.ok) { showToast(`/test:update: ${resp.payload?.error ?? 'backend error'}`); return }
+      const out = (resp.payload.output ?? '').trim()
+      if (!out) { showToast('/test:update: no test output'); return }
+      const hasFailures = /FAIL|failed|error|Error|FAILED/i.test(out)
+      if (!hasFailures) { showToast('/test:update: all tests pass — nothing to update'); return }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@test:failures', content: `// Failing tests:\n${out}` })
+      inputText.value = 'Analyze the failing test output above. For each failure: identify whether the test expectation is wrong (update the assertion) or the implementation is wrong (fix the code). Propose the minimal change to make all tests pass.'
+    } catch { showToast('/test:update: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/api') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/api requires an open workspace'); return }
+    try {
+      showToast('Detecting API routes…')
+      interface ShellRespApi { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespApi>('shell.run', {
+        command: [
+          'grep -rn --include="*.ts" --include="*.js" --include="*.py" --include="*.vue"',
+          '-E "router\\.(get|post|put|patch|delete|all)|app\\.(get|post|put|patch|delete)|@(Get|Post|Put|Patch|Delete|Router)|FastAPI|APIRouter|@app\\." .',
+          '2>/dev/null | grep -v node_modules | grep -v ".test." | grep -v ".spec." | head -40',
+        ].join(' '),
+        workspace_path: props.workspacePath,
+      })
+      if (!resp.payload?.ok) { showToast(`/api: ${resp.payload?.error ?? 'backend error'}`); return }
+      const raw = (resp.payload.output ?? '').trim()
+      if (!raw) { showToast('/api: no route definitions detected'); return }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@api:routes', content: `// API route definitions:\n${raw}` })
+      inputText.value = 'List all API endpoints detected above in a structured format: METHOD /path — description. Group by router/controller.'
+    } catch { showToast('/api: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /stash — list git stashes, or push/pop
+  if (cmd.id === '/stash') {
+    const rawArgs = inputText.value.trim()
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/stash requires an open workspace'); return }
+    try {
+      let stashCmd: string
+      if (rawArgs.startsWith('push')) {
+        const msg = rawArgs.slice(4).trim()
+        const SAFE_MSG = /^[A-Za-z0-9_./ -]+$/
+        if (msg && (!SAFE_MSG.test(msg) || msg.includes('..'))) { showToast('/stash push: invalid message'); return }
+        stashCmd = msg ? `git stash push -m '${msg.replace(/'/g, "'\\''")}'` : 'git stash push'
+      } else if (rawArgs.startsWith('pop')) {
+        stashCmd = 'git stash pop'
+      } else {
+        stashCmd = 'git stash list'
+      }
+      showToast('Running git stash…')
+      interface ShellRespStash { ok: boolean; output?: string; error?: string }
+      const resp = await props.backend.send<ShellRespStash>('shell.run', { command: stashCmd, workspace_path: props.workspacePath })
+      if (!resp.payload?.ok) { showToast(`/stash: ${resp.payload?.error ?? 'backend error'}`); return }
+      const raw = (resp.payload.output ?? '').trim()
+      if (!raw) { showToast('/stash: no stashes found'); return }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git:stash', content: `// git stash list:\n${raw}` })
+      inputText.value = 'Summarize the stash entries above. Which stash is most likely the one I want to restore? Explain each one briefly.'
+    } catch { showToast('/stash: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /review:pr — fetch PR details + diff and ask AI to review
+  if (cmd.id === '/review:pr') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/review:pr requires an open workspace'); return }
+    try {
+      showToast('Fetching PR…')
+      interface ShellRespPr { ok: boolean; output?: string; error?: string }
+      const prMeta = await props.backend.send<ShellRespPr>('shell.run', {
+        command: 'gh pr view --json number,title,body,url,state,author,headRefName 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      if (!prMeta.payload?.ok || !prMeta.payload.output?.trim()) { showToast('/review:pr: no open PR (gh CLI required)'); return }
+      const prDiff = await props.backend.send<ShellRespPr>('shell.run', {
+        command: 'gh pr diff 2>&1 | head -500',
+        workspace_path: props.workspacePath,
+      })
+      const meta = (prMeta.payload.output ?? '').trim()
+      const diff = (prDiff.payload?.output ?? '').trim()
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@pr:meta', content: `// PR info:\n${meta}` })
+      if (diff) contextChips.value.push({ id: crypto.randomUUID(), label: '@pr:diff', content: `// PR diff (first 500 lines):\n${diff}` })
+      inputText.value = 'Review this pull request. Check for: 1. Correctness and logic errors, 2. Security issues, 3. Performance concerns, 4. Missing tests or edge cases, 5. Code style and readability. Summarize findings with severity (critical/medium/low).'
+    } catch { showToast('/review:pr: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /deps:check — check for outdated or vulnerable dependencies
+  if (cmd.id === '/deps:check') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/deps:check requires an open workspace'); return }
+    try {
+      showToast('Checking dependencies…')
+      interface ShellRespDeps { ok: boolean; output?: string; error?: string }
+      const npmCheck = await props.backend.send<ShellRespDeps>('shell.run', {
+        command: 'npm outdated 2>&1 | head -30',
+        workspace_path: props.workspacePath,
+      })
+      const pipCheck = await props.backend.send<ShellRespDeps>('shell.run', {
+        command: 'pip list --outdated 2>&1 | head -20',
+        workspace_path: props.workspacePath,
+      })
+      const npmOut = (npmCheck.payload?.ok ? npmCheck.payload.output ?? '' : '').trim()
+      const pipOut = (pipCheck.payload?.ok ? pipCheck.payload.output ?? '' : '').trim()
+      if (!npmCheck.payload?.ok && !pipCheck.payload?.ok) { showToast(`/deps:check: ${npmCheck.payload?.error ?? 'backend error'}`); return }
+      if (!npmOut && !pipOut) { showToast('/deps:check: no outdated packages found'); return }
+      if (npmOut) contextChips.value.push({ id: crypto.randomUUID(), label: '@deps:npm', content: `// npm outdated:\n${npmOut}` })
+      if (pipOut && !pipOut.includes('is not recognized') && !pipOut.includes('command not found')) {
+        contextChips.value.push({ id: crypto.randomUUID(), label: '@deps:pip', content: `// pip outdated:\n${pipOut}` })
+      }
+      inputText.value = 'Review the outdated packages above. For each one: 1. What changed in the newer version (breaking changes?), 2. Risk of upgrading, 3. Whether to upgrade now or defer. Prioritize by severity.'
+    } catch { showToast('/deps:check: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /debug:stack — paste a stack trace and ask AI to explain and suggest a fix
+  if (cmd.id === '/debug:stack') {
+    inputText.value = ''
+    try {
+      const trace = window.prompt('Paste the stack trace or error output:')
+      if (!trace?.trim()) return
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@stack:trace', content: `// Stack trace:\n${trace.trim()}` })
+      inputText.value = 'Analyze the stack trace above. Explain: 1. What caused this error, 2. Which line in my code is responsible, 3. How to fix it. Include the exact code change needed.'
+    } catch { showToast('/debug:stack: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /rename:symbol — rename a symbol across the codebase with AI assistance
+  if (cmd.id === '/rename:symbol') {
+    inputText.value = ''
+    const sel = (props.getEditorSelection?.() || '').trim()
+    const symbolName = sel || window.prompt('Enter the symbol name to rename:')?.trim()
+    if (!symbolName) return
+    if (!props.workspacePath) { showToast('/rename:symbol requires an open workspace'); return }
+    try {
+      showToast(`Searching for "${symbolName}"…`)
+      interface ShellRespRename { ok: boolean; output?: string }
+      const safeSymbol = symbolName.replace(/[^A-Za-z0-9_$]/g, '').slice(0, 80)
+      if (!safeSymbol) { showToast('/rename:symbol: invalid symbol name'); return }
+      const resp = await props.backend.send<ShellRespRename>('shell.run', {
+        command: `grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.py" --include="*.vue" -w "${safeSymbol}" . 2>/dev/null | grep -v node_modules | grep -v ".test." | grep -v ".spec." | head -30`,
+        workspace_path: props.workspacePath,
+      })
+      if (!resp.payload?.ok) { showToast(`/rename:symbol: ${resp.payload?.error ?? 'backend error'}`); return }
+      const usages = (resp.payload.output ?? '').trim()
+      if (!usages) {
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@symbol:${safeSymbol}`, content: `// Symbol "${safeSymbol}": no usages found in workspace` })
+      } else {
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@symbol:${safeSymbol}`, content: `// Usages of "${safeSymbol}" (${usages.split('\n').length} occurrences):\n${usages}` })
+      }
+      const relPath = props.getActiveRelPath?.()
+      inputText.value = `I want to rename "${safeSymbol}" to a better name${relPath ? ` (currently in ${relPath.split('/').pop()})` : ''}. Suggest 3 good alternative names with reasoning, then show the rename plan (which files need updating and what the grep-replace command would be).`
+    } catch { showToast('/rename:symbol: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /coverage:add — generate tests for uncovered lines in the current file
+  if (cmd.id === '/coverage:add') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/coverage:add requires an open workspace'); return }
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('/coverage:add: no file open'); return }
+    const content = props.getEditorContent?.()
+    if (!content) { showToast('/coverage:add: file is empty'); return }
+    const SAFE_PATH_COV = /^[A-Za-z0-9_./ -]+$/
+    if (!SAFE_PATH_COV.test(relPath) || relPath.includes('..') || relPath.startsWith('-')) { showToast('/coverage:add: invalid path'); return }
+    try {
+      showToast('Running coverage…')
+      interface ShellRespCov { ok: boolean; output?: string }
+      const ext = relPath.split('.').pop() ?? ''
+      const sqPath = "'" + relPath.replace(/'/g, "'\\''") + "'"
+      const escapedPattern = "'" + relPath.replace(/'/g, "'\\''").replace(/\./g, '\\.') + "'"
+      const coverCmd = ext === 'py'
+        ? `python -m pytest --cov=${sqPath} --cov-report=term-missing -q 2>&1 | tail -30`
+        : `npx vitest run --coverage ${sqPath} 2>&1 | tail -40 || npx jest --coverage --testPathPattern=${escapedPattern} 2>&1 | tail -40`
+      const resp = await props.backend.send<ShellRespCov>('shell.run', { command: coverCmd, workspace_path: props.workspacePath })
+      const coverOut = (resp.payload?.ok ? resp.payload.output ?? '' : '').trim()
+      const label = `@${relPath.split('/').pop()}`
+      if (!contextChips.value.some((c) => c.label === label)) {
+        contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 8000)}\n\`\`\`` })
+      }
+      if (coverOut) contextChips.value.push({ id: crypto.randomUUID(), label: '@coverage:report', content: `// Coverage report:\n${coverOut}` })
+      inputText.value = `Based on the file and coverage report above, identify which functions or branches are NOT covered by tests and write new test cases to cover them. Focus on the most important uncovered paths first.`
+    } catch {
+      const label = `@${relPath.split('/').pop()}`
+      const ext = relPath.split('.').pop() ?? ''
+      if (!contextChips.value.some((c) => c.label === label)) {
+        contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 8000)}\n\`\`\`` })
+      }
+      inputText.value = 'Analyze the file above and write test cases for any functions that are missing test coverage. Focus on edge cases and error paths.'
+    }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /branch — list, create, or switch git branches
+  if (cmd.id === '/branch') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/branch requires an open workspace'); return }
+    try {
+      showToast('Fetching branches…')
+      interface ShellRespBranch { ok: boolean; output?: string }
+      const [branchResp, trackingResp] = await Promise.all([
+        props.backend.send<ShellRespBranch>('shell.run', { command: 'git branch -a --color=never 2>&1', workspace_path: props.workspacePath }),
+        props.backend.send<ShellRespBranch>('shell.run', { command: 'git status --short --branch 2>&1', workspace_path: props.workspacePath }),
+      ])
+      if (!branchResp.payload?.ok) { showToast(`/branch: ${branchResp.payload?.error ?? 'backend error'}`); return }
+      const branches = (branchResp.payload.output ?? '').trim()
+      const status = (trackingResp.payload?.ok ? trackingResp.payload.output ?? '' : '').split('\n')[0].trim()
+      const chip = `// Git branches:\n${branches}\n\n// Current branch:\n${status}`
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@git:branches')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git:branches', content: chip })
+      inputText.value = 'Show me the list of branches above. What is the current branch and what branches are available to switch to or merge from?'
+    } catch { showToast('/branch: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /env:check — compare .env.example with .env and find missing vars
+  if (cmd.id === '/env:check') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/env:check requires an open workspace'); return }
+    try {
+      interface ReadRespEnv { payload?: { ok?: boolean; content?: string } }
+      const [exampleResp, envResp] = await Promise.all([
+        props.backend.send<ReadRespEnv>('fs.read_file', { workspace_path: props.workspacePath, rel_path: '.env.example' })
+          .catch(() => ({ payload: { ok: false, content: '' } })),
+        props.backend.send<ReadRespEnv>('fs.read_file', { workspace_path: props.workspacePath, rel_path: '.env' })
+          .catch(() => ({ payload: { ok: false, content: '' } })),
+      ])
+      const example = (exampleResp.payload?.content ?? '').trim()
+      const env = (envResp.payload?.content ?? '').trim()
+      if (!example) { showToast('/env:check: no .env.example found'); return }
+      const exampleVars = example.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => l.split('=')[0].trim())
+      const envVars = new Set(env.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => l.split('=')[0].trim()))
+      const missing = exampleVars.filter((v) => !envVars.has(v))
+      const chip = `// .env.example variables: ${exampleVars.join(', ')}\n// Missing in .env: ${missing.length ? missing.join(', ') : '(none — all set)'}`
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@env:check', content: chip })
+      inputText.value = missing.length
+        ? `The .env file is missing ${missing.length} variable(s): ${missing.join(', ')}. For each missing variable, explain what it's likely used for based on its name, and provide example values I can use.`
+        : 'All variables from .env.example are present in .env. Review if any values look misconfigured or need updating.'
+    } catch { showToast('/env:check: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /fixall — collect all Problems panel diagnostics and ask AI to fix
+  if (cmd.id === '/fixall') {
+    inputText.value = ''
+    const diags = allDiagnosticsSorted()
+    if (!diags.length) { showToast('/fixall: no errors or warnings in Problems panel'); return }
+    const errors = diags.filter((d) => d.severity === 'error')
+    const warns  = diags.filter((d) => d.severity === 'warning')
+    const lines = diags.slice(0, 40).map((d) => `${d.relPath}:${d.line} [${d.severity}] ${d.message}`)
+    const chip = `// Problems panel (${errors.length} errors, ${warns.length} warnings):\n${lines.join('\n')}`
+    contextChips.value = contextChips.value.filter((c) => c.label !== '@problems')
+    contextChips.value.push({ id: crypto.randomUUID(), label: '@problems', content: chip })
+    inputText.value = errors.length
+      ? `There are ${errors.length} error(s) and ${warns.length} warning(s) shown in @problems above. Starting with the errors, fix each issue. For each fix, show the full corrected code block and explain why the change resolves the problem.`
+      : `There are ${warns.length} warning(s) shown in @problems above. Fix each issue, showing the corrected code and explaining the reason.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /worktree — git worktree management
+  if (cmd.id === '/worktree') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/worktree requires an open workspace'); return }
+    const arg = (extra ?? '').trim()
+    const SAFE_WT = /^[A-Za-z0-9_./ -]+$/
+    try {
+      showToast('Fetching worktrees…')
+      interface ShellRespWt { ok: boolean; output?: string; error?: string }
+      if (!arg || arg === 'list') {
+        const r = await props.backend.send<ShellRespWt>('shell.run', { command: 'git worktree list', workspace_path: props.workspacePath })
+        if (!r.payload?.ok) { showToast(`/worktree: ${r.payload?.error ?? 'backend error'}`); return }
+        const out = (r.payload.output ?? '').trim() || '(no worktrees)'
+        contextChips.value.push({ id: crypto.randomUUID(), label: '@worktree:list', content: `// git worktrees:\n${out}` })
+        inputText.value = 'Summarize the current git worktrees shown above and suggest when adding a new worktree would be helpful.'
+      } else if (arg.startsWith('add ')) {
+        const parts = arg.slice(4).trim().split(/\s+/)
+        const wtPath = parts[0] ?? ''
+        const branch = parts[1] ?? ''
+        if (!wtPath || !SAFE_WT.test(wtPath) || wtPath.includes('..')) { showToast('/worktree add: invalid path'); return }
+        if (branch && (!SAFE_WT.test(branch) || branch.includes('..'))) { showToast('/worktree add: invalid branch name'); return }
+        const sqPath = "'" + wtPath.replace(/'/g, "'\\''") + "'"
+        const sqBranch = branch ? " -b '" + branch.replace(/'/g, "'\\''") + "'" : ''
+        const cmd2 = `git worktree add${sqBranch} ${sqPath}`
+        const r = await props.backend.send<ShellRespWt>('shell.run', { command: cmd2, workspace_path: props.workspacePath })
+        showToast(r.payload?.ok ? `Worktree added at ${wtPath}` : `Error: ${r.payload?.error ?? 'failed'}`)
+      } else if (arg.startsWith('remove ')) {
+        const wtPath = arg.slice(7).trim()
+        if (!wtPath || !SAFE_WT.test(wtPath) || wtPath.includes('..')) { showToast('/worktree remove: invalid path'); return }
+        const sqPath = "'" + wtPath.replace(/'/g, "'\\''") + "'"
+        const r = await props.backend.send<ShellRespWt>('shell.run', { command: `git worktree remove ${sqPath}`, workspace_path: props.workspacePath })
+        showToast(r.payload?.ok ? `Worktree removed: ${wtPath}` : `Error: ${r.payload?.error ?? 'failed'}`)
+      } else {
+        showToast('/worktree: usage: list | add <path> [branch] | remove <path>')
+      }
+    } catch { showToast('/worktree: command failed') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /accessibility — audit HTML/JSX/Vue template for a11y issues
+  if (cmd.id === '/accessibility') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const fileContent = props.getEditorContent?.()
+    if (!relPath || !fileContent) { showToast('/accessibility: no file open'); return }
+    const ext = relPath.split('.').pop()?.toLowerCase() ?? ''
+    if (!['vue', 'html', 'jsx', 'tsx', 'svelte'].includes(ext)) { showToast(`/accessibility: ${ext} files not supported (use .vue/.html/.jsx/.tsx)`); return }
+    const templateMatch = ext === 'vue' ? fileContent.match(/<template[\s\S]*?>([\s\S]*?)<\/template>/) : null
+    const htmlSnippet = templateMatch ? templateMatch[1].trim().slice(0, 6000) : fileContent.slice(0, 6000)
+    const fileName = relPath.split('/').pop()
+    contextChips.value = contextChips.value.filter((c) => !c.label.startsWith('@accessibility:'))
+    contextChips.value.push({ id: crypto.randomUUID(), label: `@accessibility:${fileName}`, content: `// Template/HTML in ${relPath}:
+${htmlSnippet}` })
+    inputText.value = `Perform a WCAG 2.1 AA accessibility audit on the template shown in @accessibility:${fileName}. For each issue found:
+1. Specify the WCAG criterion violated (e.g. 1.1.1 Non-text Content)
+2. Quote the problematic element
+3. Provide the corrected code
+
+Also flag any missing ARIA roles, poor color contrast indicators, keyboard trap risks, or missing alt/label attributes.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /regex — build, explain, or test a regex pattern
+  if (cmd.id === '/regex') {
+    const desc = (extra ?? '').trim()
+    if (!desc) {
+      inputText.value = '/regex '
+      showToast('Describe what you need: e.g.  /regex email validator  or  /regex explain /^[a-z]+$/i')
+      nextTick(() => { textareaEl.value?.focus() })
+      return
+    }
+    const sel = props.getEditorSelection?.()
+    if (sel) {
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@selection')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: sel })
+    }
+    inputText.value = desc.startsWith('explain ')
+      ? `Explain the following regex in plain English. Break down each component, list what it matches and what it rejects, and show 3-5 concrete examples:
+
+\`${desc.slice(8).trim()}\``
+      : `Build a regex pattern for: ${desc}.
+
+Respond with:
+1. The pattern (wrapped in a code block, specify the language/flags)
+2. Plain-English explanation of each part
+3. 5 test cases (3 matching, 2 non-matching)
+4. Any caveats or edge cases${sel ? '\n\nAlso check if the selection matches.' : ''}`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /pin:file — quickly pin current open file to Always-Include
+  if (cmd.id === '/pin:file') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath) { showToast('/pin:file: no file open in editor'); return }
+    addGlobalPin(relPath)
+    showToast(`Pinned to Always-Include: ${relPath}`)
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /context:clear — remove all context chips
+  if (cmd.id === '/context:clear') {
+    inputText.value = ''
+    const count = contextChips.value.length
+    if (!count) { showToast('No context chips to clear'); return }
+    contextChips.value = []
+    showToast(`Cleared ${count} context chip${count !== 1 ? 's' : ''}`)
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /gen:component — generate Vue/React component from description
+  if (cmd.id === '/gen:component') {
+    const desc = (extra ?? '').trim()
+    if (!desc) {
+      inputText.value = '/gen:component '
+      showToast('Add component description: e.g.  /gen:component Modal with title and close button')
+      nextTick(() => { textareaEl.value?.focus() })
+      return
+    }
+    // Detect project type from open file
+    const relPath = props.getActiveRelPath?.()
+    const ext = relPath?.split('.').pop()?.toLowerCase() ?? ''
+    const isVue = ext === 'vue' || relPath?.includes('vue')
+    const isReact = ['tsx', 'jsx'].includes(ext)
+    const framework = isVue ? 'Vue 3 Composition API (script setup, TypeScript)' : isReact ? 'React with TypeScript and hooks' : 'Vue 3 Composition API (script setup, TypeScript)'
+    inputText.value = `Generate a complete, production-ready ${framework} component for: ${desc}.
+
+Requirements:
+- Full TypeScript typing (props interface, emits, etc.)
+- ${isVue ? 'Use <script setup lang="ts">' : 'Use functional component with typed props'}
+- Include all necessary imports
+- Handle loading/error states if applicable
+- Add accessibility attributes (role, aria-*)
+- Style with scoped CSS or Tailwind classes (match project conventions)
+- Include example usage in a comment at the top`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /rules:show — display all active AI rule files
+  if (cmd.id === '/rules:show') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/rules:show requires an open workspace'); return }
+    try {
+      showToast('Loading rule files…')
+      interface ReadRespR { payload?: { ok?: boolean; content?: string } }
+      const RULE_PATHS = ['AGENTS.md', '.cursorrules', '.cursor/rules/main.mdc', '.cursor/rules/default.mdc', '.github/copilot-instructions.md']
+      const results = await Promise.all(
+        RULE_PATHS.map((rp) =>
+          props.backend.send<ReadRespR>('fs.read_file', { workspace_path: props.workspacePath, rel_path: rp })
+            .then((r) => ({ path: rp, content: (r.payload?.content ?? '').trim() }))
+            .catch(() => ({ path: rp, content: '' })),
+        ),
+      )
+      const found = results.filter((r) => r.content.length > 0)
+      if (!found.length) { showToast('/rules:show: no AI rule files found (AGENTS.md, .cursorrules, etc.)'); return }
+      const chip = found.map((r) => {
+        const snippet = r.content.length > 2000 ? r.content.slice(0, 2000) + '
+// …truncated' : r.content
+        return `--- ${r.path} ---
+${snippet}`
+      }).join('
+
+')
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@rules:active')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@rules:active', content: chip })
+      inputText.value = `Summarize the active AI rules shown in @rules:active — what conventions, constraints, or instructions are currently applied to AI interactions in this project? Flag any conflicting or redundant rules.`
+    } catch { showToast('/rules:show: failed to read rule files') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /mode — switch chat mode (ask / edit / agent)
+  if (cmd.id === '/mode') {
+    inputText.value = ''
+    const target = (extra ?? '').trim().toLowerCase() as 'ask' | 'edit' | 'agent' | ''
+    if (!target || !['ask', 'edit', 'agent'].includes(target)) {
+      const next: 'ask' | 'edit' | 'agent' = chatMode.value === 'ask' ? 'edit' : chatMode.value === 'edit' ? 'agent' : 'ask'
+      chatMode.value = next
+      showToast(`Mode → ${next}`)
+    } else {
+      chatMode.value = target as 'ask' | 'edit' | 'agent'
+      showToast(`Mode → ${target}`)
+    }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /session:stats — show token usage and cost for this session
+  if (cmd.id === '/session:stats') {
+    inputText.value = ''
+    const stats = sessionStats.value
+    const models = stats.modelsUsed.length ? stats.modelsUsed.join(', ') : 'unknown'
+    const costStr = stats.totalCost > 0 ? `~$${stats.totalCost.toFixed(4)}` : 'free / no pricing data'
+    const chip = `// Session Statistics:
+// Total input tokens:  ${stats.totalIn.toLocaleString()}
+// Total output tokens: ${stats.totalOut.toLocaleString()}
+// Total tokens:        ${(stats.totalIn + stats.totalOut).toLocaleString()}
+// Estimated cost:      ${costStr}
+// Models used:         ${models}
+// Threads:             ${allThreads.value.length}`
+    contextChips.value = contextChips.value.filter((c) => c.label !== '@session:stats')
+    contextChips.value.push({ id: crypto.randomUUID(), label: '@session:stats', content: chip })
+    inputText.value = `Based on my session usage shown in @session:stats, am I using AI efficiently? Suggest how I could reduce token usage or cost while maintaining productivity.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /gen:sql — generate SQL query from description
+  if (cmd.id === '/gen:sql') {
+    const desc = (extra ?? '').trim()
+    if (!desc) {
+      inputText.value = '/gen:sql '
+      showToast('Describe the query: e.g. /gen:sql users who signed up last month and have not logged in')
+      nextTick(() => { textareaEl.value?.focus() })
+      return
+    }
+    // Inject schema chip if available
+    const hasSchema = contextChips.value.some((c) => c.label === '@schema')
+    inputText.value = `Generate a production-quality SQL query for: ${desc}.
+
+${hasSchema ? 'Use the schema in @schema above.' : 'Infer reasonable column/table names from the description.'}
+
+Respond with:
+1. The SQL query in a \\`\\`\\`sql code block
+2. A brief explanation of each clause
+3. Performance notes (indexes, potential N+1, etc.)
+4. Alternative approaches if relevant`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /todo — find TODO/FIXME comments and ask AI to resolve them
+  if (cmd.id === '/todo') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/todo requires an open workspace'); return }
+    try {
+      showToast('Scanning for TODOs…')
+      interface ShellRespTodo { ok: boolean; output?: string }
+      const relPath = props.getActiveRelPath?.()
+      const todoCmd = relPath
+        ? `grep -n -E "TODO|FIXME|HACK|XXX|BUG" '${relPath.replace(/'/g, "'\\''")}' 2>/dev/null | head -40`
+        : 'grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" --include="*.vue" -E "TODO|FIXME|HACK|XXX|BUG" . 2>/dev/null | grep -v node_modules | head -40'
+      const resp = await props.backend.send<ShellRespTodo>('shell.run', { command: todoCmd, workspace_path: props.workspacePath })
+      if (!resp.payload?.ok) { showToast(`/todo: ${resp.payload?.error ?? 'backend error'}`); return }
+      const raw = (resp.payload.output ?? '').trim()
+      if (!raw) { showToast('/todo: no TODO/FIXME comments found'); return }
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@todos')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@todos', content: `// TODO/FIXME annotations${relPath ? ` in ${relPath}` : ''}:\n${raw}` })
+      if (relPath) {
+        const content = props.getEditorContent?.()
+        const ext = relPath.split('.').pop() ?? ''
+        const label = `@${relPath.split('/').pop()}`
+        if (content && !contextChips.value.some((c) => c.label === label)) {
+          contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 40_000)}\n\`\`\`` })
+        }
+        inputText.value = 'Resolve all the TODO/FIXME comments shown above. For each one, implement the actual fix inline. Return the complete updated file with all TODOs resolved.'
+      } else {
+        inputText.value = 'Analyze all the TODO/FIXME/HACK comments above. For each one: explain what needs to be done and provide a concrete code solution.'
+      }
+    } catch { showToast('/todo: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /size — analyze file size and complexity, suggest splits
+  if (cmd.id === '/size') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (!relPath || !content) { showToast('/size: no file open'); return }
+    const lineCount = content.split('\n').length
+    const charCount = content.length
+    const ext = relPath.split('.').pop() ?? ''
+    const fileName = relPath.split('/').pop()
+    const label = `@${fileName}`
+    if (!contextChips.value.some((c) => c.label === label)) {
+      contextChips.value.push({ id: crypto.randomUUID(), label, content: `// File: ${relPath}\n\`\`\`${ext}\n${content.slice(0, 40_000)}\n\`\`\`` })
+    }
+    inputText.value = `Analyze this file: ${fileName} (${lineCount} lines, ${Math.round(charCount/1024)}KB). Is it too large? Identify: 1. The main responsibility areas, 2. Functions/classes that could be extracted to separate files, 3. Suggested file split with new file names. Be specific with line ranges.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /init:rules — analyze codebase and generate .cursorrules / AI instructions
+  if (cmd.id === '/init:rules') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/init:rules requires an open workspace'); return }
+    try {
+      showToast('Analyzing project structure…')
+      interface ShellResp2 { ok: boolean; output?: string }
+      interface ReadResp4 { ok: boolean; content?: string }
+      const [treeResp, pkgResp, rulesResp] = await Promise.all([
+        props.backend.send<ShellResp2>('shell.run', { command: 'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/__pycache__/*" -not -path "*/.venv/*" | head -80 2>&1', workspace_path: props.workspacePath }),
+        props.backend.send<ReadResp4>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }).catch(() => ({ payload: { ok: false } })),
+        props.backend.send<ReadResp4>('fs.read_file', { workspace_path: props.workspacePath, rel_path: '.cursorrules' }).catch(() => ({ payload: { ok: false } })),
+      ])
+      const tree = treeResp.payload?.ok ? (treeResp.payload.output ?? '') : ''
+      const existingRules = (rulesResp as { payload?: ReadResp4 }).payload?.content
+      const existing = existingRules ? `\n\nExisting .cursorrules:\n${existingRules.slice(0, 2000)}` : ''
+      let pkgContext = ''
+      const pkgContent = (pkgResp as { payload?: ReadResp4 }).payload?.content
+      if (pkgContent) {
+        try {
+          const p = JSON.parse(pkgContent) as { name?: string; description?: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+          const deps = Object.keys(p.dependencies ?? {}).slice(0, 20).join(', ')
+          const dev = Object.keys(p.devDependencies ?? {}).slice(0, 20).join(', ')
+          pkgContext = `\nProject: ${p.name ?? ''} — ${p.description ?? ''}\nDeps: ${deps}\nDevDeps: ${dev}`
+        } catch { /* ignore */ }
+      }
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@workspace', content: `// Project file tree:\n${tree}${pkgContext}${existing}` })
+      inputText.value = 'Based on the project structure above, generate a comprehensive `.cursorrules` file (also works as `CLAUDE.md` or `AGENTS.md`). Cover: 1. Tech stack overview, 2. Code style & conventions, 3. Key patterns to follow, 4. Common mistakes to avoid, 5. Testing conventions. Return the file content in a code block so I can apply it directly.'
+    } catch {
+      inputText.value = 'Analyze this project and generate a .cursorrules / CLAUDE.md file covering: tech stack, code conventions, key patterns, mistakes to avoid, and testing conventions.'
+    }
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /explain:commit — explain last 5 commits in plain English
+  // /explain:imports — extract and explain all imports in the current file
+  if (cmd.id === '/explain:imports') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const content = props.getEditorContent?.()
+    if (!relPath || !content) { showToast('/explain:imports: no file open'); return }
+    const ext = relPath.split('.').pop() ?? ''
+    // Extract import/require lines based on file type
+    const importLines = content.split('\n').filter((line) => {
+      const t = line.trim()
+      return t.startsWith('import ') || t.startsWith('from ') || /^const .+ = require\(/.test(t) || t.startsWith('use ') || t.startsWith('#include') || t.startsWith('using ')
+    })
+    if (!importLines.length) { showToast('/explain:imports: no imports found'); return }
+    const fileName = relPath.split('/').pop()
+    contextChips.value.push({
+      id: crypto.randomUUID(),
+      label: `@imports:${fileName}`,
+      content: `// Imports in ${relPath}:\n${importLines.slice(0, 80).join('\n')}`,
+    })
+    inputText.value = `For each import shown above (from ${fileName}), explain:\n1. What the imported module/library does\n2. Why it is used in this file\n3. Any notable gotchas or best practices\n\nBe concise — one paragraph per import.`
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  if (cmd.id === '/explain:commit') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/explain:commit requires an open workspace'); return }
+    try {
+      showToast('Fetching recent commits…')
+      interface ShellResp3 { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellResp3>('shell.run', {
+        command: 'git log -5 --format="commit %H%nauthor: %an%ndate: %ad%nsubject: %s%n%nbody:%n%b%n---" --date=short 2>&1',
+        workspace_path: props.workspacePath,
+      })
+      if (resp.payload?.ok && resp.payload.output?.trim()) {
+        contextChips.value.push({ id: crypto.randomUUID(), label: '@git:log:5', content: `// Last 5 commits:\n${resp.payload.output.slice(0, 6000)}` })
+        inputText.value = 'Explain these 5 commits in plain English. For each: what changed, why it likely happened, and any risks or notable patterns.'
+      } else {
+        inputText.value = 'Explain the recent git commits in plain English. Describe what changed and why.'
+      }
+    } catch {
+      inputText.value = 'Explain the recent git commits in plain English.'
     }
     nextTick(() => { textareaEl.value?.focus() })
     return
@@ -4608,8 +5758,8 @@ ${historyText}`
         props.backend.send<ShellResp>('shell.run', { command: eslintCmd, workspace_path: props.workspacePath }),
         props.backend.send<ShellResp>('shell.run', { command: ruffCmd, workspace_path: props.workspacePath }),
       ])
-      const eslint = (eslintResp.payload?.output ?? '').trim()
-      const ruff = (ruffResp.payload?.output ?? '').trim()
+      const eslint = (eslintResp.payload?.ok ? eslintResp.payload.output ?? '' : '').trim()
+      const ruff = (ruffResp.payload?.ok ? ruffResp.payload.output ?? '' : '').trim()
       let lintErrors = ''
       if (eslint && !eslint.includes('not available')) lintErrors += `// ESLint:\n${eslint}\n`
       if (ruff && !ruff.includes('not available') && !ruff.includes('error: ')) lintErrors += `\n// Ruff:\n${ruff}\n`
@@ -4679,6 +5829,19 @@ ${log || '(no commits)'}`
 
   if (cmd.id === '/scaffold') {
     inputText.value = 'Scaffold a new '
+    // Auto-inject tree so AI knows what already exists in the project
+    if (props.workspacePath) {
+      void (async () => {
+        try {
+          interface FlatRespScaffold { ok: boolean; files?: string[] }
+          const r = await props.backend.send<FlatRespScaffold>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' })
+          const files = (r.payload?.files ?? []).slice(0, 100)
+          if (files.length && !contextChips.value.some((c) => c.label === '@tree')) {
+            contextChips.value.push({ id: crypto.randomUUID(), label: '@tree', content: `// Project file tree:\n${buildFileTree(files)}` })
+          }
+        } catch { /* ignore */ }
+      })()
+    }
     await nextTick(); textareaEl.value?.focus()
     const len = inputText.value.length
     textareaEl.value?.setSelectionRange(len, len)
@@ -4687,20 +5850,52 @@ ${log || '(no commits)'}`
 
   inputText.value = cmd.template + ' '
 
-  // Auto-inject current file chip for code-focused commands when no chip exists yet
+  // Auto-inject context for code-focused commands when no chip exists yet.
+  // Prefer the editor selection (more targeted) over the full file.
   const CODE_CMDS = new Set(['/explain', '/fix', '/tests', '/doc', '/review', '/optimize', '/refactor', '/debug', '/improve', '/perf', '/security', '/types', '/mock', '/diagram', '/migrate'])
   if (CODE_CMDS.has(cmd.id) && contextChips.value.length === 0) {
     const relPath = props.getActiveRelPath?.()
-    const content = props.getEditorContent?.()
-    if (relPath && content !== undefined) {
-      const ext = relPath.split('.').pop() ?? ''
-      const label = `@${relPath.split('/').pop()}`
-      if (!contextChips.value.some((c) => c.label === label)) {
+    const ext = relPath?.split('.').pop() ?? ''
+    const sel = props.getEditorSelection?.()
+    if (sel?.trim()) {
+      contextChips.value.push({
+        id: crypto.randomUUID(),
+        label: '@selection',
+        content: relPath
+          ? `// Selection from: ${relPath}\n\`\`\`${ext}\n${sel.trim()}\n\`\`\``
+          : `// Selected code:\n\`\`\`\n${sel.trim()}\n\`\`\``,
+      })
+    } else {
+      const content = props.getEditorContent?.()
+      if (relPath && content !== undefined) {
+        const label = `@${relPath.split('/').pop()}`
+        if (!contextChips.value.some((c) => c.label === label)) {
+          contextChips.value.push({
+            id: crypto.randomUUID(),
+            label,
+            content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``,
+          })
+        }
+      }
+    }
+    // For /fix and /debug, also inject diagnostics for the current file (VS Code parity)
+    if ((cmd.id === '/fix' || cmd.id === '/debug') && relPath) {
+      const fileDiags = allDiagnosticsSorted().filter((d) => d.relPath === relPath)
+      if (fileDiags.length > 0) {
+        const diagLines = fileDiags.slice(0, 20).map(
+          (d) => `${d.line}${d.col ? ':' + d.col : ''} [${d.severity}] ${d.message}${d.source ? ' (' + d.source + ')' : ''}`,
+        )
         contextChips.value.push({
           id: crypto.randomUUID(),
-          label,
-          content: `// File: ${relPath}\n\`\`\`${ext}\n${content}\n\`\`\``,
+          label: '@errors',
+          content: `// Diagnostics in ${relPath} (${fileDiags.length} issue${fileDiags.length === 1 ? '' : 's'}):\n${diagLines.join('\n')}`,
         })
+        // Overwrite the generic template with a diagnostics-aware prompt
+        const errCount = fileDiags.filter((d) => d.severity === 'error').length
+        const warnCount = fileDiags.filter((d) => d.severity === 'warning').length
+        inputText.value = errCount > 0
+          ? `Fix the ${errCount} error${errCount > 1 ? 's' : ''} shown in @errors. For each, show the corrected code and a one-line explanation.`
+          : `Fix the ${warnCount} warning${warnCount > 1 ? 's' : ''} shown in @errors.`
       }
     }
   }
@@ -4901,10 +6096,14 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
           command: `git log --follow --oneline --date=short --format="%h %ad %an — %s" -- '${sqPath}' 2>/dev/null | head -30`,
           workspace_path: props.workspacePath,
         })
-        const log = (resp.payload?.output ?? '').trim()
-        chipContent = log
-          ? `// git log: ${relPath} (last ${log.split('\n').length} commits)\n${log}`
-          : `// @git:file-log: no history for ${relPath}`
+        if (!resp.payload?.ok) {
+          chipContent = `// @git:file-log: ${resp.payload?.error ?? 'backend error'}`
+        } else {
+          const log = (resp.payload.output ?? '').trim()
+          chipContent = log
+            ? `// git log: ${relPath} (last ${log.split('\n').length} commits)\n${log}`
+            : `// @git:file-log: no history for ${relPath}`
+        }
       }
     } catch { chipContent = '// @git:file-log: unavailable' }
   } else if (option.id === '@git:recent') {
@@ -4919,6 +6118,21 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
       chipContent = out ? `// recently committed files (last 5 commits):\n${out}` : '// @git:recent: no recent commits'
     } catch {
       chipContent = '// @git:recent: unavailable'
+    }
+  } else if (option.id === '@git:conflicts') {
+    chipLabel = '@git:conflicts'
+    try {
+      interface ShellRespConflicts { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespConflicts>('shell.run', {
+        command: 'git status --short 2>/dev/null | grep -E "^[UA][UA] |^AA |^DD " | head -20',
+        workspace_path: props.workspacePath,
+      })
+      const raw = resp.payload?.ok ? (resp.payload.output ?? '').trim() : null
+      chipContent = raw === null
+        ? `// @git:conflicts: ${resp.payload?.error ?? 'backend error'}`
+        : raw ? `// Merge conflicts:\n${raw}` : '// @git:conflicts: no merge conflicts found'
+    } catch {
+      chipContent = '// @git:conflicts: unavailable'
     }
   } else if (option.id === '@git:stash') {
     chipLabel = '@git:stash'
@@ -6140,6 +7354,151 @@ ${out}`
         ? `// Project rules (${workspaceRulesFile.value}):\n${workspaceRulesContent.value.slice(0, 8000)}`
         : '// @rules: no rules file found (.cursorrules / AGENTS.md / .cursor/rules/*.mdc)'
     }
+  } else if (option.id === '@schema') {
+    chipLabel = '@schema'
+    try {
+      interface ReadRespSchema { payload?: { ok?: boolean; content?: string } }
+      let schemaFound = false
+      for (const p of ['prisma/schema.prisma', 'schema.prisma', 'db/schema.sql', 'database/schema.sql']) {
+        const r = await props.backend.send<ReadRespSchema>('fs.read_file', { workspace_path: props.workspacePath, rel_path: p })
+        const c = r.payload?.content ?? ''
+        if (c) { chipContent = `// DB schema (${p}):\n\`\`\`prisma\n${c.slice(0, 6000)}\n\`\`\``; schemaFound = true; break }
+      }
+      if (!schemaFound) {
+        interface ShellRespSchema { ok: boolean; output?: string }
+        const resp = await props.backend.send<ShellRespSchema>('shell.run', {
+          command: 'find . -name "*.sql" -not -path "*/node_modules/*" 2>/dev/null | head -5',
+          workspace_path: props.workspacePath,
+        })
+        const files = (resp.payload?.ok ? resp.payload.output ?? '' : '').trim()
+        chipContent = files ? `// SQL migration files found:\n${files}` : '// @schema: no database schema found (checked prisma/, db/, database/)'
+      }
+    } catch { chipContent = '// @schema: unavailable' }
+  } else if (option.id === '@changelog') {
+    chipLabel = '@changelog'
+    try {
+      interface ReadRespCL { payload?: { ok?: boolean; content?: string } }
+      let found = false
+      for (const name of ['CHANGELOG.md', 'CHANGES.md', 'HISTORY.md', 'CHANGELOG.txt']) {
+        const r = await props.backend.send<ReadRespCL>('fs.read_file', { workspace_path: props.workspacePath, rel_path: name })
+        const c = r.payload?.content ?? ''
+        if (c) { chipContent = `// ${name}:\n${c.slice(0, 6000)}`; found = true; break }
+      }
+      if (!found) chipContent = '// @changelog: no CHANGELOG file found in workspace root'
+    } catch { chipContent = '// @changelog: unavailable' }
+  } else if (option.id === '@todos') {
+    chipLabel = '@todos'
+    try {
+      interface ShellRespTodos { ok: boolean; output?: string }
+      const resp = await props.backend.send<ShellRespTodos>('shell.run', {
+        command: 'grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" --include="*.vue" -E "TODO|FIXME|HACK|XXX|BUG" . 2>/dev/null | grep -v "node_modules" | head -40',
+        workspace_path: props.workspacePath,
+      })
+      const raw = resp.payload?.ok ? (resp.payload.output ?? '').trim() : null
+      chipContent = raw === null
+        ? `// @todos: ${resp.payload?.error ?? 'backend error'}`
+        : raw ? `// TODO/FIXME/HACK annotations:\n${raw}` : '// @todos: no TODO/FIXME comments found'
+    } catch { chipContent = '// @todos: unavailable' }
+  } else if (option.id === '@memories') {
+    chipLabel = '@memories'
+    chipContent = memories.value.length
+      ? `// Saved memories:\n${memories.value.map((m, i) => `${i + 1}. ${m}`).join('\n')}`
+      : '// @memories: no memories saved — use /memory or the Notes panel to add facts'
+  } else if (option.id === '@config') {
+    chipLabel = '@config'
+    if (!props.workspacePath) {
+      chipContent = '// @config: no workspace open'
+    } else {
+      try {
+        interface ReadRespCfg { payload?: { ok?: boolean; content?: string } }
+        const CONFIG_FILES = [
+          'tsconfig.json', 'tsconfig.base.json',
+          '.eslintrc.json', '.eslintrc.js', '.eslintrc.cjs', 'eslint.config.js', 'eslint.config.mjs',
+          'vite.config.ts', 'vite.config.js',
+          '.prettierrc', '.prettierrc.json', '.prettierrc.js',
+          'vitest.config.ts', 'vitest.config.js',
+          'jest.config.ts', 'jest.config.js',
+          'webpack.config.js', 'rollup.config.js',
+        ]
+        const results = await Promise.all(
+          CONFIG_FILES.map((f) =>
+            props.backend.send<ReadRespCfg>('fs.read_file', { workspace_path: props.workspacePath, rel_path: f })
+              .then((r) => ({ file: f, content: (r.payload?.content ?? '').trim() }))
+              .catch(() => ({ file: f, content: '' })),
+          ),
+        )
+        const found = results.filter((r) => r.content.length > 0)
+        if (!found.length) {
+          chipContent = '// @config: no common config files found'
+        } else {
+          chipContent = found.map((r) => {
+            const ext = r.file.split('.').pop() ?? ''
+            const snippet = r.content.slice(0, 1200) + (r.content.length > 1200 ? '\n// …truncated' : '')
+            return `// ${r.file}:\n\`\`\`${ext}\n${snippet}\n\`\`\``
+          }).join('\n\n')
+        }
+      } catch { chipContent = '// @config: unavailable' }
+    }
+  } else if (option.id === '@tests') {
+    chipLabel = '@tests'
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath || !props.workspacePath) {
+      chipContent = '// @tests: no file open'
+    } else {
+      try {
+        const baseName = relPath.split('/').pop()?.replace(/\.(ts|tsx|js|jsx|vue|py)$/, '') ?? ''
+        const SAFE_BASE = /^[A-Za-z0-9_.-]+$/
+        if (!SAFE_BASE.test(baseName)) { chipContent = '// @tests: could not determine test file pattern'; }
+        else {
+          interface ShellRespTests { ok: boolean; output?: string }
+          const r = await props.backend.send<ShellRespTests>('shell.run', {
+            command: `find . -type f \( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" \) ! -path "*/node_modules/*" ! -path "*/.venv/*" | grep -i "${baseName}" | head -10`,
+            workspace_path: props.workspacePath,
+          })
+          const found = r.payload?.ok ? (r.payload.output ?? '').trim().split('\n').filter(Boolean) : null
+          if (found === null) { chipContent = `// @tests: ${r.payload?.error ?? 'backend error'}` }
+          else if (!found.length) { chipContent = `// @tests: no test files found for ${baseName}` }
+          else {
+            interface ReadRespT { payload?: { ok?: boolean; content?: string } }
+            const parts: string[] = []
+            for (const tf of found.slice(0, 3)) {
+              const tr = await props.backend.send<ReadRespT>('fs.read_file', { workspace_path: props.workspacePath, rel_path: tf.replace(/^\.\//, '') })
+              if (tr.payload?.content) parts.push(`// ${tf}:\n${tr.payload.content.slice(0, 3000)}`)
+            }
+            chipContent = parts.join('\n\n') || `// @tests: test files for ${baseName}: ${found.join(', ')}`
+          }
+        }
+      } catch { chipContent = '// @tests: unavailable' }
+    }
+  } else if (option.id === '@related') {
+    chipLabel = '@related'
+    const relPath = props.getActiveRelPath?.()
+    if (!relPath || !props.workspacePath) {
+      chipContent = '// @related: no file open'
+    } else {
+      try {
+        const baseName = relPath.split('/').pop() ?? ''
+        const SAFE_B = /^[A-Za-z0-9_.@-]+$/
+        const SAFE_PATH_REL = /^[A-Za-z0-9_./ -]+$/
+        if (!SAFE_B.test(baseName) || !SAFE_PATH_REL.test(relPath) || relPath.includes('..')) { chipContent = '// @related: invalid filename'; }
+        else {
+          interface ShellRespRel { ok: boolean; output?: string }
+          // Files that import the current file (single-quote quoting prevents injection)
+          const sqBase = "'" + baseName.replace(/\.[^.]+$/, '').replace(/'/g, "'\\''") + "'"
+          const sqRelPath = "'" + relPath.replace(/'/g, "'\\''") + "'"
+          const r = await props.backend.send<ShellRespRel>('shell.run', {
+            command: `grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.vue" --include="*.py" --fixed-strings -l ${sqBase} . 2>/dev/null | grep -v node_modules | grep -v ".venv" | grep -Fv ${sqRelPath} | head -15`,
+            workspace_path: props.workspacePath,
+          })
+          const files = r.payload?.ok ? (r.payload.output ?? '').trim().split('\n').filter(Boolean) : null
+          chipContent = files === null
+            ? `// @related: ${r.payload?.error ?? 'backend error'}`
+            : files.length
+              ? `// Files that reference ${baseName}:\n${files.join('\n')}`
+              : `// @related: no files found that import ${baseName}`
+        }
+      } catch { chipContent = '// @related: unavailable' }
+    }
   } else if (option.id === '@diff:') {
     // Bare @diff: — prompt user to type a file path
     const newVal = val.slice(0, atIdx) + '@diff:' + val.slice(cur)
@@ -6164,10 +7523,12 @@ ${out}`
         command: `git diff HEAD -- '${safePath}' 2>/dev/null`,
         workspace_path: props.workspacePath,
       })
-      const raw = (resp.payload?.output ?? '').trim()
-      chipContent = raw
-        ? `// git diff HEAD -- ${filePath}:\n\`\`\`diff\n${raw.slice(0, 8000)}\n\`\`\``
-        : `// @diff:${filePath}: no changes (or file not tracked)`
+      const raw = resp.payload?.ok ? (resp.payload.output ?? '').trim() : null
+      chipContent = raw === null
+        ? `// @diff:${filePath}: ${resp.payload?.error ?? 'backend error'}`
+        : raw
+          ? `// git diff HEAD -- ${filePath}:\n\`\`\`diff\n${raw.slice(0, 8000)}\n\`\`\``
+          : `// @diff:${filePath}: no changes (or file not tracked)`
     } catch {
       chipContent = `// @diff:${filePath}: unavailable`
     }
@@ -6474,11 +7835,13 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       slashMenuIdx.value = (slashMenuIdx.value + 1) % slashOptions.value.length
+      nextTick(() => slashMenuEl.value?.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' }))
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       slashMenuIdx.value = (slashMenuIdx.value - 1 + slashOptions.value.length) % slashOptions.value.length
+      nextTick(() => slashMenuEl.value?.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' }))
       return
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -6497,11 +7860,13 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       atMenuIdx.value = (atMenuIdx.value + 1) % atOptions.value.length
+      nextTick(() => atMenuEl.value?.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' }))
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       atMenuIdx.value = (atMenuIdx.value - 1 + atOptions.value.length) % atOptions.value.length
+      nextTick(() => atMenuEl.value?.querySelector<HTMLElement>('.active')?.scrollIntoView({ block: 'nearest' }))
       return
     }
     if (e.key === 'Enter' || e.key === 'Tab') {
@@ -6603,7 +7968,15 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     if (!hadSlash) inputText.value = '/' + inputText.value
     showSlashMenu.value = true
     slashMenuFilter.value = hadSlash ? inputText.value.slice(1) : ''
-    slashOptions.value = SLASH_COMMANDS.filter((c) => c.id.includes(slashMenuFilter.value.toLowerCase()))
+    const f2 = slashMenuFilter.value.toLowerCase()
+    const base2 = SLASH_COMMANDS.filter((c) => c.id.includes(f2))
+    if (!f2 && recentCmds.value.length > 0) {
+      const recent2 = recentCmds.value.map((id) => SLASH_COMMANDS.find((c) => c.id === id)).filter((c): c is SlashCommand => c !== undefined)
+      const recentIds2 = new Set(recent2.map((c) => c.id))
+      slashOptions.value = [...recent2, ...base2.filter((c) => !recentIds2.has(c.id))]
+    } else {
+      slashOptions.value = base2
+    }
   }
   // Ctrl+Enter — regenerate last AI response (when not sending)
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !sending.value && !e.shiftKey) {
@@ -6619,6 +7992,14 @@ function onTextareaKeydown(e: KeyboardEvent): void {
     const idx = cycleable.findIndex((m) => m.id === settingsModel.value)
     const next = cycleable[(idx + 1) % cycleable.length]
     if (next) { switchModel(next.id); showToast(`Model: ${next.display}`) }
+  }
+  // Backspace at start of empty input — remove last context chip (VS Code/Cursor UX)
+  if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+    const el = textareaEl.value
+    if (el && el.selectionStart === 0 && el.selectionEnd === 0 && inputText.value === '' && contextChips.value.length > 0) {
+      e.preventDefault()
+      contextChips.value.pop()
+    }
   }
 }
 
@@ -6725,6 +8106,53 @@ const bookmarkedMessages = computed(() =>
   messages.value.map((m, i) => ({ msg: m, idx: i })).filter(({ msg }) => msg.bookmarked)
 )
 
+// Context-aware quick action suggestions for the empty state (mirrors VS Code Copilot smart actions)
+const emptySuggestions = computed<Array<{ label: string; action: string }>>(() => {
+  const relPath = props.getActiveRelPath?.() ?? ''
+  const ext = relPath.split('.').pop()?.toLowerCase() ?? ''
+  const isTest = /\.(test|spec)\.(ts|tsx|js|jsx|py)$/.test(relPath) || relPath.includes('__tests__')
+  // Diagnostics-first: if the current file has errors, surface /fix prominently
+  const fileDiagCount = relPath ? allDiagnosticsSorted().filter((d) => d.relPath === relPath && d.severity === 'error').length : 0
+  if (fileDiagCount > 0) {
+    return [
+      { label: `/fix — ${fileDiagCount} error${fileDiagCount > 1 ? 's' : ''} in this file`, action: '/fix ' },
+      { label: '/explain — explain code', action: '/explain ' },
+      { label: '/review — code review', action: '/review ' },
+      { label: '/tests — generate unit tests', action: '/tests ' },
+    ]
+  }
+  if (isTest) {
+    return [
+      { label: '/fixtests — run & fix failing tests', action: '/fixtests' },
+      { label: '/explain — explain what this test does', action: '/explain ' },
+      { label: '/review — review test quality', action: '/review ' },
+      { label: '/mock — generate mock helpers', action: '/mock ' },
+    ]
+  }
+  if (ext === 'py') {
+    return [
+      { label: '/explain — explain Python code', action: '/explain ' },
+      { label: '/tests — generate pytest tests', action: '/tests ' },
+      { label: '/security — security audit', action: '/security ' },
+      { label: '/types — add type hints', action: '/types ' },
+    ]
+  }
+  if (['vue', 'jsx', 'tsx'].includes(ext)) {
+    return [
+      { label: '/explain — explain component', action: '/explain ' },
+      { label: '/tests — generate component tests', action: '/tests ' },
+      { label: '/review — component code review', action: '/review ' },
+      { label: '/optimize — performance check', action: '/optimize ' },
+    ]
+  }
+  return [
+    { label: '/explain — explain code', action: '/explain ' },
+    { label: '/fix — find and fix issues', action: '/fix ' },
+    { label: '/tests — generate unit tests', action: '/tests ' },
+    { label: '/review — code review', action: '/review ' },
+  ]
+})
+
 function jumpToBookmark(idx: number): void {
   const el = messagesEl.value?.querySelectorAll('.ai-msg')[idx] as HTMLElement | undefined
   el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -6818,10 +8246,12 @@ function getDateLabel(ts: number): string {
         <p class="ai-empty-title">AI assistant ready</p>
         <p class="ai-empty-hint">@ to add context &nbsp;·&nbsp; / for commands &nbsp;·&nbsp; Enter to send</p>
         <div class="ai-empty-suggestions">
-          <button class="ai-empty-btn" @click="inputText = '/explain '; nextTick(() => textareaEl?.focus())">/explain — explain code</button>
-          <button class="ai-empty-btn" @click="inputText = '/fix '; nextTick(() => textareaEl?.focus())">/fix — find and fix issues</button>
-          <button class="ai-empty-btn" @click="inputText = '/tests '; nextTick(() => textareaEl?.focus())">/tests — generate unit tests</button>
-          <button class="ai-empty-btn" @click="inputText = '/review '; nextTick(() => textareaEl?.focus())">/review — code review</button>
+          <button
+            v-for="s in emptySuggestions"
+            :key="s.action"
+            class="ai-empty-btn"
+            @click="inputText = s.action; nextTick(() => textareaEl?.focus())"
+          >{{ s.label }}</button>
         </div>
         <!-- Cursor-style: show active file suggestion when one is open -->
         <div v-if="props.getActiveRelPath?.()" class="ai-empty-file-hint">
@@ -6855,11 +8285,27 @@ function getDateLabel(ts: number): string {
         :data-mi="mi"
       >
         <!-- Bubble -->
-        <div class="ai-bubble" :class="msg.role">
+        <div class="ai-bubble" :class="msg.role" @dblclick="msg.role === 'user' && !msg.streaming ? startInlineEdit(mi) : undefined">
+          <!-- Inline edit mode (Cursor-style: double-click user bubble to edit) -->
+          <template v-if="editingMsgIdx === mi">
+            <textarea
+              :id="`ai-inline-edit-${mi}`"
+              v-model="editingMsgText"
+              class="ai-inline-edit-ta"
+              rows="4"
+              @keydown.enter.exact.prevent="submitInlineEdit(mi)"
+              @keydown.escape.prevent="cancelInlineEdit"
+            />
+            <div class="ai-inline-edit-actions">
+              <span class="ai-inline-edit-hint">Enter to resend · Esc to cancel</span>
+              <button class="ai-cancel-btn" @click="cancelInlineEdit">Cancel</button>
+              <button class="ai-send-btn" style="padding:3px 10px;font-size:11px" @click="submitInlineEdit(mi)">Resend</button>
+            </div>
+          </template>
           <!-- Text content -->
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div
-            v-if="msg.content"
+            v-else-if="msg.content"
             class="ai-text"
             :class="{ 'ai-text-folded': isMsgFolded(mi, msg.content) }"
             v-html="renderWithSearchHighlight(msg.content)"
@@ -7035,6 +8481,24 @@ function getDateLabel(ts: number): string {
           </button>
           <button class="ai-msg-action-btn" title="Copy" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
+          </button>
+          <!-- Add AI response as context chip (Cursor-style: use response in next message) -->
+          <button
+            v-if="msg.role === 'assistant' && !msg.streaming"
+            class="ai-msg-action-btn"
+            title="Add response as context for next message"
+            @click="addResponseAsContext(msg)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25v-8.5C0 2.784.784 2 1.75 2ZM1.5 3.75v.5c.918.553 2.963 1.785 4.78 2.886A1.75 1.75 0 0 0 8 7.5c.641 0 1.245-.332 1.72-.864C11.537 6.035 13.582 4.803 14.5 4.25v-.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM1.5 6.893v5.357c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V6.893l-4.064 2.45a3.25 3.25 0 0 1-3.372 0Z"/></svg>
+          </button>
+          <!-- Delete message pair (user + AI response) -->
+          <button
+            v-if="msg.role === 'user' && !sending"
+            class="ai-msg-action-btn ai-msg-delete-btn"
+            title="Delete this exchange"
+            @click="deleteMessagePair(mi)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/></svg>
           </button>
           <button
             v-if="msg.role === 'assistant' && !msg.streaming && workspacePath"
@@ -7234,6 +8698,12 @@ function getDateLabel(ts: number): string {
       <div v-if="contextChips.length" class="ai-chips">
         <span class="ai-chips-meta">
           <span class="ai-chips-total" :title="`Total context from chips: ~${chipsTokenTotal.toLocaleString()} tokens`">~{{ chipsTokenTotal > 999 ? (chipsTokenTotal / 1000).toFixed(1) + 'k' : chipsTokenTotal }}t</span>
+          <span
+            v-if="chipsTokenTotal > 30000"
+            class="ai-chips-warn"
+            :class="{ 'ai-chips-warn-critical': chipsTokenTotal > 60000 }"
+            :title="`Context chips are ~${(chipsTokenTotal/1000).toFixed(0)}k tokens — consider /compact to reduce context size`"
+          >⚠ large context</span>
           <button
             v-if="contextChips.filter(c => !c.pinned).length > 1"
             class="ai-chips-clear"
@@ -7307,6 +8777,7 @@ function getDateLabel(ts: number): string {
         >
           <span class="ai-slash-name">{{ cmd.label }}</span>
           <span class="ai-slash-desc">{{ cmd.description }}</span>
+          <span v-if="!slashMenuFilter && recentCmds.includes(cmd.id)" class="ai-slash-recent">recent</span>
         </div>
       </div>
 
@@ -7453,6 +8924,27 @@ function getDateLabel(ts: number): string {
           </span>
         </div>
         <div class="ai-input-btns">
+          <!-- Add editor selection as context chip -->
+          <button
+            v-if="!sending && props.getEditorSelection"
+            class="ai-settings-btn"
+            title="Add editor selection as context (Cursor-style: adds selected code as @selection chip)"
+            @click="() => {
+              const sel = props.getEditorSelection?.()?.trim()
+              if (!sel) { showToast('No selection — select code in the editor first'); return }
+              const relPath = props.getActiveRelPath?.()
+              const ext = relPath?.split('.').pop() ?? ''
+              const label = '@selection'
+              contextChips.value = contextChips.value.filter(c => c.label !== '@selection')
+              contextChips.value.push({ id: crypto.randomUUID(), label, content: `\`\`\`${ext}\n${sel.slice(0, 8000)}\n\`\`\`` })
+              showToast('Selection added to context')
+              nextTick(() => textareaEl.value?.focus())
+            }"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M1.75 1h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v3.5a.75.75 0 0 1-1.5 0v-3.5C0 1.784.784 1 1.75 1ZM14.25 1h-3.5a.75.75 0 0 0 0 1.5h3.5a.25.25 0 0 1 .25.25v3.5a.75.75 0 0 0 1.5 0v-3.5A1.75 1.75 0 0 0 14.25 1ZM1.5 10.75a.75.75 0 0 0-1.5 0v3.5C0 15.216.784 16 1.75 16h3.5a.75.75 0 0 0 0-1.5h-3.5a.25.25 0 0 1-.25-.25v-3.5Zm13 0a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 14.25 16h-3.5a.75.75 0 0 1 0-1.5h3.5a.25.25 0 0 0 .25-.25v-3.5Z"/>
+            </svg>
+          </button>
           <!-- Attach file button -->
           <button
             v-if="!sending && workspacePath"
@@ -7682,6 +9174,13 @@ function getDateLabel(ts: number): string {
           :placeholder="showArchivedThreads ? 'Search archived…' : 'Search chats…'"
           @keydown.escape="showThreads = false; threadSearchQuery = ''"
         />
+        <button class="ai-thread-bulk-toggle" :class="{ active: threadBulkMode }" title="Select multiple" @click="threadBulkMode = !threadBulkMode; selectedThreadIds.value = new Set()">☑</button>
+      </div>
+      <div v-if="threadBulkMode && selectedThreadIds.size > 0" class="ai-thread-bulk-bar">
+        <span class="ai-thread-bulk-count">{{ selectedThreadIds.size }} selected</span>
+        <button class="ai-thread-bulk-btn" @click="bulkArchiveThreads">Archive</button>
+        <button class="ai-thread-bulk-btn ai-thread-bulk-del" @click="bulkDeleteThreads">Delete</button>
+        <button class="ai-thread-bulk-cancel" @click="threadBulkMode = false; selectedThreadIds.value = new Set()">Cancel</button>
       </div>
       <div class="ai-threads-list">
         <div v-if="!filteredThreads.length" class="ai-threads-empty">No results</div>
@@ -7690,9 +9189,17 @@ function getDateLabel(ts: number): string {
           <div
             v-else
             class="ai-thread-item"
-            :class="{ active: item.thread.id === currentThreadId }"
-            @click="switchThread(item.thread.id)"
+            :class="{ active: item.thread.id === currentThreadId, 'bulk-selected': threadBulkMode && selectedThreadIds.has(item.thread.id) }"
+            :style="item.thread.color ? `border-left: 3px solid ${item.thread.color}` : ''"
+            @click="threadBulkMode ? toggleThreadSelect(item.thread.id) : switchThread(item.thread.id)"
           >
+            <input
+              v-if="threadBulkMode"
+              type="checkbox"
+              class="ai-thread-checkbox"
+              :checked="selectedThreadIds.has(item.thread.id)"
+              @click.stop="toggleThreadSelect(item.thread.id)"
+            />
             <div class="ai-thread-main">
               <input
                 v-if="renamingThreadId === item.thread.id"
@@ -7717,6 +9224,13 @@ function getDateLabel(ts: number): string {
               <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
               <span v-if="threadTotalTokens(item.thread) > 0" class="ai-thread-tokens" :title="`~${threadTotalTokens(item.thread).toLocaleString()} total tokens`">{{ threadTotalTokens(item.thread) >= 1000 ? (threadTotalTokens(item.thread) / 1000).toFixed(1) + 'k' : threadTotalTokens(item.thread) }}t</span>
               <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
+              <!-- Color dot — click to cycle colors (Cursor-style thread tagging) -->
+              <button
+                class="ai-thread-color-btn"
+                :style="item.thread.color ? `background:${item.thread.color}` : ''"
+                :title="item.thread.color ? `Color: ${item.thread.color} (click to change)` : 'Set thread color'"
+                @click.stop="cycleThreadColor(item.thread.id, $event)"
+              />
               <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
               <button class="ai-thread-dup" title="Duplicate thread" @click.stop="duplicateThread(item.thread.id)">⎘</button>
               <button class="ai-thread-archive" :title="item.thread.archived ? 'Unarchive' : 'Archive'" @click.stop="toggleArchiveThread(item.thread.id, $event)">{{ item.thread.archived ? '↩' : '⊡' }}</button>
@@ -7771,6 +9285,7 @@ function getDateLabel(ts: number): string {
             <div class="ai-notepad-item-header" @click="activeNotepadId = activeNotepadId === np.id ? null : np.id">
               <span class="ai-notepad-item-name" :class="{ active: activeNotepadId === np.id }">{{ np.name }}</span>
               <span class="ai-notepad-item-tokens">{{ np.content.trim() ? `~${Math.ceil(np.content.length/4)} tok` : 'empty' }}</span>
+              <button class="ai-notepad-pin-btn" :class="{ active: np.pinned }" :title="np.pinned ? 'Always inject: ON (click to disable)' : 'Pin: always inject into every message'" @click.stop="toggleNotepadPin(np.id)">{{ np.pinned ? '📌' : '⊙' }}</button>
               <button class="ai-notepad-item-del" title="Delete" @click.stop="deleteNotepad(np.id)">✕</button>
             </div>
             <textarea
@@ -7799,6 +9314,26 @@ function getDateLabel(ts: number): string {
             <div class="ai-notepad-item-header">
               <span class="ai-notepad-item-name" style="font-weight:400;font-size:12px">{{ mem }}</span>
               <button class="ai-notepad-item-del" title="Remove memory" @click="removeMemory(mi)">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Global Context Pins — always-include files across all conversations -->
+        <div class="ai-notepad-section" style="margin-top:8px">
+          <div class="ai-notepad-section-header">
+            <span>Always-Include Files <span style="opacity:.6;font-size:10.5px">— file content injected every conversation</span></span>
+            <button
+              class="ai-notepad-add-btn"
+              title="Pin a file path to always include"
+              @click="() => { const p = window.prompt('File path to always include (relative to workspace, e.g. src/types.ts):'); if (p?.trim()) addGlobalPin(p.trim()) }"
+            >+</button>
+          </div>
+          <div v-if="globalContextPins.length === 0" class="ai-settings-hint" style="padding:6px 0">No pinned files — click + to always include a file in every conversation.</div>
+          <div v-for="pin in globalContextPins" :key="pin.id" class="ai-notepad-item" style="cursor:default">
+            <div class="ai-notepad-item-header">
+              <span class="ai-notepad-item-name" style="font-weight:400;font-size:12px;color:var(--accent-fg)">{{ pin.label }}</span>
+              <span class="ai-settings-hint" style="flex:1;font-size:10.5px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ pin.relPath }}</span>
+              <button class="ai-notepad-item-del" title="Remove pin" @click="removeGlobalPin(pin.id)">✕</button>
             </div>
           </div>
         </div>
@@ -8236,6 +9771,10 @@ function getDateLabel(ts: number): string {
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 0A1.75 1.75 0 0 0 1 1.75v12.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25V5.06a1.75 1.75 0 0 0-.513-1.237L10.41.514A1.75 1.75 0 0 0 9.172 0H2.75zm0 1.5h6.422c.13 0 .254.051.346.143L13.57 5.66A.25.25 0 0 1 13.5 6.009V14.25a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25V1.75a.25.25 0 0 1 .25-.25zm5.25 5.5a.75.75 0 0 1 .75.75v1.25h1.25a.75.75 0 0 1 0 1.5H8.75v1.25a.75.75 0 0 1-1.5 0v-1.25H6a.75.75 0 0 1 0-1.5h1.25V7.75A.75.75 0 0 1 8 7z"/></svg>
           Save to AI rules
         </button>
+        <button class="ai-ctx-item" @click="ctxMenuSaveToMemory">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5z"/></svg>
+          Save to Memory
+        </button>
         <div class="ai-ctx-sep" />
         <button class="ai-ctx-item ai-ctx-danger" @click="ctxMenuDelete">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/><path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/></svg>
@@ -8363,6 +9902,10 @@ function getDateLabel(ts: number): string {
 .ai-msg-action-btn:hover {
   background: var(--bg-subtle);
   color: var(--text-bright);
+}
+.ai-msg-delete-btn:hover {
+  background: rgba(248, 81, 73, 0.12);
+  color: #f85149;
 }
 .ai-msg-time {
   font-size: 10px;
@@ -8583,6 +10126,17 @@ function getDateLabel(ts: number): string {
   background: none; border: none; cursor: pointer; text-align: center;
 }
 .ai-fold-btn:hover { text-decoration: underline; }
+/* Inline user-bubble editor */
+.ai-bubble[class~="user"]:not(.ai-bubble--editing) { cursor: text; }
+.ai-inline-edit-ta {
+  width: 100%; min-height: 60px; max-height: 240px;
+  padding: 6px 8px; border: 1px solid var(--accent-emphasis, #6366f1);
+  border-radius: 4px; background: var(--bg-base); color: var(--text-bright);
+  font-size: 13px; font-family: inherit; resize: vertical;
+  outline: none; box-sizing: border-box;
+}
+.ai-inline-edit-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.ai-inline-edit-hint { flex: 1; font-size: 10.5px; color: var(--text-muted); }
 
 .ai-text :deep(.ai-code-wrap) {
   margin: 6px 0;
@@ -8716,6 +10270,20 @@ function getDateLabel(ts: number): string {
 }
 .ai-text :deep(.ai-code-action-btn:hover) {
   opacity: 1; background: var(--bg-subtle); color: var(--accent-fg);
+}
+.ai-text :deep(.ai-code-create-btn) {
+  background: none;
+  border: 1px solid var(--success-fg, #3fb950);
+  border-radius: 4px;
+  color: var(--success-fg, #3fb950);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 7px;
+  margin-left: 2px;
+}
+.ai-text :deep(.ai-code-create-btn:hover) {
+  background: var(--success-fg, #3fb950);
+  color: #fff;
 }
 .ai-text :deep(.ai-code-apply-btn),
 .ai-text :deep(.ai-code-insert-btn) {
@@ -9097,6 +10665,7 @@ function getDateLabel(ts: number): string {
 .ai-diff-view :deep(.diff-del) { background: rgba(248, 81, 73, 0.15); color: #f85149; padding: 0 8px; white-space: pre; }
 .ai-diff-view :deep(.diff-hunk) { color: var(--accent-fg); background: rgba(79, 140, 201, 0.1); padding: 0 8px; white-space: pre; }
 .ai-diff-view :deep(.diff-ctx) { color: var(--text-muted); padding: 0 8px; white-space: pre; }
+.ai-text :deep(.ai-diff-view.ai-diff-inline) { max-height: 400px; border-top: 1px solid var(--border-muted); }
 
 /* ── Command proposal card ─────────────────────────────────────────────────── */
 .ai-cmd-card {
@@ -9294,6 +10863,18 @@ function getDateLabel(ts: number): string {
 .ai-slash-desc {
   color: var(--text-muted);
   font-size: 11.5px;
+  flex: 1;
+}
+.ai-slash-recent {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-fg);
+  opacity: 0.6;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
 }
 
 .ai-input-row {
@@ -9959,6 +11540,30 @@ function getDateLabel(ts: number): string {
 .ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
 .ai-thread-dup { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
 .ai-thread-dup:hover { color: var(--text-bright); background: var(--bg-subtle); }
+.ai-thread-color-btn {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-muted);
+  cursor: pointer; flex-shrink: 0;
+  opacity: 0; transition: opacity 0.12s;
+  padding: 0;
+}
+.ai-thread-item:hover .ai-thread-color-btn,
+.ai-thread-item.active .ai-thread-color-btn { opacity: 1; }
+.ai-thread-color-btn:hover { border-color: var(--text-muted); transform: scale(1.2); }
+/* Bulk selection */
+.ai-thread-bulk-toggle { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 4px; border-radius: 3px; margin-left: 4px; flex-shrink: 0; }
+.ai-thread-bulk-toggle:hover, .ai-thread-bulk-toggle.active { color: var(--accent-fg); }
+.ai-thread-bulk-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--bg-subtle); border-bottom: 1px solid var(--border-muted); font-size: 11px; }
+.ai-thread-bulk-count { color: var(--text-secondary); flex: 1; }
+.ai-thread-bulk-btn { font-size: 10.5px; padding: 2px 8px; border: 1px solid var(--border-muted); border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer; }
+.ai-thread-bulk-btn:hover { background: var(--bg-hover); }
+.ai-thread-bulk-del { color: #f85149; border-color: rgba(248,81,73,.4); }
+.ai-thread-bulk-del:hover { background: rgba(248,81,73,.1); }
+.ai-thread-bulk-cancel { font-size: 10.5px; padding: 2px 6px; background: none; border: none; color: var(--text-muted); cursor: pointer; }
+.ai-thread-bulk-cancel:hover { color: var(--text-primary); }
+.ai-thread-checkbox { width: 12px; height: 12px; margin-right: 6px; flex-shrink: 0; cursor: pointer; accent-color: var(--accent-fg); }
+.ai-thread-item.bulk-selected { background: var(--bg-subtle); }
 .ai-thread-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
 .ai-thread-archive { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
 .ai-thread-archive:hover { color: var(--text-bright); background: var(--bg-subtle); }
@@ -10063,6 +11668,8 @@ kbd {
 .ai-notepad-item-tokens { font-size: 10px; color: var(--fg-muted, #888); opacity: .7; flex-shrink: 0; }
 .ai-notepad-item-del { background: none; border: none; color: var(--fg-muted, #888); cursor: pointer; font-size: 10px; padding: 0 2px; flex-shrink: 0; }
 .ai-notepad-item-del:hover { color: #e06c75; }
+.ai-notepad-pin-btn { background: none; border: none; cursor: pointer; font-size: 10px; padding: 0 2px; flex-shrink: 0; opacity: 0.4; }
+.ai-notepad-pin-btn:hover, .ai-notepad-pin-btn.active { opacity: 1; }
 
 /* ── Apply-code diff preview modal ──────────────────────────────────────────── */
 .ai-modal-overlay {

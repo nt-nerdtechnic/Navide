@@ -28,6 +28,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'dirty', value: boolean): void
   (e: 'addToChat', selection: string): void
+  (e: 'explainWithAI', selection: string): void
+  (e: 'fixWithAI', selection: string): void
+  (e: 'writeTestsWithAI', selection: string): void
 }>()
 
 const { toast, alert } = useNotify()
@@ -191,6 +194,40 @@ const cmdk = ref<{ open: boolean; instruction: string; busy: boolean; range: Ran
 )
 const proposal = ref<{ range: Range; oldText: string; newText: string } | null>(null)
 const cmdkInput = ref<HTMLInputElement | null>(null)
+
+function computeProposalDiff(oldText: string, newText: string): Array<{ type: '+' | '-' | ' '; text: string }> {
+  const A = oldText.split('\n'), B = newText.split('\n')
+  const capA = A.slice(0, 300), capB = B.slice(0, 300)
+  const m = capA.length, n = capB.length
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = capA[i - 1] === capB[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
+  const out: Array<{ type: '+' | '-' | ' '; text: string }> = []
+  let i = m, j = n
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && capA[i - 1] === capB[j - 1]) {
+      out.unshift({ type: ' ', text: capA[i - 1] }); i--; j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      out.unshift({ type: '+', text: capB[j - 1] }); j--
+    } else {
+      out.unshift({ type: '-', text: capA[i - 1] }); i--
+    }
+  }
+  const CONTEXT = 3
+  const changed = new Set(out.map((l, idx) => l.type !== ' ' ? idx : -1).filter((x) => x >= 0))
+  const keep = new Set<number>()
+  for (const idx of changed)
+    for (let k = Math.max(0, idx - CONTEXT); k <= Math.min(out.length - 1, idx + CONTEXT); k++) keep.add(k)
+  const condensed: Array<{ type: '+' | '-' | ' '; text: string }> = []
+  let prev = -2
+  for (const idx of Array.from(keep).sort((a, b) => a - b)) {
+    if (idx > prev + 1 && condensed.length > 0) condensed.push({ type: ' ', text: '⋯' })
+    condensed.push(out[idx])
+    prev = idx
+  }
+  return condensed
+}
 
 function openCmdK(): void {
   const range = editorRef.value?.getSelectionRange() ?? null
@@ -894,6 +931,9 @@ defineExpose({
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); openFind() }">Find</button>
           <div class="ep-ctx-sep" />
           <button class="ep-ctx-item" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('addToChat', sel || editorRef?.getValue?.() || '') }">Add to AI Chat</button>
+          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('explainWithAI', sel || editorRef?.getValue?.() || '') }">Explain with AI</button>
+          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('fixWithAI', sel || editorRef?.getValue?.() || '') }">Fix with AI</button>
+          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('writeTestsWithAI', sel || editorRef?.getValue?.() || '') }">Generate Tests</button>
           <div class="ep-ctx-sep" />
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); editorRef?.selectAll() }">Select All</button>
         </div>
@@ -942,8 +982,12 @@ defineExpose({
         </div>
       </div>
       <div class="ep-prop-diff">
-        <pre class="ep-old">{{ proposal.oldText }}</pre>
-        <pre class="ep-new">{{ proposal.newText }}</pre>
+        <pre
+          v-for="(ln, li) in computeProposalDiff(proposal.oldText, proposal.newText)"
+          :key="li"
+          class="ep-diff-line"
+          :class="ln.type === '+' ? 'ep-diff-add' : ln.type === '-' ? 'ep-diff-del' : 'ep-diff-ctx'"
+        ><span class="ep-diff-sign">{{ ln.type === '+' ? '+' : ln.type === '-' ? '-' : ' ' }}</span>{{ ln.text }}</pre>
       </div>
     </div>
 
@@ -1115,17 +1159,25 @@ defineExpose({
   background: var(--bg-subtle);
 }
 .ep-prop-actions { display: flex; gap: 6px; }
-.ep-prop-diff { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border-muted); }
-.ep-old, .ep-new {
-  margin: 0;
-  padding: 8px 12px;
-  font: 12px/1.5 ui-monospace, Menlo, monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
+.ep-prop-diff {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
   background: var(--bg-base);
+  overflow-x: auto;
 }
-.ep-old { color: var(--diff-del-fg); background: var(--diff-del-bg); }
-.ep-new { color: var(--diff-add-fg); background: var(--diff-add-bg); }
+.ep-diff-line {
+  margin: 0;
+  padding: 0 12px;
+  font: 12px/1.6 ui-monospace, Menlo, monospace;
+  white-space: pre;
+  display: flex;
+  gap: 6px;
+}
+.ep-diff-sign { flex-shrink: 0; width: 10px; }
+.ep-diff-add { color: var(--diff-add-fg, #3fb950); background: var(--diff-add-bg, rgba(63,185,80,.12)); }
+.ep-diff-del { color: var(--diff-del-fg, #f85149); background: var(--diff-del-bg, rgba(248,81,73,.12)); }
+.ep-diff-ctx { color: var(--text-muted); }
 
 .ep-find {
   display: flex;
@@ -1244,6 +1296,7 @@ defineExpose({
   color: var(--text-primary);
 }
 .ep-ctx-item:hover { background: var(--accent-muted); }
+.ep-ctx-item.ep-ctx-ai { color: var(--accent-fg); }
 .ep-ctx-sep { height: 1px; background: var(--border-default); margin: 3px 0; }
 
 .ep-statusbar {

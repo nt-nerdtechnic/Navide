@@ -4129,9 +4129,11 @@ const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'sidebar' | 'fullscr
 watch(effectiveLayoutMode, () => {
   void nextTick(() => {
     requestAnimationFrame(() => {
-      for (const ref of Object.values(paneRefs)) {
-        (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
-      }
+      requestAnimationFrame(() => {
+        for (const ref of Object.values(paneRefs)) {
+          (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
+        }
+      })
     })
   })
 })

@@ -468,8 +468,12 @@ registerCommand('workbench.action.addSelectionToChat', () => {
   if (!sel) return
   aiPanelOpen.value = true
   const rel = activeRel.value
+  const ext = rel ? (rel.split('.').pop() ?? '') : ''
   const label = rel ? `@${rel.split('/').pop()}` : '@selection'
-  void nextTick(() => aiChatRef.value?.addContextChip(label, sel))
+  const content = rel
+    ? `// Selection from: ${rel}\n\`\`\`${ext}\n${sel}\n\`\`\``
+    : `// Selected code:\n\`\`\`\n${sel}\n\`\`\``
+  void nextTick(() => aiChatRef.value?.addContextChip(label, content))
 })
 function getActiveRelPath(): string { return activeRel.value }
 registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
@@ -1631,7 +1635,10 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             embedded
             :active="f.relPath === activeRel"
             @dirty="(v) => markDirty(f.relPath, v)"
-            @add-to-chat="(sel: string) => { aiPanelOpen = true; nextTick(() => aiChatRef?.addContextChip(`@${f.relPath.split('/').pop()}(selection)`, sel)) }"
+            @add-to-chat="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => aiChatRef?.addContextChip(label, content)) }"
+            @explain-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/explain Explain the selected code step by step.') }) }"
+            @fix-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/fix Fix any bugs or issues in the selected code.') }) }"
+            @write-tests-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/tests Generate comprehensive unit tests for the selected code.') }) }"
           />
           <DiffPane
             v-else-if="f.kind === 'diff'"

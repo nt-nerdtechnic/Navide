@@ -153,7 +153,7 @@ class TerminalService:
         # Per-session pending INPUT bytes not yet accepted by the non-blocking
         # PTY master (EAGAIN / partial write). Drained via add_writer.
         self._in_buffers: dict[str, bytearray] = {}    # session_id -> pending bytes
-        self._use_tmux: bool = _tmux_available()
+        self._use_tmux: bool = False  # plain PTY mode — tmux removed for xterm scrollback
 
     def create(
         self,
