@@ -558,6 +558,31 @@ const MODEL_CATALOG: ModelEntry[] = [
   { id: 'codellama',                  provider: 'ollama',    display: 'CodeLlama',               note: 'Local · Code',       ctx: 16_000  },
   { id: 'gemma2',                     provider: 'ollama',    display: 'Gemma 2',                 note: 'Local',              ctx: 8_000   },
 ]
+// Token pricing per million tokens [input, output] in USD — used for cost estimation badges
+const MODEL_COSTS: Record<string, [number, number]> = {
+  'claude-opus-4-8':            [15,    75   ],
+  'claude-sonnet-4-6':          [3,     15   ],
+  'claude-haiku-4-5-20251001':  [0.8,   4    ],
+  'claude-3-5-sonnet-20241022': [3,     15   ],
+  'claude-3-5-haiku-20241022':  [0.8,   4    ],
+  'gpt-4o':                     [2.5,   10   ],
+  'gpt-4o-mini':                [0.15,  0.6  ],
+  'o3-mini':                    [1.1,   4.4  ],
+  'deepseek-chat':              [0.27,  1.1  ],
+  'deepseek-reasoner':          [0.55,  2.19 ],
+  'llama-3.3-70b-versatile':    [0.59,  0.79 ],
+  'mixtral-8x7b-32768':         [0.24,  0.24 ],
+}
+
+function estimateCost(modelId: string, inputTokens: number, outputTokens: number): string | null {
+  const costs = MODEL_COSTS[modelId]
+  if (!costs) return null
+  const usd = (inputTokens / 1_000_000) * costs[0] + (outputTokens / 1_000_000) * costs[1]
+  if (usd < 0.001) return '<$0.001'
+  if (usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(3)}`
+}
+
 const ANTHROPIC_MODELS = MODEL_CATALOG.filter((m) => m.provider === 'anthropic').map((m) => m.id)
 const OLLAMA_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'ollama').map((m) => m.id)
 const OPENAI_MODELS     = MODEL_CATALOG.filter((m) => m.provider === 'openai').map((m) => m.id)
@@ -3693,6 +3718,11 @@ function getDateLabel(ts: number): string {
           >{{ Math.round(msg.outputTokens / (msg.elapsedMs / 1000)) }} t/s</span>
           <span v-if="msg.role === 'assistant' && msg.model && !msg.streaming" class="ai-msg-model-badge" :title="msg.model">{{ msg.model.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</span>
           <span v-if="msg.role === 'assistant' && (msg.inputTokens || msg.outputTokens) && !msg.streaming" class="ai-msg-tokens" :title="`Input: ${(msg.inputTokens ?? 0).toLocaleString()} tokens\nOutput: ${(msg.outputTokens ?? 0).toLocaleString()} tokens`">↑{{ (msg.inputTokens ?? 0).toLocaleString() }} ↓{{ (msg.outputTokens ?? 0).toLocaleString() }}</span>
+          <span
+            v-if="msg.role === 'assistant' && msg.model && msg.inputTokens != null && msg.outputTokens != null && !msg.streaming && estimateCost(msg.model, msg.inputTokens, msg.outputTokens)"
+            class="ai-msg-cost"
+            :title="`Estimated API cost for this response (${msg.model})`"
+          >{{ estimateCost(msg.model, msg.inputTokens ?? 0, msg.outputTokens ?? 0) }}</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
             {{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
           </span>
