@@ -381,7 +381,7 @@ class TerminalService:
         except OSError as err:
             log.warning("interrupt session %s failed: %s", session_id, err)
 
-    def kill(self, session_id: str) -> None:
+    def kill(self, session_id: str, *, keep_tmux: bool = False) -> None:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
@@ -391,7 +391,7 @@ class TerminalService:
             os.killpg(os.getpgid(session.proc.pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-        if tmux_name:
+        if tmux_name and not keep_tmux:
             try:
                 subprocess.run(
                     ["tmux", "kill-session", "-t", tmux_name],
@@ -402,7 +402,7 @@ class TerminalService:
 
     def shutdown(self) -> None:
         for session in list(self._sessions.values()):
-            self.kill(session.id)
+            self.kill(session.id, keep_tmux=True)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)
