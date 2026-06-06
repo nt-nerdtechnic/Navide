@@ -1230,6 +1230,7 @@ onMounted(() => {
   api?.onSwitchEditorSidebar?.((sidebar) => {
     if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
       sidebarView.value = sidebar
+      sidebarHidden.value = false
     }
   })
   api?.onOpenEditorDiff?.((params) => {

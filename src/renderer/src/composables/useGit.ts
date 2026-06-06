@@ -1180,10 +1180,16 @@ export function useGit(
   // gap our cross-process setup has (that an in-editor extension doesn't) is a
   // WebSocket drop — a git.changed emitted while disconnected is lost. So on
   // (re)connect, re-sync once; loadStatus also re-registers this workspace with
-  // the backend GitWatcher via git.status.
+  // the backend GitWatcher via git.status. loadLog is also re-called so that
+  // windows that open before the WS is ready (e.g. miniIDE) get their history.
   const _stopReconnect = watch(
     () => backend.status.value,
-    (s) => { if (s === 'connected' && workspacePath()) void loadStatus() },
+    (s) => {
+      if (s === 'connected' && workspacePath()) {
+        void loadStatus()
+        void loadLog()
+      }
+    },
   )
   onScopeDispose(_stopReconnect)
 

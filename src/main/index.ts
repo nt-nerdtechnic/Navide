@@ -128,6 +128,7 @@ function openDiffWindow(params: Record<string, string>): void {
   // Editor window already open — send IPC so it opens a diff tab without reload.
   if (editorWindow && !editorWindow.isDestroyed()) {
     editorWindow.webContents.send('editor:openDiff', params)
+    editorWindow.webContents.send('editor:switchSidebar', 'git')
     editorWindow.focus()
     return
   }
@@ -138,6 +139,7 @@ function openDiffWindow(params: Record<string, string>): void {
     diff_filepath: params.filepath,
     diff_staged: params.staged,
     diff_name: params.name ?? params.filepath,
+    sidebar: 'git',
   })
 }
 
