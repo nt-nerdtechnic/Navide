@@ -110,8 +110,18 @@ interface ChatMessage {
   pendingEdits?: Array<{ relPath: string; code: string }> // detected file edits from Edit mode
 }
 
+// ── Checkpoint (Cursor-style conversation snapshots) ──────────────────────────
+interface ChatCheckpoint {
+  id: string
+  name: string
+  timestamp: number
+  messagesSnapshot: ChatMessage[]
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 const messages = ref<ChatMessage[]>([])
+const checkpoints = ref<ChatCheckpoint[]>([])
+const showCheckpoints = ref(false)
 const inputText = ref('')
 const inputHistory: string[] = []
 let historyIdx = -1
@@ -245,7 +255,7 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 }
 
 // ── Conversation thread persistence ──────────────────────────────────────────
-interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; model?: string }
+interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; model?: string; checkpoints?: ChatCheckpoint[] }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
@@ -372,6 +382,7 @@ function _doSave(): void {
   const toSave = messages.value.filter((m) => !m.streaming).slice(-100)
   allThreads.value[idx].messages = toSave
   allThreads.value[idx].updatedAt = Date.now()
+  allThreads.value[idx].checkpoints = checkpoints.value
   const firstUser = toSave.find((m) => m.role === 'user')
   if (firstUser && (allThreads.value[idx].title === 'New chat' )) {
     // Truncate at word boundary within 40 chars
@@ -414,6 +425,7 @@ function switchThread(id: string): void {
   if (!thread) return
   currentThreadId.value = id
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
+  checkpoints.value = thread.checkpoints ?? []
   expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
   // Restore per-conversation model override when switching threads (silently)
   if (thread.model) {
@@ -767,7 +779,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
   { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
   { id: '/continue', label: '/continue', description: 'Continue last response',  template: '' },
-  { id: '/compact',  label: '/compact',  description: 'Summarize & compress history to free context', template: '' },
+  { id: '/compact',     label: '/compact',     description: 'Summarize & compress history to free context', template: '' },
+  { id: '/checkpoint',  label: '/checkpoint',  description: 'Save a conversation checkpoint',              template: '' },
+  { id: '/checkpoints', label: '/checkpoints', description: 'View and restore checkpoints',                template: '' },
   { id: '/model',    label: '/model',    description: 'Switch model for this conversation',            template: '' },
   { id: '/rename',   label: '/rename',   description: 'Rename this chat thread',                       template: '' },
   { id: '/pin',      label: '/pin',      description: 'Pin / unpin this chat thread',                  template: '' },
@@ -1469,6 +1483,21 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // /checkpoint [name] — save current conversation snapshot
+  if (rawText === '/checkpoint' || rawText.startsWith('/checkpoint ')) {
+    const name = rawText.slice('/checkpoint'.length).trim()
+    inputText.value = ''
+    saveCheckpoint(name || undefined)
+    return
+  }
+
+  // /checkpoints — open checkpoint panel
+  if (rawText === '/checkpoints') {
+    inputText.value = ''
+    showCheckpoints.value = true
+    return
+  }
+
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
@@ -1900,6 +1929,11 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
     e.preventDefault()
     textareaEl.value?.focus()
+  }
+  // Ctrl+Shift+S — save checkpoint
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 's') {
+    e.preventDefault()
+    if (messages.value.length > 0) saveCheckpoint()
   }
 }
 
@@ -3306,6 +3340,36 @@ function copyAllMessages(): void {
   navigator.clipboard.writeText(md.trim()).then(() => showToast('Conversation copied')).catch(() => showToast('Copy failed'))
 }
 
+// ── Conversation Checkpoints (Cursor-style snapshots) ─────────────────────────
+function saveCheckpoint(name?: string): void {
+  const snap = messages.value.filter((m) => !m.streaming).map((m) => ({ ...m }))
+  if (!snap.length) { showToast('Nothing to checkpoint'); return }
+  const label = name?.trim() || `Checkpoint ${checkpoints.value.length + 1} (${snap.length} msgs)`
+  const cp: ChatCheckpoint = {
+    id: `cp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: label,
+    timestamp: Date.now(),
+    messagesSnapshot: snap,
+  }
+  checkpoints.value = [cp, ...checkpoints.value].slice(0, 10)  // keep last 10
+  saveCurrentThread()
+  showToast(`Checkpoint saved: ${label}`)
+}
+
+function restoreCheckpoint(cp: ChatCheckpoint): void {
+  if (!window.confirm(`Restore to checkpoint "${cp.name}"?\nThis will replace the current conversation (${messages.value.length} messages).`)) return
+  messages.value = cp.messagesSnapshot.map((m) => ({ ...m, streaming: false, thinking: false }))
+  saveCurrentThread()
+  showCheckpoints.value = false
+  showToast(`Restored: ${cp.name}`)
+  nextTick(() => void scrollBottom())
+}
+
+function deleteCheckpoint(id: string): void {
+  checkpoints.value = checkpoints.value.filter((c) => c.id !== id)
+  saveCurrentThread()
+}
+
 // ── Message bookmarks ─────────────────────────────────────────────────────────
 function toggleBookmark(mi: number): void {
   const msg = messages.value[mi]
@@ -3903,6 +3967,15 @@ function getDateLabel(ts: number): string {
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.72.22a.749.749 0 0 1 1.06 0l1.25 1.25a.749.749 0 0 1 0 1.06L5.78 3.78a.749.749 0 0 1-1.06 0L3.47 2.53a.749.749 0 0 1 0-1.06ZM5 5.5a.5.5 0 0 1 .5-.5H8a.5.5 0 0 1 0 1H5.5A.5.5 0 0 1 5 5.5Zm-1.5 5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1H4a.5.5 0 0 1-.5-.5Zm1-2.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5Zm8.25-6.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 12.75 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H3.25A1.75 1.75 0 0 1 1.5 10.25v-7.5C1.5 1.784 2.284 1 3.25 1ZM3.25 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
           </button>
           <button
+            v-if="messages.length > 0"
+            class="ai-settings-btn"
+            :class="{ active: showCheckpoints, 'ai-cp-has': checkpoints.length > 0 }"
+            :title="`Checkpoints (${checkpoints.length}) — Ctrl+Shift+S to save`"
+            @click="showCheckpoints = !showCheckpoints"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 1.5 0ZM8 12a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"/></svg>
+          </button>
+          <button
             v-if="messages.length > 0 && !sending"
             class="ai-settings-btn"
             title="Undo last send — remove last message and restore text to input"
@@ -3939,6 +4012,35 @@ function getDateLabel(ts: number): string {
               <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 9.99 1.409v.526c0 .384.214.706.535.862a6.98 6.98 0 0 1 .606.331c.316.19.693.16.965-.066l.372-.323a1.402 1.402 0 0 1 1.947.162l.739.845c.45.515.433 1.28-.037 1.773l-.365.388c-.224.238-.285.58-.152.892.144.343.27.694.374 1.052.098.339.364.59.706.643l.529.082c.764.119 1.282.823 1.2 1.593l-.116 1.112c-.076.729-.7 1.263-1.437 1.178l-.531-.065c-.345-.042-.668.163-.805.481a6.887 6.887 0 0 1-.376 1.053c-.134.312-.072.654.153.892l.365.388c.469.494.486 1.258.037 1.773l-.74.845a1.402 1.402 0 0 1-1.947.162l-.373-.324c-.272-.225-.648-.255-.963-.065-.198.12-.408.228-.61.331a.993.993 0 0 0-.535.862v.526c0 .764-.546 1.314-1.289 1.378A8.2 8.2 0 0 1 8 16a8.2 8.2 0 0 1-.701-.031C6.556 15.905 6.01 15.355 6.01 14.591v-.526a.993.993 0 0 0-.535-.862 6.942 6.942 0 0 1-.607-.331c-.315-.19-.691-.16-.963.065l-.373.324a1.402 1.402 0 0 1-1.947-.162l-.739-.845c-.45-.515-.433-1.28.037-1.773l.365-.388c.224-.238.285-.58.152-.892a6.933 6.933 0 0 1-.374-1.053c-.098-.339-.364-.59-.706-.643l-.529-.082C.236 9.177-.282 8.473-.2 7.703l.116-1.112C-.008 5.862.616 5.328 1.353 5.413l.531.065c.345.042.668-.163.805-.481A6.887 6.887 0 0 1 3.065 3.944c.134-.312.072-.654-.153-.892L2.547 2.664C2.078 2.17 2.061 1.406 2.51.891l.74-.845A1.402 1.402 0 0 1 5.197.884l.372.323c.272.226.649.256.965.066a6.98 6.98 0 0 1 .606-.331A.993.993 0 0 0 7.675 1.935V1.409C7.675.645 8.221.095 8.964.031 8.977.01 8.988 0 9 0H8ZM6.5 8a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0Z"/>
             </svg>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Checkpoints panel -->
+    <div v-if="showCheckpoints" class="ai-checkpoints-panel">
+      <div class="ai-threads-header">
+        <span>Checkpoints ({{ checkpoints.length }})</span>
+        <button class="ai-settings-close" @click="showCheckpoints = false">✕</button>
+      </div>
+      <div class="ai-checkpoints-actions">
+        <button class="ai-cp-save-btn" @click="saveCheckpoint()">+ Save checkpoint now</button>
+        <span class="ai-cp-hint">Ctrl+Shift+S · /checkpoint [name]</span>
+      </div>
+      <div class="ai-threads-list">
+        <div v-if="!checkpoints.length" class="ai-threads-empty">No checkpoints yet.<br>Save one to restore the conversation later.</div>
+        <div
+          v-for="cp in checkpoints"
+          :key="cp.id"
+          class="ai-checkpoint-item"
+        >
+          <div class="ai-cp-info">
+            <span class="ai-cp-name">{{ cp.name }}</span>
+            <span class="ai-cp-meta">{{ cp.messagesSnapshot.length }} msgs · {{ new Date(cp.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+          </div>
+          <div class="ai-cp-btns">
+            <button class="ai-cp-restore-btn" title="Restore this checkpoint" @click="restoreCheckpoint(cp)">Restore</button>
+            <button class="ai-cp-del-btn" title="Delete checkpoint" @click="deleteCheckpoint(cp.id)">✕</button>
+          </div>
         </div>
       </div>
     </div>
@@ -4363,8 +4465,12 @@ function getDateLabel(ts: number): string {
   width: 16px; height: 16px; border-radius: 3px; font-size: 9px; font-weight: 700;
   flex-shrink: 0;
 }
-.ai-model-badge-provider.anthropic { background: rgba(209,92,255,0.2); color: #d15cff; }
-.ai-model-badge-provider.ollama    { background: rgba(87,171,90,0.2);  color: #57ab5a; }
+.ai-model-badge-provider.anthropic        { background: rgba(209,92,255,0.2);  color: #d15cff; }
+.ai-model-badge-provider.ollama           { background: rgba(87,171,90,0.2);   color: #57ab5a; }
+.ai-model-badge-provider.openai           { background: rgba(16,185,129,0.2);  color: #10b981; font-size: 8px; width: auto; padding: 0 3px; }
+.ai-model-badge-provider.groq             { background: rgba(251,146,60,0.2);  color: #fb923c; }
+.ai-model-badge-provider.deepseek         { background: rgba(59,130,246,0.2);  color: #3b82f6; font-size: 8px; width: auto; padding: 0 3px; }
+.ai-model-badge-provider.openai_compatible{ background: rgba(148,163,184,0.2); color: #94a3b8; }
 
 /* Model picker grouped items */
 .ai-model-picker-group {
