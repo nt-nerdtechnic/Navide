@@ -332,6 +332,7 @@ const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
+const settingsMaxTokens = ref(4096)
 const showModelPicker = ref(false)
 
 const ANTHROPIC_MODELS = [
@@ -1039,6 +1040,7 @@ function saveSettings(): void {
     model: settingsModel.value,
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
+    max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
   }).catch(() => {/* ignore */})
   localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
   showSettings.value = false
@@ -1492,7 +1494,7 @@ function setupListeners(): void {
   unsubSettingsGet = props.backend.on('ai.chat.settings', (payload) => {
     const p = payload as {
       provider?: string; anthropic_api_key?: string; model?: string
-      ollama_base_url?: string; system_prompt?: string
+      ollama_base_url?: string; system_prompt?: string; max_tokens?: number
     }
     if (p.provider === 'anthropic' || p.provider === 'ollama') settingsProvider.value = p.provider
     if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
@@ -1500,6 +1502,7 @@ function setupListeners(): void {
     if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
     // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
     if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
+    if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
   })
 }
 
@@ -2791,6 +2794,13 @@ function getDateLabel(ts: number): string {
             Auto-accept file edits
           </label>
         </div>
+        <div class="ai-settings-row">
+          <label class="ai-settings-label">Max response tokens (256–16000)</label>
+          <div class="ai-tokens-row">
+            <input v-model.number="settingsMaxTokens" type="range" min="256" max="16000" step="256" class="ai-tokens-slider" />
+            <span class="ai-tokens-val">{{ settingsMaxTokens.toLocaleString() }}</span>
+          </div>
+        </div>
         <div v-if="workspaceRulesFile" class="ai-settings-row ai-rules-notice">
           <span class="ai-rules-icon">✦</span>
           <span>Workspace rules auto-applied from <code>{{ workspaceRulesFile }}</code></span>
@@ -3860,6 +3870,9 @@ function getDateLabel(ts: number): string {
 }
 .ai-settings-textarea:focus { border-color: var(--accent-emphasis); }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
+.ai-tokens-row { display: flex; align-items: center; gap: 8px; }
+.ai-tokens-slider { flex: 1; accent-color: var(--accent-emphasis); }
+.ai-tokens-val { font-size: 12px; color: var(--text-bright); min-width: 48px; text-align: right; }
 .ai-rules-notice {
   font-size: 11px;
   color: var(--text-muted);
