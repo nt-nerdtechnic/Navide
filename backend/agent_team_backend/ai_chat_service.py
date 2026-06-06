@@ -99,6 +99,17 @@ async def _stream_anthropic(
             t = 1.0
         kwargs["temperature"] = max(0.0, min(1.0, t))
 
+    # Extended thinking — only for supported Claude models
+    thinking_budget = settings.get("thinking_budget_tokens")
+    if thinking_budget is not None:
+        try:
+            budget_tokens = max(1024, min(32000, int(thinking_budget)))
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
+            # Extended thinking requires temperature=1 per Anthropic API
+            kwargs.pop("temperature", None)
+        except (TypeError, ValueError):
+            pass
+
     async with client.messages.stream(**kwargs) as stream:
         async for event in stream:
             event_type = getattr(event, "type", None)
