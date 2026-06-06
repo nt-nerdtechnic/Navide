@@ -2609,6 +2609,30 @@ function ctxMenuRegen(): void {
   msgCtxMenu.value = null
   void regenerate()
 }
+async function ctxMenuSaveToRules(): Promise<void> {
+  if (!msgCtxMenu.value) return
+  const content = messages.value[msgCtxMenu.value.mi]?.content ?? ''
+  msgCtxMenu.value = null
+  if (!props.workspacePath) { showToast('Open a workspace first'); return }
+  const sel = window.getSelection()?.toString().trim()
+  const rule = sel || content.replace(/```[\s\S]*?```/g, '').trim().slice(0, 500)
+  if (!rule) { showToast('No content to save'); return }
+  const entry = `\n\n## AI Rule (from chat)\n${rule}`
+  // Try to append to AGENTS.md or .cursorrules
+  for (const rulePath of ['AGENTS.md', '.cursor/rules', '.cursorrules']) {
+    try {
+      interface ReadResp { ok: boolean; content?: string }
+      const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: rulePath })
+      if (fr.payload?.ok || rulePath === 'AGENTS.md') {
+        const existing = fr.payload?.content ?? ''
+        interface WriteResp { ok: boolean; error?: string }
+        const wr = await props.backend.send<WriteResp>('fs.write_file', { workspace_path: props.workspacePath, rel_path: rulePath, content: existing + entry })
+        if (wr.payload?.ok) { showToast(`Saved to ${rulePath}`); return }
+      }
+    } catch { /* try next */ }
+  }
+  showToast('Could not save rule — create AGENTS.md first')
+}
 
 // ── Regenerate last AI response ────────────────────────────────────────────────
 function undoLastSend(): void {
