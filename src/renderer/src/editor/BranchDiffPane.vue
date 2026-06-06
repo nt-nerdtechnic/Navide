@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { parseHunks, toSideBySide, type Hunk, type SideRow } from '../lib/git-diff'
 import type { useBackend } from '../composables/useBackend'
 import { useGit } from '../composables/useGit'
@@ -11,6 +11,14 @@ const props = defineProps<{
   compare: string
   backend: ReturnType<typeof useBackend>
 }>()
+
+const emit = defineEmits<{
+  (e: 'open-file', payload: { filepath: string; name: string }): void
+}>()
+
+function openFile(filename: string) {
+  emit('open-file', { filepath: filename, name: filename.split('/').at(-1) ?? filename })
+}
 
 const reviewOpen = ref(false)
 const { gitStatus, gitBranches } = useGit(() => props.workspacePath, props.backend)
@@ -126,8 +134,20 @@ watch(() => props.backend.status.value, s => {
 
 watch([() => props.base, () => props.compare, () => props.workspacePath], () => loadDiff())
 
+const allCollapsed = computed(() => fileDiffs.value.length > 0 && fileDiffs.value.every((_, i) => collapsed.value[i]))
+
 function toggleCollapse(i: number) {
   collapsed.value = { ...collapsed.value, [i]: !collapsed.value[i] }
+}
+
+function collapseAll() {
+  const next: Record<number, boolean> = {}
+  fileDiffs.value.forEach((_, i) => { next[i] = true })
+  collapsed.value = next
+}
+
+function expandAll() {
+  collapsed.value = {}
 }
 
 function cellClass(cell: SideRow['left']): string {
@@ -150,6 +170,17 @@ function cellClass(cell: SideRow['left']): string {
         <span class="bdp-del">-{{ totalDeleted }}</span>
       </template>
       <div class="bdp-sp" />
+      <template v-if="fileDiffs.length">
+        <button class="bdp-btn" :title="allCollapsed ? 'Expand All' : 'Collapse All'"
+          @click="allCollapsed ? expandAll() : collapseAll()">
+          <svg v-if="allCollapsed" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1.75 2.5a.75.75 0 0 0 0 1.5h12.5a.75.75 0 0 0 0-1.5H1.75zm0 5a.75.75 0 0 0 0 1.5h12.5a.75.75 0 0 0 0-1.5H1.75zm0 5a.75.75 0 0 0 0 1.5h12.5a.75.75 0 0 0 0-1.5H1.75z"/>
+          </svg>
+          <svg v-else width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M7.22 1.47a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1-1.06 1.06L8 3.06 5.53 5.53a.75.75 0 0 1-1.06-1.06l3.25-3.25zm-3.25 9 3.25 3.25a.75.75 0 0 0 1.06 0l3.25-3.25a.75.75 0 1 0-1.06-1.06L8 12.94l-2.47-2.47a.75.75 0 0 0-1.06 1.06z"/>
+          </svg>
+        </button>
+      </template>
       <button class="bdp-btn" title="Refresh" :disabled="loading" @click="loadDiff">
         <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
           <path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/>
@@ -188,7 +219,7 @@ function cellClass(cell: SideRow['left']): string {
 
     <!-- File list -->
     <div v-else class="bdp-scroll">
-      <div v-for="(f, fi) in fileDiffs" :key="f.filename" class="bdp-file">
+      <div v-for="(f, fi) in fileDiffs" :key="f.filename" class="bdp-file" :class="{ 'bdp-file--open': !collapsed[fi] }">
 
         <!-- File header row -->
         <div class="bdp-file-hdr" @click="toggleCollapse(fi)">
@@ -202,6 +233,11 @@ function cellClass(cell: SideRow['left']): string {
           <span class="bdp-fname">{{ f.filename }}</span>
           <span v-if="f.addCount" class="bdp-add">+{{ f.addCount }}</span>
           <span v-if="f.delCount" class="bdp-del">-{{ f.delCount }}</span>
+          <button class="bdp-open-btn" title="Open file" @click.stop="openFile(f.filename)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1z"/>
+            </svg>
+          </button>
         </div>
 
         <!-- Hunks (side-by-side) -->
@@ -300,20 +336,34 @@ function cellClass(cell: SideRow['left']): string {
 .bdp-err { color: var(--danger-fg, #f85149); }
 
 /* Scroll container */
-.bdp-scroll { flex: 1; overflow-y: auto; overflow-x: auto; }
+.bdp-scroll { flex: 1; overflow-y: auto; overflow-x: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 
-/* File block */
-.bdp-file { border-bottom: 1px solid var(--border-muted); }
+/* File card */
+.bdp-file {
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
 
 .bdp-file-hdr {
   display: flex; align-items: center; gap: 5px;
-  padding: 5px 10px; cursor: pointer; user-select: none;
-  background: var(--bg-subtle); position: sticky; top: 0; z-index: 2;
-  border-bottom: 1px solid var(--border-muted);
+  padding: 6px 10px; cursor: pointer; user-select: none;
+  background: var(--bg-subtle);
 }
-.bdp-file-hdr:hover { background: rgba(177,186,196,0.06); }
-.bdp-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform 0.1s; }
+.bdp-file-hdr:hover { background: rgba(177,186,196,0.1); }
+.bdp-file--open > .bdp-file-hdr { border-bottom: 1px solid var(--border-muted); }
+.bdp-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform 0.15s; }
 .bdp-file-ic { color: var(--text-muted); flex-shrink: 0; }
+.bdp-open-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; flex-shrink: 0;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--text-muted); cursor: pointer; padding: 0;
+  opacity: 0; transition: opacity 0.1s;
+}
+.bdp-file-hdr:hover .bdp-open-btn { opacity: 1; }
+.bdp-open-btn:hover { color: var(--accent-fg); background: rgba(177,186,196,0.15); }
 .bdp-fname {
   flex: 1; font-size: 12px; font-weight: 600; color: var(--text-primary);
   font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

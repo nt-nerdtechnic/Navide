@@ -1413,6 +1413,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :base="f.base!"
             :compare="f.compare ?? ''"
             :backend="backend"
+            @open-file="openFile"
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">
