@@ -1512,6 +1512,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :get-editor-content="() => activeEditor()?.getContent?.() ?? ''"
         :get-editor-selection="() => activeEditor()?.getSelection?.() ?? ''"
         :get-active-rel-path="getActiveRelPath"
+        :get-open-files="() => openFiles.filter(f => f.kind === 'file').map(f => f.relPath)"
         :insert-text-at-cursor="(text: string) => activeEditor()?.insertTextAtCursor?.(text)"
         :open-file="(relPath: string, line?: number) => openFile({ filepath: relPath, line })"
       />
