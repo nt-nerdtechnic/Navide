@@ -50,7 +50,7 @@ TOOL_DEFS = [
         "description": (
             "Search for a text pattern across files in the workspace. "
             "Uses ripgrep if available, otherwise falls back to Python glob+read. "
-            "Returns up to 20 matching results."
+            "Returns up to 20 matching lines in 'file:line: snippet' format."
         ),
         "input_schema": {
             "type": "object",
@@ -243,13 +243,13 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
         return "Error: query is required"
 
     root = Path(workspace_path).resolve()
-    results: list[str] = []
+    results: list[str] = []  # "rel/path.py:LINE: snippet"
     max_results = 20
 
-    # Try ripgrep first
+    # Try ripgrep first — returns file:line:snippet for each match
     try:
         rg_args = ["rg", "--line-number", "--no-heading", "--color=never",
-                   "--max-count=1", "-l"]
+                   "--max-count=3"]
         if file_pattern and file_pattern != "*":
             rg_args += ["--glob", file_pattern]
         rg_args += [query, str(root)]
@@ -266,19 +266,28 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
             await proc.communicate()
             raise
         if proc.returncode in (0, 1):  # 0=found, 1=no match
-            matching_files = stdout.decode(errors="replace").splitlines()
-            for fpath in matching_files[:max_results]:
-                results.append(fpath.strip())
+            for raw_line in stdout.decode(errors="replace").splitlines():
+                if len(results) >= max_results:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                # Make path relative for readability: /abs/root/src/foo.py:5:text → src/foo.py:5:text
+                abs_prefix = str(root) + "/"
+                if line.startswith(abs_prefix):
+                    line = line[len(abs_prefix):]
+                # Truncate very long match lines to avoid token bloat
+                if len(line) > 200:
+                    line = line[:197] + "…"
+                results.append(line)
             if not results:
                 return f"No matches found for {query!r}"
-            summary_lines = [f"Found matches in {len(results)} file(s):"]
-            summary_lines.extend(results)
-            return "\n".join(summary_lines)
+            return f"Found {len(results)} match(es):\n" + "\n".join(results)
     except (FileNotFoundError, asyncio.TimeoutError):
         pass  # rg not available or timed out — fall back to Python
 
-    # Python fallback: glob + read
-    import fnmatch
+    # Python fallback: glob + line-level search
+    _SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"}
     pattern = file_pattern if file_pattern != "*" else "**/*"
     try:
         candidates = list(root.glob(pattern))
@@ -290,24 +299,27 @@ async def _tool_search_files(input: dict, workspace_path: str) -> str:
             break
         if not candidate.is_file():
             continue
-        # Skip binary-ish / noise dirs
-        parts = candidate.parts
-        if any(p in {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build"} for p in parts):
+        if any(p in _SKIP_DIRS for p in candidate.parts):
             continue
         try:
             if candidate.stat().st_size > 5 * 1024 * 1024:
                 continue
-            text = candidate.read_text(encoding="utf-8", errors="ignore")
-            if query in text:
-                results.append(str(candidate.relative_to(root)))
+            rel = str(candidate.relative_to(root))
+            lines = candidate.read_text(encoding="utf-8", errors="ignore").splitlines()
+            for lineno, text in enumerate(lines, 1):
+                if len(results) >= max_results:
+                    break
+                if query in text:
+                    snippet = text.strip()
+                    if len(snippet) > 160:
+                        snippet = snippet[:157] + "…"
+                    results.append(f"{rel}:{lineno}: {snippet}")
         except (OSError, ValueError):
             continue
 
     if not results:
         return f"No matches found for {query!r}"
-    summary_lines = [f"Found matches in {len(results)} file(s):"]
-    summary_lines.extend(results)
-    return "\n".join(summary_lines)
+    return f"Found {len(results)} match(es):\n" + "\n".join(results)
 
 
 async def _tool_edit_file(input: dict, workspace_path: str) -> str:
