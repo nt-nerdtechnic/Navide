@@ -1219,6 +1219,17 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     return
   }
 
+  // Open file in editor (code block header ↗ button)
+  const openFileBtn = target.closest<HTMLButtonElement>('.ai-code-open-btn')
+  if (openFileBtn) {
+    const relPath = openFileBtn.dataset.path ?? ''
+    if (relPath) {
+      if (props.openFile) props.openFile(relPath)
+      else showToast(`File: ${relPath}`)
+    }
+    return
+  }
+
   // Inline code action buttons (Explain / Refactor)
   const codeActionBtn = target.closest<HTMLButtonElement>('.ai-code-action-btn')
   if (codeActionBtn) {
@@ -1238,7 +1249,8 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
         ? `Explain this code clearly and concisely:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
         : `Refactor this code to improve readability and maintainability. Show the complete refactored version:\n\n\`\`\`\n${code.slice(0, 3000)}\n\`\`\``
       inputText.value = prompt
-      await nextTick(); textareaEl.value?.focus()
+      await nextTick()
+      void sendMessage()
     } catch { /* ignore */ }
     return
   }
@@ -1360,6 +1372,15 @@ function renderMarkdownLite(rawText: string): string {
     const applyBtn = targetPath
       ? `<button class="ai-code-apply-btn" data-code="${encoded}" data-path="${inferredPath ?? ''}" title="Apply to ${targetPath}">${applyLabel}</button>`
       : ''
+    // Open-file button and file path chip (Cursor-style code block header)
+    const safeInferredPath = inferredPath ? inferredPath.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : ''
+    const openBtn = inferredPath && props.openFile
+      ? `<button class="ai-code-open-btn" data-path="${safeInferredPath}" title="Open ${safeInferredPath} in editor">↗</button>`
+      : ''
+    const shortFilename = inferredPath ? inferredPath.split('/').pop()!.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''
+    const fileLabel = inferredPath
+      ? `<span class="ai-code-filepath" title="${safeInferredPath}">${shortFilename}</span><span class="ai-code-lang-sm">${langLabel}</span>`
+      : `<span class="ai-code-lang">${langLabel}</span>`
     // Collapse code blocks that exceed 30 lines
     const lineCount = code.split('\n').length
     const isLong = lineCount > 30
@@ -1401,7 +1422,8 @@ function renderMarkdownLite(rawText: string): string {
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
-      `<span class="ai-code-lang">${langLabel}</span>` +
+      `${fileLabel}` +
+      `${openBtn}` +
       `${runBtn}` +
       `${saveBtn}` +
       `${insertBtn}` +
@@ -4262,8 +4284,9 @@ async function onChatDrop(e: DragEvent): Promise<void> {
       continue
     }
     const filePath = (file as File & { path?: string }).path
-    const relPath = filePath && props.workspacePath && filePath.startsWith(props.workspacePath)
-      ? filePath.slice(props.workspacePath.length).replace(/^\//, '')
+    const wsRoot = props.workspacePath ? props.workspacePath.replace(/\/$/, '') : ''
+    const relPath = filePath && wsRoot && (filePath === wsRoot || filePath.startsWith(wsRoot + '/'))
+      ? filePath.slice(wsRoot.length).replace(/^\//, '')
       : file.name
     try {
       const text = await file.text()
@@ -5971,6 +5994,40 @@ function getDateLabel(ts: number): string {
   padding: 3px 10px;
   background: var(--bg-muted);
   border-bottom: 1px solid var(--border-muted);
+}
+.ai-text :deep(.ai-code-filepath) {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--accent-fg);
+  font-weight: 500;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.ai-text :deep(.ai-code-lang-sm) {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: 5px;
+  opacity: 0.7;
+}
+.ai-text :deep(.ai-code-open-btn) {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 5px;
+  border-radius: 3px;
+  margin-left: 2px;
+  opacity: 0.7;
+}
+.ai-text :deep(.ai-code-open-btn:hover) {
+  opacity: 1;
+  background: var(--bg-subtle);
+  color: var(--accent-fg);
 }
 .ai-text :deep(.ai-code-lang) {
   font-family: ui-monospace, Menlo, monospace;
