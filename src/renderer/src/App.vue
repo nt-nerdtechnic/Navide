@@ -4041,6 +4041,11 @@ watch(activeTab, (v) => {
   try {
     if (activeTabStorageKey.value) localStorage.setItem(activeTabStorageKey.value, v)
   } catch { /* ignore */ }
+  // Keep currentRunGroupId in sync with the active tab so that "+ Add to grid"
+  // always spawns into whichever tab the user is currently viewing.
+  if (v && v !== 'manual' && runGroups.value.some((g) => g.id === v)) {
+    currentRunGroupId.value = v
+  }
 })
 
 function minimizePane(id: string): void {

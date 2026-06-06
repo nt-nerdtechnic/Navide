@@ -417,6 +417,8 @@ interface DiffApplyState {
   btn: HTMLButtonElement
 }
 const diffApplyState = ref<DiffApplyState | null>(null)
+const compareStage  = ref<{ code: string } | null>(null)
+const compareResult = ref<{ codeA: string; codeB: string } | null>(null)
 
 // Quick inline diff: return first changed lines (added/removed) for preview
 function computeSimpleDiffPreview(oldText: string, newText: string, maxLines = 12): Array<{ type: '+' | '-' | ' '; text: string }> {
@@ -539,7 +541,7 @@ function setThreadLabel(id: string, label: ThreadLabel): void {
 }
 
 const showThreads = ref(false)
-const showArchivedThreads = ref(false)
+const threadTab = ref<'chats' | 'pinned' | 'archived'>('chats')
 const threadSearchQuery = ref('')
 const threadBulkMode = ref(false)
 const selectedThreadIds = ref(new Set<string>())
@@ -588,9 +590,10 @@ const renamingTitle = ref('')
 const threadDrafts = new Map<string, string>()
 const filteredThreads = computed(() => {
   const q = threadSearchQuery.value.trim().toLowerCase()
-  const pool = showArchivedThreads.value
-    ? allThreads.value.filter((t) => t.archived)
-    : allThreads.value.filter((t) => !t.archived)
+  const pool =
+    threadTab.value === 'archived' ? allThreads.value.filter((t) => t.archived) :
+    threadTab.value === 'pinned'   ? allThreads.value.filter((t) => !t.archived && t.pinned) :
+                                     allThreads.value.filter((t) => !t.archived)
   const list = q
     ? pool.filter((t) =>
         t.title.toLowerCase().includes(q) ||
@@ -1352,6 +1355,22 @@ function highlightSearchMatch(snippet: string, query: string): string {
   return parts.join('')
 }
 
+function renderWebChipContent(src: string): string {
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const truncated = src.slice(0, 1200) + (src.length > 1200 ? '\n…' : '')
+  return truncated.split(/(https?:\/\/[^\s<>"]+)/g).map((part, i) =>
+    i % 2 === 1
+      ? `<a class="ai-chip-url-link" href="#" data-url="${esc(part)}">${esc(part)}</a>`
+      : esc(part)
+  ).join('')
+}
+function onChipUrlClick(e: Event): void {
+  const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('.ai-chip-url-link')
+  if (!a) return
+  e.preventDefault()
+  const url = a.dataset.url ?? ''
+  if (url) void window.agentTeam?.openExternal(url)
+}
 function openGlobalSearch(): void {
   showGlobalSearch.value = true
   globalSearchQuery.value = ''
@@ -1889,6 +1908,16 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
     try {
       const code = decodeURIComponent(escape(atob(codeActionBtn.dataset.code ?? '')))
       const action = codeActionBtn.dataset.action ?? 'explain'
+      if (action === 'compare') {
+        if (!compareStage.value) {
+          compareStage.value = { code }
+          showToast('Code staged — click Compare on another block to diff')
+        } else {
+          compareResult.value = { codeA: compareStage.value.code, codeB: code }
+          compareStage.value = null
+        }
+        return
+      }
       if (action === 'newchat') {
         const wrap = codeActionBtn.closest<HTMLElement>('.ai-code-wrap')
         const lang = (wrap?.querySelector('.ai-code-lang') ?? wrap?.querySelector('.ai-code-lang-sm'))?.textContent ?? ''
@@ -2114,6 +2143,9 @@ function renderMarkdownLite(rawText: string): string {
     const newChatBtn = isCodeLang && code.trim().length > 20
       ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context">New chat</button>`
       : ''
+    const compareBtn = isCodeLang && code.trim().length > 20
+      ? `<button class="ai-code-action-btn" data-action="compare" data-code="${encoded}" title="Stage / compare with another code block">Compare</button>`
+      : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +
       `<div class="ai-code-header">` +
@@ -2127,7 +2159,7 @@ function renderMarkdownLite(rawText: string): string {
       `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
       `<button class="ai-code-wrap-btn" title="Toggle word wrap">↔</button>` +
       `</div>` +
-      `${explainBtn || refactorBtn || newChatBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}${newChatBtn}</div>` : ''}` +
+      `${explainBtn || refactorBtn || newChatBtn || compareBtn ? `<div class="ai-code-actions">${explainBtn}${refactorBtn}${newChatBtn}${compareBtn}</div>` : ''}` +
       `${toggleBtn}` +
       `<pre class="ai-code-block hljs"${isLong ? ' style="display:none"' : ''}><code class="has-line-numbers">${numberedLines}</code></pre>` +
       `</div>`,
@@ -3915,10 +3947,19 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     showThreads.value = !showThreads.value
   }
+  // Ctrl+Shift+M / Cmd+Shift+M — copy thread as markdown
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
+    e.preventDefault()
+    copyThreadAsMarkdown()
+  }
   // Escape — close context menu or diff-apply modal
   if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
+  }
+  if (e.key === 'Escape' && compareResult.value) {
+    compareResult.value = null; compareStage.value = null
+    return
   }
   // Cmd+Enter / Ctrl+Enter — accept diff-apply modal (VS Code Copilot parity)
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && diffApplyState.value) {
@@ -6577,6 +6618,7 @@ ${log || '(no commits)'}`
       '@ — Open context menu (@file, @selection, @git, @web…)',
       '/ — Open command menu',
       'Ctrl+Shift+C — Copy code block',
+      'Ctrl+Shift+M / Cmd+Shift+M — Copy thread as Markdown',
     ].join('\n')
     messages.value.push({ role: 'assistant', content: `## Keyboard Shortcuts\n\n${shortcuts}`, timestamp: Date.now() })
     return
@@ -10542,6 +10584,11 @@ function showModelChange(mi: number): string | null {
             <button class="ai-chip-popover-close" @click="previewChipId = null">×</button>
           </div>
           <img v-if="previewChip.imageData" :src="previewChip.imageData" class="ai-chip-popover-img" alt="pasted image" />
+          <div v-else-if="previewChip.label.startsWith('@web:') || previewChip.label.startsWith('@url:')"
+            class="ai-chip-popover-content"
+            v-html="renderWebChipContent(previewChip.content)"
+            @click.prevent="onChipUrlClick"
+          ></div>
           <pre v-else class="ai-chip-popover-content">{{ previewChip.content.slice(0, 1200) }}{{ previewChip.content.length > 1200 ? '\n…' : '' }}</pre>
         </div>
       </div>
@@ -10984,8 +11031,9 @@ function showModelChange(mi: number): string | null {
     <div v-if="showThreads" class="ai-threads-panel">
       <div class="ai-threads-header">
         <div class="ai-threads-tabs">
-          <button class="ai-threads-tab" :class="{ active: !showArchivedThreads }" @click="showArchivedThreads = false">Chats ({{ allThreads.filter(t => !t.archived).length }})</button>
-          <button class="ai-threads-tab" :class="{ active: showArchivedThreads }" @click="showArchivedThreads = true">Archive ({{ allThreads.filter(t => t.archived).length }})</button>
+          <button class="ai-threads-tab" :class="{ active: threadTab === 'chats' }" @click="threadTab = 'chats'">Chats ({{ allThreads.filter(t => !t.archived).length }})</button>
+          <button class="ai-threads-tab" :class="{ active: threadTab === 'pinned' }" @click="threadTab = 'pinned'">Pinned ({{ allThreads.filter(t => !t.archived && t.pinned).length }})</button>
+          <button class="ai-threads-tab" :class="{ active: threadTab === 'archived' }" @click="threadTab = 'archived'">Archive ({{ allThreads.filter(t => t.archived).length }})</button>
         </div>
         <div class="ai-thread-sort-wrap">
           <button class="ai-thread-sort-btn" :title="`Sort: ${threadSortMode}`" @click="threadSortMode = threadSortMode === 'date' ? 'name' : threadSortMode === 'name' ? 'model' : 'date'">
@@ -11001,7 +11049,7 @@ function showModelChange(mi: number): string | null {
         <input
           v-model="threadSearchQuery"
           class="ai-search-input"
-          :placeholder="showArchivedThreads ? 'Search archived…' : 'Search chats…'"
+          :placeholder="threadTab === 'archived' ? 'Search archived…' : threadTab === 'pinned' ? 'Search pinned…' : 'Search chats…'"
           @keydown.escape="showThreads = false; threadSearchQuery = ''"
         />
         <button class="ai-thread-bulk-toggle" :class="{ active: threadBulkMode }" title="Select multiple" @click="threadBulkMode = !threadBulkMode; selectedThreadIds.value = new Set()">☑</button>
@@ -11045,8 +11093,9 @@ function showModelChange(mi: number): string | null {
                 class="ai-thread-title"
                 title="Double-click to rename"
                 @dblclick.stop="startRenameThread(item.thread.id, item.thread.title, $event)"
-              >{{ item.thread.title }}</span>
-              <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(item.thread, threadSearchQuery) }}</span>
+                v-html="highlightSearchMatch(item.thread.title, threadSearchQuery)"
+              ></span>
+              <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet" v-html="highlightSearchMatch(getThreadMatchSnippet(item.thread, threadSearchQuery), threadSearchQuery)"></span>
             </div>
             <div class="ai-thread-meta">
               <span v-if="item.thread.label" class="ai-thread-label-badge" :title="`Label: ${item.thread.label}`">{{ item.thread.label }}</span>
@@ -11246,6 +11295,27 @@ function showModelChange(mi: number): string | null {
         <div class="ai-modal-footer">
           <button class="ai-cancel-btn" @click="diffApplyState = null">Cancel <kbd>Esc</kbd></button>
           <button class="ai-apply-confirm-btn" title="Apply changes (⌘↵ / Ctrl+↵)" @click="confirmApply">Apply <kbd>⌘↵</kbd></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Code Compare modal -->
+    <div v-if="compareResult" class="ai-modal-overlay" @click.self="compareResult = null; compareStage = null">
+      <div class="ai-modal ai-compare-modal">
+        <div class="ai-modal-header">
+          <span>Code Comparison</span>
+          <button class="ai-settings-close" @click="compareResult = null; compareStage = null">✕</button>
+        </div>
+        <div class="ai-compare-diff">
+          <div
+            v-for="(ln, li) in computeSimpleDiffPreview(compareResult.codeA, compareResult.codeB, 300)"
+            :key="li"
+            class="ai-diff-ln"
+            :class="ln.type === '+' ? 'diff-add' : ln.type === '-' ? 'diff-del' : 'diff-ctx'"
+          ><span class="ai-diff-sign">{{ ln.type }}</span><span class="ai-diff-text">{{ ln.text }}</span></div>
+        </div>
+        <div class="ai-modal-footer">
+          <button class="ai-cancel-btn" @click="compareResult = null; compareStage = null">Close <kbd>Esc</kbd></button>
         </div>
       </div>
     </div>
@@ -12670,6 +12740,8 @@ function showModelChange(mi: number): string | null {
   cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; flex-shrink: 0;
 }
 .ai-chip-popover-close:hover { color: var(--text-primary); }
+.ai-chip-url-link { color: var(--accent, #58a6ff); text-decoration: none; cursor: pointer; }
+.ai-chip-url-link:hover { text-decoration: underline; }
 .ai-chip-popover-content {
   margin: 0;
   padding: 8px 10px;
@@ -13616,6 +13688,11 @@ kbd {
   background: #0078d4; border: none; color: #fff; font-weight: 600;
 }
 .ai-apply-confirm-btn:hover { background: #106ebe; }
+.ai-compare-modal { max-width: 720px; width: 95vw; }
+.ai-compare-diff {
+  overflow-y: auto; max-height: 60vh; font-family: var(--font-mono, monospace); font-size: 11px;
+  background: var(--bg-code, #1e1e1e); border-radius: 4px; padding: 8px 0;
+}
 .ai-modal-footer kbd {
   display: inline-block; font-family: inherit; font-size: 9px;
   background: rgba(255,255,255,0.12); border-radius: 3px;
