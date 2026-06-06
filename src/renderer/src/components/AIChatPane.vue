@@ -1259,7 +1259,7 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/summarize', label: '/summarize', description: 'Summarize conversation', template: '' },
   { id: '/run',      label: '/run',      description: 'Run shell command',       template: '' },
   { id: '/clear',    label: '/clear',    description: 'Clear chat',             template: '' },
-  { id: '/export',   label: '/export',   description: 'Export chat',            template: '' },
+  { id: '/export',   label: '/export',   description: 'Export chat (default: markdown; /export json)',  template: '' },
   { id: '/help',     label: '/help',     description: 'Show all commands',       template: '' },
   { id: '/test',     label: '/test',     description: 'Run test suite',          template: '' },
   { id: '/diff',     label: '/diff',     description: 'Explain current diff',    template: '' },
@@ -1280,6 +1280,8 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/save-prompt',  label: '/save-prompt',  description: 'Save current input as a reusable prompt template (e.g. /save-prompt Code Review)', template: '' },
   { id: '/prompts',      label: '/prompts',      description: 'Browse and load saved prompt templates',                  template: '' },
   { id: '/import',       label: '/import',       description: 'Import a chat from a JSON file (exported via /export)',   template: '' },
+  { id: '/pr',           label: '/pr',           description: 'Generate a pull request title + description from current git changes', template: '' },
+  { id: '/changelog',    label: '/changelog',    description: 'Generate a CHANGELOG entry from recent git commits',                   template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -2213,6 +2215,14 @@ async function sendMessage(): Promise<void> {
         : `Error: ${r?.error ?? 'unknown'}`
       messages.value.push({ role: 'assistant', content: out, timestamp: Date.now() })
     } catch { messages.value.push({ role: 'assistant', content: 'Command failed', isError: true, timestamp: Date.now() }) }
+    return
+  }
+
+  // /export [markdown|json] — export chat
+  if (rawText === '/export' || rawText.startsWith('/export ')) {
+    const arg = rawText.slice('/export'.length).trim().toLowerCase()
+    inputText.value = ''
+    void exportConversation(arg === 'json' ? 'json' : 'markdown')
     return
   }
 
@@ -3788,9 +3798,14 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
     return
   }
   if (cmd.id === '/export') {
-    inputText.value = ''
-    const fmt = window.confirm('Export as Markdown?\n\nOK = Markdown (.md)\nCancel = JSON (.json)') ? 'markdown' : 'json'
-    void exportConversation(fmt as 'markdown' | 'json')
+    const existing = inputText.value.slice('/export'.length).trim().toLowerCase()
+    if (existing === 'json') { inputText.value = ''; void exportConversation('json'); return }
+    // Default to markdown (or if user typed '/export markdown')
+    if (existing === '' || existing === 'markdown' || existing === 'md') { inputText.value = ''; void exportConversation('markdown'); return }
+    // Unknown arg — hint and wait
+    inputText.value = '/export '
+    showToast('Type: /export markdown  or  /export json')
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
     return
   }
   // /commit: auto-add @git chip so AI sees the staged diff (falls back to unstaged)
