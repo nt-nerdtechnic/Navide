@@ -1861,7 +1861,7 @@ function triggerCompact(): void {
   if (cmd) selectSlashCommand(cmd)
 }
 
-function selectSlashCommand(cmd: SlashCommand): void {
+async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   showSlashMenu.value = false
   if (cmd.id === '/run') {
     // Let user type the command after /run
@@ -1878,7 +1878,7 @@ function selectSlashCommand(cmd: SlashCommand): void {
   }
   if (cmd.id === '/compact') {
     // Keep only the last 4 messages; replace the rest with an AI summary
-    const all = messages.value.filter((m) => !m.streaming && m.role !== 'system')
+    const all = messages.value.filter((m) => !m.streaming)
     if (all.length < 6) { showToast('Not enough history to compact (need 6+ messages)'); return }
     inputText.value = ''
     const keepLast = 4
