@@ -2747,10 +2747,11 @@ function onTextareaInput(e: Event): void {
   if (atIdx === -1) { showAtMenu.value = false; return }
 
   const fragment = beforeCursor.slice(atIdx + 1)
-  // Allow spaces only inside @codebase <query>
+  // Allow spaces inside @codebase <query> and @web:<query>
   const isCodebaseQuery = /^codebase\s+\S/i.test(fragment)
   const isFolderPath = /^folder:/i.test(fragment)
-  if (fragment.includes(' ') && !isCodebaseQuery) { showAtMenu.value = false; return }
+  const isWebQuery = /^web:/i.test(fragment)
+  if (fragment.includes(' ') && !isCodebaseQuery && !isWebQuery) { showAtMenu.value = false; return }
 
   atMenuFilter.value = fragment
   atMenuIdx.value = 0
@@ -2775,8 +2776,7 @@ function onTextareaInput(e: Event): void {
     return
   }
 
-  // @web:<query> — real-time web search
-  const isWebQuery = /^web:/i.test(fragment)
+  // @web:<query> — real-time web search (isWebQuery already set above)
   if (isWebQuery) {
     const webQ = fragment.slice('web:'.length).trim()
     if (webQ.length >= 1) {
