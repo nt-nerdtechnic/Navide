@@ -75,7 +75,30 @@ function onCursorChange(pos: Position): void {
     }
   } else {
     selectionInfo.value = ''
+    floatingChat.value = null
   }
+}
+
+// ── Floating "Add to Chat" button ─────────────────────────────────────────────
+const floatingChat = ref<{ x: number; y: number } | null>(null)
+
+function onEditorBodyMouseup(e: MouseEvent): void {
+  requestAnimationFrame(() => {
+    const sel = editorRef.value?.getSelectionText() ?? ''
+    if (sel.trim()) {
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      floatingChat.value = {
+        x: e.clientX - rect.left,
+        y: Math.max(4, e.clientY - rect.top - 38),
+      }
+    }
+  })
+}
+
+function onAddToChatFloat(): void {
+  const sel = editorRef.value?.getSelectionText() ?? ''
+  floatingChat.value = null
+  emit('addToChat', sel || editorRef.value?.getValue() || '')
 }
 
 interface FsRead { ok: boolean; content?: string; error?: string }
@@ -851,7 +874,7 @@ defineExpose({
     </div>
 
     <!-- Editor -->
-    <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout" @contextmenu="showContextMenu">
+    <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout" @contextmenu="showContextMenu" @mouseup="onEditorBodyMouseup">
       <div v-if="loadError" class="ep-error">{{ loadError }}</div>
       <EditorView
         v-else-if="loaded"
@@ -862,6 +885,21 @@ defineExpose({
         @cursor-change="onCursorChange"
       />
       <div v-else class="ep-loading">Loading…</div>
+
+      <!-- Floating "Add to Chat" button — appears on text selection -->
+      <Transition name="ep-float-fade">
+        <button
+          v-if="floatingChat && selectionInfo"
+          class="ep-float-chat-btn"
+          :style="{ left: floatingChat.x + 'px', top: floatingChat.y + 'px' }"
+          @mousedown.prevent="onAddToChatFloat"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0">
+            <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/>
+          </svg>
+          Add to Chat
+        </button>
+      </Transition>
 
       <!-- Context menu -->
       <div v-if="ctxOpen" class="ep-ctx-backdrop" @mousedown.self="closeContextMenu">
@@ -1260,4 +1298,21 @@ defineExpose({
 .ep-indent-opt { display: block; width: 100%; text-align: left; padding: 4px 12px; background: none; border: none; cursor: pointer; font-size: 12px; color: var(--text-primary); }
 .ep-indent-opt:hover, .ep-indent-opt.active { background: var(--accent-muted); color: var(--accent-fg); }
 .ep-indent-sep { height: 1px; background: var(--border-default); margin: 3px 0; }
+
+.ep-float-chat-btn {
+  position: absolute;
+  z-index: 150;
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px; font-size: 11px; font-weight: 600;
+  background: var(--accent-emphasis); color: #fff;
+  border: none; border-radius: 5px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  transform: translateX(-50%);
+  pointer-events: all;
+  white-space: nowrap;
+  user-select: none;
+}
+.ep-float-chat-btn:hover { filter: brightness(1.12); }
+.ep-float-fade-enter-active, .ep-float-fade-leave-active { transition: opacity 0.1s, transform 0.1s; }
+.ep-float-fade-enter-from, .ep-float-fade-leave-to { opacity: 0; transform: translateX(-50%) translateY(4px); }
 </style>
