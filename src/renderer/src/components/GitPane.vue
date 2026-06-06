@@ -1277,9 +1277,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="panel-header">
         <span class="panel-title">SOURCE CONTROL</span>
         <div class="spacer" />
-        <!-- View mode toggle (mini-IDE only) -->
+        <!-- View mode toggle -->
         <button
-          v-if="embedded"
           class="hdr-btn"
           :title="viewMode === 'tree' ? 'Switch to List View' : 'Switch to Tree View'"
           @click.stop="viewMode = viewMode === 'tree' ? 'list' : 'tree'; showViewMenu = false"
@@ -1290,8 +1289,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <!-- Review / Diff unified toggle -->
+        <!-- Review / Diff unified toggle (mini-IDE only) -->
         <button
+          v-if="embedded"
           class="hdr-btn"
           :class="{ active: activePanel !== null }"
           title="AI Review & Diff"
