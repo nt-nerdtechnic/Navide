@@ -509,6 +509,21 @@ const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-mode
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
+
+const _SYSTEM_PROFILES: Record<string, string> = {
+  coding:   'You are a helpful AI coding assistant. Be concise, use code examples, and always explain your reasoning.',
+  concise:  'You are a helpful AI assistant. Be extremely concise. No preamble, no filler words. Answer directly.',
+  security: 'You are a senior security engineer. Review all code for vulnerabilities (OWASP Top 10, injection, auth issues, secrets). Always flag security issues first.',
+  teacher:  'You are a patient coding teacher. Explain every concept thoroughly with analogies, examples, and step-by-step reasoning. Assume the learner is new to the topic.',
+  refactor: 'You are an expert code refactoring specialist. Focus on: clean code principles, SOLID design, reducing complexity, improving readability, and eliminating duplication.',
+}
+
+function applySystemPromptProfile(profile: string): void {
+  if (!profile || profile === 'custom') return
+  const text = _SYSTEM_PROFILES[profile]
+  if (text) { settingsSystemPrompt.value = text; showToast(`Profile: ${profile}`) }
+}
+
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
 // Chat mode — 'ask' = suggestions only, 'edit' = targeted file edits, 'agent' = full autonomous
@@ -3435,13 +3450,55 @@ function _addImageFile(file: File): void {
   reader.readAsDataURL(file)
 }
 
+function _looksLikeCode(text: string): boolean {
+  const lines = text.split('\n')
+  if (lines.length < 3) return false
+  // Heuristics: indentation, brackets, common code patterns
+  const indented = lines.filter((l) => /^\s{2,}/.test(l)).length
+  const brackets = (text.match(/[{}()\[\];]/g) ?? []).length
+  const keywords = (text.match(/\b(function|const|let|var|if|else|for|while|return|import|export|class|def|async|await|fn|pub|mod|struct|interface|type)\b/g) ?? []).length
+  return indented >= 2 || brackets >= 4 || keywords >= 2
+}
+
+function _detectCodeLang(text: string): string {
+  if (/^\s*(import|export|const|let|function|class|interface|type\s+\w+\s*=)/.test(text)) return 'typescript'
+  if (/^\s*(def |class |import |from |print\(|if __name__)/.test(text)) return 'python'
+  if (/^\s*(fn |use |pub |mod |let mut |impl )/.test(text)) return 'rust'
+  if (/^\s*(package |import ".*"|func |type |struct )/.test(text)) return 'go'
+  if (/^\s*(<\?php|namespace |use |class |function )/.test(text)) return 'php'
+  if (/^\s*(#include|int main\(|void |printf\(|std::)/.test(text)) return 'cpp'
+  if (/^\s*(<[a-zA-Z]|\{%|{{|<!DOCTYPE)/.test(text)) return 'html'
+  if (/^\s*([.#]\w|@media|@keyframes|display:|margin:|padding:)/.test(text)) return 'css'
+  if (/^\s*(\{|"[^"]+"\s*:)/.test(text)) return 'json'
+  if (/^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP)\b/i.test(text)) return 'sql'
+  return ''
+}
+
 async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
   const items = Array.from(e.clipboardData?.items ?? [])
   const imageItem = items.find((it) => it.type.startsWith('image/'))
-  if (!imageItem) return
-  e.preventDefault()
-  const file = imageItem.getAsFile()
-  if (file) _addImageFile(file)
+  if (imageItem) {
+    e.preventDefault()
+    const file = imageItem.getAsFile()
+    if (file) _addImageFile(file)
+    return
+  }
+  // Rich paste: auto-wrap multi-line code-like text in code block
+  const textItem = items.find((it) => it.type === 'text/plain')
+  if (textItem) {
+    textItem.getAsString((pasted) => {
+      if (!_looksLikeCode(pasted)) return
+      // Only auto-wrap if it doesn't already look like it's inside a code block
+      const cur = inputText.value
+      if (cur.includes('```')) return
+      e.preventDefault()
+      const lang = _detectCodeLang(pasted)
+      const wrapped = `\`\`\`${lang}\n${pasted.trim()}\n\`\`\``
+      inputText.value = cur + wrapped
+      showToast('Code detected — wrapped in code block')
+      nextTick(() => textareaEl.value?.focus())
+    })
+  }
 }
 
 const dragOverChat = ref(false)
@@ -4622,7 +4679,18 @@ function getDateLabel(ts: number): string {
           <input v-model="settingsOllamaUrl" type="text" class="ai-settings-input" placeholder="http://localhost:11434" />
         </div>
         <div class="ai-settings-row ai-settings-row--column">
-          <label class="ai-settings-label">System Prompt</label>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <label class="ai-settings-label" style="margin:0">System Prompt</label>
+            <select class="ai-profile-select" title="Quick profile" @change="applySystemPromptProfile(($event.target as HTMLSelectElement).value)">
+              <option value="">Quick profile…</option>
+              <option value="coding">Coding assistant</option>
+              <option value="concise">Concise (no fluff)</option>
+              <option value="security">Security reviewer</option>
+              <option value="teacher">Teacher / explain everything</option>
+              <option value="refactor">Refactoring expert</option>
+              <option value="custom">Custom (keep current)</option>
+            </select>
+          </div>
           <textarea
             v-model="settingsSystemPrompt"
             class="ai-settings-textarea"
@@ -6051,6 +6119,17 @@ function getDateLabel(ts: number): string {
   box-sizing: border-box;
 }
 .ai-settings-textarea:focus { border-color: var(--accent-emphasis); }
+.ai-profile-select {
+  background: var(--bg-input, #2a2a2a);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-normal);
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
+}
+.ai-profile-select:hover { border-color: var(--accent-emphasis); }
 .ai-settings-footer { display: flex; justify-content: flex-end; }
 .ai-tokens-row { display: flex; align-items: center; gap: 8px; }
 .ai-tokens-slider { flex: 1; accent-color: var(--accent-emphasis); }
