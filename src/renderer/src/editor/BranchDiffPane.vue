@@ -319,15 +319,15 @@ function cellClass(cell: SideRow['left']): string {
 }
 .bdp-title { font-size: 11px; font-weight: 600; color: var(--text-primary); }
 .bdp-meta { font-size: 11px; color: var(--text-muted); margin-left: 4px; }
-.bdp-add { font-size: 11px; color: var(--success-fg, #3fb950); font-variant-numeric: tabular-nums; }
-.bdp-del { font-size: 11px; color: var(--danger-fg, #f85149); font-variant-numeric: tabular-nums; }
+.bdp-add { font-size: 11px; color: var(--success-fg); font-variant-numeric: tabular-nums; }
+.bdp-del { font-size: 11px; color: var(--danger-fg); font-variant-numeric: tabular-nums; }
 .bdp-sp { flex: 1; }
 .bdp-btn {
   display: flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; background: transparent; border: none;
   border-radius: 4px; color: var(--text-muted); cursor: pointer; padding: 0;
 }
-.bdp-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.bdp-btn:hover { color: var(--text-primary); background: var(--bg-active); }
 .bdp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* AI Review section */
@@ -337,7 +337,7 @@ function cellClass(cell: SideRow['left']): string {
   border-bottom: 1px solid var(--border-muted); flex-shrink: 0;
   background: var(--bg-subtle);
 }
-.bdp-review-hdr:hover { background: rgba(177,186,196,0.08); }
+.bdp-review-hdr:hover { background: var(--bg-hover); }
 .bdp-review-ic { color: var(--accent-fg); flex-shrink: 0; }
 .bdp-review-label {
   flex: 1; font-size: 11px; font-weight: 600; color: var(--text-primary);
@@ -358,7 +358,7 @@ function cellClass(cell: SideRow['left']): string {
   flex: 1; display: flex; align-items: center; justify-content: center;
   font-size: 12px; color: var(--text-muted); padding: 24px; text-align: center;
 }
-.bdp-err { color: var(--danger-fg, #f85149); }
+.bdp-err { color: var(--danger-fg); }
 
 /* Scroll container */
 .bdp-scroll { flex: 1; overflow-y: auto; overflow-x: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
@@ -376,7 +376,7 @@ function cellClass(cell: SideRow['left']): string {
   padding: 6px 10px; cursor: pointer; user-select: none;
   background: var(--bg-subtle);
 }
-.bdp-file-hdr:hover { background: rgba(177,186,196,0.1); }
+.bdp-file-hdr:hover { background: var(--bg-active); }
 .bdp-file--open > .bdp-file-hdr { border-bottom: 1px solid var(--border-muted); }
 .bdp-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform 0.15s; }
 .bdp-file-ic { color: var(--text-muted); flex-shrink: 0; }
@@ -413,7 +413,7 @@ function cellClass(cell: SideRow['left']): string {
   font-family: ui-monospace, Menlo, monospace;
 }
 .bdp-range {
-  font-size: 11px; color: var(--accent-fg, #79c0ff); opacity: 0.85;
+  font-size: 11px; color: var(--accent-fg); opacity: 0.85;
 }
 
 /* Side-by-side grid: each hunk is a 2-column grid */
@@ -443,10 +443,10 @@ function cellClass(cell: SideRow['left']): string {
 }
 
 /* Cell colours */
-.k-add  { background: rgba(46,160,67,0.12); }
-.k-add .bdp-no, .k-add .bdp-sign { color: var(--success-fg, #3fb950); }
-.k-del  { background: rgba(248,81,73,0.12); }
-.k-del .bdp-no, .k-del .bdp-sign { color: var(--danger-fg, #f85149); }
+.k-add  { background: color-mix(in srgb, var(--success-strong) 12%, transparent); }
+.k-add .bdp-no, .k-add .bdp-sign { color: var(--success-fg); }
+.k-del  { background: var(--diff-del-bg); }
+.k-del .bdp-no, .k-del .bdp-sign { color: var(--danger-fg); }
 .k-ctx  { background: transparent; }
 .k-empty { background: rgba(0,0,0,0.06); }
 </style>

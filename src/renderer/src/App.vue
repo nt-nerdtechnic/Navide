@@ -4818,11 +4818,11 @@ function paneIsCommander(p: ActivePane): boolean {
             <span>🗑 Kill all agents?</span>
             <button class="history-close" @click="confirmKillAll = false">✕</button>
           </div>
-          <div style="padding: 16px 14px; font-size: 13px; color: #c9d1d9;">
+          <div style="padding: 16px 14px; font-size: 13px; color: var(--text-primary);">
             這將強制終止 <strong>{{ panes.length }} 個 agent</strong>，所有進行中的工作將遺失。
           </div>
           <div style="display: flex; gap: 8px; padding: 0 14px 14px; justify-content: flex-end;">
-            <button class="history-close" style="border: 1px solid #30363d; padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">Cancel</button>
+            <button class="history-close" style="border: 1px solid var(--border-default); padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">Cancel</button>
             <button class="danger" style="padding: 4px 14px; border-radius: 6px; font-size: 12px;" @click="() => { onKillAll(); confirmKillAll = false }">Kill all</button>
           </div>
         </div>
@@ -5209,10 +5209,10 @@ function paneIsCommander(p: ActivePane): boolean {
   transition: background 0.15s;
 }
 .resize-handle:hover::after {
-  background: #388bfd44;
+  background: color-mix(in srgb, var(--accent-focus) 27%, transparent);
 }
 .is-resizing .resize-handle::after {
-  background: #388bfd66;
+  background: color-mix(in srgb, var(--accent-focus) 40%, transparent);
 }
 .resize-handle-left {
   left: var(--left-width, 360px);
@@ -5259,7 +5259,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .grid-handle:hover::after,
 .is-resizing .grid-handle::after {
-  background: #388bfd55;
+  background: color-mix(in srgb, var(--accent-focus) 33%, transparent);
 }
 .grid-handle-v {
   top: 0;
@@ -5328,12 +5328,12 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .spotlight-thumb:hover {
   border-color: var(--accent-muted);
-  box-shadow: 0 2px 12px rgba(56, 139, 253, 0.15);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--accent-focus) 15%, transparent);
   background: var(--bg-elevated);
 }
 .spotlight-thumb--active {
   border-color: var(--accent-focus);
-  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.25);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 25%, transparent);
   background: var(--bg-elevated);
 }
 .spotlight-thumb-info {
@@ -5382,7 +5382,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .spotlight-thumb-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
 .spotlight-thumb-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
-.spotlight-thumb-badge[data-status="starting"] { background: #0d1a2d; color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
+.spotlight-thumb-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
 .spotlight-thumb-badge[data-status="error"],
 .spotlight-thumb-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
 .spotlight-strip-empty {
@@ -5425,7 +5425,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-item--active {
   border-color: var(--accent-focus);
   background: var(--bg-elevated);
-  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 20%, transparent);
 }
 .meeting-avatar {
   width: 28px;
@@ -5488,7 +5488,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
 .meeting-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
 .meeting-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
-.meeting-badge[data-status="starting"] { background: #0d1a2d; color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
+.meeting-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
 .meeting-badge[data-status="error"]    { background: var(--danger-subtle); color: var(--danger-bright); border: 1px solid var(--danger-emphasis); }
 .meeting-empty {
   color: var(--text-disabled);
@@ -5821,7 +5821,7 @@ function paneIsCommander(p: ActivePane): boolean {
   height: 10px;
   border-radius: 50%;
   background: var(--warning-fg);
-  box-shadow: 0 0 0 4px rgba(240, 136, 62, 0.2);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning-fg) 20%, transparent);
 }
 .stall-slot {
   color: var(--text-secondary);

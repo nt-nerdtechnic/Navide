@@ -100,8 +100,8 @@ function openItem(d: Diagnostic): void {
   border-radius: 10px;
   font-weight: 600;
 }
-.badge-err  { background: rgba(248, 81, 73, 0.2); color: #f85149; }
-.badge-warn { background: rgba(187, 128, 9, 0.2); color: #d29922; }
+.badge-err  { background: color-mix(in srgb, var(--danger-fg) 20%, transparent); color: var(--danger-fg); }
+.badge-warn { background: color-mix(in srgb, var(--attention-fg) 20%, transparent); color: var(--attention-fg); }
 
 .problems-empty {
   padding: 24px 16px;
@@ -134,9 +134,9 @@ function openItem(d: Diagnostic): void {
 }
 .prob-item:hover { background: var(--bg-muted); }
 .prob-icon { font-size: 9px; flex-shrink: 0; }
-.prob-icon.sev-error   { color: #f85149; }
-.prob-icon.sev-warning { color: #d29922; }
-.prob-icon.sev-info    { color: #58a6ff; }
+.prob-icon.sev-error   { color: var(--danger-fg); }
+.prob-icon.sev-warning { color: var(--attention-fg); }
+.prob-icon.sev-info    { color: var(--accent-fg); }
 .prob-msg {
   flex: 1;
   white-space: nowrap;

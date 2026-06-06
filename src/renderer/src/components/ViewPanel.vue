@@ -58,7 +58,7 @@ const modes: [LayoutMode, string, string][] = [
   color: var(--text-primary);
 }
 .mode-btn.active {
-  background: #1f6feb33;
+  background: color-mix(in srgb, var(--accent-emphasis) 20%, transparent);
   color: var(--accent-bright);
 }
 </style>

@@ -2371,15 +2371,15 @@ defineExpose({
 }
 .ev-dec-highlight {
   position: absolute;
-  background: rgba(255, 200, 0, 0.18);
-  border: 1px solid rgba(255, 200, 0, 0.4);
+  background: color-mix(in srgb, var(--attention-fg) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--attention-fg) 40%, transparent);
   border-radius: 2px;
   pointer-events: none;
   box-sizing: border-box;
 }
 .ev-dec-current {
-  background: rgba(255, 140, 0, 0.38);
-  border-color: rgba(255, 140, 0, 0.7);
+  background: color-mix(in srgb, var(--warning-fg) 38%, transparent);
+  border-color: color-mix(in srgb, var(--warning-fg) 70%, transparent);
 }
 .ev-ghost {
   position: absolute;
@@ -2429,8 +2429,8 @@ defineExpose({
   margin-left: 4px;
 }
 .bracket-match {
-  background: rgba(100, 160, 255, 0.22);
-  border: 1px solid rgba(100, 160, 255, 0.6);
+  background: color-mix(in srgb, var(--accent-fg) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-fg) 60%, transparent);
   border-radius: 2px;
 }
 .ev-diag-icon {
@@ -2438,14 +2438,14 @@ defineExpose({
   cursor: default;
   margin-right: 2px;
 }
-.ev-diag-error   { color: #f85149; }
-.ev-diag-warning { color: #d29922; }
-.ev-diag-info    { color: #58a6ff; }
+.ev-diag-error   { color: var(--danger-fg); }
+.ev-diag-warning { color: var(--attention-fg); }
+.ev-diag-info    { color: var(--accent-fg); }
 .ev-suggest {
   position: absolute;
   z-index: 20;
-  background: var(--bg-panel, #1e1e2e);
-  border: 1px solid var(--border-color, #3a3a5c);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
   border-radius: 4px;
   box-shadow: 0 4px 14px rgba(0,0,0,0.45);
   min-width: 160px;
@@ -2463,7 +2463,7 @@ defineExpose({
   color: var(--text-primary);
 }
 .ev-suggest-item.active, .ev-suggest-item:hover {
-  background: var(--accent, #5a9eff);
-  color: #fff;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
 }
 </style>

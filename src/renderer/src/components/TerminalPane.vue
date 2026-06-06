@@ -143,11 +143,11 @@ onMounted(() => {
 }
 .pane:focus-within {
   border-color: var(--accent-emphasis);
-  box-shadow: 0 0 0 1px #1f6feb33;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-emphasis) 20%, transparent);
 }
 .pane.pane-focus {
   border-color: var(--accent-focus);
-  box-shadow: 0 0 0 2px #388bfd44;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 27%, transparent);
 }
 .pane.pane-focus .pane-header {
   background: var(--bg-elevated);

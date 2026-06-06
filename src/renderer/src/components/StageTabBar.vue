@@ -183,7 +183,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
 
 .tab-rename-input {
   width: 80px;
-  background: var(--bg-base, #0d1117);
+  background: var(--bg-base);
   border: 1px solid var(--accent-focus);
   border-radius: 3px;
   color: var(--text-primary);

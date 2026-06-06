@@ -348,7 +348,7 @@ const verdictMeta = computed(() =>
   width: 22px; height: 22px; background: transparent; border: none;
   border-radius: 4px; color: var(--text-muted); cursor: pointer; padding: 0;
 }
-.hdr-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.hdr-btn:hover { color: var(--text-primary); background: var(--bg-active); }
 
 /* Controls */
 .controls {
@@ -382,7 +382,7 @@ const verdictMeta = computed(() =>
 .action-row { display: flex; align-items: center; gap: 8px; }
 .btn-primary {
   display: flex; align-items: center; padding: 4px 10px; font-size: 11px; font-weight: 600;
-  background: var(--success-emphasis); color: #fff; border: none; border-radius: 5px; cursor: pointer;
+  background: var(--success-emphasis); color: var(--text-on-emphasis); border: none; border-radius: 5px; cursor: pointer;
 }
 .btn-primary:hover { background: var(--success-strong); }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -391,7 +391,7 @@ const verdictMeta = computed(() =>
   background: var(--danger-subtle); color: var(--danger-fg);
   border: 1px solid var(--danger-muted); border-radius: 5px; cursor: pointer;
 }
-.btn-stop:hover { background: var(--danger-emphasis); color: #fff; }
+.btn-stop:hover { background: var(--danger-emphasis); color: var(--text-on-emphasis); }
 .reviewing-indicator { font-size: 11px; color: var(--text-muted); font-style: italic; }
 
 /* Error */
@@ -430,9 +430,9 @@ const verdictMeta = computed(() =>
   display: flex; align-items: center; gap: 8px;
   padding: 7px 12px; font-size: 11px; font-weight: 600; flex-shrink: 0;
 }
-.verdict-approve  { background: rgba(63,185,80,0.12); color: var(--success-fg, #3fb950); border-bottom: 1px solid rgba(63,185,80,0.25); }
-.verdict-warn     { background: rgba(210,153,34,0.12); color: var(--warning-fg, #d2991a); border-bottom: 1px solid rgba(210,153,34,0.25); }
-.verdict-reject   { background: rgba(248,81,73,0.12);  color: var(--danger-fg, #f85149);  border-bottom: 1px solid rgba(248,81,73,0.25); }
+.verdict-approve  { background: var(--diff-add-bg); color: var(--success-fg); border-bottom: 1px solid color-mix(in srgb, var(--success-fg) 25%, transparent); }
+.verdict-warn     { background: color-mix(in srgb, var(--attention-fg) 12%, transparent); color: var(--warning-fg); border-bottom: 1px solid color-mix(in srgb, var(--attention-fg) 25%, transparent); }
+.verdict-reject   { background: var(--diff-del-bg);  color: var(--danger-fg);  border-bottom: 1px solid color-mix(in srgb, var(--danger-fg) 25%, transparent); }
 .verdict-icon { font-size: 13px; }
 
 /* Summary */
@@ -471,9 +471,9 @@ const verdictMeta = computed(() =>
   background: var(--bg-subtle); overflow: hidden;
 }
 .finding-card.is-dismissed { opacity: 0.45; }
-.finding-card.sev-critical { border-left: 3px solid var(--danger-fg, #f85149); }
-.finding-card.sev-warning  { border-left: 3px solid var(--warning-fg, #d2991a); }
-.finding-card.sev-suggestion { border-left: 3px solid var(--accent-fg, #58a6ff); }
+.finding-card.sev-critical { border-left: 3px solid var(--danger-fg); }
+.finding-card.sev-warning  { border-left: 3px solid var(--warning-fg); }
+.finding-card.sev-suggestion { border-left: 3px solid var(--accent-fg); }
 
 .finding-header {
   display: flex; align-items: center; gap: 6px;
@@ -486,14 +486,14 @@ const verdictMeta = computed(() =>
   color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .finding-file--link { cursor: pointer; }
-.finding-file--link:hover { color: var(--accent-fg, #58a6ff); text-decoration: underline; }
+.finding-file--link:hover { color: var(--accent-fg); text-decoration: underline; }
 .finding-line { color: var(--text-muted); }
 .finding-ai-btn {
   background: transparent; border: 1px solid var(--border-muted); cursor: pointer;
-  color: var(--accent-fg, #58a6ff); font-size: 9px; line-height: 1;
+  color: var(--accent-fg); font-size: 9px; line-height: 1;
   padding: 1px 5px; border-radius: 3px; flex-shrink: 0; white-space: nowrap;
 }
-.finding-ai-btn:hover { background: rgba(88,166,255,0.12); }
+.finding-ai-btn:hover { background: color-mix(in srgb, var(--accent-fg) 12%, transparent); }
 .dismiss-btn {
   background: transparent; border: none; cursor: pointer;
   color: var(--text-muted); font-size: 12px; line-height: 1;

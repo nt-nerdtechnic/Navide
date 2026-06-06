@@ -280,7 +280,7 @@ button:disabled {
 }
 .r-badge.completed {
   color: var(--success-fg);
-  background: #11331b;
+  background: var(--success-subtle);
 }
 .r-badge.running {
   color: var(--accent-fg);
@@ -288,7 +288,7 @@ button:disabled {
 }
 .r-badge.aborted {
   color: var(--attention-fg);
-  background: #341a00;
+  background: var(--attention-subtle);
 }
 .r-missing {
   font-size: 10px;

@@ -1195,8 +1195,8 @@ defineExpose({
   gap: 6px;
 }
 .ep-diff-sign { flex-shrink: 0; width: 10px; }
-.ep-diff-add { color: var(--diff-add-fg, #3fb950); background: var(--diff-add-bg, rgba(63,185,80,.12)); }
-.ep-diff-del { color: var(--diff-del-fg, #f85149); background: var(--diff-del-bg, rgba(248,81,73,.12)); }
+.ep-diff-add { color: var(--diff-add-fg); background: var(--diff-add-bg); }
+.ep-diff-del { color: var(--diff-del-fg); background: var(--diff-del-bg); }
 .ep-diff-ctx { color: var(--text-muted); }
 
 .ep-find {
@@ -1359,7 +1359,7 @@ defineExpose({
   z-index: 150;
   display: flex; align-items: center; gap: 5px;
   padding: 4px 10px; font-size: 11px; font-weight: 600;
-  background: var(--accent-emphasis); color: #fff;
+  background: var(--accent-emphasis); color: var(--text-on-emphasis);
   border: none; border-radius: 5px; cursor: pointer;
   box-shadow: 0 2px 8px rgba(0,0,0,0.35);
   transform: translateX(-50%);

@@ -292,7 +292,7 @@ function onLogDividerEnd(): void {
   min-height: 0;
   margin-top: 4px;
   background: var(--bg-inset);
-  border: 1px solid #1b2230;
+  border: 1px solid var(--border-muted);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -418,7 +418,7 @@ function onLogDividerEnd(): void {
 }
 .row.open {
   background: var(--bg-subtle);
-  border-left-color: #2f81f7;
+  border-left-color: var(--accent-focus);
 }
 .ts {
   color: var(--text-muted);
