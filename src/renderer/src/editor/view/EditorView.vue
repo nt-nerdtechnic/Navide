@@ -764,9 +764,10 @@ function onKeydown(e: KeyboardEvent): void {
         if (ch === ' ' || ch === '\t') indent += ch
         else break
       }
-      // Smart bracket expansion: pressing Enter between {|}, [|], (|) adds indented inner line
+      // Smart bracket expansion: pressing Enter between {|}, [|], (|) adds indented inner line.
+      // Skip when multi-cursor is active — extra cursors don't know their local context.
       const EXPAND_PAIRS: Record<string, string> = { '{': '}', '[': ']', '(': ')' }
-      if (!selectionRange() && c.col > 0 && c.col < curLine.length && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
+      if (extraCursors.value.length === 0 && !selectionRange() && c.col > 0 && c.col < curLine.length && EXPAND_PAIRS[curLine[c.col - 1]] === curLine[c.col]) {
         applyEdit({ start: c, end: c }, '\n' + indent + INDENT.value + '\n' + indent)
         cursor.value = { line: c.line + 1, col: indent.length + INDENT.value.length }
         break
