@@ -2583,6 +2583,21 @@ function editMessage(idx: number): void {
   nextTick(() => textareaEl.value?.focus())
 }
 
+// ── Quote-reply a message ──────────────────────────────────────────────────────
+function quoteReply(msg: ChatMessage): void {
+  const stripped = msg.content.replace(/[#*`_~>]/g, '').trim()
+  const excerpt = stripped.slice(0, 120) + (stripped.length > 120 ? '…' : '')
+  const prefix = `> ${excerpt}\n\n`
+  inputText.value = prefix + inputText.value
+  nextTick(() => {
+    const el = textareaEl.value
+    if (!el) return
+    el.focus()
+    // Place cursor after the quote block
+    el.setSelectionRange(prefix.length, prefix.length)
+  })
+}
+
 // ── Fork conversation from a message (create a new thread from this point) ────
 function forkFromMessage(idx: number): void {
   if (sending.value) return
@@ -6066,6 +6081,14 @@ function getDateLabel(ts: number): string {
             @click="forkFromMessage(mi)"
           >
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm0 2.122a2.25 2.25 0 1 0-1.5 0v.878A2.25 2.25 0 0 0 5.75 8.5h1.5v2.128a2.251 2.251 0 1 0 1.5 0V8.5h1.5a2.25 2.25 0 0 0 2.25-2.25v-.878a2.25 2.25 0 1 0-1.5 0v.878a.75.75 0 0 1-.75.75h-4.5A.75.75 0 0 1 5 6.25v-.878Zm3.75 7.378a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm3-8.75a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z"/></svg>
+          </button>
+          <button
+            v-if="msg.role === 'assistant' && !msg.streaming"
+            class="ai-msg-action-btn"
+            title="Quote reply"
+            @click="quoteReply(msg)"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h1a.75.75 0 0 1 .75.75v1.19l1.72-1.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25ZM1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H7.81l-2.53 2.53a.749.749 0 0 1-1.28-.53V12h-.25A1.75 1.75 0 0 1 2 10.25v-7.5ZM5.5 6.25a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Zm.75 2.25h2.5a.75.75 0 0 1 0 1.5H6.25a.75.75 0 0 1 0-1.5Z"/></svg>
           </button>
           <button class="ai-msg-action-btn" title="Copy" @click="copyMessage(msg.content)">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"/><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>
