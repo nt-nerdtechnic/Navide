@@ -1,10 +1,10 @@
 {
   "pane": {
-    "git": { "title": "SOURCE CONTROL" },
+    "git": { "title": "SOURCE CONTROL", "tab": "Source Control" },
     "explorer": { "title": "Explorer" },
-    "ai-chat": { "title": "AI Chat" },
+    "ai-chat": { "title": "AI Chat", "tab-shortcut": "AI Chat (⌘⇧A)" },
     "search": { "title": "Search" },
-    "problems": { "title": "Problems" }
+    "problems": { "title": "Problems", "tab-shortcut": "Problems (⌘⇧M)" }
   },
   "action": {
     "commit": "Commit",
@@ -28,8 +28,8 @@
     "collapse-all-folders": "Collapse all folders",
     "cancel": "Cancel",
     "ok": "OK",
-    "open-files": "Open {{ selectedFilePaths.length }} file(s)",
-    "delete-items": "Delete {{ selectedKeys.size }} items",
+    "open-files": "Open {count} file(s)",
+    "delete-items": "Delete {size} items",
     "copy-paths": "Copy paths",
     "open-diff": "Open Diff",
     "open-in-editor": "Open in editor",
@@ -70,7 +70,18 @@
     "bookmarks-count": "Bookmarks (${bookmarkedMessages.length})",
     "bookmarks": "Bookmarks — bookmark messages with ★",
     "keyboard-shortcuts": "Keyboard shortcuts (?)",
-    "settings": "Settings"
+    "settings": "Settings",
+    "close": "Close",
+    "close-others": "Close Others",
+    "close-to-right": "Close to the Right",
+    "close-to-left": "Close to the Left",
+    "close-all": "Close All",
+    "move-up": "Move up",
+    "move-down": "Move down",
+    "add-stage": "+ Add Stage",
+    "add-slot": "+ Add Slot",
+    "remove-slot": "Remove slot",
+    "create": "Create"
   },
   "settings": {
     "appearance": {
@@ -115,7 +126,14 @@
     "select-workspace": "Select a workspace to get started",
     "selected-count": "selected",
     "name-placeholder": "Name",
-    "ignored": "Ignored"
+    "ignored": "Ignored",
+    "unsaved": "Unsaved",
+    "new-role": "New role",
+    "edit-role": "Edit role",
+    "new-stage": "New Stage",
+    "edit-stage": "Edit Stage",
+    "saving": "Saving…",
+    "no-parallel-slots": "No parallel slots — stage runs with a single agent."
   },
   "error": {
     "not-git-repo": "Not a Git repository",

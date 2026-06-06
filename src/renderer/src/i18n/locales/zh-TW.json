@@ -1,10 +1,10 @@
 {
   "pane": {
-    "git": { "title": "原始碼控制" },
+    "git": { "title": "原始碼控制", "tab": "原始碼控制" },
     "explorer": { "title": "檔案總管" },
-    "ai-chat": { "title": "AI 對話" },
+    "ai-chat": { "title": "AI 對話", "tab-shortcut": "AI 對話 (⌘⇧A)" },
     "search": { "title": "搜尋" },
-    "problems": { "title": "問題" }
+    "problems": { "title": "問題", "tab-shortcut": "問題 (⌘⇧M)" }
   },
   "action": {
     "commit": "提交",
@@ -28,8 +28,8 @@
     "collapse-all-folders": "收合所有資料夾",
     "cancel": "取消",
     "ok": "確定",
-    "open-files": "開啟 {{ selectedFilePaths.length }} 個檔案",
-    "delete-items": "刪除 {{ selectedKeys.size }} 個項目",
+    "open-files": "開啟 {count} 個檔案",
+    "delete-items": "刪除 {size} 個項目",
     "copy-paths": "複製路徑",
     "open-diff": "開啟差異比對",
     "open-in-editor": "在編輯器中開啟",
@@ -70,7 +70,18 @@
     "bookmarks-count": "書籤（${bookmarkedMessages.length}）",
     "bookmarks": "書籤——點選 ★ 為訊息加入書籤",
     "keyboard-shortcuts": "鍵盤快捷鍵（?）",
-    "settings": "設定"
+    "settings": "設定",
+    "close": "關閉",
+    "close-others": "關閉其他",
+    "close-to-right": "關閉右側",
+    "close-to-left": "關閉左側",
+    "close-all": "全部關閉",
+    "move-up": "上移",
+    "move-down": "下移",
+    "add-stage": "+ 新增階段",
+    "add-slot": "+ 新增插槽",
+    "remove-slot": "移除插槽",
+    "create": "建立"
   },
   "settings": {
     "appearance": {
@@ -115,7 +126,14 @@
     "select-workspace": "請選擇工作區以開始使用",
     "selected-count": "已選取",
     "name-placeholder": "名稱",
-    "ignored": "已忽略"
+    "ignored": "已忽略",
+    "unsaved": "未儲存",
+    "new-role": "新增角色",
+    "edit-role": "編輯角色",
+    "new-stage": "新增階段",
+    "edit-stage": "編輯階段",
+    "saving": "儲存中…",
+    "no-parallel-slots": "沒有平行插槽——此階段由單一 Agent 執行。"
   },
   "error": {
     "not-git-repo": "非 Git 儲存庫",

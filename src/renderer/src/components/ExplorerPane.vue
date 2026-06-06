@@ -548,25 +548,25 @@ defineExpose({ revealFile, focusTree })
           v-if="selectedFilePaths.length > 0"
           class="exp-ctx-item"
           @click="openSelected(); closeCtx()"
-        >Open {{ selectedFilePaths.length }} file(s)</button>
-        <button class="exp-ctx-item danger" @click="deleteSelected(); closeCtx()">Delete {{ selectedKeys.size }} items</button>
+        >{{ $t('action.open-files', { count: selectedFilePaths.length }) }}</button>
+        <button class="exp-ctx-item danger" @click="deleteSelected(); closeCtx()">{{ $t('action.delete-items', { size: selectedKeys.size }) }}</button>
         <div class="exp-ctx-sep" />
-        <button class="exp-ctx-item" @click="copyPathsSelected(); closeCtx()">Copy paths</button>
+        <button class="exp-ctx-item" @click="copyPathsSelected(); closeCtx()">{{ $t('action.copy-paths') }}</button>
       </template>
       <!-- Single-item context menu -->
       <template v-else>
-        <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">New File</button>
-        <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">New Folder</button>
+        <button class="exp-ctx-item" @click="startNew('new-file', ctx.entry); closeCtx()">{{ $t('action.new-file') }}</button>
+        <button class="exp-ctx-item" @click="startNew('new-folder', ctx.entry); closeCtx()">{{ $t('action.new-folder') }}</button>
         <template v-if="ctx.entry">
           <div class="exp-ctx-sep" />
-          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">Open Diff</button>
-          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">Open in editor</button>
-          <button v-if="!ctx.entry.is_dir && props.onAskAiAboutFile" class="exp-ctx-item" @click="props.onAskAiAboutFile!(ctx.entry!.rel_path); closeCtx()">Ask AI about this file</button>
-          <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">Rename</button>
-          <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">Delete</button>
+          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">{{ $t('action.open-diff') }}</button>
+          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">{{ $t('action.open-in-editor') }}</button>
+          <button v-if="!ctx.entry.is_dir && props.onAskAiAboutFile" class="exp-ctx-item" @click="props.onAskAiAboutFile!(ctx.entry!.rel_path); closeCtx()">{{ $t('action.ask-ai-about-file') }}</button>
+          <button class="exp-ctx-item" @click="startRename(ctx.entry!); closeCtx()">{{ $t('action.rename') }}</button>
+          <button class="exp-ctx-item danger" @click="doDelete(ctx.entry!); closeCtx()">{{ $t('action.delete') }}</button>
           <div class="exp-ctx-sep" />
-          <button class="exp-ctx-item" @click="reveal(ctx.entry!); closeCtx()">Reveal in Finder</button>
-          <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">Copy path</button>
+          <button class="exp-ctx-item" @click="reveal(ctx.entry!); closeCtx()">{{ $t('action.reveal-in-finder') }}</button>
+          <button class="exp-ctx-item" @click="copyPath(ctx.entry!); closeCtx()">{{ $t('action.copy-path') }}</button>
         </template>
       </template>
     </div>
