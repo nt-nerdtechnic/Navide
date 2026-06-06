@@ -99,6 +99,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+alt+up',   command: 'editor.action.insertCursorAbove',                   when: 'editorTextFocus' },
   { key: 'cmd+alt+down', command: 'editor.action.insertCursorBelow',                   when: 'editorTextFocus' },
   { key: 'shift+alt+i',  command: 'editor.action.insertCursorAtEndOfEachLineSelected', when: 'editorTextFocus' },
+  { key: 'cmd+d',        command: 'editor.action.addSelectionToNextFindMatch',          when: 'editorTextFocus' },
 
   // ── Code Folding ─────────────────────────────────────────────────────────────
   { key: 'cmd+alt+[',   command: 'editor.fold',            when: 'editorOpen' },

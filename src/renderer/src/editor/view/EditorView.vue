@@ -1567,6 +1567,22 @@ function onMousedown(e: MouseEvent): void {
   if (e.detail === 2) {
     e.preventDefault(); selectWordAt(pos); focus(); return
   }
+  // Alt+Click: add/remove an extra cursor (VS Code behavior).
+  if (e.altKey) {
+    e.preventDefault()
+    const idx = extraCursors.value.findIndex(c => c.line === pos.line && c.col === pos.col)
+    if (idx !== -1) {
+      const next = [...extraCursors.value]; next.splice(idx, 1)
+      const nextA = [...extraAnchors.value]; nextA.splice(idx, 1)
+      extraCursors.value = next; extraAnchors.value = nextA
+    } else {
+      extraCursors.value = [...extraCursors.value, clampPos(pos)]
+      extraAnchors.value = [...extraAnchors.value, null]
+    }
+    focus(); return
+  }
+  // Plain click clears extra cursors (VS Code clears multi-cursor on single click).
+  if (!e.shiftKey) _clearExtraCursors()
   moveTo(pos, e.shiftKey)
   dragging = true
   focus()
@@ -1994,6 +2010,56 @@ function insertCursorBelow(): void {
   extraAnchors.value = [...extraAnchors.value, null]
 }
 
+// Ctrl+D: select next occurrence of the current word / selected text (VS Code: Add Selection to Next Find Match).
+function selectNextOccurrence(): void {
+  const sel = selectionRange()
+  let searchWord: string
+  let searchStart: Position
+
+  if (sel && comparePos(sel.start, sel.end) !== 0) {
+    // There is a selection. If it's multi-line, bail out.
+    if (sel.start.line !== sel.end.line) return
+    searchWord = model.getLine(sel.start.line).slice(sel.start.col, sel.end.col)
+    searchStart = sel.end
+  } else {
+    // No selection — select the word at cursor first.
+    const word = getWordAtCursor()
+    if (!word) return
+    const { line, col } = cursor.value
+    const text = model.getLine(line)
+    let wStart = col
+    while (wStart > 0 && isWordChar(text[wStart - 1])) wStart--
+    anchor.value = { line, col: wStart }
+    cursor.value = { line, col: wStart + word.length }
+    return
+  }
+
+  // Find next occurrence after searchStart (wraps around).
+  const lc = model.lineCount()
+  for (let pass = 0; pass < 2; pass++) {
+    const startL = pass === 0 ? searchStart.line : 0
+    for (let l = startL; l < lc; l++) {
+      const text = model.getLine(l)
+      const startC = l === searchStart.line && pass === 0 ? searchStart.col : 0
+      const idx = text.indexOf(searchWord, startC)
+      if (idx === -1) continue
+      // Skip if this range is already selected by an extra cursor.
+      const alreadyCovered = extraCursors.value.some(
+        (ec, ei) => ec.line === l && ec.col === idx + searchWord.length &&
+          extraAnchors.value[ei]?.line === l && extraAnchors.value[ei]?.col === idx
+      )
+      if (alreadyCovered) continue
+      // Also skip the primary selection.
+      if (l === sel.start.line && idx === sel.start.col) continue
+      // Add as extra selection.
+      extraCursors.value = [...extraCursors.value, { line: l, col: idx + searchWord.length }]
+      extraAnchors.value = [...extraAnchors.value, { line: l, col: idx }]
+      void nextTick(() => revealPosition({ line: l, col: idx + searchWord.length }))
+      return
+    }
+  }
+}
+
 function addCursorsToLineEnds(): void {
   const sel = selectionRange()
   if (!sel || sel.start.line === sel.end.line) return
@@ -2036,7 +2102,7 @@ defineExpose({
   selectCurrentWord,
   setTabSize, setUseSpaces, getTabSize, getUseSpaces,
   foldAt, unfoldAt, toggleFoldAt, foldAll, unfoldAll, foldToLevel, foldRecursively, unfoldRecursively,
-  insertCursorAbove, insertCursorBelow, addCursorsToLineEnds,
+  insertCursorAbove, insertCursorBelow, addCursorsToLineEnds, selectNextOccurrence,
   getCursorLine: () => cursor.value.line,
 })
 </script>
