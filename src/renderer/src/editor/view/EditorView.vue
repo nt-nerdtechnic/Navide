@@ -1913,6 +1913,16 @@ function revealLine(line: number): void {
   cursor.value = clampPos({ line: Math.max(0, line - 1), col: 0 })
   void Promise.resolve().then(() => { scrollCursorIntoView(); focus() })
 }
+/** Scroll a 0-based model line into view without moving the cursor. */
+function _scrollLineIntoView(line: number): void {
+  const el = scrollEl.value; if (!el) return
+  const y = m2d(line) * lineHeightPx.value
+  if (y < el.scrollTop + lineHeightPx.value)
+    el.scrollTop = Math.max(0, y - lineHeightPx.value)
+  else if (y + lineHeightPx.value > el.scrollTop + el.clientHeight)
+    el.scrollTop = y + lineHeightPx.value - el.clientHeight
+  vs.scrollTop.value = el.scrollTop
+}
 function revealPosition(line: number, col: number): void {
   // 0-based; used internally by find navigation.
   ghost.value = null
@@ -2070,7 +2080,7 @@ function selectNextOccurrence(): void {
       // Add as extra selection.
       extraCursors.value = [...extraCursors.value, { line: l, col: idx + searchWord.length }]
       extraAnchors.value = [...extraAnchors.value, { line: l, col: idx }]
-      void nextTick(() => revealPosition({ line: l, col: idx + searchWord.length }))
+      void nextTick(() => _scrollLineIntoView(l))
       return
     }
   }
