@@ -34,6 +34,7 @@ async function createWindow(): Promise<void> {
     width: 1280,
     height: 800,
     title: 'Agent-Team',
+    titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

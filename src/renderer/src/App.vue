@@ -1318,6 +1318,48 @@ const showSettings = ref(false)
 const showHistory = ref(false)
 const confirmKillAll = ref(false)
 
+// ── Titlebar & Status Bar ─────────────────────────────────────────────────────
+const workspaceBaseName = computed(() => {
+  if (!currentWorkspace.value) return 'Agent-Team'
+  const parts = currentWorkspace.value.replace(/\\/g, '/').split('/')
+  return parts.filter(Boolean).at(-1) || 'Agent-Team'
+})
+
+interface StatusBarGit {
+  branch: string
+  ahead: number
+  behind: number
+  dirty: boolean
+}
+const statusBarGit = ref<StatusBarGit>({ branch: '', ahead: 0, behind: 0, dirty: false })
+
+async function refreshStatusBarGit(): Promise<void> {
+  if (!currentWorkspace.value || !workspaceSelected.value) return
+  const resp = await sendQuiet<{
+    branch: string; ahead: number; behind: number
+    staged: unknown[]; unstaged: unknown[]
+  }>('git.status', { workspace_path: currentWorkspace.value })
+  if (resp) {
+    statusBarGit.value = {
+      branch: resp.branch || '',
+      ahead: resp.ahead ?? 0,
+      behind: resp.behind ?? 0,
+      dirty: (resp.staged?.length ?? 0) + (resp.unstaged?.length ?? 0) > 0
+    }
+  }
+}
+
+let _gitPollTimer: ReturnType<typeof window.setInterval> | null = null
+watch(workspaceSelected, (v) => {
+  if (v) {
+    void refreshStatusBarGit()
+    _gitPollTimer = window.setInterval(() => void refreshStatusBarGit(), 5000)
+  } else {
+    if (_gitPollTimer !== null) { clearInterval(_gitPollTimer); _gitPollTimer = null }
+    statusBarGit.value = { branch: '', ahead: 0, behind: 0, dirty: false }
+  }
+}, { immediate: true })
+
 // ── Keybinding system ─────────────────────────────────────────────────────────
 useKeybindings()
 registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
@@ -4426,6 +4468,16 @@ function paneIsCommander(p: ActivePane): boolean {
     @complete="onboardingComplete = true"
   />
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
+    <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
+    <div class="titlebar">
+      <span class="titlebar-name">{{ workspaceBaseName }}</span>
+      <button class="titlebar-gear" @mousedown.stop @click="showSettings = true" title="Settings">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
     <ControlPane
       ref="controlPaneRef"
       :backend-status="backend.status.value"
@@ -4797,6 +4849,38 @@ function paneIsCommander(p: ActivePane): boolean {
     <div class="resize-handle resize-handle-left" @mousedown="onResizeStart($event, 'left')" />
     <div v-if="tokenPanelExpanded" class="resize-handle resize-handle-right" @mousedown="onResizeStart($event, 'right')" />
     <NotificationHost />
+    <!-- Status bar -->
+    <div class="statusbar">
+      <div class="statusbar-left">
+        <span v-if="statusBarGit.branch" class="sb-item sb-git">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="6" y1="3" x2="6" y2="15"/>
+            <circle cx="18" cy="6" r="3"/>
+            <circle cx="6" cy="18" r="3"/>
+            <path d="M18 9a9 9 0 0 1-9 9"/>
+          </svg>
+          {{ statusBarGit.branch }}{{ statusBarGit.dirty ? '*' : '' }}
+        </span>
+        <span v-if="statusBarGit.behind > 0 || statusBarGit.ahead > 0" class="sb-item sb-sync">
+          <span v-if="statusBarGit.behind > 0">{{ statusBarGit.behind }}↓</span>
+          <span v-if="statusBarGit.ahead > 0"> {{ statusBarGit.ahead }}↑</span>
+        </span>
+        <span class="sb-item sb-backend" :class="'sb-' + backend.status.value">
+          <span class="sb-dot" />
+          {{ backend.status.value === 'connected' ? 'Backend' : 'Connecting…' }}
+        </span>
+      </div>
+      <div class="statusbar-right">
+        <span v-if="pipeline.state !== 'idle'" class="sb-item sb-pipeline" :class="'sb-' + pipeline.state">
+          {{ pipeline.state === 'running'
+            ? `Stage ${pipeline.stageIndex + 1} / ${stagesApi.stages.value.length || '?'}`
+            : pipeline.state }}
+        </span>
+        <span v-if="panes.length > 0" class="sb-item sb-agents">
+          {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
+        </span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -4812,7 +4896,113 @@ function paneIsCommander(p: ActivePane): boolean {
   color: var(--text-bright);
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   overflow: hidden;
+  box-sizing: border-box;
+  padding-top: 38px;
+  padding-bottom: 24px;
 }
+
+/* ── Custom Titlebar ─────────────────────────────────────────────────────────── */
+.titlebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: drag;
+  background: var(--bg-panel, #161b22);
+  border-bottom: 1px solid var(--border-subtle, #21262d);
+  z-index: 200;
+  user-select: none;
+  /* leave 80px on the left for macOS traffic lights */
+  padding-left: 80px;
+  padding-right: 8px;
+}
+.titlebar-name {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted, #8b949e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.titlebar-gear {
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #8b949e);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.titlebar-gear:hover {
+  background: var(--bg-hover, #21262d);
+  color: var(--text-bright, #e6edf3);
+}
+
+/* ── Status Bar ──────────────────────────────────────────────────────────────── */
+.statusbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-panel, #161b22);
+  border-top: 1px solid var(--border-subtle, #21262d);
+  z-index: 200;
+  user-select: none;
+  padding: 0 8px;
+  font-size: 11px;
+}
+.statusbar-left,
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  height: 22px;
+  border-radius: 3px;
+  color: var(--text-muted, #8b949e);
+  cursor: default;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.sb-item:hover {
+  background: var(--bg-hover, #21262d);
+  color: var(--text-bright, #e6edf3);
+}
+.sb-git { gap: 5px; }
+.sb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted, #8b949e);
+  flex-shrink: 0;
+}
+.sb-backend.sb-connected .sb-dot { background: #3fb950; }
+.sb-backend:not(.sb-connected) .sb-dot { background: #f85149; }
+.sb-pipeline.sb-running { color: #58a6ff; }
+.sb-pipeline.sb-completed { color: #3fb950; }
+.sb-pipeline.sb-aborted { color: #f85149; }
+.sb-agents { color: var(--text-muted, #8b949e); }
 .resize-handle {
   position: absolute;
   top: 0;
