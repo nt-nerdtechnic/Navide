@@ -31,6 +31,7 @@ const emit = defineEmits<{
   (e: 'explainWithAI', selection: string): void
   (e: 'fixWithAI', selection: string): void
   (e: 'writeTestsWithAI', selection: string): void
+  (e: 'askWithAI', payload: { selection: string; question: string }): void
 }>()
 
 const { toast, alert } = useNotify()
@@ -242,18 +243,27 @@ function closeCmdK(): void {
   editorRef.value?.focus()
 }
 
+const QUESTION_RE = /^(?:what|how|why|when|where|who|which|explain|does|is|are|can|should|could|would|tell me|describe|what'?s|how'?s)\b/i
+
 async function submitCmdK(): Promise<void> {
   if (cmdk.value.busy) return
-  if (!cmdk.value.instruction.trim()) return
+  const instruction = cmdk.value.instruction.trim()
+  if (!instruction) return
   if (!cmdk.value.range || !cmdk.value.code) {
     void alert('Select code to rewrite first', { title: 'Cmd+K' })
+    return
+  }
+  // If the instruction is a question, route to AI chat instead of code rewrite
+  if (QUESTION_RE.test(instruction)) {
+    closeCmdK()
+    emit('askWithAI', { selection: cmdk.value.code, question: instruction })
     return
   }
   cmdk.value.busy = true
   try {
     const resp = await props.backend.send<AiResult>('editor.rewrite', {
       code: cmdk.value.code,
-      instruction: cmdk.value.instruction,
+      instruction,
       language: lang.value,
       model,
     })
@@ -966,11 +976,11 @@ defineExpose({
         ref="cmdkInput"
         v-model="cmdk.instruction"
         class="ep-cmdk-input"
-        placeholder="Describe the changes to make to the selected code…"
+        placeholder="Instruction or question — e.g. 'add error handling' or 'how does this work?'"
         @keydown.enter="submitCmdK"
         @keydown.esc="closeCmdK"
       />
-      <button class="ep-act primary" :disabled="cmdk.busy" @click="submitCmdK">{{ cmdk.busy ? 'Thinking…' : 'Rewrite' }}</button>
+      <button class="ep-act primary" :disabled="cmdk.busy" @click="submitCmdK">{{ cmdk.busy ? 'Thinking…' : QUESTION_RE.test(cmdk.instruction.trim()) ? 'Ask' : 'Rewrite' }}</button>
       <button class="ep-act" @click="closeCmdK">Cancel</button>
     </div>
 

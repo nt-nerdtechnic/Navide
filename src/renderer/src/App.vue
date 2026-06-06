@@ -304,6 +304,12 @@ type InjectionStatus = 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
 type KickoffStatus = 'none' | 'pending' | 'sent' | 'failed'
 type PreparationStatus = 'starting' | 'checking-dialog' | 'settling' | 'injecting-role' | 'waiting-agent' | 'ready' | 'failed'
 
+interface RunGroup {
+  id: string
+  name: string
+  createdAt: number
+}
+
 interface ActivePane {
   id: string
   agentKey: string
@@ -316,6 +322,8 @@ interface ActivePane {
   command: string
   workspacePath: string
   origin: 'manual' | 'pipeline'
+  /** Which pipeline run group this pane belongs to. Undefined = unassigned (manual). */
+  runGroupId?: string
   injectionStatus: InjectionStatus
   preparationStatus: PreparationStatus
   injectionTimer: number | null
@@ -923,6 +931,7 @@ interface SpawnInternal {
   commandOverride: string
   workspacePath: string
   origin: 'manual' | 'pipeline'
+  runGroupId?: string
   kickoffPrompt?: string
   skipRoleInjection?: boolean
   /** True when commandOverride is a `--resume`/`resume` command restoring a
@@ -1012,6 +1021,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     command,
     workspacePath: opts.workspacePath,
     origin: opts.origin,
+    runGroupId: opts.runGroupId,
     injectionStatus: 'pending',
     preparationStatus: 'starting',
     injectionTimer: null,
@@ -1562,17 +1572,18 @@ async function onWorkspaceCheck(path: string): Promise<void> {
         await stagesApi.refresh()
       }
     }
+    _loadRunGroups(path)
     await restoreWorkspacePanes(resp, path)
-    // Restore saved tab after panes are repopulated — validate key still exists
+    // Restore saved activeTab after panes are repopulated
     try {
       const key = `agentTeam.activeTab.${path}`
       const saved = localStorage.getItem(key)
-      if (saved && (saved === 'all' || saved === 'manual' || stageTabs.value.some((t) => t.key === saved))) {
+      if (saved && stageTabs.value.some((t) => t.key === saved)) {
         activeTab.value = saved
       } else {
-        activeTab.value = 'all'
+        activeTab.value = stageTabs.value[0]?.key ?? ''
       }
-    } catch { activeTab.value = 'all' }
+    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
   }
 }
 
@@ -1603,6 +1614,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     `↩ Restoring ${spawned.length} slot pane(s) and ${manualPanes.length} manual pane(s)`
   )
   pipeline.workspacePath = workspacePath
+
+  // Assign restored pipeline panes to the most recent existing run group.
+  // _loadRunGroups always ensures at least one group exists before this runs.
+  const restoreGroupId = runGroups.value[runGroups.value.length - 1]?.id ?? ''
+
   await Promise.all(spawned.map(async ({ stageIndex, stageId, slot }) => {
     const sessionId = (slot.session_id ?? '').trim()
     const spec = agentSpecs.find((s) => s.agentKey === slot.agent)
@@ -1627,6 +1643,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       commandOverride,
       workspacePath,
       origin: 'pipeline',
+      runGroupId: restoreGroupId || undefined,
       isResume,
       skipRoleInjection,
       stageIndex,
@@ -1887,6 +1904,7 @@ async function preSpawnStage(index: number): Promise<void> {
       commandOverride: '',
       workspacePath: pipeline.workspacePath,
       origin: 'pipeline',
+      runGroupId: currentRunGroupId.value,
       // No kickoffPrompt → kickoffStatus='none' → scheduleInjection stops after role
     })
     if (paneId) {
@@ -2011,6 +2029,7 @@ async function activateStage(index: number): Promise<void> {
         commandOverride: '',
         workspacePath: pipeline.workspacePath,
         origin: 'pipeline',
+        runGroupId: currentRunGroupId.value,
         kickoffPrompt: kickoff
       })
       if (paneId) {
@@ -2203,6 +2222,7 @@ async function spawnPipelineStage(index: number): Promise<void> {
       commandOverride: '',
       workspacePath: pipeline.workspacePath,
       origin: 'pipeline',
+      runGroupId: currentRunGroupId.value,
       kickoffPrompt: kickoff
     })
     if (paneId) {
@@ -2249,6 +2269,9 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   pipeline.workspacePath = payload.workspacePath
   pipeline.stageIndex = 0
   pipeline.state = 'running'
+  // Create a run group tab for this pipeline execution
+  const pipelineName = pipelinesApi.activePipeline.value?.name ?? 'Pipeline'
+  createRunGroup(pipelineName)
   // Derive global commander from stage config (slot with isCommander=true).
   let globalManager: GlobalManagerRef | null = null
   for (const s of stagesApi.stages.value) {
@@ -2457,7 +2480,9 @@ async function doCloseWorkspace(): Promise<void> {
   existingProject.value = null
   currentMode.value = 'spawn'
   pipeline.workspacePath = ''
-  activeTab.value = 'all'
+  runGroups.value = []
+  currentRunGroupId.value = ''
+  activeTab.value = ''
   try {
     sessionStorage.removeItem(WS_SELECTED_KEY)
     sessionStorage.removeItem(WS_PATH_KEY)
@@ -3885,54 +3910,95 @@ const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
 
-// ── Stage Tab Bar ─────────────────────────────────────────────────────────────
-const activeTab = ref<string>('all')
+// ── Pipeline Run Group Tab Bar ────────────────────────────────────────────────
+// Each pipeline execution creates a RunGroup; all its agent slots share that group.
+// Tab bar only appears once at least one group exists. Manual panes with no group
+// appear in a "手動" tab alongside any groups.
+
+const runGroups = ref<RunGroup[]>([])
+const currentRunGroupId = ref<string>('')  // ID assigned to newly spawned pipeline panes
+const activeTab = ref<string>('')
+
+function _runGroupsKey(): string {
+  return currentWorkspace.value ? `agentTeam.runGroups.${currentWorkspace.value}` : ''
+}
+
+function _saveRunGroups(): void {
+  try {
+    const key = _runGroupsKey()
+    if (key) localStorage.setItem(key, JSON.stringify(runGroups.value))
+  } catch { /* ignore */ }
+}
+
+function _loadRunGroups(path: string): void {
+  try {
+    const raw = localStorage.getItem(`agentTeam.runGroups.${path}`)
+    runGroups.value = raw ? (JSON.parse(raw) as RunGroup[]) : []
+  } catch { runGroups.value = [] }
+  // Always ensure at least one group exists (default tab)
+  if (runGroups.value.length === 0) {
+    const id = `rg-${Date.now()}`
+    runGroups.value = [{ id, name: '預設', createdAt: Date.now() }]
+    try { localStorage.setItem(`agentTeam.runGroups.${path}`, JSON.stringify(runGroups.value)) } catch { /* ignore */ }
+  }
+  currentRunGroupId.value = runGroups.value[runGroups.value.length - 1].id
+}
+
+function createRunGroup(name?: string): RunGroup {
+  const id = `rg-${Date.now()}`
+  const group: RunGroup = {
+    id,
+    name: name ?? `Run ${runGroups.value.length + 1}`,
+    createdAt: Date.now(),
+  }
+  runGroups.value = [...runGroups.value, group]
+  currentRunGroupId.value = id
+  activeTab.value = id
+  _saveRunGroups()
+  return group
+}
+
+function renameRunGroup(id: string, name: string): void {
+  runGroups.value = runGroups.value.map((g) => (g.id === id ? { ...g, name } : g))
+  _saveRunGroups()
+}
 
 const stageTabs = computed<TabItem[]>(() => {
-  const all = panes.value
-  if (all.length === 0) return []
+  if (runGroups.value.length === 0) return []
 
-  const stageOrder: string[] = []
-  const stageCounts: Record<string, number> = {}
-  let manualCount = 0
-  for (const p of all) {
-    if (p.origin === 'pipeline' && p.stageId) {
-      if (!stageCounts[p.stageId]) {
-        stageOrder.push(p.stageId)
-        stageCounts[p.stageId] = 0
-      }
-      stageCounts[p.stageId]++
-    } else if (p.origin === 'manual') {
-      manualCount++
+  // Count panes per run group; also count unassigned panes
+  const groupCounts: Record<string, number> = {}
+  let unassignedCount = 0
+  for (const p of panes.value) {
+    if (p.runGroupId) {
+      groupCounts[p.runGroupId] = (groupCounts[p.runGroupId] ?? 0) + 1
+    } else {
+      unassignedCount++
     }
   }
 
-  // Only show tabs when there are at least 2 distinct groups
-  const groupCount = stageOrder.length + (manualCount > 0 ? 1 : 0)
-  if (groupCount <= 1) return []
-
-  const tabs: TabItem[] = [{ key: 'all', label: '全部', count: all.length, type: 'all' }]
-  for (const sid of stageOrder) {
-    const stage = stagesApi.stages.value.find((s) => s.id === sid)
-    const label = stage?.shortTitle ? `P${sid} ${stage.shortTitle}` : `P${sid}`
-    tabs.push({ key: sid, label, count: stageCounts[sid], type: 'stage' })
+  const tabs: TabItem[] = []
+  for (const group of runGroups.value) {
+    tabs.push({ key: group.id, label: group.name, count: groupCounts[group.id] ?? 0, type: 'stage' })
   }
-  if (manualCount > 0) {
-    tabs.push({ key: 'manual', label: '手動', count: manualCount, type: 'manual' })
+  if (unassignedCount > 0) {
+    tabs.push({ key: 'manual', label: '手動', count: unassignedCount, type: 'manual' })
   }
   return tabs
 })
 
 const tabFilteredPaneIds = computed<Set<string>>(() => {
-  if (activeTab.value === 'all' || stageTabs.value.length === 0) {
+  if (stageTabs.value.length === 0) {
     return new Set(panes.value.map((p) => p.id))
   }
   if (activeTab.value === 'manual') {
-    return new Set(panes.value.filter((p) => p.origin === 'manual').map((p) => p.id))
+    return new Set(panes.value.filter((p) => !p.runGroupId).map((p) => p.id))
   }
-  return new Set(
-    panes.value.filter((p) => p.origin === 'pipeline' && p.stageId === activeTab.value).map((p) => p.id)
-  )
+  if (activeTab.value && runGroups.value.some((g) => g.id === activeTab.value)) {
+    return new Set(panes.value.filter((p) => p.runGroupId === activeTab.value).map((p) => p.id))
+  }
+  // Fallback: show all
+  return new Set(panes.value.map((p) => p.id))
 })
 
 // Panes visible under both tab filter and minimize filter — drives grid sizing
@@ -3975,10 +4041,10 @@ watch(panes, (newPanes, oldPanes) => {
   if (layoutMode.value !== 'grid' && newPanes.length > (oldPanes?.length ?? 0)) {
     focusPaneId.value = newPanes[newPanes.length - 1].id
   }
-  // If the current tab has no remaining panes, fall back to 'all'
-  if (activeTab.value !== 'all' && stageTabs.value.length > 0) {
+  // If the current tab's run group was removed, fall back to first available group
+  if (activeTab.value && stageTabs.value.length > 0) {
     const tabStillExists = stageTabs.value.some((t) => t.key === activeTab.value)
-    if (!tabStillExists) activeTab.value = 'all'
+    if (!tabStillExists) activeTab.value = stageTabs.value[0]?.key ?? ''
   }
 })
 
@@ -4665,13 +4731,15 @@ function paneIsCommander(p: ActivePane): boolean {
     </Teleport>
     <main
       class="stage"
-      :class="{ 'stage--tabbed': stageTabs.length > 1 }"
+      :class="{ 'stage--tabbed': stageTabs.length > 0 }"
       :data-layout="effectiveLayoutMode"
     >
       <StageTabBar
-        v-if="stageTabs.length > 1"
+        v-if="stageTabs.length > 0"
         :tabs="stageTabs"
         v-model="activeTab"
+        @add="createRunGroup()"
+        @rename="(key, name) => renameRunGroup(key, name)"
       />
       <div v-if="panes.length === 0" class="empty">
         <!-- Pipeline is starting but the first pane hasn't appeared yet.

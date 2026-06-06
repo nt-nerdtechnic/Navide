@@ -58,6 +58,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/test-utils": "^2.4.10",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.0",
     "electron-vite": "^2.3.0",
     "happy-dom": "^15.11.7",
     "typescript": "^5.7.2",
