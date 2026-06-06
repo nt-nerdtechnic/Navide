@@ -1327,6 +1327,8 @@ const AT_OPTIONS_STATIC: AtOption[] = [
   { id: '@lint',       label: '@lint — run ESLint / ruff / mypy and attach errors' },
   { id: '@readme',     label: '@readme — inject README.md from workspace root as context' },
   { id: '@diff:',      label: '@diff:path — git diff of a specific file (e.g. @diff:src/App.vue)' },
+  { id: '@ci',         label: '@ci — last CI/CD run status (GitHub Actions / .github/workflows)' },
+  { id: '@lock',       label: '@lock — package lock file summary (key deps & versions)' },
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
@@ -4796,11 +4798,16 @@ ${out}`
         props.backend.send<ShellRespRemote>('shell.run', { command: 'git remote -v 2>/dev/null', workspace_path: props.workspacePath }),
         props.backend.send<ShellRespRemote>('shell.run', { command: 'git status -sb 2>/dev/null | head -5', workspace_path: props.workspacePath }),
       ])
-      const remotes = (remoteResp.payload?.output ?? '').trim()
-      const status = (statusResp.payload?.output ?? '').trim()
-      chipContent = remotes
-        ? `// Git remote info:\n${remotes}\n\n// Branch tracking status:\n${status || '(no status)'}`
-        : '// @git:remote: no remotes configured'
+      if (!remoteResp.payload?.ok || !statusResp.payload?.ok) {
+        const err = remoteResp.payload?.ok === false ? remoteResp.payload?.error : statusResp.payload?.error
+        chipContent = `// @git:remote: ${err ?? 'backend error'}`
+      } else {
+        const remotes = (remoteResp.payload.output ?? '').trim()
+        const status = (statusResp.payload.output ?? '').trim()
+        chipContent = remotes
+          ? `// Git remote info:\n${remotes}\n\n// Branch tracking status:\n${status || '(no status)'}`
+          : '// @git:remote: no remotes configured'
+      }
     } catch {
       chipContent = '// @git:remote: unavailable'
     }
@@ -4832,13 +4839,41 @@ ${out}`
       if (results.length === 0) {
         chipContent = `// @codebase search "${query}": no results`
       } else {
-        chipContent = `// @codebase search "${query}" — ${results.length} files\n`
-        for (const r of results.slice(0, 8)) {
-          chipContent += `\n// ${r.rel_path}\n`
-          for (const m of r.matches.slice(0, 5)) {
-            chipContent += `${m.line}: ${m.text}\n`
+        // Enrich each result with surrounding context lines (±2) by reading the file
+        const topFiles = results.slice(0, 6)
+        const enriched: string[] = [`// @codebase search "${query}" — ${results.length} files`]
+        for (const r of topFiles) {
+          let fileLines: string[] = []
+          try {
+            interface ReadResp { ok: boolean; content?: string }
+            const fr = await props.backend.send<ReadResp>('fs.read_file', {
+              workspace_path: props.workspacePath, rel_path: r.rel_path,
+            })
+            if (fr.payload?.ok && fr.payload.content) {
+              fileLines = fr.payload.content.split('\n')
+            }
+          } catch { /* fall back to plain match */ }
+
+          enriched.push(`\n// ${r.rel_path}`)
+          const shownLines = new Set<number>()
+          for (const m of r.matches.slice(0, 3)) {
+            const lo = Math.max(0, m.line - 3)          // 2 lines before
+            const hi = Math.min(fileLines.length - 1, m.line + 1)  // 1 line after
+            if (fileLines.length > 0) {
+              for (let ln = lo; ln <= hi; ln++) {
+                if (!shownLines.has(ln)) {
+                  shownLines.add(ln)
+                  const marker = ln === m.line - 1 ? '▶' : ' '
+                  enriched.push(`${marker}${ln + 1}: ${fileLines[ln]}`)
+                }
+              }
+              if (m !== r.matches[Math.min(r.matches.length - 1, 2)]) enriched.push('  …')
+            } else {
+              enriched.push(`${m.line}: ${m.text}`)
+            }
           }
         }
+        chipContent = enriched.join('\n')
       }
     } catch {
       chipContent = `// @codebase search "${query}": unavailable`
@@ -5158,10 +5193,14 @@ ${out}`
         workspace_path: props.workspacePath,
         timeout_ms: 60000,
       })
-      const raw = (resp.payload?.output ?? '').trim()
-      chipContent = raw
-        ? `// Test results:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
-        : '// @test:results: no output returned'
+      if (!resp.payload?.ok) {
+        chipContent = `// @test:results: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const raw = (resp.payload.output ?? '').trim()
+        chipContent = raw
+          ? `// Test results:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
+          : '// @test:results: no output returned'
+      }
     } catch {
       chipContent = '// @test:results: unavailable'
     }
@@ -5488,18 +5527,22 @@ ${out}`
           case_sensitive: false,
           max_results: 50,
         })
-        const importers = (resp.payload?.results ?? []).filter((r) =>
-          r.rel_path !== activeFile &&
-          r.matches.some((m) => /import|require|from/.test(m.text) && m.text.includes(filename))
-        )
-        if (!importers.length) {
-          chipContent = `// @dependents: no files found that import '${activeFile}'`
+        if (!resp.payload?.ok) {
+          chipContent = `// @dependents: ${resp.payload?.error ?? 'backend error'}`
         } else {
-          const lines = importers.map((r) => {
-            const importLine = r.matches.find((m) => /import|require|from/.test(m.text))
-            return `  ${r.rel_path}${importLine ? `  → ${importLine.text.trim().slice(0, 60)}` : ''}`
-          })
-          chipContent = `// Files that import '${activeFile}' (${importers.length} found):\n${lines.join('\n')}`
+          const importers = (resp.payload.results ?? []).filter((r) =>
+            r.rel_path !== activeFile &&
+            r.matches.some((m) => /import|require|from/.test(m.text) && m.text.includes(filename))
+          )
+          if (!importers.length) {
+            chipContent = `// @dependents: no files found that import '${activeFile}'`
+          } else {
+            const lines = importers.map((r) => {
+              const importLine = r.matches.find((m) => /import|require|from/.test(m.text))
+              return `  ${r.rel_path}${importLine ? `  → ${importLine.text.trim().slice(0, 60)}` : ''}`
+            })
+            chipContent = `// Files that import '${activeFile}' (${importers.length} found):\n${lines.join('\n')}`
+          }
         }
       } catch {
         chipContent = '// @dependents: unavailable'
@@ -5520,10 +5563,14 @@ ${out}`
         workspace_path: props.workspacePath,
         timeout_ms: 30000,
       })
-      const raw = (resp.payload?.output ?? '').trim()
-      chipContent = raw
-        ? `// Lint output:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
-        : '// @lint: no output (no errors, or linter not found)'
+      if (!resp.payload?.ok) {
+        chipContent = `// @lint: ${resp.payload?.error ?? 'backend error'}`
+      } else {
+        const raw = (resp.payload.output ?? '').trim()
+        chipContent = raw
+          ? `// Lint output:\n\`\`\`\n${raw.slice(-5000)}\n\`\`\``
+          : '// @lint: no output (no errors, or linter not found)'
+      }
     } catch {
       chipContent = '// @lint: unavailable'
     }
@@ -5545,6 +5592,67 @@ ${out}`
       if (!found) chipContent = '// @readme: no README file found in workspace root'
     } catch {
       chipContent = '// @readme: unavailable'
+    }
+  } else if (option.id === '@ci') {
+    chipLabel = '@ci'
+    try {
+      interface ShellRespCI { ok: boolean; output?: string }
+      const [workflowsResp, ghResp] = await Promise.all([
+        props.backend.send<ShellRespCI>('shell.run', {
+          command: 'ls .github/workflows/ 2>/dev/null | head -10',
+          workspace_path: props.workspacePath,
+        }),
+        props.backend.send<ShellRespCI>('shell.run', {
+          command: 'gh run list --limit 5 --json status,conclusion,name,headBranch,createdAt 2>/dev/null || echo "(gh CLI not available)"',
+          workspace_path: props.workspacePath,
+        }),
+      ])
+      const workflows = (workflowsResp.payload?.output ?? '').trim()
+      const runs = (ghResp.payload?.output ?? '').trim()
+      if (!workflows && (runs.includes('not available') || !runs)) {
+        chipContent = '// @ci: no CI/CD config found and gh CLI unavailable'
+      } else {
+        let ci = ''
+        if (workflows) ci += `// Workflow files:\n${workflows.split('\n').map((f) => `  ${f}`).join('\n')}\n\n`
+        if (runs && !runs.includes('not available')) {
+          try {
+            const parsed = JSON.parse(runs) as Array<{ status: string; conclusion: string; name: string; headBranch: string; createdAt: string }>
+            ci += `// Recent CI runs:\n` + parsed.map((r) => `  ${r.conclusion ?? r.status} — ${r.name} (${r.headBranch})`).join('\n')
+          } catch { ci += `// CI runs:\n${runs}` }
+        }
+        chipContent = ci || '// @ci: no CI information available'
+      }
+    } catch {
+      chipContent = '// @ci: unavailable'
+    }
+  } else if (option.id === '@lock') {
+    chipLabel = '@lock'
+    try {
+      interface ReadResp2 { payload?: { ok?: boolean; content?: string } }
+      let found2 = false
+      for (const name of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Pipfile.lock', 'poetry.lock']) {
+        const r = await props.backend.send<ReadResp2>('fs.read_file', { workspace_path: props.workspacePath, rel_path: name })
+        const content = r.payload?.content ?? ''
+        if (content) {
+          // For JSON lock files, show top-level packages only
+          if (name === 'package-lock.json') {
+            try {
+              const d = JSON.parse(content) as { packages?: Record<string, { version?: string }> }
+              const top = Object.entries(d.packages ?? {})
+                .filter(([k]) => k && !k.slice('node_modules/'.length).includes('/'))
+                .map(([k, v]) => `  ${k.replace('node_modules/', '')}@${v.version ?? '?'}`)
+                .slice(0, 30)
+              chipContent = `// package-lock.json (${top.length} top-level deps):\n${top.join('\n')}`
+            } catch { chipContent = `// ${name}:\n${content.slice(0, 3000)}` }
+          } else {
+            chipContent = `// ${name}:\n${content.slice(0, 3000)}`
+          }
+          found2 = true; break
+        }
+      }
+      if (!found2) chipContent = '// @lock: no lock file found (package-lock.json, yarn.lock, etc.)'
+    } catch {
+      chipContent = '// @lock: unavailable'
     }
   } else if (option.id === '@diff:') {
     // Bare @diff: — prompt user to type a file path
