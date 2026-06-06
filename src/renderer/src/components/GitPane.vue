@@ -1277,8 +1277,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="panel-header">
         <span class="panel-title">SOURCE CONTROL</span>
         <div class="spacer" />
-        <!-- View mode toggle (single button: list ⇄ tree) -->
+        <!-- View mode toggle (mini-IDE only) -->
         <button
+          v-if="embedded"
           class="hdr-btn"
           :title="viewMode === 'tree' ? 'Switch to List View' : 'Switch to Tree View'"
           @click.stop="viewMode = viewMode === 'tree' ? 'list' : 'tree'; showViewMenu = false"
@@ -2903,4 +2904,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   display: flex; flex-direction: column;
   flex: 1; min-height: 0; overflow: hidden;
 }
+.review-tab {
+  padding: 2px 10px; font-size: 11px; font-weight: 500;
+  background: transparent; border: none; border-radius: 3px;
+  color: var(--text-muted); cursor: pointer;
+}
+.review-tab:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
+.review-tab.active { color: var(--text-primary); border-bottom: 2px solid var(--accent-fg); }
 </style>

@@ -9,6 +9,7 @@ const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   gitStatus: ReturnType<typeof useGit>['gitStatus']['value']
   gitBranches: ReturnType<typeof useGit>['gitBranches']['value']
+  hideHeader?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -119,8 +120,8 @@ function applyInline(s: string): string {
 
 <template>
   <div class="review-pane">
-    <!-- Header -->
-    <div class="panel-header">
+    <!-- Header (hidden when embedded in a tabbed panel) -->
+    <div v-if="!hideHeader" class="panel-header">
       <span class="panel-title">AI REVIEW</span>
       <div class="spacer" />
       <button class="hdr-btn" title="Close" @click="emit('close')">

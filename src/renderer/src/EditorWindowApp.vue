@@ -93,6 +93,7 @@ const zenMode = ref(false)
 const changesCount = ref(0)
 const activePath = computed(() => {
   const f = openFiles.value.find((x) => x.relPath === activeRel.value)
+  if (f?.kind === 'branch-diff') return [f.name]
   const displayPath = (f?.kind === 'diff' || f?.kind === 'conflict') ? (f.filepath ?? '') : activeRel.value
   return displayPath.split('/').filter(Boolean)
 })
@@ -290,12 +291,17 @@ function openConflict(p: { filepath: string; name?: string }): void {
   activeRel.value = tabKey
 }
 
-function openBranchDiff(p: { base: string; compare?: string }): void {
+function openBranchDiff(p: { base: string; compare?: string; workspacePath?: string }): void {
   const base = p.base || 'main'
   const tabKey = `\x00branch-diff:${base}`
   const name = `Diff with ${base}`
-  if (!openFiles.value.find((f) => f.relPath === tabKey)) {
-    openFiles.value.push({ kind: 'branch-diff', relPath: tabKey, base, compare: p.compare ?? '', name, line: 0, dirty: false, revealSeq: 0 })
+  const ws = p.workspacePath || workspacePath
+  const existing = openFiles.value.find((f) => f.relPath === tabKey)
+  if (existing) {
+    // update workspace in case called from a different workspace context
+    existing.filepath = ws
+  } else {
+    openFiles.value.push({ kind: 'branch-diff', relPath: tabKey, base, compare: p.compare ?? '', filepath: ws, name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
 }
@@ -1234,7 +1240,7 @@ onMounted(() => {
     })
   })
   api?.onOpenEditorBranchDiff?.((params) => {
-    openBranchDiff({ base: params.branch_diff_base ?? 'main', compare: params.branch_diff_compare ?? '' })
+    openBranchDiff({ base: params.branch_diff_base ?? 'main', compare: params.branch_diff_compare ?? '', workspacePath: params.workspace_path })
   })
   if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
 })
@@ -1403,7 +1409,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <BranchDiffPane
             v-else-if="f.kind === 'branch-diff'"
             v-show="f.relPath === activeRel"
-            :workspace-path="workspacePath"
+            :workspace-path="f.filepath || workspacePath"
             :base="f.base!"
             :compare="f.compare ?? ''"
             :backend="backend"
