@@ -53,7 +53,7 @@ async def stream_chat(
         async for chunk in _stream_anthropic(settings, messages, system, max_tokens, tools):
             yield chunk
     elif provider in _OPENAI_COMPAT_CONFIGS:
-        async for chunk in _stream_openai_compatible(provider, settings, messages, system, max_tokens):
+        async for chunk in _stream_openai_compatible(provider, settings, messages, system, max_tokens, tools):
             yield chunk
     else:
         async for chunk in _stream_ollama(settings, messages, system, max_tokens):
@@ -159,12 +159,83 @@ async def _stream_anthropic(
 
 # ── OpenAI-compatible (OpenAI, Google, Groq, DeepSeek, Mistral, xAI, custom) ─
 
+def _to_openai_tools(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic-schema tool defs to OpenAI function-calling format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        }
+        for t in tools
+    ]
+
+
+def _convert_messages_to_openai(messages: list[dict]) -> list[dict]:
+    """Convert Anthropic-format multi-turn messages (with content blocks) to OpenAI format."""
+    result: list[dict] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        if isinstance(content, str):
+            result.append({"role": role, "content": content})
+            continue
+
+        if not isinstance(content, list):
+            result.append({"role": role, "content": str(content)})
+            continue
+
+        if role == "assistant":
+            text_parts: list[str] = []
+            tool_calls: list[dict] = []
+            for block in content:
+                btype = block.get("type", "")
+                if btype == "text":
+                    text_parts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    })
+            out: dict = {"role": "assistant", "content": "".join(text_parts) or ""}
+            if tool_calls:
+                out["tool_calls"] = tool_calls
+            result.append(out)
+
+        elif role == "user":
+            tool_results = [b for b in content if b.get("type") == "tool_result"]
+            text_blocks = [b for b in content if b.get("type") == "text"]
+            for tr in tool_results:
+                result.append({
+                    "role": "tool",
+                    "tool_call_id": tr.get("tool_use_id", ""),
+                    "content": tr.get("content", ""),
+                })
+            if text_blocks:
+                text = "\n".join(b.get("text", "") for b in text_blocks)
+                result.append({"role": "user", "content": text})
+
+        else:
+            result.append(msg)
+
+    return result
+
+
 async def _stream_openai_compatible(
     provider: str,
     settings: dict,
     messages: list[dict],
     system: str,
     max_tokens: int,
+    tools: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     try:
         import httpx
@@ -186,7 +257,9 @@ async def _stream_openai_compatible(
     model_field = cfg["model_field"]
     model = settings.get(model_field, _CHAT_DEFAULTS.get(model_field, ""))
 
-    full_messages = list(messages)
+    # Convert Anthropic-format messages (with content blocks) to OpenAI format
+    converted = _convert_messages_to_openai(list(messages))
+    full_messages = converted
     if system and (not full_messages or full_messages[0].get("role") != "system"):
         full_messages = [{"role": "system", "content": system}] + full_messages
 
@@ -196,6 +269,9 @@ async def _stream_openai_compatible(
         "stream": True,
         "max_tokens": max_tokens,
     }
+
+    if tools:
+        body["tools"] = _to_openai_tools(tools)
 
     temperature = settings.get("temperature")
     if temperature is not None:
@@ -210,6 +286,8 @@ async def _stream_openai_compatible(
 
     prompt_tokens = 0
     completion_tokens = 0
+    # Accumulate incremental tool call deltas: index → {id, name, arguments}
+    pending_tool_calls: dict[int, dict] = {}
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         async with client.stream(
@@ -236,9 +314,36 @@ async def _stream_openai_compatible(
                     prompt_tokens = usage.get("prompt_tokens", 0)
                     completion_tokens = usage.get("completion_tokens", 0)
                 choices = chunk.get("choices") or []
-                text = (choices[0].get("delta") or {} if choices else {}).get("content", "")
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                text = delta.get("content", "")
                 if text:
                     yield text
+                # Accumulate streamed tool call fragments
+                for tc_delta in delta.get("tool_calls") or []:
+                    tc_idx: int = tc_delta.get("index", 0)
+                    if tc_idx not in pending_tool_calls:
+                        pending_tool_calls[tc_idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc_delta.get("id"):
+                        pending_tool_calls[tc_idx]["id"] = tc_delta["id"]
+                    fn = tc_delta.get("function") or {}
+                    if fn.get("name"):
+                        pending_tool_calls[tc_idx]["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        pending_tool_calls[tc_idx]["arguments"] += fn["arguments"]
+
+    # Emit fully-assembled tool calls as TOOL sentinels
+    for tc in sorted(pending_tool_calls.values(), key=lambda x: x.get("id", "")):
+        try:
+            inp = json.loads(tc["arguments"]) if tc.get("arguments") else {}
+        except json.JSONDecodeError:
+            inp = {}
+        yield "\x00TOOL:" + json.dumps({
+            "id": tc["id"],
+            "name": tc["name"],
+            "input": inp,
+        })
 
     yield "\x00DONE:" + json.dumps({
         "model": model,

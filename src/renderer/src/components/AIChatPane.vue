@@ -2233,6 +2233,51 @@ async function fixProblems(): Promise<void> {
   }
 }
 
+// ── Attach File ───────────────────────────────────────────────────────────────
+async function attachFile(): Promise<void> {
+  const api = (window as Window & { agentTeam?: Record<string, (...a: unknown[]) => unknown> }).agentTeam
+  if (!api?.pickFile) return
+  interface PickResult { ok: boolean; path?: string; canceled?: boolean }
+  const result = await (api.pickFile as (a: Record<string, unknown>) => Promise<PickResult>)({
+    title: 'Attach File to Chat',
+    defaultPath: props.workspacePath ?? undefined,
+  })
+  if (!result.ok || !result.path) return
+
+  const absPath = result.path
+  const relPath = props.workspacePath
+    ? absPath.startsWith(props.workspacePath)
+      ? absPath.slice(props.workspacePath.length).replace(/^\//, '')
+      : absPath
+    : absPath
+
+  const ext = relPath.split('.').pop() ?? ''
+  try {
+    interface ReadResp { ok: boolean; content?: string }
+    const r = await props.backend.send<ReadResp>('fs.read_file', {
+      workspace_path: props.workspacePath,
+      rel_path: relPath,
+    })
+    if (!r.payload?.ok || !r.payload.content) {
+      showToast(`Could not read file: ${relPath}`)
+      return
+    }
+    const content = r.payload.content
+    const MAX = 80_000
+    const truncated = content.length > MAX ? content.slice(0, MAX) + '\n// … truncated' : content
+    const chipLabel = `@${relPath.split('/').pop() ?? relPath}`
+    contextChips.value = contextChips.value.filter((c) => c.label !== chipLabel)
+    contextChips.value.push({
+      id: crypto.randomUUID(),
+      label: chipLabel,
+      content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
+    })
+    nextTick(() => textareaEl.value?.focus())
+  } catch {
+    showToast(`Could not read file: ${relPath}`)
+  }
+}
+
 async function regenerate(): Promise<void> {
   if (sending.value) return
   // Find last user message index
@@ -5011,6 +5056,17 @@ function getDateLabel(ts: number): string {
           </span>
         </div>
         <div class="ai-input-btns">
+          <!-- Attach file button -->
+          <button
+            v-if="!sending && workspacePath"
+            class="ai-settings-btn"
+            title="Attach file — add any workspace file as context (Cursor-style)"
+            @click="attachFile"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13.78 7.22a.75.75 0 0 1 0 1.06l-4.25 4.25a4.75 4.75 0 0 1-6.716-6.716l5.25-5.25a3.25 3.25 0 0 1 4.6 4.6L7.44 9.5a1.75 1.75 0 0 1-2.474-2.474L9.22 2.78a.75.75 0 0 1 1.06 1.06L6.03 8.086a.25.25 0 0 0 .354.354l5.19-5.19a1.75 1.75 0 0 0-2.475-2.475l-5.25 5.25a3.25 3.25 0 0 0 4.6 4.6l4.25-4.25a.75.75 0 0 1 1.06 0z"/>
+            </svg>
+          </button>
           <!-- Voice input button (Web Speech API) -->
           <button
             v-if="voiceSupported && !sending"
