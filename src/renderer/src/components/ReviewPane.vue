@@ -23,17 +23,42 @@ const baseBranch = ref('main')
 const compareBranch = ref('')
 
 // Model picker
-const provider = ref<'ollama' | 'anthropic'>('ollama')
-const ollamaModel = ref('qwen2:latest')
-const anthropicModel = ref('claude-sonnet-4-6')
+type ProviderKey = 'ollama' | 'anthropic' | 'openai' | 'google' | 'groq' | 'deepseek' | 'mistral' | 'xai' | 'openai_compatible'
+
+const PROVIDER_LABELS: Record<ProviderKey, string> = {
+  ollama: 'Ollama (Local)',
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google Gemini',
+  groq: 'Groq',
+  deepseek: 'DeepSeek',
+  mistral: 'Mistral AI',
+  xai: 'xAI (Grok)',
+  openai_compatible: 'Custom (OpenAI-compatible)',
+}
+
+const PROVIDER_MODELS: Partial<Record<ProviderKey, string[]>> = {
+  anthropic: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'],
+  google: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+  groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  mistral: ['mistral-large-latest', 'mistral-small-latest', 'codestral-latest'],
+  xai: ['grok-3-mini', 'grok-3', 'grok-2'],
+}
+
+const provider = ref<ProviderKey>('ollama')
+const currentModel = ref('')
 const ollamaModels = ref<string[]>([])
 
+const staticModels = computed(() => PROVIDER_MODELS[provider.value] ?? [])
+
 onMounted(async () => {
-  const r = await props.backend.send<{ ok: boolean; provider?: string; ollama_model?: string; anthropic_model?: string }>('ai.chat.settings.get', {})
+  const r = await props.backend.send<Record<string, string>>('ai.chat.settings.get', {})
   if (r.ok && r.payload?.ok) {
-    provider.value = (r.payload.provider as 'ollama' | 'anthropic') ?? 'ollama'
-    if (r.payload.ollama_model) ollamaModel.value = r.payload.ollama_model
-    if (r.payload.anthropic_model) anthropicModel.value = r.payload.anthropic_model
+    const p = r.payload.provider as ProviderKey
+    if (p) provider.value = p
+    if (r.payload.model) currentModel.value = r.payload.model
   }
   const mr = await props.backend.send<{ ok: boolean; models?: { name: string }[] }>('analyzer.models', {})
   if (mr.ok && mr.payload?.models) {
@@ -44,7 +69,7 @@ onMounted(async () => {
 async function saveModel() {
   await props.backend.send('ai.chat.settings.set', {
     provider: provider.value,
-    model: provider.value === 'anthropic' ? anthropicModel.value : ollamaModel.value,
+    model: currentModel.value,
   })
 }
 
@@ -162,17 +187,25 @@ function applyInline(s: string): string {
       <!-- Model picker row -->
       <div class="model-row">
         <select class="model-select" v-model="provider" @change="saveModel">
-          <option value="ollama">Ollama</option>
-          <option value="anthropic">Anthropic</option>
+          <option v-for="(label, key) in PROVIDER_LABELS" :key="key" :value="key">{{ label }}</option>
         </select>
-        <select v-if="provider === 'ollama'" class="model-select model-select--flex" v-model="ollamaModel" @change="saveModel">
+        <!-- Ollama: dynamic model list -->
+        <select v-if="provider === 'ollama'" class="model-select model-select--flex" v-model="currentModel" @change="saveModel">
           <option v-for="m in ollamaModels" :key="m" :value="m">{{ m }}</option>
-          <option v-if="!ollamaModels.includes(ollamaModel)" :value="ollamaModel">{{ ollamaModel }}</option>
+          <option v-if="currentModel && !ollamaModels.includes(currentModel)" :value="currentModel">{{ currentModel }}</option>
         </select>
-        <select v-else class="model-select model-select--flex" v-model="anthropicModel" @change="saveModel">
-          <option value="claude-opus-4-8">claude-opus-4-8</option>
-          <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
-          <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+        <!-- Custom OpenAI-compatible: free text input -->
+        <input
+          v-else-if="provider === 'openai_compatible'"
+          class="model-select model-select--flex model-input"
+          v-model="currentModel"
+          placeholder="Model name (e.g. llama-3.3-70b)"
+          @change="saveModel"
+        />
+        <!-- Cloud providers: static model list -->
+        <select v-else class="model-select model-select--flex" v-model="currentModel" @change="saveModel">
+          <option v-for="m in staticModels" :key="m" :value="m">{{ m }}</option>
+          <option v-if="currentModel && !staticModels.includes(currentModel)" :value="currentModel">{{ currentModel }}</option>
         </select>
       </div>
 
@@ -280,6 +313,7 @@ function applyInline(s: string): string {
   border-radius: 4px; color: var(--text-primary); cursor: pointer; min-width: 0;
 }
 .model-select--flex { flex: 1; }
+.model-input { font-family: inherit; }
 .mode-row {
   display: flex; align-items: center; justify-content: space-between; gap: 6px;
 }

@@ -15,16 +15,58 @@ log = logging.getLogger("agent_team_backend.ai_chat_settings")
 SETTINGS_FILE = "ai_chat_settings.json"
 
 DEFAULTS: dict[str, Any] = {
-    "provider": "ollama",                  # "anthropic" | "ollama"
+    "provider": "ollama",
+    # Anthropic
     "anthropic_api_key": "",
     "anthropic_model": "claude-sonnet-4-6",
+    # Ollama (local)
     "ollama_model": "qwen2:latest",
     "ollama_base_url": "http://localhost:11434",
+    # OpenAI
+    "openai_api_key": "",
+    "openai_model": "gpt-4o",
+    # Google Gemini
+    "google_api_key": "",
+    "google_model": "gemini-2.5-pro",
+    # Groq
+    "groq_api_key": "",
+    "groq_model": "llama-3.3-70b-versatile",
+    # DeepSeek
+    "deepseek_api_key": "",
+    "deepseek_model": "deepseek-chat",
+    # Mistral AI
+    "mistral_api_key": "",
+    "mistral_model": "mistral-large-latest",
+    # xAI (Grok)
+    "xai_api_key": "",
+    "xai_model": "grok-3-mini",
+    # Custom OpenAI-compatible (LM Studio, vLLM, etc.)
+    "openai_compatible_base_url": "",
+    "openai_compatible_api_key": "",
+    "openai_compatible_model": "",
+    # Shared
     "system_prompt": "You are a helpful AI coding assistant.",
     "max_tokens": 4096,
 }
 
-_VALID_PROVIDERS = ("anthropic", "ollama")
+_VALID_PROVIDERS = (
+    "anthropic", "ollama",
+    "openai", "google", "groq", "deepseek", "mistral", "xai",
+    "openai_compatible",
+)
+
+# Maps provider name → the DEFAULTS key that holds its model name.
+_PROVIDER_MODEL_FIELD: dict[str, str] = {
+    "anthropic": "anthropic_model",
+    "ollama": "ollama_model",
+    "openai": "openai_model",
+    "google": "google_model",
+    "groq": "groq_model",
+    "deepseek": "deepseek_model",
+    "mistral": "mistral_model",
+    "xai": "xai_model",
+    "openai_compatible": "openai_compatible_model",
+}
 
 
 class AIChatSettingsStore:
@@ -47,41 +89,35 @@ class AIChatSettingsStore:
             except Exception as err:
                 log.warning("ai_chat settings read error (%s); using defaults", err)
                 result = dict(DEFAULTS)
-        # Add computed `model` alias so the frontend receives a single key
-        if result.get("provider") == "anthropic":
-            result["model"] = result.get("anthropic_model", DEFAULTS["anthropic_model"])
-        else:
-            result["model"] = result.get("ollama_model", DEFAULTS["ollama_model"])
+        # Add computed `model` alias so the frontend receives a single key.
+        provider = result.get("provider", "ollama")
+        model_field = _PROVIDER_MODEL_FIELD.get(provider, "ollama_model")
+        result["model"] = result.get(model_field, DEFAULTS.get(model_field, ""))
         return result
 
     def set(self, updates: dict[str, Any]) -> dict[str, Any]:
         current = self.get()
-        # Handle generic `model` key from frontend — map to provider-specific key
+        # Handle generic `model` key from frontend — map to provider-specific key.
         if "model" in updates:
-            provider = updates.get("provider") or current.get("provider", "anthropic")
-            if provider == "anthropic":
-                current["anthropic_model"] = updates["model"]
-            else:
-                current["ollama_model"] = updates["model"]
+            provider = updates.get("provider") or current.get("provider", "ollama")
+            model_field = _PROVIDER_MODEL_FIELD.get(provider, "ollama_model")
+            current[model_field] = updates["model"]
         for key, value in updates.items():
             if key in DEFAULTS:
                 current[key] = value
         if current.get("provider") not in _VALID_PROVIDERS:
             current["provider"] = "ollama"
-        # Clamp max_tokens to a valid range (1–16 000) so callers can't
-        # accidentally trigger runaway API costs or send 0/negative values.
         try:
             current["max_tokens"] = max(1, min(int(current["max_tokens"]), 16_000))
         except (TypeError, ValueError):
             current["max_tokens"] = DEFAULTS["max_tokens"]
-        # Persist without the computed `model` alias (it's derived on read)
+        # Persist without the computed `model` alias (it's derived on read).
         to_save = {k: v for k, v in current.items() if k != "model"}
         self._write(to_save)
-        # Recompute `model` alias so the return value is fresh (not the value from get() above)
-        if current.get("provider") == "anthropic":
-            current["model"] = current.get("anthropic_model", DEFAULTS["anthropic_model"])
-        else:
-            current["model"] = current.get("ollama_model", DEFAULTS["ollama_model"])
+        # Recompute alias so the return value is fresh.
+        provider = current.get("provider", "ollama")
+        model_field = _PROVIDER_MODEL_FIELD.get(provider, "ollama_model")
+        current["model"] = current.get(model_field, DEFAULTS.get(model_field, ""))
         log.info("ai_chat settings saved: provider=%s model=%s",
                  current.get("provider"), current.get("model"))
         return current

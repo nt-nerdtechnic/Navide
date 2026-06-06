@@ -27,19 +27,44 @@ const emit = defineEmits<{
 type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance'
 const activeTab = ref<Tab>('roles')
 
-// ── AI Chat settings ──────────────────────────────────────────────────────────
-const aiChatApiKey = ref('')
-const aiChatApiKeyDirty = ref(false)
+// ── AI provider credentials (shown in Analyzer tab) ──────────────────────────
+const aiProviderKeys = ref({
+  anthropic_api_key: '',
+  openai_api_key: '',
+  google_api_key: '',
+  groq_api_key: '',
+  deepseek_api_key: '',
+  mistral_api_key: '',
+  xai_api_key: '',
+  openai_compatible_base_url: '',
+  openai_compatible_api_key: '',
+  openai_compatible_model: '',
+})
+const aiKeysDirty = ref(false)
+
+// Keep old ref alive so template refs added by the subagent don't break
+const aiChatApiKey = computed({
+  get: () => aiProviderKeys.value.anthropic_api_key,
+  set: (v: string) => { aiProviderKeys.value.anthropic_api_key = v; aiKeysDirty.value = true },
+})
+const aiChatApiKeyDirty = computed(() => aiKeysDirty.value)
 
 function fetchAiChatSettings(): void {
-  props.backend.send<{ anthropic_api_key?: string }>('ai.chat.settings.get', {})
-    .then(r => { if (r?.anthropic_api_key) aiChatApiKey.value = r.anthropic_api_key })
+  props.backend.send<Record<string, string>>('ai.chat.settings.get', {})
+    .then(r => {
+      if (!r?.ok) return
+      const p = r.payload ?? r
+      for (const k of Object.keys(aiProviderKeys.value) as (keyof typeof aiProviderKeys.value)[]) {
+        if (p[k] !== undefined) (aiProviderKeys.value as Record<string, string>)[k] = p[k]
+      }
+      aiKeysDirty.value = false
+    })
     .catch(() => {/* ignore */})
 }
 function saveAiChatSettings(): void {
-  props.backend.send('ai.chat.settings.set', { anthropic_api_key: aiChatApiKey.value })
+  props.backend.send('ai.chat.settings.set', { ...aiProviderKeys.value })
     .catch(() => {/* ignore */})
-  aiChatApiKeyDirty.value = false
+  aiKeysDirty.value = false
 }
 
 // ── Appearance (theme) ────────────────────────────────────────────────────────
@@ -1177,20 +1202,64 @@ async function plDelete(id: string, name: string) {
             </div>
           </div>
 
-          <!-- ⑤ Anthropic API Key -->
+          <!-- ⑤ Cloud Provider API Keys -->
           <div class="az-section">
-            <div class="az-section-title">Anthropic API Key</div>
-            <p class="az-hint">Used when the AI Chat / AI Review provider is set to Anthropic. Stored locally with restricted permissions.</p>
-            <div class="ai-chat-key-row">
-              <input
-                v-model="aiChatApiKey"
-                type="password"
-                class="ai-chat-key-input"
-                placeholder="sk-ant-…"
-                @input="aiChatApiKeyDirty = true"
-              />
-              <button class="ai-chat-key-save" :disabled="!aiChatApiKeyDirty" @click="saveAiChatSettings">Save</button>
-            </div>
+            <div class="az-section-title">Cloud Provider API Keys</div>
+            <p class="az-hint">API keys are stored locally with restricted file permissions (0600). Leave blank for providers you don't use.</p>
+
+            <table class="az-key-table">
+              <tbody>
+                <tr>
+                  <td class="az-key-label">Anthropic</td>
+                  <td><input v-model="aiProviderKeys.anthropic_api_key" type="password" class="az-key-input" placeholder="sk-ant-…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">OpenAI</td>
+                  <td><input v-model="aiProviderKeys.openai_api_key" type="password" class="az-key-input" placeholder="sk-…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">Google Gemini</td>
+                  <td><input v-model="aiProviderKeys.google_api_key" type="password" class="az-key-input" placeholder="AIza…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">Groq</td>
+                  <td><input v-model="aiProviderKeys.groq_api_key" type="password" class="az-key-input" placeholder="gsk_…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">DeepSeek</td>
+                  <td><input v-model="aiProviderKeys.deepseek_api_key" type="password" class="az-key-input" placeholder="sk-…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">Mistral AI</td>
+                  <td><input v-model="aiProviderKeys.mistral_api_key" type="password" class="az-key-input" placeholder="…" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">xAI (Grok)</td>
+                  <td><input v-model="aiProviderKeys.xai_api_key" type="password" class="az-key-input" placeholder="xai-…" @input="aiKeysDirty = true" /></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="az-section-title" style="margin-top:16px">Custom OpenAI-Compatible</div>
+            <p class="az-hint">Point to any server exposing <code>/v1/chat/completions</code> (LM Studio, vLLM, llama.cpp, etc.).</p>
+            <table class="az-key-table">
+              <tbody>
+                <tr>
+                  <td class="az-key-label">Base URL</td>
+                  <td><input v-model="aiProviderKeys.openai_compatible_base_url" type="text" class="az-key-input" placeholder="http://localhost:1234/v1" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">API Key</td>
+                  <td><input v-model="aiProviderKeys.openai_compatible_api_key" type="password" class="az-key-input" placeholder="(optional)" @input="aiKeysDirty = true" /></td>
+                </tr>
+                <tr>
+                  <td class="az-key-label">Default Model</td>
+                  <td><input v-model="aiProviderKeys.openai_compatible_model" type="text" class="az-key-input" placeholder="e.g. llama-3.3-70b" @input="aiKeysDirty = true" /></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <button class="ai-chat-key-save" style="margin-top:10px" :disabled="!aiKeysDirty" @click="saveAiChatSettings">Save Keys</button>
           </div>
 
         </div>
@@ -2181,6 +2250,11 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .pl-detail-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
 
 .ai-chat-key-row { display: flex; gap: 8px; align-items: center; }
+.az-key-table { width: 100%; border-collapse: collapse; }
+.az-key-table tr + tr td { padding-top: 6px; }
+.az-key-label { width: 130px; font-size: 12px; color: var(--text-muted); padding-right: 10px; white-space: nowrap; vertical-align: middle; }
+.az-key-input { width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 12px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--bg-inset); color: var(--text-bright); font-family: monospace; }
+.az-key-input:focus { outline: none; border-color: var(--accent-emphasis); }
 .ai-chat-key-input {
   flex: 1;
   padding: 7px 10px;
