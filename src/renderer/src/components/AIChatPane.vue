@@ -411,12 +411,20 @@ const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
-// Chat mode — 'ask' = suggestions only, 'agent' = can execute edits/commands
-const chatMode = ref<'ask' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
+// Chat mode — 'ask' = suggestions only, 'edit' = targeted file edits, 'agent' = full autonomous
+const chatMode = ref<'ask' | 'edit' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
 watch(chatMode, (mode) => {
   settingsAutoAccept.value = mode === 'agent'
   localStorage.setItem('ai-chat-auto-accept', mode === 'agent' ? 'true' : 'false')
 })
+// Edit mode working set — files targeted for batch edits (VS Code Copilot Edit parity)
+const editWorkingSet = ref<string[]>([])
+function addToWorkingSet(relPath: string): void {
+  if (!editWorkingSet.value.includes(relPath)) editWorkingSet.value.push(relPath)
+}
+function removeFromWorkingSet(idx: number): void {
+  editWorkingSet.value.splice(idx, 1)
+}
 const settingsMaxTokens = ref(4096)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const showModelPicker = ref(false)
@@ -1382,12 +1390,28 @@ async function sendMessage(): Promise<void> {
         smartCtxSuffix = `\n\n--- Current open file: ${relPath} ---\n\`\`\`\n${lines}\n\`\`\``
       }
     }
+    // Edit mode: inject working set file contents into context
+    let editSetSuffix = ''
+    if (chatMode.value === 'edit' && editWorkingSet.value.length > 0) {
+      const files: string[] = []
+      for (const relPath of editWorkingSet.value) {
+        try {
+          interface FileResp { ok: boolean; content?: string; payload?: { content?: string } }
+          const r = await props.backend.send<FileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: relPath })
+          const content = (r as { payload?: { content?: string } }).payload?.content ?? ''
+          if (content) files.push(`--- ${relPath} ---\n\`\`\`\n${content.slice(0, 6000)}\n\`\`\``)
+        } catch { /* skip unreadable files */ }
+      }
+      if (files.length) {
+        editSetSuffix = `\n\n[Edit Mode Working Set — propose diffs for these files]\n${files.join('\n\n')}`
+      }
+    }
     localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
       workspace_path: props.workspacePath,
-      ...(lengthHint || notesSuffix || smartCtxSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + smartCtxSuffix } : {}),
+      ...(lengthHint || notesSuffix || smartCtxSuffix || editSetSuffix ? { system_suffix: (lengthHint ?? '') + notesSuffix + smartCtxSuffix + editSetSuffix } : {}),
     })
   } catch {
     const last = messages.value[messages.value.length - 1]
@@ -3237,6 +3261,11 @@ function getDateLabel(ts: number): string {
             @click="toggleBookmark(mi)"
           >{{ msg.bookmarked ? '★' : '☆' }}</button>
           <span v-if="msg.elapsedMs" class="ai-msg-elapsed">{{ (msg.elapsedMs / 1000).toFixed(1) }}s</span>
+          <span
+            v-if="msg.role === 'assistant' && msg.outputTokens && msg.elapsedMs && msg.elapsedMs > 0 && !msg.streaming"
+            class="ai-msg-tokspeed"
+            :title="`${Math.round(msg.outputTokens / (msg.elapsedMs / 1000))} tokens/sec`"
+          >{{ Math.round(msg.outputTokens / (msg.elapsedMs / 1000)) }} t/s</span>
           <span v-if="msg.role === 'assistant' && msg.model && !msg.streaming" class="ai-msg-model-badge" :title="msg.model">{{ msg.model.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</span>
           <span v-if="msg.role === 'assistant' && (msg.inputTokens || msg.outputTokens) && !msg.streaming" class="ai-msg-tokens" :title="`Input: ${(msg.inputTokens ?? 0).toLocaleString()} tokens\nOutput: ${(msg.outputTokens ?? 0).toLocaleString()} tokens`">↑{{ (msg.inputTokens ?? 0).toLocaleString() }} ↓{{ (msg.outputTokens ?? 0).toLocaleString() }}</span>
           <span v-if="msg.timestamp" class="ai-msg-time">
@@ -3329,6 +3358,23 @@ function getDateLabel(ts: number): string {
       </div>
 
       <!-- Slash command menu -->
+      <!-- Edit mode: working set — files targeted for batch edits -->
+      <div v-if="chatMode === 'edit'" class="ai-working-set">
+        <span class="ai-working-set-label">Editing:</span>
+        <span
+          v-for="(f, fi) in editWorkingSet"
+          :key="fi"
+          class="ai-working-set-file"
+        >{{ f.split('/').pop() }}<button class="ai-working-set-remove" @click.stop="removeFromWorkingSet(fi)">×</button></span>
+        <button
+          v-if="props.getActiveRelPath?.()"
+          class="ai-working-set-add"
+          :title="`Add ${props.getActiveRelPath?.()} to working set`"
+          @click="addToWorkingSet(props.getActiveRelPath?.() ?? '')"
+        >+ current file</button>
+        <span v-if="!editWorkingSet.length" class="ai-working-set-empty">No files — add the current file or use @file</span>
+      </div>
+
       <div v-if="showSlashMenu" ref="slashMenuEl" class="ai-at-menu ai-slash-menu">
         <div
           v-for="(cmd, i) in slashOptions"
@@ -3359,13 +3405,13 @@ function getDateLabel(ts: number): string {
 
       <!-- Model quick-picker badge -->
       <div class="ai-model-bar">
-        <!-- Chat mode toggle: Ask (read-only) vs Agent (can execute edits/commands) -->
+        <!-- Chat mode toggle: Ask → Edit → Agent cycle -->
         <button
           class="ai-mode-toggle"
           :class="chatMode"
-          :title="chatMode === 'ask' ? 'Ask mode — AI suggests, you approve\nClick to switch to Agent mode' : 'Agent mode — AI can auto-apply edits & run commands\nClick to switch to Ask mode'"
-          @click="chatMode = chatMode === 'ask' ? 'agent' : 'ask'"
-        >{{ chatMode === 'ask' ? 'Ask' : 'Agent' }}</button>
+          :title="chatMode === 'ask' ? 'Ask — AI suggests, you approve all edits\nClick to switch to Edit mode' : chatMode === 'edit' ? 'Edit — target specific files, AI proposes diffs\nClick to switch to Agent mode' : 'Agent — AI auto-applies edits & runs commands\nClick to switch to Ask mode'"
+          @click="chatMode = chatMode === 'ask' ? 'edit' : chatMode === 'edit' ? 'agent' : 'ask'"
+        >{{ chatMode === 'ask' ? 'Ask' : chatMode === 'edit' ? 'Edit' : 'Agent' }}</button>
         <span
           v-if="workspaceRulesFile"
           class="ai-rules-badge"
@@ -3746,7 +3792,7 @@ function getDateLabel(ts: number): string {
           <label class="ai-settings-label">Chat mode</label>
           <label class="ai-toggle-label">
             <input :checked="chatMode === 'agent'" type="checkbox" @change="chatMode = ($event.target as HTMLInputElement).checked ? 'agent' : 'ask'" />
-            Agent mode — auto-accept file edits &amp; commands
+            Agent mode — auto-accept file edits &amp; commands (also use toolbar toggle: Ask → Edit → Agent)
           </label>
         </div>
         <div class="ai-settings-row">
@@ -3928,6 +3974,7 @@ function getDateLabel(ts: number): string {
   opacity: 0.75;
 }
 .ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
+.ai-msg-tokspeed { font-size: 10px; color: var(--text-muted); opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums; }
 
 .ai-regen-model-wrap { position: relative; display: inline-flex; }
 .ai-regen-model-btn { font-size: 10px; display: flex; align-items: center; }
@@ -4741,7 +4788,23 @@ function getDateLabel(ts: number): string {
   transition: border-color .15s, color .15s, background .15s;
 }
 .ai-mode-toggle.ask   { border-color: var(--border-muted); color: var(--text-muted); }
+.ai-mode-toggle.edit  { border-color: #f0a030; color: #f0a030; background: rgba(240,160,48,0.08); }
 .ai-mode-toggle.agent { border-color: #57ab5a; color: #57ab5a; background: rgba(87,171,90,0.1); }
+/* Edit mode working set bar */
+.ai-working-set {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  padding: 4px 10px; border-bottom: 1px solid var(--border-muted); background: rgba(240,160,48,0.05);
+}
+.ai-working-set-label { font-size: 10px; color: #f0a030; font-weight: 600; opacity: 0.8; }
+.ai-working-set-file {
+  display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; font-size: 10px;
+  background: rgba(240,160,48,0.15); border: 1px solid rgba(240,160,48,0.3); border-radius: 3px; color: var(--text-secondary);
+}
+.ai-working-set-remove { background: none; border: none; color: inherit; cursor: pointer; font-size: 11px; padding: 0 0 0 2px; opacity: 0.6; }
+.ai-working-set-remove:hover { opacity: 1; }
+.ai-working-set-add { background: none; border: 1px dashed rgba(240,160,48,0.4); border-radius: 3px; padding: 1px 6px; font-size: 10px; color: #f0a030; cursor: pointer; opacity: 0.7; }
+.ai-working-set-add:hover { opacity: 1; background: rgba(240,160,48,0.1); }
+.ai-working-set-empty { font-size: 10px; color: var(--text-muted); opacity: 0.6; }
 
 /* Context window bar */
 .ai-ctx-bar {
