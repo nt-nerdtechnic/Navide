@@ -2,6 +2,8 @@
 import { ref, watch } from 'vue'
 import { parseHunks, toSideBySide, type Hunk, type SideRow } from '../lib/git-diff'
 import type { useBackend } from '../composables/useBackend'
+import { useGit } from '../composables/useGit'
+import ReviewPane from '../components/ReviewPane.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -9,6 +11,9 @@ const props = defineProps<{
   compare: string
   backend: ReturnType<typeof useBackend>
 }>()
+
+const reviewOpen = ref(false)
+const { gitStatus, gitBranches } = useGit(() => props.workspacePath, props.backend)
 
 interface FileDiff {
   filename: string
@@ -130,6 +135,28 @@ function cellClass(cell: SideRow['left']): string {
       </button>
     </div>
 
+    <!-- AI Review toggle -->
+    <div class="bdp-review-hdr" @click="reviewOpen = !reviewOpen">
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" class="bdp-review-ic">
+        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
+      </svg>
+      <span class="bdp-review-label">AI Review</span>
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
+        class="bdp-chevron" :style="{ transform: reviewOpen ? '' : 'rotate(-90deg)' }">
+        <path d="M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427z"/>
+      </svg>
+    </div>
+    <div v-if="reviewOpen" class="bdp-review-body">
+      <ReviewPane
+        :workspace-path="workspacePath"
+        :backend="backend"
+        :git-status="gitStatus"
+        :git-branches="gitBranches"
+        :hide-header="true"
+        @close="reviewOpen = false"
+      />
+    </div>
+
     <!-- States -->
     <div v-if="loading" class="bdp-msg">Loading diff…</div>
     <div v-else-if="loadError" class="bdp-msg bdp-err">{{ loadError }}</div>
@@ -224,6 +251,24 @@ function cellClass(cell: SideRow['left']): string {
 }
 .bdp-btn:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
 .bdp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* AI Review section */
+.bdp-review-hdr {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--border-muted); flex-shrink: 0;
+  background: var(--bg-subtle);
+}
+.bdp-review-hdr:hover { background: rgba(177,186,196,0.08); }
+.bdp-review-ic { color: var(--accent-fg); flex-shrink: 0; }
+.bdp-review-label {
+  flex: 1; font-size: 11px; font-weight: 600; color: var(--text-primary);
+}
+.bdp-review-body {
+  flex-shrink: 0; max-height: 340px; overflow: hidden;
+  border-bottom: 1px solid var(--border-muted);
+  display: flex; flex-direction: column;
+}
 
 /* States */
 .bdp-msg {

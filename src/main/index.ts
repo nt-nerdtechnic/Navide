@@ -58,7 +58,6 @@ function openRolesWindow(): void {
     width: 900,
     height: 720,
     title: 'Agent-Team · Role Manager',
-    parent: mainWindow ?? undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -109,7 +108,6 @@ function openStagesWindow(): void {
     width: 1000,
     height: 700,
     title: 'Agent-Team · Stage Manager',
-    parent: mainWindow ?? undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -193,7 +191,6 @@ function openEditorWindow(params: Record<string, string>): void {
     width: 1100,
     height: 760,
     title: 'Agent-Team · Editor',
-    parent: mainWindow ?? undefined,
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

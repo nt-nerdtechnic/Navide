@@ -5,8 +5,6 @@ import type { IgnoreTarget } from '../composables/useGit'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
-import ReviewPane from './ReviewPane.vue'
-import BranchDiffPane from '../editor/BranchDiffPane.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -15,7 +13,6 @@ const props = defineProps<{
   // When embedded in the editor window, "open in editor" opens in-place via the
   // `open-file` event instead of spawning a separate editor window.
   embedded?: boolean
-  showBranchDiff?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -67,8 +64,6 @@ function fileDir(path: string): string {
 // ── view / sort ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list' | 'tree'>('tree')
 const sortBy = ref<'name' | 'path' | 'status'>('path')
-const activePanel = ref<'review' | 'diff' | null>(null)
-const diffBase = ref('main')
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
 const showCommitMenuPos = ref({ top: 0, right: 0 })
@@ -1231,42 +1226,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
     </div>
 
-    <!-- Unified Review panel (AI Review + Diff tabs) -->
-    <div v-else-if="activePanel !== null" class="review-panel">
-      <div class="panel-header">
-        <button
-          class="review-tab"
-          :class="{ active: activePanel === 'review' }"
-          @click.stop="activePanel = 'review'"
-        >AI Review</button>
-        <button
-          class="review-tab"
-          :class="{ active: activePanel === 'diff' }"
-          @click.stop="activePanel = 'diff'"
-        >Diff with main</button>
-        <div class="spacer" />
-        <button class="hdr-btn" title="Close" @click.stop="activePanel = null">✕</button>
-      </div>
-      <ReviewPane
-        v-show="activePanel === 'review'"
-        :workspace-path="workspacePath"
-        :backend="backend"
-        :git-status="gitStatus"
-        :git-branches="gitBranches"
-        :hide-header="true"
-        @close="activePanel = null"
-        style="flex: 1; min-height: 0;"
-      />
-      <BranchDiffPane
-        v-show="activePanel === 'diff'"
-        :workspace-path="workspacePath"
-        :base="diffBase"
-        compare=""
-        :backend="backend"
-        style="flex: 1; min-height: 0; overflow: hidden;"
-      />
-    </div>
-
     <template v-else>
 
       <!-- ══════════════════════════════════════════════════════
@@ -1289,13 +1248,12 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="hdr-btn" title="Refresh" :disabled="isFetching" @click.stop="doFetch">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
-        <!-- Review / Diff unified toggle (mini-IDE only) -->
+        <!-- Diff Review button (mini-IDE only) — opens combined diff+review in editor tab -->
         <button
           v-if="embedded"
           class="hdr-btn"
-          :class="{ active: activePanel !== null }"
-          title="AI Review & Diff"
-          @click.stop="activePanel = activePanel !== null ? null : 'review'"
+          title="Diff Review"
+          @click.stop="openBranchDiffTab('main')"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
@@ -2900,15 +2858,4 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 }
 .ignore-modal-text { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
 .ignore-modal .btn-ghost { align-self: flex-end; }
-.review-panel {
-  display: flex; flex-direction: column;
-  flex: 1; min-height: 0; overflow: hidden;
-}
-.review-tab {
-  padding: 2px 10px; font-size: 11px; font-weight: 500;
-  background: transparent; border: none; border-radius: 3px;
-  color: var(--text-muted); cursor: pointer;
-}
-.review-tab:hover { color: var(--text-primary); background: rgba(177,186,196,0.1); }
-.review-tab.active { color: var(--text-primary); border-bottom: 2px solid var(--accent-fg); }
 </style>

@@ -1329,7 +1329,6 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
-        show-branch-diff
         @open-file="openFile"
         @open-conflict="openConflict"
         @open-branch-diff="openBranchDiff"
