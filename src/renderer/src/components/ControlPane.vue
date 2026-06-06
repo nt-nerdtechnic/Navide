@@ -593,18 +593,6 @@ function onExplorerDividerEnd(): void {
 
 <template>
   <aside class="sidebar">
-    <header class="brand">
-      <div class="brand-row">
-        <h2>Agent-Team</h2>
-        <span class="dot" :style="{ background: statusColor }"></span>
-        <button class="gear-btn" @click="emit('open-settings')" title="Settings">⚙</button>
-      </div>
-      <div class="brand-sub">
-        backend {{ backendStatus }} <span v-if="backendUrl">· {{ backendUrl }}</span>
-      </div>
-      <div class="build-tag" title="Currently running build version">🏷 build {{ buildTag }}</div>
-    </header>
-
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
     <div class="sidebar-tabs">
       <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer" @click="sidebarTab = 'explorer'">
@@ -1232,53 +1220,10 @@ function onExplorerDividerEnd(): void {
   line-height: 1;
   border: 1px solid var(--bg-base);
 }
-.brand {
-  border-bottom: 1px solid var(--border-muted);
-  padding-bottom: 10px;
-}
-.brand-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.gear-btn {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  line-height: 1;
-  transition: color 0.15s, background 0.15s;
-}
-.gear-btn:hover {
-  color: var(--text-bright);
-  background: var(--bg-muted);
-}
-.brand h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
 .dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-}
-.brand-sub {
-  color: var(--text-secondary);
-  font-size: 10px;
-  margin-top: 4px;
-  word-break: break-all;
-}
-.build-tag {
-  color: var(--text-muted);
-  font-size: 10px;
-  margin-top: 2px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  word-break: break-all;
 }
 .block {
   display: flex;

@@ -231,7 +231,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         /* ignore */
       }
     })
-    queueMicrotask(() => {
+    requestAnimationFrame(() => {
       fit.fit()
     })
     resizeObserver = new ResizeObserver(() => {

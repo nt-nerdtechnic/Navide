@@ -161,13 +161,26 @@ def glob_files(
         return {"ok": False, "error": "workspace not found"}
     if not pattern:
         return {"ok": False, "error": "pattern required"}
+    # Reject patterns with .. components or absolute paths to prevent traversal.
+    pattern_parts = pattern.replace("\\", "/").split("/")
+    if ".." in pattern_parts or pattern.startswith("/") or pattern.startswith("\\"):
+        return {"ok": False, "error": "invalid pattern"}
+
     _BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2",
                    ".ttf", ".eot", ".mp4", ".mp3", ".zip", ".gz", ".tar", ".pdf",
                    ".bin", ".lock", ".pyc"}
+    root_str = str(root) + os.sep
     try:
         matches: list[str] = []
         for fp in sorted(root.glob(pattern)):
             if not fp.is_file():
+                continue
+            # Verify the resolved path stays inside the workspace (guards symlinks).
+            try:
+                real = fp.resolve(strict=True)
+            except OSError:
+                continue
+            if not (str(real) == str(root) or str(real).startswith(root_str)):
                 continue
             # skip noise dirs inside the match
             parts = fp.relative_to(root).parts

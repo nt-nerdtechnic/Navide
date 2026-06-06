@@ -19,6 +19,7 @@ import SettingsModal from './components/SettingsModal.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import OnboardingWizard from './components/OnboardingWizard.vue'
 import Welcome from './components/Welcome.vue'
+import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
 import { useRoles } from './composables/useRoles'
@@ -1585,6 +1586,16 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       }
     }
     await restoreWorkspacePanes(resp, path)
+    // Restore saved tab after panes are repopulated — validate key still exists
+    try {
+      const key = `agentTeam.activeTab.${path}`
+      const saved = localStorage.getItem(key)
+      if (saved && (saved === 'all' || saved === 'manual' || stageTabs.value.some((t) => t.key === saved))) {
+        activeTab.value = saved
+      } else {
+        activeTab.value = 'all'
+      }
+    } catch { activeTab.value = 'all' }
   }
 }
 
@@ -2521,6 +2532,7 @@ async function doCloseWorkspace(): Promise<void> {
   existingProject.value = null
   currentMode.value = 'spawn'
   pipeline.workspacePath = ''
+  activeTab.value = 'all'
   try {
     sessionStorage.removeItem(WS_SELECTED_KEY)
     sessionStorage.removeItem(WS_PATH_KEY)
@@ -3948,6 +3960,71 @@ const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
 
+// ── Stage Tab Bar ─────────────────────────────────────────────────────────────
+const activeTab = ref<string>('all')
+
+const stageTabs = computed<TabItem[]>(() => {
+  const all = panes.value
+  if (all.length === 0) return []
+
+  const stageOrder: string[] = []
+  const stageCounts: Record<string, number> = {}
+  let manualCount = 0
+  for (const p of all) {
+    if (p.origin === 'pipeline' && p.stageId) {
+      if (!stageCounts[p.stageId]) {
+        stageOrder.push(p.stageId)
+        stageCounts[p.stageId] = 0
+      }
+      stageCounts[p.stageId]++
+    } else if (p.origin === 'manual') {
+      manualCount++
+    }
+  }
+
+  // Only show tabs when there are at least 2 distinct groups
+  const groupCount = stageOrder.length + (manualCount > 0 ? 1 : 0)
+  if (groupCount <= 1) return []
+
+  const tabs: TabItem[] = [{ key: 'all', label: '全部', count: all.length, type: 'all' }]
+  for (const sid of stageOrder) {
+    const stage = stagesApi.stages.value.find((s) => s.id === sid)
+    const label = stage?.shortTitle ? `P${sid} ${stage.shortTitle}` : `P${sid}`
+    tabs.push({ key: sid, label, count: stageCounts[sid], type: 'stage' })
+  }
+  if (manualCount > 0) {
+    tabs.push({ key: 'manual', label: '手動', count: manualCount, type: 'manual' })
+  }
+  return tabs
+})
+
+const tabFilteredPaneIds = computed<Set<string>>(() => {
+  if (activeTab.value === 'all' || stageTabs.value.length === 0) {
+    return new Set(panes.value.map((p) => p.id))
+  }
+  if (activeTab.value === 'manual') {
+    return new Set(panes.value.filter((p) => p.origin === 'manual').map((p) => p.id))
+  }
+  return new Set(
+    panes.value.filter((p) => p.origin === 'pipeline' && p.stageId === activeTab.value).map((p) => p.id)
+  )
+})
+
+// Panes visible under both tab filter and minimize filter — drives grid sizing
+const tabVisiblePanes = computed(() =>
+  panes.value.filter((p) => tabFilteredPaneIds.value.has(p.id) && !minimizedPanes.value.has(p.id))
+)
+
+// Persist activeTab to localStorage keyed by workspace path
+const activeTabStorageKey = computed(() =>
+  currentWorkspace.value ? `agentTeam.activeTab.${currentWorkspace.value}` : ''
+)
+watch(activeTab, (v) => {
+  try {
+    if (activeTabStorageKey.value) localStorage.setItem(activeTabStorageKey.value, v)
+  } catch { /* ignore */ }
+})
+
 function minimizePane(id: string): void {
   minimizedPanes.value = new Set([...minimizedPanes.value, id])
   if (focusPaneId.value === id) {
@@ -3973,6 +4050,20 @@ watch(panes, (newPanes, oldPanes) => {
   if (layoutMode.value !== 'grid' && newPanes.length > (oldPanes?.length ?? 0)) {
     focusPaneId.value = newPanes[newPanes.length - 1].id
   }
+  // If the current tab has no remaining panes, fall back to 'all'
+  if (activeTab.value !== 'all' && stageTabs.value.length > 0) {
+    const tabStillExists = stageTabs.value.some((t) => t.key === activeTab.value)
+    if (!tabStillExists) activeTab.value = 'all'
+  }
+})
+
+// When switching tabs, ensure focusPaneId is within the new tab's visible panes
+watch(activeTab, () => {
+  const visible = tabVisiblePanes.value
+  if (focusPaneId.value && !visible.some((p) => p.id === focusPaneId.value)) {
+    focusPaneId.value = visible[0]?.id ?? null
+  }
+  void nextTick(() => refitAllTerminals())
 })
 
 // Auto-focus: poll lastRawActivityAt every 500ms to follow the most active pane.
@@ -4021,7 +4112,7 @@ watch(layoutMode, (mode) => {
 }, { immediate: true })
 
 const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'sidebar' | 'fullscreen'>(() => {
-  if (panes.value.length <= 1) return 'grid'
+  if (tabVisiblePanes.value.length <= 1) return 'grid'
   const m = layoutMode.value
   // auto → sidebar layout (focus pane left, others stacked in right column)
   if (m === 'auto') return 'sidebar'
@@ -4156,8 +4247,7 @@ function onPipResizeEnd(): void {
 // Number of non-focus visible panes — drives explicit grid-template-rows so
 // that grid-row: 1 / -1 works correctly on the focus pane.
 const sidebarRowCount = computed(() => {
-  const visible = panes.value.filter((p) => !minimizedPanes.value.has(p.id)).length
-  return Math.max(1, visible - 1)
+  return Math.max(1, tabVisiblePanes.value.length - 1)
 })
 
 // ── Grid pane splitters ───────────────────────────────────────────────────────
@@ -4181,12 +4271,12 @@ watch(sidebarLeftPx, (v) => { try { localStorage.setItem('agentTeam.sidebarLeftP
 watch(dualFocusSplitPx, (v) => { try { localStorage.setItem('agentTeam.dualFocusSplitPx', String(v)) } catch {} })
 
 const numCols = computed(() => {
-  const n = panes.value.length
+  const n = tabVisiblePanes.value.length
   if (n <= 1) return 1
   if (n <= 4) return 2
   return 3
 })
-const numRows = computed(() => Math.max(1, Math.ceil(panes.value.length / numCols.value)))
+const numRows = computed(() => Math.max(1, Math.ceil(tabVisiblePanes.value.length / numCols.value)))
 
 watch(numCols, (n) => { colWidths.value = Array(n).fill(1) }, { immediate: true })
 watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true })
@@ -4387,6 +4477,7 @@ function dualFocusStyle(paneId: string): Record<string, string> {
 }
 
 const backendUrl = computed(() => backend.httpUrl.value)
+const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
 const analyzerStatus = computed<AnalyzerStatusView>(() => ({
   available: !!analyzerApi.health.value?.ok,
@@ -4652,8 +4743,14 @@ function paneIsCommander(p: ActivePane): boolean {
     </Teleport>
     <main
       class="stage"
+      :class="{ 'stage--tabbed': stageTabs.length > 1 }"
       :data-layout="effectiveLayoutMode"
     >
+      <StageTabBar
+        v-if="stageTabs.length > 1"
+        :tabs="stageTabs"
+        v-model="activeTab"
+      />
       <div v-if="panes.length === 0" class="empty">
         <!-- Pipeline is starting but the first pane hasn't appeared yet.
              The orchestrator typically takes 10-30s for the first stage:
@@ -4713,7 +4810,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
-          v-show="!minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId)"
+          v-show="tabFilteredPaneIds.has(p.id) && !minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId)"
           :style="{ ...floatPaneStyle(p.id), ...dualFocusStyle(p.id) }"
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
@@ -4730,7 +4827,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
           <div
-            v-for="p in paneViews.filter(v => !v.isMinimized)"
+            v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
             :key="p.id"
             class="meeting-item"
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
@@ -4746,7 +4843,7 @@ function paneIsCommander(p: ActivePane): boolean {
             </div>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="meeting-empty">
+          <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
             只有一個 agent
           </div>
         </div>
@@ -4754,7 +4851,7 @@ function paneIsCommander(p: ActivePane): boolean {
       <!-- Spotlight mode: horizontal scrollable bottom strip -->
       <div v-if="effectiveLayoutMode === 'spotlight'" class="spotlight-strip">
         <div
-          v-for="p in paneViews.filter(v => !v.isMinimized)"
+          v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
           :key="p.id"
           class="spotlight-thumb"
           :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId }"
@@ -4769,7 +4866,7 @@ function paneIsCommander(p: ActivePane): boolean {
           </div>
           <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
         </div>
-        <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="spotlight-strip-empty">
+        <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="spotlight-strip-empty">
           只有一個 agent
         </div>
       </div>
@@ -4867,7 +4964,8 @@ function paneIsCommander(p: ActivePane): boolean {
         </span>
         <span class="sb-item sb-backend" :class="'sb-' + backend.status.value">
           <span class="sb-dot" />
-          {{ backend.status.value === 'connected' ? 'Backend' : 'Connecting…' }}
+          {{ backend.status.value === 'connected' ? 'backend' : 'connecting…' }}
+          <span v-if="backendUrl" class="sb-url">· {{ backendUrl }}</span>
         </span>
       </div>
       <div class="statusbar-right">
@@ -4879,6 +4977,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <span v-if="panes.length > 0" class="sb-item sb-agents">
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
+        <span class="sb-item sb-build">{{ buildTag }}</span>
       </div>
     </div>
   </div>
@@ -4912,8 +5011,8 @@ function paneIsCommander(p: ActivePane): boolean {
   align-items: center;
   justify-content: center;
   -webkit-app-region: drag;
-  background: var(--bg-panel, #161b22);
-  border-bottom: 1px solid var(--border-subtle, #21262d);
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
   z-index: 200;
   user-select: none;
   /* leave 80px on the left for macOS traffic lights */
@@ -4925,7 +5024,7 @@ function paneIsCommander(p: ActivePane): boolean {
   text-align: center;
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-muted, #8b949e);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4941,13 +5040,13 @@ function paneIsCommander(p: ActivePane): boolean {
   border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--text-muted, #8b949e);
+  color: var(--text-muted);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .titlebar-gear:hover {
-  background: var(--bg-hover, #21262d);
-  color: var(--text-bright, #e6edf3);
+  background: var(--bg-hover);
+  color: var(--text-bright);
 }
 
 /* ── Status Bar ──────────────────────────────────────────────────────────────── */
@@ -4960,8 +5059,8 @@ function paneIsCommander(p: ActivePane): boolean {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--bg-panel, #161b22);
-  border-top: 1px solid var(--border-subtle, #21262d);
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-muted);
   z-index: 200;
   user-select: none;
   padding: 0 8px;
@@ -4980,29 +5079,29 @@ function paneIsCommander(p: ActivePane): boolean {
   padding: 0 7px;
   height: 22px;
   border-radius: 3px;
-  color: var(--text-muted, #8b949e);
+  color: var(--text-secondary);
   cursor: default;
   white-space: nowrap;
   transition: background 0.12s, color 0.12s;
 }
 .sb-item:hover {
-  background: var(--bg-hover, #21262d);
-  color: var(--text-bright, #e6edf3);
+  background: var(--bg-hover);
+  color: var(--text-bright);
 }
 .sb-git { gap: 5px; }
 .sb-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--text-muted, #8b949e);
+  background: var(--text-muted);
   flex-shrink: 0;
 }
-.sb-backend.sb-connected .sb-dot { background: #3fb950; }
-.sb-backend:not(.sb-connected) .sb-dot { background: #f85149; }
-.sb-pipeline.sb-running { color: #58a6ff; }
-.sb-pipeline.sb-completed { color: #3fb950; }
-.sb-pipeline.sb-aborted { color: #f85149; }
-.sb-agents { color: var(--text-muted, #8b949e); }
+.sb-backend.sb-connected .sb-dot { background: var(--success-fg); }
+.sb-backend:not(.sb-connected) .sb-dot { background: var(--danger-fg); }
+.sb-pipeline.sb-running { color: var(--accent-fg); }
+.sb-pipeline.sb-completed { color: var(--success-fg); }
+.sb-pipeline.sb-aborted { color: var(--danger-fg); }
+.sb-agents { color: var(--text-secondary); }
 .resize-handle {
   position: absolute;
   top: 0;
@@ -5034,16 +5133,26 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .stage {
   position: relative;
+  display: flex;
+  flex-direction: column;
   padding: 8px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
+.stage--tabbed {
+  padding-top: 0;
+}
+.stage--tabbed .empty,
+.stage--tabbed .grid {
+  margin-top: 8px;
+}
 .grid {
   display: grid;
   /* grid-template-columns/rows are driven by gridStyle computed (JS) */
   gap: 8px;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   position: relative;
 }
 /* Grid pane splitter handles */
@@ -5700,6 +5809,8 @@ function paneIsCommander(p: ActivePane): boolean {
 .stall-btn.danger:hover {
   background: var(--danger-bright);
 }
+.sb-url { color: var(--text-muted); font-size: 10px; }
+.sb-build { color: var(--text-muted); }
 </style>
 <style>
 html,

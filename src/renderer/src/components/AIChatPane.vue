@@ -627,6 +627,26 @@ function deleteThread(id: string): void {
   catch { /* quota */ }
 }
 
+function duplicateThread(id: string): void {
+  const src = allThreads.value.find((t) => t.id === id)
+  if (!src) return
+  const copy: ChatThread = {
+    id: crypto.randomUUID(),
+    title: src.title.slice(0, 55) + ' (copy)',
+    messages: src.messages.map((m) => ({ ...m })),
+    updatedAt: Date.now(),
+    pinned: false,
+    model: src.model,
+    checkpoints: src.checkpoints ? src.checkpoints.map((c) => ({ ...c, messages: c.messages.map((m) => ({ ...m })) })) : undefined,
+  }
+  const idx = allThreads.value.findIndex((t) => t.id === id)
+  allThreads.value.splice(idx + 1, 0, copy)
+  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
+  catch { /* quota */ }
+  switchThread(copy.id)
+  showToast('Thread duplicated')
+}
+
 function startRenameThread(id: string, title: string, e: Event): void {
   e.stopPropagation()
   renamingThreadId.value = id
@@ -6408,6 +6428,7 @@ function getDateLabel(ts: number): string {
               <span v-if="threadTotalTokens(item.thread) > 0" class="ai-thread-tokens" :title="`~${threadTotalTokens(item.thread).toLocaleString()} total tokens`">{{ threadTotalTokens(item.thread) >= 1000 ? (threadTotalTokens(item.thread) / 1000).toFixed(1) + 'k' : threadTotalTokens(item.thread) }}t</span>
               <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
               <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
+              <button class="ai-thread-dup" title="Duplicate thread" @click.stop="duplicateThread(item.thread.id)">⎘</button>
               <button class="ai-thread-del" title="Delete" @click.stop="deleteThread(item.thread.id)">✕</button>
             </div>
             <div v-if="item.thread.messages.length && renamingThreadId !== item.thread.id" class="ai-thread-preview">
@@ -6849,6 +6870,10 @@ function getDateLabel(ts: number): string {
         <button v-if="msgCtxMenu.role === 'assistant'" class="ai-ctx-item" @click="ctxMenuRegen">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg>
           Regenerate
+        </button>
+        <button v-if="msgCtxMenu.role === 'assistant'" class="ai-ctx-item" @click="ctxMenuSaveToRules">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M2.75 0A1.75 1.75 0 0 0 1 1.75v12.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25V5.06a1.75 1.75 0 0 0-.513-1.237L10.41.514A1.75 1.75 0 0 0 9.172 0H2.75zm0 1.5h6.422c.13 0 .254.051.346.143L13.57 5.66A.25.25 0 0 1 13.5 6.009V14.25a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25V1.75a.25.25 0 0 1 .25-.25zm5.25 5.5a.75.75 0 0 1 .75.75v1.25h1.25a.75.75 0 0 1 0 1.5H8.75v1.25a.75.75 0 0 1-1.5 0v-1.25H6a.75.75 0 0 1 0-1.5h1.25V7.75A.75.75 0 0 1 8 7z"/></svg>
+          Save to AI rules
         </button>
         <div class="ai-ctx-sep" />
         <button class="ai-ctx-item ai-ctx-danger" @click="ctxMenuDelete">
@@ -8539,8 +8564,11 @@ function getDateLabel(ts: number): string {
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
 .ai-thread-del:hover { color: var(--danger-fg, #cf222e); background: color-mix(in srgb, var(--danger-fg, #cf222e) 10%, transparent); }
+.ai-thread-dup { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
+.ai-thread-dup:hover { color: var(--text-bright); background: var(--bg-subtle); }
 .ai-thread-pin { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; opacity: 0; transition: opacity 0.12s; }
-.ai-thread-item:hover .ai-thread-pin { opacity: 1; }
+.ai-thread-item:hover .ai-thread-pin,
+.ai-thread-item:hover .ai-thread-dup { opacity: 1; }
 .ai-thread-pin:hover { color: var(--accent-fg); }
 .ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
 .ai-thread-model-badge { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); border-radius: 3px; padding: 0 4px; opacity: 0.7; }
