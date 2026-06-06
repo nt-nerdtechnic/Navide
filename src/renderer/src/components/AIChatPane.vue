@@ -693,10 +693,10 @@ const settingsUserRules = ref(localStorage.getItem('ai-chat-user-rules') ?? '')
 
 // ── Custom @docs entries (user-defined documentation URLs) ───────────────────
 interface CustomDocEntry { key: string; label: string; url: string }
-const customDocs = ref<CustomDocEntry[]>(() => {
+const customDocs = ref<CustomDocEntry[]>((() => {
   try { return JSON.parse(localStorage.getItem('ai-chat-custom-docs') ?? '[]') as CustomDocEntry[] }
   catch { return [] }
-}())
+})())
 const newDocKey   = ref('')
 const newDocLabel = ref('')
 const newDocUrl   = ref('')
@@ -1234,6 +1234,9 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { id: '/search',   label: '/search',   description: 'Search codebase for a symbol or string',        template: '' },
   { id: '/fixtests',     label: '/fixtests',     description: 'Run tests, then auto-ask AI to fix failures',       template: '' },
   { id: '/save-summary', label: '/save-summary', description: 'Summarize key decisions & save to Notepad',             template: '' },
+  { id: '/translate',    label: '/translate',    description: 'Translate code comments/strings to another language (e.g. /translate Spanish)', template: '' },
+  { id: '/spell',        label: '/spell',        description: 'Fix spelling and grammar in the current file or selection', template: '' },
+  { id: '/git',          label: '/git',          description: 'Quick git status + recent commits summary',               template: '' },
 ]
 const showSlashMenu = ref(false)
 const slashMenuFilter = ref('')
@@ -3779,6 +3782,73 @@ ${historyText}`
       sending.value = false
       showToast('Summary generation failed')
     }
+    return
+  }
+
+  // /translate — add language context and translate code comments/strings
+  if (cmd.id === '/translate') {
+    const lang = rawText.slice('/translate'.length).trim() || ''
+    const targetLang = lang || (window.prompt('Translate to language:') ?? '').trim()
+    if (!targetLang) return
+    inputText.value = ''
+    // Auto-attach current file if no chips
+    const relPath = props.getActiveRelPath?.()
+    const fileContent = props.getEditorContent?.()
+    if (relPath && fileContent !== undefined && contextChips.value.length === 0) {
+      const ext = relPath.split('.').pop() ?? ''
+      contextChips.value.push({ id: crypto.randomUUID(), label: `@${relPath.split('/').pop()}`, content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent.slice(0, 60_000)}\n\`\`\`` })
+    }
+    const prompt = contextChips.value.length
+      ? `Translate all code comments, string literals, and documentation in the attached file(s) to ${targetLang}. Preserve code logic and formatting exactly. Output the complete translated file.`
+      : `Translate the following text to ${targetLang}:`
+    inputText.value = prompt
+    nextTick(() => { textareaEl.value?.focus() })
+    return
+  }
+
+  // /spell — fix spelling and grammar in the current file or selection
+  if (cmd.id === '/spell') {
+    inputText.value = ''
+    const relPath = props.getActiveRelPath?.()
+    const fileContent = props.getEditorContent?.()
+    const selection = props.getActiveSelection?.()
+    if (selection && selection.trim()) {
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@selection', content: `// Selection:\n${selection}` })
+      inputText.value = 'Fix all spelling and grammar errors in the selected text above. Return only the corrected text, preserving all formatting and line breaks.'
+    } else if (relPath && fileContent !== undefined) {
+      const ext = relPath.split('.').pop() ?? ''
+      if (!contextChips.value.some((c) => c.label.includes(relPath.split('/').pop() ?? '')))
+        contextChips.value.push({ id: crypto.randomUUID(), label: `@${relPath.split('/').pop()}`, content: `// File: ${relPath}\n\`\`\`${ext}\n${fileContent.slice(0, 60_000)}\n\`\`\`` })
+      inputText.value = 'Fix all spelling and grammar errors in the code comments, strings, and documentation in the attached file. Return the complete corrected file content.'
+    } else {
+      inputText.value = 'Fix spelling and grammar: '
+    }
+    nextTick(() => { textareaEl.value?.focus(); const l = inputText.value.length; textareaEl.value?.setSelectionRange(l, l) })
+    return
+  }
+
+  // /git — quick git status + recent commits summary
+  if (cmd.id === '/git') {
+    inputText.value = ''
+    if (!props.workspacePath) { showToast('/git requires an open workspace'); return }
+    try {
+      interface ShellResp { ok: boolean; output?: string }
+      const [statusResp, logResp] = await Promise.all([
+        props.backend.send<ShellResp>('shell.run', { command: 'git status --short 2>&1', workspace_path: props.workspacePath }),
+        props.backend.send<ShellResp>('shell.run', { command: 'git log --oneline -10 2>&1', workspace_path: props.workspacePath }),
+      ])
+      const status = (statusResp.payload?.output ?? '').trim()
+      const log = (logResp.payload?.output ?? '').trim()
+      const chipContent = `// git status:
+${status || '(clean)'}
+
+// git log (last 10):
+${log || '(no commits)'}`
+      contextChips.value = contextChips.value.filter((c) => c.label !== '@git:status')
+      contextChips.value.push({ id: crypto.randomUUID(), label: '@git:status', content: chipContent })
+      inputText.value = 'Summarize the current git status and recent commits. What changed recently?'
+    } catch { showToast('/git: unavailable') }
+    nextTick(() => { textareaEl.value?.focus() })
     return
   }
 
