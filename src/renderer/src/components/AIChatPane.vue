@@ -114,6 +114,8 @@ interface ChatMessage {
   thinkingContent?: string // extended thinking (Claude thinking blocks)
   thinkingExpanded?: boolean
   contextRefs?: string[]   // labels of context chips used when this message was sent (Cursor-style "used references")
+  truncated?: boolean      // response appears to be cut off (unclosed code block heuristic)
+}
 
 // ── Checkpoint (Cursor-style conversation snapshots) ──────────────────────────
 interface ChatCheckpoint {
@@ -688,6 +690,34 @@ function applySystemPromptProfile(profile: string): void {
 const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
 const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
 const settingsUserRules = ref(localStorage.getItem('ai-chat-user-rules') ?? '')
+
+// ── Custom @docs entries (user-defined documentation URLs) ───────────────────
+interface CustomDocEntry { key: string; label: string; url: string }
+const customDocs = ref<CustomDocEntry[]>(() => {
+  try { return JSON.parse(localStorage.getItem('ai-chat-custom-docs') ?? '[]') as CustomDocEntry[] }
+  catch { return [] }
+}())
+const newDocKey   = ref('')
+const newDocLabel = ref('')
+const newDocUrl   = ref('')
+const allDocsCatalog = computed<Record<string, { label: string; url: string }>>(() => {
+  const result: Record<string, { label: string; url: string }> = { ...DOCS_CATALOG }
+  for (const d of customDocs.value) {
+    if (d.key.trim()) result[d.key.trim()] = { label: d.label || d.key, url: d.url }
+  }
+  return result
+})
+function addCustomDoc(): void {
+  const key = newDocKey.value.trim().toLowerCase().replace(/\s+/g, '-')
+  if (!key || !newDocUrl.value.trim()) { showToast('Key and URL are required'); return }
+  if (customDocs.value.some((d) => d.key === key)) { showToast('Key already exists'); return }
+  customDocs.value.push({ key, label: newDocLabel.value.trim() || key, url: newDocUrl.value.trim() })
+  newDocKey.value = ''; newDocLabel.value = ''; newDocUrl.value = ''
+}
+function removeCustomDoc(key: string): void {
+  customDocs.value = customDocs.value.filter((d) => d.key !== key)
+}
+
 // Chat mode — 'ask' = suggestions only, 'edit' = targeted file edits, 'agent' = full autonomous
 const chatMode = ref<'ask' | 'edit' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
 watch(chatMode, (mode) => {
@@ -1925,6 +1955,7 @@ function saveSettings(): void {
   localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
   localStorage.setItem('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
   localStorage.setItem('ai-chat-user-rules', settingsUserRules.value)
+  localStorage.setItem('ai-chat-custom-docs', JSON.stringify(customDocs.value))
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -2876,6 +2907,9 @@ function setupListeners(): void {
       const lastUser = [...messages.value].reverse().find((m) => m.role === 'user')
       const generated = extractFollowUps(last.content, lastUser?.content ?? '')
       last.followUps = generated
+      // Detect truncation: odd ``` count means the response ends in an open code block
+      const backtickFences = (last.content.match(/```/g) ?? []).length
+      if (backtickFences % 2 !== 0) last.truncated = true
       // Detect conventional commit message in response
       const commitMatch = last.content.match(/^(?:```\w*\n?)?((?:feat|fix|chore|docs|style|refactor|test|perf|build|ci|revert)(?:\([^)]+\))?!?: .+)(?:\n|$)/m)
       if (commitMatch) last.commitMsg = commitMatch[1].trim()
@@ -3339,14 +3373,14 @@ function onTextareaInput(e: Event): void {
   const isDocsQuery = /^docs:/i.test(fragment)
   if (isDocsQuery) {
     const docName = fragment.slice('docs:'.length).trim().toLowerCase()
-    const matched = Object.entries(DOCS_CATALOG)
-      .filter(([k]) => k.startsWith(docName) || DOCS_CATALOG[k].label.toLowerCase().includes(docName))
+    const matched = Object.entries(allDocsCatalog.value)
+      .filter(([k]) => k.startsWith(docName) || allDocsCatalog.value[k].label.toLowerCase().includes(docName))
       .map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
     atOptions.value = matched.length ? matched : [{ id: '@docs', label: '@docs — type a doc name (vue, react, ts, python…)' }]
     return
   }
   if (/^docs$/i.test(fragment)) {
-    atOptions.value = Object.entries(DOCS_CATALOG).map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
+    atOptions.value = Object.entries(allDocsCatalog.value).map(([k, v]) => ({ id: `@docs:${k}`, label: `@docs:${k} — ${v.label}` }))
     return
   }
 
@@ -3801,8 +3835,8 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   // Remove the @fragment from textarea
   const el = textareaEl.value
   if (!el && !refreshTargetId) { showAtMenu.value = false; return }
-  const val = el.value
-  const cur = el.selectionStart ?? val.length
+  const val = el?.value ?? ''
+  const cur = el ? (el.selectionStart ?? val.length) : 0
   const beforeCursor = val.slice(0, cur)
   const atIdx = beforeCursor.lastIndexOf('@')
 
@@ -4282,7 +4316,7 @@ ${out}`
     return
   } else if (option.id.startsWith('@docs:')) {
     const docKey = option.id.slice('@docs:'.length).trim()
-    const docEntry = DOCS_CATALOG[docKey]
+    const docEntry = allDocsCatalog.value[docKey]
     chipLabel = `@docs:${docKey}`
     if (!docEntry) {
       chipContent = `// @docs: unknown documentation "${docKey}"`
@@ -5493,6 +5527,18 @@ function getDateLabel(ts: number): string {
         <button class="ai-apply-all-btn" @click="applyAllEdits(msg)">Apply All {{ msg.pendingEdits.length }} files</button>
         <button class="ai-apply-all-dismiss" @click="msg.pendingEdits = undefined" title="Dismiss">✕</button>
       </div>
+      <!-- Truncated response indicator (VS Code Copilot Chat parity) -->
+      <div
+        v-if="msg.role === 'assistant' && msg.truncated && !msg.streaming && mi === lastAssistantIdx"
+        class="ai-truncated-bar"
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"/></svg>
+        <span class="ai-truncated-label">Response may be incomplete</span>
+        <button
+          class="ai-truncated-continue-btn"
+          @click="inputText = 'Please continue your response from where you left off.'; nextTick(() => void sendMessage())"
+        >Continue generating</button>
+      </div>
       <!-- Per-message follow-up suggestions (only on last assistant message when not streaming) -->
       <div
         v-if="msg.role === 'assistant' && msg.followUps?.length && !msg.streaming && mi === lastAssistantIdx"
@@ -6334,6 +6380,23 @@ function getDateLabel(ts: number): string {
           <button v-if="workspacePath" class="ai-create-rules-btn" @click="createWorkspaceRulesFile">+ Create AGENTS.md</button>
           <span v-if="!workspacePath" style="opacity:.6;font-size:11px">Create <code>AGENTS.md</code> or <code>.cursor/rules</code></span>
         </div>
+        <!-- Custom @docs entries -->
+        <div class="ai-settings-row ai-settings-row--column">
+          <label class="ai-settings-label" style="margin-bottom:6px">Custom @docs <span style="font-size:10px;opacity:.55;font-weight:400">— add your own documentation sources</span></label>
+          <div v-if="customDocs.length === 0" style="font-size:11px;opacity:.5;margin-bottom:4px">No custom docs yet.</div>
+          <div v-for="d in customDocs" :key="d.key" class="ai-custom-doc-row">
+            <span class="ai-custom-doc-key">@docs:{{ d.key }}</span>
+            <span class="ai-custom-doc-label" :title="d.url">{{ d.label }}</span>
+            <button class="ai-custom-doc-remove" title="Remove" @click="removeCustomDoc(d.key)">×</button>
+          </div>
+          <div class="ai-custom-doc-add">
+            <input v-model="newDocKey"   type="text" class="ai-settings-input" placeholder="key (e.g. nextjs)" style="flex:1;min-width:0" />
+            <input v-model="newDocLabel" type="text" class="ai-settings-input" placeholder="Label"              style="flex:1.5;min-width:0" />
+            <input v-model="newDocUrl"   type="url"  class="ai-settings-input" placeholder="https://…"         style="flex:2;min-width:0" />
+            <button class="ai-create-rules-btn" title="Add doc" @click="addCustomDoc">+</button>
+          </div>
+        </div>
+
         <!-- Session usage statistics -->
         <div class="ai-stats-row">
           <span class="ai-stats-title">Session usage</span>
@@ -7957,6 +8020,12 @@ function getDateLabel(ts: number): string {
 .ai-rules-missing { opacity: 0.8; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ai-create-rules-btn { flex-shrink: 0; padding: 3px 8px; border-radius: 4px; border: 1px solid var(--accent-emphasis); background: transparent; color: var(--accent-fg, var(--accent-emphasis)); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .ai-create-rules-btn:hover { background: var(--accent-emphasis); color: var(--text-on-emphasis, #fff); }
+.ai-custom-doc-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.06)); }
+.ai-custom-doc-key { font-family: monospace; font-size: 10px; opacity: .8; flex-shrink: 0; }
+.ai-custom-doc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .7; }
+.ai-custom-doc-remove { border: none; background: transparent; color: var(--danger-fg, #f85149); cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px; opacity: .7; }
+.ai-custom-doc-remove:hover { opacity: 1; }
+.ai-custom-doc-add { display: flex; gap: 4px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
 .ai-settings-save {
   padding: 5px 16px;
   background: var(--accent-emphasis);
@@ -8317,6 +8386,29 @@ kbd {
   font-size: 10px;
   color: var(--text-muted, #8b949e);
 }
+
+/* ── Truncated response bar ─────────────────────────────────────────────────── */
+.ai-truncated-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  border-top: 1px solid var(--border, #3a3a4a);
+}
+.ai-truncated-label { flex: 1; }
+.ai-truncated-continue-btn {
+  padding: 3px 10px;
+  background: var(--accent, #1e6ba8);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ai-truncated-continue-btn:hover { opacity: 0.85; }
 </style>
 
 <style>
