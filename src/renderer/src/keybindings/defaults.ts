@@ -114,6 +114,20 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+k cmd+5', command: 'editor.foldLevel5',      when: 'editorOpen' },
   { key: 'cmd+k cmd+6', command: 'editor.foldLevel6',      when: 'editorOpen' },
   { key: 'cmd+k cmd+7', command: 'editor.foldLevel7',      when: 'editorOpen' },
+
+  // ── Split Editor ─────────────────────────────────────────────────────────────
+  { key: 'cmd+\\',         command: 'workbench.action.splitEditor',          when: 'editorOpen' },
+  { key: 'cmd+k cmd+left', command: 'workbench.action.focusPreviousGroup' },
+  { key: 'cmd+k cmd+right',command: 'workbench.action.focusNextGroup' },
+
+  // ── Problems Panel ───────────────────────────────────────────────────────────
+  { key: 'f8',          command: 'editor.action.marker.nextInFiles' },
+  { key: 'shift+f8',    command: 'editor.action.marker.prevInFiles' },
+  { key: 'cmd+shift+m', command: 'workbench.action.problems.focus' },
+
+  // ── Quick Fix ────────────────────────────────────────────────────────────────
+  { key: 'cmd+.',       command: 'editor.action.quickFix', when: 'editorTextFocus' },
+
   { key: 'cmd+shift+p', command: 'workbench.action.showCommands' },
   { key: 'f1',          command: 'workbench.action.showCommands' },
   { key: 'cmd+k cmd+w', command: 'workbench.action.closeAllEditors' },

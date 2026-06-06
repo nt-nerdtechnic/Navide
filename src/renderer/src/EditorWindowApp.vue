@@ -10,9 +10,11 @@ import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import AIChatPane from './components/AIChatPane.vue'
+import ProblemsPane from './components/ProblemsPane.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
 import { useNotify } from './composables/useNotify'
+import { allDiagnosticsSorted, setDiagnostics } from './editor/diagnostics'
 
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
@@ -84,10 +86,10 @@ function onAiResizeEnd(): void {
 interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
-const initialSidebar = (['explorer', 'search', 'git'] as const).find(
+const initialSidebar = (['explorer', 'search', 'git', 'problems'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
-const sidebarView = ref<'explorer' | 'search' | 'git'>(initialSidebar)
+const sidebarView = ref<'explorer' | 'search' | 'git' | 'problems'>(initialSidebar)
 const sidebarHidden = ref(false)
 const zenMode = ref(false)
 const changesCount = ref(0)
@@ -382,8 +384,54 @@ function setEditorRef(relPath: string, el: unknown): void {
   if (el) editorPaneRefs.set(relPath, el as InstanceType<typeof EditorPane>)
   else editorPaneRefs.delete(relPath)
 }
+
+// ── Split Editor — secondary group (Phase D) ──────────────────────────────────
+interface SecondaryGroup { files: OpenFile[]; activeRel: string }
+const secondaryGroup = ref<SecondaryGroup | null>(null)
+const activeGroupIsPrimary = ref(true)
+const editorPaneRefsSecondary = new Map<string, InstanceType<typeof EditorPane>>()
+
+function setEditorRefSecondary(relPath: string, el: unknown): void {
+  if (el) editorPaneRefsSecondary.set(relPath, el as InstanceType<typeof EditorPane>)
+  else editorPaneRefsSecondary.delete(relPath)
+}
+
 function activeEditor(): InstanceType<typeof EditorPane> | undefined {
-  return editorPaneRefs.get(activeRel.value)
+  if (activeGroupIsPrimary.value) return editorPaneRefs.get(activeRel.value)
+  return editorPaneRefsSecondary.get(secondaryGroup.value?.activeRel ?? '')
+}
+
+function splitEditor(): void {
+  const current = openFiles.value.find(f => f.relPath === activeRel.value)
+  if (!current || current.kind !== 'file') return
+  secondaryGroup.value = { files: [{ ...current }], activeRel: current.relPath }
+  activeGroupIsPrimary.value = false
+}
+
+function closeFileInSecondary(relPath: string): void {
+  if (!secondaryGroup.value) return
+  const i = secondaryGroup.value.files.findIndex(f => f.relPath === relPath)
+  if (i === -1) return
+  secondaryGroup.value.files.splice(i, 1)
+  if (secondaryGroup.value.activeRel === relPath) {
+    secondaryGroup.value.activeRel =
+      secondaryGroup.value.files[Math.min(i, secondaryGroup.value.files.length - 1)]?.relPath ?? ''
+  }
+  if (secondaryGroup.value.files.length === 0) {
+    secondaryGroup.value = null
+    activeGroupIsPrimary.value = true
+  }
+}
+
+function openFileInSecondary(relPath: string): void {
+  if (!secondaryGroup.value) return
+  const exists = secondaryGroup.value.files.find(f => f.relPath === relPath)
+  if (!exists) {
+    const primary = openFiles.value.find(f => f.relPath === relPath)
+    if (primary) secondaryGroup.value.files.push({ ...primary })
+  }
+  secondaryGroup.value.activeRel = relPath
+  activeGroupIsPrimary.value = false
 }
 
 // ── Keybinding system ─────────────────────────────────────────────────────────
@@ -498,7 +546,33 @@ registerCommand('editor.action.openFileAtCursor', async () => {
   }
 })
 registerCommand('editor.action.trimTrailingWhitespace', () => activeEditor()?.trimTrailingWhitespace())
-registerCommand('editor.action.formatDocument',         () => activeEditor()?.formatDocument())
+registerCommand('editor.action.formatDocument', () => {
+  activeEditor()?.formatDocument()
+  // After formatting, validate JSON/YAML syntax and expose parse errors as diagnostics.
+  const f = openFiles.value.find(x => x.relPath === activeRel.value)
+  const ext = f?.name.split('.').pop()?.toLowerCase() ?? ''
+  if (ext !== 'json') return
+  const content = activeEditor()?.getContent?.() ?? ''
+  try {
+    JSON.parse(content)
+    // Clear any prior JSON parse diagnostics for this file.
+    setDiagnostics(activeRel.value, [])
+  } catch (err) {
+    const msg = err instanceof SyntaxError ? err.message : String(err)
+    // Try to extract line number from SyntaxError message (V8: "at position N").
+    const posMatch = msg.match(/position (\d+)/)
+    let line = 1
+    if (posMatch) {
+      const offset = parseInt(posMatch[1], 10)
+      line = content.slice(0, offset).split('\n').length
+    }
+    setDiagnostics(activeRel.value, [{
+      relPath: activeRel.value, line, col: 0,
+      severity: 'error', message: msg, source: 'json',
+    }])
+    toast(`JSON syntax error: ${msg}`)
+  }
+})
 registerCommand('editor.action.formatSelection',        () => activeEditor()?.formatSelection())
 registerCommand('editor.action.smartSelect.expand',     () => activeEditor()?.expandSelection())
 registerCommand('editor.action.smartSelect.shrink',     () => activeEditor()?.shrinkSelection())
@@ -772,6 +846,10 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectCurrentWord',       label: 'Select Current Word' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
+  { id: 'editor.action.marker.nextInFiles',     label: 'Next Problem',                keys: 'F8' },
+  { id: 'editor.action.marker.prevInFiles',     label: 'Previous Problem',            keys: '⇧F8' },
+  { id: 'workbench.action.problems.focus',      label: 'Show Problems',               keys: '⌘⇧M' },
+  { id: 'editor.action.quickFix',               label: 'Quick Fix',                   keys: '⌘.' },
   { id: 'editor.fold',             label: 'Fold',               keys: '⌘⌥[' },
   { id: 'editor.unfold',           label: 'Unfold',             keys: '⌘⌥]' },
   { id: 'editor.toggleFold',       label: 'Toggle Fold' },
@@ -789,6 +867,9 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.insertCursorAbove',                   label: 'Add Cursor Above',                   keys: '⌘⌥↑' },
   { id: 'editor.action.insertCursorBelow',                   label: 'Add Cursor Below',                   keys: '⌘⌥↓' },
   { id: 'editor.action.insertCursorAtEndOfEachLineSelected', label: 'Add Cursors to Line Ends',           keys: '⇧⌥I' },
+  { id: 'workbench.action.splitEditor',          label: 'Split Editor',               keys: '⌘\\' },
+  { id: 'workbench.action.focusPreviousGroup',   label: 'Focus Previous Editor Group', keys: '⌘K ⌘←' },
+  { id: 'workbench.action.focusNextGroup',       label: 'Focus Next Editor Group',    keys: '⌘K ⌘→' },
   { id: 'workbench.action.gotoSymbol',         label: 'Go to Symbol in File',     keys: '⌘⇧O' },
   { id: 'workbench.action.gotoWorkspaceSymbol', label: 'Go to Symbol in Workspace', keys: '⌘T' },
   { id: 'workbench.action.changeLanguageMode', label: 'Change Language Mode', keys: '⌘K ⌘M' },
@@ -1004,6 +1085,11 @@ watch(qoQuery, (q) => {
 registerCommand('workbench.action.quickOpen', openQuickOpen)
 registerCommand('workbench.action.focusActiveEditorGroup', () => { activeEditor()?.focus?.() })
 
+// ── Split Editor ──────────────────────────────────────────────────────────────
+registerCommand('workbench.action.splitEditor', splitEditor)
+registerCommand('workbench.action.focusPreviousGroup', () => { activeGroupIsPrimary.value = true })
+registerCommand('workbench.action.focusNextGroup', () => { if (secondaryGroup.value) activeGroupIsPrimary.value = false })
+
 // ── Code Folding ──────────────────────────────────────────────────────────────
 registerCommand('editor.fold',              () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.foldAt?.(l) })
 registerCommand('editor.unfold',            () => { const e = activeEditor(); const l = e?.getCursorLine?.() ?? 0; e?.unfoldAt?.(l) })
@@ -1020,6 +1106,54 @@ registerCommand('workbench.action.reopenClosedEditor', () => {
   const last = closedHistory.pop()
   if (last) openFile({ filepath: last.relPath, name: last.name })
 })
+
+// ── Problems Panel (F8 / ⇧F8 / ⌘⇧M) ──────────────────────────────────────────
+function nextProblem(): void {
+  const all = allDiagnosticsSorted()
+  if (!all.length) { toast('No problems detected'); return }
+  const curLine = (activeEditor()?.getCursorLine?.() ?? 0) + 1 // 1-based
+  const curRel = activeRel.value
+  const next = all.find(d => d.relPath > curRel || (d.relPath === curRel && d.line > curLine))
+    ?? all[0]
+  if (next.relPath !== curRel) openFile({ filepath: next.relPath })
+  nextTick(() => activeEditor()?.revealLine?.(next.line))
+}
+function prevProblem(): void {
+  const all = allDiagnosticsSorted()
+  if (!all.length) { toast('No problems detected'); return }
+  const curLine = (activeEditor()?.getCursorLine?.() ?? 0) + 1
+  const curRel = activeRel.value
+  const reversed = [...all].reverse()
+  const prev = reversed.find(d => d.relPath < curRel || (d.relPath === curRel && d.line < curLine))
+    ?? reversed[0]
+  if (prev.relPath !== curRel) openFile({ filepath: prev.relPath })
+  nextTick(() => activeEditor()?.revealLine?.(prev.line))
+}
+registerCommand('editor.action.marker.nextInFiles', nextProblem)
+registerCommand('editor.action.marker.prevInFiles', prevProblem)
+registerCommand('workbench.action.problems.focus', () => { sidebarHidden.value = false; sidebarView.value = 'problems' })
+
+// ── Quick Fix ⌘. ─────────────────────────────────────────────────────────────
+const quickFixOpen = ref(false)
+const quickFixItems = ref<Array<{ label: string; message: string }>>([])
+const quickFixIdx = ref(0)
+
+function showQuickFix(): void {
+  const curLine = (activeEditor()?.getCursorLine?.() ?? 0) + 1 // diagnostics are 1-based
+  const diags = (allDiagnosticsSorted()).filter(d => d.relPath === activeRel.value && d.line === curLine)
+  if (!diags.length) { toast('No quick fixes available'); return }
+  quickFixItems.value = diags.map(d => ({ label: `AI Fix: ${d.message}`, message: d.message }))
+  quickFixIdx.value = 0
+  quickFixOpen.value = true
+}
+function closeQuickFix(): void { quickFixOpen.value = false }
+function runQuickFix(idx: number): void {
+  const item = quickFixItems.value[idx]
+  closeQuickFix()
+  if (!item) return
+  executeCommand('editor.action.inlineRewrite')
+}
+registerCommand('editor.action.quickFix', showQuickFix)
 
 // ── Multi-cursor ──────────────────────────────────────────────────────────────
 registerCommand('editor.action.insertCursorAbove',                  () => activeEditor()?.insertCursorAbove?.())
@@ -1246,7 +1380,7 @@ async function confirmNewFile(): Promise<void> {
   openFile({ filepath: relPath })
 }
 
-const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || wsymOpen.value || langOpen.value || kbOpen.value || themeOpen.value || newFileOpen.value)
+const anyOverlayOpen = computed(() => paletteOpen.value || qoOpen.value || symOpen.value || wsymOpen.value || langOpen.value || kbOpen.value || themeOpen.value || newFileOpen.value || quickFixOpen.value)
 watch(anyOverlayOpen, (v) => setContext('modalOpen', v))
 
 // ── Close modal (Escape when any overlay is open) ────────────────────────────
@@ -1255,6 +1389,7 @@ registerCommand('workbench.action.closeModal', () => {
   if (qoOpen.value) { closeQuickOpen(); return }
   if (symOpen.value) { closeGotoSymbol(); return }
   if (wsymOpen.value) { closeWorkspaceSymbol(); return }
+  if (quickFixOpen.value) { closeQuickFix(); return }
   if (langOpen.value) { closeLangPicker(); return }
   if (kbOpen.value) { closeKeyboardShortcuts(); return }
   if (themeOpen.value) { closeThemePicker(true); return }
@@ -1378,6 +1513,15 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z"/></svg>
         <span v-if="changesCount" class="ide-act-badge">{{ changesCount > 99 ? '99+' : changesCount }}</span>
       </button>
+      <button
+        class="ide-act-btn"
+        :class="{ active: sidebarView === 'problems' }"
+        title="Problems (⌘⇧M)"
+        @click="sidebarView = 'problems'; sidebarHidden = false"
+      >
+        <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor"><path d="M8.22 1.754a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm-1.763-.707c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm-.25-5.25a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 0 1.5 0Z"/></svg>
+        <span v-if="allDiagnosticsSorted().filter(d => d.severity === 'error').length" class="ide-act-badge ide-act-badge--err">{{ allDiagnosticsSorted().filter(d => d.severity === 'error').length }}</span>
+      </button>
     </div>
 
     <!-- Sidebar -->
@@ -1421,11 +1565,16 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @open-branch-diff="openBranchDiff"
         @changes-count="changesCount = $event"
       />
+      <ProblemsPane
+        v-show="sidebarView === 'problems'"
+        @open-file="(p) => openFile({ filepath: p.filepath, line: p.line })"
+      />
     </div>
     <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
 
     <!-- Editor area -->
-    <div class="ide-main">
+    <div class="ide-main-container" :class="{ 'ide-split': secondaryGroup }">
+      <div class="ide-main" :class="{ 'group-active': activeGroupIsPrimary && secondaryGroup }">
       <div v-if="openFiles.length && !zenMode" ref="tabsEl" class="ide-tabs">
         <div
           v-for="f in openFiles"
@@ -1509,7 +1658,40 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           Open a file from the Explorer or Search pane on the left
         </div>
       </div>
-    </div>
+      </div><!-- end ide-main primary -->
+
+      <!-- Secondary editor group (Phase D split editor) -->
+      <div v-if="secondaryGroup" class="ide-main ide-main--secondary" :class="{ 'group-active': !activeGroupIsPrimary }" @mousedown="activeGroupIsPrimary = false">
+        <div class="ide-tabs">
+          <div
+            v-for="f in secondaryGroup.files"
+            :key="f.relPath"
+            class="ide-tab"
+            :class="{ active: f.relPath === secondaryGroup.activeRel }"
+            @click="secondaryGroup.activeRel = f.relPath"
+          >
+            <span class="ide-tab-name">{{ f.name }}</span>
+            <button class="ide-tab-close" title="Close" @click.stop="closeFileInSecondary(f.relPath)">✕</button>
+          </div>
+        </div>
+        <div class="ide-editors">
+          <template v-for="f in secondaryGroup.files" :key="'sec:' + f.relPath">
+            <EditorPane
+              v-if="f.kind === 'file'"
+              v-show="f.relPath === secondaryGroup.activeRel"
+              :ref="(el) => setEditorRefSecondary(f.relPath, el)"
+              :workspace-path="workspacePath"
+              :backend="backend"
+              :rel-path="f.relPath"
+              :name="f.name"
+              embedded
+              :active="f.relPath === secondaryGroup.activeRel && !activeGroupIsPrimary"
+              @dirty="(v) => markDirty(f.relPath, v)"
+            />
+          </template>
+        </div>
+      </div><!-- end ide-main secondary -->
+    </div><!-- end ide-main-container -->
 
     <!-- Right activity bar (AI Chat toggle) -->
     <div class="ide-right-act">
@@ -1748,6 +1930,25 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     </div>
   </div>
 
+  <!-- Quick Fix overlay (⌘.) -->
+  <div v-if="quickFixOpen" class="ide-palette-overlay" @mousedown.self="closeQuickFix">
+    <div class="ide-palette" style="max-width: 480px">
+      <div class="ide-new-file-label">Quick Fix</div>
+      <ul class="ide-palette-list">
+        <li
+          v-for="(item, i) in quickFixItems"
+          :key="i"
+          class="ide-palette-item"
+          :class="{ active: i === quickFixIdx }"
+          @mouseover="quickFixIdx = i"
+          @click="runQuickFix(i)"
+        >
+          <span class="ide-palette-label">{{ item.label }}</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+
   <NotificationHost />
 
   <!-- Tab right-click context menu -->
@@ -1844,6 +2045,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   line-height: 15px;
   text-align: center;
 }
+.ide-act-badge--err { background: #f85149; color: #fff; }
 
 .ide-sidebar {
   flex-shrink: 0;
@@ -1864,12 +2066,22 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-resize-handle:hover { background: var(--accent-emphasis); }
 .ide-sidebar > * { flex: 1; min-height: 0; }
 
+.ide-main-container {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
 .ide-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
 }
+.ide-split .ide-main { border-right: 1px solid var(--border-muted); }
+.ide-main--secondary { flex: 1; }
+.group-active .ide-tabs { border-bottom: 2px solid var(--accent-emphasis); }
 .ide-tabs {
   display: flex;
   align-items: stretch;
