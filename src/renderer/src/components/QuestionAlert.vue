@@ -357,7 +357,7 @@ textarea:focus {
 }
 .auto-bar {
   padding: 10px 18px;
-  background: #0d2030;
+  background: var(--bg-inset);
   border-top: 1px solid var(--accent-muted);
   font-size: 12px;
 }
