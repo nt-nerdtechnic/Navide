@@ -2084,6 +2084,15 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  // Delegate other slash-only commands to selectSlashCommand so typing them directly works
+  const _delegateSlash = ['/clear', '/compact', '/diff', '/model', '/pin', '/summarize', '/checkpoints']
+  if (_delegateSlash.includes(rawText)) {
+    inputText.value = ''
+    const found = SLASH_COMMANDS.find((c) => c.id === rawText)
+    if (found) void selectSlashCommand(found)
+    return
+  }
+
   // /test — run test suite and show output
   if (rawText === '/test' || rawText.startsWith('/test ')) {
     if (!props.workspacePath) { showToast('/test requires an open workspace'); return }
@@ -4061,6 +4070,10 @@ ${historyText}`
         props.backend.send<ShellResp>('shell.run', { command: 'git log --oneline -20 2>&1', workspace_path: props.workspacePath }),
         props.backend.send<ShellResp>('shell.run', { command: 'git diff --stat HEAD 2>&1 | head -40', workspace_path: props.workspacePath }),
       ])
+      if (!vsMain.payload?.ok || !staged.payload?.ok) {
+        showToast('/pr: ' + (vsMain.payload?.error ?? staged.payload?.error ?? 'backend error'))
+        return
+      }
       const commits = (vsMain.payload?.output ?? '').trim()
       const stat = (staged.payload?.output ?? '').trim()
       const chipContent = `// Recent commits (for PR description):\n${commits || '(none)'}\n\n// Changed files:\n${stat || '(none)'}`
@@ -5616,9 +5629,21 @@ function deleteCheckpoint(id: string): void {
 }
 
 // ── Message bookmarks ─────────────────────────────────────────────────────────
+const showBookmarks = ref(false)
+
 function toggleBookmark(mi: number): void {
   const msg = messages.value[mi]
   if (msg) { msg.bookmarked = !msg.bookmarked; saveCurrentThread() }
+}
+
+const bookmarkedMessages = computed(() =>
+  messages.value.map((m, i) => ({ msg: m, idx: i })).filter(({ msg }) => msg.bookmarked)
+)
+
+function jumpToBookmark(idx: number): void {
+  const el = messagesEl.value?.querySelectorAll('.ai-msg')[idx] as HTMLElement | undefined
+  el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  showBookmarks.value = false
 }
 
 // ── Message feedback ──────────────────────────────────────────────────────────
@@ -6438,6 +6463,14 @@ function getDateLabel(ts: number): string {
           </button>
           <button
             class="ai-settings-btn"
+            :class="{ active: showBookmarks }"
+            :title="bookmarkedMessages.length ? `Bookmarks (${bookmarkedMessages.length})` : 'Bookmarks — bookmark messages with ★'"
+            @click="showBookmarks = !showBookmarks"
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 0 1-1.227.579L8 11.722l-3.773 3.107A.75.75 0 0 1 3 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.91l3.023-2.489a.75.75 0 0 1 .954 0L11.5 12.66V2.75a.25.25 0 0 0-.25-.25Z"/></svg>
+          </button>
+          <button
+            class="ai-settings-btn"
             title="Keyboard shortcuts (?)"
             @click="showShortcuts = !showShortcuts"
           >
@@ -6588,6 +6621,23 @@ function getDateLabel(ts: number): string {
             </button>
             <button v-if="promptTemplates.length > 0" class="ai-pt-del" title="Delete" @click="deletePromptTemplate(t.id)">✕</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bookmarks panel -->
+    <div v-if="showBookmarks" class="ai-settings">
+      <div class="ai-settings-header">
+        <span>Bookmarks <span style="font-weight:400;opacity:.6;font-size:11px">— {{ bookmarkedMessages.length ? `${bookmarkedMessages.length} in this thread` : 'none yet — use ★ on a message' }}</span></span>
+        <button class="ai-settings-close" @click="showBookmarks = false">✕</button>
+      </div>
+      <div class="ai-settings-body">
+        <div v-if="bookmarkedMessages.length === 0" class="ai-settings-hint" style="padding:8px 0">
+          Bookmark messages with the ★ button to quickly jump back to them.
+        </div>
+        <div v-for="{ msg, idx } in bookmarkedMessages" :key="idx" class="ai-bm-item" @click="jumpToBookmark(idx)">
+          <span class="ai-bm-role">{{ msg.role === 'user' ? 'You' : 'AI' }}</span>
+          <span class="ai-bm-snippet">{{ msg.content.replace(/```[\s\S]*?```/g, '[code]').replace(/\n/g, ' ').trim().slice(0, 80) }}</span>
         </div>
       </div>
     </div>
@@ -8602,6 +8652,14 @@ function getDateLabel(ts: number): string {
   background: var(--bg-muted); color: var(--text-muted); cursor: pointer; font-size: 12px;
 }
 .ai-pt-del:hover { border-color: #b91c1c; color: #ef4444; }
+.ai-bm-item {
+  display: flex; align-items: baseline; gap: 8px; padding: 7px 10px; border-radius: 5px;
+  cursor: pointer; border: 1px solid var(--border-muted); background: var(--bg-muted);
+  margin-bottom: 4px;
+}
+.ai-bm-item:hover { border-color: var(--accent-emphasis); background: var(--bg-subtle); }
+.ai-bm-role { font-size: 10px; font-weight: 700; color: var(--accent-fg); flex-shrink: 0; text-transform: uppercase; }
+.ai-bm-snippet { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .ai-cancel-btn {
   font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-left: auto;
   background: var(--bg-muted); color: var(--text-muted); border: 1px solid var(--border-muted);
