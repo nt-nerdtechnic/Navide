@@ -351,13 +351,13 @@ function switchThread(id: string): void {
   currentThreadId.value = id
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
   expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
-  // Restore per-conversation model override when switching threads
+  // Restore per-conversation model override when switching threads (silently)
   if (thread.model) {
     const entry = MODEL_CATALOG.find((m) => m.id === thread.model)
     if (entry) {
       if (entry.provider !== 'auto') settingsProvider.value = entry.provider
       settingsModel.value = thread.model
-      saveSettings()
+      _pushSettingsToBackend()
     }
   }
   // Move selected thread to front
@@ -455,7 +455,7 @@ function switchModel(modelId: string): void {
   // Persist per-conversation model on the current thread
   const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
   if (ct) ct.model = modelId
-  saveSettings()
+  _pushSettingsToBackend()
 }
 
 // When provider switches, reset model to the first preset for that provider
@@ -1154,24 +1154,25 @@ function fetchSettings(): void {
   props.backend.send('ai.chat.settings.get', {}).catch(() => {/* ignore */})
 }
 
-function saveSettings(): void {
-  // Resolve "auto" to a real model before sending to backend
-  let resolvedProvider = settingsProvider.value as string
-  let resolvedModel = settingsModel.value
-  if (resolvedModel === 'auto') {
-    const hasKey = (settingsApiKey.value ?? '').trim().length > 0
-    if (hasKey) {
-      resolvedProvider = 'anthropic'
-      resolvedModel = 'claude-sonnet-4-6'
-    } else {
-      resolvedProvider = 'ollama'
-      resolvedModel = OLLAMA_MODELS[0] ?? 'llama3.2'
-    }
+// Resolve "auto" model to a real backend model+provider pair
+function resolveModel(): { provider: string; model: string } {
+  if (settingsModel.value !== 'auto') {
+    return { provider: settingsProvider.value, model: settingsModel.value }
   }
+  const hasKey = (settingsApiKey.value ?? '').trim().length > 0
+  return hasKey
+    ? { provider: 'anthropic', model: 'claude-sonnet-4-6' }
+    : { provider: 'ollama',    model: OLLAMA_MODELS[0] ?? 'llama3.2' }
+}
+
+// Send current settings to backend without UI side-effects (toast, panel close).
+// Called by switchModel() and switchThread() to apply per-conversation model silently.
+function _pushSettingsToBackend(): void {
+  const { provider, model } = resolveModel()
   const payload: Record<string, unknown> = {
-    provider: resolvedProvider,
+    provider,
     anthropic_api_key: settingsApiKey.value,
-    model: resolvedModel,
+    model,
     ollama_base_url: settingsOllamaUrl.value,
     system_prompt: settingsSystemPrompt.value,
     max_tokens: Math.max(256, Math.min(16000, Number(settingsMaxTokens.value) || 4096)),
@@ -1180,6 +1181,10 @@ function saveSettings(): void {
     payload.temperature = Math.max(0, Math.min(1, settingsTemperature.value))
   }
   props.backend.send('ai.chat.settings.set', payload).catch(() => {/* ignore */})
+}
+
+function saveSettings(): void {
+  _pushSettingsToBackend()
   localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
   showSettings.value = false
   showToast('Settings saved')
@@ -1886,6 +1891,15 @@ function setupListeners(): void {
     if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
     if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
     if (p.temperature !== undefined) settingsTemperature.value = p.temperature
+    // Re-apply per-conversation model override after backend settings load
+    const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+    if (ct?.model) {
+      const entry = MODEL_CATALOG.find((m) => m.id === ct.model)
+      if (entry) {
+        if (entry.provider !== 'auto') settingsProvider.value = entry.provider
+        settingsModel.value = ct.model
+      }
+    }
   })
 }
 
@@ -3566,6 +3580,7 @@ function getDateLabel(ts: number): string {
               <span v-if="threadSearchQuery && !item.thread.title.toLowerCase().includes(threadSearchQuery.toLowerCase())" class="ai-thread-snippet">{{ getThreadMatchSnippet(item.thread, threadSearchQuery) }}</span>
             </div>
             <div class="ai-thread-meta">
+              <span v-if="item.thread.model" class="ai-thread-model-badge" :title="`Thread model: ${item.thread.model}`">{{ MODEL_CATALOG.find(m => m.id === item.thread.model)?.display?.split(' ').slice(-1)[0] ?? item.thread.model }}</span>
               <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
               <span class="ai-thread-time">{{ new Date(item.thread.updatedAt).toLocaleDateString() }}</span>
               <button class="ai-thread-pin" :title="item.thread.pinned ? 'Unpin' : 'Pin'" @click.stop="togglePinThread(item.thread.id, $event)">{{ item.thread.pinned ? '📌' : '⊙' }}</button>
@@ -3655,8 +3670,18 @@ function getDateLabel(ts: number): string {
         </div>
         <div class="ai-settings-row">
           <label class="ai-settings-label">Model</label>
-          <select v-model="selectedModelKey" class="ai-settings-select">
-            <option v-for="m in currentModelOptions" :key="m" :value="m">{{ m }}</option>
+          <select
+            :value="modelIsCustom ? 'custom' : settingsModel"
+            class="ai-settings-select"
+            @change="(e) => { const v = (e.target as HTMLSelectElement).value; if (v !== 'custom') switchModel(v) }"
+          >
+            <option value="auto">✦ Auto (best available)</option>
+            <optgroup label="Anthropic">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'anthropic')" :key="m.id" :value="m.id">{{ m.display }}</option>
+            </optgroup>
+            <optgroup label="Ollama (Local)">
+              <option v-for="m in MODEL_CATALOG.filter(e => e.provider === 'ollama')" :key="m.id" :value="m.id">{{ m.display }}</option>
+            </optgroup>
             <option value="custom">Custom…</option>
           </select>
           <input
@@ -4991,6 +5016,7 @@ function getDateLabel(ts: number): string {
 .ai-thread-item:hover .ai-thread-pin { opacity: 1; }
 .ai-thread-pin:hover { color: var(--accent-fg); }
 .ai-thread-pin-indicator { font-size: 10px; flex-shrink: 0; }
+.ai-thread-model-badge { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); border-radius: 3px; padding: 0 4px; opacity: 0.7; }
 .ai-settings-btn.active { color: var(--accent-fg); }
 
 .ai-shortcuts-panel {
