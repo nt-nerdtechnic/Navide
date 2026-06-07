@@ -24,6 +24,9 @@ backend/.venv/
 *.pyc
 backend/dist/
 backend/build/
+
+# ─── Electron packaging output ──────────────────────────────────────────────
+dist-release/
 backend/*.egg-info/
 backend/.mypy_cache/
 backend/.ruff_cache/
