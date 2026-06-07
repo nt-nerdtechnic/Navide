@@ -79,6 +79,7 @@ ipcMain.handle('backend:info', () => {
     status: 'ready' as const,
     host: backend.host,
     port: backend.port,
+    shell: backend.shell,
     httpUrl: `http://${backend.host}:${backend.port}`,
     wsUrl: `ws://${backend.host}:${backend.port}/ws`
   }

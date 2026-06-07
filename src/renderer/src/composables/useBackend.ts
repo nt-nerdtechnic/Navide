@@ -6,6 +6,7 @@ interface BackendInfo {
   status: 'starting' | 'ready'
   host?: string
   port?: number
+  shell?: string
   httpUrl?: string
   wsUrl?: string
 }
@@ -38,6 +39,7 @@ export function useBackend() {
   const status = ref<BackendStatus>('starting')
   const wsUrl = ref<string>('')
   const httpUrl = ref<string>('')
+  const shell = ref<string>('')
   const lastError = ref<string>('')
   const ws = shallowRef<WebSocket | null>(null)
   interface PendingEntry { resolve: (resp: WsResponse) => void; reject: (err: Error) => void }
@@ -173,6 +175,7 @@ export function useBackend() {
     }
     wsUrl.value = info.wsUrl
     httpUrl.value = info.httpUrl ?? ''
+    shell.value = info.shell ?? ''
     connect()
   }
 
@@ -185,5 +188,5 @@ export function useBackend() {
     ws.value?.close()
   })
 
-  return { status, wsUrl, httpUrl, lastError, send, on }
+  return { status, wsUrl, httpUrl, shell, lastError, send, on }
 }

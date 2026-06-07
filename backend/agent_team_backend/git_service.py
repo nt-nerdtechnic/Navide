@@ -210,12 +210,15 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
             if len(line) < 3:
                 continue
             xy = line[:2]
-            path = _unquote_git_path(line[3:])
             x, y = xy[0], xy[1]
-            # Renames/copies render as "orig -> new"; use the new path so that
-            # later stage/unstage/discard/diff operations resolve a real file.
-            if (x in ("R", "C") or y in ("R", "C")) and " -> " in path:
-                path = _unquote_git_path(path.split(" -> ", 1)[1])
+            raw_path = line[3:]
+            # Renames/copies render as "orig -> new" (each part may be independently
+            # quoted when it contains spaces). Split on " -> " first, then unquote
+            # each part separately so "old name" -> "new name" works correctly.
+            if (x in ("R", "C") or y in ("R", "C")) and " -> " in raw_path:
+                path = _unquote_git_path(raw_path.split(" -> ", 1)[1])
+            else:
+                path = _unquote_git_path(raw_path)
             if x == "!" and y == "!":
                 status.ignored.append(GitFileEntry(path=path, status="!"))
             elif x == "?" and y == "?":

@@ -6,6 +6,7 @@ import { app } from 'electron'
 export interface BackendHandle {
   host: string
   port: number
+  shell: string
   proc: ChildProcess
   stop: () => Promise<void>
 }
@@ -28,14 +29,14 @@ function findFreePort(): Promise<number> {
 }
 
 /** Ask the user's login shell for its full PATH (captures nvm/fnm/volta etc.).
- *  Returns null if the shell doesn't respond within 3 s. */
-function getLoginShellPath(): Promise<string | null> {
+ *  Returns { shell, path }. Path is null if the shell doesn't respond. */
+function getLoginShellEnv(): Promise<{ shell: string; path: string | null }> {
   return new Promise((resolve) => {
     const shell = process.env.SHELL ?? '/bin/zsh'
     execFile(shell, ['-l', '-c', 'echo $PATH'], { timeout: 3000 }, (err, stdout) => {
-      if (err) { resolve(null); return }
+      if (err) { resolve({ shell, path: null }); return }
       const p = stdout.trim()
-      resolve(p.length > 0 ? p : null)
+      resolve({ shell, path: p.length > 0 ? p : null })
     })
   })
 }
@@ -47,8 +48,10 @@ export async function startBackend(): Promise<BackendHandle> {
   // Electron strips PATH on macOS when launched from Finder/Dock.
   // Use a login shell to recover the full user PATH (nvm, fnm, volta, brew…).
   const env = { ...process.env }
+  let userShell = process.env.SHELL ?? '/bin/zsh'
   if (process.platform === 'darwin') {
-    const loginPath = await getLoginShellPath()
+    const { shell, path: loginPath } = await getLoginShellEnv()
+    userShell = shell
     if (loginPath) {
       // Merge: login shell PATH first so user-installed tools take precedence,
       // then any paths the current process already has (rare but harmless).
@@ -93,6 +96,7 @@ export async function startBackend(): Promise<BackendHandle> {
   const handle: BackendHandle = {
     host,
     port,
+    shell: userShell,
     proc,
     stop: () =>
       new Promise<void>((resolve) => {
@@ -111,6 +115,7 @@ export async function startBackend(): Promise<BackendHandle> {
   await waitForHealth(host, port, 15_000)
   return handle
 }
+
 
 async function waitForHealth(host: string, port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs

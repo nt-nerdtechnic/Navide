@@ -1083,8 +1083,9 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       : undefined
     pane.outputLogFile = outputLogFile
 
+    const userShell = backend.shell.value || 'bash'
     await ref.spawn({
-      command: ['bash', '-lc', command],
+      command: [userShell, '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
       metadata: {
