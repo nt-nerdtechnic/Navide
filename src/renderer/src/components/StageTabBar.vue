@@ -17,9 +17,7 @@ const emit = defineEmits<{
   (e: 'move-pane', paneId: string, targetKey: string): void
 }>()
 
-// Number of deletable (stage) tabs — the last one is kept, so the ✕ only shows
-// when more than one stage tab exists.
-const stageTabCount = computed(() => props.tabs.filter((t) => t.type === 'stage').length)
+// The ✕ shows on all tabs as long as there are 2+ tabs total (last tab is protected).
 
 // Drag-to-move: a pane dropped onto a tab reassigns it to that tab's run group.
 const dragOverKey = ref<string | null>(null)
@@ -84,7 +82,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
           <span class="tab-label">{{ tab.label }}</span>
           <span class="tab-count">{{ tab.count }}</span>
           <span
-            v-if="tab.type === 'stage' && stageTabCount > 1"
+            v-if="tabs.length > 1"
             class="tab-close"
             title="刪除此 tab（pane 會移到第一個剩餘 tab）"
             @click.stop="emit('delete', tab.key)"

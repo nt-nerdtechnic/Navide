@@ -4059,6 +4059,19 @@ async function movePaneToGroup(paneId: string, targetKey: string): Promise<void>
 /** Delete a run-group tab. The last remaining run group is kept (never deletable).
  *  All panes in the deleted group are reassigned to the first remaining group. */
 async function deleteRunGroup(id: string): Promise<void> {
+  // 刪除「手動」tab：把未指派 pane 移到第一個 stage group
+  if (id === 'manual') {
+    if (stageTabs.value.length <= 1) return  // only the manual tab left — nothing to do
+    const target = runGroups.value[0]
+    if (!target) return
+    const affected = panes.value.filter((p) => !p.runGroupId)
+    await Promise.all(affected.map((p) => {
+      p.runGroupId = target.id
+      return persistPaneRunGroup(p, target.id)
+    }))
+    if (activeTab.value === 'manual') activeTab.value = target.id
+    return
+  }
   if (runGroups.value.length <= 1) return  // keep the last tab
   const target = runGroups.value.find((g) => g.id !== id)
   if (!target) return
