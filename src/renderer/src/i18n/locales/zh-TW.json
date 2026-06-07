@@ -224,7 +224,7 @@
     "no-parallel-slots": "沒有平行插槽——此階段由單一 Agent 執行。",
     "workspace": "工作區",
     "pipelines": "流程",
-    "active-agents": "執行中的 Agent ({running}/{total})",
+    "active-agents": "執行中 ({running}/{total})",
     "no-agents-running": "沒有執行中的 Agent。",
     "manual-spawn": "啟動Agent",
     "select-role": "選擇角色…",
