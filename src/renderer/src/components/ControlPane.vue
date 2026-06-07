@@ -885,7 +885,7 @@ function onExplorerDividerEnd(): void {
             :model-value="layoutMode ?? 'auto'"
             @update:model-value="emit('update:layoutMode', $event)"
           />
-          <button class="history-btn" @click="emit('open-history')">📋 {{ $t('label.history') }}</button>
+          <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
         </div>
       </div>
       <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
