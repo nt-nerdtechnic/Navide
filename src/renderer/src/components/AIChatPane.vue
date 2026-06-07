@@ -2254,7 +2254,7 @@ function renderMarkdownLite(rawText: string): string {
       : ''
     const isErrorBlock = /(?:Error:|Exception:|Traceback|FAILED|\bfatal\b|\bpanic\b)/i.test(code)
     const explainErrBtn = isErrorBlock
-      ? `<button class="ai-code-action-btn ai-code-action-err" data-action="explainerr" data-code="${encoded}" title="Ask AI to explain this error">Explain Error</button>`
+      ? `<button class="ai-code-action-btn ai-code-action-err" data-action="explainerr" data-code="${encoded}" title="Ask AI to explain this error">${i18n.global.t('action.explain-error')}</button>`
       : ''
     blocks.push(
       `<div class="ai-code-wrap"${foldAttr}>` +

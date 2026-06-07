@@ -1339,6 +1339,7 @@ const statusBarGit = ref<StatusBarGit>({ branch: '', ahead: 0, behind: 0, dirty:
 
 async function refreshStatusBarGit(): Promise<void> {
   if (!currentWorkspace.value || !workspaceSelected.value) return
+  if (backend.status.value !== 'connected') return
   const resp = await sendQuiet<{
     branch: string; ahead: number; behind: number
     staged: unknown[]; unstaged: unknown[]

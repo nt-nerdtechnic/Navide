@@ -3,9 +3,15 @@ import { ref, computed, watch, onMounted } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useOnboarding, type OnboardDep } from '../composables/useOnboarding'
 import OnboardingDepRow from './OnboardingDepRow.vue'
+import { useSettings } from '../composables/useSettings'
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 const emit = defineEmits<{ (e: 'complete'): void; (e: 'close'): void }>()
+
+const settings = useSettings()
+function toggleLanguage(): void {
+  settings.setLanguage(settings.language.value === 'zh-TW' ? 'en-US' : 'zh-TW')
+}
 
 const ob = useOnboarding(props.backend)
 const step = ref(1)
@@ -57,14 +63,21 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   <div class="ob-overlay">
     <div class="ob-modal">
       <header class="ob-header">
-        <div class="ob-title">Navide (Agent-Team) · {{ $t('label.environment-setup') }}</div>
+        <div class="ob-header-top">
+          <div class="ob-title">Navide (Agent-Team) · {{ $t('label.environment-setup') }}</div>
+          <button class="ob-lang-btn" @click="toggleLanguage">
+            <span :class="{ active: settings.language.value === 'zh-TW' }">繁中</span>
+            <span class="ob-lang-sep">/</span>
+            <span :class="{ active: settings.language.value === 'en-US' }">EN</span>
+          </button>
+        </div>
         <ol class="ob-steps">
           <li
             v-for="s in STEPS"
             :key="s.n"
             :class="{ active: step === s.n, done: (s.n === 1 && step1Done) || (s.n === 2 && step2Done) }"
           >
-            <span class="ob-step-num">{{ s.n }}</span>{{ s.label }}
+            <span class="ob-step-num">{{ s.n }}</span>{{ s.n === 1 ? $t('label.step-foundation') : s.n === 2 ? $t('label.step-agent-analyzer') : $t('label.step-ready-check') }}
           </li>
         </ol>
       </header>
@@ -82,7 +95,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           />
           <div class="ob-row-actions">
             <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">{{ $t('action.install-missing') }}</button>
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
+            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
           </div>
         </section>
 
@@ -142,7 +155,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             </div>
 
             <label class="ob-model-custom">
-              <span class="ob-model-custom-label">Other model</span>
+              <span class="ob-model-custom-label">{{ $t('label.other-model') }}</span>
               <input
                 v-model="customModel"
                 class="ob-input"
@@ -153,23 +166,23 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
 
             <div class="ob-row-actions">
               <button class="ob-btn primary small" :disabled="!pullTarget" @click="ob.pullModel(pullTarget)">
-                Download {{ pullTarget || 'model' }}
+                {{ $t('action.download-model', { name: pullTarget || $t('label.model') }) }}
               </button>
-              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
+              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
             </div>
           </div>
         </section>
 
         <!-- Step 3 -->
         <section v-else>
-          <p class="ob-hint">Once all required items are ready, you can enter the main screen.</p>
+          <p class="ob-hint">{{ $t('hint.ready-check') }}</p>
           <ul class="ob-gate">
-            <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> Foundation environment ready</li>
-            <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> At least one Agent CLI</li>
-            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> Ollama + at least one model</li>
+            <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> {{ $t('label.foundation-ready') }}</li>
+            <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> {{ $t('label.at-least-one-cli') }}</li>
+            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> {{ $t('label.ollama-model-ready') }}</li>
           </ul>
           <div class="ob-row-actions">
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
+            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
           </div>
         </section>
 
@@ -180,16 +193,16 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       </div>
 
       <footer class="ob-footer">
-        <button v-if="step > 1" class="ob-btn ghost" @click="step--">Back</button>
+        <button v-if="step > 1" class="ob-btn ghost" @click="step--">{{ $t('action.back') }}</button>
         <span class="ob-spacer" />
-        <button v-if="step < 3" class="ob-btn primary" :disabled="!!ob.installing.value" @click="step++">Next</button>
+        <button v-if="step < 3" class="ob-btn primary" :disabled="!!ob.installing.value" @click="step++">{{ $t('action.next') }}</button>
         <button
           v-else
           class="ob-btn primary"
           :disabled="!ob.allRequiredReady.value"
-          :title="ob.allRequiredReady.value ? '' : 'Some required items are not yet ready'"
+          :title="ob.allRequiredReady.value ? '' : $t('hint.not-ready')"
           @click="ob.markComplete().then(() => emit('complete')).catch(() => emit('complete'))"
-        >Open Navide (Agent-Team)</button>
+        >{{ $t('action.open-app') }}</button>
       </footer>
     </div>
   </div>
@@ -218,7 +231,16 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   overflow: hidden;
 }
 .ob-header { padding: 18px 22px 12px; border-bottom: 1px solid var(--border-muted); }
-.ob-title { font-size: 15px; font-weight: 700; color: var(--text-bright); margin-bottom: 12px; }
+.ob-header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.ob-title { font-size: 15px; font-weight: 700; color: var(--text-bright); }
+.ob-lang-btn {
+  display: flex; align-items: center; gap: 2px;
+  background: none; border: 1px solid var(--border-default);
+  border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  font-size: 11px; color: var(--text-muted);
+}
+.ob-lang-btn span.active { color: var(--text-bright); font-weight: 600; }
+.ob-lang-sep { color: var(--text-muted); margin: 0 2px; }
 .ob-steps { display: flex; gap: 8px; list-style: none; margin: 0; padding: 0; }
 .ob-steps li {
   flex: 1;

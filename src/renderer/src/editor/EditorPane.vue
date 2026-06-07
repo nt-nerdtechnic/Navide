@@ -1039,7 +1039,7 @@ defineExpose({
           @click="findRegex = !findRegex"
         >.*</button>
         <span class="ep-find-count">
-          <template v-if="findQuery && findMatches.length === 0">No results</template>
+          <template v-if="findQuery && findMatches.length === 0">{{ $t('label.no-results') }}</template>
           <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
         </span>
         <button class="ep-find-nav" title="Previous match (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
