@@ -23,6 +23,7 @@ backend/.venv/
 **/__pycache__/
 *.pyc
 backend/dist/
+backend/build/
 backend/*.egg-info/
 backend/.mypy_cache/
 backend/.ruff_cache/
