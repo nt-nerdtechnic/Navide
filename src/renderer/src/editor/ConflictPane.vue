@@ -210,7 +210,7 @@ function choiceOf(idx: number): ConflictChoice | undefined {
   <div class="cp-root">
     <!-- Toolbar -->
     <div class="cp-toolbar">
-      <span class="cp-badge conflict">CONFLICT</span>
+      <span class="cp-badge conflict">{{ $t('label.conflict') }}</span>
       <span class="cp-filepath" :title="filepath">{{ filepath }}</span>
       <span class="cp-progress">{{ resolvedCount }} / {{ totalConflicts }} resolved</span>
       <button
@@ -228,10 +228,10 @@ function choiceOf(idx: number): ConflictChoice | undefined {
 
     <!-- Body -->
     <div class="cp-body">
-      <div v-if="loading" class="cp-msg">Loading…</div>
-      <div v-else-if="mergeAborted" class="cp-msg warn">Merge aborted — conflicts cancelled.</div>
+      <div v-if="loading" class="cp-msg">{{ $t('label.loading') }}</div>
+      <div v-else-if="mergeAborted" class="cp-msg warn">{{ $t('status.merge-aborted') }}</div>
       <div v-else-if="loadError" class="cp-msg err">{{ loadError }}</div>
-      <div v-else-if="content === null" class="cp-msg">Not loaded</div>
+      <div v-else-if="content === null" class="cp-msg">{{ $t('label.not-loaded') }}</div>
 
       <template v-else>
         <div v-for="(block, bi) in blocks" :key="bi">
@@ -252,19 +252,19 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                 <button
                   class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'ours' }"
                   @click="choose(block.conflictIdx!, 'ours')"
-                >Accept Ours</button>
+                >{{ $t('action.accept-ours') }}</button>
                 <button
                   class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'theirs' }"
                   @click="choose(block.conflictIdx!, 'theirs')"
-                >Accept Theirs</button>
+                >{{ $t('action.accept-theirs') }}</button>
                 <button
                   class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'both' }"
                   @click="choose(block.conflictIdx!, 'both')"
-                >Accept Both</button>
+                >{{ $t('action.accept-both') }}</button>
                 <button
                   class="cp-btn edit-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'manual' }"
                   @click="choose(block.conflictIdx!, 'manual')"
-                >Edit</button>
+                >{{ $t('action.edit') }}</button>
               </div>
             </div>
 
@@ -277,8 +277,8 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                 rows="6"
               />
               <div class="cp-manual-actions">
-                <button class="cp-btn primary" @click="saveManual(block.conflictIdx!)">Confirm</button>
-                <button class="cp-btn" @click="cancelManual(block.conflictIdx!)">Cancel</button>
+                <button class="cp-btn primary" @click="saveManual(block.conflictIdx!)">{{ $t('action.confirm') }}</button>
+                <button class="cp-btn" @click="cancelManual(block.conflictIdx!)">{{ $t('action.cancel') }}</button>
               </div>
             </div>
 

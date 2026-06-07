@@ -175,7 +175,7 @@ const verdictMeta = computed(() =>
   <div class="review-pane">
     <!-- Header -->
     <div v-if="!hideHeader" class="panel-header">
-      <span class="panel-title">AI REVIEW</span>
+      <span class="panel-title">{{ $t('label.ai-review') }}</span>
       <div class="spacer" />
       <button class="hdr-btn" title="Close" @click="emit('close')">
         <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
@@ -215,12 +215,12 @@ const verdictMeta = computed(() =>
           {{ mode === 'working' ? 'Working Changes' : `${baseBranch} → ${compareBranch || currentBranch}` }}
         </span>
         <button class="branch-toggle" @click="mode = mode === 'branch' ? 'working' : 'branch'">
-          {{ mode === 'branch' ? '✕ Cancel' : '↔ Branch Diff' }}
+          {{ mode === 'branch' ? '✕ ' + $t('action.cancel') : '↔ Branch Diff' }}
         </button>
       </div>
 
       <div v-if="mode === 'branch'" class="branch-row">
-        <span class="branch-label">Base</span>
+        <span class="branch-label">{{ $t('label.base') }}</span>
         <select class="branch-select" v-model="baseBranch">
           <option v-for="b in localBranches" :key="b" :value="b">{{ b }}</option>
           <option v-if="!localBranches.includes('main')" value="main">main</option>
@@ -238,10 +238,10 @@ const verdictMeta = computed(() =>
           <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="margin-right:4px">
             <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.669 10.081a.5.5 0 0 1-.67.225L8 8.698V5a.5.5 0 0 1 1 0v3.1l2.586 1.293a.5.5 0 0 1 .083.688z"/>
           </svg>
-          Start Review
+          {{ $t('action.start-review') }}
         </button>
-        <button v-else class="btn-stop" @click="stopReview">Stop</button>
-        <span v-if="isReviewing" class="reviewing-indicator">Analyzing…</span>
+        <button v-else class="btn-stop" @click="stopReview">{{ $t('action.stop-streaming') }}</button>
+        <span v-if="isReviewing" class="reviewing-indicator">{{ $t('label.analyzing') }}</span>
       </div>
     </div>
 
@@ -251,7 +251,7 @@ const verdictMeta = computed(() =>
     <!-- Analyzing spinner -->
     <div v-if="isReviewing" class="analyzing-state">
       <div class="spinner" />
-      <span>Analyzing… <span class="elapsed-time">({{ reviewElapsed }}s)</span></span>
+      <span>{{ $t('label.analyzing') }} <span class="elapsed-time">({{ reviewElapsed }}s)</span></span>
     </div>
 
     <!-- Empty hint -->
@@ -259,7 +259,7 @@ const verdictMeta = computed(() =>
       <svg width="24" height="24" viewBox="0 0 16 16" fill="currentColor" style="opacity:0.3;margin-bottom:8px">
         <path d="M1.5 2.75C1.5 1.784 2.284 1 3.25 1h9.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 12.75 12H9.06l.72 1.5h1.47a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1 0-1.5h1.47L6.94 12H3.25A1.75 1.75 0 0 1 1.5 10.25v-7.5zm1.5 0v7.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25h-9.5a.25.25 0 0 0-.25.25z"/>
       </svg>
-      <p>Click <strong>Start Review</strong> to analyse your working changes, or use <strong>↔ Branch Diff</strong> to compare branches.</p>
+      <p>{{ $t('hint.review-instructions') }}</p>
     </div>
 
     <!-- Management UI -->

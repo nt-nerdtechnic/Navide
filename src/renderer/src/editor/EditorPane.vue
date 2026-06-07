@@ -896,7 +896,7 @@ defineExpose({
         <span v-if="dirty" class="ep-dirty" title="Unsaved">●</span>
       </div>
       <div class="ep-spacer" />
-      <button class="ep-act" :disabled="!dirty" title="Save (⌘S)" @click="save">Save</button>
+      <button class="ep-act" :disabled="!dirty" title="Save (⌘S)" @click="save">{{ $t('action.save') }}</button>
       <button class="ep-act" title="AI complete (⌘I)" :disabled="ghostBusy || !loaded" @click="requestGhost">
         {{ ghostBusy ? '…' : '✦ Complete' }}
       </button>
@@ -915,7 +915,7 @@ defineExpose({
         @update:model-value="onChange"
         @cursor-change="onCursorChange"
       />
-      <div v-else class="ep-loading">Loading…</div>
+      <div v-else class="ep-loading">{{ $t('label.loading') }}</div>
 
       <!-- Floating "Add to Chat" button — appears on text selection -->
       <Transition name="ep-float-fade">
@@ -935,16 +935,16 @@ defineExpose({
       <!-- Context menu -->
       <div v-if="ctxOpen" class="ep-ctx-backdrop" @mousedown.self="closeContextMenu">
         <div ref="ctxMenuEl" class="ep-ctx-menu" :style="{ left: ctxX + 'px', top: ctxY + 'px' }">
-          <button class="ep-ctx-item" @click="ctxCut">Cut</button>
-          <button class="ep-ctx-item" @click="ctxCopy">Copy</button>
-          <button class="ep-ctx-item" @click="ctxPaste">Paste</button>
+          <button class="ep-ctx-item" @click="ctxCut">{{ $t('action.cut') }}</button>
+          <button class="ep-ctx-item" @click="ctxCopy">{{ $t('action.copy') }}</button>
+          <button class="ep-ctx-item" @click="ctxPaste">{{ $t('action.paste') }}</button>
           <div class="ep-ctx-sep" />
-          <button class="ep-ctx-item" @click="() => { closeContextMenu(); toggleLineComment() }">Toggle Comment</button>
-          <button class="ep-ctx-item" @click="() => { closeContextMenu(); openFind() }">Find</button>
+          <button class="ep-ctx-item" @click="() => { closeContextMenu(); toggleLineComment() }">{{ $t('action.toggle-comment') }}</button>
+          <button class="ep-ctx-item" @click="() => { closeContextMenu(); openFind() }">{{ $t('action.find') }}</button>
           <div class="ep-ctx-sep" />
-          <button class="ep-ctx-item" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('addToChat', sel || editorRef?.getValue?.() || '') }">Add to AI Chat</button>
-          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('explainWithAI', sel || editorRef?.getValue?.() || '') }">Explain with AI</button>
-          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('fixWithAI', sel || editorRef?.getValue?.() || '') }">Fix with AI</button>
+          <button class="ep-ctx-item" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('addToChat', sel || editorRef?.getValue?.() || '') }">{{ $t('action.add-to-ai-chat') }}</button>
+          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('explainWithAI', sel || editorRef?.getValue?.() || '') }">{{ $t('action.explain-with-ai') }}</button>
+          <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('fixWithAI', sel || editorRef?.getValue?.() || '') }">{{ $t('action.fix-with-ai') }}</button>
           <button class="ep-ctx-item ep-ctx-ai" @click="() => { const sel = editorRef?.getSelectionText?.() ?? ''; closeContextMenu(); emit('writeTestsWithAI', sel || editorRef?.getValue?.() || '') }">Generate Tests</button>
           <div class="ep-ctx-sep" />
           <button class="ep-ctx-item" @click="() => { closeContextMenu(); editorRef?.selectAll() }">Select All</button>

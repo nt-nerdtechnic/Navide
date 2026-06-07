@@ -4779,7 +4779,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <div class="history-modal">
           <div class="history-modal-header">
             <div class="history-header-left">
-              <span>Agent History</span>
+              <span>{{ $t('label.agent-history') }}</span>
               <button
                 v-if="panes.length > 0"
                 class="history-killall"
@@ -4835,8 +4835,8 @@ function paneIsCommander(p: ActivePane): boolean {
             這將強制終止 <strong>{{ panes.length }} 個 agent</strong>，所有進行中的工作將遺失。
           </div>
           <div style="display: flex; gap: 8px; padding: 0 14px 14px; justify-content: flex-end;">
-            <button class="history-close" style="border: 1px solid var(--border-default); padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">Cancel</button>
-            <button class="danger" style="padding: 4px 14px; border-radius: 6px; font-size: 12px;" @click="() => { onKillAll(); confirmKillAll = false }">Kill all</button>
+            <button class="history-close" style="border: 1px solid var(--border-default); padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">{{ $t('action.cancel') }}</button>
+            <button class="danger" style="padding: 4px 14px; border-radius: 6px; font-size: 12px;" @click="() => { onKillAll(); confirmKillAll = false }">{{ $t('action.kill-all') }}</button>
           </div>
         </div>
       </div>
@@ -4869,15 +4869,14 @@ function paneIsCommander(p: ActivePane): boolean {
           </p>
         </div>
         <div v-else class="empty-card">
-          <h2>Two ways to drive the team</h2>
+          <h2>{{ $t('label.two-ways-title') }}</h2>
           <p>
-            <strong>▶ Run pipeline</strong> — drive all {{ stagesApi.stages.value.length }} SDLC stages end-to-end. Each stage spawns the
-            recommended CLI + role and receives a tailored kickoff prompt.
+            <strong>▶ {{ $t('action.run-pipeline') }}</strong> {{ $t('label.two-ways-pipeline', { count: stagesApi.stages.value.length }) }}
           </p>
           <p>
-            <strong>+ Add to grid</strong> — spawn one agent at any role/stage you want, ad-hoc.
+            <strong>{{ $t('action.add-to-grid') }}</strong> {{ $t('label.two-ways-grid') }}
           </p>
-          <p class="muted">Set workspace + (for pipeline) task description on the left first.</p>
+          <p class="muted">{{ $t('label.set-workspace-pipeline') }}</p>
         </div>
       </div>
       <div v-else class="grid" ref="gridRef" :style="gridStyle">
@@ -5041,8 +5040,8 @@ function paneIsCommander(p: ActivePane): boolean {
             </p>
           </div>
           <footer>
-            <button class="stall-btn primary" @click="confirmCloseWorkspace = false">Cancel</button>
-            <button class="stall-btn danger" @click="doCloseWorkspace">Abort &amp; Switch</button>
+            <button class="stall-btn primary" @click="confirmCloseWorkspace = false">{{ $t('action.cancel') }}</button>
+            <button class="stall-btn danger" @click="doCloseWorkspace">{{ $t('action.abort-and-switch') }}</button>
           </footer>
         </div>
       </div>

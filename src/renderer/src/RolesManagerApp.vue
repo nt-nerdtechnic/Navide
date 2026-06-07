@@ -430,17 +430,14 @@ const statusClass = computed(() => {
         </p>
       </section>
       <section v-else class="detail empty">
-        <p>Select a role on the left or click <strong>+ New role</strong>.</p>
+        <p>{{ $t('hint.select-role-or-create') }}</p>
       </section>
     </div>
 
     <div v-if="confirmingDelete" class="modal" @click.self="confirmingDelete = false">
       <div class="modal-card">
         <h3>Delete role "{{ draft?.label }}"?</h3>
-        <p>
-          This removes the role from the persisted registry. Stages using this role's key as
-          <code>defaultRole</code> will fall back to whatever happens to match at runtime.
-        </p>
+        <p>{{ $t('hint.default-role-fallback') }}</p>
         <div class="modal-actions">
           <button class="ghost" @click="confirmingDelete = false">{{ $t('action.cancel') }}</button>
           <button class="danger" @click="doDelete">{{ $t('action.delete') }}</button>
@@ -450,7 +447,7 @@ const statusClass = computed(() => {
 
     <div v-if="confirmingReset" class="modal" @click.self="confirmingReset = false">
       <div class="modal-card">
-        <h3>Reset all roles to factory defaults?</h3>
+        <h3>{{ $t('hint.reset-roles-title') }}</h3>
         <p>
           All custom roles will be removed and the original 5 (PM / Backend / Frontend / Mobile / QA)
           will be restored. This is destructive and cannot be undone.
@@ -464,7 +461,7 @@ const statusClass = computed(() => {
 
     <div v-if="importPreview" class="modal" @click.self="cancelImport">
       <div class="modal-card wide">
-        <h3>Import roles</h3>
+        <h3>{{ $t('hint.import-roles-title') }}</h3>
         <p v-if="importPreview.filePath" class="filepath">{{ importPreview.filePath }}</p>
         <ul class="import-stats">
           <li><strong>{{ importPreview.rolesIn.length }}</strong> role(s) in file</li>
@@ -482,12 +479,12 @@ const statusClass = computed(() => {
         <label class="checkbox-row">
           <input v-model="importPreview.replaceAll" type="checkbox" />
           <span>
-            <strong>Replace all</strong> — delete current roles NOT in the import file
+            <strong>{{ $t('hint.replace-all-roles') }}</strong>
             <span class="muted">(destructive; backend will refuse to remove the last role)</span>
           </span>
         </label>
         <div class="modal-actions">
-          <button class="ghost" :disabled="importBusy" @click="cancelImport">Cancel</button>
+          <button class="ghost" :disabled="importBusy" @click="cancelImport">{{ $t('action.cancel') }}</button>
           <button class="primary" :disabled="importBusy" @click="applyImport">
             {{ importBusy ? 'Importing…' : importPreview.replaceAll ? 'Replace & Import' : 'Merge & Import' }}
           </button>

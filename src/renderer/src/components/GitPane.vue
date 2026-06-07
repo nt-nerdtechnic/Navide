@@ -1203,7 +1203,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 <template>
   <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; clearSelection()">
 
-    <div v-if="!workspacePath" class="empty-state">Select a workspace to get started</div>
+    <div v-if="!workspacePath" class="empty-state">{{ $t('label.select-workspace') }}</div>
 
     <!-- ── Init panel ─────────────────────────────────────── -->
     <div v-else-if="!gitStatus.is_git_repo" class="init-panel">
@@ -1211,27 +1211,27 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <path d="M15.698 7.287 8.712.302a1.03 1.03 0 0 0-1.457 0l-1.45 1.45 1.84 1.84a1.223 1.223 0 0 1 1.55 1.56l1.773 1.774a1.224 1.224 0 0 1 1.267 2.025 1.226 1.226 0 0 1-2.002-1.334L8.58 5.965v4.233a1.226 1.226 0 0 1 .321 2.432 1.226 1.226 0 0 1-1.11-1.384 1.224 1.224 0 0 1 .787-1.03V5.926a1.224 1.224 0 0 1-.666-1.608L6.076 2.486 .302 8.26a1.03 1.03 0 0 0 0 1.456l6.986 6.986a1.03 1.03 0 0 0 1.456 0l6.953-6.953a1.031 1.031 0 0 0 0-1.462z"/>
       </svg>
       <div class="init-title">{{ $t('status.not-git-repo') }}</div>
-      <div class="init-desc">This folder does not have a <code>.git</code> directory</div>
+      <div class="init-desc">{{ $t('error.not-git-repo-desc') }}</div>
       <button class="btn-primary w-full" :disabled="isInitializing" @click="doInit(true)">
-        {{ isInitializing ? 'Initializing…' : 'Initialize Repository' }}
+        {{ isInitializing ? $t('label.initializing') : $t('error.initialize-repository') }}
       </button>
       <button class="btn-ghost w-full" style="font-size:11px" :disabled="isInitializing" @click="doInit(false)">
-        Initialize (without .gitignore)
+        {{ $t('label.init-no-gitignore') }}
       </button>
       <p v-if="initError" class="err-text">{{ initError }}</p>
 
       <!-- Connect existing directory to a remote -->
       <div class="clone-box">
-        <div class="clone-title">Or connect to an existing remote repository</div>
-        <div class="clone-hint">Merge the current directory with a remote repo (no separate folder selection needed)</div>
+        <div class="clone-title">{{ $t('label.connect-remote-title') }}</div>
+        <div class="clone-hint">{{ $t('label.connect-remote-hint') }}</div>
         <input
           v-model="connectUrl"
           class="clone-input"
-          placeholder="Repository URL (https://… or git@…)"
+          :placeholder="$t('label.repo-url-placeholder')"
           :disabled="connecting"
         />
         <button class="btn-ghost w-full" :disabled="connecting" @click="doConnect">
-          {{ connecting ? 'Connecting…' : 'Connect to Remote' }}
+          {{ connecting ? $t('label.connecting') : $t('action.connect-to-remote') }}
         </button>
         <p v-if="connectError" class="err-text">{{ connectError }}</p>
       </div>
@@ -1275,7 +1275,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <Teleport to="body">
           <div v-if="showViewMenu" class="tp-backdrop" @click="showViewMenu = false" />
           <div v-if="showViewMenu" class="tp-dropdown" :style="{ top: viewMenuPos.top + 'px', right: viewMenuPos.right + 'px' }" @click.stop>
-            <div class="menu-group-label">View</div>
+            <div class="menu-group-label">{{ $t('label.view') }}</div>
             <button class="menu-item" @click="viewMode = 'list'; showViewMenu = false">
               <span class="menu-check">{{ viewMode === 'list' ? '✓' : '' }}</span> View as List
             </button>
@@ -1283,7 +1283,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <span class="menu-check">{{ viewMode === 'tree' ? '✓' : '' }}</span> View as Tree
             </button>
             <div class="menu-sep" />
-            <div class="menu-group-label">Sort by</div>
+            <div class="menu-group-label">{{ $t('label.sort-by') }}</div>
             <button class="menu-item" @click="sortBy = 'name'; showViewMenu = false">
               <span class="menu-check">{{ sortBy === 'name' ? '✓' : '' }}</span> Name
             </button>
@@ -1305,7 +1305,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- All-conflicts-resolved banner -->
       <div v-if="allConflictsResolved" class="op-banner op-banner-ready">
         <span class="op-text">✓ All conflicts resolved — ready to commit merge</span>
-        <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">Go to commit</button>
+        <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">{{ $t('action.go-to-commit') }}</button>
       </div>
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
       <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': opInProgress === 'merge' && conflictFileCount > 0 }">
@@ -1342,8 +1342,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <!-- Commit button with dropdown -->
         <div class="commit-btn-row">
           <button class="commit-main-btn" :disabled="!canCommit" @click.stop="doCommit">
-            <span v-if="isCommitting">Committing…</span>
-            <span v-else>✓ {{ amendMode ? 'Amend Commit' : 'Commit' }}</span>
+            <span v-if="isCommitting">{{ $t('label.committing') }}</span>
+            <span v-else>✓ {{ amendMode ? $t('action.amend-commit') : $t('action.commit') }}</span>
           </button>
           <button class="commit-arrow-btn" :disabled="!hasStaged && !gitLog.length" :title="$t('action.commit-more-options')" @click.stop="openCommitMenu($event)">▾</button>
           <Teleport to="body">
@@ -1374,10 +1374,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span v-if="autoCommitStep" class="ac-status-spinner">⟳</span>
           <span v-else class="ac-status-dot" />
           <span class="ac-status-label">
-            <template v-if="autoCommitStep === 'staging'">Staging all changes…</template>
-            <template v-else-if="autoCommitStep === 'checking'">Running lint check…</template>
-            <template v-else-if="autoCommitStep === 'generating'">Generating AI commit message…</template>
-            <template v-else-if="autoCommitStep === 'committing'">Committing…</template>
+            <template v-if="autoCommitStep === 'staging'">{{ $t('label.staging-changes') }}</template>
+            <template v-else-if="autoCommitStep === 'checking'">{{ $t('label.running-lint') }}</template>
+            <template v-else-if="autoCommitStep === 'generating'">{{ $t('label.generating-message') }}</template>
+            <template v-else-if="autoCommitStep === 'committing'">{{ $t('label.committing') }}</template>
             <template v-else>Auto Commit waiting — triggers in {{ autoCommitCountdown }}s</template>
           </span>
         </div>
@@ -1438,8 +1438,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
               </div>
               <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
-                <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
+                <div v-if="fileHistoryLoading" class="loading-text">{{ $t('label.loading') }}</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">{{ $t('label.no-commits') }}</div>
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>
@@ -1645,8 +1645,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
               </div>
               <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
-                <div v-if="fileHistoryLoading" class="loading-text">Loading…</div>
-                <div v-else-if="!fileHistoryCommits.length" class="loading-text">No commit history</div>
+                <div v-if="fileHistoryLoading" class="loading-text">{{ $t('label.loading') }}</div>
+                <div v-else-if="!fileHistoryCommits.length" class="loading-text">{{ $t('label.no-commits') }}</div>
                 <div v-for="hc in fileHistoryCommits" :key="hc.hash" class="mini-row">
                   <code class="hash-tag">{{ hc.short_hash }}</code>
                   <span class="mini-msg">{{ hc.message }}</span>

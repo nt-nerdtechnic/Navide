@@ -1762,7 +1762,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           @click="confirmThemePicker"
         >
           <span class="ide-palette-label">{{ t.label }}</span>
-          <span v-if="t.id === currentTheme" class="ide-palette-key">Current</span>
+          <span v-if="t.id === currentTheme" class="ide-palette-key">{{ $t('label.current') }}</span>
         </li>
       </ul>
     </div>
@@ -1833,7 +1833,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · {{ s.relPath.split('/').pop() }}:{{ s.line }}</span>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">No symbols found in open files</div>
+      <div v-else class="ide-palette-empty">{{ $t('label.no-symbols-found') }}</div>
     </div>
   </div>
   <!-- Go to Symbol -->
@@ -1859,7 +1859,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span class="ide-palette-key" style="opacity:.6; font-size:.85em">{{ s.kind }} · Line {{ s.line }}</span>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">No symbols detected in the current file</div>
+      <div v-else class="ide-palette-empty">{{ $t('label.no-symbols-detected') }}</div>
     </div>
   </div>
   <div v-if="qoOpen" class="ide-palette-overlay" @mousedown.self="closeQuickOpen">
@@ -1899,9 +1899,9 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         </template>
       </ul>
       <div v-else class="ide-palette-empty">
-        <template v-if="qoQuery.startsWith(':')">Enter a valid line number</template>
-        <template v-else-if="qoQuery.startsWith('@')">No symbols detected in the current file</template>
-        <template v-else>No open files</template>
+        <template v-if="qoQuery.startsWith(':')">{{ $t('label.enter-valid-line') }}</template>
+        <template v-else-if="qoQuery.startsWith('@')">{{ $t('label.no-symbols-detected') }}</template>
+        <template v-else>{{ $t('label.no-open-files') }}</template>
       </div>
     </div>
   </div>
@@ -1927,14 +1927,14 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           <span v-if="cmd.keys" class="ide-palette-key">{{ cmd.keys }}</span>
         </li>
       </ul>
-      <div v-else class="ide-palette-empty">No matching commands</div>
+      <div v-else class="ide-palette-empty">{{ $t('label.no-matching-commands') }}</div>
     </div>
   </div>
 
   <!-- New file dialog -->
   <div v-if="newFileOpen" class="ide-palette-overlay" @mousedown.self="closeNewFileDialog">
     <div class="ide-palette" style="max-width:440px">
-      <div class="ide-new-file-label">New File — enter path relative to workspace</div>
+      <div class="ide-new-file-label">{{ $t('label.new-file-hint') }}</div>
       <input
         ref="newFileInputEl"
         v-model="newFilePath"
@@ -1943,14 +1943,14 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @keydown.enter.prevent="confirmNewFile"
         @keydown.escape.prevent="closeNewFileDialog"
       />
-      <div class="ide-new-file-hint">Press Enter to create &nbsp;·&nbsp; Esc to cancel</div>
+      <div class="ide-new-file-hint">{{ $t('label.file-create-hint') }}</div>
     </div>
   </div>
 
   <!-- Quick Fix overlay (⌘.) -->
   <div v-if="quickFixOpen" class="ide-palette-overlay" @mousedown.self="closeQuickFix">
     <div class="ide-palette" style="max-width: 480px">
-      <div class="ide-new-file-label">Quick Fix</div>
+      <div class="ide-new-file-label">{{ $t('label.quick-fix') }}</div>
       <ul class="ide-palette-list">
         <li
           v-for="(item, i) in quickFixItems"
@@ -1977,9 +1977,9 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.relPath)">{{ $t('action.close-to-left') }}</div>
       <div class="ide-tab-ctx-item" @click="ctxCloseAll">{{ $t('action.close-all') }}</div>
       <div class="ide-tab-ctx-sep" />
-      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyPath(tabCtxMenu!.relPath)">Copy Path</div>
-      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyRelPath(tabCtxMenu!.relPath)">Copy Relative Path</div>
-      <div v-if="!tabCtxMenu!.relPath.startsWith('\x00')" class="ide-tab-ctx-item" @click="ctxRevealInFinder(tabCtxMenu!.relPath)">Reveal in Finder</div>
+      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyPath(tabCtxMenu!.relPath)">{{ $t('action.copy-path') }}</div>
+      <div class="ide-tab-ctx-item" :class="{ disabled: tabCtxMenu!.relPath.startsWith('\x00') }" @click="ctxCopyRelPath(tabCtxMenu!.relPath)">{{ $t('action.copy-relative-path') }}</div>
+      <div v-if="!tabCtxMenu!.relPath.startsWith('\x00')" class="ide-tab-ctx-item" @click="ctxRevealInFinder(tabCtxMenu!.relPath)">{{ $t('action.reveal-in-finder') }}</div>
     </div>
     <div v-if="tabCtxMenu" class="ide-tab-ctx-backdrop" @mousedown="closeTabCtxMenu" />
   </teleport>

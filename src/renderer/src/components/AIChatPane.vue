@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { i18n } from '../i18n'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
@@ -2153,7 +2154,7 @@ function renderMarkdownLite(rawText: string): string {
     // Mermaid diagrams — defer rendering to avoid innerHTML XSS
     if (lang?.toLowerCase() === 'mermaid') {
       const i = blocks.length
-      blocks.push(`<div class="ai-mermaid-wrap"><div class="ai-mermaid" data-graph="${encodeURIComponent(code.trim())}"><span class="ai-mermaid-loading">Rendering diagram…</span></div></div>`)
+      blocks.push(`<div class="ai-mermaid-wrap"><div class="ai-mermaid" data-graph="${encodeURIComponent(code.trim())}"><span class="ai-mermaid-loading">${i18n.global.t('label.rendering-diagram')}</span></div></div>`)
       return `\x00B${i}\x00`
     }
     // Diff/patch blocks — render with dedicated diff renderer (green/red line highlighting)
@@ -2162,8 +2163,8 @@ function renderMarkdownLite(rawText: string): string {
       const encoded = btoa(unescape(encodeURIComponent(code.trim())))
       blocks.push(
         `<div class="ai-code-wrap">` +
-        `<div class="ai-code-header"><span class="ai-code-lang">Diff</span>` +
-        `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button></div>` +
+        `<div class="ai-code-header"><span class="ai-code-lang">${i18n.global.t('label.diff')}</span>` +
+        `<button class="ai-code-copy-btn" data-code="${encoded}">${i18n.global.t('action.copy')}</button></div>` +
         `<div class="ai-diff-view ai-diff-inline">${renderDiff(code)}</div>` +
         `</div>`,
       )
@@ -2191,7 +2192,7 @@ function renderMarkdownLite(rawText: string): string {
     // Prefer inferred path from code comment; fall back to active file
     const targetPath = inferredPath ?? props.getActiveRelPath?.() ?? null
     const insertBtn = props.insertTextAtCursor
-      ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor position in editor">Insert</button>`
+      ? `<button class="ai-code-insert-btn" data-code="${encoded}" title="Insert at cursor position in editor">${i18n.global.t('action.insert')}</button>`
       : ''
     const applyLabel = inferredPath ? `Apply to ${inferredPath.split('/').pop()}` : 'Apply'
     const applyBtn = targetPath
@@ -2201,7 +2202,7 @@ function renderMarkdownLite(rawText: string): string {
     const safeInferredPath = inferredPath ? inferredPath.replace(/"/g, '&quot;').replace(/'/g, '&#39;') : ''
     // "Create file" button — shown when code block has an inferred path (for new files)
     const createBtn = inferredPath && props.workspacePath
-      ? `<button class="ai-code-create-btn" data-code="${encoded}" data-path="${safeInferredPath}" title="Create new file: ${safeInferredPath}">Create</button>`
+      ? `<button class="ai-code-create-btn" data-code="${encoded}" data-path="${safeInferredPath}" title="Create new file: ${safeInferredPath}">${i18n.global.t('action.create')}</button>`
       : ''
     const openBtn = inferredPath && props.openFile
       ? `<button class="ai-code-open-btn" data-path="${safeInferredPath}" title="Open ${safeInferredPath} in editor">↗</button>`
@@ -2230,7 +2231,7 @@ function renderMarkdownLite(rawText: string): string {
     }
     const ext = lang ? (LANG_EXT[lang.toLowerCase()] ?? 'txt') : 'txt'
     const saveBtn = window.agentTeam?.saveJson
-      ? `<button class="ai-code-save-btn" data-code="${encoded}" data-ext="${ext}" title="Save to file">Save</button>`
+      ? `<button class="ai-code-save-btn" data-code="${encoded}" data-ext="${ext}" title="Save to file">${i18n.global.t('action.save')}</button>`
       : ''
     // Wrap each line in a span for CSS line-number counters
     const numberedLines = highlighted
@@ -2240,16 +2241,16 @@ function renderMarkdownLite(rawText: string): string {
     // Inline code actions (explain/refactor) for code-like languages
     const isCodeLang = !isShell && !['json', 'yaml', 'toml', 'sql', 'md', 'markdown', 'text', ''].includes((lang ?? '').toLowerCase())
     const explainBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="explain" data-code="${encoded}" title="Ask AI to explain this code [Alt+E]">Explain</button>`
+      ? `<button class="ai-code-action-btn" data-action="explain" data-code="${encoded}" title="Ask AI to explain this code [Alt+E]">${i18n.global.t('action.explain')}</button>`
       : ''
     const refactorBtn = isCodeLang && code.trim().length > 30
-      ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code [Alt+R]">Refactor</button>`
+      ? `<button class="ai-code-action-btn" data-action="refactor" data-code="${encoded}" title="Ask AI to refactor this code [Alt+R]">${i18n.global.t('action.refactor')}</button>`
       : ''
     const newChatBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context [Alt+N]">New chat</button>`
+      ? `<button class="ai-code-action-btn" data-action="newchat" data-code="${encoded}" title="Start new chat with this code as context [Alt+N]">${i18n.global.t('action.new-chat')}</button>`
       : ''
     const compareBtn = isCodeLang && code.trim().length > 20
-      ? `<button class="ai-code-action-btn" data-action="compare" data-code="${encoded}" title="Stage / compare with another code block [Alt+C]">Compare</button>`
+      ? `<button class="ai-code-action-btn" data-action="compare" data-code="${encoded}" title="Stage / compare with another code block [Alt+C]">${i18n.global.t('action.compare')}</button>`
       : ''
     const isErrorBlock = /(?:Error:|Exception:|Traceback|FAILED|\bfatal\b|\bpanic\b)/i.test(code)
     const explainErrBtn = isErrorBlock
@@ -2265,7 +2266,7 @@ function renderMarkdownLite(rawText: string): string {
       `${insertBtn}` +
       `${createBtn}` +
       `${applyBtn}` +
-      `<button class="ai-code-copy-btn" data-code="${encoded}">Copy</button>` +
+      `<button class="ai-code-copy-btn" data-code="${encoded}">${i18n.global.t('action.copy')}</button>` +
       `<button class="ai-code-wrap-btn" title="Toggle word wrap">↔</button>` +
       `</div>` +
       `${explainBtn || refactorBtn || newChatBtn || compareBtn || explainErrBtn ? `<div class="ai-code-actions">${explainErrBtn}${explainBtn}${refactorBtn}${newChatBtn}${compareBtn}</div>` : ''}` +

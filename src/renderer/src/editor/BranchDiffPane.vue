@@ -210,7 +210,7 @@ function cellClass(cell: SideRow['left']): string {
       <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" class="bdp-review-ic">
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/>
       </svg>
-      <span class="bdp-review-label">AI Review</span>
+      <span class="bdp-review-label">{{ $t('label.ai-review') }}</span>
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
         class="bdp-chevron" :style="{ transform: reviewOpen ? '' : 'rotate(-90deg)' }">
         <path d="M4.427 7.427l3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427z"/>
@@ -231,7 +231,7 @@ function cellClass(cell: SideRow['left']): string {
     <div v-show="reviewOpen" class="bdp-review-resizer" @mousedown.prevent="startReviewDrag" />
 
     <!-- States -->
-    <div v-if="loading" class="bdp-msg">Loading diff…</div>
+    <div v-if="loading" class="bdp-msg">{{ $t('label.loading-diff') }}</div>
     <div v-else-if="loadError" class="bdp-msg bdp-err">{{ loadError }}</div>
     <div v-else-if="!fileDiffs.length" class="bdp-msg">
       {{ compare ? `No changes between ${base} and ${resolvedCompare || compare}` : 'No uncommitted changes' }}

@@ -342,28 +342,28 @@ const statusClass = computed(() => {
 
         <div class="grid-2">
           <div>
-            <label>ID</label>
+            <label>{{ $t('label.id') }}</label>
             <input v-model="draft.id" type="text" placeholder="e.g. 01" spellcheck="false" :disabled="!isNew" />
-            <p v-if="isNew && draft.id && stagesApi.stages.value.find((s) => s.id === draft!.id.trim())" class="warn">ID already exists</p>
+            <p v-if="isNew && draft.id && stagesApi.stages.value.find((s) => s.id === draft!.id.trim())" class="warn">{{ $t('error.id-exists') }}</p>
           </div>
           <div>
-            <label>Short Title</label>
+            <label>{{ $t('label.short-title') }}</label>
             <input v-model="draft.shortTitle" type="text" placeholder="e.g. Requirements" spellcheck="false" />
           </div>
         </div>
 
-        <label>Title</label>
+        <label>{{ $t('label.title') }}</label>
         <input v-model="draft.title" type="text" placeholder="e.g. 01 Requirement Analysis" spellcheck="false" />
 
-        <label>Question</label>
+        <label>{{ $t('label.question') }}</label>
         <input v-model="draft.question" type="text" placeholder="e.g. What to do / not do?" spellcheck="false" />
 
-        <label>Description</label>
+        <label>{{ $t('label.description') }}</label>
         <textarea v-model="draft.description" rows="4" placeholder="Brief description of what this stage does" spellcheck="false"></textarea>
 
         <div class="grid-2">
           <div>
-            <label>Sentinel</label>
+            <label>{{ $t('label.sentinel') }}</label>
             <input v-model="draft.sentinel" type="text" placeholder="---SLUG-DONE---" spellcheck="false" />
           </div>
           <div class="checkbox-row" style="margin-top: 18px">
@@ -399,37 +399,37 @@ const statusClass = computed(() => {
           <div v-if="addingSlot" class="slot-form">
             <div class="grid-2">
               <div>
-                <label>Agent</label>
+                <label>{{ $t('label.agent') }}</label>
                 <select v-model="slotDraft.agentKey">
                   <option v-for="a in AGENT_OPTIONS" :key="a.key" :value="a.key">{{ a.label }}</option>
                 </select>
               </div>
               <div>
-                <label>Role Key</label>
+                <label>{{ $t('label.role-key') }}</label>
                 <input v-model="slotDraft.roleKey" type="text" placeholder="e.g. backend" spellcheck="false" />
               </div>
             </div>
-            <label>Label</label>
+            <label>{{ $t('label.label') }}</label>
             <input v-model="slotDraft.label" type="text" placeholder="e.g. Backend" spellcheck="false" />
-            <label>Kickoff Body</label>
+            <label>{{ $t('label.kickoff-body') }}</label>
             <textarea v-model="slotDraft.kickoffBody" rows="5" spellcheck="false" class="mono" placeholder="Stage-specific body (no INTERACTION_PROTOCOL prefix). Use {{task}}."></textarea>
             <div class="row tight" style="margin-top: 6px">
-              <button class="ghost" @click="cancelAddSlot">Cancel</button>
-              <button class="primary" :disabled="!slotDraft.label.trim()" @click="confirmAddSlot">Add</button>
+              <button class="ghost" @click="cancelAddSlot">{{ $t('action.cancel') }}</button>
+              <button class="primary" :disabled="!slotDraft.label.trim()" @click="confirmAddSlot">{{ $t('action.add') }}</button>
             </div>
           </div>
         </div>
       </section>
       <section v-else class="detail empty">
-        <p>Select a stage on the left or click <strong>+ Add Stage</strong>.</p>
+        <p>{{ $t('hint.select-stage-or-create') }}</p>
       </section>
     </div>
 
     <!-- Delete confirm modal -->
     <div v-if="confirmingDelete" class="modal" @click.self="confirmingDelete = false">
       <div class="modal-card">
-        <h3>Delete stage "{{ draft?.title }}"?</h3>
-        <p>This removes the stage from the persisted registry. Running pipelines that reference this stage will skip it.</p>
+        <h3>{{ $t('hint.delete-stage-title') }}</h3>
+        <p>{{ $t('hint.delete-stage-warning') }}</p>
         <div class="modal-actions">
           <button class="ghost" @click="confirmingDelete = false">{{ $t('action.cancel') }}</button>
           <button class="danger" @click="doDelete">{{ $t('action.delete') }}</button>
@@ -440,11 +440,11 @@ const statusClass = computed(() => {
     <!-- Reset confirm modal -->
     <div v-if="confirmingReset" class="modal" @click.self="confirmingReset = false">
       <div class="modal-card">
-        <h3>Reset all stages to factory defaults?</h3>
-        <p>All custom stages will be removed and the original 5 SDLC stages will be restored. This is destructive and cannot be undone.</p>
+        <h3>{{ $t('hint.reset-stages-title') }}</h3>
+        <p>{{ $t('hint.reset-stages-warning') }}</p>
         <div class="modal-actions">
-          <button class="ghost" @click="confirmingReset = false">Cancel</button>
-          <button class="danger" @click="doReset">Reset</button>
+          <button class="ghost" @click="confirmingReset = false">{{ $t('action.cancel') }}</button>
+          <button class="danger" @click="doReset">{{ $t('action.reset') }}</button>
         </div>
       </div>
     </div>

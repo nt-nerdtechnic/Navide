@@ -120,10 +120,10 @@ onUnmounted(() => {
 
       <div class="comp-card">
         <div class="comp-emoji">🎉</div>
-        <h1 class="comp-title">Pipeline complete!</h1>
+        <h1 class="comp-title">{{ $t('label.pipeline-completed-modal') }}</h1>
         <p class="comp-sub">All {{ totalStages }} stages finished successfully</p>
-        <p class="comp-sub2">Every agent has delivered its results — check the panels on the right.</p>
-        <button class="comp-btn" @click="emit('close')">Awesome, let's go 🚀</button>
+        <p class="comp-sub2">{{ $t('hint.completion-modal-body') }}</p>
+        <button class="comp-btn" @click="emit('close')">{{ $t('action.completion-close') }}</button>
       </div>
     </div>
   </Teleport>

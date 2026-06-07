@@ -791,10 +791,10 @@ async function plDelete(id: string, name: string) {
             </aside>
             <section v-if="rDraft" class="split-detail">
               <div class="detail-head">
-                <h3>{{ rDraft.isNew ? 'New role' : 'Edit role' }}</h3>
+                <h3>{{ rDraft.isNew ? $t('label.new-role') : $t('label.edit-role') }}</h3>
                 <div class="row-g gap">
                   <button v-if="!rDraft.isNew" class="danger" @click="rConfirmDelete = true">{{ $t('settings.roles.delete') }}</button>
-                  <button class="primary" :disabled="!rCanSave || rSaving" @click="rSave">{{ rSaving ? 'Saving…' : rDraft.isNew ? 'Create' : $t('settings.roles.save') }}</button>
+                  <button class="primary" :disabled="!rCanSave || rSaving" @click="rSave">{{ rSaving ? $t('label.saving') : rDraft.isNew ? $t('action.create') : $t('settings.roles.save') }}</button>
                 </div>
               </div>
               <p v-if="rError" class="err-msg">{{ rError }}</p>
@@ -819,7 +819,7 @@ async function plDelete(id: string, name: string) {
                 <p class="hint-msg">{{ rDraft.system_prompt.length }} chars · Changes apply to new spawns only</p>
               </div>
             </section>
-            <section v-else class="split-detail empty-detail"><p>Select a role or click + New role</p></section>
+            <section v-else class="split-detail empty-detail"><p>{{ $t('hint.select-role-create') }}</p></section>
           </div>
         </div>
 
@@ -830,18 +830,18 @@ async function plDelete(id: string, name: string) {
           <!-- ── LIST VIEW ──────────────────────────────────────────────── -->
           <template v-if="mView === 'list'">
             <div class="mcp-topbar">
-              <span class="mcp-page-title">Installed MCP Servers</span>
+              <span class="mcp-page-title">{{ $t('label.installed-mcp-servers') }}</span>
               <div class="mcp-topbar-actions">
-                <button class="mcp-action-btn" @click="mView = 'catalog'">Add MCP +</button>
-                <button class="mcp-action-btn" @click="mLoad" :disabled="mLoading">Refresh ↺</button>
-                <button class="mcp-action-btn" @click="mOpenConfig" :disabled="!mConfigPath">Open MCP Config</button>
+                <button class="mcp-action-btn" @click="mView = 'catalog'">{{ $t('action.add-mcp') }}</button>
+                <button class="mcp-action-btn" @click="mLoad" :disabled="mLoading">{{ $t('action.refresh') }}</button>
+                <button class="mcp-action-btn" @click="mOpenConfig" :disabled="!mConfigPath">{{ $t('action.open-mcp-config') }}</button>
               </div>
             </div>
             <p v-if="mError" class="err-msg" style="margin:6px 16px 0">{{ mError }}</p>
             <span v-if="mSummary" class="mcp-summary-ok">{{ mSummary }}</span>
 
             <div class="mcp-server-list">
-              <div v-if="mLoading" class="mcp-loading">Loading…</div>
+              <div v-if="mLoading" class="mcp-loading">{{ $t('label.loading') }}</div>
 
               <div v-for="(srv, idx) in mServers" :key="srv.name" class="mcp-server-card">
                 <!-- Main row -->
@@ -863,11 +863,11 @@ async function plDelete(id: string, name: string) {
                 </div>
                 <div v-else-if="srv.status === 'error'" class="mcp-tools-row mcp-tools-error">
                   <span class="mcp-chevron">!</span>
-                  <span>Connection failed — check that the command is correct</span>
+                  <span>{{ $t('hint.connection-failed') }}</span>
                 </div>
                 <div v-else-if="srv.status === 'disabled'" class="mcp-tools-row mcp-tools-disabled">
                   <span class="mcp-chevron">–</span>
-                  <span>Disabled</span>
+                  <span>{{ $t('label.disabled') }}</span>
                 </div>
 
                 <!-- Tool list (expanded) -->
@@ -881,12 +881,12 @@ async function plDelete(id: string, name: string) {
                 <!-- Env / command editor (collapsible) -->
                 <div class="mcp-config-toggle" @click="mToggleEnv(srv.name)">
                   <span class="mcp-chevron" :class="{ open: mExpandedEnv.has(srv.name) }">›</span>
-                  <span>Settings</span>
+                  <span>{{ $t('action.settings') }}</span>
                 </div>
                 <div v-if="mExpandedEnv.has(srv.name)" class="mcp-config-form">
                   <div class="two-col">
                     <div class="field">
-                      <label class="lbl">Command</label>
+                      <label class="lbl">{{ $t('label.mcp-command') }}</label>
                       <input v-model="srv.command" type="text" spellcheck="false" placeholder="npx" @blur="mSave(true)" />
                     </div>
                     <div class="field">
@@ -1330,7 +1330,7 @@ async function plDelete(id: string, name: string) {
               <div class="pl-detail-actions">
                 <button class="pl-delete-icon"
                   :disabled="plBusy || (pipelinesApi?.pipelines.value.length ?? 0) <= 1"
-                  :title="(pipelinesApi?.pipelines.value.length ?? 0) <= 1 ? 'At least one pipeline must remain' : 'Delete this pipeline'"
+                  :title="(pipelinesApi?.pipelines.value.length ?? 0) <= 1 ? $t('hint.at-least-one-pipeline') : $t('action.delete-pipeline')"
                   @click="plDelete(plEditingId, plCurrentPipeline?.name ?? '')">
                   🗑
                 </button>
@@ -1382,10 +1382,10 @@ async function plDelete(id: string, name: string) {
                 </aside>
                 <section v-if="sDraft" class="split-detail">
                   <div class="detail-head">
-                    <h3>{{ sIsNew ? 'New stage' : 'Edit stage' }}</h3>
+                    <h3>{{ sIsNew ? $t('label.new-stage') : $t('label.edit-stage') }}</h3>
                     <div class="row-g gap">
-                      <button v-if="!sIsNew" class="danger" @click="sConfirmDelete = true">🗑 Delete</button>
-                      <button class="primary" :disabled="!sCanSave || sSaving" @click="sSave">{{ sSaving ? 'Saving…' : sIsNew ? 'Create' : 'Save' }}</button>
+                      <button v-if="!sIsNew" class="danger" @click="sConfirmDelete = true">{{ $t('settings.roles.delete') }}</button>
+                      <button class="primary" :disabled="!sCanSave || sSaving" @click="sSave">{{ sSaving ? $t('label.saving') : sIsNew ? $t('action.create') : $t('settings.roles.save') }}</button>
                     </div>
                   </div>
                   <p v-if="sError" class="err-msg">{{ sError }}</p>
@@ -1522,7 +1522,7 @@ async function plDelete(id: string, name: string) {
                 {{ $t('settings.appearance.reset-to-defaults') }}
               </button>
             </div>
-            <p class="ap-hint">Tweaks are layered on top of the current theme and preserved when switching themes.</p>
+            <p class="ap-hint">{{ $t('settings.appearance.tweaks-hint') }}</p>
             <div class="ap-color-list">
               <label
                 v-for="tok in CUSTOMIZABLE_TOKENS"
@@ -1535,7 +1535,7 @@ async function plDelete(id: string, name: string) {
                   :value="resolvedTokenValue(tok.id)"
                   @input="onPickColor(tok.id, ($event.target as HTMLInputElement).value)"
                 />
-                <span class="ap-color-name">{{ tok.label }}</span>
+                <span class="ap-color-name">{{ $t('settings.color.' + tok.id.slice(2)) }}</span>
                 <span class="ap-color-token">{{ tok.id }}</span>
                 <button
                   v-if="customOverrides[tok.id]"
@@ -1548,9 +1548,9 @@ async function plDelete(id: string, name: string) {
           </section>
 
           <section class="ap-section">
-            <h3 class="ap-title">Environment</h3>
-            <p class="ap-hint">Re-run the first-launch environment detection wizard (checks Homebrew / Node / CLI / Ollama, etc.).</p>
-            <button class="ap-reset" @click="emit('reopen-onboarding')">↻ Re-run environment check</button>
+            <h3 class="ap-title">{{ $t('settings.appearance.environment') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
+            <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
           </section>
         </div>
 
@@ -1561,21 +1561,21 @@ async function plDelete(id: string, name: string) {
     <!-- Confirm dialogs -->
     <div v-if="rConfirmDelete" class="s-overlay confirm" @click.self="rConfirmDelete = false">
       <div class="confirm-card">
-        <h3>Delete role "{{ rDraft?.label }}"?</h3>
-        <p>This action cannot be undone.</p>
+        <h3>{{ $t('settings.roles.delete-confirm-title', { label: rDraft?.label }) }}</h3>
+        <p>{{ $t('settings.roles.cannot-undo') }}</p>
         <div class="row-g gap" style="justify-content:flex-end">
           <button class="ghost" @click="rConfirmDelete = false">{{ $t('settings.roles.cancel') }}</button>
-          <button class="danger" @click="rDoDelete">Delete</button>
+          <button class="danger" @click="rDoDelete">{{ $t('action.delete') }}</button>
         </div>
       </div>
     </div>
     <div v-if="rConfirmReset" class="s-overlay confirm" @click.self="rConfirmReset = false">
       <div class="confirm-card">
-        <h3>Reset all roles to defaults?</h3>
-        <p>All custom roles will be removed. This action cannot be undone.</p>
+        <h3>{{ $t('settings.roles.reset-confirm-title') }}</h3>
+        <p>{{ $t('settings.roles.reset-confirm-body') }}</p>
         <div class="row-g gap" style="justify-content:flex-end">
-          <button class="ghost" @click="rConfirmReset = false">Cancel</button>
-          <button class="danger" @click="rDoReset">Reset</button>
+          <button class="ghost" @click="rConfirmReset = false">{{ $t('action.cancel') }}</button>
+          <button class="danger" @click="rDoReset">{{ $t('action.reset') }}</button>
         </div>
       </div>
     </div>

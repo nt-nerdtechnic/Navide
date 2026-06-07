@@ -23,7 +23,7 @@ const btnLabel = computed(() =>
     <div class="ob-dep-info">
       <div class="ob-dep-name">
         {{ dep.label }}
-        <span v-if="dep.optional" class="ob-dep-opt">Optional</span>
+        <span v-if="dep.optional" class="ob-dep-opt">{{ $t('label.optional') }}</span>
         <span v-if="dep.version" class="ob-dep-ver">{{ dep.version }}</span>
         <span v-if="dep.status === 'outdated'" class="ob-dep-warn">requires ≥ {{ dep.min_version }}</span>
       </div>

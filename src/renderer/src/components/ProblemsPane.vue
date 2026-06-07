@@ -40,11 +40,11 @@ function openItem(d: Diagnostic): void {
 <template>
   <div class="problems-pane">
     <div class="problems-header">
-      <span class="problems-title">Problems</span>
+      <span class="problems-title">{{ $t('pane.problems.title') }}</span>
       <span v-if="errorCount" class="badge badge-err">{{ errorCount }} error{{ errorCount !== 1 ? 's' : '' }}</span>
       <span v-if="warnCount" class="badge badge-warn">{{ warnCount }} warning{{ warnCount !== 1 ? 's' : '' }}</span>
     </div>
-    <div v-if="!all.length" class="problems-empty">No problems detected</div>
+    <div v-if="!all.length" class="problems-empty">{{ $t('label.no-problems-detected') }}</div>
     <div v-else class="problems-list">
       <div v-for="g in groups" :key="g.relPath" class="prob-group">
         <div class="prob-file">{{ g.relPath }}</div>
@@ -63,7 +63,7 @@ function openItem(d: Diagnostic): void {
             class="prob-fix-btn"
             title="Fix with AI"
             @click.stop="emit('fix-with-ai', { diag: d })"
-          >Fix</button>
+          >{{ $t('action.fix') }}</button>
         </div>
       </div>
     </div>

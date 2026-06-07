@@ -164,13 +164,13 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
     </div>
 
     <div ref="bodyRef" class="dp-body">
-      <div v-if="loading" class="dp-msg">Loading…</div>
+      <div v-if="loading" class="dp-msg">{{ $t('label.loading') }}</div>
       <div v-else-if="loadError" class="dp-msg err">{{ loadError }}</div>
-      <div v-else-if="isBinary" class="dp-msg">Binary file — diff not available</div>
-      <div v-else-if="isEmpty" class="dp-msg">No changes</div>
+      <div v-else-if="isBinary" class="dp-msg">{{ $t('label.binary-file') }}</div>
+      <div v-else-if="isEmpty" class="dp-msg">{{ $t('label.no-changes') }}</div>
       <div v-else-if="rawDiff === null" class="dp-msg">
         Diff not loaded
-        <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">Reload</button>
+        <button class="dp-refresh" style="margin-left: 8px" @click="loadDiff">{{ $t('action.reload') }}</button>
       </div>
       <div v-else class="dp-hunks">
         <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dp-hunk" :class="{ active: hi === currentHunkIdx }">
@@ -178,12 +178,12 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
             <span class="dp-range">{{ hunk.header }}</span>
             <span class="dp-actions">
               <template v-if="staged">
-                <button class="hk-btn" @click="unstageHunk(hunk)">Unstage Hunk</button>
+                <button class="hk-btn" @click="unstageHunk(hunk)">{{ $t('action.unstage-hunk') }}</button>
               </template>
               <template v-else>
-                <button v-if="hunkHasChanges(hunk)" class="hk-btn" @click="stageHunk(hunk)">Stage Hunk</button>
+                <button v-if="hunkHasChanges(hunk)" class="hk-btn" @click="stageHunk(hunk)">{{ $t('action.stage-hunk') }}</button>
                 <button v-if="selectedCount(hi) > 0" class="hk-btn primary" @click="stageSelected(hunk, hi)">Stage Selected ({{ selectedCount(hi) }})</button>
-                <button v-if="hunkHasChanges(hunk)" class="hk-btn danger" @click="discardHunk(hunk)">Discard Hunk</button>
+                <button v-if="hunkHasChanges(hunk)" class="hk-btn danger" @click="discardHunk(hunk)">{{ $t('action.discard-hunk') }}</button>
               </template>
             </span>
           </div>

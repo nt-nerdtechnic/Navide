@@ -283,7 +283,7 @@ defineExpose({ openReplace, focusInput, setQuery })
             @keydown.esc="clearSearch"
           />
           <div class="sp-toggles">
-            <button class="sp-tg" :class="{ on: caseSensitive }" title="Match case (Aa)" @click="caseSensitive = !caseSensitive">Aa</button>
+            <button class="sp-tg" :class="{ on: caseSensitive }" :title="$t('hint.match-case')" @click="caseSensitive = !caseSensitive">Aa</button>
             <button class="sp-tg" :class="{ on: wholeWord }" title="Match whole word" @click="wholeWord = !wholeWord">
               <span style="text-decoration: underline">ab</span>
             </button>
@@ -317,9 +317,9 @@ defineExpose({ openReplace, focusInput, setQuery })
 
     <!-- ── summary ──────────────────────────────────────────────────────── -->
     <div class="sp-summary">
-      <span v-if="searching" class="sp-muted">Searching…</span>
+      <span v-if="searching" class="sp-muted">{{ $t('label.searching') }}</span>
       <span v-else-if="error" class="sp-error">{{ error }}</span>
-      <span v-else-if="query && total === 0" class="sp-muted">No results</span>
+      <span v-else-if="query && total === 0" class="sp-muted">{{ $t('label.no-results') }}</span>
       <span v-else-if="total > 0">{{ total }} result(s) · {{ fileCount }} file(s)<span v-if="truncated" class="sp-trunc"> · Truncated</span></span>
     </div>
 

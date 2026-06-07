@@ -57,7 +57,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
   <div class="ob-overlay">
     <div class="ob-modal">
       <header class="ob-header">
-        <div class="ob-title">Navide (Agent-Team) · Environment Setup</div>
+        <div class="ob-title">Navide (Agent-Team) · {{ $t('label.environment-setup') }}</div>
         <ol class="ob-steps">
           <li
             v-for="s in STEPS"
@@ -72,7 +72,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       <div class="ob-body">
         <!-- Step 1 -->
         <section v-if="step === 1">
-          <p class="ob-hint">Install the foundational tools required to run Navide (Agent-Team). Already-installed items show a green checkmark.</p>
+          <p class="ob-hint">{{ $t('hint.install-foundation-tools') }}</p>
           <OnboardingDepRow
             v-for="d in ob.foundationDeps.value"
             :key="d.id"
@@ -81,14 +81,14 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             @install="ob.install(d)"
           />
           <div class="ob-row-actions">
-            <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">Install missing</button>
+            <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">{{ $t('action.install-missing') }}</button>
             <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? 'Detecting…' : 'Re-detect' }}</button>
           </div>
         </section>
 
         <!-- Step 2 -->
         <section v-else-if="step === 2">
-          <p class="ob-hint">At least one Agent CLI (claude / codex / gemini) is required. Detection only confirms the binary is in PATH — <b>it does not verify you are logged in</b>. Complete login in an external terminal.</p>
+          <p class="ob-hint">{{ $t('hint.agent-cli-required') }}</p>
           <OnboardingDepRow
             v-for="d in ob.cliDeps.value"
             :key="d.id"
@@ -96,7 +96,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
             :installing="ob.installing.value"
             @install="ob.install(d)"
           />
-          <p class="ob-hint" style="margin-top:14px">Analyzer requires Ollama + at least one model.</p>
+          <p class="ob-hint" style="margin-top:14px">{{ $t('hint.analyzer-requires-ollama') }}</p>
           <OnboardingDepRow
             v-for="d in ob.analyzerDeps.value"
             :key="d.id"
@@ -108,15 +108,15 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           <!-- Model picker -->
           <div class="ob-models">
             <div class="ob-models-head">
-              <span class="ob-models-title">Analysis model</span>
-              <span class="ob-models-sub">Download any one; any installed model will pass.</span>
+              <span class="ob-models-title">{{ $t('label.analysis-model') }}</span>
+              <span class="ob-models-sub">{{ $t('hint.download-model') }}</span>
             </div>
 
             <div class="ob-installed">
               <template v-if="ob.models.value.length">
                 <span v-for="m in ob.models.value" :key="m" class="ob-chip ok">✓ {{ m }}</span>
               </template>
-              <span v-else class="ob-chip empty">No models installed</span>
+              <span v-else class="ob-chip empty">{{ $t('label.no-models-installed') }}</span>
             </div>
 
             <div class="ob-model-grid">
@@ -132,8 +132,8 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
                 <span class="ob-model-info">
                   <span class="ob-model-name">
                     {{ m.name }}
-                    <span v-if="m.recommended" class="ob-tag rec">Recommended</span>
-                    <span v-if="isInstalled(m.name)" class="ob-tag inst">Installed</span>
+                    <span v-if="m.recommended" class="ob-tag rec">{{ $t('label.recommended') }}</span>
+                    <span v-if="isInstalled(m.name)" class="ob-tag inst">{{ $t('label.installed') }}</span>
                   </span>
                   <span class="ob-model-desc">{{ m.desc }}</span>
                 </span>
