@@ -80,6 +80,29 @@ def _validate_commit_hash(value: str) -> str | None:
     return None
 
 
+_GIT_ESCAPE_RE = re.compile(r'\\([\\abtnvfr"]|[0-7]{3})')
+
+def _unquote_git_path(raw: str) -> str:
+    """Strip surrounding double-quotes and unescape C-style escapes that git
+    adds to paths with spaces or non-ASCII chars in porcelain output."""
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        inner = raw[1:-1]
+        def _repl(m: re.Match) -> str:
+            s = m.group(1)
+            if s == '\\': return '\\'
+            if s == 'a':  return '\a'
+            if s == 'b':  return '\b'
+            if s == 't':  return '\t'
+            if s == 'n':  return '\n'
+            if s == 'v':  return '\v'
+            if s == 'f':  return '\f'
+            if s == 'r':  return '\r'
+            if s == '"':  return '"'
+            return chr(int(s, 8))
+        return _GIT_ESCAPE_RE.sub(_repl, inner)
+    return raw
+
+
 def _validate_ref_name(value: str, label: str = "name") -> str | None:
     """Return None if valid, else an error string.
 
@@ -187,12 +210,12 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
             if len(line) < 3:
                 continue
             xy = line[:2]
-            path = line[3:]
+            path = _unquote_git_path(line[3:])
             x, y = xy[0], xy[1]
             # Renames/copies render as "orig -> new"; use the new path so that
             # later stage/unstage/discard/diff operations resolve a real file.
             if (x in ("R", "C") or y in ("R", "C")) and " -> " in path:
-                path = path.split(" -> ", 1)[1]
+                path = _unquote_git_path(path.split(" -> ", 1)[1])
             if x == "!" and y == "!":
                 status.ignored.append(GitFileEntry(path=path, status="!"))
             elif x == "?" and y == "?":
