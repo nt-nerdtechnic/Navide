@@ -14,6 +14,12 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+try:
+    import chardet as _chardet
+    _HAVE_CHARDET = True
+except ImportError:
+    _HAVE_CHARDET = False
+
 from .projects import PROJECT_DIR_NAME
 
 # High-noise dirs the UI should not auto-expand (performance, NOT gitignore).
@@ -246,20 +252,159 @@ def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
 _READ_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
 
 
-def read_file(workspace_path: str, rel_path: str) -> dict[str, Any]:
-    """Read a UTF-8 text file. Binary / undecodable files return an error."""
+_BINARY_EXTENSIONS = {
+    # Images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif", ".svg",
+    ".avif", ".heic", ".heif", ".raw",
+    # Audio / Video
+    ".mp3", ".mp4", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".webm", ".mkv", ".avi",
+    ".mov", ".wmv",
+    # Fonts
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    # Archives / compiled
+    ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".jar", ".war", ".ear",
+    ".pyc", ".pyo", ".class", ".so", ".dylib", ".dll", ".exe", ".bin", ".a", ".o",
+    # Documents
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # Database
+    ".db", ".sqlite", ".sqlite3",
+}
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".svg", ".avif"}
+
+_ENCODINGS_TO_TRY = [
+    "utf-8-sig",   # UTF-8 with BOM  (must come before utf-8)
+    "utf-16",      # UTF-16 with BOM (auto-detects LE/BE)
+    "utf-8",
+    "latin-1",     # always succeeds — last resort for Western text
+]
+
+
+def _detect_encoding(raw: bytes) -> str:
+    """Return the best encoding guess for *raw* bytes."""
+    if _HAVE_CHARDET:
+        result = _chardet.detect(raw[:65536])
+        enc = (result.get("encoding") or "").lower().replace("-", "_")
+        confidence = result.get("confidence", 0) or 0
+        if enc and confidence >= 0.70:
+            # Normalise common aliases
+            enc = {
+                "ascii": "utf_8",
+                "utf_8_sig": "utf_8_sig",
+                "utf_16_le": "utf_16",
+                "utf_16_be": "utf_16",
+                "iso_8859_1": "latin_1",
+                "windows_1252": "cp1252",
+                "windows_1251": "cp1251",
+                "gb2312": "gb2312",
+                "gbk": "gbk",
+                "big5": "big5",
+                "shift_jis": "shift_jis",
+                "euc_jp": "euc_jp",
+                "euc_kr": "euc_kr",
+            }.get(enc, enc)
+            return enc
+    # BOM detection fallback
+    if raw[:3] == b"\xef\xbb\xbf":
+        return "utf_8_sig"
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return "utf_16"
+    return "utf_8"
+
+
+def _is_binary_content(raw: bytes) -> bool:
+    """Heuristic: if > 0.3% of first 8 KB are null bytes, treat as binary."""
+    sample = raw[:8192]
+    if not sample:
+        return False
+    null_count = sample.count(b"\x00")
+    return null_count / len(sample) > 0.003
+
+
+def read_file(workspace_path: str, rel_path: str, encoding_override: str | None = None) -> dict[str, Any]:
+    """Read a file, auto-detecting encoding.
+
+    If *encoding_override* is given, skip detection and decode with that codec.
+
+
+    Returns:
+        ok=True  → {"ok": True, "content": str, "encoding": str, "bom": bool}
+        ok=False → {"ok": False, "error": str, "is_binary": bool,
+                     "size": int, "ext": str}
+    """
     try:
         target = _resolve_safe(workspace_path, rel_path)
         if not target.is_file():
             raise FsError("not a file")
-        if target.stat().st_size > _READ_SIZE_LIMIT:
-            return {"ok": False, "error": "file too large (> 10 MB)"}
-        content = target.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return {"ok": False, "error": "binary or non-UTF-8 file"}
+        size = target.stat().st_size
+        if size > _READ_SIZE_LIMIT:
+            return {"ok": False, "error": "file too large (> 10 MB)", "is_binary": False, "size": size, "ext": target.suffix.lower()}
+
+        ext = target.suffix.lower()
+
+        # Fast-path: known binary extension
+        if ext in _BINARY_EXTENSIONS:
+            return {
+                "ok": False,
+                "error": "binary file",
+                "is_binary": True,
+                "is_image": ext in _IMAGE_EXTENSIONS,
+                "size": size,
+                "ext": ext,
+            }
+
+        raw = target.read_bytes()
+
+        # Heuristic binary check
+        if _is_binary_content(raw):
+            return {
+                "ok": False,
+                "error": "binary file",
+                "is_binary": True,
+                "is_image": False,
+                "size": size,
+                "ext": ext,
+            }
+
+        # Encoding detection + decode
+        if encoding_override:
+            detected = encoding_override.replace("-", "_").lower()
+        else:
+            detected = _detect_encoding(raw)
+        bom = detected in ("utf_8_sig", "utf_16")
+
+        # Try detected encoding first, then fallbacks
+        order = [detected] + ([e for e in _ENCODINGS_TO_TRY if e.replace("-", "_") != detected.replace("-", "_")] if not encoding_override else [])
+        content: str | None = None
+        used_enc = detected
+        for enc in order:
+            try:
+                content = raw.decode(enc)
+                used_enc = enc
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        if content is None:
+            # latin-1 never fails — absolute last resort
+            content = raw.decode("latin-1", errors="replace")
+            used_enc = "latin-1"
+
+        # Normalise encoding name for display (match VS Code labels)
+        _ENC_DISPLAY: dict[str, str] = {
+            "utf_8": "UTF-8", "utf_8_sig": "UTF-8 with BOM",
+            "utf_16": "UTF-16", "utf_16_le": "UTF-16 LE", "utf_16_be": "UTF-16 BE",
+            "latin_1": "Latin-1", "latin-1": "Latin-1",
+            "cp1252": "Windows 1252", "cp1251": "Windows 1251",
+            "gb2312": "GB2312", "gbk": "GBK", "big5": "Big5",
+            "shift_jis": "Shift JIS", "euc_jp": "EUC-JP", "euc_kr": "EUC-KR",
+        }
+        enc_label = _ENC_DISPLAY.get(used_enc.replace("-", "_"), used_enc.upper())
+
+        return {"ok": True, "content": content, "encoding": enc_label, "bom": bom}
+
     except (FsError, OSError) as exc:
-        return {"ok": False, "error": str(exc)}
-    return {"ok": True, "content": content}
+        return {"ok": False, "error": str(exc), "is_binary": False, "size": 0, "ext": ""}
 
 
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool

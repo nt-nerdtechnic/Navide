@@ -108,8 +108,20 @@ function onAddToChatFloat(): void {
   emit('addToChat', sel || editorRef.value?.getValue() || '')
 }
 
-interface FsRead { ok: boolean; content?: string; error?: string }
+interface FsRead {
+  ok: boolean; content?: string; error?: string
+  encoding?: string; bom?: boolean
+  is_binary?: boolean; is_image?: boolean; size?: number; ext?: string
+}
 interface AiResult { ok: boolean; text?: string; error?: string }
+
+// ── Encoding state ────────────────────────────────────────────────────────────
+const fileEncoding = ref<string>('UTF-8')
+const fileBom = ref<boolean>(false)
+const isBinaryFile = ref<boolean>(false)
+const isImageFile = ref<boolean>(false)
+const binarySize = ref<number>(0)
+const binaryExt = ref<string>('')
 
 // ── Line ending (EOL) detection ───────────────────────────────────────────────
 type EOL = 'LF' | 'CRLF'
@@ -134,13 +146,25 @@ async function load(): Promise<void> {
       workspace_path: props.workspacePath,
       rel_path: props.relPath,
     })
-    if (!resp.payload?.ok) {
-      loadError.value = resp.payload?.error || 'Unable to read file'
+    const p = resp.payload
+    if (!p?.ok) {
+      // Binary / image / oversized file — show special UI instead of error text
+      if (p?.is_binary || p?.is_image) {
+        isBinaryFile.value = true
+        isImageFile.value = p?.is_image ?? false
+        binarySize.value = p?.size ?? 0
+        binaryExt.value = p?.ext ?? ''
+        loaded.value = true
+        return
+      }
+      loadError.value = p?.error || 'Unable to read file'
       return
     }
-    const raw = resp.payload.content ?? ''
+    const raw = p.content ?? ''
     eol.value = detectEOL(raw)
     content.value = raw
+    fileEncoding.value = p.encoding ?? 'UTF-8'
+    fileBom.value = p.bom ?? false
     loaded.value = true
     if (props.initialLine && props.initialLine > 0) {
       await nextTick()
@@ -778,7 +802,42 @@ function scrollLineDown(): void { editorRef.value?.scrollLineDown() }
 const editorTabSize = ref(2)
 const editorUseSpaces = ref(true)
 const indentPickerOpen = ref(false)
-function openIndentPicker(): void { indentPickerOpen.value = !indentPickerOpen.value }
+function openIndentPicker(): void { indentPickerOpen.value = !indentPickerOpen.value; encodingPickerOpen.value = false }
+
+const encodingPickerOpen = ref(false)
+const ENCODING_OPTIONS = [
+  'UTF-8', 'UTF-8 with BOM', 'UTF-16', 'UTF-16 LE', 'UTF-16 BE',
+  'Latin-1', 'Windows 1252', 'Windows 1251',
+  'GB2312', 'GBK', 'Big5', 'Shift JIS', 'EUC-JP', 'EUC-KR',
+]
+function openEncodingPicker(): void { encodingPickerOpen.value = !encodingPickerOpen.value; indentPickerOpen.value = false }
+async function reopenWithEncoding(enc: string): Promise<void> {
+  encodingPickerOpen.value = false
+  // Map display name → Python codec name for re-open request
+  const encMap: Record<string, string> = {
+    'UTF-8': 'utf-8', 'UTF-8 with BOM': 'utf-8-sig', 'UTF-16': 'utf-16',
+    'UTF-16 LE': 'utf-16-le', 'UTF-16 BE': 'utf-16-be',
+    'Latin-1': 'latin-1', 'Windows 1252': 'cp1252', 'Windows 1251': 'cp1251',
+    'GB2312': 'gb2312', 'GBK': 'gbk', 'Big5': 'big5',
+    'Shift JIS': 'shift_jis', 'EUC-JP': 'euc_jp', 'EUC-KR': 'euc_kr',
+  }
+  try {
+    const resp = await props.backend.send<FsRead>('fs.read_file', {
+      workspace_path: props.workspacePath,
+      rel_path: props.relPath,
+      encoding_override: encMap[enc] ?? enc.toLowerCase(),
+    })
+    if (resp.payload?.ok && resp.payload.content !== undefined) {
+      content.value = resp.payload.content
+      fileEncoding.value = enc
+      fileBom.value = resp.payload.bom ?? false
+      eol.value = detectEOL(resp.payload.content)
+      dirty.value = false
+    } else {
+      toast(resp.payload?.error ?? 'Failed to re-open with encoding', { type: 'error' })
+    }
+  } catch { toast('Encoding switch failed', { type: 'error' }) }
+}
 function setIndent(size: number, spaces: boolean): void {
   editorTabSize.value = size
   editorUseSpaces.value = spaces
@@ -906,6 +965,18 @@ defineExpose({
     <!-- Editor -->
     <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout" @contextmenu="showContextMenu" @mouseup="onEditorBodyMouseup">
       <div v-if="loadError" class="ep-error">{{ loadError }}</div>
+      <!-- Binary / image file preview -->
+      <div v-else-if="loaded && isBinaryFile" class="ep-binary">
+        <div v-if="isImageFile" class="ep-binary-img-wrap">
+          <img :src="`file://${props.workspacePath}/${props.relPath}`" class="ep-binary-img" :alt="props.name" />
+        </div>
+        <div v-else class="ep-binary-placeholder">
+          <span class="ep-binary-icon">⬛</span>
+          <p class="ep-binary-name">{{ props.name }}</p>
+          <p class="ep-binary-meta">Binary file · {{ binaryExt.toUpperCase().replace('.','') || 'BIN' }} · {{ binarySize > 1048576 ? (binarySize/1048576).toFixed(1)+' MB' : binarySize > 1024 ? (binarySize/1024).toFixed(1)+' KB' : binarySize+' B' }}</p>
+          <p class="ep-binary-hint">This file type cannot be displayed as text.</p>
+        </div>
+      </div>
       <EditorView
         v-else-if="loaded"
         ref="editorRef"
@@ -1076,16 +1147,30 @@ defineExpose({
         <span class="ep-status-sep">·</span>
         <span class="ep-status-lang">{{ langDisplay }}</span>
         <span class="ep-status-sep">·</span>
-        <span class="ep-status-enc">UTF-8</span>
+        <button
+          class="ep-status-enc"
+          :title="`File encoding: ${fileEncoding}${fileBom ? ' (BOM)' : ''} — click to re-open with different encoding`"
+          @click="openEncodingPicker"
+        >{{ fileEncoding }}{{ fileBom ? ' BOM' : '' }}</button>
       </span>
-    </div>
-
-    <!-- Indent picker -->
-    <div v-if="indentPickerOpen" class="ep-indent-picker">
-      <div class="ep-indent-header">Indentation</div>
-      <button v-for="n in [2, 4, 6, 8]" :key="n" class="ep-indent-opt" :class="{ active: editorUseSpaces && editorTabSize === n }" @click="setIndent(n, true); indentPickerOpen = false">{{ n }} Spaces</button>
-      <div class="ep-indent-sep" />
-      <button v-for="n in [2, 4, 8]" :key="'t' + n" class="ep-indent-opt" :class="{ active: !editorUseSpaces && editorTabSize === n }" @click="setIndent(n, false); indentPickerOpen = false">Tabs ({{ n }})</button>
+      <!-- Indent picker -->
+      <div v-if="indentPickerOpen" class="ep-indent-picker">
+        <div class="ep-indent-header">Indentation</div>
+        <button v-for="n in [2, 4, 6, 8]" :key="n" class="ep-indent-opt" :class="{ active: editorUseSpaces && editorTabSize === n }" @click="setIndent(n, true); indentPickerOpen = false">{{ n }} Spaces</button>
+        <div class="ep-indent-sep" />
+        <button v-for="n in [2, 4, 8]" :key="'t' + n" class="ep-indent-opt" :class="{ active: !editorUseSpaces && editorTabSize === n }" @click="setIndent(n, false); indentPickerOpen = false">Tabs ({{ n }})</button>
+      </div>
+      <!-- Encoding picker -->
+      <div v-if="encodingPickerOpen" class="ep-indent-picker ep-enc-picker">
+        <div class="ep-indent-header">Reopen with Encoding</div>
+        <button
+          v-for="enc in ENCODING_OPTIONS"
+          :key="enc"
+          class="ep-indent-opt"
+          :class="{ active: fileEncoding === enc }"
+          @click="reopenWithEncoding(enc)"
+        >{{ enc }}</button>
+      </div>
     </div>
   </div>
 </template>
@@ -1136,6 +1221,19 @@ defineExpose({
 .ep-body { flex: 1; position: relative; min-height: 0; }
 .ep-error, .ep-loading { padding: 24px; color: var(--text-muted); font-size: 12px; }
 .ep-error { color: var(--danger-fg); }
+
+/* Binary / image file preview */
+.ep-binary { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: var(--bg-subtle); }
+.ep-binary-img-wrap { max-width: 100%; max-height: 100%; padding: 24px; }
+.ep-binary-img { max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 4px; box-shadow: 0 2px 16px rgba(0,0,0,.3); }
+.ep-binary-placeholder { text-align: center; padding: 48px 24px; color: var(--text-muted); }
+.ep-binary-icon { font-size: 40px; display: block; opacity: 0.3; margin-bottom: 12px; }
+.ep-binary-name { font-size: 15px; font-weight: 600; color: var(--text-secondary); margin: 0 0 6px; }
+.ep-binary-meta { font-size: 12px; margin: 0 0 10px; opacity: 0.7; }
+.ep-binary-hint { font-size: 11px; opacity: 0.5; margin: 0; }
+
+/* Encoding picker */
+.ep-enc-picker { max-height: 280px; overflow-y: auto; }
 
 .ep-cmdk {
   display: flex;
@@ -1325,24 +1423,27 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  height: 20px;
-  background: var(--accent-emphasis);
-  color: var(--text-on-emphasis);
+  height: 22px;
+  background: var(--bg-inset);
+  color: var(--text-muted);
   font-size: 11px;
   flex-shrink: 0;
   user-select: none;
-  opacity: 0.9;
+  border-top: 1px solid var(--border-muted);
 }
 .ep-status-pos { font-variant-numeric: tabular-nums; }
-.ep-status-sel { color: var(--accent-fg); font-variant-numeric: tabular-nums; padding-left: 8px; }
-.ep-status-right { display: flex; align-items: center; gap: 6px; opacity: 0.85; }
-.ep-status-sep { opacity: 0.5; }
-.ep-status-eol, .ep-status-indent {
-  background: none; border: none; cursor: pointer; padding: 0 2px;
-  color: inherit; font-size: inherit; font-family: inherit;
-  opacity: 0.85;
+.ep-status-sel { font-variant-numeric: tabular-nums; padding-left: 8px; }
+.ep-status-right { display: flex; align-items: center; gap: 1px; }
+.ep-status-sep { opacity: 0.35; padding: 0 3px; }
+.ep-status-eol, .ep-status-indent, .ep-status-enc {
+  background: none; border: none; cursor: pointer; padding: 1px 6px;
+  color: var(--text-muted); font-size: inherit; font-family: inherit;
+  border-radius: 3px; transition: background 0.1s, color 0.1s;
 }
-.ep-status-eol:hover, .ep-status-indent:hover { color: var(--accent-fg); opacity: 1; }
+.ep-status-eol:hover, .ep-status-indent:hover, .ep-status-enc:hover {
+  background: var(--bg-hover); color: var(--text-primary);
+}
+.ep-status-lang { padding: 0 3px; }
 .ep-indent-picker {
   position: absolute; bottom: calc(100% + 4px); right: 8px;
   background: var(--bg-overlay); border: 1px solid var(--border-default);

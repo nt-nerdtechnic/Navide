@@ -1913,7 +1913,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.read_file":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "")
+            enc_override = payload.get("encoding_override") or None
+            result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override)
             await session.websocket.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────
