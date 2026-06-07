@@ -7,7 +7,7 @@
 # Electron copies it to resources/bin/ via package.json extraResources.
 
 a = Analysis(
-    ['agent_team_backend/__main__.py'],
+    ['run.py'],
     pathex=['.'],
     binaries=[],
     datas=[],
