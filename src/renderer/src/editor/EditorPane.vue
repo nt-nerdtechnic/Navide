@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { setContext } from '../keybindings/useKeybindings'
-import EditorView from './view/EditorView.vue'
+import EditorViewMonaco from './view/EditorViewMonaco.vue'
 import type { Range, Position } from './types'
 import { diagnosticsStore } from './diagnostics'
 
@@ -49,7 +49,7 @@ watch([() => props.revealAt, () => props.revealSeq] as const, ([line]) => {
 })
 const loadError = ref('')
 const loaded = ref(false)
-const editorRef = ref<InstanceType<typeof EditorView> | null>(null)
+const editorRef = ref<InstanceType<typeof EditorViewMonaco> | null>(null)
 
 const model = 'qwen2:latest' // analyzer's default; rewrite/complete proxy to local LLM
 const langOverride = ref<string | null>(null)
@@ -976,7 +976,7 @@ defineExpose({
           <p class="ep-binary-hint">This file type cannot be displayed as text.</p>
         </div>
       </div>
-      <EditorView
+      <EditorViewMonaco
         v-else-if="loaded"
         ref="editorRef"
         :model-value="content"
