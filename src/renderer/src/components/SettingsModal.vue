@@ -953,7 +953,7 @@ async function plDelete(id: string, name: string) {
 
           <!-- ① Inference backend -->
           <div class="az-section">
-            <div class="az-section-title">Inference Backend</div>
+            <div class="az-section-title">{{ $t('settings.analyzer.inference-backend') }}</div>
             <div class="az-backend-toggle">
               <button
                 :class="['az-backend-btn', { active: props.analyzerApi.analyzerSettings.value.backend === 'ollama' }]"
@@ -968,8 +968,8 @@ async function plDelete(id: string, name: string) {
             <!-- llama.cpp-specific settings -->
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'llama_cpp'">
               <div class="az-subsection">
-                <label class="az-label">llama-cli executable path
-                  <span class="az-hint-inline">(leave blank to use the default from PATH)</span>
+                <label class="az-label">{{ $t('settings.analyzer.llama-cli-path') }}
+                  <span class="az-hint-inline">{{ $t('settings.analyzer.llama-cli-path-hint') }}</span>
                 </label>
                 <div class="az-url-row">
                   <input
@@ -983,28 +983,28 @@ async function plDelete(id: string, name: string) {
                     class="az-detect-btn"
                     :disabled="azDetecting"
                     @click="azDetectCli"
-                    title="Auto-scan PATH and common locations"
-                  >{{ azDetecting ? '…' : 'Auto-detect' }}</button>
-                  <button class="az-browse-btn" @click="azPickCli" title="Browse…">…</button>
+                    :title="$t('settings.analyzer.auto-detect-title')"
+                  >{{ azDetecting ? '…' : $t('settings.analyzer.auto-detect') }}</button>
+                  <button class="az-browse-btn" @click="azPickCli" :title="$t('action.browse')">…</button>
                 </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
                     llama-cli {{ props.analyzerApi.health.value?.version }}
                   </span>
-                  <span class="az-version offline" v-else>llama-cli not detected</span>
+                  <span class="az-version offline" v-else>{{ $t('settings.analyzer.llama-not-detected') }}</span>
                 </div>
               </div>
 
               <div class="az-subsection">
-                <label class="az-label">Custom GGUF model path
-                  <span class="az-hint-inline">(when set, this file is used directly, bypassing Ollama)</span>
+                <label class="az-label">{{ $t('settings.analyzer.gguf-path') }}
+                  <span class="az-hint-inline">{{ $t('settings.analyzer.gguf-path-hint') }}</span>
                 </label>
                 <div class="az-url-row">
                   <input
                     class="az-input"
                     type="text"
-                    placeholder="e.g. /Users/xxx/models/qwen2.5-coder-7b-q4_k_m.gguf"
+                    :placeholder="$t('settings.analyzer.gguf-path-placeholder')"
                     :value="props.analyzerApi.analyzerSettings.value.gguf_path"
                     @change="props.analyzerApi.saveSettings({ gguf_path: ($event.target as HTMLInputElement).value })"
                   />
@@ -1014,7 +1014,7 @@ async function plDelete(id: string, name: string) {
                     @click="azRecheck"
                     title="Re-check whether the file exists"
                   >{{ azRechecking ? '…' : '↻' }}</button>
-                  <button class="az-browse-btn" @click="azPickGguf" title="Browse .gguf files…">…</button>
+                  <button class="az-browse-btn" @click="azPickGguf" :title="$t('action.browse')">…</button>
                 </div>
                 <template v-if="props.analyzerApi.analyzerSettings.value.gguf_path">
                   <div class="az-status-row">
@@ -1035,7 +1035,7 @@ async function plDelete(id: string, name: string) {
             <!-- Ollama REST-specific settings -->
             <template v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'">
               <div class="az-subsection">
-                <label class="az-label">Inference server URL</label>
+                <label class="az-label">{{ $t('settings.analyzer.inference-url') }}</label>
                 <div class="az-url-row">
                   <input
                     class="az-input"
@@ -1048,16 +1048,16 @@ async function plDelete(id: string, name: string) {
                     class="az-recheck-btn"
                     :disabled="azRechecking"
                     @click="azRecheck"
-                    title="Re-check connection"
+                    :title="$t('settings.analyzer.recheck-title')"
                   >{{ azRechecking ? '…' : '↻' }}</button>
                 </div>
                 <div class="az-status-row">
                   <span class="az-status-dot" :class="props.analyzerApi.health.value?.ok ? 'ok' : 'err'"></span>
                   <span class="az-version" v-if="props.analyzerApi.health.value?.ok">
-                    Ollama {{ props.analyzerApi.health.value?.version }} connected
+                    {{ $t('settings.analyzer.ollama-connected', { version: props.analyzerApi.health.value?.version }) }}
                   </span>
                   <span class="az-version offline" v-else>
-                    Not connected · run <code class="az-code">ollama serve</code>
+                    {{ $t('settings.analyzer.not-connected') }} <code class="az-code">ollama serve</code>
                   </span>
                 </div>
               </div>
@@ -1067,8 +1067,8 @@ async function plDelete(id: string, name: string) {
           <!-- ② Model manager (Ollama mode only) -->
           <div v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'" class="az-section az-models-section">
             <div class="az-section-header">
-              <div class="az-section-title">Model Manager</div>
-              <span class="az-section-note">Download · delete local models</span>
+              <div class="az-section-title">{{ $t('settings.analyzer.model-manager') }}</div>
+              <span class="az-section-note">{{ $t('settings.analyzer.model-manager-note') }}</span>
             </div>
 
             <!-- Pull a new model -->
@@ -1076,7 +1076,7 @@ async function plDelete(id: string, name: string) {
               <input
                 class="az-input az-pull-input"
                 type="text"
-                placeholder="Model name, e.g. qwen2.5-coder, llama3.2, gemma3"
+                :placeholder="$t('settings.analyzer.model-placeholder')"
                 v-model="azPullName"
                 @keydown.enter="azDoPull"
               />
@@ -1085,7 +1085,7 @@ async function plDelete(id: string, name: string) {
                 :disabled="props.analyzerApi.pulling.value || !azPullName.trim()"
                 @click="azDoPull"
               >
-                {{ props.analyzerApi.pulling.value ? 'Downloading…' : '⬇ Download' }}
+                {{ props.analyzerApi.pulling.value ? $t('settings.analyzer.downloading') : $t('settings.analyzer.download') }}
               </button>
             </div>
 
@@ -1093,7 +1093,7 @@ async function plDelete(id: string, name: string) {
             <div v-if="props.analyzerApi.pulling.value" class="az-progress-wrap">
               <div class="az-progress-label">
                 <span class="az-spin">⏳</span>
-                <span>{{ props.analyzerApi.pullProgress.value?.status ?? 'Connecting…' }}</span>
+                <span>{{ props.analyzerApi.pullProgress.value?.status ?? $t('settings.analyzer.connecting') }}</span>
                 <template v-if="props.analyzerApi.pullProgress.value?.total">
                   <span class="az-pct">
                     {{ Math.round((props.analyzerApi.pullProgress.value.completed ?? 0) / props.analyzerApi.pullProgress.value.total * 100) }}%
@@ -1118,7 +1118,7 @@ async function plDelete(id: string, name: string) {
             <!-- Installed models list -->
             <div class="az-model-list">
               <div v-if="props.analyzerApi.models.value.length === 0" class="az-no-models">
-                No local models detected. Run <code>ollama pull &lt;model-name&gt;</code> or use the download field above.
+                {{ $t('settings.analyzer.no-local-models') }}
               </div>
               <div
                 v-for="m in props.analyzerApi.models.value"
@@ -1132,7 +1132,7 @@ async function plDelete(id: string, name: string) {
                     <template v-if="m.size > 0"> · {{ (m.size / 1e9).toFixed(1) }} GB</template>
                   </span>
                 </div>
-                <button class="az-del-btn" @click="azDoDelete(m.name)" title="Delete locally">✕</button>
+                <button class="az-del-btn" @click="azDoDelete(m.name)" :title="$t('settings.analyzer.delete-local-title')">✕</button>
               </div>
             </div>
           </div>
@@ -1140,51 +1140,51 @@ async function plDelete(id: string, name: string) {
           <!-- ③ Model benchmark -->
           <div class="az-section az-benchmark-section">
             <div class="az-section-header">
-              <div class="az-section-title">Model Benchmark</div>
+              <div class="az-section-title">{{ $t('settings.analyzer.model-benchmark') }}</div>
               <button
                 class="az-run-btn"
                 :disabled="props.analyzerApi.benchmarking.value || !props.analyzerApi.health.value?.ok"
                 @click="props.analyzerApi.benchmark()"
               >
-                {{ props.analyzerApi.benchmarking.value ? '⏳ Running…' : '🧪 Run benchmark' }}
+                {{ props.analyzerApi.benchmarking.value ? $t('settings.analyzer.running') : $t('settings.analyzer.run-benchmark') }}
               </button>
             </div>
 
             <div v-if="props.analyzerApi.benchmarking.value" class="az-progress-wrap">
               <div v-if="props.analyzerApi.benchmarkProgress.value" class="az-progress-label">
                 <span class="az-spin">⏳</span>
-                Testing: <strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
+                {{ $t('settings.analyzer.testing') }} <strong>{{ props.analyzerApi.benchmarkProgress.value.model }}</strong>
                 · {{ props.analyzerApi.benchmarkProgress.value.task_id }}
               </div>
-              <div v-else class="az-progress-label">Preparing…</div>
+              <div v-else class="az-progress-label">{{ $t('settings.analyzer.preparing') }}</div>
             </div>
 
             <div v-if="!props.analyzerApi.benchmarking.value && props.analyzerApi.benchmarkResults.value.length === 0" class="az-hint">
-              <p>Runs 4 standard tasks against all local models to determine which ones are suitable for pipeline intent detection:</p>
+              <p>{{ $t('settings.analyzer.benchmark-hint') }}</p>
               <ul>
-                <li><strong>T1</strong> Tech stack detection — outputs JSON <code>{libraries, doc_query}</code></li>
-                <li><strong>T2</strong> Workspace summary — one-sentence summary</li>
-                <li><strong>T3</strong> Relevance selection — picks the most relevant item from a doc list</li>
-                <li><strong>T4</strong> CLI intent parsing — parses agent output and extracts questions and options</li>
+                <li><strong>T1</strong> {{ $t('settings.analyzer.task-t1') }} <code>{libraries, doc_query}</code></li>
+                <li><strong>T2</strong> {{ $t('settings.analyzer.task-t2') }}</li>
+                <li><strong>T3</strong> {{ $t('settings.analyzer.task-t3') }}</li>
+                <li><strong>T4</strong> {{ $t('settings.analyzer.task-t4') }}</li>
               </ul>
-              <p class="az-pass-rule">Pass threshold: at least 3 of 4 tasks (≥75%). Models that fail will be hidden from the Model dropdown.</p>
+              <p class="az-pass-rule">{{ $t('settings.analyzer.pass-threshold') }}</p>
             </div>
 
             <div v-if="props.analyzerApi.benchmarkResults.value.length > 0" class="az-results">
               <div class="az-results-summary">
-                Passed
+                {{ $t('settings.analyzer.passed') }}
                 <strong>{{ props.analyzerApi.benchmarkResults.value.filter(r => r.passed).length }}</strong>
                 /
                 {{ props.analyzerApi.benchmarkResults.value.length }}
-                model(s)
+                {{ $t('settings.analyzer.models') }}
               </div>
               <table class="az-table">
                 <thead>
                   <tr>
-                    <th class="az-th-model">Model</th>
+                    <th class="az-th-model">{{ $t('settings.analyzer.col-model') }}</th>
                     <th v-for="t in ['T1','T2','T3','T4']" :key="t" class="az-th-task">{{ t }}</th>
-                    <th class="az-th-score">Score</th>
-                    <th class="az-th-verdict">Verdict</th>
+                    <th class="az-th-score">{{ $t('settings.analyzer.col-score') }}</th>
+                    <th class="az-th-verdict">{{ $t('settings.analyzer.col-verdict') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1205,8 +1205,8 @@ async function plDelete(id: string, name: string) {
                     </td>
                     <td class="az-td-score">{{ r.score }}/{{ r.tasks.length }}</td>
                     <td class="az-td-verdict">
-                      <span v-if="r.passed" class="az-badge-pass">Pass</span>
-                      <span v-else class="az-badge-fail">Excluded</span>
+                      <span v-if="r.passed" class="az-badge-pass">{{ $t('settings.analyzer.badge-pass') }}</span>
+                      <span v-else class="az-badge-fail">{{ $t('settings.analyzer.badge-excluded') }}</span>
                     </td>
                   </tr>
                 </tbody>
@@ -1216,8 +1216,8 @@ async function plDelete(id: string, name: string) {
 
           <!-- ⑤ Cloud Provider API Keys -->
           <div class="az-section">
-            <div class="az-section-title">Cloud Provider API Keys</div>
-            <p class="az-hint">API keys are stored locally with restricted file permissions (0600). Leave blank for providers you don't use.</p>
+            <div class="az-section-title">{{ $t('settings.analyzer.cloud-keys') }}</div>
+            <p class="az-hint">{{ $t('settings.analyzer.cloud-keys-hint') }}</p>
 
             <table class="az-key-table">
               <tbody>
@@ -1252,7 +1252,7 @@ async function plDelete(id: string, name: string) {
               </tbody>
             </table>
 
-            <div class="az-section-title" style="margin-top:16px">Custom OpenAI-Compatible</div>
+            <div class="az-section-title" style="margin-top:16px">{{ $t('settings.analyzer.custom-openai') }}</div>
             <p class="az-hint">Point to any server exposing <code>/v1/chat/completions</code> (LM Studio, vLLM, llama.cpp, etc.).</p>
             <table class="az-key-table">
               <tbody>
