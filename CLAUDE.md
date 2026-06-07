@@ -11,6 +11,10 @@ This project uses plan-driven development.
 3. After each phase is completed, update that `.plan.md` todo `status`.
 4. If no plan exists and the task is complex, run Discovery -> Clarify -> Plan Artifact before implementation.
 
+## Language
+
+- **Codebase language**: English — all code, comments, commit messages, variable names, and documentation must be in English.
+
 ## Behavioral Guidelines
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
