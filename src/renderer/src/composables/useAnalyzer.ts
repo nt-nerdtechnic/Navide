@@ -145,7 +145,9 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
 
   // ── Benchmark state (persisted to localStorage) ──────────────────────────
   const _stored = localStorage.getItem(BENCHMARK_STORAGE_KEY)
-  const benchmarkResults = ref<BenchmarkModelResult[]>(_stored ? JSON.parse(_stored) : [])
+  const benchmarkResults = ref<BenchmarkModelResult[]>(
+    (() => { try { return _stored ? JSON.parse(_stored) : [] } catch { return [] } })()
+  )
   const benchmarking = ref<boolean>(false)
   const benchmarkProgress = ref<BenchmarkProgress | null>(null)
 

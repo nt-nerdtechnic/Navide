@@ -422,7 +422,7 @@ class TerminalService:
                 "stream": "stdout",
             },
         )
-        asyncio.create_task(self._emit(event))
+        self._loop.create_task(self._emit(event))
 
     def _close(self, session: TerminalSession, *, reason: str) -> None:
         if session.closed:
@@ -468,5 +468,5 @@ class TerminalService:
                 "exit_code": exit_code,
             },
         )
-        asyncio.create_task(self._emit(event))
+        self._loop.create_task(self._emit(event))
         self._sessions.pop(session.id, None)

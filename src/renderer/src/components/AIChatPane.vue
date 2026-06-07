@@ -237,7 +237,7 @@ const pendingCompactAllMessages = ref<ChatMessage[]>([])
 interface PromptTemplate { id: string; name: string; text: string }
 const showPromptTemplates = ref(false)
 const promptTemplates = ref<PromptTemplate[]>(
-  JSON.parse(localStorage.getItem('ai-chat-prompt-templates') ?? '[]') as PromptTemplate[]
+  (() => { try { return JSON.parse(localStorage.getItem('ai-chat-prompt-templates') ?? '[]') } catch { return [] } })()
 )
 
 // Built-in starter templates shown when library is empty
@@ -287,7 +287,9 @@ const displayedTemplates = computed(() =>
 
 // ── Memories (Cursor-style persistent facts, injected into every system prompt) ─
 const MEMORIES_KEY = 'ai-chat-memories'
-const memories = ref<string[]>(JSON.parse(localStorage.getItem(MEMORIES_KEY) ?? '[]') as string[])
+const memories = ref<string[]>(
+  (() => { try { return JSON.parse(localStorage.getItem(MEMORIES_KEY) ?? '[]') } catch { return [] } })()
+)
 watch(memories, (v) => { try { localStorage.setItem(MEMORIES_KEY, JSON.stringify(v)) } catch { /* quota */ } }, { deep: true })
 function addMemory(fact: string): void { const f = fact.trim(); if (f && !memories.value.includes(f)) { memories.value.push(f) } }
 function removeMemory(idx: number): void { memories.value.splice(idx, 1) }

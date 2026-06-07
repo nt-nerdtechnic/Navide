@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import ControlPane, {
@@ -410,7 +410,9 @@ function syncViews(): void {
   })
 }
 
-window.setInterval(syncViews, 400)
+let _syncViewsTimer: ReturnType<typeof window.setInterval> | null = null
+onMounted(() => { _syncViewsTimer = window.setInterval(syncViews, 400) })
+onUnmounted(() => { if (_syncViewsTimer !== null) clearInterval(_syncViewsTimer) })
 watch(panes, syncViews, { deep: true, immediate: true })
 
 // PTY-friendly paste: wraps text with bracketed-paste escape sequences so

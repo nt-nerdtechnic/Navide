@@ -187,6 +187,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let resizeObserver: ResizeObserver | null = null
   let resizeRafId = 0
   let mounted = false
+  let mountedEl: HTMLElement | null = null
+  let _mousedownHandler: (() => void) | null = null
 
   // Debounce the size we push to the backend PTY. Layout transitions and
   // app startup churn the pane size repeatedly (e.g. grid→spotlight); pushing
@@ -334,7 +336,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // Make the whole pane click-focusable so the user can type immediately.
     el.tabIndex = 0
     el.style.cursor = 'text'
-    el.addEventListener('mousedown', () => {
+    const _mousedownHandler = () => {
       // Record click moment too — Claude TUI redraws on focus regardless of
       // which path got us there.
       lastFocusAt.value = Date.now()
@@ -343,7 +345,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       } catch {
         /* ignore */
       }
-    })
+    }
+    el.addEventListener('mousedown', _mousedownHandler)
+    mountedEl = el
     resizeObserver = new ResizeObserver(() => fitAndSend())
     resizeObserver.observe(el)
     mounted = true
@@ -472,6 +476,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cancelAnimationFrame(resizeRafId)
     if (resizeSendTimer) clearTimeout(resizeSendTimer)
     resizeObserver?.disconnect()
+    if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()
     if (sessionId.value) {
       void backend.send('terminal.kill', { terminal_session_id: sessionId.value }).catch(() => {
