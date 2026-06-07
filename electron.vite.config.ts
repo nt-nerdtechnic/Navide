@@ -5,13 +5,11 @@ import { resolve, join } from 'node:path'
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const monacoEditorPlugin = ((monacoEditorPlugin_ as any).default ?? monacoEditorPlugin_) as typeof monacoEditorPlugin_
 import { randomBytes } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
-// ── App version ──────────────────────────────────────────────────────────────
-// 手動維護的版本號 —— 每次有意義的改動就在這裡 bump。
-// 不用 git hash 當版本（hash 對人不直觀，未 commit 的 dirty 改動也不會反映）。
-const APP_VERSION = '0.1.6'
+// ── App version — single source of truth is package.json ─────────────────────
+const APP_VERSION: string = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8')).version
 
 // Build-time tag shown in the header: "v<APP_VERSION> @MM/DD HH:mm".
 // The timestamp distinguishes each dev-mode launch; the version string stays
@@ -44,6 +42,9 @@ export default defineConfig({
       rollupOptions: {
         input: resolve(__dirname, 'src/preload/index.ts')
       }
+    },
+    define: {
+      __APP_VERSION__: JSON.stringify(APP_VERSION)
     }
   },
   renderer: {

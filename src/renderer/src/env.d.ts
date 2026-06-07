@@ -17,6 +17,8 @@ interface BackendInfo {
 declare global {
   // Build tag injected by electron.vite.config.ts (git short-hash + dirty + time).
   const __APP_BUILD__: string
+  // App version injected from package.json at build time.
+  const __APP_VERSION__: string
   interface Window {
     agentTeam?: {
       appName: string

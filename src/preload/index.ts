@@ -10,7 +10,7 @@ export interface BackendInfo {
 
 contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
-  version: '0.0.1',
+  version: __APP_VERSION__,
   getBackendInfo: (): Promise<BackendInfo> => ipcRenderer.invoke('backend:info'),
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
