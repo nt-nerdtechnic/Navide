@@ -632,7 +632,7 @@ function onExplorerDividerEnd(): void {
               <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
             </div>
           </div>
-          <div v-if="panes.length === 0" class="empty">No agents running.</div>
+          <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
           <ul v-else class="agent-list">
             <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
               <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
@@ -656,13 +656,13 @@ function onExplorerDividerEnd(): void {
               <div v-if="p.error" class="err">{{ p.error }}</div>
               <div class="row tight">
                 <template v-if="p.isMinimized">
-                  <button class="ghost" @click="emit('restore', p.id)">↑ Restore</button>
-                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                  <button class="ghost" @click="emit('restore', p.id)">{{ $t('action.restore') }}</button>
+                  <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
                 </template>
                 <template v-else>
-                  <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">Interrupt</button>
-                  <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">Reapply role</button>
-                  <button class="danger" @click="emit('kill', p.id)">Remove</button>
+                  <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">{{ $t('action.interrupt') }}</button>
+                  <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">{{ $t('action.reapply-role') }}</button>
+                  <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
                 </template>
               </div>
             </li>
@@ -671,7 +671,7 @@ function onExplorerDividerEnd(): void {
           <div class="spawn-card">
             <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
               <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
-              <span>Manual spawn</span>
+              <span>{{ $t('label.manual-spawn') }}</span>
             </div>
             <div v-if="manualSpawnOpen" class="spawn-card-body">
               <div class="row two-col">
@@ -681,21 +681,21 @@ function onExplorerDividerEnd(): void {
                   </option>
                 </select>
                 <select v-model="pickedRole">
-                  <option value="">Select role…</option>
+                  <option value="">{{ $t('label.select-role') }}</option>
                   <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
                 </select>
               </div>
-              <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+              <button class="primary" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
               <p v-if="!canSpawn" class="hint warn">
-                {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
+                {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
               </p>
               <div v-if="currentRole" class="prompt-block">
                 <div class="prompt-head">
                   <button class="link" @click="previewOpen = !previewOpen">
                     {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
                   </button>
-                  <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
-                    ⚙ Settings
+                  <button class="link tiny" @click="emit('open-settings')" :title="$t('action.settings')">
+                    ⚙ {{ $t('action.settings') }}
                   </button>
                 </div>
                 <p class="role-line">{{ currentRole.one_line }}</p>
@@ -703,10 +703,10 @@ function onExplorerDividerEnd(): void {
               </div>
               <div v-else class="prompt-block warn-block">
                 <p class="warn">
-                  {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+                  {{ roles.length === 0 ? $t('label.no-roles-available') : $t('label.no-role-selected') }}
                 </p>
                 <div v-if="roles.length === 0" class="row tight">
-                  <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+                  <button class="ghost" @click="emit('open-settings')">⚙ {{ $t('action.settings') }}</button>
                 </div>
               </div>
             </div>
@@ -733,7 +733,7 @@ function onExplorerDividerEnd(): void {
     <div class="part-top" ref="pipelineTopEl" :style="{ height: (pipelineTopRatio * 100) + '%' }">
 
     <section class="block panel-section">
-      <label class="lbl">Workspace</label>
+      <label class="lbl">{{ $t('label.workspace') }}</label>
       <div class="row workspace-row">
         <input
           v-model="workspacePath"
@@ -750,7 +750,7 @@ function onExplorerDividerEnd(): void {
           @click="pickWorkspace"
           title="Pick folder via native dialog"
         >
-          {{ pickingWorkspace ? '…' : '📁 Browse' }}
+          {{ pickingWorkspace ? '…' : '📁 ' + $t('action.browse') }}
         </button>
         <button
           v-if="workspacePath"
@@ -764,7 +764,7 @@ function onExplorerDividerEnd(): void {
       <label class="checkbox-row">
         <input v-model="yoloLocal" type="checkbox" />
         <span>
-          <strong>YOLO mode</strong> — auto-bypass permission prompts
+          <strong>{{ $t('label.yolo-mode') }}</strong> {{ $t('label.yolo-bypass') }}
           <span class="muted-inline">(claude / codex / gemini)</span>
         </span>
       </label>
@@ -772,7 +772,7 @@ function onExplorerDividerEnd(): void {
 
     <!-- ── Pipeline list ────────────────────────────────────────────────── -->
     <section class="block panel-section">
-      <label class="lbl">Pipelines</label>
+      <label class="lbl">{{ $t('label.pipelines') }}</label>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
           v-for="p in pagedPipelines"
@@ -797,7 +797,7 @@ function onExplorerDividerEnd(): void {
           </span>
         </li>
       </ul>
-      <p v-else-if="pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="hint">No pipelines loaded…</p>
+      <p v-else-if="pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="hint">{{ $t('label.no-pipelines') }}</p>
       <div v-if="pipelinePageCount > 1 && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-pagination">
         <button class="ghost pg-btn" :disabled="pipelinePage === 0" @click="pipelinePage--">‹</button>
         <span class="pg-info">{{ pipelinePage + 1 }} / {{ pipelinePageCount }}</span>
@@ -841,12 +841,12 @@ function onExplorerDividerEnd(): void {
         <div class="pipeline-running-divider"></div>
         <div class="pipeline-running-name">
           <div class="prn-title">
-            ▶ {{ pipelines?.find(p => p.id === activePipelineId)?.name ?? 'Pipeline' }}
+            ▶ {{ pipelines?.find(p => p.id === activePipelineId)?.name ?? $t('label.pipelines') }}
           </div>
           <div v-if="pipeline.task" class="prn-task">{{ pipeline.task }}</div>
           <div class="prn-meta">
-            <span v-if="autoAnswerEnabled" class="prn-auto">🤖 Full auto · {{ analyzerModelLocal }}</span>
-            <span v-else class="prn-manual">Manual confirm</span>
+            <span v-if="autoAnswerEnabled" class="prn-auto">{{ $t('label.full-auto') }} · {{ analyzerModelLocal }}</span>
+            <span v-else class="prn-manual">{{ $t('label.manual-confirm') }}</span>
           </div>
         </div>
         <div v-if="pipeline.state === 'running'" class="pipeline-running">
@@ -859,13 +859,13 @@ function onExplorerDividerEnd(): void {
           </div>
           <div class="row pipeline-row">
             <button class="primary wide" :disabled="!pipelineNextStage" @click="emit('pipeline-next')">
-              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
+              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : $t('action.finish') }}
             </button>
-            <button class="danger" @click="emit('pipeline-abort')">Abort</button>
+            <button class="danger" @click="emit('pipeline-abort')">{{ $t('action.abort') }}</button>
           </div>
         </div>
         <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
-          Pipeline aborted. Agents are kept — Resume to continue, or Reset to clear.
+          {{ $t('label.pipeline-aborted') }}
         </p>
       </template>
     </section>
@@ -879,16 +879,16 @@ function onExplorerDividerEnd(): void {
     <!-- ── Active agents ──────────────────────────────────────────────────── -->
     <section class="block panel-section">
       <div class="row between agent-list-hdr">
-        <label class="lbl">Active agents ({{ runningCount }}/{{ panes.length }})</label>
+        <label class="lbl">{{ $t('label.active-agents', { running: runningCount, total: panes.length }) }}</label>
         <div class="agent-header-actions">
           <ViewPanel
             :model-value="layoutMode ?? 'auto'"
             @update:model-value="emit('update:layoutMode', $event)"
           />
-          <button class="history-btn" @click="emit('open-history')">📋 History</button>
+          <button class="history-btn" @click="emit('open-history')">📋 {{ $t('label.history') }}</button>
         </div>
       </div>
-      <div v-if="panes.length === 0" class="empty">No agents running.</div>
+      <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
       <ul v-else class="agent-list">
         <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
           <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
@@ -912,17 +912,17 @@ function onExplorerDividerEnd(): void {
           <div v-if="p.error" class="err">{{ p.error }}</div>
           <div class="row tight">
             <template v-if="p.isMinimized">
-              <button class="ghost" @click="emit('restore', p.id)">↑ Restore</button>
-              <button class="danger" @click="emit('kill', p.id)">Remove</button>
+              <button class="ghost" @click="emit('restore', p.id)">{{ $t('action.restore') }}</button>
+              <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
             </template>
             <template v-else>
               <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
-                Interrupt
+                {{ $t('action.interrupt') }}
               </button>
               <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
-                Reapply role
+                {{ $t('action.reapply-role') }}
               </button>
-              <button class="danger" @click="emit('kill', p.id)">Remove</button>
+              <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
             </template>
           </div>
         </li>
@@ -931,7 +931,7 @@ function onExplorerDividerEnd(): void {
       <div class="spawn-card">
         <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
           <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
-          <span>Manual spawn</span>
+          <span>{{ $t('label.manual-spawn') }}</span>
         </div>
         <div v-if="manualSpawnOpen" class="spawn-card-body">
           <div class="row two-col">
@@ -941,13 +941,13 @@ function onExplorerDividerEnd(): void {
               </option>
             </select>
             <select v-model="pickedRole">
-              <option value="">Select role…</option>
+              <option value="">{{ $t('label.select-role') }}</option>
               <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
             </select>
           </div>
-          <button class="primary" :disabled="!canSpawn" @click="spawn">+ Add to grid</button>
+          <button class="primary" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
           <p v-if="!canSpawn" class="hint warn">
-            {{ backendStatus !== 'connected' ? 'Waiting for backend…' : 'Set workspace path first' }}
+            {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
           </p>
 
           <div v-if="currentRole" class="prompt-block">
@@ -955,8 +955,8 @@ function onExplorerDividerEnd(): void {
               <button class="link" @click="previewOpen = !previewOpen">
                 {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
               </button>
-              <button class="link tiny" @click="emit('open-settings')" title="Open Settings">
-                ⚙ Settings
+              <button class="link tiny" @click="emit('open-settings')" :title="$t('action.settings')">
+                ⚙ {{ $t('action.settings') }}
               </button>
             </div>
             <p class="role-line">{{ currentRole.one_line }}</p>
@@ -964,10 +964,10 @@ function onExplorerDividerEnd(): void {
           </div>
           <div v-else class="prompt-block warn-block">
             <p class="warn">
-              {{ roles.length === 0 ? 'No roles available. Open the manager to add one.' : 'No role selected. The agent will start without role injection.' }}
+              {{ roles.length === 0 ? $t('label.no-roles-available') : $t('label.no-role-selected') }}
             </p>
             <div v-if="roles.length === 0" class="row tight">
-              <button class="ghost" @click="emit('open-settings')">⚙ Open Settings</button>
+              <button class="ghost" @click="emit('open-settings')">⚙ {{ $t('action.settings') }}</button>
             </div>
           </div>
         </div>
@@ -983,12 +983,12 @@ function onExplorerDividerEnd(): void {
         <div class="pipeline-detail-nav">
           <button class="ghost back-btn" @click="backToList">← Back</button>
           <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
-          <span v-if="openedPipelineId === activePipelineId" class="active-tag">Default</span>
+          <span v-if="openedPipelineId === activePipelineId" class="active-tag">{{ $t('label.default') }}</span>
         </div>
       </section>
       <section class="block" :class="{ pipeline: pipelineOpen }">
         <button class="lbl collapsible-header" @click="pipelineOpen = !pipelineOpen">
-          {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? 'Pipeline' }} · {{ effectiveStageCount }}-stage
+          {{ pipelineOpen ? '▾' : '▸' }} {{ openedPipeline?.name ?? $t('label.pipelines') }} · {{ effectiveStageCount }}-stage
         </button>
         <template v-if="pipelineOpen">
         <div
@@ -1054,13 +1054,13 @@ function onExplorerDividerEnd(): void {
         <label class="checkbox-row">
           <input v-model="autoAnswerLocal" type="checkbox" :disabled="!analyzerStatus.available" />
           <span>
-            <strong>🤖 Full auto</strong>
-            <span v-if="!analyzerStatus.available" class="muted-inline"> — needs Ollama</span>
-            <span v-else class="muted-inline"> — LLM auto-answers all agent questions</span>
+            <strong>{{ $t('label.full-auto') }}</strong>
+            <span v-if="!analyzerStatus.available" class="muted-inline">{{ $t('label.needs-ollama') }}</span>
+            <span v-else class="muted-inline">{{ $t('label.auto-answers') }}</span>
           </span>
         </label>
         <div v-if="analyzerStatus.available" class="analyzer-row">
-          <label class="lbl tiny">Model</label>
+          <label class="lbl tiny">{{ $t('label.model') }}</label>
           <select v-model="analyzerModelLocal">
             <option v-for="m in filteredModels" :key="m.name" :value="m.name">
               {{ m.name }} · {{ m.parameter_size || (m.size / 1e9).toFixed(1) + 'GB' }}
@@ -1075,14 +1075,14 @@ function onExplorerDividerEnd(): void {
           </button>
         </div>
         <div v-else class="analyzer-row">
-          <span class="muted-inline">Ollama unreachable.</span>
+          <span class="muted-inline">{{ $t('label.ollama-unreachable') }}</span>
           <button class="ghost refresh" @click="emit('refresh-analyzer')" title="Retry connection">
-            ↻ Retry
+            {{ $t('action.retry') }}
           </button>
         </div>
         <div v-if="pipeline.state === 'idle' || pipeline.state === 'completed' || pipeline.state === 'aborted'" class="row pipeline-row">
           <button class="primary wide" :disabled="!canRunPipeline" @click="startPipeline">
-            ▶ Run pipeline
+            {{ $t('action.run-pipeline') }}
           </button>
           <button
             v-if="pipeline.state !== 'idle'"
@@ -1090,7 +1090,7 @@ function onExplorerDividerEnd(): void {
             @click="emit('pipeline-reset')"
             title="Clear pipeline state and close all agent panes"
           >
-            Reset
+            {{ $t('action.reset') }}
           </button>
         </div>
         <div v-else class="pipeline-running">
@@ -1109,19 +1109,19 @@ function onExplorerDividerEnd(): void {
               :disabled="!pipelineNextStage"
               @click="emit('pipeline-next')"
             >
-              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : 'Finish' }}
+              {{ pipelineNextStage ? `Next → ${pipelineNextStage.shortTitle}` : $t('action.finish') }}
             </button>
-            <button class="danger" @click="emit('pipeline-abort')">Abort</button>
+            <button class="danger" @click="emit('pipeline-abort')">{{ $t('action.abort') }}</button>
           </div>
         </div>
         <p v-if="pipeline.state === 'completed'" class="hint ok">
-          ✓ Pipeline completed all 4 stages. Review each pane on the right.
+          {{ $t('label.pipeline-completed') }}
         </p>
         <p v-else-if="pipeline.state === 'aborted'" class="hint warn">
-          Pipeline aborted (paused). Agents are kept — Resume to continue, or Reset to clear.
+          {{ $t('label.pipeline-aborted-paused') }}
         </p>
         <p v-else-if="pipeline.state === 'idle' && !canRunPipeline" class="hint">
-          Provide task description + workspace, then start.
+          {{ $t('label.provide-task') }}
         </p>
         </template>
       </section>
@@ -1132,24 +1132,19 @@ function onExplorerDividerEnd(): void {
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
         <div class="restart-card">
-          <h3>↺ Start pipeline over from Stage 01?</h3>
-          <p v-if="existingProject">
-            This will <strong>discard the current project state</strong>
-            ({{ existingProject.stagesCompleted }}/{{ existingProject.totalStages }} stages recorded
-            as completed) and re-run from the beginning using the same task description.
-          </p>
+          <h3>{{ $t('label.restart-title') }}</h3>
+          <p v-if="existingProject" v-html="$t('hint.restart-confirm', { completed: existingProject.stagesCompleted, total: existingProject.totalStages })"></p>
           <div v-if="existingProject?.taskDescription" class="restart-task">
             {{ existingProject.taskDescription.length > 240
               ? existingProject.taskDescription.slice(0, 240) + '…'
               : existingProject.taskDescription }}
           </div>
           <p class="restart-warn">
-            Existing pipeline.log is preserved (events keep appending).
-            project.json's stage records will be reset to pending.
+            {{ $t('label.restart-preserved') }}
           </p>
           <div class="restart-actions">
-            <button class="ghost" @click="confirmingRestart = false">Cancel</button>
-            <button class="danger" @click="startOverNow">↺ Wipe &amp; restart</button>
+            <button class="ghost" @click="confirmingRestart = false">{{ $t('action.cancel') }}</button>
+            <button class="danger" @click="startOverNow">{{ $t('action.wipe-restart') }}</button>
           </div>
         </div>
       </div>

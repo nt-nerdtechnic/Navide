@@ -109,7 +109,8 @@
     "open-file": "📂 Open file",
     "collapse": "Collapse",
     "restore": "↑ Restore",
-    "retry": "↻ Retry"
+    "retry": "↻ Retry",
+    "finish": "Finish"
   },
   "settings": {
     "appearance": {

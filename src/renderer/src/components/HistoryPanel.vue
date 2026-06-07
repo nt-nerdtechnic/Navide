@@ -211,7 +211,7 @@ function onLogDividerEnd(): void {
           </template>
           <div v-else class="pipeline-log-empty">
             <span class="empty-glyph">›_</span>
-            <span>No output yet</span>
+            <span>{{ $t('label.no-output-yet') }}</span>
           </div>
         </div>
       </div>
@@ -226,14 +226,14 @@ function onLogDividerEnd(): void {
       </select>
       <select v-model="stageFilter" class="flt" title="Filter by stage">
         <option v-for="s in stageOptions" :key="s" :value="s">
-          {{ s === 'all' ? 'all stages' : `Stage ${s}` }}
+          {{ s === 'all' ? $t('label.all-stages') : $t('label.stage-n', { n: s }) }}
         </option>
       </select>
       <input v-model="search" class="search" type="text" placeholder="🔍 search…" />
     </div>
 
-    <div v-if="loading && events.length === 0" class="msg">Loading…</div>
-    <div v-else-if="filtered.length === 0" class="msg">No events</div>
+    <div v-if="loading && events.length === 0" class="msg">{{ $t('label.loading') }}</div>
+    <div v-else-if="filtered.length === 0" class="msg">{{ $t('label.no-events') }}</div>
 
     <div ref="timelineEl" class="timeline" @scroll="onScroll">
       <div
@@ -251,8 +251,8 @@ function onLogDividerEnd(): void {
     </div>
 
     <div class="actions">
-      <button class="act" @click="exportJsonl" title="Download filtered events as .jsonl">💾 Export</button>
-      <button class="act" :disabled="!path" @click="openFile" title="Open history.jsonl in Finder">📂 Open file</button>
+      <button class="act" @click="exportJsonl">{{ $t('action.export') }}</button>
+      <button class="act" :disabled="!path" @click="openFile">{{ $t('action.open-file') }}</button>
     </div>
   </div>
 </template>

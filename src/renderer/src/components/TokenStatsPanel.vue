@@ -159,11 +159,11 @@ async function confirmReset(scope: ResetScope): Promise<void> {
     <div v-if="!expanded" class="rail">
       <button class="rail-btn" :class="{ active: tab === 'history' }" title="Expand pipeline history" @click="tab = 'history'; expanded = true">
         <span class="rail-icon">📜</span>
-        <span class="rail-label">History</span>
+        <span class="rail-label">{{ $t('label.history') }}</span>
       </button>
       <button class="rail-btn" :class="{ active: tab === 'tokens' }" :title="`Expand token stats · ${collapsedTotal} so far`" @click="tab = 'tokens'; expanded = true">
         <span class="rail-icon">📊</span>
-        <span class="rail-label">Tokens</span>
+        <span class="rail-label">{{ $t('label.tokens') }}</span>
         <span v-if="runTotals.calls > 0" class="rail-badge">{{ collapsedTotal }}</span>
       </button>
     </div>
@@ -171,68 +171,68 @@ async function confirmReset(scope: ResetScope): Promise<void> {
     <!-- Expanded panel -->
     <template v-else>
       <header class="hdr">
-        <button class="collapse" title="Collapse" @click="expanded = false">‹</button>
+        <button class="collapse" :title="$t('action.collapse')" @click="expanded = false">‹</button>
         <div class="tabs">
-          <button class="tab" :class="{ active: tab === 'history' }" @click="tab = 'history'">📜 History</button>
-          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 Tokens</button>
+          <button class="tab" :class="{ active: tab === 'history' }" @click="tab = 'history'">📜 {{ $t('label.history') }}</button>
+          <button class="tab" :class="{ active: tab === 'tokens' }" @click="tab = 'tokens'">📊 {{ $t('label.tokens') }}</button>
         </div>
       </header>
 
       <HistoryPanel v-if="tab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
 
       <template v-else>
-      <div v-if="loading && !snapshot" class="msg">Loading…</div>
+      <div v-if="loading && !snapshot" class="msg">{{ $t('label.loading') }}</div>
 
       <div class="body">
         <!-- Current run total -->
         <section class="block">
           <div class="block-hdr">
-            <span class="block-title">Current run</span>
+            <span class="block-title">{{ $t('label.current-run') }}</span>
             <button class="reset-btn" title="Reset run counter" @click="confirmReset('run')">⟲</button>
           </div>
           <div v-if="currentRun" class="run-meta" :title="currentRun.task">
             <span class="run-id">{{ currentRun.run_id || '—' }}</span>
           </div>
-          <div v-else class="muted">No active run.</div>
+          <div v-else class="muted">{{ $t('label.no-active-run') }}</div>
           <div class="totals">
-            <div class="cell"><div class="big">{{ fmt(runTotals.input) }}</div><div class="lbl">input</div></div>
-            <div class="cell"><div class="big">{{ fmt(runTotals.output) }}</div><div class="lbl">output</div></div>
-            <div class="cell"><div class="big">{{ fmt(runTotals.input + runTotals.output) }}</div><div class="lbl">total</div></div>
-            <div class="cell"><div class="big">{{ runTotals.calls }}</div><div class="lbl">calls</div></div>
+            <div class="cell"><div class="big">{{ fmt(runTotals.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(runTotals.output) }}</div><div class="lbl">{{ $t('label.out') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(runTotals.input + runTotals.output) }}</div><div class="lbl">{{ $t('label.total') }}</div></div>
+            <div class="cell"><div class="big">{{ runTotals.calls }}</div><div class="lbl">{{ $t('label.calls') }}</div></div>
           </div>
         </section>
 
         <!-- Cumulative (workspace lifetime) -->
         <section class="block">
           <div class="block-hdr">
-            <span class="block-title">Workspace cumulative</span>
+            <span class="block-title">{{ $t('label.workspace-cumulative') }}</span>
             <button class="reset-btn" title="Wipe workspace history" @click="confirmReset('workspace')">⟲</button>
           </div>
           <div class="totals">
-            <div class="cell"><div class="big">{{ fmt(cumulative.input) }}</div><div class="lbl">input</div></div>
-            <div class="cell"><div class="big">{{ fmt(cumulative.output) }}</div><div class="lbl">output</div></div>
-            <div class="cell"><div class="big">{{ fmt(cumulative.input + cumulative.output) }}</div><div class="lbl">total</div></div>
-            <div class="cell"><div class="big">{{ cumulative.calls }}</div><div class="lbl">calls</div></div>
+            <div class="cell"><div class="big">{{ fmt(cumulative.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(cumulative.output) }}</div><div class="lbl">{{ $t('label.out') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(cumulative.input + cumulative.output) }}</div><div class="lbl">{{ $t('label.total') }}</div></div>
+            <div class="cell"><div class="big">{{ cumulative.calls }}</div><div class="lbl">{{ $t('label.calls') }}</div></div>
           </div>
         </section>
 
         <!-- Global all-time -->
         <section class="block">
           <div class="block-hdr">
-            <span class="block-title">All time (global)</span>
+            <span class="block-title">{{ $t('label.all-time-global') }}</span>
             <button class="reset-btn" title="Wipe global tally" @click="confirmReset('global')">⟲</button>
           </div>
           <div class="totals">
-            <div class="cell"><div class="big">{{ fmt(allTime.input) }}</div><div class="lbl">input</div></div>
-            <div class="cell"><div class="big">{{ fmt(allTime.output) }}</div><div class="lbl">output</div></div>
-            <div class="cell"><div class="big">{{ fmt(allTime.input + allTime.output) }}</div><div class="lbl">total</div></div>
-            <div class="cell"><div class="big">{{ allTime.calls }}</div><div class="lbl">calls</div></div>
+            <div class="cell"><div class="big">{{ fmt(allTime.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(allTime.output) }}</div><div class="lbl">{{ $t('label.out') }}</div></div>
+            <div class="cell"><div class="big">{{ fmt(allTime.input + allTime.output) }}</div><div class="lbl">{{ $t('label.total') }}</div></div>
+            <div class="cell"><div class="big">{{ allTime.calls }}</div><div class="lbl">{{ $t('label.calls') }}</div></div>
           </div>
         </section>
 
         <!-- By Vendor -->
         <section class="block">
-          <div class="block-hdr"><span class="block-title">By vendor</span></div>
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-vendor') }}</span></div>
           <table class="grid">
             <tr v-for="row in vendorRows" :key="row.key">
               <th>{{ row.label }}</th>
@@ -241,15 +241,15 @@ async function confirmReset(scope: ResetScope): Promise<void> {
               <td class="dim">{{ row.bucket.calls }}</td>
             </tr>
             <tr class="head">
-              <th></th><td>in</td><td>out</td><td class="dim">calls</td>
+              <th></th><td>{{ $t('label.in') }}</td><td>{{ $t('label.out') }}</td><td class="dim">{{ $t('label.calls') }}</td>
             </tr>
           </table>
         </section>
 
         <!-- By Stage -->
         <section class="block">
-          <div class="block-hdr"><span class="block-title">By stage</span></div>
-          <div v-if="!stageRows.length" class="muted">No stages defined.</div>
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-stage') }}</span></div>
+          <div v-if="!stageRows.length" class="muted">{{ $t('label.no-stages') }}</div>
           <table v-else class="grid">
             <tr v-for="row in stageRows" :key="row.id">
               <th>{{ row.label }}</th>
@@ -262,8 +262,8 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 
         <!-- By Pane -->
         <section class="block">
-          <div class="block-hdr"><span class="block-title">By pane</span></div>
-          <div v-if="!paneRows.length" class="muted">No active panes.</div>
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-pane') }}</span></div>
+          <div v-if="!paneRows.length" class="muted">{{ $t('label.no-active-panes') }}</div>
           <table v-else class="grid">
             <tr v-for="row in paneRows" :key="row.id">
               <th :title="row.sub">{{ row.label }}</th>

@@ -109,7 +109,8 @@
     "open-file": "📂 開啟檔案",
     "collapse": "收合",
     "restore": "↑ 還原",
-    "retry": "↻ 重試"
+    "retry": "↻ 重試",
+    "finish": "完成"
   },
   "settings": {
     "appearance": {

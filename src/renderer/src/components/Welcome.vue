@@ -81,20 +81,20 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
     <div class="welcome-card">
       <header class="w-head">
         <h1>Navide (Agent-Team)</h1>
-        <p class="tagline">Drive Claude Code · Codex · Gemini CLI together</p>
+        <p class="tagline">{{ $t('label.tagline') }}</p>
       </header>
 
       <section class="w-open">
-        <h2>📂 Open Workspace</h2>
+        <h2>{{ $t('label.open-workspace') }}</h2>
         <div class="w-open-btns">
           <button class="primary" :disabled="picking" @click="browse">
-            {{ picking ? '…' : 'Browse…' }}
+            {{ picking ? '…' : $t('action.browse') }}
           </button>
         </div>
       </section>
 
       <section class="w-recent">
-        <h2>🕓 Recent</h2>
+        <h2>{{ $t('label.recent') }}</h2>
 
         <p v-if="error" class="w-error">{{ error }}</p>
 
@@ -109,7 +109,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
             <button
               class="pin"
               :class="{ on: item.pinned }"
-              :title="item.pinned ? 'Unpin' : 'Pin'"
+              :title="item.pinned ? $t('label.unpin') : $t('label.pin')"
               @click="togglePin(item, $event)"
             >
               {{ item.pinned ? '★' : '☆' }}
@@ -121,7 +121,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
                   {{ stateBadge(item.last_known_state).icon }}
                   {{ stateBadge(item.last_known_state).label }}
                 </span>
-                <span v-if="!item.exists" class="r-missing" title="Folder not found">⚠ missing</span>
+                <span v-if="!item.exists" class="r-missing" title="Folder not found">{{ $t('label.missing') }}</span>
                 <span class="r-time">{{ timeAgo(item.last_opened_at) }}</span>
               </div>
               <div class="r-path">{{ item.path }}</div>
@@ -135,13 +135,11 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
           </li>
         </ul>
 
-        <p v-else-if="loaded" class="w-empty">
-          No recent workspaces yet. Click <strong>Browse…</strong> to open a project folder.
-        </p>
+        <p v-else-if="loaded" class="w-empty" v-html="$t('label.no-recent-workspaces')"></p>
       </section>
 
       <footer class="w-foot">
-        <button class="link" @click="emit('open-settings')">⚙ Settings</button>
+        <button class="link" @click="emit('open-settings')">⚙ {{ $t('action.settings') }}</button>
       </footer>
     </div>
   </div>
