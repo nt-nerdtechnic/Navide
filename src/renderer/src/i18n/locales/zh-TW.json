@@ -226,7 +226,7 @@
     "pipelines": "流程",
     "active-agents": "執行中的 Agent ({running}/{total})",
     "no-agents-running": "沒有執行中的 Agent。",
-    "manual-spawn": "自動化",
+    "manual-spawn": "啟動Agent",
     "select-role": "選擇角色…",
     "waiting-backend": "等待後端…",
     "set-workspace-first": "請先設定工作區路徑",
