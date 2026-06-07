@@ -401,6 +401,8 @@ function activeEditor(): InstanceType<typeof EditorPane> | undefined {
   return editorPaneRefsSecondary.get(secondaryGroup.value?.activeRel ?? '')
 }
 
+const activeFile = computed(() => openFiles.value.find((f) => f.relPath === activeRel.value))
+
 function splitEditor(): void {
   const current = openFiles.value.find(f => f.relPath === activeRel.value)
   if (!current || current.kind !== 'file') return
@@ -1588,22 +1590,28 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
     <!-- Editor area -->
     <div class="ide-main-container" :class="{ 'ide-split': secondaryGroup }">
       <div class="ide-main" :class="{ 'group-active': activeGroupIsPrimary && secondaryGroup }">
-      <div v-if="openFiles.length && !zenMode" ref="tabsEl" class="ide-tabs">
-        <div
-          v-for="f in openFiles"
-          :key="f.relPath"
-          class="ide-tab"
-          :class="{ active: f.relPath === activeRel }"
-          :title="(f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : f.relPath"
-          @click="activeRel = f.relPath"
-          @contextmenu.prevent="openTabCtxMenu($event, f.relPath)"
-        >
-          <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
-          <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
-          <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
-          <span class="ide-tab-name">{{ f.name }}</span>
-          <span v-if="f.dirty" class="ide-tab-dirty" :title="$t('label.unsaved')">●</span>
-          <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFile(f.relPath)">✕</button>
+      <div v-if="openFiles.length && !zenMode" class="ide-tab-bar">
+        <div ref="tabsEl" class="ide-tabs">
+          <div
+            v-for="f in openFiles"
+            :key="f.relPath"
+            class="ide-tab"
+            :class="{ active: f.relPath === activeRel }"
+            :title="(f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : f.relPath"
+            @click="activeRel = f.relPath"
+            @contextmenu.prevent="openTabCtxMenu($event, f.relPath)"
+          >
+            <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
+            <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
+            <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
+            <span class="ide-tab-name">{{ f.name }}</span>
+            <span v-if="f.dirty" class="ide-tab-dirty" :title="$t('label.unsaved')">●</span>
+            <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFile(f.relPath)">✕</button>
+          </div>
+        </div>
+        <div v-if="activeFile?.kind === 'file'" class="ide-tab-actions">
+          <button class="ide-tab-act" :title="'AI complete (⌘I)'" @click="activeEditor()?.requestGhost()">✦ Complete</button>
+          <button class="ide-tab-act" :title="'AI rewrite selection (⌘K)'" @click="activeEditor()?.openCmdK()">✦ Cmd+K</button>
         </div>
       </div>
 
@@ -2098,18 +2106,44 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 }
 .ide-split .ide-main { border-right: 1px solid var(--border-muted); }
 .ide-main--secondary { flex: 1; }
-.group-active .ide-tabs { border-bottom: 2px solid var(--accent-emphasis); }
+.ide-tab-bar {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
+  flex-shrink: 0;
+}
+.group-active .ide-tab-bar { border-bottom: 2px solid var(--accent-emphasis); }
 .ide-tabs {
   display: flex;
   align-items: stretch;
   gap: 0;
-  background: var(--bg-subtle);
-  border-bottom: 1px solid var(--border-muted);
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
-  flex-shrink: 0;
   scrollbar-width: none;
 }
 .ide-tabs::-webkit-scrollbar { display: none; }
+.ide-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-muted);
+}
+.ide-tab-act {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ide-tab-act:hover:not(:disabled) { background: var(--bg-muted); color: var(--text-bright); }
+.ide-tab-act:disabled { opacity: 0.4; cursor: default; }
 .ide-tab {
   display: flex;
   align-items: center;

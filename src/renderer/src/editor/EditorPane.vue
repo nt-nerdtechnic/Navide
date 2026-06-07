@@ -948,14 +948,13 @@ defineExpose({
 
 <template>
   <div class="editor-pane">
-    <!-- Tabs -->
-    <div class="ep-tabs">
-      <div v-if="!embedded" class="ep-tab active">
+    <!-- Tabs (standalone mode only; embedded mode uses EditorWindowApp tab bar) -->
+    <div v-if="!embedded" class="ep-tabs">
+      <div class="ep-tab active">
         <span class="ep-tab-name">{{ name }}</span>
         <span v-if="dirty" class="ep-dirty" title="Unsaved">●</span>
       </div>
       <div class="ep-spacer" />
-      <button class="ep-act" :disabled="!dirty" title="Save (⌘S)" @click="save">{{ $t('action.save') }}</button>
       <button class="ep-act" title="AI complete (⌘I)" :disabled="ghostBusy || !loaded" @click="requestGhost">
         {{ ghostBusy ? '…' : '✦ Complete' }}
       </button>
