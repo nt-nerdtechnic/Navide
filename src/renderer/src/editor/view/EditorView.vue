@@ -693,25 +693,7 @@ function onKeydown(e: KeyboardEvent): void {
   if (mod && (e.key === 'a' || e.key === 'A')) {
     e.preventDefault(); selectAll(); return
   }
-  if (mod && (e.key === 'c' || e.key === 'C')) {
-    e.preventDefault()
-    const sel = selectionRange()
-    const text = sel ? model.getValueInRange(sel) : model.getLine(cursor.value.line) + '\n'
-    void navigator.clipboard.writeText(text)
-    return
-  }
-  if (mod && (e.key === 'x' || e.key === 'X')) {
-    e.preventDefault()
-    const sel = selectionRange()
-    if (sel) {
-      void navigator.clipboard.writeText(model.getValueInRange(sel))
-      applyEdit(sel, '')
-    } else {
-      void navigator.clipboard.writeText(model.getLine(cursor.value.line) + '\n')
-      deleteLine()
-    }
-    return
-  }
+  // Cmd+C / Cmd+X are handled by @copy / @cut on the textarea (ClipboardEvent API).
   if (mod && e.key === '/') {
     e.preventDefault(); toggleLineComment(); return
   }
@@ -857,6 +839,23 @@ function onPaste(e: ClipboardEvent): void {
   e.preventDefault()
   const text = e.clipboardData?.getData('text/plain') ?? ''
   if (text) insertText(text)
+}
+function onCopy(e: ClipboardEvent): void {
+  e.preventDefault()
+  const sel = selectionRange()
+  const text = sel ? model.getValueInRange(sel) : model.getLine(cursor.value.line) + '\n'
+  e.clipboardData?.setData('text/plain', text)
+}
+function onCut(e: ClipboardEvent): void {
+  e.preventDefault()
+  const sel = selectionRange()
+  if (sel) {
+    e.clipboardData?.setData('text/plain', model.getValueInRange(sel))
+    applyEdit(sel, '')
+  } else {
+    e.clipboardData?.setData('text/plain', model.getLine(cursor.value.line) + '\n')
+    deleteLine()
+  }
 }
 
 function doUndo(): void {
@@ -1779,10 +1778,12 @@ const ghostStyle = computed(() => {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 function measureChar(): void {
+  // Measure inside the editor container so font rendering matches the actual editor.
+  const container = scrollEl.value ?? document.body
   const probe = document.createElement('span')
   probe.style.cssText = `position:absolute;visibility:hidden;font-size:${fontSizePx.value}px;font-family:ui-monospace,Menlo,monospace;white-space:pre`
   probe.textContent = '0'.repeat(50)
-  document.body.appendChild(probe)
+  container.appendChild(probe)
   charWidth.value = probe.getBoundingClientRect().width / 50
   probe.remove()
 }
@@ -2255,6 +2256,8 @@ defineExpose({
       @keydown="onKeydown"
       @input="onInput"
       @paste="onPaste"
+      @copy="onCopy"
+      @cut="onCut"
       @compositionstart="composing = true"
       @compositionend="onCompositionEnd"
     />
