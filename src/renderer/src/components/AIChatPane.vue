@@ -220,6 +220,21 @@ const showShortcuts = ref(false)
 const autoScroll = ref(true)
 // Per-thread scroll position memory
 const threadScrollPositions = new Map<string, number>()
+// Thread unread tracking: threadId → timestamp of last visit (reactive so badge updates on switch)
+const threadLastVisited = reactive<Record<string, number>>((() => {
+  try {
+    const raw = localStorage.getItem('ai-thread-last-visited')
+    if (!raw) return {}
+    return Object.fromEntries(JSON.parse(raw) as [string, number][])
+  } catch { return {} }
+})())
+function _saveLastVisited(): void {
+  try { localStorage.setItem('ai-thread-last-visited', JSON.stringify(Object.entries(threadLastVisited))) } catch { /* noop */ }
+}
+function threadUnreadCount(thread: ChatThread): number {
+  const lastSeen = threadLastVisited[thread.id] ?? 0
+  return thread.messages.filter((m) => m.role === 'assistant' && (m.timestamp ?? 0) > lastSeen).length
+}
 const toastMsg = ref('')
 let toastTimer: number | null = null
 let saveTimer: number | null = null
@@ -838,6 +853,11 @@ function switchThread(id: string): void {
   }
   if (sending.value) stopStreaming()
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  // Record last-visited time for outgoing thread (unread badge)
+  if (currentThreadId.value) {
+    threadLastVisited[currentThreadId.value] = Date.now()
+    _saveLastVisited()
+  }
   // Save pinned chips to outgoing thread before switching
   const outThread = allThreads.value.find((t) => t.id === currentThreadId.value)
   if (outThread) outThread.pinnedChips = contextChips.value.filter((c) => c.pinned)
@@ -845,6 +865,9 @@ function switchThread(id: string): void {
   const thread = allThreads.value.find((t) => t.id === id)
   if (!thread) return
   currentThreadId.value = id
+  // Mark incoming thread as visited immediately (clear unread badge)
+  threadLastVisited[id] = Date.now()
+  _saveLastVisited()
   messages.value = thread.messages.map((m) => ({ ...m, streaming: false, thinking: false }))
   checkpoints.value = thread.checkpoints ?? []
   expandedMsgIdxs.value = new Set(); expandedDiffs.value = new Set()
@@ -1326,9 +1349,20 @@ const showSearch = ref(false)
 const showHistoryPalette = ref(false)
 const historyPaletteQuery = ref('')
 const filteredHistory = computed(() =>
-  historyPaletteQuery.value.trim()
-    ? inputHistory.filter(h => h.toLowerCase().includes(historyPaletteQuery.value.toLowerCase()))
-    : [...inputHistory].reverse()
+  (() => {
+    const q = historyPaletteQuery.value.trim().toLowerCase()
+    const reversed = [...inputHistory].reverse()
+    if (!q) return reversed
+    // Fuzzy: items containing all chars of query in order (Ctrl+R shell-style)
+    const exact = reversed.filter(h => h.toLowerCase().includes(q))
+    if (exact.length) return exact
+    const chars = q.split('')
+    return reversed.filter(h => {
+      let idx = 0
+      for (const c of h.toLowerCase()) { if (c === chars[idx]) idx++; if (idx === chars.length) return true }
+      return false
+    })
+  })()
 )
 function openHistoryPalette(): void {
   showHistoryPalette.value = true
@@ -4060,6 +4094,12 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     showThreads.value = !showThreads.value
   }
+  // Ctrl+R — open prompt history palette (shell-style reverse search)
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'r') {
+    e.preventDefault()
+    openHistoryPalette()
+    return
+  }
   // Ctrl+Shift+H / Cmd+Shift+H — open prompt history palette
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
     e.preventDefault()
@@ -6778,6 +6818,7 @@ ${log || '(no commits)'}`
       'Ctrl+/ — Toggle thread sidebar',
       'Ctrl+F / Cmd+F — Search in current chat',
       'Ctrl+Shift+F — Search across all chats',
+      'Ctrl+R — Prompt history reverse search (shell-style)',
       'Ctrl+Shift+H — Prompt history palette',
       'Escape — Stop streaming / close panel',
       'Tab — Accept @mention or /command from menu',
@@ -10681,6 +10722,24 @@ function showModelChange(mi: number): string | null {
           >{{ Math.round(msg.outputTokens / (msg.elapsedMs / 1000)) }} t/s</span>
           <span v-if="msg.role === 'assistant' && msg.model && !msg.streaming" class="ai-msg-model-badge" :title="msg.model">{{ msg.model.replace(/^claude-/, '').replace(/-\d{8}$/, '') }}</span>
           <span v-if="msg.role === 'assistant' && (msg.inputTokens || msg.outputTokens) && !msg.streaming" class="ai-msg-tokens" :title="`Input: ${(msg.inputTokens ?? 0).toLocaleString()} tokens\nOutput: ${(msg.outputTokens ?? 0).toLocaleString()} tokens`">↑{{ (msg.inputTokens ?? 0).toLocaleString() }} ↓{{ (msg.outputTokens ?? 0).toLocaleString() }}</span>
+          <!-- Token arc: visual proportion of context window used by this message -->
+          <svg
+            v-if="msg.role === 'assistant' && msg.outputTokens && currentModelCtx > 0 && !msg.streaming"
+            class="ai-token-arc"
+            width="14" height="14" viewBox="0 0 14 14"
+            :title="`This response used ~${Math.round(msg.outputTokens / currentModelCtx * 100)}% of the ${(currentModelCtx/1000).toFixed(0)}k context window`"
+          >
+            <circle cx="7" cy="7" r="5" fill="none" stroke="var(--border-muted,#30363d)" stroke-width="2"/>
+            <circle
+              cx="7" cy="7" r="5" fill="none"
+              :stroke="msg.outputTokens / currentModelCtx > 0.3 ? '#e05252' : msg.outputTokens / currentModelCtx > 0.1 ? '#d29922' : 'var(--accent)'"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-dasharray="31.4"
+              :stroke-dashoffset="31.4 * (1 - Math.min(1, msg.outputTokens / currentModelCtx))"
+              transform="rotate(-90 7 7)"
+            />
+          </svg>
           <span
             v-if="msg.role === 'assistant' && msg.model && msg.inputTokens != null && msg.outputTokens != null && !msg.streaming && estimateCost(msg.model, msg.inputTokens, msg.outputTokens)"
             class="ai-msg-cost"
@@ -11377,6 +11436,12 @@ function showModelChange(mi: number): string | null {
               <span v-if="item.thread.label" class="ai-thread-label-badge" :title="`Label: ${item.thread.label}`">{{ item.thread.label }}</span>
               <span v-if="item.thread.model" class="ai-thread-model-badge" :title="`Thread model: ${item.thread.model}`">{{ MODEL_CATALOG.find(m => m.id === item.thread.model)?.display?.split(' ').slice(-1)[0] ?? item.thread.model }}</span>
               <span v-if="item.thread.messages.length" class="ai-thread-count">{{ item.thread.messages.length }}</span>
+              <!-- Unread badge: AI messages since last visit -->
+              <span
+                v-if="item.thread.id !== currentThreadId && threadUnreadCount(item.thread) > 0"
+                class="ai-thread-unread"
+                :title="`${threadUnreadCount(item.thread)} new AI response${threadUnreadCount(item.thread) > 1 ? 's' : ''} since last visit`"
+              >{{ threadUnreadCount(item.thread) > 9 ? '9+' : threadUnreadCount(item.thread) }}</span>
               <span v-if="threadTotalTokens(item.thread) > 0" class="ai-thread-tokens" :title="`~${threadTotalTokens(item.thread).toLocaleString()} total tokens`">{{ threadTotalTokens(item.thread) >= 1000 ? (threadTotalTokens(item.thread) / 1000).toFixed(1) + 'k' : threadTotalTokens(item.thread) }}t</span>
               <span class="ai-thread-time" :title="new Date(item.thread.updatedAt).toLocaleString()">{{ relativeTime(item.thread.updatedAt) }}</span>
               <!-- Color dot — click to cycle colors (Cursor-style thread tagging) -->
@@ -11579,7 +11644,7 @@ function showModelChange(mi: number): string | null {
     <div v-if="showHistoryPalette" class="ai-modal-overlay" @click.self="showHistoryPalette = false">
       <div class="ai-modal ai-history-palette">
         <div class="ai-modal-header">
-          <span>Prompt History</span>
+          <span>Prompt History <kbd style="font-size:10px;opacity:.6">Ctrl+R</kbd></span>
           <button class="ai-settings-close" @click="showHistoryPalette = false">✕</button>
         </div>
         <input
@@ -12152,6 +12217,8 @@ function showModelChange(mi: number): string | null {
   opacity: 0.75;
 }
 .ai-msg-tokens { font-size: 10px; color: var(--text-muted); opacity: 0.55; user-select: none; font-variant-numeric: tabular-nums; }
+.ai-token-arc { opacity: 0.55; flex-shrink: 0; cursor: help; transition: opacity .15s; }
+.ai-msg-actions:hover .ai-token-arc { opacity: 1; }
 .ai-msg-tokspeed { font-size: 10px; color: var(--text-muted); opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-msg-ttft { font-size: 10px; color: var(--text-muted); opacity: 0.4; user-select: none; font-variant-numeric: tabular-nums; }
 .ai-msg-cost {
@@ -13927,6 +13994,8 @@ function showModelChange(mi: number): string | null {
 }
 .ai-thread-rename-input { flex: 1; font-size: 12.5px; background: var(--bg-inset); border: 1px solid var(--accent-emphasis); border-radius: 3px; color: var(--text-bright); padding: 1px 4px; outline: none; min-width: 0; }
 .ai-thread-count { font-size: 10px; color: var(--text-on-emphasis); background: var(--accent-muted); padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; }
+.ai-thread-unread { font-size: 10px; font-weight: 700; color: #fff; background: #e05252; padding: 1px 5px; border-radius: 8px; white-space: nowrap; flex-shrink: 0; animation: ai-pulse 1.5s ease-in-out infinite; }
+@keyframes ai-pulse { 0%,100% { opacity:1 } 50% { opacity:0.65 } }
 .ai-thread-tokens { font-size: 9px; color: var(--text-muted); background: var(--bg-muted); padding: 1px 4px; border-radius: 6px; white-space: nowrap; flex-shrink: 0; opacity: 0.7; }
 .ai-thread-time { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
 .ai-thread-del { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 11px; padding: 2px 4px; border-radius: 3px; flex-shrink: 0; }
