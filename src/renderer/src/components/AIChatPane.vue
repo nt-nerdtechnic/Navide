@@ -10253,7 +10253,7 @@ function showModelChange(mi: number): string | null {
             ref="globalSearchInput"
             v-model="globalSearchQuery"
             class="ai-global-search-input"
-            placeholder="Search all chats…"
+            :placeholder="$t('label.search-all-chats')"
             @keydown.escape="closeGlobalSearch"
             @keydown="onGlobalSearchKeydown"
           />
@@ -11360,7 +11360,7 @@ function showModelChange(mi: number): string | null {
               <span
                 v-else
                 class="ai-thread-title"
-                title="Double-click to rename"
+                :title="$t('action.double-click-rename')"
                 @dblclick.stop="startRenameThread(item.thread.id, item.thread.title, $event)"
                 v-html="highlightSearchMatch(item.thread.title, threadSearchQuery)"
               ></span>

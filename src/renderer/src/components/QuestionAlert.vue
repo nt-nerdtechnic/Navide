@@ -147,7 +147,7 @@ const queueBadge = computed(() =>
                 :value="answers[i] ?? ''"
                 @input="setAnswer(i, ($event.target as HTMLTextAreaElement).value)"
                 rows="3"
-                placeholder="Type your answer…"
+                :placeholder="$t('label.answer-placeholder')"
                 spellcheck="false"
                 @keydown.meta.enter="submit"
                 @keydown.ctrl.enter="submit"

@@ -129,7 +129,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
             </div>
             <button
               class="r-delete"
-              title="Remove from history"
+              :title="$t('action.remove-from-history')"
               @click="removeItem(item, $event)"
             >✕</button>
           </li>

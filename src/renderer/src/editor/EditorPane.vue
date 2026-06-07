@@ -1030,7 +1030,7 @@ defineExpose({
             v-model="gotoLineInput"
             type="number"
             class="ep-goto-input"
-            placeholder="Line number"
+            :placeholder="$t('label.line-number')"
             min="1"
             @keydown="onGotoKeydown"
           />
@@ -1046,7 +1046,7 @@ defineExpose({
         ref="cmdkInput"
         v-model="cmdk.instruction"
         class="ep-cmdk-input"
-        placeholder="Instruction or question — e.g. 'add error handling' or 'how does this work?'"
+        :placeholder="$t('label.inline-edit-placeholder')"
         @keydown.enter="submitCmdK"
         @keydown.esc="closeCmdK"
       />
@@ -1087,25 +1087,25 @@ defineExpose({
           ref="findInputEl"
           v-model="findQuery"
           class="ep-find-input"
-          placeholder="Search…"
+          :placeholder="$t('label.find-in-editor')"
           @keydown="onFindKeydown"
         />
         <button
           class="ep-find-btn"
           :class="{ active: findCase }"
-          title="Match case (⌥C)"
+          :title="$t('action.match-case-shortcut')"
           @click="findCase = !findCase"
         >Aa</button>
         <button
           class="ep-find-btn"
           :class="{ active: findWholeWord }"
-          title="Match whole word (⌥W)"
+          :title="$t('action.match-whole-word')"
           @click="findWholeWord = !findWholeWord"
         >W|</button>
         <button
           class="ep-find-btn"
           :class="{ active: findRegex }"
-          title="Use regular expression (⌥R)"
+          :title="$t('action.use-regex')"
           @click="findRegex = !findRegex"
         >.*</button>
         <span class="ep-find-count">
@@ -1117,7 +1117,7 @@ defineExpose({
         <button
           class="ep-find-btn"
           :class="{ active: replaceOpen }"
-          title="Toggle replace (⌘H)"
+          :title="$t('action.toggle-replace')"
           @click="replaceOpen = !replaceOpen"
         >ab</button>
         <button class="ep-find-close" title="Close (Esc)" @click="closeFind">✕</button>
@@ -1127,7 +1127,7 @@ defineExpose({
           ref="replaceInputEl"
           v-model="replaceQuery"
           class="ep-find-input"
-          placeholder="Replace…"
+          :placeholder="$t('label.replace-in-editor')"
           @keydown="onReplaceKeydown"
         />
         <button class="ep-find-nav" title="Replace (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>

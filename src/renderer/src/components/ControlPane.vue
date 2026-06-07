@@ -748,7 +748,7 @@ function onExplorerDividerEnd(): void {
           class="ghost browse"
           :disabled="pickingWorkspace"
           @click="pickWorkspace"
-          title="Pick folder via native dialog"
+          :title="$t('action.pick-folder')"
         >
           {{ pickingWorkspace ? '…' : '📁 ' + $t('action.browse') }}
         </button>
@@ -756,7 +756,7 @@ function onExplorerDividerEnd(): void {
           v-if="workspacePath"
           class="ghost switch-ws"
           @click="emit('switch-workspace')"
-          title="Switch / close workspace (back to Welcome)"
+          :title="$t('action.switch-workspace')"
         >
           ↺
         </button>
@@ -828,7 +828,7 @@ function onExplorerDividerEnd(): void {
             <button
               class="danger"
               @click="confirmingRestart = true"
-              title="Discard all stage progress and re-run from Stage 01"
+              :title="$t('action.discard-progress')"
             >
               ↺ Start over
             </button>
@@ -1021,7 +1021,7 @@ function onExplorerDividerEnd(): void {
             <button
               class="danger"
               @click="confirmingRestart = true"
-              title="Discard all stage progress and re-run from Stage 01"
+              :title="$t('action.discard-progress')"
             >
               ↺ Start over
             </button>
@@ -1043,7 +1043,7 @@ function onExplorerDividerEnd(): void {
           v-model="taskDescription"
           :disabled="pipeline.state === 'running'"
           :class="{ 'drag-over': isTaskDragOver }"
-          placeholder="Describe the task to drive through all stages. e.g. &#10;&quot;Build an internal approval system for the store, digitising the paper workflow…&quot;"
+          :placeholder="$t('label.task-placeholder')"
           rows="3"
           spellcheck="false"
           @dragover.prevent
@@ -1088,7 +1088,7 @@ function onExplorerDividerEnd(): void {
             v-if="pipeline.state !== 'idle'"
             class="ghost"
             @click="emit('pipeline-reset')"
-            title="Clear pipeline state and close all agent panes"
+            :title="$t('action.clear-pipeline')"
           >
             {{ $t('action.reset') }}
           </button>

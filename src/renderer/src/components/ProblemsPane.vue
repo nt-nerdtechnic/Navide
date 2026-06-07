@@ -61,7 +61,7 @@ function openItem(d: Diagnostic): void {
           <span v-if="d.source" class="prob-src">{{ d.source }}</span>
           <button
             class="prob-fix-btn"
-            title="Fix with AI"
+            :title="$t('action.fix-with-ai')"
             @click.stop="emit('fix-with-ai', { diag: d })"
           >{{ $t('action.fix') }}</button>
         </div>

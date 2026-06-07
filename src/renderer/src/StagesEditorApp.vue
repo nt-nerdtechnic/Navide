@@ -359,7 +359,7 @@ const statusClass = computed(() => {
         <input v-model="draft.question" type="text" placeholder="e.g. What to do / not do?" spellcheck="false" />
 
         <label>{{ $t('label.description') }}</label>
-        <textarea v-model="draft.description" rows="4" placeholder="Brief description of what this stage does" spellcheck="false"></textarea>
+        <textarea v-model="draft.description" rows="4" :placeholder="$t('label.stage-description-hint')" spellcheck="false"></textarea>
 
         <div class="grid-2">
           <div>

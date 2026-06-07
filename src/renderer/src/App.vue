@@ -4787,8 +4787,8 @@ function paneIsCommander(p: ActivePane): boolean {
                 v-if="panes.length > 0"
                 class="history-killall"
                 @click="confirmKillAll = true"
-                title="Kill all agents"
-              >🗑 Kill all</button>
+                :title="$t('action.kill-all-agents')"
+              >🗑 {{ $t('action.kill-all') }}</button>
             </div>
             <button class="history-close" @click="showHistory = false">✕</button>
           </div>

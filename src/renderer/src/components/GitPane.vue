@@ -1263,7 +1263,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button
           v-if="embedded"
           class="hdr-btn"
-          title="Diff Review"
+          :title="$t('action.diff-review')"
           @click.stop="openBranchDiffTab('main')"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">

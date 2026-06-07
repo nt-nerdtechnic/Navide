@@ -1919,7 +1919,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="paletteInputEl"
         v-model="paletteQuery"
         class="ide-palette-input"
-        placeholder="Type a command name…"
+        :placeholder="$t('label.command-name-placeholder')"
         @keydown="onPaletteKeydown"
       />
       <ul v-if="filteredCmds.length" class="ide-palette-list">

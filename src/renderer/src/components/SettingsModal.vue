@@ -1012,7 +1012,7 @@ async function plDelete(id: string, name: string) {
                     class="az-recheck-btn"
                     :disabled="azRechecking"
                     @click="azRecheck"
-                    title="Re-check whether the file exists"
+                    :title="$t('action.recheck-file-exists')"
                   >{{ azRechecking ? '…' : '↻' }}</button>
                   <button class="az-browse-btn" @click="azPickGguf" :title="$t('action.browse')">…</button>
                 </div>

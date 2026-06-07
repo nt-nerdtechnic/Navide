@@ -277,7 +277,7 @@ defineExpose({ openReplace, focusInput, setQuery })
             ref="queryInput"
             v-model="query"
             class="sp-input"
-            placeholder="Search"
+            :placeholder="$t('label.search-placeholder')"
             spellcheck="false"
             @keydown.enter="doSearch"
             @keydown.esc="clearSearch"
@@ -296,7 +296,7 @@ defineExpose({ openReplace, focusInput, setQuery })
           <input
             v-model="replacement"
             class="sp-input"
-            placeholder="Replace"
+            :placeholder="$t('label.replace-placeholder')"
             spellcheck="false"
             @keydown.enter="replaceAll"
           />
@@ -336,7 +336,7 @@ defineExpose({ openReplace, focusInput, setQuery })
           <button
             v-if="showReplace"
             class="sp-file-replace"
-            title="Replace in file"
+            :title="$t('action.replace-in-file')"
             @click.stop="replaceFile(file)"
           >
             <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
@@ -356,7 +356,7 @@ defineExpose({ openReplace, focusInput, setQuery })
               <button
                 v-if="!isRegex"
                 class="sp-match-btn"
-                title="Replace this match"
+                :title="$t('action.replace-match')"
                 @click.stop="replaceOne(file, m)"
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
