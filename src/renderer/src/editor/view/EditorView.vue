@@ -853,6 +853,11 @@ function onCompositionEnd(): void {
   composing = false
   onInput()
 }
+function onPaste(e: ClipboardEvent): void {
+  e.preventDefault()
+  const text = e.clipboardData?.getData('text/plain') ?? ''
+  if (text) insertText(text)
+}
 
 function doUndo(): void {
   preferredCol = -1
@@ -1637,12 +1642,13 @@ function selectLineAt(lineNum: number): void {
 let dragging = false
 function onMousedown(e: MouseEvent): void {
   if (e.button !== 0) return
+  e.preventDefault()  // prevent native HTML text selection from conflicting with custom selection
   const pos = posFromMouse(e)
   if (e.detail === 3) {
-    e.preventDefault(); selectLineAt(pos.line); focus(); return
+    selectLineAt(pos.line); focus(); return
   }
   if (e.detail === 2) {
-    e.preventDefault(); selectWordAt(pos); focus(); return
+    selectWordAt(pos); focus(); return
   }
   // Alt+Click: add/remove an extra cursor (VS Code behavior).
   if (e.altKey) {
@@ -2248,6 +2254,7 @@ defineExpose({
       autocomplete="off"
       @keydown="onKeydown"
       @input="onInput"
+      @paste="onPaste"
       @compositionstart="composing = true"
       @compositionend="onCompositionEnd"
     />
@@ -2338,7 +2345,7 @@ defineExpose({
   overflow: auto;
 }
 .ev-sizer { position: relative; width: 100%; }
-.ev-slab { position: absolute; top: 0; left: 0; will-change: transform; }
+.ev-slab { position: absolute; top: 0; left: 0; will-change: transform; user-select: none; }
 .ev-line {
   position: absolute;
   left: 0;
