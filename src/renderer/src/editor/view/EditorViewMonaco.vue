@@ -36,45 +36,117 @@ let tsLspConfigured = false
 function ensureTsLsp(): void {
   if (tsLspConfigured) return
   tsLspConfigured = true
-  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+
+  const sharedOpts: monaco.languages.typescript.CompilerOptions = {
     target: monaco.languages.typescript.ScriptTarget.ESNext,
     module: monaco.languages.typescript.ModuleKind.ESNext,
     moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-    strict: true,
+    lib: ['es2022', 'dom', 'dom.iterable'],
+    strict: false,         // loose — files are opened individually, not as a project
     allowJs: true,
     checkJs: false,
     jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
-  })
-  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    allowNonTsExtensions: true,
+    allowSyntheticDefaultImports: true,
+    esModuleInterop: true,
+    noEmit: true,
+  }
+  monaco.languages.typescript.typescriptDefaults.setCompilerOptions(sharedOpts)
+  monaco.languages.typescript.javascriptDefaults.setCompilerOptions(sharedOpts)
+
+  const diagOpts: monaco.languages.typescript.DiagnosticsOptions = {
     noSemanticValidation: false,
     noSyntaxValidation: false,
-  })
+    // Don't flag missing imports — we only have single-file context
+    diagnosticCodesToIgnore: [2792, 2307, 2304, 2305],
+  }
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagOpts)
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(diagOpts)
+
+  // Enable eager model sync so hover / completions respond faster
+  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true)
+  monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true)
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
+// Syntax token colors mirror VS Code Dark+ theme exactly.
 function buildMonacoTheme(): monaco.editor.IStandaloneThemeData {
   const s = getComputedStyle(document.documentElement)
   const g = (v: string) => s.getPropertyValue(v).trim() || undefined
   return {
     base: 'vs-dark',
     inherit: true,
-    rules: [],
+    // Token rules override VS Code Dark+ defaults where our theme deviates.
+    rules: [
+      { token: 'keyword',                  foreground: '569cd6', fontStyle: 'bold' },
+      { token: 'keyword.control',          foreground: 'c586c0' },
+      { token: 'keyword.operator',         foreground: 'd4d4d4' },
+      { token: 'string',                   foreground: 'ce9178' },
+      { token: 'string.escape',            foreground: 'd7ba7d' },
+      { token: 'comment',                  foreground: '6a9955', fontStyle: 'italic' },
+      { token: 'comment.doc',              foreground: '6a9955', fontStyle: 'italic' },
+      { token: 'number',                   foreground: 'b5cea8' },
+      { token: 'regexp',                   foreground: 'd16969' },
+      { token: 'type',                     foreground: '4ec9b0' },
+      { token: 'type.identifier',          foreground: '4ec9b0' },
+      { token: 'class',                    foreground: '4ec9b0' },
+      { token: 'interface',                foreground: '4ec9b0' },
+      { token: 'enum',                     foreground: '4ec9b0' },
+      { token: 'function',                 foreground: 'dcdcaa' },
+      { token: 'method',                   foreground: 'dcdcaa' },
+      { token: 'identifier',               foreground: '9cdcfe' },
+      { token: 'variable',                 foreground: '9cdcfe' },
+      { token: 'variable.readonly',        foreground: '4fc1ff' },
+      { token: 'parameter',                foreground: '9cdcfe' },
+      { token: 'property',                 foreground: '9cdcfe' },
+      { token: 'property.declaration',     foreground: '9cdcfe' },
+      { token: 'operator',                 foreground: 'd4d4d4' },
+      { token: 'punctuation',              foreground: 'd4d4d4' },
+      { token: 'delimiter',                foreground: 'd4d4d4' },
+      { token: 'tag',                      foreground: '569cd6' },
+      { token: 'tag.html',                 foreground: '569cd6' },
+      { token: 'attribute.name',           foreground: '9cdcfe' },
+      { token: 'attribute.value',          foreground: 'ce9178' },
+      { token: 'constant',                 foreground: '4fc1ff' },
+      { token: 'constant.language',        foreground: '569cd6' },
+      { token: 'support',                  foreground: 'dcdcaa' },
+      { token: 'namespace',                foreground: 'd4d4d4' },
+      { token: 'decorator',                foreground: 'dcdcaa' },
+      { token: 'annotation',               foreground: 'dcdcaa' },
+    ],
     colors: {
-      'editor.background': g('--bg-base') ?? '#1e1e1e',
-      'editor.foreground': g('--text-primary') ?? '#d4d4d4',
-      'editor.selectionBackground': g('--bg-selected') ?? '#264f78',
-      'editor.inactiveSelectionBackground': g('--bg-selected') ?? '#264f7844',
-      'editor.lineHighlightBackground': g('--bg-inset') ?? '#2a2d2e',
-      'editorLineNumber.foreground': g('--text-muted') ?? '#858585',
-      'editorLineNumber.activeForeground': g('--text-secondary') ?? '#c6c6c6',
-      'editorCursor.foreground': g('--accent-fg') ?? '#aeafad',
-      'editorWidget.background': g('--bg-overlay') ?? '#252526',
-      'editorWidget.border': g('--border-default') ?? '#454545',
-      'editorGutter.background': g('--bg-base') ?? '#1e1e1e',
-      'scrollbar.shadow': '#000000',
-      'scrollbarSlider.background': (g('--border-muted') ?? '#424242') + '80',
-      'scrollbarSlider.hoverBackground': (g('--border-default') ?? '#5a5a5a') + 'cc',
-      'scrollbarSlider.activeBackground': (g('--border-default') ?? '#5a5a5a') + 'ff',
+      'editor.background':                   g('--bg-base') ?? '#1e1e1e',
+      'editor.foreground':                   g('--text-primary') ?? '#d4d4d4',
+      'editor.selectionBackground':          g('--bg-selected') ?? '#264f78',
+      'editor.inactiveSelectionBackground':  '#3a3d41',
+      'editor.lineHighlightBackground':      g('--bg-inset') ?? '#2a2d2e',
+      'editor.lineHighlightBorder':          '#00000000',
+      'editorLineNumber.foreground':         g('--text-muted') ?? '#858585',
+      'editorLineNumber.activeForeground':   g('--text-secondary') ?? '#c6c6c6',
+      'editorCursor.foreground':             g('--accent-fg') ?? '#aeafad',
+      'editorWhitespace.foreground':         '#3b3b3b',
+      'editorIndentGuide.background1':        '#404040',
+      'editorIndentGuide.activeBackground1':  '#707070',
+      'editorBracketMatch.background':       '#0064001a',
+      'editorBracketMatch.border':           '#888888',
+      'editorWidget.background':             g('--bg-overlay') ?? '#252526',
+      'editorWidget.border':                 g('--border-default') ?? '#454545',
+      'editorSuggestWidget.background':      g('--bg-overlay') ?? '#252526',
+      'editorSuggestWidget.border':          g('--border-default') ?? '#454545',
+      'editorSuggestWidget.selectedBackground': g('--bg-selected') ?? '#094771',
+      'editorHoverWidget.background':        g('--bg-overlay') ?? '#252526',
+      'editorHoverWidget.border':            g('--border-default') ?? '#454545',
+      'editorGutter.background':             g('--bg-base') ?? '#1e1e1e',
+      'editorError.foreground':              '#f44747',
+      'editorWarning.foreground':            '#cca700',
+      'editorInfo.foreground':               '#3794ff',
+      'scrollbar.shadow':                    '#000000',
+      'scrollbarSlider.background':          (g('--border-muted') ?? '#424242') + '80',
+      'scrollbarSlider.hoverBackground':     (g('--border-default') ?? '#5a5a5a') + 'cc',
+      'scrollbarSlider.activeBackground':    (g('--border-default') ?? '#5a5a5a') + 'ff',
+      'peekViewEditor.background':           '#001f33',
+      'peekViewResult.background':           '#252526',
+      'peekViewTitle.background':            '#1e1e1e',
     },
   }
 }
@@ -116,28 +188,70 @@ onMounted(() => {
     language: normalizeLanguage(props.language),
     theme: 'agent-theme',
     automaticLayout: true,
+    // ── Appearance (VS Code Dark+ parity) ─────────────────────────────────────
     minimap: { enabled: false },
     fontSize: 13,
     fontFamily: 'ui-monospace, Menlo, Consolas, "Courier New", monospace',
+    fontLigatures: true,
     lineHeight: 20,
-    scrollBeyondLastLine: false,
-    wordWrap: 'off',
-    renderWhitespace: 'none',
-    folding: true,
-    foldingHighlight: false,
-    glyphMargin: false,
-    lineDecorationsWidth: 4,
-    overviewRulerLanes: 0,
+    letterSpacing: 0,
+    renderWhitespace: 'selection',
     renderLineHighlight: 'line',
+    // ── Scrolling ─────────────────────────────────────────────────────────────
+    scrollBeyondLastLine: true,
+    scrollBeyondLastColumn: 5,
+    smoothScrolling: true,
+    // ── Gutter ────────────────────────────────────────────────────────────────
+    glyphMargin: true,
+    folding: true,
+    foldingHighlight: true,
+    foldingStrategy: 'auto',
+    showFoldingControls: 'mouseover',
+    lineDecorationsWidth: 6,
+    lineNumbersMinChars: 3,
+    overviewRulerLanes: 3,
+    overviewRulerBorder: false,
+    // ── Bracket / indent guides ────────────────────────────────────────────────
+    bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: true },
+    guides: {
+      bracketPairs: true,
+      indentation: true,
+      highlightActiveIndentation: true,
+      bracketPairsHorizontal: 'active',
+    },
+    matchBrackets: 'always',
+    // ── Selection / occurrences ───────────────────────────────────────────────
     selectionHighlight: true,
     occurrencesHighlight: 'singleFile',
+    wordBasedSuggestions: 'currentDocument',
+    // ── Hover (type info) ─────────────────────────────────────────────────────
+    hover: { enabled: true, delay: 300, sticky: true },
+    // ── Suggest / intellisense ────────────────────────────────────────────────
+    suggest: {
+      insertMode: 'replace',
+      snippetsPreventQuickSuggestions: false,
+      showWords: true,
+      showSnippets: true,
+      preview: true,
+      previewMode: 'prefix',
+    },
+    quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
+    acceptSuggestionOnEnter: 'on',
+    tabCompletion: 'on',
+    // ── Sticky scroll ─────────────────────────────────────────────────────────
+    stickyScroll: { enabled: true, maxLineCount: 5 },
+    // ── Other ─────────────────────────────────────────────────────────────────
+    wordWrap: 'off',
     codeLens: false,
     contextmenu: true,
     fixedOverflowWidgets: true,
     tabSize: 2,
     insertSpaces: true,
     detectIndentation: true,
-    // Inline suggestions (ghost text)
+    links: true,
+    colorDecorators: true,
+    lightbulb: { enabled: monaco.editor.ShowLightbulbIconMode.OnCode },
+    // Inline suggestions (ghost text — Phase 3)
     inlineSuggest: { enabled: true, mode: 'prefix', showToolbar: 'onHover' },
   })
 
