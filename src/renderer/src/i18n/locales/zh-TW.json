@@ -172,8 +172,10 @@
     "appearance": {
       "language": "語言",
       "theme": "主題",
+      "theme-hint": "主題是使用者層級的偏好設定，對所有工作區生效。",
       "language-zh-TW": "繁體中文",
       "language-en-US": "English",
+      "language-hint": "語言是使用者層級的偏好設定，對所有工作區生效。",
       "custom-colors": "自訂顏色",
       "reset-to-defaults": "↺ 重設為預設值",
       "tweaks-hint": "自訂調整會疊加在目前主題上，切換主題時仍會保留。",

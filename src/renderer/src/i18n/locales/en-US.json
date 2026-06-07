@@ -172,8 +172,10 @@
     "appearance": {
       "language": "Language",
       "theme": "Theme",
+      "theme-hint": "Theme is a user-level preference applied across all workspaces.",
       "language-zh-TW": "繁體中文",
       "language-en-US": "English",
+      "language-hint": "Language is a user-level preference applied across all workspaces.",
       "custom-colors": "Custom Colors",
       "reset-to-defaults": "↺ Reset to defaults",
       "tweaks-hint": "Tweaks are layered on top of the current theme and preserved when switching themes.",

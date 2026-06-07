@@ -1472,7 +1472,7 @@ async function plDelete(id: string, name: string) {
         <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
           <section class="ap-section">
             <h3 class="ap-title">{{ $t('settings.appearance.theme') }}</h3>
-            <p class="ap-hint">Theme is a user-level preference applied across all workspaces.</p>
+            <p class="ap-hint">{{ $t('settings.appearance.theme-hint') }}</p>
             <div class="ap-theme-grid">
               <button
                 v-for="t in BUILTIN_THEMES"
@@ -1495,8 +1495,8 @@ async function plDelete(id: string, name: string) {
           </section>
 
           <section class="ap-section">
-            <h3 class="ap-title">Language</h3>
-            <p class="ap-hint">Language is a user-level preference applied across all workspaces.</p>
+            <h3 class="ap-title">{{ $t('settings.appearance.language') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.language-hint') }}</p>
             <div class="ap-lang-row">
               <button
                 v-for="lang in SUPPORTED_LANGUAGES"
