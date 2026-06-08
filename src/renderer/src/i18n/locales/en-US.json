@@ -166,7 +166,8 @@
     "match-case-shortcut": "Match case (⌥C)",
     "match-whole-word": "Match whole word (⌥W)",
     "use-regex": "Use regular expression (⌥R)",
-    "toggle-replace": "Toggle replace (⌘H)"
+    "toggle-replace": "Toggle replace (⌘H)",
+    "delete-pipeline": "Delete this pipeline"
   },
   "settings": {
     "appearance": {
@@ -393,11 +394,14 @@
     "pipeline-completed-modal": "Pipeline complete!",
     "id": "ID",
     "short-title": "Short Title",
+    "title": "Title",
     "question": "Question",
     "description": "Description",
     "sentinel": "Sentinel",
     "role-key": "Role Key",
     "kickoff-body": "Kickoff Body",
+    "agent": "Agent",
+    "label": "Label",
     "conflict": "CONFLICT",
     "not-loaded": "Not loaded",
     "loading-diff": "Loading diff…",

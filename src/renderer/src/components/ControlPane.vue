@@ -609,7 +609,7 @@ function onExplorerDividerEnd(): void {
     </div>
 
     <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
-    <div v-if="sidebarTab === 'explorer'" class="pane-split">
+    <div v-show="sidebarTab === 'explorer'" class="pane-split">
       <div class="part-top" ref="explorerTopEl" :style="{ height: (explorerTopRatio * 100) + '%' }">
         <ExplorerPane
           v-if="backend"
@@ -717,7 +717,8 @@ function onExplorerDividerEnd(): void {
 
     <!-- ── Git tab ────────────────────────────────────────────────────────── -->
     <GitPane
-      v-if="sidebarTab === 'git' && backend"
+      v-if="backend"
+      v-show="sidebarTab === 'git'"
       :workspace-path="workspace ?? ''"
       :analyzer-model="analyzerModel"
       :backend="backend"

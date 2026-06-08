@@ -208,10 +208,11 @@ class HistoryStore:
         except OSError as err:
             log.warning("history read failed at %s: %s", path, err)
             return []
-        # Warm the buffer for next time.
+        # Warm the buffer for next time — only if record() hasn't already
+        # populated it while we held no lock during the cold read.
         with self._lock:
-            buf = deque(events[-TAIL_LIMIT:], maxlen=TAIL_LIMIT)
-            self._tails[key] = buf
+            if self._tails.get(key) is None:
+                self._tails[key] = deque(events[-TAIL_LIMIT:], maxlen=TAIL_LIMIT)
         return events[-limit:]
 
     def snapshot(

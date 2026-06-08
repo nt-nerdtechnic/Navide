@@ -166,7 +166,8 @@
     "match-case-shortcut": "區分大小寫（⌥C）",
     "match-whole-word": "完整比對單字（⌥W）",
     "use-regex": "使用正規表達式（⌥R）",
-    "toggle-replace": "切換取代（⌘H）"
+    "toggle-replace": "切換取代（⌘H）",
+    "delete-pipeline": "刪除此管線"
   },
   "settings": {
     "appearance": {
@@ -393,11 +394,14 @@
     "pipeline-completed-modal": "流程完成！",
     "id": "ID",
     "short-title": "簡短標題",
+    "title": "標題",
     "question": "問題",
     "description": "描述",
     "sentinel": "終止標記",
     "role-key": "角色識別碼",
     "kickoff-body": "啟動提示",
+    "agent": "Agent",
+    "label": "標籤",
     "conflict": "衝突",
     "not-loaded": "未載入",
     "loading-diff": "載入差異中…",

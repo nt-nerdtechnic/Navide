@@ -91,7 +91,6 @@ onMounted(() => {
       if (p.alpha <= 0) continue
       alive.push(p)
 
-      const hex = Math.round(p.alpha * 255).toString(16).padStart(2, '0')
       ctx.beginPath()
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
       ctx.fillStyle = `rgb(${p.r},${p.g},${p.b})`
