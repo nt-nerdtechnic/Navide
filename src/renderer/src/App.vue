@@ -1715,11 +1715,13 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // run_group_id no longer maps to an existing tab (e.g. localStorage cleared
   // while project.json survived, or records predating run_group_id). Created
   // once on first need so we don't spawn an empty tab for manual-only restores.
+  // Restored pipeline panes use the saved Pipeline name for the recreated
+  // RunGroup tab; task_description stays task content, not a grouping label.
   let _restoreGroupId = ''
   const ensureRestoreGroup = (): string => {
     if (_restoreGroupId) return _restoreGroupId
     _restoreGroupId = runGroups.value[0]?.id
-      ?? createRunGroup((payload.project?.task_description?.trim() || 'Pipeline').slice(0, 40)).id
+      ?? createRunGroup(pipelineRunGroupName(payload.project?.pipeline_id as string | undefined)).id
     return _restoreGroupId
   }
 
@@ -2346,9 +2348,10 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   pipeline.workspacePath = payload.workspacePath
   pipeline.stageIndex = 0
   pipeline.state = 'running'
-  // Create a run group tab for this pipeline execution
-  const pipelineName = pipelinesApi.activePipeline.value?.name ?? 'Pipeline'
-  createRunGroup(pipelineName)
+  // Pipeline-created panes are grouped under a RunGroup tab named after the
+  // Pipeline itself. Keep this separate from pipeline.task, which is the user's
+  // task prompt and should not become a tab/group label.
+  createRunGroup(pipelineRunGroupName(payload.pipelineId))
   // Derive global commander from stage config (slot with isCommander=true).
   let globalManager: GlobalManagerRef | null = null
   for (const s of stagesApi.stages.value) {
@@ -4001,10 +4004,16 @@ const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
 
-// ── Pipeline Run Group Tab Bar ────────────────────────────────────────────────
-// Each pipeline execution creates a RunGroup; all its agent slots share that group.
-// Tab bar only appears once at least one group exists. Manual panes with no group
-// appear in a "手動" tab alongside any groups.
+// ── Agent Run Group Tab Bar ───────────────────────────────────────────────────
+// Naming guide for this area:
+//   Pipeline = the configured workflow template/run selected in the left panel.
+//   Pane     = one live terminal session running Claude Code / Codex / Gemini.
+//   RunGroup = a frontend grouping bucket for panes; rendered to the user as a tab.
+//   Tab      = the visible UI affordance for selecting one RunGroup.
+//
+// Rule: when panes are created by a Pipeline run, their RunGroup tab name should
+// be the Pipeline name. Ad-hoc groups created by the + button may use "Run N".
+// Manual panes without any group appear in the special "手動" tab.
 
 const runGroups = ref<RunGroup[]>([])
 const currentRunGroupId = ref<string>('')  // ID assigned to newly spawned pipeline panes
@@ -4058,6 +4067,13 @@ function createRunGroup(name?: string): RunGroup {
 function renameRunGroup(id: string, name: string): void {
   runGroups.value = runGroups.value.map((g) => (g.id === id ? { ...g, name } : g))
   _saveRunGroups()
+}
+
+function pipelineRunGroupName(pipelineId?: string): string {
+  const id = pipelineId || pipelinesApi.activePipelineId.value
+  const byId = pipelinesApi.pipelines.value.find((p) => p.id === id)?.name.trim()
+  const active = pipelinesApi.activePipeline.value?.name.trim()
+  return byId || active || 'Pipeline'
 }
 
 /** Persist a pane's run-group reassignment to project.json (survives restart). */

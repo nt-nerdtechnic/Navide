@@ -293,8 +293,22 @@ onUnmounted(() => {
 
 defineExpose({ openPipelineDetail })
 
-const pickedAgent = ref<string>(props.agentSpecs[0]?.agentKey ?? 'claude')
+const manualAgentSpecs = computed(() =>
+  props.agentSpecs.filter((spec) => spec.agentKey !== 'terminal')
+)
+
+const pickedAgent = ref<string>(manualAgentSpecs.value[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
+
+watch(
+  manualAgentSpecs,
+  (specs) => {
+    if (!specs.some((spec) => spec.agentKey === pickedAgent.value)) {
+      pickedAgent.value = specs[0]?.agentKey ?? 'claude'
+    }
+  },
+  { immediate: true }
+)
 
 // ── Top-level tab: pipeline | git ─────────────────────────────────────────────
 const _TAB_KEY = 'agentTeam.sidebarTab'
@@ -686,7 +700,7 @@ function onExplorerDividerEnd(): void {
             <div v-if="manualSpawnOpen" class="spawn-card-body">
               <div class="row two-col">
                 <select v-model="pickedAgent">
-                  <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+                  <option v-for="spec in manualAgentSpecs" :key="spec.agentKey" :value="spec.agentKey">
                     {{ spec.label }}
                   </option>
                 </select>
@@ -923,7 +937,7 @@ function onExplorerDividerEnd(): void {
         <div v-if="manualSpawnOpen" class="spawn-card-body">
           <div class="row two-col">
             <select v-model="pickedAgent">
-              <option v-for="spec in agentSpecs" :key="spec.agentKey" :value="spec.agentKey">
+              <option v-for="spec in manualAgentSpecs" :key="spec.agentKey" :value="spec.agentKey">
                 {{ spec.label }}
               </option>
             </select>
