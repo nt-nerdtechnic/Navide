@@ -173,6 +173,12 @@ const agentSpecs: AgentSpec[] = [
     defaultCommand: 'gemini',
     skipPermissionFlag: '--yolo --skip-trust',
     hint: 'tester + verifier'
+  },
+  {
+    agentKey: 'terminal',
+    label: 'Terminal',
+    defaultCommand: '',
+    hint: 'plain shell'
   }
 ]
 
@@ -1006,6 +1012,12 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const spec = agentSpecs.find((s) => s.agentKey === opts.agentKey)
   if (!spec) return null
   let command = resolveCommand(opts.agentKey, opts.commandOverride)
+  const userShell = backend.shell.value || 'bash'
+
+  if (opts.agentKey === 'terminal' && !command) {
+    command = userShell
+  }
+
   const id = crypto.randomUUID()
   // For Claude, pin a unique --session-id so backend attribution maps THIS
   // pane's CLI events (turn_complete / agent_active / JSONL) precisely. Without
@@ -1083,7 +1095,6 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       : undefined
     pane.outputLogFile = outputLogFile
 
-    const userShell = backend.shell.value || 'bash'
     await ref.spawn({
       command: [userShell, '-lc', command],
       cwd: opts.workspacePath,

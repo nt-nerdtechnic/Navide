@@ -415,6 +415,16 @@ function spawn(): void {
   })
 }
 
+function openTerminal(): void {
+  if (!canSpawn.value) return
+  emit('spawn', {
+    agentKey: 'terminal',
+    roleKey: '',
+    stageId: '',
+    workspacePath: workspacePath.value.trim()
+  })
+}
+
 function startPipeline(): void {
   if (!canRunPipeline.value) return
   emit('pipeline-start', {
@@ -685,7 +695,10 @@ function onExplorerDividerEnd(): void {
                   <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
                 </select>
               </div>
-              <button class="primary" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
+              <div class="row spawn-actions">
+                <button class="primary wide" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
+                <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
+              </div>
               <p v-if="!canSpawn" class="hint warn">
                 {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
               </p>
@@ -870,6 +883,7 @@ function onExplorerDividerEnd(): void {
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
+            <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
           </div>
           <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
@@ -918,7 +932,10 @@ function onExplorerDividerEnd(): void {
               <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
             </select>
           </div>
-          <button class="primary" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
+          <div class="row spawn-actions">
+            <button class="primary wide" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
+            <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
+          </div>
           <p v-if="!canSpawn" class="hint warn">
             {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
           </p>
@@ -1364,6 +1381,19 @@ textarea.drag-over {
 }
 .pipeline-row {
   margin-top: 4px;
+}
+.spawn-actions {
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+.terminal-btn {
+  opacity: 0.6;
+  border-style: dashed;
+  transition: opacity 0.2s, background 0.2s;
+}
+.terminal-btn:hover:not(:disabled) {
+  opacity: 1;
 }
 
 button {
@@ -1900,6 +1930,20 @@ button.icon-btn.muted:hover {
 }
 .agent-line:hover {
   background: var(--bg-subtle);
+}
+.agent-close-btn {
+  margin-left: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  width: 18px;
+}
+.agent-close-btn:hover {
+  color: var(--danger-fg);
+  background: var(--danger-deep);
 }
 .stage-line {
   color: var(--text-secondary);
