@@ -2545,6 +2545,10 @@ async function doCloseWorkspace(): Promise<void> {
   currentWorkspace.value = ''
   existingProject.value = null
   currentMode.value = 'spawn'
+  // Save path before clearing — the abort API needs it.
+  // We don't call onPipelineAbort() here because its trailing onWorkspaceCheck()
+  // would re-set currentWorkspace/existingProject that we just cleared.
+  const wsPathForAbort = pipeline.workspacePath
   pipeline.workspacePath = ''
   runGroups.value = []
   currentRunGroupId.value = ''
@@ -2555,7 +2559,11 @@ async function doCloseWorkspace(): Promise<void> {
   } catch {
     /* ignore */
   }
-  if (pipeline.state === 'running') await onPipelineAbort()
+  if (pipeline.state === 'running' && wsPathForAbort) {
+    cancelAllWatchers()
+    stopGlobalManagerRouter()
+    await sendQuiet('pipeline.abort', { workspace_path: wsPathForAbort, reason: 'user' })
+  }
   await onPipelineReset()
 }
 

@@ -290,6 +290,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   font-size: 12px;
   min-height: 0;
+  overflow: hidden;
 }
 
 /* ─────── collapsed rail ─────── */
@@ -385,6 +386,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 .body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: auto;
   padding: 8px 0;
   min-height: 0;
 }
@@ -434,16 +436,24 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 
 .totals {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 .cell {
   text-align: center;
   background: var(--bg-subtle);
   border-radius: 3px;
-  padding: 6px 0;
+  padding: 6px 2px;
+  overflow: hidden;
 }
-.big { font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.big {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .lbl {
   font-size: 9px;
   color: var(--text-secondary);
@@ -455,6 +465,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   width: 100%;
   border-collapse: collapse;
   font-size: 11px;
+  table-layout: fixed;
 }
 .grid tr.head td, .grid tr.head th {
   font-size: 9px;
@@ -467,14 +478,19 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   text-align: left;
   font-weight: 500;
   color: var(--text-primary);
-  padding: 3px 6px 3px 0;
+  padding: 3px 4px 3px 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .grid td {
   text-align: right;
-  padding: 3px 6px;
+  padding: 3px 4px;
   font-variant-numeric: tabular-nums;
   color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .grid td.dim { color: var(--text-secondary); }
 </style>

@@ -261,8 +261,9 @@ function onLogDividerEnd(): void {
 .history {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 .run-info {
   padding: 6px 8px;
@@ -274,6 +275,7 @@ function onLogDividerEnd(): void {
 }
 .paths-actions .ghost {
   flex: 1;
+  min-width: 0;
   background: transparent;
   color: var(--text-primary);
   border: 1px solid var(--border-default);
@@ -282,6 +284,8 @@ function onLogDividerEnd(): void {
   padding: 4px 4px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .paths-actions .ghost:hover {
   background: var(--bg-muted);
@@ -391,6 +395,11 @@ function onLogDividerEnd(): void {
   border-radius: 5px;
   font-size: 11px;
   padding: 3px 5px;
+}
+.flt {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 90px;
 }
 .search {
   flex: 1;

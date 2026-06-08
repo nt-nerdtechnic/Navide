@@ -336,7 +336,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // Make the whole pane click-focusable so the user can type immediately.
     el.tabIndex = 0
     el.style.cursor = 'text'
-    const _mousedownHandler = () => {
+    _mousedownHandler = () => {
       // Record click moment too — Claude TUI redraws on focus regardless of
       // which path got us there.
       lastFocusAt.value = Date.now()
