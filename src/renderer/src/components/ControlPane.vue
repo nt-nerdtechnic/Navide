@@ -734,34 +734,6 @@ function onExplorerDividerEnd(): void {
     <div class="part-top" ref="pipelineTopEl" :style="{ height: (pipelineTopRatio * 100) + '%' }">
 
     <section class="block panel-section">
-      <label class="lbl">{{ $t('label.workspace') }}</label>
-      <div class="row workspace-row">
-        <input
-          v-model="workspacePath"
-          type="text"
-          placeholder="/absolute/path/to/project"
-          spellcheck="false"
-          autocorrect="off"
-          @dragover.prevent
-          @drop.prevent="onWorkspaceDrop"
-        />
-        <button
-          class="ghost browse"
-          :disabled="pickingWorkspace"
-          @click="pickWorkspace"
-          :title="$t('action.pick-folder')"
-        >
-          {{ pickingWorkspace ? '…' : '📁 ' + $t('action.browse') }}
-        </button>
-        <button
-          v-if="workspacePath"
-          class="ghost switch-ws"
-          @click="emit('switch-workspace')"
-          :title="$t('action.switch-workspace')"
-        >
-          ↺
-        </button>
-      </div>
       <label class="checkbox-row">
         <input v-model="yoloLocal" type="checkbox" />
         <span>

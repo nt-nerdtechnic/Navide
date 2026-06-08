@@ -2562,6 +2562,12 @@ async function doCloseWorkspace(): Promise<void> {
 // Triggered by the Browse button in ControlPane. Behaves like picking a workspace
 // from the Welcome screen: reset all state first, then let the workspace-check
 // debounce fire naturally once currentWorkspace drives the prop update.
+async function titlebarBrowseWorkspace(): Promise<void> {
+  if (!window.agentTeam?.pickWorkspace) return
+  const picked = await window.agentTeam.pickWorkspace(currentWorkspace.value || undefined)
+  if (picked) await onWorkspaceBrowse(picked)
+}
+
 async function onWorkspaceBrowse(path: string): Promise<void> {
   if (path === currentWorkspace.value) return
   if (pipeline.state === 'running') await onPipelineAbort()
@@ -4683,7 +4689,21 @@ function paneIsCommander(p: ActivePane): boolean {
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
     <div class="titlebar">
-      <span class="titlebar-name">{{ workspaceBaseName }}</span>
+      <template v-if="workspaceSelected">
+        <div class="titlebar-workspace">
+          <input
+            :value="currentWorkspace"
+            type="text"
+            class="titlebar-ws-input"
+            spellcheck="false"
+            autocorrect="off"
+            @change="onWorkspaceBrowse(($event.target as HTMLInputElement).value)"
+          />
+          <button class="titlebar-ws-btn" @mousedown.stop @click="titlebarBrowseWorkspace" :title="$t('action.pick-folder')">📁</button>
+          <button class="titlebar-ws-btn" @mousedown.stop @click="onSwitchWorkspace" :title="$t('action.switch-workspace')">↺</button>
+        </div>
+      </template>
+      <span v-else class="titlebar-name">{{ workspaceBaseName }}</span>
       <button class="titlebar-gear" @mousedown.stop @click="showSettings = true" title="Settings">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
@@ -5148,6 +5168,49 @@ function paneIsCommander(p: ActivePane): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.titlebar-workspace {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+  min-width: 0;
+}
+.titlebar-ws-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
+  border-radius: 5px;
+  color: var(--text-primary);
+  outline: none;
+}
+.titlebar-ws-input:focus {
+  border-color: var(--border-focus, #4a90d9);
+}
+.titlebar-ws-btn {
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+  width: 26px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.titlebar-ws-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
 }
 .titlebar-gear {
   -webkit-app-region: no-drag;
