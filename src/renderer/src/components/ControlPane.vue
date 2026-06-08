@@ -1636,6 +1636,14 @@ button.icon-btn.muted:hover {
   padding: 10px;
   border-radius: 6px;
 }
+.pipeline-detail-scroll .pipeline {
+  flex: 1;
+  min-height: 0;
+}
+.pipeline-detail-scroll .pipeline textarea {
+  flex: 1;
+  min-height: 60px;
+}
 .manual-spawn {
   background: var(--bg-inset);
   border: 1px solid var(--accent-muted);

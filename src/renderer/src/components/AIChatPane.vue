@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from 'vue'
 import { i18n } from '../i18n'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
