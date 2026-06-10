@@ -118,6 +118,7 @@ interface ChatMessage {
   thinkingContent?: string // extended thinking (Claude thinking blocks)
   thinkingExpanded?: boolean
   contextRefs?: string[]   // labels of context chips used when this message was sent (Cursor-style "used references")
+  imageData?: string       // pasted image thumbnail for user messages
   truncated?: boolean      // response appears to be cut off (unclosed code block heuristic)
   pinned?: boolean         // message pinned for easy reference
 }
@@ -128,6 +129,20 @@ interface ChatCheckpoint {
   name: string
   timestamp: number
   messagesSnapshot: ChatMessage[]
+}
+
+type ShellPayload = { ok: boolean; output?: string; exit_code?: number; error?: string }
+type ReadPayload = { ok?: boolean; content?: string; error?: string }
+type LegacyApi = { invoke(channel: string, payload?: unknown): Promise<unknown> }
+
+function messageText(msg: ChatMessage): string {
+  return typeof msg.rawContent === 'string' ? msg.rawContent : msg.content
+}
+
+function legacyInvoke(channel: string, payload?: unknown): Promise<unknown> {
+  const api = (window as unknown as { api?: LegacyApi }).api
+  if (!api) return Promise.reject(new Error('legacy api unavailable'))
+  return api.invoke(channel, payload)
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -147,6 +162,7 @@ interface _SR { continuous: boolean; interimResults: boolean; lang: string; onre
 const voiceListening = ref(false)
 let _speechRecognition: _SR | null = null
 const voiceSupported = typeof window !== 'undefined' && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)
+const speechSynthesisAvailable = typeof window !== 'undefined' && 'speechSynthesis' in window
 const enhancingPrompt = ref(false)
 
 function toggleVoiceInput(): void {
@@ -616,6 +632,17 @@ function bulkArchiveThreads(): void {
   saveCurrentThread()
   showToast(`Archived ${ids.length} thread(s)`)
 }
+function resetThreadBulkSelection(): void {
+  selectedThreadIds.value = new Set()
+}
+function toggleThreadBulkMode(): void {
+  threadBulkMode.value = !threadBulkMode.value
+  resetThreadBulkSelection()
+}
+function cancelThreadBulkMode(): void {
+  threadBulkMode.value = false
+  resetThreadBulkSelection()
+}
 const threadSortMode = ref<'date' | 'name' | 'model'>(
   (localStorage.getItem('ai-chat-thread-sort') ?? 'date') as 'date' | 'name' | 'model'
 )
@@ -643,6 +670,31 @@ function onPanelResizeMousedown(e: MouseEvent): void {
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
   e.preventDefault()
+}
+
+function addSelectionContextChip(): void {
+  const sel = props.getEditorSelection?.()?.trim()
+  if (!sel) {
+    showToast('No selection — select code in the editor first')
+    return
+  }
+  const relPath = props.getActiveRelPath?.()
+  const ext = relPath?.split('.').pop() ?? ''
+  const label = '@selection'
+  contextChips.value = contextChips.value.filter((c) => c.label !== label)
+  contextChips.value.push({ id: crypto.randomUUID(), label, content: `\`\`\`${ext}\n${sel.slice(0, 8000)}\n\`\`\`` })
+  showToast('Selection added to context')
+  nextTick(() => textareaEl.value?.focus())
+}
+
+function promptAddMemory(): void {
+  const fact = window.prompt('New memory fact (one sentence):')
+  if (fact?.trim()) addMemory(fact.trim())
+}
+
+function promptAddGlobalPin(): void {
+  const path = window.prompt('File path to always include (relative to workspace, e.g. src/types.ts):')
+  if (path?.trim()) addGlobalPin(path.trim())
 }
 const renamingThreadId = ref('')
 const renamingTitle = ref('')
@@ -756,6 +808,7 @@ function toggleArchiveThread(id: string, e: Event): void {
 }
 const currentThreadId = ref('')
 const allThreads = ref<ChatThread[]>([])
+const currentThread = computed(() => allThreads.value.find((t) => t.id === currentThreadId.value) ?? null)
 
 function newThreadId(): string { return crypto.randomUUID() }
 
@@ -926,7 +979,7 @@ function duplicateThread(id: string): void {
     updatedAt: Date.now(),
     pinned: false,
     model: src.model,
-    checkpoints: src.checkpoints ? src.checkpoints.map((c) => ({ ...c, messages: c.messages.map((m) => ({ ...m })) })) : undefined,
+    checkpoints: src.checkpoints ? src.checkpoints.map((c) => ({ ...c, messagesSnapshot: c.messagesSnapshot.map((m) => ({ ...m })) })) : undefined,
   }
   const idx = allThreads.value.findIndex((t) => t.id === id)
   allThreads.value.splice(idx + 1, 0, copy)
@@ -1915,7 +1968,7 @@ async function onMessagesClick(e: MouseEvent): Promise<void> {
       let oldLines = 0
       let oldContent = ''
       try {
-        interface ReadResp { ok: boolean; content?: string }
+        interface ReadResp extends ReadPayload {}
         const r = await props.backend.send<ReadResp>('fs.read_file', {
           workspace_path: props.workspacePath,
           rel_path: relPath,
@@ -2908,7 +2961,7 @@ async function sendMessage(): Promise<void> {
     const n = Math.max(1, Math.min(50, nArg))
     try {
       showToast(`Fetching last ${n} commits…`)
-      interface ShellRespEC { ok: boolean; output?: string }
+      interface ShellRespEC { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespEC>('shell.run', {
         command: `git log -${n} --format="commit %H%nauthor: %an%ndate: %ad%nsubject: %s%n%nbody:%n%b%n---" --date=short 2>&1`,
         workspace_path: props.workspacePath,
@@ -2937,7 +2990,7 @@ async function sendMessage(): Promise<void> {
     }
     if (!props.workspacePath) { showToast('/open requires an open workspace'); return }
     try {
-      interface FlatRespOpen { ok: boolean; files?: string[] }
+      interface FlatRespOpen { ok: boolean; files?: string[]; error?: string }
       const resp = await props.backend.send<FlatRespOpen>('fs.list_files_flat', { workspace_path: props.workspacePath, query })
       if (!resp.payload?.ok) { showToast(`/open: ${resp.payload?.error ?? 'backend error'}`); return }
       const files = resp.payload.files ?? []
@@ -3115,7 +3168,7 @@ async function sendMessage(): Promise<void> {
     if (!query) { showToast('Usage: /search <query>'); return }
     inputText.value = ''
     try {
-      interface SearchResp2 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+      interface SearchResp2 { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
       const resp = await props.backend.send<SearchResp2>('search.find_in_files', {
         workspace_path: props.workspacePath,
         query,
@@ -3145,7 +3198,7 @@ async function sendMessage(): Promise<void> {
     if (!pattern) { showToast('Usage: /search:regex <pattern>'); return }
     inputText.value = ''
     try {
-      interface SearchResp3 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+      interface SearchResp3 { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
       const resp = await props.backend.send<SearchResp3>('search.find_in_files', {
         workspace_path: props.workspacePath,
         query: pattern,
@@ -3361,9 +3414,9 @@ async function sendMessage(): Promise<void> {
       const pinParts: string[] = []
       for (const pin of globalContextPins.value) {
         try {
-          interface PinFileResp { ok: boolean; payload?: { content?: string } }
+          interface PinFileResp { ok: boolean; content?: string; payload?: { content?: string } }
           const pr = await props.backend.send<PinFileResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: pin.relPath })
-          const content = pr.payload?.content ?? ''
+          const content = pr.payload?.content ?? pr.payload?.payload?.content ?? ''
           const ext = pin.relPath.split('.').pop() ?? ''
           if (content) pinParts.push(`--- Always-Include: ${pin.relPath} ---\n\`\`\`${ext}\n${content.slice(0, 8000)}\n\`\`\``)
         } catch { /* skip unreadable */ }
@@ -3388,6 +3441,14 @@ async function sendMessage(): Promise<void> {
     sending.value = false
     currentSessionId.value = null
   }
+}
+
+function addMsg(msg: ChatMessage): void {
+  messages.value.push({ ...msg, timestamp: msg.timestamp ?? Date.now() })
+}
+
+function sendToBackend(): Promise<void> {
+  return sendMessage()
 }
 
 // ── Stop streaming ─────────────────────────────────────────────────────────────
@@ -3447,7 +3508,7 @@ function deleteMessagePair(idx: number): void {
 
 // ── Add AI response text as a context chip ─────────────────────────────────
 function addResponseAsContext(msg: ChatMessage): void {
-  const text = (msg.rawContent ?? msg.content).trim().slice(0, 8000)
+  const text = messageText(msg).trim().slice(0, 8000)
   if (!text) return
   const label = `@ai:response`
   if (!contextChips.value.some((c) => c.label === label)) {
@@ -3520,7 +3581,7 @@ async function exportConversation(format: 'markdown' | 'json' | 'html' = 'markdo
     for (const msg of msgs) {
       const role = msg.role === 'user' ? 'user' : 'assistant'
       const label = msg.role === 'user' ? 'User' : `Assistant${msg.model ? ` (${msg.model})` : ''}`
-      const ts = new Date(msg.timestamp).toLocaleString()
+      const ts = new Date(msg.timestamp ?? Date.now()).toLocaleString()
       body += `<div class="msg ${role}"><div class="role">${esc(label)} <span class="ts">${esc(ts)}</span></div><pre class="content">${esc(msg.content)}</pre></div>\n`
     }
     content = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(title)}</title><style>
@@ -3673,7 +3734,7 @@ async function ctxMenuSaveToRules(): Promise<void> {
   // Try to append to AGENTS.md or .cursorrules
   for (const rulePath of ['AGENTS.md', '.cursor/rules', '.cursorrules']) {
     try {
-      interface ReadResp { ok: boolean; content?: string }
+      interface ReadResp extends ReadPayload {}
       const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: rulePath })
       if (fr.payload?.ok || rulePath === 'AGENTS.md') {
         const existing = fr.payload?.content ?? ''
@@ -3890,7 +3951,7 @@ async function attachFile(): Promise<void> {
     try {
       let fileContent = ''
       if (isInsideWorkspace) {
-        interface ReadResp { ok: boolean; content?: string }
+        interface ReadResp extends ReadPayload {}
         const r = await props.backend.send<ReadResp>('fs.read_file', {
           workspace_path: props.workspacePath,
           rel_path: relPath,
@@ -4567,7 +4628,7 @@ async function createWorkspaceRulesFile(): Promise<void> {
 }
 
 async function detectWorkspaceRules(): Promise<void> {
-  interface ReadResp { ok: boolean; content?: string }
+  interface ReadResp extends ReadPayload {}
   interface ListResp { ok: boolean; entries?: Array<{ name: string; is_dir: boolean }> }
 
   workspaceGlobRules.value = []
@@ -5044,6 +5105,7 @@ function triggerCompact(): void {
 async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
   showSlashMenu.value = false
   trackRecentCmd(cmd.id)
+  const extra = cmd.id.replace(/^\/\S+/, '').trim()
   // Bridge: commands that have rawText handlers in sendMessage but need selectSlashCommand routing
   if (cmd.id === '/help') {
     inputText.value = '/help'
@@ -5264,7 +5326,7 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
       showToast(`Searching for "${query}"…`)
       try {
         interface SearchMatch { line: number; col: number; text: string }
-        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        interface SearchResp { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
         const resp = await props.backend.send<SearchResp>('search.find_in_files', {
           workspace_path: props.workspacePath,
           query,
@@ -5299,7 +5361,7 @@ async function selectSlashCommand(cmd: SlashCommand): Promise<void> {
       if (!props.workspacePath) { showToast('/search:regex requires an open workspace'); return }
       showToast(`Searching regex /${pattern}/…`)
       try {
-        interface SearchRegexResp { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; col: number; text: string }> }> }
+        interface SearchRegexResp { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: Array<{ line: number; col: number; text: string }> }> }
         const resp = await props.backend.send<SearchRegexResp>('search.find_in_files', {
           workspace_path: props.workspacePath,
           query: pattern,
@@ -5571,7 +5633,7 @@ ${historyText}`
     if (!safeRelPath) { showToast('/format: invalid file path'); return }
     try {
       showToast('Formatting…')
-      interface ShellRespFmt { ok: boolean; output?: string }
+      interface ShellRespFmt { ok: boolean; output?: string; error?: string }
       const sqPath = safeRelPath.replace(/'/g, "'\\''")
       const isPy = safeRelPath.endsWith('.py')
       const isTs = /\.(ts|tsx|js|jsx|vue|css|scss|json|md)$/.test(safeRelPath)
@@ -5626,7 +5688,7 @@ ${historyText}`
     if (!props.workspacePath) { showToast('/test:update requires an open workspace'); return }
     try {
       showToast('Running tests…')
-      interface ShellRespTest { ok: boolean; output?: string }
+      interface ShellRespTest { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespTest>('shell.run', {
         command: 'npx vitest run 2>&1 | tail -80 || npx jest --no-coverage 2>&1 | tail -80 || python -m pytest -x -q 2>&1 | tail -60',
         workspace_path: props.workspacePath,
@@ -5648,7 +5710,7 @@ ${historyText}`
     if (!props.workspacePath) { showToast('/api requires an open workspace'); return }
     try {
       showToast('Detecting API routes…')
-      interface ShellRespApi { ok: boolean; output?: string }
+      interface ShellRespApi { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespApi>('shell.run', {
         command: [
           'grep -rn --include="*.ts" --include="*.js" --include="*.py" --include="*.vue"',
@@ -5774,7 +5836,7 @@ ${historyText}`
     if (!props.workspacePath) { showToast('/rename:symbol requires an open workspace'); return }
     try {
       showToast(`Searching for "${symbolName}"…`)
-      interface ShellRespRename { ok: boolean; output?: string }
+      interface ShellRespRename { ok: boolean; output?: string; error?: string }
       const safeSymbol = symbolName.replace(/[^A-Za-z0-9_$]/g, '').slice(0, 80)
       if (!safeSymbol) { showToast('/rename:symbol: invalid symbol name'); return }
       const resp = await props.backend.send<ShellRespRename>('shell.run', {
@@ -5807,7 +5869,7 @@ ${historyText}`
     if (!SAFE_PATH_COV.test(relPath) || relPath.includes('..') || relPath.startsWith('-')) { showToast('/coverage:add: invalid path'); return }
     try {
       showToast('Running coverage…')
-      interface ShellRespCov { ok: boolean; output?: string }
+      interface ShellRespCov { ok: boolean; output?: string; error?: string }
       const ext = relPath.split('.').pop() ?? ''
       const sqPath = "'" + relPath.replace(/'/g, "'\\''") + "'"
       const escapedPattern = "'" + relPath.replace(/'/g, "'\\''").replace(/\./g, '\\.') + "'"
@@ -5840,7 +5902,7 @@ ${historyText}`
     if (!props.workspacePath) { showToast('/branch requires an open workspace'); return }
     try {
       showToast('Fetching branches…')
-      interface ShellRespBranch { ok: boolean; output?: string }
+      interface ShellRespBranch { ok: boolean; output?: string; error?: string }
       const [branchResp, trackingResp] = await Promise.all([
         props.backend.send<ShellRespBranch>('shell.run', { command: 'git branch -a --color=never 2>&1', workspace_path: props.workspacePath }),
         props.backend.send<ShellRespBranch>('shell.run', { command: 'git status --short --branch 2>&1', workspace_path: props.workspacePath }),
@@ -5862,7 +5924,7 @@ ${historyText}`
     inputText.value = ''
     if (!props.workspacePath) { showToast('/env:check requires an open workspace'); return }
     try {
-      interface ReadRespEnv { payload?: { ok?: boolean; content?: string } }
+      interface ReadRespEnv extends ReadPayload {}
       const [exampleResp, envResp] = await Promise.all([
         props.backend.send<ReadRespEnv>('fs.read_file', { workspace_path: props.workspacePath, rel_path: '.env.example' })
           .catch(() => ({ payload: { ok: false, content: '' } })),
@@ -5872,9 +5934,9 @@ ${historyText}`
       const example = (exampleResp.payload?.content ?? '').trim()
       const env = (envResp.payload?.content ?? '').trim()
       if (!example) { showToast('/env:check: no .env.example found'); return }
-      const exampleVars = example.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => l.split('=')[0].trim())
-      const envVars = new Set(env.split('\n').filter((l) => l.includes('=') && !l.startsWith('#')).map((l) => l.split('=')[0].trim()))
-      const missing = exampleVars.filter((v) => !envVars.has(v))
+      const exampleVars = example.split('\n').filter((l: string) => l.includes('=') && !l.startsWith('#')).map((l: string) => l.split('=')[0].trim())
+      const envVars = new Set(env.split('\n').filter((l: string) => l.includes('=') && !l.startsWith('#')).map((l: string) => l.split('=')[0].trim()))
+      const missing = exampleVars.filter((v: string) => !envVars.has(v))
       const chip = `// .env.example variables: ${exampleVars.join(', ')}\n// Missing in .env: ${missing.length ? missing.join(', ') : '(none — all set)'}`
       contextChips.value.push({ id: crypto.randomUUID(), label: '@env:check', content: chip })
       inputText.value = missing.length
@@ -6053,7 +6115,7 @@ Requirements:
     if (!props.workspacePath) { showToast('/rules:show requires an open workspace'); return }
     try {
       showToast('Loading rule files…')
-      interface ReadRespR { payload?: { ok?: boolean; content?: string } }
+      interface ReadRespR extends ReadPayload {}
       const RULE_PATHS = ['AGENTS.md', '.cursorrules', '.cursor/rules/main.mdc', '.cursor/rules/default.mdc', '.github/copilot-instructions.md']
       const results = await Promise.all(
         RULE_PATHS.map((rp) =>
@@ -6174,7 +6236,7 @@ Fix all errors, starting with the most critical.`
     if (!props.workspacePath) { showToast('/arch requires an open workspace'); return }
     try {
       showToast('Analyzing project structure…')
-      interface ShellRespArch { ok: boolean; output?: string }
+      interface ShellRespArch { ok: boolean; output?: string; error?: string }
       const [treeResp, pkgResp] = await Promise.all([
         props.backend.send<ShellRespArch>('shell.run', {
           command: 'find . -type f ! -path "*/node_modules/*" ! -path "*/.venv/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/__pycache__/*" | head -80 | sort',
@@ -6217,7 +6279,7 @@ Be concise and developer-focused.`
     if (ref2 && (!SAFE_REF.test(ref2) || ref2.includes('..'))) { showToast('/diff:explain: invalid ref/hash'); return }
     try {
       showToast('Fetching diff…')
-      interface ShellRespDe { ok: boolean; output?: string }
+      interface ShellRespDe { ok: boolean; output?: string; error?: string }
       const sqRef = ref2 ? "'" + ref2.replace(/'/g, "'\''") + "'" : 'HEAD'
       const diffCmd = ref2
         ? `git show ${sqRef} --stat --unified=3 2>&1 | head -120`
@@ -6246,7 +6308,7 @@ End with a one-sentence summary suitable for a CHANGELOG entry.`
     if (!props.workspacePath) { showToast('/todo requires an open workspace'); return }
     try {
       showToast('Scanning for TODOs…')
-      interface ShellRespTodo { ok: boolean; output?: string }
+      interface ShellRespTodo { ok: boolean; output?: string; error?: string }
       const relPath = props.getActiveRelPath?.()
       const todoCmd = relPath
         ? `grep -n -E "TODO|FIXME|HACK|XXX|BUG" '${relPath.replace(/'/g, "'\\''")}' 2>/dev/null | head -40`
@@ -6298,8 +6360,8 @@ End with a one-sentence summary suitable for a CHANGELOG entry.`
     if (!props.workspacePath) { showToast('/init:rules requires an open workspace'); return }
     try {
       showToast('Analyzing project structure…')
-      interface ShellResp2 { ok: boolean; output?: string }
-      interface ReadResp4 { ok: boolean; content?: string }
+      interface ShellResp2 { ok: boolean; output?: string; error?: string }
+      interface ReadResp4 extends ReadPayload {}
       const [treeResp, pkgResp, rulesResp] = await Promise.all([
         props.backend.send<ShellResp2>('shell.run', { command: 'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/__pycache__/*" -not -path "*/.venv/*" | head -80 2>&1', workspace_path: props.workspacePath }),
         props.backend.send<ReadResp4>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }).catch(() => ({ payload: { ok: false } })),
@@ -6357,7 +6419,7 @@ End with a one-sentence summary suitable for a CHANGELOG entry.`
     if (!props.workspacePath) { showToast('/explain:commit requires an open workspace'); return }
     try {
       showToast('Fetching recent commits…')
-      interface ShellResp3 { ok: boolean; output?: string }
+      interface ShellResp3 { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp3>('shell.run', {
         command: 'git log -5 --format="commit %H%nauthor: %an%ndate: %ad%nsubject: %s%n%nbody:%n%b%n---" --date=short 2>&1',
         workspace_path: props.workspacePath,
@@ -6380,7 +6442,7 @@ End with a one-sentence summary suitable for a CHANGELOG entry.`
     if (!props.workspacePath) { showToast('/commit:amend requires an open workspace'); return }
     try {
       showToast('Fetching last commit…')
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git log -1 --format="%H%n%s%n%n%b" 2>&1',
         workspace_path: props.workspacePath,
@@ -6488,7 +6550,7 @@ End with a one-sentence summary suitable for a CHANGELOG entry.`
     if (!props.workspacePath) { showToast('/coverage requires an open workspace'); return }
     try {
       showToast('Running coverage…')
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const rawPath = props.getActiveRelPath?.() ?? ''
       const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
       const safeRelPath = SAFE_PATH.test(rawPath) && !rawPath.includes('..') && !rawPath.startsWith('-') ? rawPath : ''
@@ -6544,7 +6606,7 @@ ${log || '(no commits)'}`
     if (props.workspacePath) {
       void (async () => {
         try {
-          interface FlatRespScaffold { ok: boolean; files?: string[] }
+          interface FlatRespScaffold { ok: boolean; files?: string[]; error?: string }
           const r = await props.backend.send<FlatRespScaffold>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' })
           const files = (r.payload?.files ?? []).slice(0, 100)
           if (files.length && !contextChips.value.some((c) => c.label === '@tree')) {
@@ -6601,8 +6663,8 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/gen:readme requires an open workspace'); return }
     try {
       showToast('Reading project structure…')
-      interface FlatRespReadme { ok: boolean; files?: string[] }
-      interface ShellRespReadme { ok: boolean; output?: string }
+      interface FlatRespReadme { ok: boolean; files?: string[]; error?: string }
+      interface ShellRespReadme { ok: boolean; output?: string; error?: string }
       const [filesResp, pkgResp, existingResp] = await Promise.all([
         props.backend.send<FlatRespReadme>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' }),
         props.backend.send<ShellRespReadme>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }).catch(() => ({ payload: { ok: false, output: '' } })),
@@ -6660,7 +6722,7 @@ ${log || '(no commits)'}`
     const SAFE_REF = /^[A-Za-z0-9_./-]+$/
     try {
       showToast('Fetching recent commits…')
-      interface ShellRespCP { ok: boolean; output?: string }
+      interface ShellRespCP { ok: boolean; output?: string; error?: string }
       const logResp = await props.backend.send<ShellRespCP>('shell.run', {
         command: 'git log --oneline -20 2>&1',
         workspace_path: props.workspacePath,
@@ -6724,7 +6786,7 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/ask:codebase requires an open workspace'); return }
     try {
       showToast('Reading project structure…')
-      interface FlatRespCB { ok: boolean; files?: string[] }
+      interface FlatRespCB { ok: boolean; files?: string[]; error?: string }
       const resp = await props.backend.send<FlatRespCB>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' })
       const files = (resp.payload?.files ?? []).slice(0, 200)
       const tree = buildFileTree(files)
@@ -6855,7 +6917,7 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/lint:all requires an open workspace'); return }
     try {
       showToast('Running project-wide lint…')
-      interface ShellRespLA { ok: boolean; output?: string }
+      interface ShellRespLA { ok: boolean; output?: string; error?: string }
       const [eslintResp, ruffResp] = await Promise.all([
         props.backend.send<ShellRespLA>('shell.run', { command: 'npx eslint . --format compact 2>&1 | head -80 || echo "(eslint not found)"', workspace_path: props.workspacePath }),
         props.backend.send<ShellRespLA>('shell.run', { command: 'python -m ruff check . 2>&1 | head -60 || echo "(ruff not found)"', workspace_path: props.workspacePath }),
@@ -6896,7 +6958,7 @@ ${log || '(no commits)'}`
     const [pathA, pathB] = parts.slice(0, 2)
     if (!SAFE_PATH_CF.test(pathA) || !SAFE_PATH_CF.test(pathB) || pathA.includes('..') || pathB.includes('..')) { showToast('/compare:files: invalid path'); return }
     try {
-      interface FileRespCF { ok?: boolean; content?: string }
+      interface FileRespCF extends ReadPayload {}
       const [aResp, bResp] = await Promise.all([
         props.backend.send<FileRespCF>('fs.read_file', { workspace_path: props.workspacePath, rel_path: pathA }),
         props.backend.send<FileRespCF>('fs.read_file', { workspace_path: props.workspacePath, rel_path: pathB }),
@@ -6950,7 +7012,7 @@ ${log || '(no commits)'}`
     const sqAuthor = "'" + author.replace(/'/g, "'\\''") + "'"
     try {
       showToast(`Fetching commits by ${author}…`)
-      interface ShellRespGLA { ok: boolean; output?: string }
+      interface ShellRespGLA { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespGLA>('shell.run', {
         command: `git log --author=${sqAuthor} --oneline -20 2>&1`,
         workspace_path: props.workspacePath,
@@ -7067,7 +7129,7 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/git:rebase requires an open workspace'); return }
     try {
       showToast('Fetching commits…')
-      interface ShellRespGR { ok: boolean; output?: string }
+      interface ShellRespGR { ok: boolean; output?: string; error?: string }
       const [logResp, branchResp] = await Promise.all([
         props.backend.send<ShellRespGR>('shell.run', { command: 'git log --oneline -20 2>&1', workspace_path: props.workspacePath }),
         props.backend.send<ShellRespGR>('shell.run', { command: 'git branch --show-current 2>&1', workspace_path: props.workspacePath }),
@@ -7099,7 +7161,7 @@ ${log || '(no commits)'}`
     const sqPat = "'" + pattern.replace(/'/g, "'\\''") + "'"
     try {
       showToast(`Running test: ${pattern}…`)
-      interface ShellRespTSR { ok: boolean; output?: string; exit_code?: number }
+      interface ShellRespTSR { ok: boolean; output?: string; exit_code?: number; error?: string }
       const hasPytest = await props.backend.send<ShellRespTSR>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'pytest.ini' }).catch(() => ({ payload: { ok: false } }))
       const isPy = pattern.endsWith('.py') || (hasPytest.payload as { ok?: boolean })?.ok
       const cmd2 = isPy
@@ -7150,7 +7212,7 @@ ${log || '(no commits)'}`
     const relPath = props.getActiveRelPath?.()
     if (relPath && props.workspacePath) {
       try {
-        interface FlatRespAT { ok: boolean; files?: string[] }
+        interface FlatRespAT { ok: boolean; files?: string[]; error?: string }
         const r = await props.backend.send<FlatRespAT>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' })
         const files = (r.payload?.files ?? []).slice(0, 100)
         if (files.length && !contextChips.value.some((c) => c.label === '@tree')) {
@@ -7174,7 +7236,7 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/coverage:report requires an open workspace'); return }
     try {
       showToast('Running project coverage…')
-      interface ShellRespCR { ok: boolean; output?: string; exit_code?: number }
+      interface ShellRespCR { ok: boolean; output?: string; exit_code?: number; error?: string }
       const hasPyproject = await props.backend.send<ShellRespCR>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'pyproject.toml' }).catch(() => ({ payload: { ok: false, content: '' } }))
       const isPy = (hasPyproject.payload as { ok?: boolean; content?: string })?.content?.includes('[tool.pytest') ?? false
       const covCmd = isPy
@@ -7225,7 +7287,7 @@ ${log || '(no commits)'}`
     if (!props.workspacePath) { showToast('/lint:fix:auto requires an open workspace'); return }
     try {
       showToast('Running auto-fix…')
-      interface ShellRespLFA { ok: boolean; output?: string }
+      interface ShellRespLFA { ok: boolean; output?: string; error?: string }
       const rawPath = props.getActiveRelPath?.() ?? ''
       const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
       const safeRelPath = SAFE_PATH.test(rawPath) && !rawPath.includes('..') && !rawPath.startsWith('-') ? rawPath : ''
@@ -7337,7 +7399,7 @@ Return only the markdown table.`
     const idxArg = cmd.id.replace('/git:stash:apply', '').trim()
     try {
       showToast('Fetching stash list…')
-      interface ShellRespGSA { ok: boolean; output?: string; exit_code?: number }
+      interface ShellRespGSA { ok: boolean; output?: string; exit_code?: number; error?: string }
       const listResp = await props.backend.send<ShellRespGSA>('shell.run', { command: 'git stash list 2>&1', workspace_path: props.workspacePath })
       const stashList = (listResp.payload?.output ?? '').trim()
       if (!stashList) { showToast('/git:stash:apply: no stashes found'); return }
@@ -7361,7 +7423,7 @@ Return only the markdown table.`
     if (!props.workspacePath) { showToast('/doc:project requires an open workspace'); return }
     try {
       showToast('Reading project structure…')
-      interface FlatRespDP { ok: boolean; files?: string[] }
+      interface FlatRespDP { ok: boolean; files?: string[]; error?: string }
       const [filesResp, pkgResp, readmeResp] = await Promise.all([
         props.backend.send<FlatRespDP>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' }),
         props.backend.send<FlatRespDP>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }).catch(() => ({ payload: { ok: false } })),
@@ -7454,7 +7516,7 @@ Return only the markdown table.`
     if (!SAFE_PATH.test(targetPath) || targetPath.includes('..')) { showToast('Invalid file path'); return }
     ;(async () => {
       try {
-        const res = await window.api.invoke('fs.read_file', { path: targetPath })
+        const res = await legacyInvoke('fs.read_file', { path: targetPath })
         const content = typeof res === 'string' ? res : (res as { content?: string })?.content ?? ''
         const preview = content.length > 6000 ? content.slice(0, 6000) + '\n…[truncated]' : content
         addMsg({ role: 'user', content: `Explain what the file \`${targetPath}\` does. Here is its content:
@@ -7478,7 +7540,7 @@ ${preview}
     ;(async () => {
       try {
         const safeQ = targetPath.replace(/'/g, "'\''")
-        const res = await window.api.invoke('shell.run', { cmd: `git log --oneline --follow -20 -- '${safeQ}'` })
+        const res = await legacyInvoke('shell.run', { cmd: `git log --oneline --follow -20 -- '${safeQ}'` })
         const log = (res as { stdout?: string })?.stdout?.trim() || '(no commits found)'
         addMsg({ role: 'user', content: `Here is the git log for \`${targetPath}\` (last 20 commits):
 \`\`\`
@@ -7496,7 +7558,7 @@ Summarise the change history and explain the purpose of recent changes.` })
     inputText.value = ''
     ;(async () => {
       try {
-        const res = await window.api.invoke('shell.run', { cmd: "grep -rh --include='*.ts' --include='*.tsx' --include='*.vue' --include='*.py' --include='*.js' -o 'process\.env\.[A-Z_][A-Z0-9_]*\|os\.environ\[[^]]*\]\|os\.getenv([^)]*)' . 2>/dev/null | sort -u | head -80" })
+        const res = await legacyInvoke('shell.run', { cmd: "grep -rh --include='*.ts' --include='*.tsx' --include='*.vue' --include='*.py' --include='*.js' -o 'process\.env\.[A-Z_][A-Z0-9_]*\|os\.environ\[[^]]*\]\|os\.getenv([^)]*)' . 2>/dev/null | sort -u | head -80" })
         const raw = (res as { stdout?: string })?.stdout?.trim() || ''
         addMsg({ role: 'user', content: `I scanned my codebase for environment variable usage and found:
 \`\`\`
@@ -7515,7 +7577,7 @@ Please generate a well-commented \`.env.example\` file that documents all these 
     inputText.value = ''
     ;(async () => {
       try {
-        const selRes = await window.api.invoke('editor.get_selection', {})
+        const selRes = await legacyInvoke('editor.get_selection', {})
         const sel = (selRes as { text?: string; file?: string })
         const selText = sel?.text?.trim() || ''
         if (!selText) { showToast('/ask:selection: no text selected in editor'); return }
@@ -7704,7 +7766,7 @@ ${preview}
     ;(async () => {
       showToast('Running type checker…')
       try {
-        const res = await window.api.invoke('shell.run', { cmd: 'npx vue-tsc --noEmit 2>&1 | head -80' })
+        const res = await legacyInvoke('shell.run', { cmd: 'npx vue-tsc --noEmit 2>&1 | head -80' })
         const out = ((res as { stdout?: string })?.stdout ?? '').trim()
         if (!out || out.toLowerCase().includes('found 0 errors')) {
           showToast('No TypeScript errors found!')
@@ -7755,7 +7817,7 @@ ${preview}
     ;(async () => {
       showToast('Scanning for dead code…')
       try {
-        const tsRes = await window.api.invoke('shell.run', { cmd: "npx ts-prune 2>/dev/null | head -60 || grep -rn 'TODO.*remove\\|FIXME.*unused\\|@deprecated' --include='*.ts' --include='*.vue' --include='*.tsx' . 2>/dev/null | head -40" })
+        const tsRes = await legacyInvoke('shell.run', { cmd: "npx ts-prune 2>/dev/null | head -60 || grep -rn 'TODO.*remove\\|FIXME.*unused\\|@deprecated' --include='*.ts' --include='*.vue' --include='*.tsx' . 2>/dev/null | head -40" })
         const out = ((tsRes as { stdout?: string })?.stdout ?? '').trim()
         if (out) {
           contextChips.value.push({ id: crypto.randomUUID(), label: '@dead:code', content: `// Potential dead code scan results:\n${out.slice(0, 5000)}` })
@@ -7776,8 +7838,8 @@ ${preview}
       showToast('Checking outdated packages…')
       try {
         const [npmRes, pipRes] = await Promise.allSettled([
-          window.api.invoke('shell.run', { cmd: 'npm outdated --json 2>/dev/null || npm outdated 2>/dev/null | head -40' }),
-          window.api.invoke('shell.run', { cmd: 'backend/.venv/bin/pip list --outdated 2>/dev/null | head -30' }),
+          legacyInvoke('shell.run', { cmd: 'npm outdated --json 2>/dev/null || npm outdated 2>/dev/null | head -40' }),
+          legacyInvoke('shell.run', { cmd: 'backend/.venv/bin/pip list --outdated 2>/dev/null | head -30' }),
         ])
         const npmOut = npmRes.status === 'fulfilled' ? ((npmRes.value as { stdout?: string })?.stdout ?? '').trim() : ''
         const pipOut = pipRes.status === 'fulfilled' ? ((pipRes.value as { stdout?: string })?.stdout ?? '').trim() : ''
@@ -7809,13 +7871,13 @@ ${preview}
     inputText.value = ''
     ;(async () => {
       try {
-        const dfRes = await window.api.invoke('fs.read_file', { path: 'Dockerfile' })
+        const dfRes = await legacyInvoke('fs.read_file', { path: 'Dockerfile' })
         const existing = typeof dfRes === 'string' ? dfRes : (dfRes as { content?: string })?.content ?? ''
         if (existing.trim()) {
           contextChips.value.push({ id: crypto.randomUUID(), label: '@Dockerfile', content: `\`\`\`dockerfile\n${existing.slice(0, 4000)}\n\`\`\`` })
           addMsg({ role: 'user', content: 'Review this Dockerfile for best practices: security (non-root user, minimal base image), layer caching, build efficiency, and correctness. Suggest specific improvements.' })
         } else {
-          const pkgRes = await window.api.invoke('fs.read_file', { path: 'package.json' }).catch(() => null)
+          const pkgRes = await legacyInvoke('fs.read_file', { path: 'package.json' }).catch(() => null)
           const pkg = pkgRes ? JSON.parse(typeof pkgRes === 'string' ? pkgRes : (pkgRes as { content?: string })?.content ?? '{}') : {}
           const framework = pkg?.dependencies?.['next'] ? 'Next.js' : pkg?.dependencies?.['vue'] ? 'Vue 3' : pkg?.dependencies?.['react'] ? 'React' : pkg?.scripts?.dev ? 'Node.js' : 'application'
           addMsg({ role: 'user', content: `Generate a production-ready multi-stage Dockerfile for this ${framework} project. Include: minimal base image, non-root user, health check, proper .dockerignore hints, and build optimisation for layer caching.` })
@@ -7831,13 +7893,13 @@ ${preview}
     inputText.value = ''
     ;(async () => {
       try {
-        const ciRes = await window.api.invoke('shell.run', { cmd: "find .github/workflows -name '*.yml' -o -name '*.yaml' 2>/dev/null | head -5 || find . -name '.gitlab-ci.yml' -o -name 'circle.yml' 2>/dev/null | head -3" })
+        const ciRes = await legacyInvoke('shell.run', { cmd: "find .github/workflows -name '*.yml' -o -name '*.yaml' 2>/dev/null | head -5 || find . -name '.gitlab-ci.yml' -o -name 'circle.yml' 2>/dev/null | head -3" })
         const files = ((ciRes as { stdout?: string })?.stdout ?? '').trim().split('\n').filter(Boolean)
         if (files.length) {
           const first = files[0]
           const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
           if (SAFE_PATH.test(first) && !first.includes('..')) {
-            const content = await window.api.invoke('fs.read_file', { path: first.trim() })
+            const content = await legacyInvoke('fs.read_file', { path: first.trim() })
             const yaml = typeof content === 'string' ? content : (content as { content?: string })?.content ?? ''
             contextChips.value.push({ id: crypto.randomUUID(), label: '@ci:config', content: `// ${first}\n\`\`\`yaml\n${yaml.slice(0, 5000)}\n\`\`\`` })
             addMsg({ role: 'user', content: `Review this CI/CD configuration. Check for: security issues (secret exposure, arbitrary code execution), missing caching, inefficient job ordering, and missing steps like type-checking or security scanning. Suggest specific improvements.` })
@@ -7868,7 +7930,7 @@ function debouncedSearchFiles(query: string): void {
 
 async function searchFiles(query: string): Promise<void> {
   try {
-    interface FlatResp { ok: boolean; files?: string[] }
+    interface FlatResp { ok: boolean; files?: string[]; error?: string }
     const lower = query.toLowerCase()
     const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
       workspace_path: props.workspacePath,
@@ -7897,10 +7959,11 @@ async function searchFiles(query: string): Promise<void> {
 async function selectAtOption(option: AtOption, refreshTargetId?: string): Promise<void> {
   trackRecentAt(option.id)
   // Remove the @fragment from textarea
-  const el = textareaEl.value
-  if (!el && !refreshTargetId) { showAtMenu.value = false; return }
-  const val = el?.value ?? ''
-  const cur = el ? (el.selectionStart ?? val.length) : 0
+  const textarea = textareaEl.value
+  if (!textarea && !refreshTargetId) { showAtMenu.value = false; return }
+  const el = textarea ?? document.createElement('textarea')
+  const val = el.value
+  const cur = el.selectionStart ?? val.length
   const beforeCursor = val.slice(0, cur)
   const atIdx = beforeCursor.lastIndexOf('@')
 
@@ -7975,7 +8038,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     if (option.id === '@git:log:verbose') {
       chipLabel = '@git:log:verbose'
       try {
-        interface ShellResp { ok: boolean; output?: string }
+        interface ShellResp { ok: boolean; output?: string; error?: string }
         const resp = await props.backend.send<ShellResp>('shell.run', {
           command: 'git log --format="%H%n  Author: %an <%ae>%n  Date:   %ar%n  %s%n%b" -10 2>&1',
           workspace_path: props.workspacePath,
@@ -7990,7 +8053,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
       const n = Math.min(Math.max(parseInt(rawN, 10) || 20, 1), 500)
       chipLabel = `@git:log:${n}`
       try {
-        interface ShellResp { ok: boolean; output?: string }
+        interface ShellResp { ok: boolean; output?: string; error?: string }
         const resp = await props.backend.send<ShellResp>('shell.run', {
           command: `git log --oneline -${n} 2>&1`,
           workspace_path: props.workspacePath,
@@ -8004,7 +8067,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   } else if (option.id === '@git:branch') {
     chipLabel = '@git:branch'
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const branchResp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git branch --show-current 2>&1 && git log -1 --pretty="%h %s (%ar, %an)" 2>&1 && git status --short 2>&1 | head -20',
         workspace_path: props.workspacePath,
@@ -8026,7 +8089,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     }
     chipLabel = `@git:blame(${relPath.split('/').pop()})`
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       showToast('Running git blame…')
       const blameResp = await props.backend.send<ShellResp>('shell.run', {
         command: `git blame --line-porcelain -- "${relPath}" 2>&1 | grep -E "^(author |summary |[0-9a-f]{40} )" | awk '/^[0-9a-f]{40}/{h=$1} /^author /{a=substr($0,8)} /^summary /{s=substr($0,9); print h" "a": "s}' | sort -u | head -60`,
@@ -8053,7 +8116,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
     const relPath = props.getActiveRelPath?.()
     if (!relPath) { showToast('@git:file-log: no file open in editor'); return }
     try {
-      interface ShellRespFL { ok: boolean; output?: string }
+      interface ShellRespFL { ok: boolean; output?: string; error?: string }
       const SAFE_PATH = /^[A-Za-z0-9_./ -]+$/
       const safeRelPath = SAFE_PATH.test(relPath) && !relPath.includes('..') && !relPath.startsWith('-') ? relPath : null
       if (!safeRelPath) { chipContent = '// @git:file-log: invalid file path'; } else {
@@ -8075,7 +8138,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   } else if (option.id === '@git:recent') {
     chipLabel = '@git:recent'
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git log --name-only --pretty=format: -5 2>&1 | grep -v "^$" | sort -u | head -20',
         workspace_path: props.workspacePath,
@@ -8088,7 +8151,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   } else if (option.id === '@git:conflicts') {
     chipLabel = '@git:conflicts'
     try {
-      interface ShellRespConflicts { ok: boolean; output?: string }
+      interface ShellRespConflicts { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespConflicts>('shell.run', {
         command: 'git status --short 2>/dev/null | grep -E "^[UA][UA] |^AA |^DD " | head -20',
         workspace_path: props.workspacePath,
@@ -8198,7 +8261,7 @@ async function selectAtOption(option: AtOption, refreshTargetId?: string): Promi
   } else if (option.id === '@git:modified') {
     chipLabel = '@git:modified'
     try {
-      interface ShellResp { ok: boolean; output?: string }
+      interface ShellResp { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellResp>('shell.run', {
         command: 'git status --short 2>&1',
         workspace_path: props.workspacePath,
@@ -8281,7 +8344,7 @@ ${out}`
   } else if (option.id === '@git:conflict') {
     chipLabel = '@git:conflict'
     try {
-      interface ShellRespConflict { ok: boolean; output?: string }
+      interface ShellRespConflict { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespConflict>('shell.run', {
         command: 'git diff --name-only --diff-filter=U 2>/dev/null',
         workspace_path: props.workspacePath,
@@ -8312,7 +8375,7 @@ ${out}`
   } else if (option.id === '@git:remote') {
     chipLabel = '@git:remote'
     try {
-      interface ShellRespRemote { ok: boolean; output?: string }
+      interface ShellRespRemote { ok: boolean; output?: string; error?: string }
       const [remoteResp, statusResp] = await Promise.all([
         props.backend.send<ShellRespRemote>('shell.run', { command: 'git remote -v 2>/dev/null', workspace_path: props.workspacePath }),
         props.backend.send<ShellRespRemote>('shell.run', { command: 'git status -sb 2>/dev/null | head -5', workspace_path: props.workspacePath }),
@@ -8335,7 +8398,7 @@ ${out}`
     const relPath = props.getActiveRelPath?.()
     if (!relPath) { showToast('@git:author: no file open in editor'); return }
     try {
-      interface ShellRespBlame { ok: boolean; output?: string }
+      interface ShellRespBlame { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespBlame>('shell.run', {
         command: `git blame --line-porcelain -- '${relPath.replace(/'/g, "'\\''")}' 2>/dev/null | awk '/^author / {a=$0} /^author-time / {t=$2} /^filename / {f=$2} /^\t/ {gsub(/^author /,"",a); printf "%s | %s | %s\\n", strftime("%Y-%m-%d", t+0), a, substr($0,2)}' | head -80`,
         workspace_path: props.workspacePath,
@@ -8367,7 +8430,7 @@ ${out}`
     chipLabel = `@codebase:${query}`
     try {
       interface SearchMatch { line: number; col: number; text: string }
-      interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+      interface SearchResp { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
       const resp = await props.backend.send<SearchResp>('search.find_in_files', {
         workspace_path: props.workspacePath,
         query,
@@ -8385,7 +8448,7 @@ ${out}`
         for (const r of topFiles) {
           let fileLines: string[] = []
           try {
-            interface ReadResp { ok: boolean; content?: string }
+            interface ReadResp extends ReadPayload {}
             const fr = await props.backend.send<ReadResp>('fs.read_file', {
               workspace_path: props.workspacePath, rel_path: r.rel_path,
             })
@@ -8432,7 +8495,7 @@ ${out}`
     const folderPath = option.id.slice('@folder:'.length).trim()
     chipLabel = `@folder:${folderPath}`
     try {
-      interface FlatResp { ok: boolean; files?: string[] }
+      interface FlatResp { ok: boolean; files?: string[]; error?: string }
       const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
         workspace_path: props.workspacePath,
         query: '',
@@ -8449,7 +8512,7 @@ ${out}`
         const results: string[] = []
         for (const filePath of taken) {
           try {
-            interface ReadResp { ok: boolean; content?: string }
+            interface ReadResp extends ReadPayload {}
             const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
             const ext = filePath.split('.').pop() ?? ''
             results.push(`// ${filePath}\n\`\`\`${ext}\n${(fr.payload?.content ?? '').slice(0, 2000)}\n\`\`\``)
@@ -8499,7 +8562,7 @@ ${out}`
       const results: string[] = []
       for (const filePath of taken) {
         try {
-          interface ReadResp { ok: boolean; content?: string }
+          interface ReadResp extends ReadPayload {}
           const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
           if (fr.payload?.ok) {
             const ext = filePath.split('.').pop() ?? ''
@@ -8542,7 +8605,7 @@ ${out}`
           const results: string[] = []
           for (const filePath of taken) {
             try {
-              interface ReadResp { ok: boolean; content?: string }
+              interface ReadResp extends ReadPayload {}
               const fr = await props.backend.send<ReadResp>('fs.read_file', { workspace_path: props.workspacePath, rel_path: filePath })
               const ext = filePath.split('.').pop() ?? ''
               results.push(`// ${filePath}\n\`\`\`${ext}\n${(fr.payload?.content ?? '').slice(0, 2000)}\n\`\`\``)
@@ -8684,9 +8747,9 @@ ${out}`
     chipLabel = '@workspace'
     if (!props.workspacePath) { chipContent = '// @workspace: no workspace open' } else {
       try {
-        interface FlatResp { ok: boolean; files?: string[] }
-        interface ReadResp3 { payload?: { ok?: boolean; content?: string } }
-        interface ShellRespWs { ok: boolean; output?: string }
+        interface FlatResp { ok: boolean; files?: string[]; error?: string }
+        interface ReadResp3 extends ReadPayload {}
+        interface ShellRespWs { ok: boolean; output?: string; error?: string }
         // Gather: tree, README, package.json or pyproject.toml, rules
         const [treeResp, readmeResp, pkgResp, pyResp] = await Promise.all([
           props.backend.send<FlatResp>('fs.list_files_flat', { workspace_path: props.workspacePath, query: '' }),
@@ -8726,7 +8789,7 @@ ${out}`
       chipContent = '// @tree: no workspace open'
     } else {
       try {
-        interface FlatResp { ok: boolean; files?: string[] }
+        interface FlatResp { ok: boolean; files?: string[]; error?: string }
         const resp = await props.backend.send<FlatResp>('fs.list_files_flat', {
           workspace_path: props.workspacePath,
           query: '',
@@ -8742,7 +8805,7 @@ ${out}`
   } else if (option.id === '@test:results') {
     chipLabel = '@test:results'
     try {
-      interface ShellRespTest { ok: boolean; output?: string }
+      interface ShellRespTest { ok: boolean; output?: string; error?: string }
       showToast('Running tests…')
       // Auto-detect test runner: vitest, pytest, jest, cargo test, go test
       const resp = await props.backend.send<ShellRespTest>('shell.run', {
@@ -8888,7 +8951,7 @@ ${out}`
       try {
         showToast(`Searching for "${symbolName}"…`)
         interface SearchMatch { line: number; col: number; text: string }
-        interface SearchResp { ok: boolean; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
+        interface SearchResp { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: SearchMatch[] }> }
         // Search for function/class/const definitions containing the symbol name
         const resp = await props.backend.send<SearchResp>('search.find_in_files', {
           workspace_path: props.workspacePath,
@@ -8915,7 +8978,7 @@ ${out}`
           const parts: string[] = []
           for (const d of defs.slice(0, 4)) {
             try {
-              interface ReadResp { ok: boolean; content?: string }
+              interface ReadResp extends ReadPayload {}
               const fr = await props.backend.send<ReadResp>('fs.read_file', {
                 workspace_path: props.workspacePath,
                 rel_path: d.path,
@@ -9006,7 +9069,7 @@ ${out}`
       chipContent = '// @env: no workspace open'
     } else {
       try {
-        interface ReadResp { ok: boolean; content?: string }
+        interface ReadResp extends ReadPayload {}
         // Try .env.example first, then .env.template, then .env.sample
         const candidates = ['.env.example', '.env.template', '.env.sample', '.env.local.example']
         let found = false
@@ -9050,7 +9113,7 @@ ${out}`
       chipContent = '// @package: no workspace open'
     } else {
       try {
-        interface ReadResp { ok: boolean; content?: string }
+        interface ReadResp extends ReadPayload {}
         const resp = await props.backend.send<ReadResp>('fs.read_file', {
           workspace_path: props.workspacePath,
           rel_path: 'package.json',
@@ -9079,7 +9142,7 @@ ${out}`
       chipContent = '// @dependents: no active file open in editor'
     } else {
       try {
-        interface SearchResp3 { ok: boolean; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
+        interface SearchResp3 { ok: boolean; error?: string; results?: Array<{ rel_path: string; matches: Array<{ line: number; text: string }> }> }
         showToast(`Finding dependents of ${activeFile.split('/').pop()}…`)
         const filename = activeFile.split('/').pop()?.replace(/\.\w+$/, '') ?? ''
         const resp = await props.backend.send<SearchResp3>('search.find_in_files', {
@@ -9113,7 +9176,7 @@ ${out}`
   } else if (option.id === '@lint') {
     chipLabel = '@lint'
     try {
-      interface ShellRespLint { ok: boolean; output?: string }
+      interface ShellRespLint { ok: boolean; output?: string; error?: string }
       showToast('Running linter…')
       const resp = await props.backend.send<ShellRespLint>('shell.run', {
         command: [
@@ -9158,7 +9221,7 @@ ${out}`
   } else if (option.id === '@ci') {
     chipLabel = '@ci'
     try {
-      interface ShellRespCI { ok: boolean; output?: string }
+      interface ShellRespCI { ok: boolean; output?: string; error?: string }
       const [workflowsResp, ghResp] = await Promise.all([
         props.backend.send<ShellRespCI>('shell.run', {
           command: 'ls .github/workflows/ 2>/dev/null | head -10',
@@ -9190,7 +9253,7 @@ ${out}`
   } else if (option.id === '@lock') {
     chipLabel = '@lock'
     try {
-      interface ReadResp2 { payload?: { ok?: boolean; content?: string } }
+      interface ReadResp2 extends ReadPayload {}
       let found2 = false
       for (const name of ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'Pipfile.lock', 'poetry.lock']) {
         const r = await props.backend.send<ReadResp2>('fs.read_file', { workspace_path: props.workspacePath, rel_path: name })
@@ -9219,7 +9282,7 @@ ${out}`
   } else if (option.id === '@port') {
     chipLabel = '@port'
     try {
-      interface ShellRespPort { ok: boolean; output?: string }
+      interface ShellRespPort { ok: boolean; output?: string; error?: string }
       // lsof lists LISTEN ports; grep for workspace-related processes when possible
       const [lsofResp, psResp] = await Promise.all([
         props.backend.send<ShellRespPort>('shell.run', {
@@ -9251,7 +9314,7 @@ ${out}`
   } else if (option.id === '@coverage') {
     chipLabel = '@coverage'
     try {
-      interface ShellRespCov { ok: boolean; output?: string }
+      interface ShellRespCov { ok: boolean; output?: string; error?: string }
       // Try vitest coverage first, then jest, then pytest-cov
       const [vitestResp, pytestResp] = await Promise.all([
         props.backend.send<ShellRespCov>('shell.run', {
@@ -9285,7 +9348,7 @@ ${out}`
   } else if (option.id === '@schema') {
     chipLabel = '@schema'
     try {
-      interface ReadRespSchema { payload?: { ok?: boolean; content?: string } }
+      interface ReadRespSchema extends ReadPayload {}
       let schemaFound = false
       for (const p of ['prisma/schema.prisma', 'schema.prisma', 'db/schema.sql', 'database/schema.sql']) {
         const r = await props.backend.send<ReadRespSchema>('fs.read_file', { workspace_path: props.workspacePath, rel_path: p })
@@ -9293,7 +9356,7 @@ ${out}`
         if (c) { chipContent = `// DB schema (${p}):\n\`\`\`prisma\n${c.slice(0, 6000)}\n\`\`\``; schemaFound = true; break }
       }
       if (!schemaFound) {
-        interface ShellRespSchema { ok: boolean; output?: string }
+        interface ShellRespSchema { ok: boolean; output?: string; error?: string }
         const resp = await props.backend.send<ShellRespSchema>('shell.run', {
           command: 'find . -name "*.sql" -not -path "*/node_modules/*" 2>/dev/null | head -5',
           workspace_path: props.workspacePath,
@@ -9305,7 +9368,7 @@ ${out}`
   } else if (option.id === '@changelog') {
     chipLabel = '@changelog'
     try {
-      interface ReadRespCL { payload?: { ok?: boolean; content?: string } }
+      interface ReadRespCL extends ReadPayload {}
       let found = false
       for (const name of ['CHANGELOG.md', 'CHANGES.md', 'HISTORY.md', 'CHANGELOG.txt']) {
         const r = await props.backend.send<ReadRespCL>('fs.read_file', { workspace_path: props.workspacePath, rel_path: name })
@@ -9317,7 +9380,7 @@ ${out}`
   } else if (option.id === '@todos') {
     chipLabel = '@todos'
     try {
-      interface ShellRespTodos { ok: boolean; output?: string }
+      interface ShellRespTodos { ok: boolean; output?: string; error?: string }
       const resp = await props.backend.send<ShellRespTodos>('shell.run', {
         command: 'grep -rn --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" --include="*.vue" -E "TODO|FIXME|HACK|XXX|BUG" . 2>/dev/null | grep -v "node_modules" | head -40',
         workspace_path: props.workspacePath,
@@ -9338,7 +9401,7 @@ ${out}`
       chipContent = '// @config: no workspace open'
     } else {
       try {
-        interface ReadRespCfg { payload?: { ok?: boolean; content?: string } }
+        interface ReadRespCfg extends ReadPayload {}
         const CONFIG_FILES = [
           'tsconfig.json', 'tsconfig.base.json',
           '.eslintrc.json', '.eslintrc.js', '.eslintrc.cjs', 'eslint.config.js', 'eslint.config.mjs',
@@ -9378,7 +9441,7 @@ ${out}`
         const SAFE_BASE = /^[A-Za-z0-9_.-]+$/
         if (!SAFE_BASE.test(baseName)) { chipContent = '// @tests: could not determine test file pattern'; }
         else {
-          interface ShellRespTests { ok: boolean; output?: string }
+          interface ShellRespTests { ok: boolean; output?: string; error?: string }
           const r = await props.backend.send<ShellRespTests>('shell.run', {
             command: `find . -type f \( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" \) ! -path "*/node_modules/*" ! -path "*/.venv/*" | grep -i "${baseName}" | head -10`,
             workspace_path: props.workspacePath,
@@ -9387,7 +9450,7 @@ ${out}`
           if (found === null) { chipContent = `// @tests: ${r.payload?.error ?? 'backend error'}` }
           else if (!found.length) { chipContent = `// @tests: no test files found for ${baseName}` }
           else {
-            interface ReadRespT { payload?: { ok?: boolean; content?: string } }
+            interface ReadRespT extends ReadPayload {}
             const parts: string[] = []
             for (const tf of found.slice(0, 3)) {
               const tr = await props.backend.send<ReadRespT>('fs.read_file', { workspace_path: props.workspacePath, rel_path: tf.replace(/^\.\//, '') })
@@ -9410,7 +9473,7 @@ ${out}`
         const SAFE_PATH_REL = /^[A-Za-z0-9_./ -]+$/
         if (!SAFE_B.test(baseName) || !SAFE_PATH_REL.test(relPath) || relPath.includes('..')) { chipContent = '// @related: invalid filename'; }
         else {
-          interface ShellRespRel { ok: boolean; output?: string }
+          interface ShellRespRel { ok: boolean; output?: string; error?: string }
           // Files that import the current file (single-quote quoting prevents injection)
           const sqBase = "'" + baseName.replace(/\.[^.]+$/, '').replace(/'/g, "'\\''") + "'"
           const sqRelPath = "'" + relPath.replace(/'/g, "'\\''") + "'"
@@ -9436,7 +9499,7 @@ ${out}`
       chipContent = `// Terminal output (last session):\n\`\`\`\n${stored.slice(-5000)}\n\`\`\``
     } else if (props.workspacePath) {
       try {
-        interface ShellRespTerm { ok: boolean; output?: string }
+        interface ShellRespTerm { ok: boolean; output?: string; error?: string }
         const [histResp, cmdResp] = await Promise.all([
           props.backend.send<ShellRespTerm>('shell.run', { command: 'history 2>/dev/null | tail -20 || fc -l 2>/dev/null | tail -20 || echo "(history unavailable)"', workspace_path: props.workspacePath }),
           props.backend.send<ShellRespTerm>('shell.run', { command: 'ls -lt 2>/dev/null | head -10', workspace_path: props.workspacePath }),
@@ -9454,7 +9517,7 @@ ${out}`
     else {
       try {
         showToast('Running build check…')
-        interface ShellRespBuild { ok: boolean; output?: string; exit_code?: number }
+        interface ShellRespBuild { ok: boolean; output?: string; exit_code?: number; error?: string }
         const hasPkg = await props.backend.send<ShellRespBuild>('fs.read_file', { workspace_path: props.workspacePath, rel_path: 'package.json' }).catch(() => ({ payload: { ok: false, content: '' } }))
         const pkg = JSON.parse((hasPkg.payload as { ok?: boolean; content?: string })?.content ?? '{}') as Record<string, unknown>
         const devDeps = (pkg.devDependencies ?? {}) as Record<string, string>
@@ -9500,7 +9563,7 @@ Up arrow — Edit last user message (inline)
     if (!props.workspacePath) { chipContent = '// @local:changes: no workspace open' }
     else {
       try {
-        interface ShellRespLC { ok: boolean; output?: string }
+        interface ShellRespLC { ok: boolean; output?: string; error?: string }
         const [statusResp, diffResp] = await Promise.all([
           props.backend.send<ShellRespLC>('shell.run', { command: 'git diff --name-only HEAD 2>&1', workspace_path: props.workspacePath }),
           props.backend.send<ShellRespLC>('shell.run', { command: 'git diff HEAD --stat 2>&1 | head -30', workspace_path: props.workspacePath }),
@@ -9568,7 +9631,7 @@ Up arrow — Edit last user message (inline)
       chipContent = `// @diff: invalid path "${filePath}" (only alphanumeric, _, ., /, - allowed)`
     } else {
     try {
-      interface ShellRespDiff { ok: boolean; output?: string }
+      interface ShellRespDiff { ok: boolean; output?: string; error?: string }
       // Single-quote the path after escaping any embedded single quotes (none allowed by validation above)
       const safePath = filePath.replace(/'/g, "'\\''")
       const resp = await props.backend.send<ShellRespDiff>('shell.run', {
@@ -9594,7 +9657,7 @@ Up arrow — Edit last user message (inline)
     const lineSpec = lineMatch[3] ? `${lineMatch[2]}-${lineMatch[3]}` : lineMatch[2]
     chipLabel = `@${filePath.split('/').pop()}:${lineSpec}`
     try {
-      interface ReadResp { ok: boolean; content?: string }
+      interface ReadResp extends ReadPayload {}
       const resp = await props.backend.send<ReadResp>('fs.read_file', {
         workspace_path: props.workspacePath,
         rel_path: filePath,
@@ -9611,7 +9674,7 @@ Up arrow — Edit last user message (inline)
     chipLabel = `@${option.id.split('/').pop()}`
     // Fetch file content
     try {
-      interface ReadResp { ok: boolean; content?: string }
+      interface ReadResp extends ReadPayload {}
       const resp = await props.backend.send<ReadResp>('fs.read_file', {
         workspace_path: props.workspacePath,
         rel_path: option.id,
@@ -9750,7 +9813,7 @@ async function onDrop(e: DragEvent): Promise<void> {
     try {
       let fileContent = ''
       if (isInsideWorkspace) {
-        interface ReadResp { ok: boolean; content?: string }
+        interface ReadResp extends ReadPayload {}
         const resp = await props.backend.send<ReadResp>('fs.read_file', {
           workspace_path: props.workspacePath,
           rel_path: relPath,
@@ -10619,7 +10682,7 @@ function showModelChange(mi: number): string | null {
           </button>
           <!-- Read aloud — Web Speech API TTS (VS Code Copilot parity) -->
           <button
-            v-if="msg.role === 'assistant' && !msg.streaming && 'speechSynthesis' in window"
+            v-if="msg.role === 'assistant' && !msg.streaming && speechSynthesisAvailable"
             class="ai-msg-action-btn"
             :title="speakingMsgIdx === mi ? 'Stop reading' : 'Read aloud'"
             :class="{ 'ai-msg-action-btn--active': speakingMsgIdx === mi }"
@@ -11109,17 +11172,7 @@ function showModelChange(mi: number): string | null {
             v-if="!sending && props.getEditorSelection"
             class="ai-settings-btn"
             :title="$t('action.add-editor-selection')"
-            @click="() => {
-              const sel = props.getEditorSelection?.()?.trim()
-              if (!sel) { showToast('No selection — select code in the editor first'); return }
-              const relPath = props.getActiveRelPath?.()
-              const ext = relPath?.split('.').pop() ?? ''
-              const label = '@selection'
-              contextChips.value = contextChips.value.filter(c => c.label !== '@selection')
-              contextChips.value.push({ id: crypto.randomUUID(), label, content: `\`\`\`${ext}\n${sel.slice(0, 8000)}\n\`\`\`` })
-              showToast('Selection added to context')
-              nextTick(() => textareaEl.value?.focus())
-            }"
+            @click="addSelectionContextChip"
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M1.75 1h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v3.5a.75.75 0 0 1-1.5 0v-3.5C0 1.784.784 1 1.75 1ZM14.25 1h-3.5a.75.75 0 0 0 0 1.5h3.5a.25.25 0 0 1 .25.25v3.5a.75.75 0 0 0 1.5 0v-3.5A1.75 1.75 0 0 0 14.25 1ZM1.5 10.75a.75.75 0 0 0-1.5 0v3.5C0 15.216.784 16 1.75 16h3.5a.75.75 0 0 0 0-1.5h-3.5a.25.25 0 0 1-.25-.25v-3.5Zm13 0a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 14.25 16h-3.5a.75.75 0 0 1 0-1.5h3.5a.25.25 0 0 0 .25-.25v-3.5Z"/>
@@ -11380,13 +11433,13 @@ function showModelChange(mi: number): string | null {
           :placeholder="threadTab === 'archived' ? 'Search archived…' : threadTab === 'pinned' ? 'Search pinned…' : 'Search chats…'"
           @keydown.escape="showThreads = false; threadSearchQuery = ''"
         />
-        <button class="ai-thread-bulk-toggle" :class="{ active: threadBulkMode }" title="Select multiple" @click="threadBulkMode = !threadBulkMode; selectedThreadIds.value = new Set()">☑</button>
+        <button class="ai-thread-bulk-toggle" :class="{ active: threadBulkMode }" title="Select multiple" @click="toggleThreadBulkMode">☑</button>
       </div>
       <div v-if="threadBulkMode && selectedThreadIds.size > 0" class="ai-thread-bulk-bar">
         <span class="ai-thread-bulk-count">{{ selectedThreadIds.size }} selected</span>
         <button class="ai-thread-bulk-btn" @click="bulkArchiveThreads">Archive</button>
         <button class="ai-thread-bulk-btn ai-thread-bulk-del" @click="bulkDeleteThreads">Delete</button>
-        <button class="ai-thread-bulk-cancel" @click="threadBulkMode = false; selectedThreadIds.value = new Set()">Cancel</button>
+        <button class="ai-thread-bulk-cancel" @click="cancelThreadBulkMode">Cancel</button>
       </div>
       <div class="ai-threads-list">
         <div v-if="!filteredThreads.length" class="ai-threads-empty">No results</div>
@@ -11526,7 +11579,7 @@ function showModelChange(mi: number): string | null {
             <button
               class="ai-notepad-add-btn"
               :title="$t('action.add-memory')"
-              @click="() => { const f = window.prompt('New memory fact (one sentence):'); if (f?.trim()) addMemory(f.trim()) }"
+              @click="promptAddMemory"
             >+</button>
           </div>
           <div v-if="memories.length === 0" class="ai-settings-hint" style="padding:6px 0">No memories yet — click + to add a persistent fact.</div>
@@ -11545,7 +11598,7 @@ function showModelChange(mi: number): string | null {
             <button
               class="ai-notepad-add-btn"
               :title="$t('action.pin-file-path')"
-              @click="() => { const p = window.prompt('File path to always include (relative to workspace, e.g. src/types.ts):'); if (p?.trim()) addGlobalPin(p.trim()) }"
+              @click="promptAddGlobalPin"
             >+</button>
           </div>
           <div v-if="globalContextPins.length === 0" class="ai-settings-hint" style="padding:6px 0">No pinned files — click + to always include a file in every conversation.</div>

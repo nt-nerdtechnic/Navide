@@ -10,8 +10,8 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('codex', 'abc')).toBe('codex resume abc')
   })
 
-  it('uses --resume for gemini', () => {
-    expect(buildResumeCommand('gemini', 'abc')).toBe('gemini --resume abc')
+  it('uses --session-file for gemini', () => {
+    expect(buildResumeCommand('gemini', '/tmp/session.json')).toBe('gemini --session-file "/tmp/session.json"')
   })
 
   it('appends the permission-bypass flag when given', () => {
@@ -29,6 +29,6 @@ describe('buildResumeCommand', () => {
   })
 
   it('trims the session id', () => {
-    expect(buildResumeCommand('gemini', '  abc  ')).toBe('gemini --resume abc')
+    expect(buildResumeCommand('gemini', '  /tmp/session.json  ')).toBe('gemini --session-file "/tmp/session.json"')
   })
 })

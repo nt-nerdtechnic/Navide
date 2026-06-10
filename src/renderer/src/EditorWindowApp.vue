@@ -78,6 +78,75 @@ function onAiResizeEnd(): void {
   document.removeEventListener('mouseup', onAiResizeEnd)
 }
 
+function selectionContext(relPath: string, selection: unknown): { label: string; content: string } {
+  const ext = relPath.split('.').pop() ?? ''
+  const label = `@${relPath.split('/').pop()}`
+  const content = `// Selection from: ${relPath}\n\`\`\`${ext}\n${String(selection ?? '')}\n\`\`\``
+  return { label, content }
+}
+
+async function handleAskAiAboutFile(relPath: string): Promise<void> {
+  aiPanelOpen.value = true
+  await nextTick()
+  const ext = relPath.split('.').pop() ?? ''
+  const label = '@' + relPath.split('/').pop()
+  try {
+    const r = await backend.send<{ ok: boolean; content?: string }>('fs.read_file', {
+      workspace_path: workspacePath,
+      rel_path: relPath,
+    })
+    const content = r.payload?.ok
+      ? `// ${relPath}\n\`\`\`${ext}\n${(r.payload.content ?? '').slice(0, 3000)}\n\`\`\``
+      : `// ${relPath} (read failed)`
+    aiChatRef.value?.addContextChip(label, content)
+  } catch {
+    aiChatRef.value?.addContextChip(label, `// ${relPath}`)
+  }
+}
+
+function addSelectionToChat(file: OpenFile, selection: unknown): void {
+  const { label, content } = selectionContext(file.relPath, selection)
+  aiPanelOpen.value = true
+  void nextTick(() => aiChatRef.value?.addContextChip(label, content))
+}
+
+function explainSelectionWithAi(file: OpenFile, selection: unknown): void {
+  const { label, content } = selectionContext(file.relPath, selection)
+  aiPanelOpen.value = true
+  void nextTick(() => {
+    aiChatRef.value?.addContextChip(label, content)
+    aiChatRef.value?.injectDraft('/explain Explain the selected code step by step.')
+  })
+}
+
+function fixSelectionWithAi(file: OpenFile, selection: unknown): void {
+  const { label, content } = selectionContext(file.relPath, selection)
+  aiPanelOpen.value = true
+  void nextTick(() => {
+    aiChatRef.value?.addContextChip(label, content)
+    aiChatRef.value?.injectDraft('/fix Fix any bugs or issues in the selected code.')
+  })
+}
+
+function writeTestsWithAi(file: OpenFile, selection: unknown): void {
+  const { label, content } = selectionContext(file.relPath, selection)
+  aiPanelOpen.value = true
+  void nextTick(() => {
+    aiChatRef.value?.addContextChip(label, content)
+    aiChatRef.value?.injectDraft('/tests Generate comprehensive unit tests for the selected code.')
+  })
+}
+
+function askSelectionWithAi(file: OpenFile, payload: unknown): void {
+  const body = (payload ?? {}) as { selection?: unknown; question?: unknown }
+  const { label, content } = selectionContext(file.relPath, body.selection)
+  aiPanelOpen.value = true
+  void nextTick(() => {
+    aiChatRef.value?.addContextChip(label, content)
+    aiChatRef.value?.injectDraft(String(body.question ?? ''))
+  })
+}
+
 // ── Open files (VS Code-style tabs); each EditorPane stays mounted (v-show) so
 //    edits/undo survive tab switches. ──────────────────────────────────────────
 // kind='diff': relPath is a synthetic key (\x00diff:<staged>:<filepath>), filepath/staged hold the real values.
@@ -1122,7 +1191,7 @@ function nextProblem(): void {
   const next = all.find(d => d.relPath > curRel || (d.relPath === curRel && d.line > curLine))
     ?? all[0]
   if (next.relPath !== curRel) openFile({ filepath: next.relPath })
-  nextTick(() => activeEditor()?.revealLine?.(next.line))
+  nextTick(() => (activeEditor() as unknown as { revealLine?: (line: number) => void } | null)?.revealLine?.(next.line))
 }
 function prevProblem(): void {
   const all = allDiagnosticsSorted()
@@ -1133,7 +1202,7 @@ function prevProblem(): void {
   const prev = reversed.find(d => d.relPath < curRel || (d.relPath === curRel && d.line < curLine))
     ?? reversed[0]
   if (prev.relPath !== curRel) openFile({ filepath: prev.relPath })
-  nextTick(() => activeEditor()?.revealLine?.(prev.line))
+  nextTick(() => (activeEditor() as unknown as { revealLine?: (line: number) => void } | null)?.revealLine?.(prev.line))
 }
 registerCommand('editor.action.marker.nextInFiles', nextProblem)
 registerCommand('editor.action.marker.prevInFiles', prevProblem)
@@ -1538,17 +1607,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :workspace-path="workspacePath"
         :backend="backend"
         embedded
-        :on-ask-ai-about-file="async (relPath: string) => {
-          aiPanelOpen = true
-          await nextTick()
-          const ext = relPath.split('.').pop() ?? ''
-          const label = '@' + relPath.split('/').pop()!
-          try {
-            const r = await backend.send<{ok:boolean;content?:string}>('fs.read_file', { workspace_path: workspacePath, rel_path: relPath })
-            const content = r.payload?.ok ? `// ${relPath}\n\`\`\`${ext}\n${(r.payload.content ?? '').slice(0, 3000)}\n\`\`\`` : `// ${relPath} (read failed)`
-            aiChatRef.value?.addContextChip(label, content)
-          } catch { aiChatRef.value?.addContextChip(label, `// ${relPath}`) }
-        }"
+        :on-ask-ai-about-file="handleAskAiAboutFile"
         @open-file="openFile"
       />
       <SearchPane
@@ -1577,10 +1636,10 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @fix-with-ai="(p) => {
           const loc = `${p.diag.relPath}:${p.diag.line}${p.diag.col ? ':' + p.diag.col : ''}`
           const chipContent = `// ${p.diag.severity.toUpperCase()}: ${p.diag.message}\n// at ${loc}${p.diag.source ? ' (' + p.diag.source + ')' : ''}`
-          aiPanelOpen.value = true
+          aiPanelOpen = true
           nextTick(() => {
-            aiChatRef.value?.addContextChip('@problems', chipContent)
-            aiChatRef.value?.injectDraft('/fix')
+            aiChatRef?.addContextChip('@problems', chipContent)
+            aiChatRef?.injectDraft('/fix')
           })
         }"
       />
@@ -1643,11 +1702,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             embedded
             :active="f.relPath === activeRel"
             @dirty="(v) => markDirty(f.relPath, v)"
-            @add-to-chat="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => aiChatRef?.addContextChip(label, content)) }"
-            @explain-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/explain Explain the selected code step by step.') }) }"
-            @fix-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/fix Fix any bugs or issues in the selected code.') }) }"
-            @write-tests-with-ai="(sel: string) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${sel}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft('/tests Generate comprehensive unit tests for the selected code.') }) }"
-            @ask-with-ai="({ selection, question }: { selection: string; question: string }) => { const ext = f.relPath.split('.').pop() ?? ''; const label = `@${f.relPath.split('/').pop()}`; const content = `// Selection from: ${f.relPath}\n\`\`\`${ext}\n${selection}\n\`\`\``; aiPanelOpen = true; nextTick(() => { aiChatRef?.addContextChip(label, content); aiChatRef?.injectDraft(question) }) }"
+            @add-to-chat="addSelectionToChat(f, $event)"
+            @explain-with-ai="explainSelectionWithAi(f, $event)"
+            @fix-with-ai="fixSelectionWithAi(f, $event)"
+            @write-tests-with-ai="writeTestsWithAi(f, $event)"
+            @ask-with-ai="askSelectionWithAi(f, $event)"
           />
           <DiffPane
             v-else-if="f.kind === 'diff'"

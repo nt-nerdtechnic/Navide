@@ -51,6 +51,15 @@ class AttributedUsage:
 
 
 @dataclass
+class SessionBinding:
+    pane_id: str
+    resume_id: str
+    workspace_path: str
+    stage_id: str | None = None
+    session_file: str = ""
+
+
+@dataclass
 class WorkspaceMapping:
     workspace_path: str
     claude_dir: str = ""        # ~/.claude/projects/<encoded>/ (or "" if unknown)
@@ -69,6 +78,7 @@ class _PaneRegistration:
     registered_at: float = field(default_factory=time.time)
     baseline_files: set[Path] = field(default_factory=set)
     claimed_session_ids: set[str] = field(default_factory=set)
+    session_home_id: str = ""
     # Codex/Gemini only: unique string embedded in this pane's kickoff so the
     # first session file containing it can be bound to this pane (those CLIs
     # can't pin a session id at launch, unlike Claude's --session-id).
@@ -142,6 +152,7 @@ class Attribution:
         self._panes: dict[str, _PaneRegistration] = {}
         self._session_owner: dict[str, str] = {}  # session_id → pane_id (ephemeral)
         self._unbound_markers: dict[str, str] = {}  # session_marker → pane_id (Codex/Gemini)
+        self._announced_session_keys: set[str] = set()
         self._lock = Lock()
         self._load_workspaces()
 
@@ -254,6 +265,7 @@ class Attribution:
         slot_key: str = "",
         explicit_session_id: str = "",
         session_marker: str = "",
+        session_home_id: str = "",
     ) -> None:
         """Bind a current-run pane to its expected log-file vendor + cwd.
 
@@ -290,6 +302,7 @@ class Attribution:
             pane_id=pane_id, vendor=vendor, cwd=cwd,
             workspace_path=ws, stage_id=stage_id, slot_key=slot_key,
             baseline_files=baseline, session_marker=session_marker,
+            session_home_id=session_home_id,
         )
         with self._lock:
             self._panes[pane_id] = reg
@@ -335,6 +348,66 @@ class Attribution:
                 workspace_path=ws_path,
                 stage_id=stage_id,
                 slot_key=slot_key,
+            )
+
+    def maybe_announce_session(self, usage: TokenUsage) -> SessionBinding | None:
+        """Return the first pane binding that should be persisted for resume.
+
+        Handles the preferred non-marker identity paths first:
+          - Gemini: explicit --session-id owner, with the session file path as
+            the durable resume value (`gemini --session-file <path>`).
+          - Codex: per-pane CODEX_HOME path encodes pane_id; resume id is
+            session_meta.payload.id.
+
+        Falls back to marker matching for older sessions and during rollout.
+        """
+        if usage.vendor not in ("codex", "gemini"):
+            return None
+
+        try:
+            text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
+        except OSError:
+            text = ""
+
+        if usage.vendor == "gemini":
+            resume_id = str(Path(usage.file_path))
+            session_id = _extract_resume_id("gemini", text) or usage.session_id
+            binding = self._announce_owned_session(
+                vendor=usage.vendor,
+                session_id=session_id,
+                resume_id=resume_id,
+                session_file=usage.file_path,
+            )
+            if binding:
+                return binding
+
+        if usage.vendor == "codex":
+            pane_id = self._pane_id_from_codex_home_path(usage.file_path)
+            if pane_id:
+                resume_id = _extract_resume_id("codex", text) or usage.session_id
+                binding = self._bind_and_announce_path_session(
+                    usage=usage,
+                    pane_id=pane_id,
+                    resume_id=resume_id,
+                    session_file=usage.file_path,
+                )
+                if binding:
+                    return binding
+
+        marker_binding = self.maybe_bind_by_marker(usage)
+        if not marker_binding:
+            return None
+        pane_id, resume_id = marker_binding
+        with self._lock:
+            reg = self._panes.get(pane_id)
+            if reg is None:
+                return None
+            return SessionBinding(
+                pane_id=pane_id,
+                resume_id=resume_id,
+                workspace_path=reg.workspace_path,
+                stage_id=reg.stage_id,
+                session_file=usage.file_path,
             )
 
     def maybe_bind_by_marker(self, usage: TokenUsage) -> tuple[str, str] | None:
@@ -385,6 +458,75 @@ class Attribution:
             self._unbound_markers.pop(reg.session_marker, None)
         log.info("bound session=%s → pane=%s via marker (resume_id=%s)", sid, matched_pane, resume_id)
         return matched_pane, resume_id
+
+    def _announce_owned_session(
+        self,
+        *,
+        vendor: str,
+        session_id: str,
+        resume_id: str,
+        session_file: str,
+    ) -> SessionBinding | None:
+        if not session_id or not resume_id:
+            return None
+        key = f"{vendor}:{session_id}:{resume_id}"
+        with self._lock:
+            owner = self._session_owner.get(session_id)
+            if owner is None or key in self._announced_session_keys:
+                return None
+            reg = self._panes.get(owner)
+            if reg is None:
+                return None
+            self._announced_session_keys.add(key)
+            reg.claimed_session_ids.add(session_id)
+            binding = SessionBinding(
+                pane_id=reg.pane_id,
+                resume_id=resume_id,
+                workspace_path=reg.workspace_path,
+                stage_id=reg.stage_id,
+                session_file=session_file,
+            )
+        log.info(
+            "announced session=%s → pane=%s via explicit owner (resume_id=%s)",
+            session_id, binding.pane_id, resume_id,
+        )
+        return binding
+
+    def _bind_and_announce_path_session(
+        self,
+        *,
+        usage: TokenUsage,
+        pane_id: str,
+        resume_id: str,
+        session_file: str,
+    ) -> SessionBinding | None:
+        if not usage.session_id or not resume_id:
+            return None
+        key = f"{usage.vendor}:{usage.session_id}:{resume_id}"
+        with self._lock:
+            reg = self._pane_registration_for_codex_home_id(pane_id)
+            if reg is None or reg.vendor != usage.vendor:
+                return None
+            if key in self._announced_session_keys:
+                return None
+            owner = self._session_owner.get(usage.session_id)
+            if owner is not None and owner != reg.pane_id:
+                return None
+            self._session_owner[usage.session_id] = reg.pane_id
+            reg.claimed_session_ids.add(usage.session_id)
+            self._announced_session_keys.add(key)
+            binding = SessionBinding(
+                pane_id=reg.pane_id,
+                resume_id=resume_id,
+                workspace_path=reg.workspace_path,
+                stage_id=reg.stage_id,
+                session_file=session_file,
+            )
+        log.info(
+            "bound session=%s → pane=%s via codex home path (resume_id=%s)",
+            usage.session_id, pane_id, resume_id,
+        )
+        return binding
 
     def pane_for_session(
         self, session_id: str
@@ -449,6 +591,14 @@ class Attribution:
             if reg:
                 return reg.pane_id, reg.stage_id, reg.slot_key or None
 
+        if usage.vendor == "codex":
+            pane_id = self._pane_id_from_codex_home_path(usage.file_path)
+            reg = self._pane_registration_for_codex_home_id(pane_id) if pane_id else None
+            if reg and reg.vendor == usage.vendor:
+                self._session_owner[usage.session_id] = reg.pane_id
+                reg.claimed_session_ids.add(usage.session_id)
+                return reg.pane_id, reg.stage_id, reg.slot_key or None
+
         # Try to claim with a freshly-spawned pane
         file_path = Path(usage.file_path)
         candidates = [
@@ -477,3 +627,26 @@ class Attribution:
         if usage.vendor in ("codex", "gemini"):
             return usage.cwd == pane_cwd
         return False
+
+    def _pane_id_from_codex_home_path(self, file_path: str) -> str:
+        try:
+            path = Path(file_path).resolve()
+            panes_root = (Path.home() / ".codex-panes").resolve()
+            rel = path.relative_to(panes_root)
+        except (OSError, ValueError):
+            return ""
+        parts = rel.parts
+        if len(parts) >= 3 and parts[1] == "sessions":
+            return parts[0]
+        return ""
+
+    def _pane_registration_for_codex_home_id(self, home_id: str) -> _PaneRegistration | None:
+        if not home_id:
+            return None
+        reg = self._panes.get(home_id)
+        if reg and (not reg.session_home_id or reg.session_home_id == home_id):
+            return reg
+        return next(
+            (p for p in self._panes.values() if p.session_home_id == home_id),
+            None,
+        )

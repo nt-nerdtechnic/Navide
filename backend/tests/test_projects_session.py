@@ -20,6 +20,7 @@ def test_slot_record_session_id_defaults_empty() -> None:
 
 def test_pane_record_session_id_defaults_empty() -> None:
     assert PaneRecord(pane_id="x").session_id == ""
+    assert PaneRecord(pane_id="x").session_home_id == ""
 
 
 def test_slot_session_id_round_trips_through_panes() -> None:
@@ -36,6 +37,19 @@ def test_slot_session_id_round_trips_through_panes() -> None:
     pane = next((p for p in restored.panes if p.slot_label == "Build"), None)
     assert pane is not None
     assert pane.session_id == "sess-123"
+
+
+def test_codex_session_home_id_round_trips_through_panes() -> None:
+    proj = Project(
+        id="p", name="n", workspace_path="/ws", created_at="t", updated_at="t",
+    )
+    proj.panes = [PaneRecord(
+        pane_id="live-pane", origin="pipeline",
+        stage_id="01", stage_index=0, slot_label="Build",
+        session_id="codex-resume-id", session_home_id="home-old",
+    )]
+    restored = Project.from_dict(proj.to_dict())
+    assert restored.panes[0].session_home_id == "home-old"
 
 
 def test_old_project_json_without_panes_migrates_slots(tmp_path: Path) -> None:
@@ -100,6 +114,17 @@ def test_record_slot_spawn_persists_session_id(store_with_stage: tuple[ProjectSt
     assert pane.origin == "pipeline"
 
 
+def test_record_slot_spawn_persists_session_home_id(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_slot_spawn(
+        ws, stage_index=0, slot_label="Build",
+        pane_id="pane-1", agent="codex", session_home_id="home-1",
+    )
+    pane = next((p for p in store.peek(ws).panes if p.slot_label == "Build"), None)
+    assert pane is not None
+    assert pane.session_home_id == "home-1"
+
+
 def test_record_slot_session_fills_in_later(store_with_stage: tuple[ProjectStore, str]) -> None:
     """Codex/Gemini path: spawn first with no id, detect + persist later."""
     store, ws = store_with_stage
@@ -149,6 +174,15 @@ def test_manual_pane_spawn_round_trips_and_can_be_rekeyed(
     assert manual[0].pane_id == "pane-new"
     assert manual[0].spawn_status == "spawned"
     assert manual[0].session_id == "sess-1"
+
+
+def test_manual_pane_spawn_persists_session_home_id(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(
+        ws, pane_id="pane-1", agent="codex", session_home_id="home-1",
+    )
+    pane = next(p for p in store.peek(ws).panes if p.origin == "manual")
+    assert pane.session_home_id == "home-1"
 
 
 def test_manual_pane_unspawn_marks_removed(store_with_stage: tuple[ProjectStore, str]) -> None:

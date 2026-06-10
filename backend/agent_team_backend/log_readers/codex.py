@@ -56,8 +56,31 @@ class CodexLogReader(LogReader):
     vendor: str = "codex"
 
     def project_dirs(self) -> list[Path]:
-        root = Path.home() / ".codex" / "sessions"
-        return [root] if root.is_dir() else []
+        roots: list[Path] = []
+        default_root = Path.home() / ".codex" / "sessions"
+        if default_root.is_dir():
+            roots.append(default_root)
+        panes_root = Path.home() / ".codex-panes"
+        if panes_root.is_dir():
+            try:
+                roots.extend(
+                    p / "sessions"
+                    for p in panes_root.iterdir()
+                    if (p / "sessions").is_dir()
+                )
+            except OSError as err:
+                log.debug("enumerate %s failed: %s", panes_root, err)
+        return roots
+
+    def watch_dirs(self) -> list[Path]:
+        roots: list[Path] = []
+        default_root = Path.home() / ".codex" / "sessions"
+        if default_root.is_dir():
+            roots.append(default_root)
+        panes_root = Path.home() / ".codex-panes"
+        if panes_root.is_dir():
+            roots.append(panes_root)
+        return roots
 
     def session_files(self) -> list[Path]:
         out: list[Path] = []

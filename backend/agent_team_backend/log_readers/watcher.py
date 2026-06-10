@@ -166,9 +166,12 @@ class LogWatcher:
 
         handler = _Handler(on_path)
 
-        # Watch every existing project_dir from every reader. Skip duplicates.
+        # Watch every existing watch root from every reader. Skip duplicates.
+        # Most readers watch the same dirs they scan; Codex also watches the
+        # stable ~/.codex-panes parent because per-pane session dirs appear
+        # after the backend has already started.
         for reader in self._readers:
-            for d in reader.project_dirs():
+            for d in reader.watch_dirs():
                 if d in self._watched_dirs or not d.exists():
                     continue
                 try:

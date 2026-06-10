@@ -358,6 +358,8 @@ interface ActivePane {
    *  Claude (the --session-id we pinned); filled in later for Codex/Gemini once
    *  their CLI-generated id is detected from the session file. */
   pinnedSessionId?: string
+  /** Stable Codex CODEX_HOME id. It can differ from the live pane id after restore. */
+  sessionHomeId?: string
   /** Unique marker embedded in this pane's kickoff (Codex/Gemini only) so the
    *  backend can match the right session file to this pane when several
    *  same-vendor panes share a workspace. */
@@ -378,6 +380,7 @@ interface SpawnHistoryEntry {
   spawnedAt: string
   removedAt?: string
   restoreMode?: 'memory-resume' | 'fresh'
+  sessionHomeId?: string
 }
 
 const panes = ref<ActivePane[]>([])
@@ -416,7 +419,7 @@ function syncViews(): void {
   })
 }
 
-let _syncViewsTimer: ReturnType<typeof window.setInterval> | null = null
+let _syncViewsTimer: number | null = null
 onMounted(() => { _syncViewsTimer = window.setInterval(syncViews, 400) })
 onUnmounted(() => { if (_syncViewsTimer !== null) clearInterval(_syncViewsTimer) })
 watch(panes, syncViews, { deep: true, immediate: true })
@@ -774,11 +777,17 @@ async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<
   if (persistedPaneSessions.has(key)) return
   let saved: unknown = null
   if (pane.origin === 'manual') {
-    saved = await sendQuiet('manual_pane.session', {
+    const resp = await sendQuiet<ProjectPayload>('manual_pane.session', {
       workspace_path: pane.workspacePath,
       pane_id: pane.id,
       session_id: id,
     })
+    // The backend silently noops when the manual pane record doesn't exist
+    // yet (persist can race manual_pane.spawn) — only cache a write the
+    // response confirms, so a later event can retry.
+    saved = resp?.project?.panes?.some(
+      (p) => p.pane_id === pane.id && p.session_id === id
+    ) ? resp : null
   } else if (pane.slotLabel && pane.origin === 'pipeline') {
     const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
     if (stageIndex < 0) return
@@ -962,6 +971,8 @@ interface SpawnInternal {
   stageIndex?: number
   /** Restore mode label for the agent history badge. */
   restoreMode?: 'memory-resume' | 'fresh'
+  sessionHomeId?: string
+  resumeSessionId?: string
 }
 
 /** Trailing line embedded in a Codex/Gemini kickoff so the backend can match
@@ -1027,14 +1038,22 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   if (opts.agentKey === 'claude' && !opts.isResume && !command.includes('--session-id')) {
     explicitSessionId = crypto.randomUUID()
     command = `${command} --session-id ${explicitSessionId}`
+  } else if (opts.agentKey === 'gemini' && !opts.isResume && !command.includes('--session-id')) {
+    explicitSessionId = crypto.randomUUID()
+    command = `${command} --session-id ${explicitSessionId}`
   }
-  // Codex/Gemini can't pin a session id at launch, so we embed a unique marker
-  // in the first injected text and the backend matches the resulting session
-  // file back to this pane by that marker. Skipped on resume because the id is
-  // already known.
+  const sessionHomeId = opts.agentKey === 'codex'
+    ? (opts.sessionHomeId || id)
+    : ''
+  const pinnedSessionId = opts.isResume
+    ? (opts.resumeSessionId?.trim() || undefined)
+    : (opts.agentKey === 'claude' ? explicitSessionId || undefined : undefined)
+  // Codex keeps a marker fallback during rollout. Gemini now pins a session id
+  // at launch, so it only needs the marker if the explicit path fails and the
+  // pane is non-resume.
   const sessionMarker =
     !opts.isResume &&
-    (opts.agentKey === 'codex' || opts.agentKey === 'gemini')
+    opts.agentKey === 'codex'
       ? `at-pane:${id}`
       : ''
   const pane: ActivePane = {
@@ -1054,7 +1073,8 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     kickoffStatus: opts.kickoffPrompt ? 'pending' : 'none',
     kickoffPrompt: opts.kickoffPrompt ?? '',
     skipRoleInjection: opts.skipRoleInjection ?? false,
-    pinnedSessionId: explicitSessionId || undefined,
+    pinnedSessionId,
+    sessionHomeId: sessionHomeId || undefined,
     sessionMarker: sessionMarker || undefined,
   }
   // If this spawn carries its kickoff directly (fallback path), embed the
@@ -1076,6 +1096,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     workspacePath: pane.workspacePath,
     spawnedAt: new Date().toISOString(),
     restoreMode: opts.restoreMode,
+    sessionHomeId: pane.sessionHomeId,
   })
   await nextTick()
   const ref = paneRefs[id]
@@ -1105,9 +1126,10 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         stage_id: opts.stageId,                 // snake_case alias for backend token sink
         origin: opts.origin,
         workspace_path: opts.workspacePath ?? '',
-        explicit_session_id: explicitSessionId,  // Claude --session-id → precise pane attribution
-        session_marker: sessionMarker,           // Codex/Gemini → marker-based session detection
-        slot_label: opts.slotLabel ?? ''         // stable by_pane key survives frontend restarts
+        explicit_session_id: explicitSessionId,  // Claude/Gemini --session-id → precise pane attribution
+        session_marker: sessionMarker,           // Codex → marker fallback session detection
+        session_home_id: sessionHomeId,           // Codex per-pane CODEX_HOME id
+        slot_label: opts.slotLabel ?? ''          // stable by_pane key survives frontend restarts
       },
       outputLogFile,
     })
@@ -1150,10 +1172,11 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       agent: payload.agentKey,
       role: payload.roleKey,
       command: '',
-      session_id:
-        payload.agentKey === 'claude'
-          ? ''
-          : panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+      // Claude's pinned --session-id is known at spawn: pass it here so the
+      // record is created with it atomically (a separate manual_pane.session
+      // call would race this spawn and silently noop on the backend).
+      session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+      session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: currentRunGroupId.value,
     })
     const pane = panes.value.find((p) => p.id === paneId)
@@ -1267,6 +1290,11 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
       pane_id: pane.id,
     })
   }
+  if (opts.markRemoved !== false && pane?.agentKey === 'codex' && pane.sessionHomeId) {
+    await sendQuiet('codex_home.cleanup', {
+      session_home_id: pane.sessionHomeId,
+    })
+  }
   const histEntry = spawnHistory.value.find((e) => e.paneId === paneId)
   if (histEntry && !histEntry.removedAt) {
     histEntry.sessionId = pane?.pinnedSessionId ?? histEntry.sessionId
@@ -1368,7 +1396,7 @@ async function refreshStatusBarGit(): Promise<void> {
   }
 }
 
-let _gitPollTimer: ReturnType<typeof window.setInterval> | null = null
+let _gitPollTimer: number | null = null
 watch(workspaceSelected, (v) => {
   if (v) {
     void refreshStatusBarGit()
@@ -1438,6 +1466,7 @@ interface ProjectSlot {
   spawn_status: string   // 'pending' | 'spawned' | 'removed'
   kickoff_status: string // 'none' | 'sent' | 'failed'
   session_id?: string    // CLI session id for resume-on-restart ('' if unknown)
+  session_home_id?: string
   run_group_id?: string  // frontend tab this pane belongs to
 }
 
@@ -1455,6 +1484,7 @@ interface ProjectManualPane {
   command: string
   spawn_status: string
   session_id?: string
+  session_home_id?: string
   run_group_id?: string
 }
 
@@ -1465,6 +1495,7 @@ interface ProjectPane {
   role: string
   command?: string
   session_id?: string
+  session_home_id?: string
   spawn_status: string   // 'pending' | 'spawned' | 'removed'
   run_group_id?: string
   origin: 'pipeline' | 'manual'
@@ -1505,6 +1536,7 @@ function looksLikeResumeCommand(agentKey: string, command: string): boolean {
   const cmd = command.trim()
   if (!cmd) return false
   if (agentKey === 'codex') return /^codex\s+resume\s+\S+/.test(cmd)
+  if (agentKey === 'gemini') return /^gemini\s+--session-file\s+\S+/.test(cmd)
   return new RegExp(`^${agentKey}\\s+--resume\\s+\\S+`).test(cmd)
 }
 
@@ -1644,7 +1676,8 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     if (activeTab.value && stageTabs.value.length > 0) {
       const paneCountByGroup: Record<string, number> = {}
       for (const p of panes.value) {
-        if (p.runGroupId) paneCountByGroup[p.runGroupId] = (paneCountByGroup[p.runGroupId] ?? 0) + 1
+        const groupKey = p.runGroupId || 'manual'
+        paneCountByGroup[groupKey] = (paneCountByGroup[groupKey] ?? 0) + 1
       }
       const activeHasPanes = (paneCountByGroup[activeTab.value] ?? 0) > 0
       if (!activeHasPanes) {
@@ -1682,6 +1715,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
           agent: sl.agent,
           role: sl.role,
           session_id: sl.session_id,
+          session_home_id: sl.session_home_id,
           spawn_status: sl.spawn_status,
           run_group_id: sl.run_group_id,
           origin: 'pipeline' as const,
@@ -1698,6 +1732,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       role: mp.role,
       command: mp.command,
       session_id: mp.session_id,
+      session_home_id: mp.session_home_id,
       spawn_status: mp.spawn_status,
       run_group_id: mp.run_group_id,
       origin: 'manual' as const,
@@ -1727,6 +1762,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
 
   await Promise.all(toRestore.map(async (saved) => {
     const sessionId = (saved.session_id ?? '').trim()
+    const sessionHomeId = saved.agent === 'codex'
+      ? ((saved.session_home_id ?? '').trim() || saved.pane_id)
+      : ''
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
     // Reuse the saved group only if its tab still exists; otherwise pipeline
@@ -1758,9 +1796,16 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       skipRoleInjection: isResume,
       stageIndex: saved.stage_index ?? -1,
       restoreMode: isResume ? 'memory-resume' : 'fresh',
+      sessionHomeId,
+      resumeSessionId: sessionId,
     })
 
     if (!paneId) return
+
+    // Fresh (non-resume) Claude spawns pin a brand-new --session-id; persist
+    // it with the record so the next restart can resume the new conversation
+    // instead of keeping a stale (or empty) id.
+    const newPinnedId = panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? ''
 
     if (saved.origin === 'pipeline') {
       await sendQuiet('pipeline.slot_spawn', {
@@ -1770,7 +1815,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         pane_id: paneId,
         agent: saved.agent,
         role: saved.role,
-        session_id: sessionId,
+        session_id: isResume ? sessionId : (newPinnedId || sessionId),
+        session_home_id: sessionHomeId,
         run_group_id: runGroupId,
       })
     } else {
@@ -1781,10 +1827,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         agent: saved.agent,
         role: saved.role,
         command: fallbackCommand,
-        session_id: isResume ? sessionId : '',
+        session_id: isResume ? sessionId : newPinnedId,
+        session_home_id: sessionHomeId,
         run_group_id: runGroupId,
       })
-      if (sessionId && !isResume) {
+      if (sessionId && !isResume && !newPinnedId) {
         await sendQuiet('manual_pane.session', {
           workspace_path: workspacePath,
           pane_id: paneId,
@@ -1995,6 +2042,7 @@ async function preSpawnStage(index: number): Promise<void> {
         role: slot.roleKey,
         // Claude's pinned id is known now; Codex/Gemini stay "" until detected.
         session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+        session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
         run_group_id: currentRunGroupId.value,
       })
     }
@@ -2712,10 +2760,10 @@ backend.on('agent.activity', (raw) => {
   }
 })
 
-// Codex/Gemini can't pin a session id at launch, so the backend detects it from
-// the session file (matched by the marker we embedded in the kickoff) and emits
-// session.detected. We persist it to project.json so the pane can be resumed
-// with the agent's prior conversation on the next App restart.
+// Codex/Gemini sessions are persisted after the backend observes their session
+// files: Gemini announces the durable session-file path from its explicit
+// --session-id owner, while Codex announces the resume id from its per-pane
+// CODEX_HOME path. Marker matching remains a fallback for older sessions.
 backend.on('session.detected', (raw) => {
   const ev = raw as { pane_id?: string; session_id?: string }
   if (!ev?.pane_id || !ev.session_id) return
@@ -4036,14 +4084,18 @@ function _saveRunGroups(): void {
 const DEFAULT_RUN_GROUP_ID = 'rg-default'
 
 function _loadRunGroups(path: string): void {
+  let hadStoredRunGroups = false
   try {
     const raw = localStorage.getItem(`agentTeam.runGroups.${path}`)
+    hadStoredRunGroups = raw !== null
     runGroups.value = raw ? (JSON.parse(raw) as RunGroup[]) : []
   } catch { runGroups.value = [] }
   // Open with exactly one default tab. Only created when no group exists at all,
   // and with a fixed id → never duplicated. Each pipeline run still adds its own
-  // tab via createRunGroup; the default acts as the catch-all / landing tab.
-  if (runGroups.value.length === 0) {
+  // tab via createRunGroup; the default acts as the catch-all / landing tab. If
+  // localStorage explicitly contains [], the user deleted the default RunGroup,
+  // so do not recreate it on reload.
+  if (!hadStoredRunGroups && runGroups.value.length === 0) {
     runGroups.value = [{ id: DEFAULT_RUN_GROUP_ID, name: '預設', createdAt: Date.now() }]
     try { localStorage.setItem(`agentTeam.runGroups.${path}`, JSON.stringify(runGroups.value)) } catch { /* ignore */ }
   }
@@ -4098,8 +4150,12 @@ async function movePaneToGroup(paneId: string, targetKey: string): Promise<void>
   await persistPaneRunGroup(pane, targetGroupId)
 }
 
-/** Delete a run-group tab. The last remaining run group is kept (never deletable).
- *  All panes in the deleted group are reassigned to the first remaining group. */
+/** Delete a RunGroup tab.
+ *
+ *  Important: "手動" is not a persisted RunGroup. It is a synthetic tab for
+ *  panes whose runGroupId is empty. Therefore deleting the last real RunGroup is
+ *  valid when there is, or will be, a manual/ungrouped tab to show those panes.
+ */
 async function deleteRunGroup(id: string): Promise<void> {
   // 刪除「手動」tab：把未指派 pane 移到第一個 stage group
   if (id === 'manual') {
@@ -4114,10 +4170,21 @@ async function deleteRunGroup(id: string): Promise<void> {
     if (activeTab.value === 'manual') activeTab.value = target.id
     return
   }
-  if (runGroups.value.length <= 1) return  // keep the last tab
   const target = runGroups.value.find((g) => g.id !== id)
-  if (!target) return
   const affected = panes.value.filter((p) => p.runGroupId === id)
+
+  if (!target) {
+    await Promise.all(affected.map((p) => {
+      p.runGroupId = undefined
+      return persistPaneRunGroup(p, '')
+    }))
+    runGroups.value = runGroups.value.filter((g) => g.id !== id)
+    if (currentRunGroupId.value === id) currentRunGroupId.value = ''
+    if (activeTab.value === id) activeTab.value = 'manual'
+    _saveRunGroups()
+    return
+  }
+
   await Promise.all(affected.map((p) => {
     p.runGroupId = target.id
     return persistPaneRunGroup(p, target.id)
@@ -4129,9 +4196,8 @@ async function deleteRunGroup(id: string): Promise<void> {
 }
 
 const stageTabs = computed<TabItem[]>(() => {
-  if (runGroups.value.length === 0) return []
-
-  // Count panes per run group; also count unassigned panes
+  // Count panes per persisted RunGroup; panes without runGroupId are surfaced
+  // through the synthetic "手動" tab, even when no real RunGroup remains.
   const groupCounts: Record<string, number> = {}
   let unassignedCount = 0
   for (const p of panes.value) {
@@ -4298,6 +4364,11 @@ watch(effectiveLayoutMode, () => {
     })
   })
 })
+
+// Tab switches and minimize/restore move panes through display:none the same
+// way layout mode changes do — refit so a pane that spawned or resized while
+// hidden doesn't keep rendering at a stale width (corrupted TUI layout).
+watch([activeTab, minimizedPanes], () => refitAllTerminals())
 
 // In fullscreen mode non-focus panes are hidden (alive but not rendered);
 // they appear in the collapsible PiP list instead.

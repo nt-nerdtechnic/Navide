@@ -33,6 +33,7 @@ from .analyzer_settings import AnalyzerSettingsStore
 from .ai_chat_settings import AIChatSettingsStore
 from .applog import backend_log_path, backend_port_file
 from .claude_hooks import install_hooks as install_claude_hooks
+from .codex_home import CodexHomeManager
 from .ipc import make_error, make_event, make_response
 from .log_readers import (
     ActivityEvent,
@@ -72,6 +73,7 @@ roles_store = RolesStore()
 stages_store = StagesStore()
 tokens_store = TokensStore()
 history_store = HistoryStore()
+codex_home_manager = CodexHomeManager()
 mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
 analyzer_settings_store = AnalyzerSettingsStore()
@@ -172,18 +174,17 @@ async def _broadcast_git_changed(ws_path: str) -> None:
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
-    """Codex/Gemini: when a session file is first matched to its pane by marker,
-    tell the frontend so it can persist the id for resume-on-restart."""
-    bound = await asyncio.to_thread(attribution.maybe_bind_by_marker, usage)
+    """Codex/Gemini: when a session file is first matched to its pane, tell
+    the frontend so it can persist the id/path for resume-on-restart."""
+    bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
     if not bound:
         return
-    pane_id, resume_id = bound
-    _, ws_path, _ = attribution.pane_for_session(usage.session_id)
     await broadcast(make_event("session.detected", {
         "vendor": usage.vendor,
-        "pane_id": pane_id,
-        "session_id": resume_id,  # the id `<cli> resume <id>` actually needs
-        "workspace_path": ws_path or usage.cwd,
+        "pane_id": bound.pane_id,
+        "session_id": bound.resume_id,  # the id/path `<cli> resume` actually needs
+        "workspace_path": bound.workspace_path or usage.cwd,
+        "session_file": bound.session_file,
     }))
 
 
@@ -191,9 +192,11 @@ async def _on_session_file(vendor: str, path: Path) -> None:
     """Watcher session sink: a Codex/Gemini session file changed. Attempt marker
     binding directly off the file (decoupled from token parsing, so it works for
     session-file formats the token reader doesn't understand)."""
+    reader = next((r for r in _readers if r.vendor == vendor), None)
     usage = TokenUsage(
         vendor=vendor, input_tokens=0, output_tokens=0,
-        cwd="", session_id=path.stem, file_path=str(path), dedup_key="",
+        cwd=reader.cwd_from_file(path) if reader else "",
+        session_id=path.stem, file_path=str(path), dedup_key="",
     )
     await _maybe_announce_session(usage)
 
@@ -502,8 +505,30 @@ def _project_payload(project) -> dict[str, Any]:
 
 
 def _claude_session_file(workspace_path: str, session_id: str) -> Path:
-    project_dir = workspace_path.replace("/", "-")
+    # Claude Code encodes the cwd by replacing EVERY non-alphanumeric char
+    # with "-" (dots, underscores, spaces, unicode — not just "/").
+    project_dir = re.sub(r"[^A-Za-z0-9]", "-", workspace_path)
     return Path.home() / ".claude" / "projects" / project_dir / f"{session_id}.jsonl"
+
+
+_CODEX_RESUME_RE = re.compile(r"^codex\s+resume\s+(\S+)")
+
+
+def _command_text(command: Any) -> str:
+    """Actual CLI command string from a terminal.create payload.
+
+    The frontend wraps agent commands as [shell, '-lc', '<cmd>'] — the real
+    command is the LAST element. Plain strings pass through unchanged.
+    """
+    if isinstance(command, list):
+        return str(command[-1]) if command else ""
+    return str(command or "")
+
+
+def _codex_resume_id(command: Any) -> str:
+    """Session id from a `codex resume <id> ...` command ('' otherwise)."""
+    m = _CODEX_RESUME_RE.match(_command_text(command).strip())
+    return m.group(1) if m else ""
 
 
 def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
@@ -513,6 +538,8 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
         return False
     if agent == "claude":
         return _claude_session_file(workspace_path, session_id).is_file()
+    if agent == "gemini" and ("/" in session_id or session_id.endswith((".json", ".jsonl"))):
+        return Path(session_id).is_file()
     # Codex/Gemini ids are detected from their session files. Keep trusting
     # persisted ids until vendor-specific preflight checks are added.
     return True
@@ -557,20 +584,39 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
         elif msg_type == "terminal.create":
             metadata = payload.get("metadata") or {}
+            agent_key = payload.get("agent_key") or ""
+            env = dict(payload.get("env") or {})
+            if agent_key == "codex":
+                # Compatibility: `codex resume <id>` only works inside the home
+                # that recorded the session. Resume in whichever home owns it;
+                # only unknown/fresh sessions get a (new) per-pane home.
+                resume_id = _codex_resume_id(payload.get("command"))
+                session_home = (
+                    codex_home_manager.find_session_home(resume_id) if resume_id else None
+                )
+                if session_home is None:
+                    home_id = str(metadata.get("session_home_id") or payload["pane_id"])
+                    codex_home = codex_home_manager.prepare(home_id)
+                    env["CODEX_HOME"] = str(codex_home)
+                    metadata["session_home_id"] = home_id
+                elif session_home != codex_home_manager.real_home:
+                    env["CODEX_HOME"] = str(session_home)
+                    metadata["session_home_id"] = session_home.name
+                # else: session lives in the real ~/.codex — resume with the
+                # default env so codex can find it.
             term = session.terminals.create(
                 pane_id=payload["pane_id"],
-                agent_key=payload.get("agent_key"),
+                agent_key=agent_key,
                 command=payload["command"],
                 cwd=payload["cwd"],
                 cols=int(payload.get("cols", 100)),
                 rows=int(payload.get("rows", 30)),
-                env=payload.get("env"),
+                env=env or None,
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
-            agent_key = payload.get("agent_key") or ""
             if agent_key in ("claude", "codex", "gemini"):
                 ws_for_pane = str(metadata.get("workspace_path") or payload["cwd"])
                 # Workspace registration via helper triggers a force-rescan
@@ -586,6 +632,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     slot_key=_stable_pane_key(metadata, ""),
                     explicit_session_id=str(metadata.get("explicit_session_id") or ""),
                     session_marker=str(metadata.get("session_marker") or ""),
+                    session_home_id=str(metadata.get("session_home_id") or ""),
                 )
             await session.websocket.send_json(
                 make_response(
@@ -635,6 +682,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
             await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "codex_home.cleanup":
+            cleaned = codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))
+            await session.websocket.send_json(
+                make_response(msg_id, msg_type, {"ok": True, "cleaned": cleaned})
+            )
 
         # -------- project / pipeline --------
         elif msg_type == "project.upsert":
@@ -732,6 +784,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 # Claude passes its pinned --session-id here; Codex/Gemini pass
                 # "" and persist later via pipeline.slot_session once detected.
                 session_id=payload.get("session_id", ""),
+                session_home_id=payload.get("session_home_id", ""),
                 run_group_id=payload.get("run_group_id", ""),
             )
             await session.websocket.send_json(
@@ -765,6 +818,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 role=payload.get("role", ""),
                 command=payload.get("command", ""),
                 session_id=payload.get("session_id", ""),
+                session_home_id=payload.get("session_home_id", ""),
                 run_group_id=payload.get("run_group_id", ""),
             )
             await session.websocket.send_json(

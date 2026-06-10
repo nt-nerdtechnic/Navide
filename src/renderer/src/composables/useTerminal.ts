@@ -145,7 +145,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   const displayStatus = computed<string>(() => {
     if (status.value !== 'running') return status.value
-    if (lastRawActivityAt.value === 0) return 'idle'
+    // Spawned but not a single byte of output yet — the CLI is still booting
+    // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
+    if (lastRawActivityAt.value === 0) return 'starting'
     if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
     return (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
   })
@@ -197,6 +199,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // back. Only the size that survives RESIZE_QUIET_MS of stillness is sent.
   const RESIZE_QUIET_MS = 250
   let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
+  // Last size the backend CONFIRMED. The reconciler compares against this so a
+  // dropped/failed resize message is retried instead of desyncing forever.
+  let ackedCols = 0
+  let ackedRows = 0
   function pushResize(): void {
     if (!sessionId.value) return
     if (resizeSendTimer) clearTimeout(resizeSendTimer)
@@ -205,13 +211,37 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     resizeSendTimer = setTimeout(() => {
       resizeSendTimer = null
       // Re-read in case xterm changed again; send the latest stable size.
-      void backend.send('terminal.resize', {
+      const sendCols = term.cols || cols
+      const sendRows = term.rows || rows
+      backend.send('terminal.resize', {
         terminal_session_id: sessionId.value,
-        cols: term.cols || cols,
-        rows: term.rows || rows
-      })
+        cols: sendCols,
+        rows: sendRows
+      }).then((resp) => {
+        if (resp?.ok) { ackedCols = sendCols; ackedRows = sendRows }
+      }).catch(() => { /* reconciler retries */ })
     }, RESIZE_QUIET_MS)
   }
+
+  // Self-healing size reconciler. A pane that spawns or resizes while hidden
+  // (background tab / spotlight / minimized → display:none) can leave the PTY
+  // and xterm at different sizes — the CLI then draws its TUI for one width
+  // while xterm renders another, corrupting the layout and cursor position.
+  // Every tick: refit if the container disagrees with xterm, re-send if the
+  // backend may disagree with xterm. Heals any missed resize within seconds.
+  const RECONCILE_MS = 2_000
+  const reconcileInterval = window.setInterval(() => {
+    if (!mounted || !sessionId.value) return
+    const el = containerRef.value
+    if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
+    const dims = fit.proposeDimensions()
+    if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
+        (dims.cols !== term.cols || dims.rows !== term.rows)) {
+      fitAndSend()
+      return
+    }
+    if (term.cols !== ackedCols || term.rows !== ackedRows) pushResize()
+  }, RECONCILE_MS)
 
   // Single source of truth for sizing: fit xterm to its container, then push the
   // (debounced) size to the backend. The only entry point used by the
@@ -371,6 +401,30 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
+    // once per pane — the size measured at mount time can be mid-transition.
+    // Wait until the container width holds steady for two consecutive frames
+    // (bounded at ~500ms), THEN fit, so the size sent below is the one the
+    // CLI actually first paints at. A PTY created at a transient width leaves
+    // permanently wrapped first-paint residue in scrollback.
+    const settleEl = containerRef.value
+    if (settleEl && settleEl.clientWidth > 0) {
+      let lastW = -1
+      const deadline = performance.now() + 500
+      while (performance.now() < deadline) {
+        // rAF with a timeout fallback — rAF is throttled (or fully paused)
+        // for occluded/background windows and must never stall the spawn.
+        await new Promise<void>((resolve) => {
+          const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
+          const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+        })
+        const w = settleEl.clientWidth
+        if (w === lastW) break
+        lastW = w
+      }
+    }
+    // Fit to the (now stable) container BEFORE spawning. No-op while hidden.
+    try { fit.fit() } catch { /* keep current size */ }
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -381,10 +435,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        // Provisional size only — fitAndSend() pushes the real container size as
-        // soon as the pane is visible. The few ms at 80×24 are never seen.
-        cols: 80,
-        rows: 24,
+        // Measured container size so the CLI's FIRST paint happens at the
+        // final width. Spawning at a placeholder let TUIs draw their banner /
+        // status bar at the wrong width; that stale first paint then lingered
+        // in scrollback after the real resize landed (visible as duplicated /
+        // misaligned lines). Hidden panes keep the 80×24 default — the size
+        // reconciler corrects them once visible.
+        cols: term.cols || 80,
+        rows: term.rows || 24,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
       })
@@ -473,6 +531,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   onScopeDispose(() => {
     cleanupSession()
     clearInterval(tickInterval)
+    clearInterval(reconcileInterval)
     cancelAnimationFrame(resizeRafId)
     if (resizeSendTimer) clearTimeout(resizeSendTimer)
     resizeObserver?.disconnect()
