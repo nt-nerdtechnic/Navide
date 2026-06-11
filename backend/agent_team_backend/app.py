@@ -144,7 +144,7 @@ async def broadcast(event: dict[str, Any]) -> None:
     """Fire-and-forget send to every connected session."""
     for session in list(_SESSIONS):
         try:
-            await session.websocket.send_json(event)
+            await session.send_json(event)
         except Exception as err:  # noqa: BLE001
             log.warning("broadcast send failed: %s", err)
 
@@ -154,6 +154,11 @@ class Session:
 
     def __init__(self, websocket: WebSocket) -> None:
         self.websocket = websocket
+        # Handlers run as concurrent tasks and the PTY output pump writes too;
+        # the websockets protocol forbids concurrent writes on one connection
+        # (its drain assertion trips and wedges the socket permanently), so
+        # every outbound frame must go through send_json() below.
+        self._send_lock = asyncio.Lock()
         # Token attribution now happens via log_readers (background log scan),
         # NOT via PTY output. TerminalService runs without a token sink.
         self.terminals = TerminalService(emit=self._send_event)
@@ -161,9 +166,14 @@ class Session:
         self._chat_tasks: set[asyncio.Task] = set()
         self._review_tasks: set[asyncio.Task] = set()
 
+    async def send_json(self, data: dict[str, Any]) -> None:
+        """Serialized websocket send — sole writer for this connection."""
+        async with self._send_lock:
+            await self.websocket.send_json(data)
+
     async def _send_event(self, event: dict[str, Any]) -> None:
         try:
-            await self.websocket.send_json(event)
+            await self.send_json(event)
         except Exception as err:  # noqa: BLE001
             log.warning("send_event failed: %s", err)
 
@@ -586,7 +596,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
     try:
         # -------- ping / terminals --------
         if msg_type == "ping":
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"pong": True, "echo": payload})
             )
         elif msg_type == "terminal.create":
@@ -641,7 +651,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     session_marker=str(metadata.get("session_marker") or ""),
                     session_home_id=str(metadata.get("session_home_id") or ""),
                 )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -655,7 +665,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
         elif msg_type == "terminal.input":
             session.terminals.write(payload["terminal_session_id"], payload["data"])
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "terminal.log_sent":
             # Fire-and-forget: log injected text to the session's output log file.
             # No response needed — caller does not await this.
@@ -664,17 +674,17 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload.get("label", "sent"),
                 payload.get("text", ""),
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "terminal.resize":
             session.terminals.resize(
                 payload["terminal_session_id"],
                 int(payload["cols"]),
                 int(payload["rows"]),
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "terminal.interrupt":
             session.terminals.interrupt(payload["terminal_session_id"])
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "terminal.kill":
             # We don't have direct session_id → pane_id mapping at the app layer;
             # the TerminalService does. Look it up before killing so we can
@@ -688,10 +698,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             session.terminals.kill(term_session_id)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "codex_home.cleanup":
             cleaned = codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"ok": True, "cleaned": cleaned})
             )
 
@@ -703,13 +713,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 backend_version=__version__,
             )
             _register_workspace_and_backfill(project.workspace_path)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "project.get":
             project = project_store.load_or_create(payload["workspace_path"])
             _register_workspace_and_backfill(project.workspace_path)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "project.peek":
@@ -717,7 +727,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             project = project_store.peek(ws_raw)
             if project:
                 _register_workspace_and_backfill(project.workspace_path)
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, _project_payload(project))
                 )
             else:
@@ -727,7 +737,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 import os as _os
                 if ws_raw and _os.path.isdir(ws_raw):
                     _register_workspace_and_backfill(_os.path.abspath(ws_raw))
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, {"project": None, "paths": None})
                 )
         elif msg_type == "agent.session_exists":
@@ -736,14 +746,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 str(payload.get("workspace_path", "")),
                 str(payload.get("session_id", "")),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"exists": exists})
             )
         elif msg_type == "pipeline.resume":
             project, resume_index = project_store.resume_pipeline(payload["workspace_path"])
             resp = _project_payload(project)
             resp["resume_index"] = resume_index
-            await session.websocket.send_json(make_response(msg_id, msg_type, resp))
+            await session.send_json(make_response(msg_id, msg_type, resp))
         elif msg_type == "pipeline.start":
             project = project_store.start_pipeline(
                 payload["workspace_path"],
@@ -766,7 +776,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             asyncio.create_task(
                 broadcast(make_event("tokens.changed", tokens_store.snapshot(project.workspace_path)))
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.stage_spawn":
@@ -777,7 +787,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 agent=payload.get("agent", ""),
                 role=payload.get("role", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.slot_spawn":
@@ -794,7 +804,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 session_home_id=payload.get("session_home_id", ""),
                 run_group_id=payload.get("run_group_id", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.slot_session":
@@ -804,7 +814,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 slot_label=payload["slot_label"],
                 session_id=payload.get("session_id", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.slot_unspawn":
@@ -813,7 +823,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 stage_index=int(payload["stage_index"]),
                 slot_label=payload["slot_label"],
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "manual_pane.spawn":
@@ -828,7 +838,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 session_home_id=payload.get("session_home_id", ""),
                 run_group_id=payload.get("run_group_id", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "manual_pane.unspawn":
@@ -836,7 +846,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload["workspace_path"],
                 pane_id=payload["pane_id"],
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "manual_pane.session":
@@ -845,7 +855,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 pane_id=payload["pane_id"],
                 session_id=payload.get("session_id", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pane.set_run_group":
@@ -854,7 +864,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 pane_id=payload["pane_id"],
                 run_group_id=payload.get("run_group_id", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "project.set_layout_mode":
@@ -866,7 +876,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if project:
                 project.layout_mode = mode
                 project_store.save(project)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "project.set_theme":
             # Backup-only persistence: localStorage in the renderer is the source
             # of truth. We just stash the latest theme + custom overrides so they
@@ -881,7 +891,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 if isinstance(custom, dict):
                     project.theme_custom = custom
                 project_store.save(project)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "project.set_language":
             # Backup-only persistence: localStorage in the renderer is the source
             # of truth. Unknown workspace → silently no-op.
@@ -892,7 +902,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 if isinstance(lang, str) and lang:
                     project.language = lang
                 project_store.save(project)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "pipeline.slot_kickoff":
             project = project_store.update_slot_kickoff(
                 payload["workspace_path"],
@@ -900,7 +910,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 slot_label=payload["slot_label"],
                 kickoff_status=payload.get("kickoff_status", "sent"),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.complete":
@@ -909,7 +919,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             asyncio.create_task(
                 broadcast(make_event("tokens.changed", tokens_store.snapshot(project.workspace_path)))
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.abort":
@@ -920,7 +930,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             asyncio.create_task(
                 broadcast(make_event("tokens.changed", tokens_store.snapshot(project.workspace_path)))
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))
             )
         elif msg_type == "pipeline.fetch_docs":
@@ -941,7 +951,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             except Exception as fetch_err:  # noqa: BLE001
                 log.warning("pipeline.fetch_docs error: %s", fetch_err)
                 doc_prefix = ""
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"doc_prefix": doc_prefix})
             )
         elif msg_type == "mcp.list_servers":
@@ -961,7 +971,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     "tool_count": info.get("tool_count", 0),
                     "tools": info.get("tools", []),
                 })
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -975,7 +985,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             servers_raw = payload.get("servers", [])
             servers = mcp_settings_store.replace_servers(servers_raw)
             await mcp_manager.reload(mcp_settings_store.path)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"ok": True, "servers": servers})
             )
         elif msg_type == "pipeline.auto_answer":
@@ -986,10 +996,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 model=payload.get("model") or ANALYZER_DEFAULT_MODEL,
             )
             _record_analyzer_tokens(result, payload)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
         # -------- recent workspaces --------
         elif msg_type == "workspace.list_recent":
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -1006,7 +1016,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 task=payload.get("task", ""),
             )
             recent = recent_workspaces_store.list()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"recent": recent})
             )
             await broadcast(
@@ -1015,7 +1025,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "workspace.pin":
             recent_workspaces_store.pin(payload["path"])
             recent = recent_workspaces_store.list()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"recent": recent})
             )
             await broadcast(
@@ -1024,7 +1034,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "workspace.unpin":
             recent_workspaces_store.unpin(payload["path"])
             recent = recent_workspaces_store.list()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"recent": recent})
             )
             await broadcast(
@@ -1034,7 +1044,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "workspace.remove":
             recent_workspaces_store.remove(payload["path"])
             recent = recent_workspaces_store.list()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"recent": recent})
             )
             await broadcast(
@@ -1043,7 +1053,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         # -------- roles registry --------
         elif msg_type == "roles.list":
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -1057,7 +1067,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 one_line=payload.get("one_line", ""),
                 system_prompt=payload.get("system_prompt", ""),
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"role": role, "roles": roles_store.list()})
             )
             await broadcast(
@@ -1065,7 +1075,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
         elif msg_type == "roles.delete":
             roles = roles_store.delete(payload["key"])
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"roles": roles})
             )
             await broadcast(
@@ -1073,7 +1083,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
         elif msg_type == "roles.reset":
             roles = roles_store.reset()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"roles": roles})
             )
             await broadcast(
@@ -1084,7 +1094,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "pipelines.list":
             pipelines = stages_store.list_pipelines()
             active_id = stages_store.get_active_pipeline_id()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -1095,7 +1105,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             name = payload.get("name", "New Pipeline")
             pipeline = stages_store.create_pipeline(name)
             pipelines = stages_store.list_pipelines()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
             )
             await broadcast(make_event("pipelines.changed", {
@@ -1108,7 +1118,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             name = payload.get("name", "")
             pipeline = stages_store.rename_pipeline(pipeline_id, name)
             pipelines = stages_store.list_pipelines()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
             )
             await broadcast(make_event("pipelines.changed", {
@@ -1122,12 +1132,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if ws_path:
                 proj = project_store.peek(ws_path)
                 if proj and proj.state == "running":
-                    await session.websocket.send_json(
+                    await session.send_json(
                         make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot delete pipeline while a project is running")
                     )
                     return
             pipelines = stages_store.delete_pipeline(pipeline_id)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"pipelines": pipelines})
             )
             await broadcast(make_event("pipelines.changed", {
@@ -1141,13 +1151,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if ws_path:
                 proj = project_store.peek(ws_path)
                 if proj and proj.state == "running":
-                    await session.websocket.send_json(
+                    await session.send_json(
                         make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot switch pipeline while a project is running")
                     )
                     return
             stages_store.set_active_pipeline(pipeline_id)
             pipelines = stages_store.list_pipelines()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {
                     "active_pipeline_id": pipeline_id,
                     "pipelines": pipelines,
@@ -1163,7 +1173,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             pipeline = stages_store.reset_builtin(pipeline_id)
             pipelines = stages_store.list_pipelines()
             stages = stages_store.list(pipeline_id)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"pipeline": pipeline, "pipelines": pipelines})
             )
             await broadcast(make_event("pipelines.changed", {
@@ -1182,7 +1192,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             pipeline_id = payload.get("pipeline_id") or None
             stages = stages_store.list(pipeline_id)
             active_id = stages_store.get_active_pipeline_id()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(
                     msg_id,
                     msg_type,
@@ -1196,14 +1206,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 # Check running guard for active pipeline
                 proj = project_store.peek(ws_path)
                 if proj and proj.state == "running":
-                    await session.websocket.send_json(
+                    await session.send_json(
                         make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot edit stages while the active pipeline is running")
                     )
                     return
             stage = stages_store.upsert(payload["stage"], pipeline_id)
             effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
             updated_stages = stages_store.list(pipeline_id)
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"stage": stage, "stages": updated_stages})
             )
             await broadcast(make_event("stages.changed", {
@@ -1217,13 +1227,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if ws_path and not pipeline_id:
                 proj = project_store.peek(ws_path)
                 if proj and proj.state == "running":
-                    await session.websocket.send_json(
+                    await session.send_json(
                         make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot reorder stages while the active pipeline is running")
                     )
                     return
             updated_stages = stages_store.reorder(payload["ids"], pipeline_id)
             effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
             await broadcast(make_event("stages.changed", {
@@ -1237,13 +1247,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if ws_path and not pipeline_id:
                 proj = project_store.peek(ws_path)
                 if proj and proj.state == "running":
-                    await session.websocket.send_json(
+                    await session.send_json(
                         make_error(msg_id, msg_type, "PIPELINE_RUNNING", "Cannot delete stages while the active pipeline is running")
                     )
                     return
             updated_stages = stages_store.delete(payload["id"], pipeline_id)
             effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
             await broadcast(make_event("stages.changed", {
@@ -1255,7 +1265,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             pipeline_id = payload.get("pipeline_id") or None
             updated_stages = stages_store.reset(pipeline_id)
             effective_pipeline_id = pipeline_id or stages_store.get_active_pipeline_id()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"stages": updated_stages})
             )
             await broadcast(make_event("stages.changed", {
@@ -1280,28 +1290,28 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 p = _shutil.which(c) or (c if __import__("os.path", fromlist=["exists"]).exists(c) else None)
                 if p and p not in found:
                     found.append(p)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {
+            await session.send_json(make_response(msg_id, msg_type, {
                 "found": found,
                 "recommended": found[0] if found else None,
             }))
 
         elif msg_type == "analyzer.settings.get":
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, analyzer_settings_store.get())
             )
         elif msg_type == "analyzer.settings.set":
             updated = analyzer_settings_store.set(payload)
-            await session.websocket.send_json(make_response(msg_id, msg_type, updated))
+            await session.send_json(make_response(msg_id, msg_type, updated))
             await broadcast(make_event("analyzer.settings_changed", updated))
 
         elif msg_type == "analyzer.health":
             data = await analyzer_health()
             data["default_model"] = ANALYZER_DEFAULT_MODEL
             data["backend"] = _az_settings().get("backend", "llama_cpp")
-            await session.websocket.send_json(make_response(msg_id, msg_type, data))
+            await session.send_json(make_response(msg_id, msg_type, data))
         elif msg_type == "analyzer.models":
             models = await analyzer_list_models()
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"models": models, "default": ANALYZER_DEFAULT_MODEL})
             )
         elif msg_type == "analyzer.classify":
@@ -1309,7 +1319,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             model = payload.get("model") or ANALYZER_DEFAULT_MODEL
             result = await analyzer_classify(text, model)
             _record_analyzer_tokens(result, payload)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "analyzer.benchmark":
             async def _benchmark_bg() -> None:
@@ -1328,17 +1338,17 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     await broadcast(make_event("analyzer.benchmark_done", {"results": [], "error": str(_bench_err)}))
 
             asyncio.create_task(_benchmark_bg())
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
 
         elif msg_type == "analyzer.pull":
             # Only valid in Ollama mode.
             model_name = payload.get("name", "")
             if not model_name:
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
                 )
             elif not _az_is_ollama():
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "pull only available in Ollama mode"})
                 )
             else:
@@ -1351,34 +1361,34 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         await broadcast(make_event("analyzer.pull_done", {"name": name, "ok": False, "error": str(_pull_err)}))
 
                 asyncio.create_task(_pull_bg())
-                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
+                await session.send_json(make_response(msg_id, msg_type, {"ok": True, "started": True}))
 
         elif msg_type == "analyzer.delete":
             model_name = payload.get("name", "")
             if not model_name:
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "name required"})
                 )
             elif not _az_is_ollama():
-                await session.websocket.send_json(
+                await session.send_json(
                     make_response(msg_id, msg_type, {"ok": False, "error": "delete only available in Ollama mode"})
                 )
             else:
                 result = await _ollama_delete_model(model_name, _az_base_url())
-                await session.websocket.send_json(make_response(msg_id, msg_type, result))
+                await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "analyzer.ollama_health":
             data = await _ollama_health(_az_base_url())
-            await session.websocket.send_json(make_response(msg_id, msg_type, data))
+            await session.send_json(make_response(msg_id, msg_type, data))
 
         # -------- token stats --------
         elif msg_type == "tokens.snapshot":
             snap = tokens_store.snapshot(payload.get("workspace_path") or None)
-            await session.websocket.send_json(make_response(msg_id, msg_type, snap))
+            await session.send_json(make_response(msg_id, msg_type, snap))
         elif msg_type == "tokens.reset":
             scope = payload.get("scope", "run")
             snap = tokens_store.reset(scope, payload.get("workspace_path") or None)
-            await session.websocket.send_json(make_response(msg_id, msg_type, snap))
+            await session.send_json(make_response(msg_id, msg_type, snap))
             await broadcast(make_event("tokens.changed", snap))
 
         # -------- pipeline history (timeline) --------
@@ -1389,7 +1399,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             _log_name = _proj.log_file_name if _proj else ""
             run_dir = _log_name.rsplit("/", 1)[0] if "/" in _log_name else ""
             snap = history_store.snapshot(ws_path, run_dir, int(payload.get("limit", 500)))
-            await session.websocket.send_json(make_response(msg_id, msg_type, snap))
+            await session.send_json(make_response(msg_id, msg_type, snap))
 
         elif msg_type == "project.log_event":
             ws_path = payload["workspace_path"]
@@ -1433,7 +1443,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             asyncio.create_task(
                 broadcast(make_event("history.appended", {"workspace_path": ws_path, "event": _ev}))
             )
-            await session.websocket.send_json(
+            await session.send_json(
                 make_response(msg_id, msg_type, {"ok": True})
             )
 
@@ -1442,7 +1452,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             create_gi = bool(payload.get("create_gitignore", True))
             result = await git_service.init_repo(ws_path, create_gitignore=create_gi)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1454,50 +1464,50 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 _git_watcher.watch(ws_path)
             include_ignored = bool(payload.get("include_ignored", False))
             result = await git_service.get_status(ws_path, include_ignored=include_ignored)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.log":
             ws_path = payload.get("workspace_path") or ""
             n = min(int(payload.get("n", 20)), 500)
             all_branches = bool(payload.get("all", False))
             result = await git_service.get_log(ws_path, n, all_branches)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": result}))
+            await session.send_json(make_response(msg_id, msg_type, {"commits": result}))
 
         elif msg_type == "git.stage":
             ws_path = payload.get("workspace_path") or ""
             files = payload.get("files") or []
             result = await git_service.stage_files(ws_path, files)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.unstage":
             ws_path = payload.get("workspace_path") or ""
             files = payload.get("files") or []
             result = await git_service.unstage_files(ws_path, files)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.stage_all":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.stage_all(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.check_staged":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.check_staged(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.commit":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
             commit_all = bool(payload.get("all"))
             result = await git_service.commit(ws_path, message, commit_all)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.sync":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.sync(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1508,25 +1518,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             chat_settings = ai_chat_settings_store.get()
             model = payload.get("model") or chat_settings.get("model") or ANALYZER_DEFAULT_MODEL
             result = await git_service.generate_commit_message(ws_path, ollama_url, model, attempt_count, settings=chat_settings)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.discard":
             ws_path = payload.get("workspace_path") or ""
             files = payload.get("files") or []
             result = await git_service.discard_changes(ws_path, files)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.fetch":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.fetch(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.pull":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.pull_only(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1535,21 +1545,21 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             remote = payload.get("remote") or ""
             branch = payload.get("branch") or ""
             result = await git_service.push_only(ws_path, remote, branch)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.branches":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.list_branches(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.create_branch":
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             switch_to = bool(payload.get("switch_to", True))
             result = await git_service.create_branch(ws_path, name, switch_to=switch_to)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1557,7 +1567,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             result = await git_service.switch_branch(ws_path, name)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1565,7 +1575,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             remote_ref = payload.get("remote_ref") or ""
             result = await git_service.checkout_remote_branch(ws_path, remote_ref)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1574,21 +1584,21 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             name = payload.get("name") or ""
             force = bool(payload.get("force", False))
             result = await git_service.delete_branch(ws_path, name, force=force)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.stash_list":
             ws_path = payload.get("workspace_path") or ""
             entries = await git_service.stash_list(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"stashes": entries}))
+            await session.send_json(make_response(msg_id, msg_type, {"stashes": entries}))
 
         elif msg_type == "git.stash":
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
             paths = payload.get("paths") or None
             result = await git_service.stash_push(ws_path, message, paths)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1596,7 +1606,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             index = int(payload.get("index", 0))
             result = await git_service.stash_pop(ws_path, index)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1604,7 +1614,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             index = int(payload.get("index", 0))
             result = await git_service.stash_drop(ws_path, index)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1612,14 +1622,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             message = payload.get("message") or ""
             result = await git_service.amend_commit(ws_path, message)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.undo_commit":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.undo_last_commit(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1628,26 +1638,26 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             filepath = payload.get("filepath") or ""
             staged = bool(payload.get("staged", False))
             result = await git_service.diff_file(ws_path, filepath, staged=staged)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.diff_blame":
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             staged = bool(payload.get("staged", False))
             result = await git_service.diff_blame(ws_path, filepath, staged=staged)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.diff_all":
             ws_path = payload.get("workspace_path") or ""
             staged = bool(payload.get("staged", False))
             result = await git_service.diff_all(ws_path, staged=staged)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.merge":
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""
             result = await git_service.merge_branch(ws_path, branch)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1655,7 +1665,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             target = payload.get("target") or ""
             result = await git_service.merge_into(ws_path, target)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1663,27 +1673,27 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             commit_hash = payload.get("commit_hash") or ""
             result = await git_service.revert_commit(ws_path, commit_hash)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.remotes":
             ws_path = payload.get("workspace_path") or ""
             remotes = await git_service.list_remotes(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"remotes": remotes}))
+            await session.send_json(make_response(msg_id, msg_type, {"remotes": remotes}))
 
         elif msg_type == "git.add_remote":
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             url = payload.get("url") or ""
             result = await git_service.add_remote(ws_path, name, url)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.connect_to_remote":
             ws_path = payload.get("workspace_path") or ""
             url = payload.get("url") or ""
             result = await git_service.connect_to_remote(ws_path, url)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1691,20 +1701,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             result = await git_service.remove_remote(ws_path, name)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.cherry_pick":
             ws_path = payload.get("workspace_path") or ""
             commit_hash = payload.get("commit_hash") or ""
             result = await git_service.cherry_pick(ws_path, commit_hash)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.tags":
             ws_path = payload.get("workspace_path") or ""
             tags = await git_service.list_tags(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"tags": tags}))
+            await session.send_json(make_response(msg_id, msg_type, {"tags": tags}))
 
         elif msg_type == "git.create_tag":
             ws_path = payload.get("workspace_path") or ""
@@ -1712,33 +1722,33 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             message = payload.get("message") or ""
             commit_hash = payload.get("commit_hash") or ""
             result = await git_service.create_tag(ws_path, name, message, commit_hash)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.delete_tag":
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             result = await git_service.delete_tag(ws_path, name)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.file_log":
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             n = int(payload.get("n", 15))
             commits = await git_service.file_log(ws_path, filepath, n)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"commits": commits}))
+            await session.send_json(make_response(msg_id, msg_type, {"commits": commits}))
 
         elif msg_type == "git.show_file":
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             rev = payload.get("rev") or "HEAD"
             result = await git_service.show_file(ws_path, filepath, rev)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.resolve_ours":
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             result = await git_service.resolve_conflict_ours(ws_path, filepath)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1746,7 +1756,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             result = await git_service.resolve_conflict_theirs(ws_path, filepath)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1754,7 +1764,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             dry_run = bool(payload.get("dry_run", True))
             result = await git_service.clean_untracked(ws_path, dry_run=dry_run)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok") and not dry_run:
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1762,12 +1772,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             commit_hash = payload.get("commit_hash") or ""
             result = await git_service.show_commit(ws_path, commit_hash)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.worktrees":
             ws_path = payload.get("workspace_path") or ""
             entries = await git_service.list_worktrees(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"worktrees": entries}))
+            await session.send_json(make_response(msg_id, msg_type, {"worktrees": entries}))
 
         elif msg_type == "git.add_worktree":
             ws_path = payload.get("workspace_path") or ""
@@ -1775,7 +1785,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             branch = payload.get("branch") or ""
             new_branch = bool(payload.get("new_branch", False))
             result = await git_service.add_worktree(ws_path, wt_path, branch, new_branch=new_branch)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1784,7 +1794,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             wt_path = payload.get("worktree_path") or ""
             force = bool(payload.get("force", False))
             result = await git_service.remove_worktree(ws_path, wt_path, force=force)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1792,40 +1802,40 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.get_config(ws_path)
             result["allowed_keys"] = sorted(git_service._ALLOWED_CONFIG_KEYS)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.config_set":
             ws_path = payload.get("workspace_path") or ""
             key = payload.get("key") or ""
             value = payload.get("value") or ""
             result = await git_service.set_config(ws_path, key, value)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.blame":
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             result = await git_service.blame_file(ws_path, filepath)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.compare_branches":
             ws_path = payload.get("workspace_path") or ""
             base = payload.get("base") or ""
             compare = payload.get("compare") or ""
             result = await git_service.compare_branches(ws_path, base, compare)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.diff_branches":
             ws_path = payload.get("workspace_path") or ""
             base = payload.get("base") or "main"
             compare = payload.get("compare") or ""
             result = await git_service.diff_branches(ws_path, base, compare)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.rebase":
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""
             result = await git_service.rebase_on(ws_path, branch)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1834,7 +1844,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             branch = payload.get("branch") or ""
             filepath = payload.get("filepath") or ""
             result = await git_service.restore_file_from_branch(ws_path, branch, filepath)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1843,7 +1853,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             branch = payload.get("branch") or ""
             remote = payload.get("remote") or "origin"
             result = await git_service.push_set_upstream(ws_path, branch, remote)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1853,7 +1863,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             reverse = bool(payload.get("reverse", False))
             cached = bool(payload.get("cached", True))
             result = await git_service.apply_patch(ws_path, patch, reverse=reverse, cached=cached)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1861,7 +1871,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             url = payload.get("url") or ""
             target_dir = payload.get("target_dir") or ""
             result = await git_service.clone_repo(url, target_dir)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.ignore":
             ws_path = payload.get("workspace_path") or ""
@@ -1869,7 +1879,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             target = payload.get("target") or "project"
             untrack = bool(payload.get("untrack", True))
             result = await git_service.add_to_gitignore(ws_path, pattern, target=target, untrack=untrack)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1877,13 +1887,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             filepath = payload.get("filepath") or ""
             result = await git_service.check_ignore(ws_path, filepath)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.abort":
             ws_path = payload.get("workspace_path") or ""
             op = payload.get("op") or ""
             result = await git_service.abort_operation(ws_path, op)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1891,14 +1901,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             index = int(payload.get("index", 0))
             result = await git_service.stash_apply(ws_path, index)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.pull_rebase":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.pull_rebase(ws_path)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1907,7 +1917,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             remote = payload.get("remote") or ""
             branch = payload.get("branch") or ""
             result = await git_service.push_force(ws_path, remote, branch)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1917,24 +1927,24 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             rel = payload.get("rel_path", "") or ""
             show_hidden = bool(payload.get("show_hidden", False))
             result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.list_files_flat":
             ws_path = payload.get("workspace_path") or ""
             query = payload.get("query", "") or ""
             result = fs_service.list_files_flat(ws_path, query=query)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.glob_files":
             ws_path = payload.get("workspace_path") or ""
             pattern = payload.get("pattern", "") or ""
             result = fs_service.glob_files(ws_path, pattern=pattern)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.mkdir":
             ws_path = payload.get("workspace_path") or ""
             result = fs_service.mkdir(ws_path, payload.get("rel_path", "") or "")
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1943,7 +1953,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.create_file(
                 ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1952,14 +1962,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.rename(
                 ws_path, payload.get("src_path", "") or "", payload.get("dst_path", "") or ""
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "fs.delete":
             ws_path = payload.get("workspace_path") or ""
             result = fs_service.delete(ws_path, payload.get("rel_path", "") or "")
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1968,7 +1978,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.write_file(
                 ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -1976,7 +1986,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             enc_override = payload.get("encoding_override") or None
             result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────
         # Security notes:
@@ -1990,7 +2000,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             cmd = payload.get("command", "") or ""
             if not cmd:
-                await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
+                await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "no command"}))
             else:
                 resolved_cwd = Path(ws_path).resolve() if ws_path else None
                 # Validate that cwd is a known registered workspace (or its subdirectory)
@@ -2000,9 +2010,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     for r in known_roots
                 )
                 if not cwd_allowed:
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "workspace path not registered"}))
+                    await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "workspace path not registered"}))
                 elif resolved_cwd and not resolved_cwd.is_dir():
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
+                    await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "invalid workspace path"}))
                 else:
                     try:
                         proc = await asyncio.create_subprocess_exec(
@@ -2014,15 +2024,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         try:
                             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
                             output = stdout.decode("utf-8", errors="replace")
-                            await session.websocket.send_json(make_response(msg_id, msg_type, {
+                            await session.send_json(make_response(msg_id, msg_type, {
                                 "ok": True, "output": output[:8000], "exit_code": proc.returncode,
                             }))
                         except asyncio.TimeoutError:
                             proc.kill()
                             await proc.communicate()
-                            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout after 30s"}))
+                            await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "timeout after 30s"}))
                     except Exception as exc:
-                        await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
+                        await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(exc)}))
 
         # ── Search (search.*) ───────────────────────────────────────────────
         elif msg_type == "search.find_in_files":
@@ -2036,7 +2046,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 includes=payload.get("includes", "") or "",
                 excludes=payload.get("excludes", "") or "",
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "search.replace_in_files":
             ws_path = payload.get("workspace_path") or ""
@@ -2050,7 +2060,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 case_sensitive=bool(payload.get("case_sensitive")),
                 whole_word=bool(payload.get("whole_word")),
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok") and result.get("total"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -2084,7 +2094,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 _text = re.sub(r'^```[a-zA-Z]*\n?', '', _text).strip()
                 _text = re.sub(r'\n?```$', '', _text).strip()
                 result = {"ok": True, "text": _text} if _text else {"ok": False, "error": "Empty response"}
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "editor.complete":
             result = await editor_service.complete(
@@ -2094,36 +2104,36 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 payload.get("suffix", "") or "",
                 payload.get("language", "") or "",
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Onboarding (onboarding.*) ───────────────────────────────────────
         elif msg_type == "onboarding.status":
             status = await asyncio.to_thread(onboarding_deps.get_status)
             status["complete"] = onboarding_deps.is_complete()
             status["skip"] = onboarding_deps.should_skip()
-            await session.websocket.send_json(make_response(msg_id, msg_type, status))
+            await session.send_json(make_response(msg_id, msg_type, status))
 
         elif msg_type == "onboarding.install":
             dep_id = payload.get("dep_id", "") or ""
             result = await asyncio.to_thread(onboarding_deps.install_dep, dep_id)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "onboarding.pull_model":
             model = payload.get("model", "") or onboarding_deps._SUGGESTED_MODEL
             result = onboarding_deps.pull_model(model)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "onboarding.complete":
             onboarding_deps.set_complete(bool(payload.get("complete", True)))
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         # ── AI Chat ──────────────────────────────────────────────────────────────
         elif msg_type == "ai.chat.settings.get":
-            await session.websocket.send_json(make_response(msg_id, msg_type, ai_chat_settings_store.get()))
+            await session.send_json(make_response(msg_id, msg_type, ai_chat_settings_store.get()))
 
         elif msg_type == "ai.chat.settings.set":
             updated = ai_chat_settings_store.set(payload)
-            await session.websocket.send_json(make_response(msg_id, msg_type, updated))
+            await session.send_json(make_response(msg_id, msg_type, updated))
 
         elif msg_type == "ai.chat.start":
             session_id = payload.get("session_id", "") or str(__import__("uuid").uuid4())
@@ -2183,14 +2193,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             task = asyncio.create_task(_run_chat())
             session._chat_tasks.add(task)
             task.add_done_callback(session._chat_tasks.discard)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "session_id": session_id}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True, "session_id": session_id}))
 
         elif msg_type == "ai.chat.accept_edit":
             ws_path = payload.get("workspace_path", "") or ""
             file_path = payload.get("file_path", "") or ""
             new_content = payload.get("new_content", "") or ""
             result = fs_service.write_file(ws_path, file_path, new_content)
-            await session.websocket.send_json(make_response(msg_id, msg_type, result))
+            await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
@@ -2201,7 +2211,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 str(payload.get("tool_id", "")),
                 approved=True,
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.chat.reject_command":
             from .ai_chat_tools import approve_command
@@ -2210,12 +2220,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 str(payload.get("tool_id", "")),
                 approved=False,
             )
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.chat.stop":
             for t in list(session._chat_tasks):
                 t.cancel()
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.chat.test_connection":
             _tc_provider = (payload.get("provider") or "").strip()
@@ -2255,7 +2265,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     _tc_ok = True
             except Exception as _e:
                 _tc_err = str(_e)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": _tc_ok, "error": _tc_err}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": _tc_ok, "error": _tc_err}))
 
         elif msg_type == "ai.enhance_prompt":
             _ep_system = (payload.get("system") or "").strip()
@@ -2263,7 +2273,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             _ep_model = (payload.get("model") or "").strip()
             _ep_provider = (payload.get("provider") or "").strip()
             if not _ep_prompt:
-                await session.websocket.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "prompt is required"))
+                await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "prompt is required"))
             else:
                 try:
                     from .ai_chat_service import stream_chat
@@ -2284,14 +2294,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                             if _ep_chunk.startswith("\x00"):
                                 break  # DONE or TOOL sentinel
                             _ep_content += _ep_chunk
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "content": _ep_content.strip()}))
+                    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "content": _ep_content.strip()}))
                 except Exception as _ep_exc:
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(_ep_exc)}))
+                    await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": str(_ep_exc)}))
 
         elif msg_type == "ai.web.search":
             query = (payload.get("query") or "").strip()[:200]
             if not query:
-                await session.websocket.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "query is required"))
+                await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "query is required"))
             else:
                 try:
                     import httpx as _httpx
@@ -2368,14 +2378,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                                 if isinstance(item, dict) and item.get("Text"):
                                     results.append({"title": item.get("Text", "")[:80], "snippet": item.get("Text", ""), "url": item.get("FirstURL", "")})
 
-                    await session.websocket.send_json(make_response(msg_id, msg_type, {"query": query, "results": results[:7]}))
+                    await session.send_json(make_response(msg_id, msg_type, {"query": query, "results": results[:7]}))
                 except Exception as _e:
-                    await session.websocket.send_json(make_error(msg_id, msg_type, "SEARCH_ERROR", str(_e)))
+                    await session.send_json(make_error(msg_id, msg_type, "SEARCH_ERROR", str(_e)))
 
         elif msg_type == "ai.review.stop":
             for t in list(session._review_tasks):
                 t.cancel()
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
         elif msg_type == "ai.review.start":
             # Cancel any in-progress review before starting a new one.
@@ -2463,22 +2473,22 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             task = asyncio.create_task(_run_review())
             session._review_tasks.add(task)
             task.add_done_callback(session._review_tasks.discard)
-            await session.websocket.send_json(make_response(msg_id, msg_type, {"ok": True, "review_id": review_id}))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True, "review_id": review_id}))
 
         else:
-            await session.websocket.send_json(
+            await session.send_json(
                 make_error(msg_id, msg_type, "UNKNOWN_TYPE", f"Unsupported message type: {msg_type!r}")
             )
     except FileNotFoundError as err:
-        await session.websocket.send_json(
+        await session.send_json(
             make_error(msg_id, msg_type, "SETUP_ERROR", str(err))
         )
     except KeyError as err:
-        await session.websocket.send_json(
+        await session.send_json(
             make_error(msg_id, msg_type, "BAD_REQUEST", f"missing field: {err}")
         )
     except Exception as err:  # noqa: BLE001
         log.exception("handle_message failed for type=%s", msg_type)
-        await session.websocket.send_json(
+        await session.send_json(
             make_error(msg_id, msg_type, "INTERNAL_ERROR", str(err))
         )
