@@ -53,6 +53,20 @@ def test_detected_codex_gemini_sessions_are_trusted() -> None:
     assert _session_exists("codex", "/tmp/ws", "") is False
 
 
+def test_antigravity_session_checks_conversation_db(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    session_id = "286db9c5-814a-4391-9244-ae51bd0083d8"
+    db = tmp_path / ".gemini" / "antigravity-cli" / "conversations" / f"{session_id}.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"")
+
+    assert _session_exists("antigravity", "/tmp/ws", session_id) is True
+    assert _session_exists("antigravity", "/tmp/ws", "missing-id") is False
+
+
 def test_gemini_session_file_path_must_exist(tmp_path: Path) -> None:
     session_file = tmp_path / "session.json"
     session_file.write_text("{}", encoding="utf-8")

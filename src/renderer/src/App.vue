@@ -175,6 +175,13 @@ const agentSpecs: AgentSpec[] = [
     hint: 'tester + verifier'
   },
   {
+    agentKey: 'antigravity',
+    label: 'Antigravity CLI',
+    defaultCommand: 'agy',
+    skipPermissionFlag: '--dangerously-skip-permissions',
+    hint: 'generalist'
+  },
+  {
     agentKey: 'terminal',
     label: 'Terminal',
     defaultCommand: '',

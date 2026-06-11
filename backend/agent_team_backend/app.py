@@ -540,6 +540,13 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
         return _claude_session_file(workspace_path, session_id).is_file()
     if agent == "gemini" and ("/" in session_id or session_id.endswith((".json", ".jsonl"))):
         return Path(session_id).is_file()
+    if agent == "antigravity":
+        # Antigravity stores each conversation as a SQLite db; the id is the
+        # filename stem accepted by `agy --conversation <id>`.
+        return (
+            Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+            / f"{session_id}.db"
+        ).is_file()
     # Codex/Gemini ids are detected from their session files. Keep trusting
     # persisted ids until vendor-specific preflight checks are added.
     return True

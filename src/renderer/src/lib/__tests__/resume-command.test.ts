@@ -14,12 +14,19 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('gemini', '/tmp/session.json')).toBe('gemini --session-file "/tmp/session.json"')
   })
 
+  it('uses agy --conversation for antigravity', () => {
+    expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
+  })
+
   it('appends the permission-bypass flag when given', () => {
     expect(buildResumeCommand('claude', 'abc', '--dangerously-skip-permissions')).toBe(
       'claude --resume abc --dangerously-skip-permissions'
     )
     expect(buildResumeCommand('codex', 'abc', '--dangerously-bypass-approvals-and-sandbox')).toBe(
       'codex resume abc --dangerously-bypass-approvals-and-sandbox'
+    )
+    expect(buildResumeCommand('antigravity', 'abc', '--dangerously-skip-permissions')).toBe(
+      'agy --conversation abc --dangerously-skip-permissions'
     )
   })
 

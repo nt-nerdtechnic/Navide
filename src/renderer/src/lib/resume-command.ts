@@ -6,6 +6,7 @@
 //   • claude --resume <id>
 //   • codex resume <id>      ← subcommand, NOT a --flag
 //   • gemini --session-file <path>
+//   • agy --conversation <id>
 //
 // `skipFlag` is the vendor's permission-bypass flag (or "" when YOLO is off),
 // appended verbatim — same flags resolveCommand() uses for a fresh launch.
@@ -22,6 +23,8 @@ export function buildResumeCommand(
       ? `codex resume ${id}`
       : agentKey === 'gemini'
         ? `gemini --session-file ${JSON.stringify(id)}`
+      : agentKey === 'antigravity'
+        ? `agy --conversation ${id}`
       : `${agentKey} --resume ${id}`
   const flag = skipFlag.trim()
   return flag ? `${base} ${flag}` : base

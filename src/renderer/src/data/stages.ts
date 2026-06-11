@@ -2,7 +2,7 @@
 // The actual stage data is loaded dynamically from the backend via useStages().
 
 export type StageId = string
-export type AgentKey = 'claude' | 'codex' | 'gemini'
+export type AgentKey = 'claude' | 'codex' | 'gemini' | 'antigravity'
 
 /**
  * One participant in a multi-agent parallel stage.
