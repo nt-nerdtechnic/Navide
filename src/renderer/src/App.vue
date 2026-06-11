@@ -1156,6 +1156,15 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
 }
 
 async function onManualSpawn(payload: SpawnPayload): Promise<void> {
+  // Spawn into the tab the user is LOOKING AT. currentRunGroupId lags behind
+  // activeTab for the synthetic "手動" tab (the sync watcher skips it), which
+  // sent panes to a different tab than the one being viewed.
+  const spawnGroupId =
+    activeTab.value === 'manual'
+      ? ''
+      : runGroups.value.some((g) => g.id === activeTab.value)
+        ? activeTab.value
+        : currentRunGroupId.value || ''
   const paneId = await spawnPane({
     agentKey: payload.agentKey,
     roleKey: payload.roleKey,
@@ -1163,7 +1172,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     commandOverride: '',
     workspacePath: payload.workspacePath,
     origin: 'manual',
-    runGroupId: currentRunGroupId.value || undefined,
+    runGroupId: spawnGroupId || undefined,
   })
   if (paneId) {
     await sendQuiet<ProjectPayload>('manual_pane.spawn', {
@@ -1177,7 +1186,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       // call would race this spawn and silently noop on the backend).
       session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
-      run_group_id: currentRunGroupId.value,
+      run_group_id: spawnGroupId,
     })
     const pane = panes.value.find((p) => p.id === paneId)
     if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
