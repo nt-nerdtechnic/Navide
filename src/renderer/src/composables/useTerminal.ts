@@ -145,7 +145,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   const displayStatus = computed<string>(() => {
     if (status.value !== 'running') return status.value
-    if (lastRawActivityAt.value === 0) return 'idle'
+    // Spawned but not a single byte of output yet — the CLI is still booting
+    // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
+    if (lastRawActivityAt.value === 0) return 'starting'
     if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
     return (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
   })
@@ -190,33 +192,63 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
 
-  // Debounce the size we push to the backend PTY. Layout transitions and
-  // app startup churn the pane size repeatedly (e.g. grid→spotlight); pushing
-  // every intermediate size resizes the live CLI's TUI over and over, and any
-  // output it printed at a transient narrow width can't reflow when it grows
-  // back. Only the size that survives RESIZE_QUIET_MS of stillness is sent.
+  // xterm and the PTY must never be at different sizes on purpose. If xterm
+  // refits immediately while the PTY resize lags, a CLI still streaming at the
+  // old width gets wrapped at the new one, and inline TUIs (Claude Code's
+  // cursor-up repaints) then overwrite the wrong rows — corruption that stays
+  // in scrollback forever. So layout churn is debounced BEFORE the fit (xterm
+  // holds its old size, matching the PTY, while the grid settles), and once
+  // quiet, the fit and the backend resize are ordered so xterm is never
+  // narrower than the PTY (see applyFit).
   const RESIZE_QUIET_MS = 250
-  let resizeSendTimer: ReturnType<typeof setTimeout> | null = null
-  function pushResize(): void {
-    if (!sessionId.value) return
-    if (resizeSendTimer) clearTimeout(resizeSendTimer)
-    const cols = term.cols
-    const rows = term.rows
-    resizeSendTimer = setTimeout(() => {
-      resizeSendTimer = null
-      // Re-read in case xterm changed again; send the latest stable size.
-      void backend.send('terminal.resize', {
-        terminal_session_id: sessionId.value,
-        cols: term.cols || cols,
-        rows: term.rows || rows
-      })
-    }, RESIZE_QUIET_MS)
+  // After the PTY resize is acked, how long to let the CLI process SIGWINCH
+  // and repaint before narrowing xterm (covers one ~10Hz TUI frame).
+  const PTY_REPAINT_GRACE_MS = 150
+  let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  // Last size the backend CONFIRMED. The reconciler compares against this so a
+  // dropped/failed resize message is retried instead of desyncing forever.
+  let ackedCols = 0
+  let ackedRows = 0
+  function sendResize(cols: number, rows: number): Promise<boolean> {
+    if (!sessionId.value) return Promise.resolve(false)
+    return backend.send('terminal.resize', {
+      terminal_session_id: sessionId.value,
+      cols,
+      rows
+    }).then((resp) => {
+      if (resp?.ok) { ackedCols = cols; ackedRows = rows; return true }
+      return false
+    }).catch(() => false /* reconciler retries */)
+  }
+  function sendResizeNow(): void {
+    void sendResize(term.cols, term.rows)
   }
 
-  // Single source of truth for sizing: fit xterm to its container, then push the
-  // (debounced) size to the backend. The only entry point used by the
-  // ResizeObserver, the post-spawn frame, and fitTerminal().
-  function fitAndSend(): void {
+  // Self-healing size reconciler. A pane that spawns or resizes while hidden
+  // (background tab / spotlight / minimized → display:none) can leave the PTY
+  // and xterm at different sizes — the CLI then draws its TUI for one width
+  // while xterm renders another, corrupting the layout and cursor position.
+  // Every tick: refit if the container disagrees with xterm, re-send if the
+  // backend may disagree with xterm. Heals any missed resize within seconds.
+  const RECONCILE_MS = 2_000
+  const reconcileInterval = window.setInterval(() => {
+    if (!mounted || !sessionId.value) return
+    const el = containerRef.value
+    if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
+    const dims = fit.proposeDimensions()
+    if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
+        (dims.cols !== term.cols || dims.rows !== term.rows)) {
+      applyFit()
+      return
+    }
+    if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+  }, RECONCILE_MS)
+
+  // Single source of truth for sizing: fit xterm to its container, then push
+  // that size to the backend in the same tick (atomic — see RESIZE_QUIET_MS
+  // comment). Entry points: the (debounced) ResizeObserver, the post-spawn
+  // frame, the reconciler, and fitTerminal().
+  function applyFit(): void {
     cancelAnimationFrame(resizeRafId)
     let poked = false
     const run = (): void => {
@@ -236,8 +268,32 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       try {
-        fit.fit()
-        pushResize()
+        // Invariant: xterm must never be NARROWER than the width the CLI
+        // believes, or in-flight output wraps and cursor-up repaints stack
+        // corrupt frames into scrollback. Shrinking width: resize the PTY
+        // first, then wait for the ack PLUS a repaint grace period — the ack
+        // only confirms the TIOCSWINSZ ioctl, not that the CLI has processed
+        // SIGWINCH and redrawn. Narrowing xterm while the last wide frame is
+        // still on screen rewraps it mid-word and breaks the CLI's cursor-up
+        // bookkeeping from then on (every keystroke echo lands wrong). Once
+        // the CLI has redrawn narrow into the still-wide xterm, the fit can't
+        // wrap anything. Growing (or rows-only): fit first, then send.
+        const dims = fit.proposeDimensions()
+        if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
+            dims.cols < term.cols && sessionId.value) {
+          void sendResize(dims.cols, dims.rows).then(() => {
+            setTimeout(() => {
+              try {
+                fit.fit()
+                // Container may have changed again while waiting.
+                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+              } catch { /* ignore transient fit errors during teardown */ }
+            }, PTY_REPAINT_GRACE_MS)
+          })
+        } else {
+          fit.fit()
+          sendResizeNow()
+        }
       } catch { /* ignore transient fit errors during teardown */ }
     }
     resizeRafId = requestAnimationFrame(run)
@@ -348,7 +404,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
     el.addEventListener('mousedown', _mousedownHandler)
     mountedEl = el
-    resizeObserver = new ResizeObserver(() => fitAndSend())
+    // Debounced: hold the old (PTY-consistent) size through layout churn,
+    // then fit + resize the PTY together once the container is still.
+    resizeObserver = new ResizeObserver(() => {
+      if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
+      resizeDebounceTimer = setTimeout(() => {
+        resizeDebounceTimer = null
+        applyFit()
+      }, RESIZE_QUIET_MS)
+    })
     resizeObserver.observe(el)
     mounted = true
   }
@@ -371,6 +435,30 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
+    // once per pane — the size measured at mount time can be mid-transition.
+    // Wait until the container width holds steady for two consecutive frames
+    // (bounded at ~500ms), THEN fit, so the size sent below is the one the
+    // CLI actually first paints at. A PTY created at a transient width leaves
+    // permanently wrapped first-paint residue in scrollback.
+    const settleEl = containerRef.value
+    if (settleEl && settleEl.clientWidth > 0) {
+      let lastW = -1
+      const deadline = performance.now() + 500
+      while (performance.now() < deadline) {
+        // rAF with a timeout fallback — rAF is throttled (or fully paused)
+        // for occluded/background windows and must never stall the spawn.
+        await new Promise<void>((resolve) => {
+          const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
+          const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+        })
+        const w = settleEl.clientWidth
+        if (w === lastW) break
+        lastW = w
+      }
+    }
+    // Fit to the (now stable) container BEFORE spawning. No-op while hidden.
+    try { fit.fit() } catch { /* keep current size */ }
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -381,10 +469,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        // Provisional size only — fitAndSend() pushes the real container size as
-        // soon as the pane is visible. The few ms at 80×24 are never seen.
-        cols: 80,
-        rows: 24,
+        // Measured container size so the CLI's FIRST paint happens at the
+        // final width. Spawning at a placeholder let TUIs draw their banner /
+        // status bar at the wrong width; that stale first paint then lingered
+        // in scrollback after the real resize landed (visible as duplicated /
+        // misaligned lines). Hidden panes keep the 80×24 default — the size
+        // reconciler corrects them once visible.
+        cols: term.cols || 80,
+        rows: term.rows || 24,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
       })
@@ -400,7 +492,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // Push the real size now that sessionId exists. The ResizeObserver's
       // initial fire happened before spawn (no session yet, so it bailed), so
       // this is what syncs the backend to the actual container on first paint.
-      fitAndSend()
+      applyFit()
 
       // Auto-focus once the PTY is wired up so the user can immediately type
       // without having to click the pane.
@@ -454,7 +546,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   function fitTerminal(): void {
     if (!mounted) return
-    fitAndSend()
+    applyFit()
   }
 
   function updateXtermTheme(): void {
@@ -473,8 +565,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   onScopeDispose(() => {
     cleanupSession()
     clearInterval(tickInterval)
+    clearInterval(reconcileInterval)
     cancelAnimationFrame(resizeRafId)
-    if (resizeSendTimer) clearTimeout(resizeSendTimer)
+    if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()

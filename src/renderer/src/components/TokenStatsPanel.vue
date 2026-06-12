@@ -322,8 +322,10 @@ async function confirmReset(scope: ResetScope): Promise<void> {
 }
 .rail-icon { font-size: 16px; }
 .rail-label {
+  /* No rotate(180deg) here: that bottom-up "book spine" trick flips CJK
+     glyphs upside down. Plain vertical-rl keeps CJK upright (top-to-bottom)
+     and rotates Latin text 90° clockwise — both readable. */
   writing-mode: vertical-rl;
-  transform: rotate(180deg);
   letter-spacing: 1px;
   font-size: 10px;
   text-transform: uppercase;

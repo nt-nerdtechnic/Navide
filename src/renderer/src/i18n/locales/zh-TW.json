@@ -157,7 +157,7 @@
     "diff-review": "差異審查",
     "replace-in-file": "取代檔案中所有符合項",
     "replace-match": "取代此符合項",
-    "pick-folder": "透過原生對話框選擇資料夾",
+    "open-in-finder": "用 Finder 開啟此資料夾",
     "clear-pipeline": "清除流程狀態並關閉所有 Agent 面板",
     "remove-from-history": "從歷史記錄中移除",
     "double-click-rename": "雙擊重新命名",

@@ -50,11 +50,17 @@ class _Handler(FileSystemEventHandler):
     def on_modified(self, event: FileSystemEvent) -> None:
         if event.is_directory:
             return
-        # Gemini's newer versions write conversation files as single-object
-        # .json (not line-delimited .jsonl), so accept both.
-        if not str(event.src_path).endswith((".jsonl", ".json")):
+        s = str(event.src_path)
+        # Antigravity conversations are SQLite: live writes land in the -wal
+        # journal first, so accept it but enqueue the canonical .db path.
+        if s.endswith(".db-wal"):
+            self._on_path(Path(s[: -len("-wal")]))
             return
-        self._on_path(Path(event.src_path))
+        # Gemini's newer versions write conversation files as single-object
+        # .json (not line-delimited .jsonl), so accept both. .db = Antigravity.
+        if not s.endswith((".jsonl", ".json", ".db")):
+            return
+        self._on_path(Path(s))
 
     def on_created(self, event: FileSystemEvent) -> None:
         self.on_modified(event)
@@ -166,9 +172,12 @@ class LogWatcher:
 
         handler = _Handler(on_path)
 
-        # Watch every existing project_dir from every reader. Skip duplicates.
+        # Watch every existing watch root from every reader. Skip duplicates.
+        # Most readers watch the same dirs they scan; Codex also watches the
+        # stable ~/.codex-panes parent because per-pane session dirs appear
+        # after the backend has already started.
         for reader in self._readers:
-            for d in reader.project_dirs():
+            for d in reader.watch_dirs():
                 if d in self._watched_dirs or not d.exists():
                     continue
                 try:
@@ -360,11 +369,11 @@ class LogWatcher:
         reader = self._reader_for(path)
         if reader is None:
             return
-        # Session-id capture for resume (Codex/Gemini). Runs independent of token
-        # parsing so it works even for session-file formats the token reader
-        # doesn't (yet) understand — it only needs the file to exist + contain
-        # the pane marker.
-        if self._session_sink is not None and reader.vendor in ("codex", "gemini"):
+        # Session-id capture for resume (Codex/Gemini/Antigravity). Runs
+        # independent of token parsing so it works even for session-file formats
+        # the token reader doesn't (yet) understand — it only needs the file to
+        # exist + contain the pane marker.
+        if self._session_sink is not None and reader.vendor in ("codex", "gemini", "antigravity"):
             try:
                 await self._session_sink(reader.vendor, path)
             except Exception as err:  # noqa: BLE001

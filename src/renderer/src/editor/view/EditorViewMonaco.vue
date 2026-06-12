@@ -31,41 +31,62 @@ let inlineDisposer: monaco.IDisposable | null = null
 let pendingGhost: string | null = null
 let ignoreNextModelChange = false
 
+type MonacoTypescriptApi = {
+  CompilerOptions: unknown
+  DiagnosticsOptions: unknown
+  ScriptTarget: { ESNext: unknown }
+  ModuleKind: { ESNext: unknown }
+  ModuleResolutionKind: { NodeJs: unknown }
+  JsxEmit: { ReactJSX: unknown }
+  typescriptDefaults: {
+    setCompilerOptions(opts: unknown): void
+    setDiagnosticsOptions(opts: unknown): void
+    setEagerModelSync(enabled: boolean): void
+  }
+  javascriptDefaults: {
+    setCompilerOptions(opts: unknown): void
+    setDiagnosticsOptions(opts: unknown): void
+    setEagerModelSync(enabled: boolean): void
+  }
+}
+
+const monacoTypescript = (monaco.languages as unknown as { typescript: MonacoTypescriptApi }).typescript
+
 // ── TypeScript LSP — configure once ───────────────────────────────────────────
 let tsLspConfigured = false
 function ensureTsLsp(): void {
   if (tsLspConfigured) return
   tsLspConfigured = true
 
-  const sharedOpts: monaco.languages.typescript.CompilerOptions = {
-    target: monaco.languages.typescript.ScriptTarget.ESNext,
-    module: monaco.languages.typescript.ModuleKind.ESNext,
-    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+  const sharedOpts = {
+    target: monacoTypescript.ScriptTarget.ESNext,
+    module: monacoTypescript.ModuleKind.ESNext,
+    moduleResolution: monacoTypescript.ModuleResolutionKind.NodeJs,
     lib: ['es2022', 'dom', 'dom.iterable'],
     strict: false,         // loose — files are opened individually, not as a project
     allowJs: true,
     checkJs: false,
-    jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+    jsx: monacoTypescript.JsxEmit.ReactJSX,
     allowNonTsExtensions: true,
     allowSyntheticDefaultImports: true,
     esModuleInterop: true,
     noEmit: true,
   }
-  monaco.languages.typescript.typescriptDefaults.setCompilerOptions(sharedOpts)
-  monaco.languages.typescript.javascriptDefaults.setCompilerOptions(sharedOpts)
+  monacoTypescript.typescriptDefaults.setCompilerOptions(sharedOpts)
+  monacoTypescript.javascriptDefaults.setCompilerOptions(sharedOpts)
 
-  const diagOpts: monaco.languages.typescript.DiagnosticsOptions = {
+  const diagOpts = {
     noSemanticValidation: false,
     noSyntaxValidation: false,
     // Don't flag missing imports — we only have single-file context
     diagnosticCodesToIgnore: [2792, 2307, 2304, 2305],
   }
-  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions(diagOpts)
-  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions(diagOpts)
+  monacoTypescript.typescriptDefaults.setDiagnosticsOptions(diagOpts)
+  monacoTypescript.javascriptDefaults.setDiagnosticsOptions(diagOpts)
 
   // Enable eager model sync so hover / completions respond faster
-  monaco.languages.typescript.typescriptDefaults.setEagerModelSync(true)
-  monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true)
+  monacoTypescript.typescriptDefaults.setEagerModelSync(true)
+  monacoTypescript.javascriptDefaults.setEagerModelSync(true)
 }
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
@@ -272,7 +293,7 @@ onMounted(() => {
         enableForwardStability: true,
       }
     },
-    freeInlineCompletions() {},
+    disposeInlineCompletions() {},
   })
 
   // Emit content changes
@@ -493,8 +514,14 @@ function toggleFoldAt(_line: number): void { editor?.trigger('', 'editor.toggleF
 function foldAll(): void { editor?.trigger('', 'editor.foldAll', null) }
 function unfoldAll(): void { editor?.trigger('', 'editor.unfoldAll', null) }
 function foldToLevel(level: number): void { editor?.trigger('', `editor.foldLevel${Math.min(level, 7)}`, null) }
-function foldRecursively(): void { editor?.trigger('', 'editor.foldRecursively', null) }
-function unfoldRecursively(): void { editor?.trigger('', 'editor.unfoldRecursively', null) }
+function foldRecursively(line?: number): void {
+  if (line !== undefined) editor?.setPosition({ lineNumber: line + 1, column: 1 })
+  editor?.trigger('', 'editor.foldRecursively', null)
+}
+function unfoldRecursively(line?: number): void {
+  if (line !== undefined) editor?.setPosition({ lineNumber: line + 1, column: 1 })
+  editor?.trigger('', 'editor.unfoldRecursively', null)
+}
 
 // Text transforms
 function transformToUppercase(): void { editor?.trigger('', 'editor.action.transformToUppercase', null) }
@@ -584,7 +611,7 @@ function zoomReset(): void { editor?.updateOptions({ fontSize: 13 }) }
 // Line numbers
 function toggleLineNumbers(): void {
   const cur = editor?.getOption(monaco.editor.EditorOption.lineNumbers)
-  const show = cur !== monaco.editor.RenderLineNumbersType.On
+  const show = String(cur) !== 'on'
   editor?.updateOptions({ lineNumbers: show ? 'on' : 'off' })
 }
 

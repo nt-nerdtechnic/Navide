@@ -1463,10 +1463,13 @@ async def check_staged(workspace_path: str) -> dict[str, Any]:
 async def commit(workspace_path: str, message: str, all: bool = False) -> dict[str, Any]:
     if not message.strip():
         return {"ok": False, "error": "empty commit message"}
-    # all=True mirrors VS Code: with nothing staged, commit every tracked change
-    # (git commit -a). Untracked files still require explicit staging.
-    args = ["git", "commit", "-a", "-m", message] if all else ["git", "commit", "-m", message]
-    rc, out, stderr = await _run(args, workspace_path)
+    # all=True: with nothing staged, commit everything — stage all changes first
+    # (git add -A) so untracked files are included too, then commit.
+    if all:
+        rc, out, stderr = await _run(["git", "add", "-A"], workspace_path)
+        if rc != 0:
+            return {"ok": False, "error": stderr.strip() or out.strip()}
+    rc, out, stderr = await _run(["git", "commit", "-m", message], workspace_path)
     if rc != 0:
         return {"ok": False, "error": stderr.strip() or out.strip()}
     # Extract new commit hash from "git commit" output

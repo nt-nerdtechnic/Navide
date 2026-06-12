@@ -303,6 +303,29 @@ def test_explicit_session_id_takes_priority_over_file_claim(
     )
 
 
+def test_gemini_explicit_session_announces_session_file(tmp_path: Path) -> None:
+    root = tmp_path / "gemini"; root.mkdir()
+    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane(
+        "g1", vendor="gemini", cwd="/ws", workspace_path="/ws",
+        explicit_session_id="gemini-uuid",
+    )
+    f = root / "session.json"
+    f.write_text(json.dumps({"sessionId": "gemini-uuid", "messages": []}))
+
+    binding = attr.maybe_announce_session(
+        _make_usage("gemini", session_id="session", file_path=str(f), cwd="/ws")
+    )
+
+    assert binding is not None
+    assert binding.pane_id == "g1"
+    assert binding.resume_id == str(f)
+    assert binding.workspace_path == "/ws"
+    assert attr.maybe_announce_session(
+        _make_usage("gemini", session_id="session", file_path=str(f), cwd="/ws")
+    ) is None
+
+
 # ─────────────────── session_marker (Codex/Gemini resume capture) ────────────
 
 @pytest.fixture
@@ -343,6 +366,55 @@ def test_marker_binds_two_codex_panes_and_returns_resume_id(codex_attr: tuple[At
     # attribution still routes by the reader's session_id (for tokens).
     assert attr.pane_for_session("rollout-T1-uuid1")[0] == "p1"
     assert attr.pane_for_session("rollout-T2-uuid2")[0] == "p2"
+
+
+def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "06" / "08"
+    root.mkdir(parents=True)
+    f = root / "rollout-2026-06-08T00-00-00-sid.jsonl"
+    f.write_text(json.dumps({"type": "session_meta", "payload": {"id": "codex-resume-id", "cwd": "/ws"}}) + "\n")
+    attr = Attribution([FakeReader("codex", tmp_path / ".codex")], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane(
+        "live-pane", vendor="codex", cwd="/ws", workspace_path="/ws",
+        session_home_id="home-old",
+    )
+
+    usage = _make_usage("codex", session_id=f.stem, file_path=str(f), cwd="/ws")
+    binding = attr.maybe_announce_session(usage)
+
+    assert binding is not None
+    assert binding.pane_id == "live-pane"
+    assert binding.resume_id == "codex-resume-id"
+    assert attr.attribute(usage).pane_id == "live-pane"
+
+
+def test_codex_home_path_prevents_same_cwd_first_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".codex-panes"
+    f1 = root / "home-a" / "sessions" / "rollout-a.jsonl"
+    f2 = root / "home-b" / "sessions" / "rollout-b.jsonl"
+    f1.parent.mkdir(parents=True)
+    f2.parent.mkdir(parents=True)
+    f1.write_text(json.dumps({"type": "session_meta", "payload": {"id": "resume-a", "cwd": "/ws"}}) + "\n")
+    f2.write_text(json.dumps({"type": "session_meta", "payload": {"id": "resume-b", "cwd": "/ws"}}) + "\n")
+    attr = Attribution([FakeReader("codex", tmp_path / ".codex")], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane("pane-a", vendor="codex", cwd="/ws", workspace_path="/ws", session_home_id="home-a")
+    attr.register_pane("pane-b", vendor="codex", cwd="/ws", workspace_path="/ws", session_home_id="home-b")
+
+    b2 = attr.maybe_announce_session(
+        _make_usage("codex", session_id=f2.stem, file_path=str(f2), cwd="/ws")
+    )
+    b1 = attr.maybe_announce_session(
+        _make_usage("codex", session_id=f1.stem, file_path=str(f1), cwd="/ws")
+    )
+
+    assert b2 is not None
+    assert b1 is not None
+    assert b2.pane_id == "pane-b"
+    assert b2.resume_id == "resume-b"
+    assert b1.pane_id == "pane-a"
+    assert b1.resume_id == "resume-a"
 
 
 def test_gemini_marker_returns_top_level_session_id(tmp_path: Path) -> None:

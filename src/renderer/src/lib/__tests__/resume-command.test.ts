@@ -10,8 +10,12 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('codex', 'abc')).toBe('codex resume abc')
   })
 
-  it('uses --resume for gemini', () => {
-    expect(buildResumeCommand('gemini', 'abc')).toBe('gemini --resume abc')
+  it('uses --session-file for gemini', () => {
+    expect(buildResumeCommand('gemini', '/tmp/session.json')).toBe('gemini --session-file "/tmp/session.json"')
+  })
+
+  it('uses agy --conversation for antigravity', () => {
+    expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
   })
 
   it('appends the permission-bypass flag when given', () => {
@@ -21,6 +25,9 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('codex', 'abc', '--dangerously-bypass-approvals-and-sandbox')).toBe(
       'codex resume abc --dangerously-bypass-approvals-and-sandbox'
     )
+    expect(buildResumeCommand('antigravity', 'abc', '--dangerously-skip-permissions')).toBe(
+      'agy --conversation abc --dangerously-skip-permissions'
+    )
   })
 
   it('returns "" for an empty/blank session id so the caller falls back to a fresh spawn', () => {
@@ -29,6 +36,6 @@ describe('buildResumeCommand', () => {
   })
 
   it('trims the session id', () => {
-    expect(buildResumeCommand('gemini', '  abc  ')).toBe('gemini --resume abc')
+    expect(buildResumeCommand('gemini', '  /tmp/session.json  ')).toBe('gemini --session-file "/tmp/session.json"')
   })
 })

@@ -227,14 +227,15 @@ class TestCommit:
         assert status["unstaged"] == []
 
     @pytest.mark.asyncio
-    async def test_commit_all_excludes_untracked(self, tmp_path):
+    async def test_commit_all_includes_untracked(self, tmp_path):
         init_repo(tmp_path)
         (tmp_path / "brand_new.txt").write_text("new")  # untracked
-        # git commit -a does not pick up untracked files → nothing to commit.
-        result = await git_service.commit(str(tmp_path), "should fail", all=True)
-        assert result["ok"] is False
+        # all=True stages everything first, so untracked files are committed too.
+        result = await git_service.commit(str(tmp_path), "feat: add brand new file", all=True)
+        assert result["ok"] is True
         status = await git_service.get_status(str(tmp_path))
-        assert any(e["path"] == "brand_new.txt" for e in status["untracked"])
+        assert status["untracked"] == []
+        assert status["staged"] == []
 
 
 # ── init_repo ─────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { join } from 'node:path'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 // Drives the built Electron app end-to-end:
@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 
 let app: ElectronApplication
 let page: Page
+let tmp: string | undefined
 
 test.beforeAll(async () => {
   app = await electron.launch({
@@ -22,6 +23,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await app?.close()
+  if (tmp) rmSync(tmp, { recursive: true, force: true })
 })
 
 test('launches and shows the Welcome entry screen', async () => {
@@ -30,7 +32,7 @@ test('launches and shows the Welcome entry screen', async () => {
 })
 
 test('picking a workspace via Browse enters the main UI', async () => {
-  const tmp = mkdtempSync(join(tmpdir(), 'agent-team-e2e-'))
+  tmp = mkdtempSync(join(tmpdir(), 'agent-team-e2e-'))
 
   // Stub the native folder picker (main process) to return our temp workspace.
   await app.evaluate(async ({ dialog }, dir) => {

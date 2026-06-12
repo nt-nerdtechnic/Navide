@@ -259,7 +259,10 @@ function startOverNow(): void {
     confirmingRestart.value = false
     return
   }
-  emit('pipeline-restart', { task, workspacePath: workspacePath.value.trim() })
+  // Send the path verbatim: folder names may legitimately end with a space
+  // (e.g. Google Drive folders), and every source of this value (picker,
+  // Welcome screen, drag-drop) already provides an exact filesystem path.
+  emit('pipeline-restart', { task, workspacePath: workspacePath.value })
   confirmingRestart.value = false
 }
 
@@ -279,7 +282,7 @@ let workspaceDebounce: number | null = null
 watch(workspacePath, (v) => {
   if (workspaceDebounce !== null) window.clearTimeout(workspaceDebounce)
   workspaceDebounce = window.setTimeout(() => {
-    emit('workspace-check', v.trim())
+    emit('workspace-check', v)
   }, 400)
 }, { immediate: true })
 onUnmounted(() => {
@@ -425,7 +428,7 @@ function spawn(): void {
     agentKey: pickedAgent.value,
     roleKey: pickedRole.value,
     stageId: '',
-    workspacePath: workspacePath.value.trim()
+    workspacePath: workspacePath.value
   })
 }
 
@@ -435,7 +438,7 @@ function openTerminal(): void {
     agentKey: 'terminal',
     roleKey: '',
     stageId: '',
-    workspacePath: workspacePath.value.trim()
+    workspacePath: workspacePath.value
   })
 }
 
@@ -443,7 +446,7 @@ function startPipeline(): void {
   if (!canRunPipeline.value) return
   emit('pipeline-start', {
     task: taskDescription.value.trim(),
-    workspacePath: workspacePath.value.trim(),
+    workspacePath: workspacePath.value,
     // Pass the opened pipeline id so App.vue activates it first if it differs from active
     pipelineId: openedPipelineId.value || undefined,
   })

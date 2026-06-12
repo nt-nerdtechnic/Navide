@@ -17,7 +17,8 @@ const emit = defineEmits<{
   (e: 'move-pane', paneId: string, targetKey: string): void
 }>()
 
-// The ✕ shows on all tabs as long as there are 2+ tabs total (last tab is protected).
+// The ✕ shows when there are at least 2 visible tabs. Actual deletion rules
+// live in App.vue because "手動" is a synthetic tab, not a persisted RunGroup.
 
 // Drag-to-move: a pane dropped onto a tab reassigns it to that tab's run group.
 const dragOverKey = ref<string | null>(null)
@@ -82,9 +83,9 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
           <span class="tab-label">{{ tab.label }}</span>
           <span class="tab-count">{{ tab.count }}</span>
           <span
-            v-if="tabs.length > 1"
+            v-if="tab.type !== 'manual' || tabs.length > 1"
             class="tab-close"
-            title="刪除此 tab（pane 會移到第一個剩餘 tab）"
+            title="刪除此 tab（pane 會移到可承接的分組）"
             @click.stop="emit('delete', tab.key)"
           >✕</span>
         </template>

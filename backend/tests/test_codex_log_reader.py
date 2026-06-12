@@ -131,6 +131,26 @@ def test_session_meta_cwd_picked_up(fake_codex_session: Path) -> None:
     assert events[0].cwd == "/home/x/work"
 
 
+def test_project_dirs_scan_pane_sessions_but_watch_stable_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(fake_home))
+    default_sessions = fake_home / ".codex" / "sessions"
+    pane_sessions = fake_home / ".codex-panes" / "pane-1" / "sessions"
+    default_sessions.mkdir(parents=True)
+    pane_sessions.mkdir(parents=True)
+
+    reader = CodexLogReader()
+
+    assert default_sessions in reader.project_dirs()
+    assert pane_sessions in reader.project_dirs()
+    assert default_sessions in reader.watch_dirs()
+    assert fake_home / ".codex-panes" in reader.watch_dirs()
+    assert pane_sessions not in reader.watch_dirs()
+
+
 def test_malformed_lines_do_not_abort(fake_codex_session: Path) -> None:
     reader = CodexLogReader()
     fake_codex_session.parent.mkdir(parents=True, exist_ok=True)

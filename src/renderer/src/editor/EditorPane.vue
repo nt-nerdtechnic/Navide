@@ -221,6 +221,17 @@ const proposal = ref<{ range: Range; oldText: string; newText: string } | null>(
 const proposalEl = ref<HTMLDivElement | null>(null)
 const cmdkInput = ref<HTMLInputElement | null>(null)
 
+function toEditorRange(
+  range: { startLine: number; startCol: number; endLine: number; endCol: number } | Range | null,
+): Range | null {
+  if (!range) return null
+  if ('start' in range) return range
+  return {
+    start: { line: range.startLine, col: range.startCol },
+    end: { line: range.endLine, col: range.endCol },
+  }
+}
+
 function computeProposalDiff(oldText: string, newText: string): Array<{ type: '+' | '-' | ' '; text: string }> {
   const A = oldText.split('\n'), B = newText.split('\n')
   const capA = A.slice(0, 300), capB = B.slice(0, 300)
@@ -256,7 +267,7 @@ function computeProposalDiff(oldText: string, newText: string): Array<{ type: '+
 }
 
 function openCmdK(): void {
-  const range = editorRef.value?.getSelectionRange() ?? null
+  const range = toEditorRange(editorRef.value?.getSelectionRange() ?? null)
   const code = editorRef.value?.getSelectionText() ?? ''
   cmdk.value = { open: true, instruction: '', busy: false, range, code }
   proposal.value = null
@@ -852,9 +863,9 @@ function transformToCamelCase(): void { editorRef.value?.transformToCamelCase() 
 function transformToKebabCase(): void { editorRef.value?.transformToKebabCase() }
 function transformToPascalCase(): void { editorRef.value?.transformToPascalCase() }
 function transformToBase64(): void { editorRef.value?.transformToBase64() }
-function transformFromBase64(): void { if (editorRef.value?.transformFromBase64() === false) toast('Invalid Base64', { type: 'error' }) }
+function transformFromBase64(): void { editorRef.value?.transformFromBase64() }
 function transformToUrlEncoded(): void { editorRef.value?.transformToUrlEncoded() }
-function transformFromUrlEncoded(): void { if (editorRef.value?.transformFromUrlEncoded() === false) toast('Invalid URL encoding', { type: 'error' }) }
+function transformFromUrlEncoded(): void { editorRef.value?.transformFromUrlEncoded() }
 function trimTrailingWhitespace(): void { editorRef.value?.trimTrailingWhitespace() }
 function formatDocument(): void { editorRef.value?.formatDocument() }
 function formatSelection(): void { editorRef.value?.formatSelection() }

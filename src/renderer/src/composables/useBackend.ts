@@ -110,10 +110,23 @@ export function useBackend() {
       lastError.value = ''
       reconnectAttempts = 0
       if (pingTimer !== null) window.clearInterval(pingTimer)
+      // A wedged backend connection can stay TCP-open for minutes while every
+      // frame fails. Pings are the liveness probe: two consecutive failures
+      // force a close so the reconnect path takes over immediately instead of
+      // waiting for the server to abort the socket.
+      let pingFailures = 0
       pingTimer = window.setInterval(() => {
-        send('ping', { t: Date.now() }).catch((err) => {
-          console.warn('[useBackend] ping failed', err)
-        })
+        send('ping', { t: Date.now() })
+          .then(() => {
+            pingFailures = 0
+          })
+          .catch((err) => {
+            console.warn('[useBackend] ping failed', err)
+            if (++pingFailures >= 2) {
+              pingFailures = 0
+              try { socket.close() } catch { /* close handler reconnects */ }
+            }
+          })
       }, 10_000)
     })
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import codecs
 import errno
 import fcntl
 import logging
@@ -128,6 +129,11 @@ class TerminalService:
         # Per-session pending INPUT bytes not yet accepted by the non-blocking
         # PTY master (EAGAIN / partial write). Drained via add_writer.
         self._in_buffers: dict[str, bytearray] = {}    # session_id -> pending bytes
+        # Per-session incremental UTF-8 decoders. PTY reads are raw byte chunks
+        # that can split a multi-byte character (CJK is 3 bytes/char); decoding
+        # each chunk independently turns the halves into U+FFFD, which desyncs
+        # the CLI's cursor math from what xterm renders (layout corruption).
+        self._decoders: dict[str, codecs.IncrementalDecoder] = {}
 
     def create(
         self,
@@ -353,7 +359,13 @@ class TerminalService:
 
         # Accumulate decoded bytes; schedule a flush if not already pending.
         _BUF_CAP = 5 * 1024 * 1024  # 5 MB — force an immediate flush if exceeded
-        decoded = chunk.decode("utf-8", errors="replace")
+        decoder = self._decoders.get(session.id)
+        if decoder is None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._decoders[session.id] = decoder
+        decoded = decoder.decode(chunk)
+        if not decoded:
+            return  # chunk ended mid-character; bytes held until the rest arrives
         buf = self._out_buffers.setdefault(session.id, [])
         buf.append(decoded)
         buf_size = sum(len(s) for s in buf)
@@ -445,6 +457,13 @@ class TerminalService:
         handle = self._out_handles.pop(session.id, None)
         if handle:
             handle.cancel()
+        # Drain any bytes the incremental decoder is still holding (a final
+        # chunk that ended mid-character) so the tail isn't silently dropped.
+        decoder = self._decoders.pop(session.id, None)
+        if decoder:
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                self._out_buffers.setdefault(session.id, []).append(tail)
         self._flush_output(session)
         # Best-effort wait for child to avoid zombies
         try:

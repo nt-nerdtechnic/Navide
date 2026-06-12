@@ -113,6 +113,15 @@ class LogReader(ABC):
         """
         return None
 
+    def watch_dirs(self) -> list[Path]:
+        """Return directories the watcher should subscribe to.
+
+        By default this is the same as project_dirs(). Readers with dynamic
+        child session directories can override this to watch a stable parent
+        while still scanning precise session roots.
+        """
+        return self.project_dirs()
+
     def parse_activity(
         self, path: Path, seen_keys: set[str]
     ) -> list[ActivityEvent]:

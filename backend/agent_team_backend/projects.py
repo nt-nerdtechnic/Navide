@@ -82,6 +82,7 @@ class PaneRecord:
     role: str = ""
     command: str = ""
     session_id: str = ""
+    session_home_id: str = ""       # Codex per-pane CODEX_HOME id; stable across restored pane ids
     spawn_status: str = "pending"   # pending / spawned / removed
     run_group_id: str = ""
     origin: str = "manual"          # "pipeline" | "manual"
@@ -161,6 +162,7 @@ class Project:
                         agent=slot.get("agent", ""),
                         role=slot.get("role", ""),
                         session_id=slot.get("session_id", ""),
+                        session_home_id=slot.get("session_home_id", ""),
                         spawn_status=slot.get("spawn_status", "pending"),
                         run_group_id=slot.get("run_group_id", ""),
                         kickoff_status=slot.get("kickoff_status", "none"),
@@ -178,6 +180,7 @@ class Project:
                     role=mp.get("role", ""),
                     command=mp.get("command", ""),
                     session_id=mp.get("session_id", ""),
+                    session_home_id=mp.get("session_home_id", ""),
                     spawn_status=mp.get("spawn_status", "spawned"),
                     run_group_id=mp.get("run_group_id", ""),
                     origin="manual",
@@ -422,6 +425,7 @@ class ProjectStore:
         agent: str = "",
         role: str = "",
         session_id: str = "",
+        session_home_id: str = "",
         run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
@@ -439,6 +443,7 @@ class ProjectStore:
         if role: pane.role = role
         # Claude pins its session id at spawn; Codex/Gemini use record_slot_session() later.
         if session_id: pane.session_id = session_id
+        if session_home_id: pane.session_home_id = session_home_id
         if run_group_id: pane.run_group_id = run_group_id
         self.save(project)
         return project
@@ -502,6 +507,7 @@ class ProjectStore:
         role: str = "",
         command: str = "",
         session_id: str = "",
+        session_home_id: str = "",
         run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
@@ -515,6 +521,7 @@ class ProjectStore:
         pane.command = command
         pane.spawn_status = "spawned"
         if session_id: pane.session_id = session_id
+        if session_home_id: pane.session_home_id = session_home_id
         if run_group_id: pane.run_group_id = run_group_id
         self.save(project)
         self.append_event(
@@ -553,6 +560,7 @@ class ProjectStore:
         project = self.load_or_create(workspace_path)
         pane = self._find_manual_pane(project, pane_id)
         if pane is None:
+            log.warning("manual_pane.session: pane %s not found — session %r not persisted", pane_id, session_id)
             return project
         pane.session_id = session_id
         self.save(project)
