@@ -1057,10 +1057,12 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     : (opts.agentKey === 'claude' ? explicitSessionId || undefined : undefined)
   // Codex keeps a marker fallback during rollout. Gemini now pins a session id
   // at launch, so it only needs the marker if the explicit path fails and the
-  // pane is non-resume.
+  // pane is non-resume. Antigravity can't pin an id at launch (`agy
+  // --conversation` only resumes existing ids), so the marker is its ONLY
+  // session-binding path.
   const sessionMarker =
     !opts.isResume &&
-    opts.agentKey === 'codex'
+    (opts.agentKey === 'codex' || opts.agentKey === 'antigravity')
       ? `at-pane:${id}`
       : ''
   const pane: ActivePane = {
@@ -2645,13 +2647,10 @@ async function doCloseWorkspace(): Promise<void> {
   await onPipelineReset()
 }
 
-// Triggered by the Browse button in ControlPane. Behaves like picking a workspace
-// from the Welcome screen: reset all state first, then let the workspace-check
-// debounce fire naturally once currentWorkspace drives the prop update.
-async function titlebarBrowseWorkspace(): Promise<void> {
-  if (!window.agentTeam?.pickWorkspace) return
-  const picked = await window.agentTeam.pickWorkspace(currentWorkspace.value || undefined)
-  if (picked) await onWorkspaceBrowse(picked)
+// Titlebar 📁 button: open the current workspace folder in Finder.
+async function titlebarRevealWorkspace(): Promise<void> {
+  if (!currentWorkspace.value || !window.agentTeam?.openPath) return
+  await window.agentTeam.openPath(currentWorkspace.value)
 }
 
 async function onWorkspaceBrowse(path: string): Promise<void> {
@@ -2766,7 +2765,11 @@ backend.on('agent.activity', (raw) => {
   }
   if (ev.vendor === 'claude' && ev.session_id) {
     const pane = panes.value.find((p) => p.id === ev.pane_id)
-    if (pane?.origin === 'manual') {
+    // Attribution can mis-route an unowned session to a sibling pane in the
+    // same cwd — never let that overwrite a pane that already pinned a
+    // different id, or the pane's persisted resume id is lost for good.
+    const accepts = !pane?.pinnedSessionId || pane.pinnedSessionId === ev.session_id
+    if (pane?.origin === 'manual' && accepts) {
       pane.pinnedSessionId = ev.session_id
       syncViews()
       void persistPaneSession(pane, ev.session_id)
@@ -4821,7 +4824,7 @@ function paneIsCommander(p: ActivePane): boolean {
             autocorrect="off"
             @change="onWorkspaceBrowse(($event.target as HTMLInputElement).value)"
           />
-          <button class="titlebar-ws-btn" @mousedown.stop @click="titlebarBrowseWorkspace" :title="$t('action.pick-folder')">📁</button>
+          <button class="titlebar-ws-btn" @mousedown.stop @click="titlebarRevealWorkspace" :title="$t('action.open-in-finder')">📁</button>
           <button class="titlebar-ws-btn" @mousedown.stop @click="onSwitchWorkspace" :title="$t('action.switch-workspace')">↺</button>
         </div>
       </template>

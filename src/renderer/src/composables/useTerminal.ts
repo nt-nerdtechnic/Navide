@@ -198,24 +198,30 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // cursor-up repaints) then overwrite the wrong rows — corruption that stays
   // in scrollback forever. So layout churn is debounced BEFORE the fit (xterm
   // holds its old size, matching the PTY, while the grid settles), and once
-  // quiet, fit.fit() and the backend resize go out in the same tick.
+  // quiet, the fit and the backend resize are ordered so xterm is never
+  // narrower than the PTY (see applyFit).
   const RESIZE_QUIET_MS = 250
+  // After the PTY resize is acked, how long to let the CLI process SIGWINCH
+  // and repaint before narrowing xterm (covers one ~10Hz TUI frame).
+  const PTY_REPAINT_GRACE_MS = 150
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
   let ackedCols = 0
   let ackedRows = 0
-  function sendResizeNow(): void {
-    if (!sessionId.value) return
-    const cols = term.cols
-    const rows = term.rows
-    backend.send('terminal.resize', {
+  function sendResize(cols: number, rows: number): Promise<boolean> {
+    if (!sessionId.value) return Promise.resolve(false)
+    return backend.send('terminal.resize', {
       terminal_session_id: sessionId.value,
       cols,
       rows
     }).then((resp) => {
-      if (resp?.ok) { ackedCols = cols; ackedRows = rows }
-    }).catch(() => { /* reconciler retries */ })
+      if (resp?.ok) { ackedCols = cols; ackedRows = rows; return true }
+      return false
+    }).catch(() => false /* reconciler retries */)
+  }
+  function sendResizeNow(): void {
+    void sendResize(term.cols, term.rows)
   }
 
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
@@ -262,8 +268,32 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       try {
-        fit.fit()
-        sendResizeNow()
+        // Invariant: xterm must never be NARROWER than the width the CLI
+        // believes, or in-flight output wraps and cursor-up repaints stack
+        // corrupt frames into scrollback. Shrinking width: resize the PTY
+        // first, then wait for the ack PLUS a repaint grace period — the ack
+        // only confirms the TIOCSWINSZ ioctl, not that the CLI has processed
+        // SIGWINCH and redrawn. Narrowing xterm while the last wide frame is
+        // still on screen rewraps it mid-word and breaks the CLI's cursor-up
+        // bookkeeping from then on (every keystroke echo lands wrong). Once
+        // the CLI has redrawn narrow into the still-wide xterm, the fit can't
+        // wrap anything. Growing (or rows-only): fit first, then send.
+        const dims = fit.proposeDimensions()
+        if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
+            dims.cols < term.cols && sessionId.value) {
+          void sendResize(dims.cols, dims.rows).then(() => {
+            setTimeout(() => {
+              try {
+                fit.fit()
+                // Container may have changed again while waiting.
+                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+              } catch { /* ignore transient fit errors during teardown */ }
+            }, PTY_REPAINT_GRACE_MS)
+          })
+        } else {
+          fit.fit()
+          sendResizeNow()
+        }
       } catch { /* ignore transient fit errors during teardown */ }
     }
     resizeRafId = requestAnimationFrame(run)

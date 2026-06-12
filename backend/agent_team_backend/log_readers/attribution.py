@@ -360,8 +360,11 @@ class Attribution:
             session_meta.payload.id.
 
         Falls back to marker matching for older sessions and during rollout.
+        Antigravity has no identity path at launch (`agy --conversation` can't
+        create a chosen id), so it relies on marker matching exclusively; its
+        resume id is the conversation .db filename stem (= usage.session_id).
         """
-        if usage.vendor not in ("codex", "gemini"):
+        if usage.vendor not in ("codex", "gemini", "antigravity"):
             return None
 
         try:
@@ -426,7 +429,7 @@ class Attribution:
         unowned session — once bound, the session_owner short-circuit means no
         further reads. The file read happens outside the lock.
         """
-        if usage.vendor not in ("codex", "gemini"):
+        if usage.vendor not in ("codex", "gemini", "antigravity"):
             return None
         sid = usage.session_id
         with self._lock:
@@ -440,6 +443,15 @@ class Attribution:
             text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
         except OSError:
             return None
+        if usage.vendor == "antigravity":
+            # SQLite conversations: recent frames (incl. the just-typed marker)
+            # often sit in the -wal journal before being checkpointed into the
+            # main db, so search it too.
+            try:
+                wal = Path(usage.file_path + "-wal")
+                text += wal.read_text(encoding="utf-8", errors="ignore")[:524_288]
+            except OSError:
+                pass
 
         matched_pane = next((pid for marker, pid in markers.items() if marker in text), None)
         if matched_pane is None:
@@ -624,7 +636,7 @@ class Attribution:
         if usage.vendor == "claude":
             expected_dir = _encode_claude_cwd(pane_cwd)
             return f"/{expected_dir}/" in file_path
-        if usage.vendor in ("codex", "gemini"):
+        if usage.vendor in ("codex", "gemini", "antigravity"):
             return usage.cwd == pane_cwd
         return False
 

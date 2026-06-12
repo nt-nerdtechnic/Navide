@@ -440,12 +440,6 @@ const hasStaged = computed(() => (gitStatus.value?.staged?.length ?? 0) > 0)
 const hasChanges = computed(
   () => hasStaged.value || (gitStatus.value?.unstaged?.length ?? 0) > 0 || (gitStatus.value?.untracked?.length ?? 0) > 0
 )
-// What `git commit` can pick up: staged files, or — when nothing is staged —
-// tracked modifications via `git commit -a`. Untracked-only can't be committed
-// without staging, so it doesn't enable the button.
-const hasCommittable = computed(
-  () => hasStaged.value || (gitStatus.value?.unstaged?.length ?? 0) > 0
-)
 // Key format: 'staged:<path>' | 'changes:<path>'
 const selectedKeys = ref(new Set<string>())
 const lastClickKey = ref<string | null>(null)
@@ -473,7 +467,7 @@ const showCommitMenu = ref(false)
 // During a merge where all conflicts are resolved, git commit works even with
 // empty staged diff (e.g. "Accept Ours" keeps HEAD content, no diff to show).
 const canCommit = computed(() =>
-  (hasCommittable.value || allConflictsResolved.value) &&
+  (hasChanges.value || allConflictsResolved.value) &&
   commitMessage.value.trim().length > 0 &&
   !isCommitting.value,
 )
@@ -493,7 +487,7 @@ async function runCommit(opts: { amend?: boolean; then?: 'push' | 'sync' } = {})
   showCommitMenu.value = false
   commitError.value = ''
   const amend = opts.amend ?? amendMode.value
-  // Nothing staged → commit all tracked changes (git commit -a), mirroring VS Code.
+  // Nothing staged → stage everything (incl. untracked) and commit it all.
   const r = amend
     ? await amendCommit(commitMessage.value)
     : await commit(commitMessage.value, !hasStaged.value)

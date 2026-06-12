@@ -157,7 +157,7 @@
     "diff-review": "Diff Review",
     "replace-in-file": "Replace in file",
     "replace-match": "Replace this match",
-    "pick-folder": "Pick folder via native dialog",
+    "open-in-finder": "Open this folder in Finder",
     "clear-pipeline": "Clear pipeline state and close all agent panes",
     "remove-from-history": "Remove from history",
     "double-click-rename": "Double-click to rename",

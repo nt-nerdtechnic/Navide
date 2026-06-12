@@ -37,6 +37,7 @@ from .codex_home import CodexHomeManager
 from .ipc import make_error, make_event, make_response
 from .log_readers import (
     ActivityEvent,
+    AntigravityLogReader,
     ClaudeLogReader,
     CodexLogReader,
     GeminiLogReader,
@@ -128,7 +129,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
     return await _llama_benchmark(progress_cb=progress_cb)
 
 # Log readers: one per vendor. Attribution maps log session files to panes.
-_readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader()]
+_readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader(), AntigravityLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
@@ -541,6 +542,15 @@ def _codex_resume_id(command: Any) -> str:
     return m.group(1) if m else ""
 
 
+_CLAUDE_RESUME_RE = re.compile(r"^claude\s+(?:\S+\s+)*--resume\s+(\S+)")
+
+
+def _claude_resume_id(command: Any) -> str:
+    """Session id from a `claude ... --resume <id> ...` command ('' otherwise)."""
+    m = _CLAUDE_RESUME_RE.match(_command_text(command).strip())
+    return m.group(1) if m else ""
+
+
 def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
     agent = agent.strip().lower()
     session_id = session_id.strip()
@@ -634,12 +644,19 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
-            if agent_key in ("claude", "codex", "gemini"):
+            if agent_key in ("claude", "codex", "gemini", "antigravity"):
                 ws_for_pane = str(metadata.get("workspace_path") or payload["cwd"])
                 # Workspace registration via helper triggers a force-rescan
                 # if the workspace is newly known — so historic CLI sessions
                 # in that workspace's folder appear in the panel right away.
                 _register_workspace_and_backfill(ws_for_pane)
+                explicit_session_id = str(metadata.get("explicit_session_id") or "")
+                if agent_key == "claude" and not explicit_session_id:
+                    # Resumed Claude panes carry no pinned --session-id. Claim the
+                    # resume id at registration, or the unowned-session fallback
+                    # can hand this pane's session to a sibling in the same cwd —
+                    # which then overwrites that sibling's persisted resume id.
+                    explicit_session_id = _claude_resume_id(payload.get("command"))
                 attribution.register_pane(
                     term.pane_id,
                     vendor=agent_key,
@@ -647,7 +664,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     workspace_path=ws_for_pane,
                     stage_id=metadata.get("stage_id") or metadata.get("stageId"),
                     slot_key=_stable_pane_key(metadata, ""),
-                    explicit_session_id=str(metadata.get("explicit_session_id") or ""),
+                    explicit_session_id=explicit_session_id,
                     session_marker=str(metadata.get("session_marker") or ""),
                     session_home_id=str(metadata.get("session_home_id") or ""),
                 )

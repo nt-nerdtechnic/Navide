@@ -226,6 +226,85 @@ def test_codex_resume_id_parses_resume_commands() -> None:
     assert app._codex_resume_id([]) == ""
 
 
+def test_claude_resume_id_parses_resume_commands() -> None:
+    assert app._claude_resume_id("claude --resume abc-123") == "abc-123"
+    assert app._claude_resume_id(
+        "claude --resume abc-123 --dangerously-skip-permissions"
+    ) == "abc-123"
+    assert app._claude_resume_id(
+        "claude --dangerously-skip-permissions --resume abc-123"
+    ) == "abc-123"
+    assert app._claude_resume_id("claude") == ""
+    assert app._claude_resume_id("claude --session-id abc-123") == ""
+    assert app._claude_resume_id("") == ""
+    assert app._claude_resume_id(None) == ""
+    # Shell-wrapped list — the shape the frontend actually sends.
+    assert app._claude_resume_id(
+        ["/bin/zsh", "-lc", "claude --resume abc-123 --dangerously-skip-permissions"]
+    ) == "abc-123"
+    assert app._claude_resume_id(["/bin/zsh", "-lc", "claude"]) == ""
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_claude_resume_claims_resume_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resumed Claude panes have no pinned --session-id; the resume id MUST be
+    claimed at registration or the unowned-session fallback can attribute the
+    session to a sibling pane in the same cwd (which then overwrites that
+    sibling's persisted resume id — the lost-conversation-on-restart bug)."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m6",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "claude-pane",
+            "agent_key": "claude",
+            "command": [
+                "/bin/zsh", "-lc",
+                "claude --resume resumed-uuid --dangerously-skip-permissions",
+            ],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    assert fake_attr.registered[0]["explicit_session_id"] == "resumed-uuid"
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_claude_metadata_session_id_wins_over_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pinned --session-id from metadata is the stronger identity; command
+    parsing is only the fallback for resume spawns."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m7",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "claude-pane-2",
+            "agent_key": "claude",
+            "command": "claude --dangerously-skip-permissions --session-id pinned-uuid",
+            "cwd": "/ws",
+            "metadata": {
+                "workspace_path": "/ws",
+                "explicit_session_id": "pinned-uuid",
+            },
+        },
+    })
+
+    assert fake_attr.registered[0]["explicit_session_id"] == "pinned-uuid"
+
+
 @pytest.mark.asyncio
 async def test_terminal_create_gemini_registers_explicit_session_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -261,5 +340,45 @@ async def test_terminal_create_gemini_registers_explicit_session_id(
         "slot_key": "",
         "explicit_session_id": "gemini-uuid",
         "session_marker": "",
+        "session_home_id": "",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_antigravity_registers_session_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Antigravity has no launch-time session identity; its marker MUST reach
+    attribution.register_pane or binding/resume can never happen (regression:
+    the register gate was hardcoded to claude/codex/gemini)."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m3",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "ag-pane",
+            "agent_key": "antigravity",
+            "command": "agy --dangerously-skip-permissions",
+            "cwd": "/ws",
+            "metadata": {
+                "workspace_path": "/ws",
+                "session_marker": "at-pane:ag-pane",
+            },
+        },
+    })
+
+    assert fake_attr.registered == [{
+        "pane_id": "ag-pane",
+        "vendor": "antigravity",
+        "cwd": "/ws",
+        "workspace_path": "/ws",
+        "stage_id": None,
+        "slot_key": "",
+        "explicit_session_id": "",
+        "session_marker": "at-pane:ag-pane",
         "session_home_id": "",
     }]
