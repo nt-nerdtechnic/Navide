@@ -112,7 +112,14 @@ export async function startBackend(): Promise<BackendHandle> {
       })
   }
 
-  await waitForHealth(host, port, 15_000)
+  try {
+    await waitForHealth(host, port, 15_000)
+  } catch (err) {
+    // Health never came up — kill the orphaned child so it can't linger and
+    // contend over the shared ~/.agent-team state on the next start attempt.
+    try { proc.kill('SIGKILL') } catch { /* already dead */ }
+    throw err
+  }
   return handle
 }
 

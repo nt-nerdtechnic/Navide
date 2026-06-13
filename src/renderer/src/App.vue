@@ -4732,6 +4732,20 @@ function dualFocusStyle(paneId: string): Record<string, string> {
 const backendUrl = computed(() => backend.httpUrl.value)
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
+// Backend supervisor popover (status bar pill → manage/restart/stop the backend).
+const backendPanelOpen = ref(false)
+const backendBusy = ref(false)
+async function onRestartBackend(): Promise<void> {
+  if (backendBusy.value) return
+  backendBusy.value = true
+  try { await backend.restart() } finally { backendBusy.value = false }
+}
+async function onStopBackend(): Promise<void> {
+  if (backendBusy.value) return
+  backendBusy.value = true
+  try { await backend.stop() } finally { backendBusy.value = false }
+}
+
 const analyzerStatus = computed<AnalyzerStatusView>(() => ({
   available: !!analyzerApi.health.value?.ok,
   version: analyzerApi.health.value?.version ?? '',
@@ -5227,7 +5241,14 @@ function paneIsCommander(p: ActivePane): boolean {
           <span v-if="statusBarGit.behind > 0">{{ statusBarGit.behind }}↓</span>
           <span v-if="statusBarGit.ahead > 0"> {{ statusBarGit.ahead }}↑</span>
         </span>
-        <span class="sb-item sb-backend" :class="'sb-' + backend.status.value">
+        <span
+          class="sb-item sb-backend sb-clickable"
+          :class="'sb-' + backend.status.value"
+          role="button"
+          tabindex="0"
+          @click="backendPanelOpen = !backendPanelOpen"
+          @keydown.enter="backendPanelOpen = !backendPanelOpen"
+        >
           <span class="sb-dot" />
           {{ backend.status.value === 'connected' ? 'backend' : 'connecting…' }}
           <span v-if="backendUrl" class="sb-url">· {{ backendUrl }}</span>
@@ -5243,6 +5264,30 @@ function paneIsCommander(p: ActivePane): boolean {
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
         <span class="sb-item sb-build">{{ buildTag }}</span>
+      </div>
+    </div>
+
+    <!-- Backend supervisor popover -->
+    <div v-if="backendPanelOpen" class="bp-backdrop" @click="backendPanelOpen = false" />
+    <div v-if="backendPanelOpen" class="bp-pop" @click.stop>
+      <div class="bp-head">
+        <span class="bp-dot sb-backend" :class="'sb-' + backend.status.value" />
+        <span class="bp-title">Backend</span>
+        <span class="bp-state" :class="'sb-' + backend.status.value">{{ backend.status.value }}</span>
+      </div>
+      <div class="bp-rows">
+        <div class="bp-row"><span class="bp-k">URL</span><span class="bp-v">{{ backendUrl || '—' }}</span></div>
+        <div class="bp-row"><span class="bp-k">PID</span><span class="bp-v">{{ backend.pid.value || '—' }}</span></div>
+      </div>
+      <div class="bp-actions">
+        <button class="bp-btn bp-restart" :disabled="backendBusy" @click="onRestartBackend">
+          {{ backendBusy ? 'working…' : (backend.status.value === 'connected' ? 'Restart' : 'Start') }}
+        </button>
+        <button
+          class="bp-btn bp-stop"
+          :disabled="backendBusy || backend.status.value !== 'connected'"
+          @click="onStopBackend"
+        >Stop</button>
       </div>
     </div>
   </div>
@@ -5410,6 +5455,92 @@ function paneIsCommander(p: ActivePane): boolean {
 .sb-pipeline.sb-completed { color: var(--success-fg); }
 .sb-pipeline.sb-aborted { color: var(--danger-fg); }
 .sb-agents { color: var(--text-secondary); }
+.sb-clickable { cursor: pointer; }
+
+/* ── Backend supervisor popover ──────────────────────────────────────────── */
+.bp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+.bp-pop {
+  position: fixed;
+  left: 8px;
+  bottom: 30px;
+  z-index: 1000;
+  width: 280px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.bp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.bp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.bp-dot.sb-connected { background: var(--success-fg); }
+.bp-dot:not(.sb-connected) { background: var(--danger-fg); }
+.bp-title {
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.bp-state {
+  margin-left: auto;
+  text-transform: capitalize;
+}
+.bp-state.sb-connected { color: var(--success-fg); }
+.bp-state:not(.sb-connected) { color: var(--danger-fg); }
+.bp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.bp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.bp-k {
+  width: 36px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.bp-v {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-bright);
+  word-break: break-all;
+}
+.bp-actions {
+  display: flex;
+  gap: 8px;
+}
+.bp-btn {
+  flex: 1;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid var(--border-muted);
+  background: var(--bg-hover);
+  color: var(--text-bright);
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.12s, opacity 0.12s;
+}
+.bp-btn:hover:not(:disabled) { background: var(--bg-active, var(--bg-hover)); }
+.bp-btn:disabled { opacity: 0.45; cursor: default; }
+.bp-restart { border-color: var(--accent-focus); color: var(--accent-fg); }
+.bp-stop { border-color: var(--danger-fg); color: var(--danger-fg); }
 .resize-handle {
   position: absolute;
   top: 0;

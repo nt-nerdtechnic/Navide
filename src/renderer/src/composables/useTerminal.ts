@@ -186,6 +186,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let inputDisposer: { dispose(): void } | null = null
   let outputUnsub: (() => void) | null = null
   let exitUnsub: (() => void) | null = null
+  let parserDisposers: { dispose(): void }[] = []
+  // DEC private mode 2048 (in-band resize): when a CLI opts in, it learns new
+  // sizes through its INPUT stream (ordered with keystrokes) instead of racing
+  // the out-of-band SIGWINCH — removing stale-cols repaint residue at the root.
+  // Most CLIs (incl. Claude Code today) don't request it; for them this stays
+  // false and the backend drain-before-ack barrier handles residue instead.
+  let mode2048 = false
   let resizeObserver: ResizeObserver | null = null
   let resizeRafId = 0
   let mounted = false
@@ -216,12 +223,28 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       cols,
       rows
     }).then((resp) => {
-      if (resp?.ok) { ackedCols = cols; ackedRows = rows; return true }
+      if (resp?.ok) {
+        ackedCols = cols; ackedRows = rows
+        // For 2048-capable CLIs, report the new size in-band right after the
+        // ack — the ioctl is done, so the report carries the authoritative
+        // values and stays ordered with the user's keystrokes.
+        if (mode2048) sendSizeReport()
+        return true
+      }
       return false
     }).catch(() => false /* reconciler retries */)
   }
   function sendResizeNow(): void {
     void sendResize(term.cols, term.rows)
+  }
+  // CSI 48 ; rows ; cols ; height_px ; width_px t — the mode-2048 size report.
+  // Pixel dims come from the render service when measured, else 0 (spec allows).
+  function sendSizeReport(): void {
+    if (!sessionId.value) return
+    const canvas = (term as any)._core?._renderService?.dimensions?.css?.canvas
+    const heightPx = Math.round(canvas?.height ?? 0) || 0
+    const widthPx = Math.round(canvas?.width ?? 0) || 0
+    pasteText(`\x1b[48;${term.rows};${term.cols};${heightPx};${widthPx}t`)
   }
 
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
@@ -302,6 +325,35 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
+
+    // ── DEC mode 2048 (in-band resize) interception ──────────────────────────
+    // Detect a CLI opting into in-band size reports and answer its query. All
+    // handlers return false (don't swallow) so xterm still processes the other
+    // modes in the same DECSET/DECRST sequence; only the 2048 DECRQM reply is
+    // swallowed so a built-in xterm answer can't double-respond.
+    parserDisposers.push(
+      term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+        if (params.includes(2048) && !mode2048) {
+          mode2048 = true
+          console.debug(`[pane ${paneId}] DEC mode 2048 (in-band resize) enabled`)
+          sendSizeReport()  // spec: report once immediately on enable
+        }
+        return false
+      }),
+      term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
+        if (params.includes(2048)) mode2048 = false
+        return false
+      }),
+      term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, (params) => {
+        // DECRQM: reply only for mode 2048 (1 = set, 2 = reset).
+        if (params[0] === 2048) {
+          pasteText(`\x1b[?2048;${mode2048 ? 1 : 2}$y`)
+          return true
+        }
+        return false
+      }),
+    )
+
     // Anchor for Shift+Arrow keyboard selection
     let selAnchorX = -1
     let selAnchorY = -1
@@ -434,6 +486,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
     error.value = ''
     status.value = 'starting'
+    mode2048 = false  // a fresh process hasn't opted in yet
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
     // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
     // once per pane — the size measured at mount time can be mid-transition.
@@ -549,6 +602,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     applyFit()
   }
 
+  // Refresh the visible CLI rendering. Corrupt frames already committed to
+  // xterm's scrollback (from a pre-fix resize, or any inline-repaint desync)
+  // are frozen history the CLI can never repaint over, so we drop the
+  // scrollback outright, then send Ctrl+L so the CLI redraws its current
+  // frame cleanly into the now-empty viewport.
+  function redraw(): void {
+    term.clear()
+    pasteText('\x0c')
+  }
+
   function updateXtermTheme(): void {
     term.options.theme = readXtermTheme()
   }
@@ -564,6 +627,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   onScopeDispose(() => {
     cleanupSession()
+    parserDisposers.forEach((d) => d.dispose())
+    parserDisposers = []
     clearInterval(tickInterval)
     clearInterval(reconcileInterval)
     cancelAnimationFrame(resizeRafId)
@@ -585,6 +650,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     kill,
     focus,
     fitTerminal,
+    redraw,
     pasteText,
     status,
     displayStatus,

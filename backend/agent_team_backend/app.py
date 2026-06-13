@@ -693,6 +693,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "terminal.resize":
+            # Drain old-width output BEFORE the ioctl + ack so it reaches the
+            # frontend first — otherwise xterm re-wraps stale-width content
+            # after narrowing and the CLI's repaints strand corrupt frames in
+            # scrollback (visible as residual text). See drain_output().
+            await session.terminals.drain_output(payload["terminal_session_id"])
             session.terminals.resize(
                 payload["terminal_session_id"],
                 int(payload["cols"]),

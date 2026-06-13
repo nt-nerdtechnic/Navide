@@ -70,6 +70,11 @@ onMounted(() => {
 
 <template>
   <div :class="['pane', { 'pane-focus': isFocus }]">
+    <button
+      class="redraw-btn"
+      @click.stop="terminal.redraw()"
+      title="Refresh CLI rendering — clears stale scrollback and forces a redraw"
+    >⟳</button>
     <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
     <header
       class="pane-header"
@@ -134,10 +139,10 @@ onMounted(() => {
 .pane.pane-focus .pane-header {
   background: var(--bg-elevated);
 }
-.minimize-btn {
+.minimize-btn,
+.redraw-btn {
   position: absolute;
   top: 5px;
-  right: 6px;
   z-index: 10;
   background: none;
   border: none;
@@ -150,10 +155,18 @@ onMounted(() => {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.pane:hover .minimize-btn {
+.minimize-btn {
+  right: 6px;
+}
+.redraw-btn {
+  right: 26px;
+}
+.pane:hover .minimize-btn,
+.pane:hover .redraw-btn {
   opacity: 1;
 }
-.minimize-btn:hover {
+.minimize-btn:hover,
+.redraw-btn:hover {
   color: var(--text-primary);
   background: var(--bg-muted);
   opacity: 1;
@@ -163,7 +176,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
-  padding: 5px 32px 5px 12px;
+  padding: 5px 52px 5px 12px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   font-size: 12px;

@@ -635,13 +635,23 @@ function onExplorerDividerEnd(): void {
       </button>
     </div>
 
-    <!-- ── Explorer tab ───────────────────────────────────────────────────── -->
-    <div v-show="sidebarTab === 'explorer'" class="pane-split">
+    <!-- ── Explorer / Git tabs (shared split: panel on top, agent dock pinned at bottom) ── -->
+    <div v-show="sidebarTab === 'explorer' || sidebarTab === 'git'" class="pane-split">
       <div class="part-top" ref="explorerTopEl" :style="{ height: (explorerTopRatio * 100) + '%' }">
         <ExplorerPane
           v-if="backend"
+          v-show="sidebarTab === 'explorer'"
           :workspace-path="workspace ?? ''"
           :backend="backend"
+        />
+        <GitPane
+          v-if="backend"
+          v-show="sidebarTab === 'git'"
+          :workspace-path="workspace ?? ''"
+          :analyzer-model="analyzerModel"
+          :backend="backend"
+          @changes-count="gitChangesCount = $event"
+          @open-workspace="$emit('workspace-browse', $event)"
         />
       </div>
       <div class="part-resize" title="Drag to resize" @mousedown="onExplorerDividerStart">
@@ -744,17 +754,6 @@ function onExplorerDividerEnd(): void {
         </section>
       </div>
     </div>
-
-    <!-- ── Git tab ────────────────────────────────────────────────────────── -->
-    <GitPane
-      v-if="backend"
-      v-show="sidebarTab === 'git'"
-      :workspace-path="workspace ?? ''"
-      :analyzer-model="analyzerModel"
-      :backend="backend"
-      @changes-count="gitChangesCount = $event"
-      @open-workspace="$emit('workspace-browse', $event)"
-    />
 
     <!-- ── Pipeline tab ──────────────────────────────────────────────────── -->
     <div v-if="sidebarTab === 'pipeline'" class="pipeline-split">
@@ -2172,26 +2171,34 @@ button.icon-btn.muted:hover {
 .pane-split .part-resize,
 .pipeline-split .part-resize {
   flex-shrink: 0;
-  height: 7px;
+  height: 11px;
   cursor: row-resize;
   display: flex;
   align-items: center;
   background: var(--bg-base);
   border-top: 1px solid var(--border-muted);
   border-bottom: 1px solid var(--border-muted);
+  transition: background 0.1s;
+}
+.pane-split .part-resize:hover,
+.pipeline-split .part-resize:hover {
+  background: var(--bg-elevated);
 }
 .pane-split .part-resize-grip,
 .pipeline-split .part-resize-grip {
   margin: 0 auto;
-  width: 32px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--border-muted);
-  transition: height 0.1s, background 0.1s;
+  width: 44px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--text-muted);
+  transition: height 0.1s, width 0.1s, background 0.1s;
 }
 .pane-split .part-resize:hover .part-resize-grip,
-.pipeline-split .part-resize:hover .part-resize-grip {
-  height: 3px;
+.pipeline-split .part-resize:hover .part-resize-grip,
+.pane-split .part-resize:active .part-resize-grip,
+.pipeline-split .part-resize:active .part-resize-grip {
+  height: 4px;
+  width: 60px;
   background: var(--accent-focus);
 }
 .pipeline-split .pipeline-detail-scroll {

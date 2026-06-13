@@ -6,6 +6,7 @@ interface BackendInfo {
   status: 'starting' | 'ready'
   host?: string
   port?: number
+  pid?: number
   shell?: string
   httpUrl?: string
   wsUrl?: string
@@ -40,6 +41,8 @@ export function useBackend() {
   const wsUrl = ref<string>('')
   const httpUrl = ref<string>('')
   const shell = ref<string>('')
+  const port = ref<number>(0)
+  const pid = ref<number>(0)
   const lastError = ref<string>('')
   const ws = shallowRef<WebSocket | null>(null)
   interface PendingEntry { resolve: (resp: WsResponse) => void; reject: (err: Error) => void }
@@ -106,6 +109,7 @@ export function useBackend() {
     ws.value = socket
 
     socket.addEventListener('open', () => {
+      if (ws.value !== socket) return // superseded by a restart swap
       status.value = 'connected'
       lastError.value = ''
       reconnectAttempts = 0
@@ -148,6 +152,10 @@ export function useBackend() {
     })
 
     socket.addEventListener('close', () => {
+      // A restart/stop swap reassigns ws.value before closing this socket and
+      // tears down its own state; if we're no longer the active socket, ignore
+      // the close so it can't schedule a competing reconnect.
+      if (ws.value !== socket) return
       ws.value = null
       if (pingTimer !== null) {
         window.clearInterval(pingTimer)
@@ -168,9 +176,49 @@ export function useBackend() {
     })
 
     socket.addEventListener('error', () => {
+      if (ws.value !== socket) return // superseded by a restart swap
       status.value = 'error'
       lastError.value = 'WebSocket error'
     })
+  }
+
+  // Applied when the main process restarts/stops the backend: the port changes
+  // on restart, so tear down the old socket and reconnect to the new wsUrl (or
+  // settle on 'disconnected' when the backend was stopped).
+  function applyBackendChanged(info: BackendInfo): void {
+    if (reconnectTimer !== null) { window.clearTimeout(reconnectTimer); reconnectTimer = null }
+    if (pingTimer !== null) { window.clearInterval(pingTimer); pingTimer = null }
+    reconnectAttempts = 0
+    const old = ws.value
+    ws.value = null
+    if (old) { try { old.close() } catch { /* close handler is a no-op now */ } }
+    for (const [, entry] of pending) entry.reject(new Error('backend changed'))
+    pending.clear()
+    if (info.status === 'ready' && info.wsUrl) {
+      wsUrl.value = info.wsUrl
+      httpUrl.value = info.httpUrl ?? ''
+      shell.value = info.shell ?? shell.value
+      port.value = info.port ?? 0
+      pid.value = info.pid ?? 0
+      connect()
+    } else {
+      wsUrl.value = ''
+      httpUrl.value = ''
+      port.value = 0
+      pid.value = 0
+      status.value = 'disconnected'
+      lastError.value = ''
+    }
+  }
+
+  function restart(): Promise<unknown> {
+    status.value = 'connecting'
+    lastError.value = ''
+    return window.agentTeam?.restartBackend?.() ?? Promise.resolve()
+  }
+
+  function stop(): Promise<unknown> {
+    return window.agentTeam?.stopBackend?.() ?? Promise.resolve()
   }
 
   async function init(): Promise<void> {
@@ -194,6 +242,8 @@ export function useBackend() {
 
   void init()
 
+  window.agentTeam?.onBackendChanged?.((info) => applyBackendChanged(info))
+
   onScopeDispose(() => {
     disposed = true
     if (pingTimer !== null) window.clearInterval(pingTimer)
@@ -201,5 +251,5 @@ export function useBackend() {
     ws.value?.close()
   })
 
-  return { status, wsUrl, httpUrl, shell, lastError, send, on }
+  return { status, wsUrl, httpUrl, shell, port, pid, lastError, send, on, restart, stop }
 }

@@ -4,6 +4,8 @@ export interface BackendInfo {
   status: 'starting' | 'ready'
   host?: string
   port?: number
+  pid?: number
+  shell?: string
   httpUrl?: string
   wsUrl?: string
 }
@@ -12,6 +14,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
   version: __APP_VERSION__,
   getBackendInfo: (): Promise<BackendInfo> => ipcRenderer.invoke('backend:info'),
+  restartBackend: (): Promise<BackendInfo> => ipcRenderer.invoke('backend:restart'),
+  stopBackend: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('backend:stop'),
+  onBackendChanged: (cb: (info: BackendInfo) => void): void => {
+    ipcRenderer.on('backend:changed', (_event, info: BackendInfo) => cb(info))
+  },
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
   openPath: (target: string): Promise<{ ok: boolean; revealed?: boolean; error?: string }> =>

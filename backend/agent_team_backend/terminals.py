@@ -296,6 +296,54 @@ class TerminalService:
             return
         self._set_winsize(session.master_fd, rows, cols)
 
+    async def drain_output(self, session_id: str) -> None:
+        """Flush all pending and kernel-buffered output before the caller's
+        next send (the resize ack), AWAITING each emit so it lands first.
+
+        Output is normally batched behind a 50ms timer (`_out_handles`) and
+        emitted via `create_task`, so old-width bytes can reach the frontend
+        AFTER the resize ack — xterm then re-wraps stale-width content and the
+        CLI's cursor-up repaints strand corrupt frames in scrollback. Draining
+        makes the ack a true ordering barrier: old-width output < ack < any
+        new-width output.
+        """
+        session = self._sessions.get(session_id)
+        if not session or session.closed:
+            return
+        # 1. Slurp any kernel-buffered bytes the reader hasn't picked up yet,
+        #    reusing the incremental decoder so a split multi-byte char isn't
+        #    turned into U+FFFD.
+        decoder = self._decoders.get(session.id)
+        if decoder is None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._decoders[session.id] = decoder
+        while True:
+            try:
+                chunk = os.read(session.master_fd, 4096)
+            except (BlockingIOError, OSError):
+                break
+            if not chunk:
+                break
+            decoded = decoder.decode(chunk)
+            if decoded:
+                self._out_buffers.setdefault(session.id, []).append(decoded)
+        # 2. Cancel the pending batch timer; we emit synchronously below.
+        handle = self._out_handles.pop(session.id, None)
+        if handle:
+            handle.cancel()
+        # 3. Emit everything buffered, awaiting so it precedes the ack on the wire.
+        chunks = self._out_buffers.pop(session.id, None)
+        if not chunks:
+            return
+        combined = "".join(chunks)
+        for piece in self._split_chunks(combined):
+            await self._emit(self._build_output_event(session, piece))
+        if session.output_log_fp:
+            try:
+                session.output_log_fp.write(_clean_for_log(combined))
+            except Exception as err:  # noqa: BLE001
+                log.warning("output log write failed: %s", err)
+
     def interrupt(self, session_id: str) -> None:
         session = self._require(session_id)
         if session.closed:
@@ -395,25 +443,8 @@ class TerminalService:
         if not chunks:
             return
         combined = "".join(chunks)
-
-        # Cap individual WS messages at 64 KB to stay well below the point
-        # where the Electron Network service becomes overwhelmed.
-        _MAX_BYTES = 64 * 1024
-        encoded = combined.encode("utf-8")
-        if len(encoded) <= _MAX_BYTES:
-            self._send_chunk(session, combined)
-        else:
-            # Split at valid UTF-8 character boundaries so multi-byte characters
-            # (emoji, CJK, etc.) are never cut in half and replaced with U+FFFD.
-            pos = 0
-            while pos < len(encoded):
-                end = min(pos + _MAX_BYTES, len(encoded))
-                # Walk back to the start of a multi-byte sequence if we landed
-                # inside one (continuation bytes have the form 10xxxxxx).
-                while end > pos and end < len(encoded) and (encoded[end] & 0xC0) == 0x80:
-                    end -= 1
-                self._send_chunk(session, encoded[pos:end].decode("utf-8"))
-                pos = end
+        for piece in self._split_chunks(combined):
+            self._send_chunk(session, piece)
 
         # Persist cleaned output to the conversation log (if one was opened).
         if session.output_log_fp:
@@ -422,9 +453,33 @@ class TerminalService:
             except Exception as err:  # noqa: BLE001
                 log.warning("output log write failed: %s", err)
 
-    def _send_chunk(self, session: TerminalSession, data: str) -> None:
+    @staticmethod
+    def _split_chunks(combined: str) -> list[str]:
+        """Split a payload into <=64 KB pieces at valid UTF-8 boundaries.
+
+        Caps individual WS messages well below the point where the Electron
+        Network service becomes overwhelmed, never cutting a multi-byte
+        character (emoji, CJK, etc.) in half into U+FFFD.
+        """
+        _MAX_BYTES = 64 * 1024
+        encoded = combined.encode("utf-8")
+        if len(encoded) <= _MAX_BYTES:
+            return [combined]
+        pieces: list[str] = []
+        pos = 0
+        while pos < len(encoded):
+            end = min(pos + _MAX_BYTES, len(encoded))
+            # Walk back to the start of a multi-byte sequence if we landed
+            # inside one (continuation bytes have the form 10xxxxxx).
+            while end > pos and end < len(encoded) and (encoded[end] & 0xC0) == 0x80:
+                end -= 1
+            pieces.append(encoded[pos:end].decode("utf-8"))
+            pos = end
+        return pieces
+
+    def _build_output_event(self, session: TerminalSession, data: str) -> dict[str, Any]:
         session.sequence += 1
-        event = make_event(
+        return make_event(
             "terminal.output",
             {
                 "terminal_session_id": session.id,
@@ -434,7 +489,9 @@ class TerminalService:
                 "stream": "stdout",
             },
         )
-        self._loop.create_task(self._emit(event))
+
+    def _send_chunk(self, session: TerminalSession, data: str) -> None:
+        self._loop.create_task(self._emit(self._build_output_event(session, data)))
 
     def _close(self, session: TerminalSession, *, reason: str) -> None:
         if session.closed:

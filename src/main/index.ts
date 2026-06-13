@@ -73,15 +73,70 @@ function openRolesWindow(): void {
   loadWindow(win, { window: 'roles' })
 }
 
-ipcMain.handle('backend:info', () => {
+function backendInfoPayload() {
   if (!backend) return { status: 'starting' as const }
   return {
     status: 'ready' as const,
     host: backend.host,
     port: backend.port,
+    pid: backend.proc.pid,
     shell: backend.shell,
     httpUrl: `http://${backend.host}:${backend.port}`,
     wsUrl: `ws://${backend.host}:${backend.port}/ws`
+  }
+}
+
+// Push the current backend info to every window so each renderer's useBackend
+// can reconnect after a restart (the port changes) or show disconnected on stop.
+function broadcastBackendChanged(): void {
+  const payload = backendInfoPayload()
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('backend:changed', payload)
+  }
+}
+
+ipcMain.handle('backend:info', () => backendInfoPayload())
+
+// Serialize lifecycle ops so a double-click can't spawn two backends or race a
+// stop against a start.
+let backendBusy = false
+
+ipcMain.handle('backend:restart', async () => {
+  if (backendBusy) return backendInfoPayload()
+  backendBusy = true
+  try {
+    if (backend) {
+      const b = backend
+      backend = null
+      await b.stop()
+    }
+    try {
+      backend = await startBackend()
+      console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
+    } catch (err) {
+      console.error('[main] backend restart failed', err)
+      backend = null
+    }
+    broadcastBackendChanged()
+    return backendInfoPayload()
+  } finally {
+    backendBusy = false
+  }
+})
+
+ipcMain.handle('backend:stop', async () => {
+  if (backendBusy) return { ok: false }
+  backendBusy = true
+  try {
+    if (backend) {
+      const b = backend
+      backend = null
+      await b.stop()
+    }
+    broadcastBackendChanged()
+    return { ok: true }
+  } finally {
+    backendBusy = false
   }
 })
 
@@ -484,7 +539,29 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 
+// Single-instance lock: a second launch must NOT spawn a parallel backend.
+// On macOS, closing the window leaves the app alive (see window-all-closed
+// below), so relaunching from Finder/Dock would otherwise start a second main
+// process — each spawning its own backend that fights over the shared
+// ~/.agent-team state, while the orphaned backend is never reaped.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // User relaunched while we're already running: focus the existing window
+    // (or create one) and reuse the running backend instead of booting another.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    } else {
+      void createWindow()
+    }
+  })
+}
+
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return
   // In dev mode, inject the per-session random token into every renderer →
   // dev-server request so browsers without the token get 403.
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']

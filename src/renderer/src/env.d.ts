@@ -10,6 +10,8 @@ interface BackendInfo {
   status: 'starting' | 'ready'
   host?: string
   port?: number
+  pid?: number
+  shell?: string
   httpUrl?: string
   wsUrl?: string
 }
@@ -22,6 +24,9 @@ declare global {
       appName: string
       version: string
       getBackendInfo: () => Promise<BackendInfo>
+      restartBackend: () => Promise<BackendInfo>
+      stopBackend: () => Promise<{ ok: boolean }>
+      onBackendChanged: (cb: (info: BackendInfo) => void) => void
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
       openPath: (target: string) => Promise<{ ok: boolean; revealed?: boolean; error?: string }>
       revealPath: (target: string) => Promise<{ ok: boolean; error?: string }>
