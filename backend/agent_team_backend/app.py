@@ -56,6 +56,7 @@ from .terminals import TerminalService
 from .tokens_store import TokensStore
 from .history_store import HistoryStore
 from . import git_service
+from . import issue_service
 from . import fs_service
 from . import search_service
 from . import editor_service
@@ -1942,6 +1943,47 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        # ── Cloud issues (issues.*) ─────────────────────────────────────────
+        # GitHub via gh / GitLab via glab, host auto-detected from origin remote.
+        # No git.changed broadcast — issues are remote state, not local repo state.
+        elif msg_type == "issues.provider":
+            ws_path = payload.get("workspace_path") or ""
+            result = await issue_service.detect_provider(ws_path)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "issues.list":
+            ws_path = payload.get("workspace_path") or ""
+            limit = payload.get("limit") or 30
+            result = await issue_service.list_issues(ws_path, limit)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "issues.get":
+            ws_path = payload.get("workspace_path") or ""
+            number = payload.get("number")
+            result = await issue_service.get_issue(ws_path, number)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "issues.create":
+            ws_path = payload.get("workspace_path") or ""
+            title = payload.get("title") or ""
+            body = payload.get("body") or ""
+            result = await issue_service.create_issue(ws_path, title, body)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "issues.comment":
+            ws_path = payload.get("workspace_path") or ""
+            number = payload.get("number")
+            body = payload.get("body") or ""
+            result = await issue_service.comment_issue(ws_path, number, body)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "issues.set_state":
+            ws_path = payload.get("workspace_path") or ""
+            number = payload.get("number")
+            state = payload.get("state") or ""
+            result = await issue_service.set_issue_state(ws_path, number, state)
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Explorer filesystem (fs.*) ──────────────────────────────────────
         elif msg_type == "fs.list_dir":

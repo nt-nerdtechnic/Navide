@@ -73,7 +73,7 @@ onMounted(() => {
     <button
       class="redraw-btn"
       @click.stop="terminal.redraw()"
-      title="Refresh CLI rendering — clears stale scrollback and forces a redraw"
+      title="Refresh CLI rendering — ask the CLI to repaint (Ctrl+L); scrollback is kept"
     >⟳</button>
     <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
     <header

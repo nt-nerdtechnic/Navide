@@ -208,9 +208,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // quiet, the fit and the backend resize are ordered so xterm is never
   // narrower than the PTY (see applyFit).
   const RESIZE_QUIET_MS = 250
-  // After the PTY resize is acked, how long to let the CLI process SIGWINCH
-  // and repaint before narrowing xterm (covers one ~10Hz TUI frame).
-  const PTY_REPAINT_GRACE_MS = 150
+  // After the PTY resize is acked, the CLI processes SIGWINCH and repaints at
+  // the new width. Narrowing xterm BEFORE that repaint finishes rewraps the
+  // still-wide part of the frame and desyncs the CLI's cursor-up bookkeeping
+  // (corruption). A fixed delay is fragile: a busy/streaming CLI — exactly the
+  // state a pane is in when the user adds a spawn slot mid-response — takes far
+  // longer than one frame to repaint. So instead of a constant, wait until the
+  // post-resize repaint output has been QUIET for a beat (repaint done), with a
+  // MIN floor (covers a fast idle repaint) and a MAX cap (so a CLI that keeps
+  // streaming still narrows eventually). See narrowAfterRepaint().
+  const PTY_REPAINT_MIN_MS = 150
+  const PTY_REPAINT_QUIET_MS = 150
+  const PTY_REPAINT_MAX_MS = 700
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
@@ -267,6 +276,27 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
   }, RECONCILE_MS)
 
+  // Narrow xterm to match a shrink already pushed to the PTY — but only once
+  // the CLI's SIGWINCH repaint has settled, so we never rewrap a half-redrawn
+  // (still partly wide) frame. Polls the raw-output activity clock: fit when
+  // output has been quiet for PTY_REPAINT_QUIET_MS (past the MIN floor), or
+  // when the MAX cap is hit (a CLI that keeps streaming must still narrow).
+  function narrowAfterRepaint(startedAt: number): void {
+    const now = Date.now()
+    const elapsed = now - startedAt
+    const quietFor = now - lastRawActivityAt.value
+    if (elapsed >= PTY_REPAINT_MAX_MS ||
+        (elapsed >= PTY_REPAINT_MIN_MS && quietFor >= PTY_REPAINT_QUIET_MS)) {
+      try {
+        fit.fit()
+        // Container may have changed again while waiting.
+        if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+      } catch { /* ignore transient fit errors during teardown */ }
+      return
+    }
+    setTimeout(() => narrowAfterRepaint(startedAt), 40)
+  }
+
   // Single source of truth for sizing: fit xterm to its container, then push
   // that size to the backend in the same tick (atomic — see RESIZE_QUIET_MS
   // comment). Entry points: the (debounced) ResizeObserver, the post-spawn
@@ -305,13 +335,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
-            setTimeout(() => {
-              try {
-                fit.fit()
-                // Container may have changed again while waiting.
-                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-              } catch { /* ignore transient fit errors during teardown */ }
-            }, PTY_REPAINT_GRACE_MS)
+            narrowAfterRepaint(Date.now())
           })
         } else {
           fit.fit()
@@ -602,13 +626,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     applyFit()
   }
 
-  // Refresh the visible CLI rendering. Corrupt frames already committed to
-  // xterm's scrollback (from a pre-fix resize, or any inline-repaint desync)
-  // are frozen history the CLI can never repaint over, so we drop the
-  // scrollback outright, then send Ctrl+L so the CLI redraws its current
-  // frame cleanly into the now-empty viewport.
+  // Ask the CLI to repaint its current frame by sending Ctrl+L (the universal
+  // redraw key). We deliberately do NOT call term.clear(): clearing xterm's
+  // buffer out-of-band wipes the scrollback the user is reading — and since
+  // Claude Code repaints its idle UI in place via cursor-up (it never appends
+  // new lines while idle), the scrollback then stays empty and there is
+  // nothing left to scroll through. It also desyncs the CLI's cursor
+  // bookkeeping from xterm. Letting the CLI clear+repaint via its own Ctrl+L
+  // stays consistent and keeps the scrollback intact and scrollable.
   function redraw(): void {
-    term.clear()
     pasteText('\x0c')
   }
 

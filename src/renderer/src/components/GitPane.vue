@@ -2,6 +2,7 @@
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
+import { useIssues } from '../composables/useIssues'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
@@ -54,6 +55,15 @@ const {
   cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
 } = useGit(() => props.workspacePath, props.backend)
+
+const {
+  provider: issueProvider, issues, selectedIssue,
+  isLoadingIssues, isLoadingDetail, isSubmitting: isIssueSubmitting,
+  issuesError,
+  ensureLoaded: ensureIssuesLoaded, refresh: refreshIssues,
+  openIssue, closeDetail: closeIssueDetail,
+  createIssue, addComment, setState: setIssueState,
+} = useIssues(() => props.workspacePath, props.backend)
 
 // ── path helpers ──────────────────────────────────────────────────────────────
 function fileName(path: string): string { return path.split('/').at(-1) ?? path }
@@ -924,6 +934,39 @@ async function saveInlineEdit(): Promise<void> {
   const r = await setGitConfig(key, inlineEditValue.value)
   if (!r.ok) configError.value = r.error || 'failed'
   else cancelInlineEdit()
+}
+
+// ── cloud issues (GitHub via gh / GitLab via glab) ────────────────────────────
+const issuesExpanded = ref(false)
+const showNewIssue = ref(false)
+const newIssueTitle = ref(''), newIssueBody = ref('')
+const newComment = ref('')
+const openIssueCount = computed(() => issues.value.filter(i => i.state === 'open').length)
+
+// Lazy: only spawn the CLI the first time the card is opened.
+function toggleIssuesCard(): void {
+  issuesExpanded.value = !issuesExpanded.value
+  if (issuesExpanded.value) void ensureIssuesLoaded()
+}
+async function submitNewIssue(): Promise<void> {
+  const r = await createIssue(newIssueTitle.value, newIssueBody.value)
+  if (r.ok) { newIssueTitle.value = ''; newIssueBody.value = ''; showNewIssue.value = false }
+}
+async function submitComment(): Promise<void> {
+  const n = selectedIssue.value?.number
+  if (n == null) return
+  const r = await addComment(n, newComment.value)
+  if (r.ok) newComment.value = ''
+}
+async function toggleIssueState(): Promise<void> {
+  const issue = selectedIssue.value
+  if (!issue) return
+  await setIssueState(issue.number, issue.state === 'open' ? 'closed' : 'open')
+}
+function issueProviderLabel(): string {
+  if (issueProvider.value.provider === 'github') return 'GitHub'
+  if (issueProvider.value.provider === 'gitlab') return 'GitLab'
+  return ''
 }
 
 // ── diff blame (used by toggleHistoryPanel) ───────────────────────────────────
@@ -2019,6 +2062,96 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
       </div>
 
+      <!-- ── ISSUES (GitHub/GitLab) ─────────────────────────── -->
+      <div class="git-card">
+        <div class="card-hdr clickable" @click="toggleIssuesCard">
+          <span class="sec-caret">{{ issuesExpanded ? '▾' : '▸' }}</span>
+          <span class="sec-label">Issues</span>
+          <span v-if="issuesExpanded && issueProviderLabel()" class="sec-badge">{{ issueProviderLabel() }}</span>
+          <span v-if="issuesExpanded && openIssueCount" class="sec-badge">{{ openIssueCount }} open</span>
+          <div class="spacer" />
+          <button
+            v-if="issuesExpanded && issueProvider.authenticated && !selectedIssue"
+            class="row-btn always" title="New issue"
+            @click.stop="showNewIssue = !showNewIssue"
+          >＋</button>
+          <button
+            v-if="issuesExpanded && issueProvider.authenticated"
+            class="row-btn always" title="Refresh" @click.stop="refreshIssues"
+          >↻</button>
+        </div>
+        <div v-if="issuesExpanded" class="card-body collapsible-body">
+          <!-- unsupported host -->
+          <div v-if="issueProvider.provider === 'unknown'" class="empty-msg" style="padding:2px 0">
+            No supported issue host detected for this repo (needs a GitHub or GitLab origin remote).
+          </div>
+          <!-- CLI missing / not authenticated -->
+          <div v-else-if="!issueProvider.cli_available" class="empty-msg" style="padding:2px 0">
+            {{ issueProvider.provider === 'github' ? 'GitHub CLI (gh)' : 'GitLab CLI (glab)' }} is not installed.
+          </div>
+          <div v-else-if="!issueProvider.authenticated" class="empty-msg" style="padding:2px 0">
+            Not authenticated. Run
+            <code>{{ issueProvider.provider === 'github' ? 'gh auth login' : 'glab auth login' }}</code>
+            in a terminal, then refresh.
+          </div>
+
+          <!-- detail view -->
+          <template v-else-if="selectedIssue">
+            <div class="input-row" style="margin-bottom:6px">
+              <button class="btn-ghost sm" @click="closeIssueDetail">← Back</button>
+              <div class="spacer" />
+              <a class="btn-ghost sm" :href="selectedIssue.url" target="_blank" rel="noopener">Open ↗</a>
+              <button class="btn-ghost sm" :disabled="isIssueSubmitting" @click="toggleIssueState">
+                {{ selectedIssue.state === 'open' ? 'Close' : 'Reopen' }}
+              </button>
+            </div>
+            <div class="issue-detail-title">
+              <span class="issue-state-dot" :class="selectedIssue.state" />
+              #{{ selectedIssue.number }} · {{ selectedIssue.title }}
+            </div>
+            <div class="b-track" style="margin-bottom:6px">{{ selectedIssue.author }} · {{ selectedIssue.created_at }}</div>
+            <pre class="issue-body">{{ selectedIssue.body || '(no description)' }}</pre>
+            <div v-for="(c, i) in selectedIssue.comments" :key="i" class="issue-comment">
+              <div class="b-track">{{ c.author }} · {{ c.created_at }}</div>
+              <pre class="issue-body">{{ c.body }}</pre>
+            </div>
+            <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
+              <textarea v-model="newComment" class="git-input" rows="2" placeholder="Add a comment…" />
+              <button class="btn-ghost sm" :disabled="!newComment.trim() || isIssueSubmitting" @click="submitComment">Comment</button>
+            </div>
+          </template>
+
+          <!-- list view -->
+          <template v-else>
+            <div v-if="showNewIssue" class="input-row" style="margin-bottom:6px; flex-direction:column; gap:4px">
+              <input v-model="newIssueTitle" class="git-input" placeholder="Issue title" />
+              <textarea v-model="newIssueBody" class="git-input" rows="3" placeholder="Description (optional)" />
+              <div class="input-row">
+                <button class="btn-ghost sm" :disabled="!newIssueTitle.trim() || isIssueSubmitting" @click="submitNewIssue">Create</button>
+                <button class="btn-ghost sm" @click="showNewIssue = false">Cancel</button>
+              </div>
+            </div>
+            <div v-if="isLoadingIssues" class="empty-msg" style="padding:2px 0">Loading…</div>
+            <div v-else-if="!issues.length" class="empty-msg" style="padding:2px 0">No issues</div>
+            <div
+              v-for="it in issues" :key="it.number"
+              class="generic-row clickable" :class="{ loading: isLoadingDetail }"
+              @click="openIssue(it.number)"
+            >
+              <span class="issue-state-dot" :class="it.state" />
+              <div style="flex:1;min-width:0">
+                <div class="b-name" :title="it.title">#{{ it.number }} {{ it.title }}</div>
+                <div class="b-track">
+                  {{ it.author }}
+                  <span v-for="l in it.labels" :key="l" class="issue-label">{{ l }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+          <p v-if="issuesError" class="err-text">{{ issuesError }}</p>
+        </div>
+      </div>
+
       </div><!-- /part-bottom-cards -->
       </div><!-- /part-bottom -->
 
@@ -2703,6 +2836,21 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .remote-name { color: var(--text-muted); font-size: 10px; flex-shrink: 0; min-width: 44px; }
 .remote-url  { color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .wt-icon { color: var(--success-bright); font-size: 11px; flex-shrink: 0; width: 14px; text-align: center; }
+
+/* ── Issues (GitHub/GitLab) ─────────────────────────────────────────────────── */
+.issue-state-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }
+.issue-state-dot.open { background: var(--success-bright); }
+.issue-state-dot.closed { background: var(--accent-purple, #a371f7); }
+.issue-label {
+  display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 8px;
+  background: var(--bg-muted); color: var(--text-muted); font-size: 9px; line-height: 14px;
+}
+.issue-detail-title { font-size: 12px; color: var(--text-primary); display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.issue-body {
+  white-space: pre-wrap; word-break: break-word; font-size: 11px; color: var(--text-primary);
+  background: var(--bg-muted); border-radius: 4px; padding: 6px; margin: 0 0 4px; font-family: inherit;
+}
+.issue-comment { border-top: 1px solid var(--border-faint, var(--border)); padding-top: 4px; margin-top: 4px; }
 
 /* ── Config ─────────────────────────────────────────────────────────────────── */
 .config-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
