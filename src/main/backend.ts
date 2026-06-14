@@ -74,6 +74,12 @@ export async function startBackend(): Promise<BackendHandle> {
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } else {
+    // Dev runs alongside the packaged app, which owns the default state dir.
+    // Point this backend at a separate dir so the two don't fight over the
+    // shared SQLite / session files / backend-port (honour a pre-set value).
+    if (!env.AGENT_TEAM_DATA_DIR) {
+      env.AGENT_TEAM_DATA_DIR = join(app.getPath('appData'), 'Agent-Team-dev')
+    }
     const projectRoot = app.getAppPath()
     proc = spawn(
       'uv',

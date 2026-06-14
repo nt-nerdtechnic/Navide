@@ -9,7 +9,16 @@ from pathlib import Path
 
 
 def app_data_dir() -> Path:
-    """Cross-platform-ish app data dir. V1 targets macOS."""
+    """Cross-platform-ish app data dir. V1 targets macOS.
+
+    An explicit ``AGENT_TEAM_DATA_DIR`` override wins over the platform default.
+    The dev launcher sets it so a `npm run dev` instance keeps its backend state
+    (sessions, settings, backend-port) separate from a packaged app running at
+    the same time — otherwise two backends fight over one state dir.
+    """
+    override = os.environ.get("AGENT_TEAM_DATA_DIR")
+    if override:
+        return Path(os.path.expanduser(override))
     if os.name == "posix" and os.uname().sysname == "Darwin":
         return Path(os.path.expanduser("~/Library/Application Support/Agent-Team"))
     # Fallback for non-macOS dev: XDG_DATA_HOME or ~/.local/share.

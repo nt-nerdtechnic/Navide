@@ -195,6 +195,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mode2048 = false
   let resizeObserver: ResizeObserver | null = null
   let resizeRafId = 0
+  // rAF is throttled/paused while a window is occluded or mid-fullscreen
+  // transition, so a fit scheduled purely on rAF can be lost when the dev
+  // window is behind another (then the terminal stays at its stale width —
+  // visible as empty space on the right). This timer is the fallback so the
+  // fit still runs. Mirrors the rAF+timeout pattern spawn() already uses.
+  let resizeFrameTimer: ReturnType<typeof setTimeout> | null = null
   let mounted = false
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
@@ -221,6 +227,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const PTY_REPAINT_QUIET_MS = 150
   const PTY_REPAINT_MAX_MS = 700
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  // Monotonic id for the in-flight resize op. Every applyFit bumps it; a
+  // pending narrowAfterRepaint loop bails the moment a newer op supersedes it,
+  // so overlapping resizes (reconciler re-firing while a narrow wait is still
+  // pending, or many panes reflowing at once) can never stack and race their
+  // fit.fit()/sendResizeNow() calls into a permanent xterm↔PTY width mismatch.
+  let resizeOpId = 0
+  let narrowTimer: ReturnType<typeof setTimeout> | null = null
+  // Temporary resize diagnostics — flip to false to silence. Logs every fit
+  // decision so an xterm↔PTY width desync can be traced from the console.
+  const DEBUG_RESIZE = true
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
   let ackedCols = 0
@@ -234,6 +250,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }).then((resp) => {
       if (resp?.ok) {
         ackedCols = cols; ackedRows = rows
+        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] ack ${cols}x${rows}`)
         // For 2048-capable CLIs, report the new size in-band right after the
         // ack — the ioctl is done, so the report carries the authoritative
         // values and stays ordered with the user's keystrokes.
@@ -281,28 +298,49 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // (still partly wide) frame. Polls the raw-output activity clock: fit when
   // output has been quiet for PTY_REPAINT_QUIET_MS (past the MIN floor), or
   // when the MAX cap is hit (a CLI that keeps streaming must still narrow).
-  function narrowAfterRepaint(startedAt: number): void {
+  function narrowAfterRepaint(startedAt: number, opId: number): void {
+    if (opId !== resizeOpId) return  // a newer resize superseded this wait
     const now = Date.now()
     const elapsed = now - startedAt
     const quietFor = now - lastRawActivityAt.value
     if (elapsed >= PTY_REPAINT_MAX_MS ||
         (elapsed >= PTY_REPAINT_MIN_MS && quietFor >= PTY_REPAINT_QUIET_MS)) {
+      narrowTimer = null
       try {
+        const before = term.cols
         fit.fit()
+        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] narrow fit ${before}->${term.cols}x${term.rows} acked=${ackedCols}x${ackedRows} (waited ${elapsed}ms)`)
         // Container may have changed again while waiting.
         if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
       } catch { /* ignore transient fit errors during teardown */ }
       return
     }
-    setTimeout(() => narrowAfterRepaint(startedAt), 40)
+    narrowTimer = setTimeout(() => narrowAfterRepaint(startedAt, opId), 40)
   }
 
   // Single source of truth for sizing: fit xterm to its container, then push
   // that size to the backend in the same tick (atomic — see RESIZE_QUIET_MS
   // comment). Entry points: the (debounced) ResizeObserver, the post-spawn
   // frame, the reconciler, and fitTerminal().
-  function applyFit(): void {
+  // Run `cb` on the next animation frame, but fall back to a timer if rAF
+  // doesn't fire in time — rAF is paused for occluded/background windows and
+  // during fullscreen transitions, which would otherwise strand a pending fit.
+  function scheduleFrame(cb: () => void): void {
     cancelAnimationFrame(resizeRafId)
+    if (resizeFrameTimer) { clearTimeout(resizeFrameTimer); resizeFrameTimer = null }
+    let fired = false
+    const fire = (): void => {
+      if (fired) return
+      fired = true
+      cancelAnimationFrame(resizeRafId)
+      if (resizeFrameTimer) { clearTimeout(resizeFrameTimer); resizeFrameTimer = null }
+      cb()
+    }
+    resizeRafId = requestAnimationFrame(fire)
+    resizeFrameTimer = setTimeout(fire, 100)
+  }
+
+  function applyFit(): void {
     let poked = false
     const run = (): void => {
       const el = containerRef.value
@@ -317,9 +355,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
           try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
           poked = true
         }
-        resizeRafId = requestAnimationFrame(run)
+        scheduleFrame(run)
         return
       }
+      // Supersede any in-flight resize: a newer op invalidates a pending
+      // narrow-wait so their fit/send calls can't interleave and desync.
+      const opId = ++resizeOpId
+      if (narrowTimer) { clearTimeout(narrowTimer); narrowTimer = null }
       try {
         // Invariant: xterm must never be NARROWER than the width the CLI
         // believes, or in-flight output wraps and cursor-up repaints stack
@@ -332,10 +374,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // the CLI has redrawn narrow into the still-wide xterm, the fit can't
         // wrap anything. Growing (or rows-only): fit first, then send.
         const dims = fit.proposeDimensions()
+        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] applyFit px=${el.clientWidth} term=${term.cols}x${term.rows} dims=${dims?.cols}x${dims?.rows}`)
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
-            narrowAfterRepaint(Date.now())
+            narrowAfterRepaint(Date.now(), opId)
           })
         } else {
           fit.fit()
@@ -343,7 +386,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         }
       } catch { /* ignore transient fit errors during teardown */ }
     }
-    resizeRafId = requestAnimationFrame(run)
+    scheduleFrame(run)
   }
 
   function mount(el: HTMLElement): void {
@@ -638,6 +681,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pasteText('\x0c')
   }
 
+  // Hard reset: drop the entire scrollback (including any corrupt frames frozen
+  // there from a pre-fix resize, which the CLI can never repaint over), then
+  // Ctrl+L so the CLI redraws its current frame into the cleared viewport.
+  // Unlike redraw(), this DOES wipe history — it is an explicit, separately
+  // labelled action, not the gentle refresh.
+  function clearScrollback(): void {
+    term.clear()
+    pasteText('\x0c')
+  }
+
   function updateXtermTheme(): void {
     term.options.theme = readXtermTheme()
   }
@@ -658,7 +711,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     clearInterval(tickInterval)
     clearInterval(reconcileInterval)
     cancelAnimationFrame(resizeRafId)
+    if (resizeFrameTimer) clearTimeout(resizeFrameTimer)
     if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
+    if (narrowTimer) clearTimeout(narrowTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()

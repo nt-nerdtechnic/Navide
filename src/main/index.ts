@@ -539,12 +539,26 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
 app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-gpu')
 
+// Dev isolation: give a `npm run dev` instance its own Electron userData so its
+// renderer localStorage (layout, settings) doesn't clobber the packaged app's
+// when both run at once. Must be set before the app is ready / userData is read.
+// The backend's state dir is isolated separately (see backend.ts). Packaged
+// builds are untouched.
+if (!app.isPackaged) {
+  app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
 // Single-instance lock: a second launch must NOT spawn a parallel backend.
 // On macOS, closing the window leaves the app alive (see window-all-closed
 // below), so relaunching from Finder/Dock would otherwise start a second main
 // process — each spawning its own backend that fights over the shared
 // ~/.agent-team state, while the orphaned backend is never reaped.
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+//
+// Packaged builds only. In dev, electron-vite owns the process lifecycle and
+// restarts often; an instance that didn't exit cleanly (Ctrl+C not reaping the
+// Electron child, or macOS keeping the app alive after the window closed) would
+// hold the lock and make the next `npm run dev` silently quit at launch.
+const gotSingleInstanceLock = !app.isPackaged || app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
