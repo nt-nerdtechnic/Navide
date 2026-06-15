@@ -214,29 +214,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // quiet, the fit and the backend resize are ordered so xterm is never
   // narrower than the PTY (see applyFit).
   const RESIZE_QUIET_MS = 250
-  // After the PTY resize is acked, the CLI processes SIGWINCH and repaints at
-  // the new width. Narrowing xterm BEFORE that repaint finishes rewraps the
-  // still-wide part of the frame and desyncs the CLI's cursor-up bookkeeping
-  // (corruption). A fixed delay is fragile: a busy/streaming CLI — exactly the
-  // state a pane is in when the user adds a spawn slot mid-response — takes far
-  // longer than one frame to repaint. So instead of a constant, wait until the
-  // post-resize repaint output has been QUIET for a beat (repaint done), with a
-  // MIN floor (covers a fast idle repaint) and a MAX cap (so a CLI that keeps
-  // streaming still narrows eventually). See narrowAfterRepaint().
-  const PTY_REPAINT_MIN_MS = 150
-  const PTY_REPAINT_QUIET_MS = 150
-  const PTY_REPAINT_MAX_MS = 700
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
-  // Monotonic id for the in-flight resize op. Every applyFit bumps it; a
-  // pending narrowAfterRepaint loop bails the moment a newer op supersedes it,
-  // so overlapping resizes (reconciler re-firing while a narrow wait is still
-  // pending, or many panes reflowing at once) can never stack and race their
-  // fit.fit()/sendResizeNow() calls into a permanent xterm↔PTY width mismatch.
-  let resizeOpId = 0
-  let narrowTimer: ReturnType<typeof setTimeout> | null = null
-  // Temporary resize diagnostics — flip to false to silence. Logs every fit
-  // decision so an xterm↔PTY width desync can be traced from the console.
-  const DEBUG_RESIZE = true
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
   let ackedCols = 0
@@ -250,7 +228,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }).then((resp) => {
       if (resp?.ok) {
         ackedCols = cols; ackedRows = rows
-        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] ack ${cols}x${rows}`)
         // For 2048-capable CLIs, report the new size in-band right after the
         // ack — the ioctl is done, so the report carries the authoritative
         // values and stays ordered with the user's keystrokes.
@@ -293,35 +270,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
   }, RECONCILE_MS)
 
-  // Narrow xterm to match a shrink already pushed to the PTY — but only once
-  // the CLI's SIGWINCH repaint has settled, so we never rewrap a half-redrawn
-  // (still partly wide) frame. Polls the raw-output activity clock: fit when
-  // output has been quiet for PTY_REPAINT_QUIET_MS (past the MIN floor), or
-  // when the MAX cap is hit (a CLI that keeps streaming must still narrow).
-  function narrowAfterRepaint(startedAt: number, opId: number): void {
-    if (opId !== resizeOpId) return  // a newer resize superseded this wait
-    const now = Date.now()
-    const elapsed = now - startedAt
-    const quietFor = now - lastRawActivityAt.value
-    if (elapsed >= PTY_REPAINT_MAX_MS ||
-        (elapsed >= PTY_REPAINT_MIN_MS && quietFor >= PTY_REPAINT_QUIET_MS)) {
-      narrowTimer = null
-      try {
-        const before = term.cols
-        fit.fit()
-        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] narrow fit ${before}->${term.cols}x${term.rows} acked=${ackedCols}x${ackedRows} (waited ${elapsed}ms)`)
-        // Container may have changed again while waiting.
-        if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-      } catch { /* ignore transient fit errors during teardown */ }
-      return
-    }
-    narrowTimer = setTimeout(() => narrowAfterRepaint(startedAt, opId), 40)
-  }
-
   // Single source of truth for sizing: fit xterm to its container, then push
-  // that size to the backend in the same tick (atomic — see RESIZE_QUIET_MS
-  // comment). Entry points: the (debounced) ResizeObserver, the post-spawn
-  // frame, the reconciler, and fitTerminal().
+  // that size to the backend. Entry points: the (debounced) ResizeObserver,
+  // the post-spawn frame, the reconciler, and fitTerminal().
   // Run `cb` on the next animation frame, but fall back to a timer if rAF
   // doesn't fire in time — rAF is paused for occluded/background windows and
   // during fullscreen transitions, which would otherwise strand a pending fit.
@@ -358,31 +309,23 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         scheduleFrame(run)
         return
       }
-      // Supersede any in-flight resize: a newer op invalidates a pending
-      // narrow-wait so their fit/send calls can't interleave and desync.
-      const opId = ++resizeOpId
-      if (narrowTimer) { clearTimeout(narrowTimer); narrowTimer = null }
       try {
         // Invariant: xterm must never be NARROWER than the width the CLI
-        // believes, or in-flight output wraps and cursor-up repaints stack
-        // corrupt frames into scrollback. Shrinking width: resize the PTY
-        // first, then wait for the ack PLUS a repaint grace period — the ack
-        // only confirms the TIOCSWINSZ ioctl, not that the CLI has processed
-        // SIGWINCH and redrawn. Narrowing xterm while the last wide frame is
-        // still on screen rewraps it mid-word and breaks the CLI's cursor-up
-        // bookkeeping from then on (every keystroke echo lands wrong). Once
-        // the CLI has redrawn narrow into the still-wide xterm, the fit can't
-        // wrap anything. Growing (or rows-only): fit first, then send.
+        // believes, or in-flight old-width output wraps and the CLI's cursor-up
+        // repaints land on the wrong rows. So on a SHRINK we push the new size
+        // to the PTY first and only fit xterm once the resize is acked — and
+        // the backend drains all old-width output before that ack (see
+        // terminals.drain_output), so nothing wide is still arriving when we
+        // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
-        if (DEBUG_RESIZE) {
-          const paneW = (el.closest('.pane') as HTMLElement | null)?.clientWidth
-          const screenW = Math.round((el.querySelector('.xterm-screen') as HTMLElement | null)?.getBoundingClientRect().width ?? 0)
-          console.log(`[resize ${paneId}] applyFit host=${el.clientWidth} pane=${paneW} screen=${screenW} term=${term.cols}x${term.rows} dims=${dims?.cols}x${dims?.rows}`)
-        }
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
-            narrowAfterRepaint(Date.now(), opId)
+            try {
+              fit.fit()
+              // Container may have changed again between the send and the ack.
+              if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+            } catch { /* ignore transient fit errors during teardown */ }
           })
         } else {
           fit.fit()
@@ -717,7 +660,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cancelAnimationFrame(resizeRafId)
     if (resizeFrameTimer) clearTimeout(resizeFrameTimer)
     if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
-    if (narrowTimer) clearTimeout(narrowTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()
