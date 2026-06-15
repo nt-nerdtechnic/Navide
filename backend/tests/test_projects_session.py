@@ -257,3 +257,56 @@ def test_ensure_dir_keeps_existing_gitignore(tmp_path: Path) -> None:
     (d / ".gitignore").write_text("# custom\n", encoding="utf-8")
     store._ensure_dir(str(tmp_path))
     assert (d / ".gitignore").read_text(encoding="utf-8") == "# custom\n"
+
+
+def test_pane_record_custom_name_defaults_empty() -> None:
+    assert PaneRecord(pane_id="x").custom_name == ""
+
+
+def test_custom_name_round_trips_through_panes() -> None:
+    proj = Project(id="p", name="n", workspace_path="/ws", created_at="t", updated_at="t")
+    proj.panes = [PaneRecord(pane_id="x", origin="manual", custom_name="Frontend Lead")]
+    restored = Project.from_dict(proj.to_dict())
+    assert restored.panes[0].custom_name == "Frontend Lead"
+
+
+def test_rename_pane_persists_custom_name(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="pane-1", agent="claude")
+    store.rename_pane(ws, pane_id="pane-1", custom_name="Reviewer")
+    pane = next((p for p in store.peek(ws).panes if p.pane_id == "pane-1"), None)
+    assert pane is not None
+    assert pane.custom_name == "Reviewer"
+
+
+def test_rename_pane_empty_resets(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="pane-1", agent="claude")
+    store.rename_pane(ws, pane_id="pane-1", custom_name="Reviewer")
+    store.rename_pane(ws, pane_id="pane-1", custom_name="")
+    pane = next(p for p in store.peek(ws).panes if p.pane_id == "pane-1")
+    assert pane.custom_name == ""
+
+
+def test_rename_pane_survives_respawn_with_new_id(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """Restart re-spawns a pipeline slot with a fresh pane_id; custom_name is keyed
+    on the (stage_index, slot_label) record and must carry forward."""
+    store, ws = store_with_stage
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="old-id", agent="claude")
+    store.rename_pane(ws, pane_id="old-id", custom_name="Architect")
+    # Restore path: same slot re-spawns under a new runtime pane id.
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="new-id", agent="claude")
+    pane = next(p for p in store.peek(ws).panes if p.slot_label == "Build")
+    assert pane.pane_id == "new-id"
+    assert pane.custom_name == "Architect"
+
+
+def test_rename_pane_unknown_workspace_returns_none(tmp_path: Path) -> None:
+    store = ProjectStore()
+    assert store.rename_pane(str(tmp_path), pane_id="x", custom_name="Y") is None

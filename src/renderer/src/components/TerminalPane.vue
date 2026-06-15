@@ -23,6 +23,7 @@ const emit = defineEmits<{
   (e: 'set-focus'): void
   (e: 'minimize'): void
   (e: 'rebuild'): void
+  (e: 'context-menu', ev: MouseEvent): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -80,11 +81,6 @@ onMounted(() => {
       @click.stop="emit('rebuild')"
       title="重建 (resume) — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。"
     >↻</button>
-    <button
-      class="redraw-btn"
-      @click.stop="terminal.redraw()"
-      title="Refresh CLI rendering — ask the CLI to repaint (Ctrl+L); scrollback is kept"
-    >⟳</button>
     <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
     <header
       class="pane-header"
@@ -92,6 +88,7 @@ onMounted(() => {
       title="拖曳到上方 tab 可移動到其他分頁"
       @click="emit('set-focus')"
       @dragstart="onHeaderDragStart"
+      @contextmenu.prevent="emit('context-menu', $event)"
     >
       <div class="header-main">
         <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
@@ -150,7 +147,6 @@ onMounted(() => {
   background: var(--bg-elevated);
 }
 .minimize-btn,
-.redraw-btn,
 .rebuild-btn {
   position: absolute;
   top: 5px;
@@ -169,19 +165,14 @@ onMounted(() => {
 .minimize-btn {
   right: 6px;
 }
-.redraw-btn {
+.rebuild-btn {
   right: 26px;
 }
-.rebuild-btn {
-  right: 46px;
-}
 .pane:hover .minimize-btn,
-.pane:hover .redraw-btn,
 .pane:hover .rebuild-btn {
   opacity: 1;
 }
 .minimize-btn:hover,
-.redraw-btn:hover,
 .rebuild-btn:hover {
   color: var(--text-primary);
   background: var(--bg-muted);
@@ -192,7 +183,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
-  padding: 5px 72px 5px 12px;
+  padding: 5px 52px 5px 12px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   font-size: 12px;

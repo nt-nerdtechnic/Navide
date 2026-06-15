@@ -152,6 +152,7 @@ const emit = defineEmits<{
   (e: 'interrupt', paneId: string): void
   (e: 'reinject', paneId: string): void
   (e: 'restore', paneId: string): void
+  (e: 'context-menu', paneId: string, ev: MouseEvent): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; pipelineId?: string }): void
   (e: 'pipeline-next'): void
   (e: 'pipeline-abort'): void
@@ -672,7 +673,7 @@ function onExplorerDividerEnd(): void {
           <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
           <ul v-else class="agent-list">
             <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
-              <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
+              <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
                 <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
                 <span class="badge">{{ p.agentLabel }}</span>
                 <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
@@ -893,7 +894,7 @@ function onExplorerDividerEnd(): void {
       <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
       <ul v-else class="agent-list">
         <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
-          <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)">
+          <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>

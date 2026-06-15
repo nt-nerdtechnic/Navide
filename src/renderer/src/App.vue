@@ -4424,6 +4424,7 @@ function onSetFocus(paneId: string): void {
 // and pane headers. The menu is rendered once in this component; each surface only
 // raises an open request with the pane id and pointer coords.
 const paneCtxMenu = ref<{ paneId: string; x: number; y: number } | null>(null)
+const paneCtxMenuEl = ref<HTMLElement | null>(null)
 
 const paneCtxView = computed<ActivePaneView | null>(() =>
   paneCtxMenu.value ? paneViews.value.find((v) => v.id === paneCtxMenu.value!.paneId) ?? null : null
@@ -4432,6 +4433,21 @@ const paneCtxView = computed<ActivePaneView | null>(() =>
 function openPaneCtxMenu(e: MouseEvent, paneId: string): void {
   e.preventDefault()
   paneCtxMenu.value = { paneId, x: e.clientX, y: e.clientY }
+  // Flip/clamp into the viewport once the menu has rendered, so items near the
+  // bottom/right edge aren't clipped by the window.
+  void nextTick(() => {
+    const el = paneCtxMenuEl.value
+    const m = paneCtxMenu.value
+    if (!el || !m) return
+    const r = el.getBoundingClientRect()
+    const margin = 8
+    if (m.y + r.height > window.innerHeight) {
+      m.y = Math.max(margin, window.innerHeight - r.height - margin)
+    }
+    if (m.x + r.width > window.innerWidth) {
+      m.x = Math.max(margin, window.innerWidth - r.width - margin)
+    }
+  })
 }
 
 function closePaneCtxMenu(): void {
@@ -4441,12 +4457,14 @@ function closePaneCtxMenu(): void {
 // Rename dialog state. Opened from the context menu; on confirm it overrides the
 // pane's display label and persists it to project.json via project.rename_pane.
 const renamingPane = ref<{ paneId: string; value: string } | null>(null)
+const renameInput = ref<HTMLInputElement | null>(null)
 
 function startRenamePane(paneId: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
   renamingPane.value = { paneId, value: pane.customName || pane.agentLabel }
   closePaneCtxMenu()
+  void nextTick(() => { renameInput.value?.focus(); renameInput.value?.select() })
 }
 
 function confirmRenamePane(): void {
@@ -4993,6 +5011,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @kill-all="onKillAll"
       @reinject="onReinject"
       @restore="restorePane"
+      @context-menu="(id, ev) => openPaneCtxMenu(ev, id)"
       @update:layout-mode="layoutMode = $event"
       @pipeline-start="onPipelineStart"
       @pipeline-next="onPipelineNext"
@@ -5346,7 +5365,7 @@ function paneIsCommander(p: ActivePane): boolean {
     <!-- Pane right-click context menu (shared by agent list, spotlight thumbs, pane headers) -->
     <Teleport v-if="paneCtxMenu" to="body">
       <div class="pane-ctx-backdrop" @mousedown="closePaneCtxMenu" @contextmenu.prevent="closePaneCtxMenu" />
-      <div class="pane-ctx" :style="{ left: paneCtxMenu.x + 'px', top: paneCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
+      <div ref="paneCtxMenuEl" class="pane-ctx" :style="{ left: paneCtxMenu.x + 'px', top: paneCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
         <div class="pane-ctx-item" @click="onSetFocus(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ $t('action.focus') }}</div>
         <div
           v-if="paneCtxView?.isMinimized"
@@ -5384,7 +5403,6 @@ function paneIsCommander(p: ActivePane): boolean {
               type="text"
               @keydown.enter="confirmRenamePane"
               @keydown.esc="renamingPane = null"
-              @vue:mounted="(vn) => (vn.el as HTMLInputElement)?.select()"
             />
           </div>
           <footer>
