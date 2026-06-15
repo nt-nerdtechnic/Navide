@@ -374,7 +374,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // the CLI has redrawn narrow into the still-wide xterm, the fit can't
         // wrap anything. Growing (or rows-only): fit first, then send.
         const dims = fit.proposeDimensions()
-        if (DEBUG_RESIZE) console.log(`[resize ${paneId}] applyFit px=${el.clientWidth} term=${term.cols}x${term.rows} dims=${dims?.cols}x${dims?.rows}`)
+        if (DEBUG_RESIZE) {
+          const paneW = (el.closest('.pane') as HTMLElement | null)?.clientWidth
+          const screenW = Math.round((el.querySelector('.xterm-screen') as HTMLElement | null)?.getBoundingClientRect().width ?? 0)
+          console.log(`[resize ${paneId}] applyFit host=${el.clientWidth} pane=${paneW} screen=${screenW} term=${term.cols}x${term.rows} dims=${dims?.cols}x${dims?.rows}`)
+        }
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
