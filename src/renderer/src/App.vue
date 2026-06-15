@@ -368,6 +368,9 @@ interface ActivePane {
   id: string
   agentKey: string
   agentLabel: string
+  /** User-set display name from the rename action. Overrides agentLabel in all
+   *  pane surfaces when non-empty; persisted to project.json (PaneRecord.custom_name). */
+  customName?: string
   roleKey: RoleKey
   stageId: StageId
   /** Human-readable slot label, e.g. "Architecture" or "UI/UX".
@@ -436,7 +439,7 @@ function syncViews(): void {
     return {
       id: p.id,
       agentKey: p.agentKey,
-      agentLabel: p.agentLabel,
+      agentLabel: p.customName || p.agentLabel,
       roleKey: p.roleKey,
       roleLabel: roleLabel(p.roleKey),
       stageId: p.stageId,
@@ -1356,6 +1359,55 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
   syncViews()
 }
 
+/** Recover a render-corrupted pane: kill it and re-spawn the same CLI session
+ *  via --resume at the current size. A fresh terminal has no stale content for
+ *  xterm to reflow, so the cursor-up overlap/ghosting clears (reuses the exact
+ *  restart-resume path). Only offered for panes with a resumable session id
+ *  (see :can-rebuild). Interrupts the in-flight turn and reprints the
+ *  conversation; no-ops if the id isn't actually resumable. */
+async function rebuildPaneViaResume(paneId: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const sessionId = (pane.pinnedSessionId ?? '').trim()
+  if (!sessionId) return
+  const ws = pane.workspacePath
+  if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
+    pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
+    return
+  }
+  const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
+  const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+  const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag)
+  if (!resumeCmd) return
+  // Snapshot identity before onKill removes the pane from the list.
+  const snap = {
+    agentKey: pane.agentKey,
+    roleKey: pane.roleKey,
+    stageId: pane.stageId,
+    slotLabel: pane.slotLabel,
+    workspacePath: ws,
+    origin: pane.origin,
+    runGroupId: pane.runGroupId,
+    sessionHomeId: pane.sessionHomeId,
+  }
+  await onKill(paneId, { markRemoved: false })
+  await spawnPane({
+    agentKey: snap.agentKey,
+    roleKey: snap.roleKey,
+    stageId: snap.stageId,
+    slotLabel: snap.slotLabel,
+    commandOverride: resumeCmd,
+    workspacePath: snap.workspacePath,
+    origin: snap.origin,
+    runGroupId: snap.runGroupId || undefined,
+    isResume: true,
+    skipRoleInjection: true,
+    restoreMode: 'memory-resume',
+    sessionHomeId: snap.sessionHomeId,
+    resumeSessionId: sessionId,
+  })
+}
+
 async function onInterrupt(paneId: string): Promise<void> {
   const ref = paneRefs[paneId]
   if (!ref?.sessionId) return
@@ -1561,6 +1613,7 @@ interface ProjectPane {
   stage_index?: number
   slot_label?: string
   kickoff_status?: string
+  custom_name?: string
 }
 
 interface ProjectPayload {
@@ -1865,6 +1918,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     })
 
     if (!paneId) return
+
+    // Re-apply the user's persisted display name to the restored pane.
+    if (saved.custom_name) {
+      const restored = panes.value.find((p) => p.id === paneId)
+      if (restored) restored.customName = saved.custom_name
+    }
 
     // Fresh (non-resume) Claude spawns pin a brand-new --session-id; persist
     // it with the record so the next restart can resume the new conversation
@@ -2632,7 +2691,6 @@ async function onPipelineReset(): Promise<void> {
   activeQuestion.value = null
   clearStageStallAutoTimer()
   stageStallPrompt.value = null
-  if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
   // Reset is the destructive action: tear down ALL panes (pipeline + manual) so
   // the workspace returns to a clean slate. onKill handles each pane's
   // watcher/timer/session teardown and removes it from the view.
@@ -4358,48 +4416,61 @@ watch(activeTab, () => {
   void nextTick(() => refitAllTerminals())
 })
 
-// Auto-focus: poll lastRawActivityAt every 500ms to follow the most active pane.
-// Two guards prevent jarring focus oscillation during pipeline execution:
-//   1. Manual grace period: user click → no auto-override for 3s
-//   2. Dwell time: current focus pane must be quiet for 2.5s before auto-switch
-let _autoFocusInterval: ReturnType<typeof setInterval> | null = null
-let _lastManualFocusAt = 0
-const MANUAL_FOCUS_GRACE_MS = 3000
-const AUTO_FOCUS_DWELL_MS = 2500  // current pane must be idle 2.5s before switching
-
 function onSetFocus(paneId: string): void {
-  _lastManualFocusAt = Date.now()
   focusPaneId.value = paneId
+}
+
+// Pane right-click context menu, shared by the agent list, spotlight thumbnails,
+// and pane headers. The menu is rendered once in this component; each surface only
+// raises an open request with the pane id and pointer coords.
+const paneCtxMenu = ref<{ paneId: string; x: number; y: number } | null>(null)
+
+const paneCtxView = computed<ActivePaneView | null>(() =>
+  paneCtxMenu.value ? paneViews.value.find((v) => v.id === paneCtxMenu.value!.paneId) ?? null : null
+)
+
+function openPaneCtxMenu(e: MouseEvent, paneId: string): void {
+  e.preventDefault()
+  paneCtxMenu.value = { paneId, x: e.clientX, y: e.clientY }
+}
+
+function closePaneCtxMenu(): void {
+  paneCtxMenu.value = null
+}
+
+// Rename dialog state. Opened from the context menu; on confirm it overrides the
+// pane's display label and persists it to project.json via project.rename_pane.
+const renamingPane = ref<{ paneId: string; value: string } | null>(null)
+
+function startRenamePane(paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  renamingPane.value = { paneId, value: pane.customName || pane.agentLabel }
+  closePaneCtxMenu()
+}
+
+function confirmRenamePane(): void {
+  const r = renamingPane.value
+  if (!r) return
+  const pane = panes.value.find((p) => p.id === r.paneId)
+  if (pane) {
+    const name = r.value.trim()
+    // Empty name resets to the default label.
+    pane.customName = name && name !== pane.agentLabel ? name : undefined
+    syncViews()
+    backend.send('project.rename_pane', {
+      workspace_path: pane.workspacePath,
+      pane_id: pane.id,
+      custom_name: pane.customName ?? '',
+    })
+  }
+  renamingPane.value = null
 }
 
 watch(layoutMode, (mode) => {
   const wp = pipeline.workspacePath
   if (wp) {
     backend.send('project.set_layout_mode', { workspace_path: wp, layout_mode: mode })
-  }
-  if (_autoFocusInterval) { clearInterval(_autoFocusInterval); _autoFocusInterval = null }
-  if (mode !== 'grid') {
-    _autoFocusInterval = setInterval(() => {
-      // Guard 1: don't override a recent manual click
-      if (Date.now() - _lastManualFocusAt < MANUAL_FOCUS_GRACE_MS) return
-      let newest = 0, newestId: string | null = null
-      let currentFocusLastActive = 0
-      for (const id of Object.keys(paneRefs)) {
-        if (minimizedPanes.value.has(id)) continue
-        const r = paneRefs[id]
-        if (!r) continue
-        const ts = (r.lastRawActivityAt as unknown as number) ?? 0
-        if (ts > newest) { newest = ts; newestId = id }
-        if (id === focusPaneId.value) currentFocusLastActive = ts
-      }
-      if (newestId && newestId !== focusPaneId.value) {
-        // Guard 2: only switch if the current focus pane has been quiet long enough
-        const currentPaneIdleMs = Date.now() - currentFocusLastActive
-        if (currentPaneIdleMs > AUTO_FOCUS_DWELL_MS) {
-          focusPaneId.value = newestId
-        }
-      }
-    }, 500)
   }
 }, { immediate: true })
 
@@ -5145,9 +5216,12 @@ function paneIsCommander(p: ActivePane): boolean {
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
+          :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'gemini', 'antigravity'].includes(p.agentKey)"
           :backend="backend"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
+          @rebuild="rebuildPaneViaResume(p.id)"
+          @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
@@ -5181,6 +5255,7 @@ function paneIsCommander(p: ActivePane): boolean {
           class="spotlight-thumb"
           :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId }"
           @click="onSetFocus(p.id)"
+          @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
         >
           <div class="spotlight-thumb-info">
             <div class="spotlight-thumb-name-row">
@@ -5264,6 +5339,57 @@ function paneIsCommander(p: ActivePane): boolean {
           <footer>
             <button class="stall-btn primary" @click="confirmCloseWorkspace = false">{{ $t('action.cancel') }}</button>
             <button class="stall-btn danger" @click="doCloseWorkspace">{{ $t('action.abort-and-switch') }}</button>
+          </footer>
+        </div>
+      </div>
+    </Teleport>
+    <!-- Pane right-click context menu (shared by agent list, spotlight thumbs, pane headers) -->
+    <Teleport v-if="paneCtxMenu" to="body">
+      <div class="pane-ctx-backdrop" @mousedown="closePaneCtxMenu" @contextmenu.prevent="closePaneCtxMenu" />
+      <div class="pane-ctx" :style="{ left: paneCtxMenu.x + 'px', top: paneCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
+        <div class="pane-ctx-item" @click="onSetFocus(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ $t('action.focus') }}</div>
+        <div
+          v-if="paneCtxView?.isMinimized"
+          class="pane-ctx-item"
+          @click="restorePane(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('action.restore') }}</div>
+        <div class="pane-ctx-item" @click="startRenamePane(paneCtxMenu!.paneId)">{{ $t('action.rename') }}</div>
+        <div class="pane-ctx-sep"></div>
+        <div
+          class="pane-ctx-item"
+          :class="{ disabled: paneCtxView?.status !== 'running' }"
+          @click="onInterrupt(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('action.interrupt') }}</div>
+        <div
+          class="pane-ctx-item"
+          :class="{ disabled: paneCtxView?.status !== 'running' || !paneCtxView?.roleKey }"
+          @click="onReinject(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('action.reapply-role') }}</div>
+        <div class="pane-ctx-sep"></div>
+        <div class="pane-ctx-item danger" @click="onKill(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ $t('action.remove') }}</div>
+      </div>
+    </Teleport>
+    <!-- Pane rename dialog -->
+    <Teleport v-if="renamingPane" to="body">
+      <div class="stall-overlay" @click.self="renamingPane = null">
+        <div class="stall-card pane-rename-card">
+          <header>
+            <strong>{{ $t('action.rename') }}</strong>
+          </header>
+          <div class="stall-body">
+            <input
+              ref="renameInput"
+              v-model="renamingPane.value"
+              class="pane-rename-input"
+              type="text"
+              @keydown.enter="confirmRenamePane"
+              @keydown.esc="renamingPane = null"
+              @vue:mounted="(vn) => (vn.el as HTMLInputElement)?.select()"
+            />
+          </div>
+          <footer>
+            <button class="stall-btn" @click="renamingPane = null">{{ $t('action.cancel') }}</button>
+            <button class="stall-btn primary" @click="confirmRenamePane">{{ $t('action.rename') }}</button>
           </footer>
         </div>
       </div>
@@ -6292,6 +6418,43 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .sb-url { color: var(--text-muted); font-size: 10px; }
 .sb-build { color: var(--text-muted); }
+
+/* Pane right-click context menu */
+.pane-ctx-backdrop { position: fixed; inset: 0; z-index: 999; }
+.pane-ctx {
+  position: fixed;
+  z-index: 1000;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  min-width: 170px;
+  user-select: none;
+}
+.pane-ctx-item {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pane-ctx-item:hover { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
+.pane-ctx-item.danger { color: var(--danger-bright); }
+.pane-ctx-item.danger:hover { background: var(--danger-emphasis); color: var(--text-on-emphasis); }
+.pane-ctx-item.disabled { opacity: 0.4; pointer-events: none; }
+.pane-ctx-sep { height: 1px; background: var(--border-default); margin: 4px 0; }
+.pane-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-bright);
+}
+.pane-rename-input:focus { outline: none; border-color: var(--accent-emphasis); }
 </style>
 <style>
 html,

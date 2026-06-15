@@ -90,6 +90,7 @@ class PaneRecord:
     stage_index: int = -1
     slot_label: str = ""
     kickoff_status: str = "none"    # none / sent / failed
+    custom_name: str = ""           # user-set display name; empty falls back to the default label
 
 
 @dataclass
@@ -548,6 +549,28 @@ class ProjectStore:
             {"event": "manual_pane_unspawn", "pane_id": pane_id},
             log_file_name=project.log_file_name,
         )
+        return project
+
+    def rename_pane(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        custom_name: str,
+    ) -> Project | None:
+        """Persist a user-set display name for a pane (any origin), keyed by pane_id.
+
+        Empty custom_name resets to the default label. Returns None when no project
+        exists for the workspace.
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.custom_name = custom_name
+        self.save(project)
         return project
 
     def record_manual_pane_session(

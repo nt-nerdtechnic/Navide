@@ -12,6 +12,9 @@ interface Props {
   pipeTag?: string
   isCommander?: boolean
   isFocus?: boolean
+  /** True when this pane has a resumable CLI session id — enables the rebuild
+   *  button (re-spawns the pane via --resume to recover from render corruption). */
+  canRebuild?: boolean
   backend: ReturnType<typeof useBackend>
 }
 
@@ -19,6 +22,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'set-focus'): void
   (e: 'minimize'): void
+  (e: 'rebuild'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -70,6 +74,12 @@ onMounted(() => {
 
 <template>
   <div :class="['pane', { 'pane-focus': isFocus }]">
+    <button
+      v-if="canRebuild"
+      class="rebuild-btn"
+      @click.stop="emit('rebuild')"
+      title="重建 (resume) — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。"
+    >↻</button>
     <button
       class="redraw-btn"
       @click.stop="terminal.redraw()"
@@ -140,7 +150,8 @@ onMounted(() => {
   background: var(--bg-elevated);
 }
 .minimize-btn,
-.redraw-btn {
+.redraw-btn,
+.rebuild-btn {
   position: absolute;
   top: 5px;
   z-index: 10;
@@ -161,12 +172,17 @@ onMounted(() => {
 .redraw-btn {
   right: 26px;
 }
+.rebuild-btn {
+  right: 46px;
+}
 .pane:hover .minimize-btn,
-.pane:hover .redraw-btn {
+.pane:hover .redraw-btn,
+.pane:hover .rebuild-btn {
   opacity: 1;
 }
 .minimize-btn:hover,
-.redraw-btn:hover {
+.redraw-btn:hover,
+.rebuild-btn:hover {
   color: var(--text-primary);
   background: var(--bg-muted);
   opacity: 1;
@@ -176,7 +192,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
-  padding: 5px 52px 5px 12px;
+  padding: 5px 72px 5px 12px;
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   font-size: 12px;

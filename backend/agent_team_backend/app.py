@@ -900,6 +900,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 project.layout_mode = mode
                 project_store.save(project)
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.rename_pane":
+            ws_raw = payload.get("workspace_path", "") or ""
+            pane_id = payload.get("pane_id", "") or ""
+            custom_name = (payload.get("custom_name", "") or "").strip()
+            if pane_id:
+                project_store.rename_pane(ws_raw, pane_id=pane_id, custom_name=custom_name)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "project.set_theme":
             # Backup-only persistence: localStorage in the renderer is the source
             # of truth. We just stash the latest theme + custom overrides so they

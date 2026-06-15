@@ -102,6 +102,7 @@
     "open-terminal": ">_ 開啟 Terminal",
     "abort": "中止",
     "remove": "移除",
+    "focus": "聚焦",
     "interrupt": "中斷",
     "reapply-role": "重新套用角色",
     "run-pipeline": "▶ 執行流程",

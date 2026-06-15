@@ -102,6 +102,7 @@
     "open-terminal": ">_ Open Terminal",
     "abort": "Abort",
     "remove": "Remove",
+    "focus": "Focus",
     "interrupt": "Interrupt",
     "reapply-role": "Reapply role",
     "run-pipeline": "▶ Run pipeline",
