@@ -64,6 +64,7 @@ onMounted(() => {
   window.agentTeam?.onLanguageChanged?.((locale) => {
     settingsApi.setLanguage(locale)
   })
+  window.addEventListener('resize', onWindowResize)
 })
 
 // ── First-run onboarding gate ────────────────────────────────────────────────
@@ -96,7 +97,23 @@ function reopenOnboarding(): void {
 // full app restart returns to Welcome.
 const WS_SELECTED_KEY = 'agentTeam.workspaceSelected'
 const WS_PATH_KEY = 'agentTeam.currentWorkspace'
+// A duplicated main window (cmd+shift+N) receives its workspace via URL param.
+// sessionStorage is per-window so it would otherwise boot to Welcome; the URL
+// param seeds it. The window must NOT auto-resume the source window's agent
+// panes (that would double-resume the same CLI sessions), so restore is
+// suppressed once on this first load — see onWorkspaceCheck.
+const _bootWorkspace = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
+let suppressPaneRestoreOnce = _bootWorkspace !== ''
+if (_bootWorkspace) {
+  try {
+    sessionStorage.setItem(WS_PATH_KEY, _bootWorkspace)
+    sessionStorage.setItem(WS_SELECTED_KEY, '1')
+  } catch {
+    /* sessionStorage unavailable — non-fatal */
+  }
+}
 const currentWorkspace = ref<string>(
+  _bootWorkspace ||
   (() => {
     try {
       return sessionStorage.getItem(WS_PATH_KEY) ?? ''
@@ -106,6 +123,7 @@ const currentWorkspace = ref<string>(
   })()
 )
 const workspaceSelected = ref<boolean>(
+  _bootWorkspace !== '' ||
   (() => {
     try {
       return sessionStorage.getItem(WS_SELECTED_KEY) === '1'
@@ -269,6 +287,17 @@ function refitAllTerminals(): void {
   }))
 }
 
+// Window-level resize safety net. Per-pane ResizeObservers can miss the macOS
+// fullscreen / maximize transition (the renderer is occluded mid-animation, so
+// the observer callback is coalesced away), leaving panes at a stale width with
+// empty space on the right. A debounced window 'resize' listener guarantees a
+// refit on any OS-window size change regardless of the observers.
+let _winResizeTimer: number | null = null
+function onWindowResize(): void {
+  if (_winResizeTimer !== null) clearTimeout(_winResizeTimer)
+  _winResizeTimer = window.setTimeout(() => { _winResizeTimer = null; refitAllTerminals() }, 150)
+}
+
 function onResizeEnd(): void {
   _dragTarget = null
   isDragging.value = false
@@ -428,7 +457,11 @@ function syncViews(): void {
 
 let _syncViewsTimer: number | null = null
 onMounted(() => { _syncViewsTimer = window.setInterval(syncViews, 400) })
-onUnmounted(() => { if (_syncViewsTimer !== null) clearInterval(_syncViewsTimer) })
+onUnmounted(() => {
+  if (_syncViewsTimer !== null) clearInterval(_syncViewsTimer)
+  window.removeEventListener('resize', onWindowResize)
+  if (_winResizeTimer !== null) clearTimeout(_winResizeTimer)
+})
 watch(panes, syncViews, { deep: true, immediate: true })
 
 // PTY-friendly paste: wraps text with bracketed-paste escape sequences so
@@ -1427,6 +1460,13 @@ watch(workspaceSelected, (v) => {
 
 // ── Keybinding system ─────────────────────────────────────────────────────────
 useKeybindings()
+registerCommand('workbench.action.newWindow', async () => {
+  const api = (window as Window & {
+    agentTeam?: { openMainWindow?: (args?: { workspace_path?: string }) => Promise<{ ok: boolean }> }
+  }).agentTeam
+  // Always open a fresh Welcome window — do not inherit the current workspace.
+  await api?.openMainWindow?.({})
+})
 registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
 registerCommand('workbench.action.closeModal', () => {
   if (showSettings.value) showSettings.value = false
@@ -1677,7 +1717,13 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       }
     }
     _loadRunGroups(path)
-    await restoreWorkspacePanes(resp, path)
+    if (suppressPaneRestoreOnce) {
+      // First load of a duplicated window: open the same workspace as a clean
+      // view without re-resuming the source window's live agent sessions.
+      suppressPaneRestoreOnce = false
+    } else {
+      await restoreWorkspacePanes(resp, path)
+    }
     // Restore saved activeTab after panes are repopulated
     try {
       const key = `agentTeam.activeTab.${path}`

@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "private": true,
   "description": "Navide (Agent-Team): macOS desktop terminal manager for Claude Code, Codex, and Gemini CLI",
   "main": "out/main/index.js",

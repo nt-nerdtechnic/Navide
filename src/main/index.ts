@@ -15,7 +15,11 @@ if (process.platform === 'darwin') {
 }
 
 let backend: BackendHandle | null = null
+// Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
+// tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
+// holds them all for lifecycle code that must reach every main window.
 let mainWindow: BrowserWindow | null = null
+const mainWindows = new Set<BrowserWindow>()
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
@@ -29,7 +33,7 @@ function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   }
 }
 
-async function createWindow(): Promise<void> {
+async function createWindow(params: Record<string, string> = {}): Promise<void> {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -42,12 +46,18 @@ async function createWindow(): Promise<void> {
       sandbox: false
     }
   })
+  mainWindows.add(win)
   mainWindow = win
+  win.on('focus', () => { mainWindow = win })
   win.on('closed', () => {
-    if (mainWindow === win) mainWindow = null
+    mainWindows.delete(win)
+    if (mainWindow === win) {
+      const remaining = [...mainWindows]
+      mainWindow = remaining.length ? remaining[remaining.length - 1] : null
+    }
   })
 
-  loadWindow(win, { window: 'main' })
+  loadWindow(win, { window: 'main', ...params })
 }
 
 function openRolesWindow(): void {
@@ -197,6 +207,14 @@ function openDiffWindow(params: Record<string, string>): void {
     sidebar: 'git',
   })
 }
+
+ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) => {
+  const params: Record<string, string> = {}
+  const ws = (args?.workspace_path ?? '').trim()
+  if (ws) params.workspace_path = ws
+  void createWindow(params)
+  return { ok: true }
+})
 
 ipcMain.handle('window:openRoles', () => {
   openRolesWindow()
@@ -546,6 +564,8 @@ app.commandLine.appendSwitch('disable-gpu')
 // builds are untouched.
 if (!app.isPackaged) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+  app.commandLine.appendSwitch('remote-debugging-port', '9333')
+  app.commandLine.appendSwitch('remote-allow-origins', 'http://127.0.0.1:9333')
 }
 
 // Single-instance lock: a second launch must NOT spawn a parallel backend.
