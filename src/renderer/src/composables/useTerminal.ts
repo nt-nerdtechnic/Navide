@@ -214,6 +214,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // quiet, the fit and the backend resize are ordered so xterm is never
   // narrower than the PTY (see applyFit).
   const RESIZE_QUIET_MS = 250
+  // On a width SHRINK we tell the PTY first, then wait this long before
+  // narrowing xterm — long enough for the CLI to process SIGWINCH and repaint
+  // its inline UI at the new (narrow) width. Narrowing xterm immediately would
+  // reflow the still-wide frame and desync the CLI's cursor-up repaint, leaving
+  // two frames overlapping (visible "跑版"). A single fixed timer — not the old
+  // quiet-wait loop, which could starve and leave xterm stuck.
+  const PTY_REPAINT_GRACE_MS = 180
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
@@ -321,11 +328,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
-            try {
-              fit.fit()
-              // Container may have changed again between the send and the ack.
-              if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-            } catch { /* ignore transient fit errors during teardown */ }
+            // Let the CLI repaint narrow into the still-wide xterm first, THEN
+            // narrow xterm so nothing reflows. Fixed delay (timers run even when
+            // the window is occluded, unlike rAF).
+            setTimeout(() => {
+              try {
+                fit.fit()
+                // Container may have changed again while waiting.
+                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+              } catch { /* ignore transient fit errors during teardown */ }
+            }, PTY_REPAINT_GRACE_MS)
           })
         } else {
           fit.fit()

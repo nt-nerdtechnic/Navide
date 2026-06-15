@@ -1,9 +1,6 @@
 import { defineConfig } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
-import monacoEditorPlugin_ from 'vite-plugin-monaco-editor'
 import { resolve, join } from 'node:path'
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const monacoEditorPlugin = ((monacoEditorPlugin_ as any).default ?? monacoEditorPlugin_) as typeof monacoEditorPlugin_
 import { randomBytes } from 'node:crypto'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -62,9 +59,6 @@ export default defineConfig({
     },
     plugins: [
       vue(),
-      monacoEditorPlugin({
-        languageWorkers: ['editorWorkerService', 'typescript', 'json', 'css', 'html'],
-      }),
       // Block all non-Electron requests with a per-session random token.
       // The main process reads the token from tmpdir and injects it via
       // session.webRequest — no browser can guess a 32-byte random value.

@@ -564,8 +564,6 @@ app.commandLine.appendSwitch('disable-gpu')
 // builds are untouched.
 if (!app.isPackaged) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
-  app.commandLine.appendSwitch('remote-debugging-port', '9333')
-  app.commandLine.appendSwitch('remote-allow-origins', 'http://127.0.0.1:9333')
 }
 
 // Single-instance lock: a second launch must NOT spawn a parallel backend.

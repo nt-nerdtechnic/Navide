@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import './monacoWorkers'
 import * as monaco from 'monaco-editor'
 import type { Decoration } from '../types'
 import {
