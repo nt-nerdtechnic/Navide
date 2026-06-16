@@ -9,6 +9,15 @@
       "rebuild-tooltip": "Rebuild (resume) — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "minimize-tooltip": "Minimize to sidebar",
       "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab"
+    },
+    "prep": {
+      "starting": "starting CLI",
+      "checking-dialog": "checking startup dialog",
+      "settling": "waiting for CLI prompt",
+      "injecting-role": "injecting role",
+      "waiting-agent": "waiting for agent",
+      "ready": "ready",
+      "failed": "setup failed"
     }
   },
   "action": {
@@ -272,6 +281,8 @@
   },
   "label": {
     "branch": "Branch",
+    "no-role": "No role",
+    "manual": "manual",
     "staged-changes": "Staged Changes",
     "changes": "Changes",
     "no-changes": "No changes",

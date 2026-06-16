@@ -42,6 +42,7 @@ import {
   type StageId,
   type StageSlot
 } from './data/stages'
+import { i18n } from './i18n'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { quickClassify } from './lib/quick-classify'
@@ -163,7 +164,7 @@ watch(settingsApi.language, () => {
 })
 
 function roleLabel(key: string): string {
-  if (!key) return 'No role'
+  if (!key) return i18n.global.t('label.no-role')
   return rolesApi.find(key)?.label ?? key
 }
 
@@ -1614,6 +1615,7 @@ interface ProjectPane {
   slot_label?: string
   kickoff_status?: string
   custom_name?: string
+  is_minimized?: boolean
 }
 
 interface ProjectPayload {
@@ -1923,6 +1925,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     if (saved.custom_name) {
       const restored = panes.value.find((p) => p.id === paneId)
       if (restored) restored.customName = saved.custom_name
+    }
+
+    // Re-apply the persisted collapsed-to-sidebar state to the new pane id.
+    if (saved.is_minimized) {
+      minimizedPanes.value = new Set([...minimizedPanes.value, paneId])
     }
 
     // Fresh (non-resume) Claude spawns pin a brand-new --session-id; persist
@@ -4380,6 +4387,7 @@ function minimizePane(id: string): void {
   if (focusPaneId.value === id) {
     focusPaneId.value = panes.value.find((p) => p.id !== id && !minimizedPanes.value.has(p.id))?.id ?? null
   }
+  persistPaneMinimized(id, true)
   syncViews()
 }
 
@@ -4388,7 +4396,20 @@ function restorePane(id: string): void {
   next.delete(id)
   minimizedPanes.value = next
   if (layoutMode.value !== 'grid') focusPaneId.value = id
+  persistPaneMinimized(id, false)
   syncViews()
+}
+
+// Persist the pane's collapsed-to-sidebar state to project.json so it survives
+// a restart (mirrors project.rename_pane / custom_name).
+function persistPaneMinimized(id: string, isMinimized: boolean): void {
+  const pane = panes.value.find((p) => p.id === id)
+  if (!pane) return
+  backend.send('project.set_pane_minimized', {
+    workspace_path: pane.workspacePath,
+    pane_id: pane.id,
+    is_minimized: isMinimized,
+  })
 }
 
 // Keep focusPaneId valid as panes are added/removed
@@ -4905,29 +4926,29 @@ const latestPipelineLog = computed<string>(() => {
 
 function paneSubtitle(p: ActivePane): string {
   const preparationLabel = panePreparationLabel(p)
-  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · manual · ${preparationLabel}`
+  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · ${i18n.global.t('label.manual')} · ${preparationLabel}`
   const stage = stagesApi.stageById.value[p.stageId] ?? { shortTitle: p.stageId }
   const prefix = p.origin === 'pipeline' ? `P${p.stageId} · ` : ''
-  const stageLabel = stage.shortTitle || 'manual'
+  const stageLabel = stage.shortTitle || i18n.global.t('label.manual')
   return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel} · ${preparationLabel}`
 }
 
 function panePreparationLabel(p: ActivePane): string {
   switch (p.preparationStatus) {
     case 'starting':
-      return 'starting CLI'
+      return i18n.global.t('pane.prep.starting')
     case 'checking-dialog':
-      return 'checking startup dialog'
+      return i18n.global.t('pane.prep.checking-dialog')
     case 'settling':
-      return 'waiting for CLI prompt'
+      return i18n.global.t('pane.prep.settling')
     case 'injecting-role':
-      return 'injecting role'
+      return i18n.global.t('pane.prep.injecting-role')
     case 'waiting-agent':
-      return 'waiting for agent'
+      return i18n.global.t('pane.prep.waiting-agent')
     case 'ready':
-      return 'ready'
+      return i18n.global.t('pane.prep.ready')
     case 'failed':
-      return 'setup failed'
+      return i18n.global.t('pane.prep.failed')
   }
 }
 
