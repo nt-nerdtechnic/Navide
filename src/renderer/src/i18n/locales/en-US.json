@@ -8,7 +8,9 @@
     "terminal": {
       "rebuild-tooltip": "Rebuild (resume) — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "minimize-tooltip": "Minimize to sidebar",
-      "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab"
+      "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab",
+      "commander-tooltip": "Global Manager — coordinates across stages, decides ---STAGE-DONE---",
+      "idle-status-tooltip": "Process still alive, but agent has finished the last turn and is at an interactive prompt"
     },
     "prep": {
       "starting": "starting CLI",

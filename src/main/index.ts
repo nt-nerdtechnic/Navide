@@ -592,6 +592,35 @@ if (!gotSingleInstanceLock) {
   })
 }
 
+// Lock down top-level navigation. By default, dropping a file onto a window (or
+// any stray location change) navigates the whole window to that URL, replacing
+// the app with e.g. a raw .js file's source. This app is a single index.html
+// SPA — it never legitimately navigates away — so allow only the dev-server
+// origin (HMR/reloads) and our own index.html, and deny every window.open
+// except external http(s) links routed to the OS browser.
+const DEV_ORIGIN = process.env['ELECTRON_RENDERER_URL']
+  ? new URL(process.env['ELECTRON_RENDERER_URL']).origin
+  : null
+function isAppNavigation(url: string): boolean {
+  try {
+    const u = new URL(url)
+    if (DEV_ORIGIN && u.origin === DEV_ORIGIN) return true
+    if (u.protocol === 'file:') return u.pathname.endsWith('/renderer/index.html')
+  } catch {
+    // Malformed URL — treat as not-app and block.
+  }
+  return false
+}
+app.on('web-contents-created', (_e, contents) => {
+  contents.on('will-navigate', (e, url) => {
+    if (!isAppNavigation(url)) e.preventDefault()
+  })
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+})
+
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
   // In dev mode, inject the per-session random token into every renderer →

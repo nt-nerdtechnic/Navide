@@ -5271,6 +5271,7 @@ function paneIsCommander(p: ActivePane): boolean {
             class="meeting-item"
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
             @click="onSetFocus(p.id)"
+            @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
             <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
             <div class="meeting-info">
@@ -5331,6 +5332,7 @@ function paneIsCommander(p: ActivePane): boolean {
             class="meeting-item"
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
             @click="onSetFocus(p.id)"
+            @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
             <span class="meeting-avatar">{{ p.agentLabel.charAt(0).toUpperCase() }}</span>
             <div class="meeting-info">
