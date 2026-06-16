@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
@@ -596,6 +596,45 @@ if (!app.isPackaged) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
+// Folder paths handed to the app from outside (Finder "Open With", a macOS
+// Quick Action, or CLI args) open as workspaces. Paths that arrive via the
+// `open-file` event before the app is ready (cold launch) are queued here and
+// drained in whenReady once a window can be created.
+const pendingOpenPaths: string[] = []
+
+// Resolve an incoming path to a workspace folder (a file resolves to its parent)
+// and open it in a new main window. Returns false if the path doesn't exist.
+function openWorkspaceFromPath(p: string): boolean {
+  const target = (p ?? '').trim()
+  if (!target) return false
+  let dir: string
+  try {
+    dir = statSync(target).isDirectory() ? target : dirname(target)
+  } catch {
+    return false
+  }
+  if (app.isReady()) {
+    void createWindow({ workspace_path: dir })
+  } else {
+    pendingOpenPaths.push(dir)
+  }
+  return true
+}
+
+// Pull workspace folder paths out of a process argv array (cold-start CLI args
+// or a relaunch's second-instance argv). Skips flags and the executable itself.
+function workspacePathsFromArgv(argv: string[]): string[] {
+  return argv.slice(1).filter((a) => a && !a.startsWith('-') && existsSync(a))
+}
+
+// macOS delivers folders/files opened via Finder, "Open With", or a Quick Action
+// (`open -b <bundleid> <path>`) through this event — the canonical way to receive
+// an external path. Register it as early as possible so launch-time events queue.
+app.on('open-file', (event, p) => {
+  event.preventDefault()
+  openWorkspaceFromPath(p)
+})
+
 // Single-instance lock: a second launch must NOT spawn a parallel backend.
 // On macOS, closing the window leaves the app alive (see window-all-closed
 // below), so relaunching from Finder/Dock would otherwise start a second main
@@ -610,9 +649,17 @@ const gotSingleInstanceLock = !app.isPackaged || app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    // User relaunched while we're already running: focus the existing window
-    // (or create one) and reuse the running backend instead of booting another.
+  app.on('second-instance', (_event, argv) => {
+    // A relaunch carrying folder paths (e.g. a Quick Action that still uses
+    // `open -n`) lands here because we hold the single-instance lock. Open the
+    // folders as workspaces instead of dropping them.
+    const paths = workspacePathsFromArgv(argv)
+    if (paths.length) {
+      for (const dir of paths) openWorkspaceFromPath(dir)
+      return
+    }
+    // Plain relaunch with no path: focus the existing window (or create one) and
+    // reuse the running backend instead of booting another.
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore()
       mainWindow.focus()
@@ -678,7 +725,18 @@ app.whenReady().then(async () => {
     console.error('[main] backend failed to start', err)
   }
 
-  await createWindow()
+  // Open any folders requested at launch: queued open-file events (macOS cold
+  // launch from a Quick Action) plus CLI path args on a packaged build. Dev runs
+  // skip argv parsing — electron-vite's argv contains paths that aren't workspaces.
+  const queued = [...pendingOpenPaths]
+  pendingOpenPaths.length = 0
+  const cli = app.isPackaged ? workspacePathsFromArgv(process.argv) : []
+  const launchPaths = [...new Set([...queued, ...cli])]
+  let openedAny = false
+  for (const p of launchPaths) {
+    if (openWorkspaceFromPath(p)) openedAny = true
+  }
+  if (!openedAny) await createWindow()
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()
