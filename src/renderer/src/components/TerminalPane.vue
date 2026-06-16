@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useTerminal } from '../composables/useTerminal'
 import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
@@ -23,10 +23,37 @@ const emit = defineEmits<{
   (e: 'set-focus'): void
   (e: 'minimize'): void
   (e: 'rebuild'): void
+  (e: 'rename', name: string): void
   (e: 'context-menu', ev: MouseEvent): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
+
+// Inline title rename — double-click the header title to edit, Enter/blur to
+// commit, Escape to cancel. The committed name bubbles up as a 'rename' event.
+const editingTitle = ref(false)
+const titleDraft = ref('')
+const titleInput = ref<HTMLInputElement | null>(null)
+let _cancelledTitle = false
+
+async function startTitleEdit(): Promise<void> {
+  _cancelledTitle = false
+  titleDraft.value = props.title
+  editingTitle.value = true
+  await nextTick()
+  titleInput.value?.select()
+}
+
+function commitTitleEdit(): void {
+  if (_cancelledTitle) return
+  editingTitle.value = false
+  emit('rename', titleDraft.value.trim())
+}
+
+function onTitleKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter') { e.preventDefault(); commitTitleEdit() }
+  if (e.key === 'Escape') { e.preventDefault(); _cancelledTitle = true; editingTitle.value = false }
+}
 
 const terminal = useTerminal(props.paneId, props.backend)
 const { theme } = useTheme()
@@ -84,7 +111,7 @@ onMounted(() => {
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
       class="pane-header"
-      draggable="true"
+      :draggable="!editingTitle"
       :title="$t('pane.terminal.drag-to-tab-tooltip')"
       @click="emit('set-focus')"
       @dragstart="onHeaderDragStart"
@@ -92,7 +119,22 @@ onMounted(() => {
     >
       <div class="header-main">
         <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
-        <span class="title">{{ title }}</span>
+        <input
+          v-if="editingTitle"
+          ref="titleInput"
+          class="title-edit"
+          v-model="titleDraft"
+          @keydown="onTitleKeydown"
+          @blur="commitTitleEdit"
+          @click.stop
+          @dblclick.stop
+        />
+        <span
+          v-else
+          class="title"
+          :title="$t('pane.terminal.rename-title-tooltip')"
+          @dblclick.stop="startTitleEdit"
+        >{{ title }}</span>
         <span v-if="isCommander" class="commander-inline" :title="$t('pane.terminal.commander-tooltip')">🎯 Mgr</span>
         <span
           class="status"
@@ -203,6 +245,17 @@ onMounted(() => {
 }
 .title {
   font-weight: 600;
+}
+.title-edit {
+  font: inherit;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-default);
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 4px;
+  padding: 1px 5px;
+  min-width: 0;
+  outline: none;
 }
 .commander-inline {
   font-size: 9px;

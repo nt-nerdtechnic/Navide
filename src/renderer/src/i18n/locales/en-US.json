@@ -10,7 +10,8 @@
       "minimize-tooltip": "Minimize to sidebar",
       "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab",
       "commander-tooltip": "Global Manager — coordinates across stages, decides ---STAGE-DONE---",
-      "idle-status-tooltip": "Process still alive, but agent has finished the last turn and is at an interactive prompt"
+      "idle-status-tooltip": "Process still alive, but agent has finished the last turn and is at an interactive prompt",
+      "rename-title-tooltip": "Double-click to rename this pane"
     },
     "prep": {
       "starting": "starting CLI",

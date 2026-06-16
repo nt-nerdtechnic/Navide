@@ -4620,21 +4620,26 @@ function startRenamePane(paneId: string): void {
   void nextTick(() => { renameInput.value?.focus(); renameInput.value?.select() })
 }
 
+// Applies a custom display name to a pane and persists it. Shared by the
+// context-menu rename dialog and the inline (double-click) header edit.
+function setPaneCustomName(paneId: string, rawName: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const name = rawName.trim()
+  // Empty name resets to the default label.
+  pane.customName = name && name !== pane.agentLabel ? name : undefined
+  syncViews()
+  backend.send('project.rename_pane', {
+    workspace_path: pane.workspacePath,
+    pane_id: pane.id,
+    custom_name: pane.customName ?? '',
+  })
+}
+
 function confirmRenamePane(): void {
   const r = renamingPane.value
   if (!r) return
-  const pane = panes.value.find((p) => p.id === r.paneId)
-  if (pane) {
-    const name = r.value.trim()
-    // Empty name resets to the default label.
-    pane.customName = name && name !== pane.agentLabel ? name : undefined
-    syncViews()
-    backend.send('project.rename_pane', {
-      workspace_path: pane.workspacePath,
-      pane_id: pane.id,
-      custom_name: pane.customName ?? '',
-    })
-  }
+  setPaneCustomName(r.paneId, r.value)
   renamingPane.value = null
 }
 
@@ -5386,7 +5391,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
           :pane-id="p.id"
-          :title="p.agentLabel"
+          :title="p.customName || p.agentLabel"
           :subtitle="paneSubtitle(p)"
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
@@ -5396,6 +5401,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
+          @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->

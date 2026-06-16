@@ -10,7 +10,8 @@
       "minimize-tooltip": "縮到側邊欄",
       "drag-to-tab-tooltip": "拖曳到上方 tab 可移動到其他分頁",
       "commander-tooltip": "全域管理者 — 跨階段協調,決定 ---STAGE-DONE---",
-      "idle-status-tooltip": "程序仍存活,但 Agent 已完成最後一個回合,正停在互動提示字元"
+      "idle-status-tooltip": "程序仍存活,但 Agent 已完成最後一個回合,正停在互動提示字元",
+      "rename-title-tooltip": "雙擊可重新命名此 pane"
     },
     "prep": {
       "starting": "啟動 CLI 中",
