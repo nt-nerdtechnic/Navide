@@ -51,9 +51,21 @@ uv run pyinstaller agent_team_backend.spec
 cd ..
 
 echo ""
-echo "=== [2/3] Packaging Electron app ==="
+echo "=== [2/4] Packaging Electron app ==="
 CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dist
 
 echo ""
-echo "=== [3/3] Done ==="
+echo "=== [3/4] Installing to /Applications ==="
+APP_PATH=$(find dist-release -maxdepth 2 -name "*.app" -type d | head -n1)
+if [ -n "$APP_PATH" ]; then
+  APP_NAME=$(basename "$APP_PATH")
+  rm -rf "/Applications/$APP_NAME"
+  cp -R "$APP_PATH" "/Applications/"
+  echo "Installed: /Applications/$APP_NAME"
+else
+  echo "WARNING: no .app found under dist-release; skipping install"
+fi
+
+echo ""
+echo "=== [4/4] Done ==="
 open dist-release
