@@ -7,6 +7,7 @@ import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
+import type { IssueDetail } from '../composables/useIssues'
 
 export interface AgentSpec {
   agentKey: string
@@ -189,6 +190,7 @@ const emit = defineEmits<{
   (e: 'switch-workspace'): void
   (e: 'workspace-browse', path: string): void
   (e: 'update:layoutMode', v: LayoutMode): void
+  (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
 }>()
 
 const yoloLocal = computed<boolean>({
@@ -546,6 +548,13 @@ const runningCount = computed(
   () => props.panes.filter((p) => p.status === 'running' || p.status === 'starting').length
 )
 
+// Running agent panes an issue can be dispatched to (id + display label).
+const dispatchTargets = computed(() =>
+  props.panes
+    .filter((p) => p.status === 'running' || p.status === 'starting')
+    .map((p) => ({ id: p.id, label: p.slotLabel || p.roleLabel || p.agentLabel }))
+)
+
 const pipelineProgress = computed(() => {
   const total = props.pipeline.totalStages || props.stages.length || 1
   if (props.pipeline.state === 'idle') return 0
@@ -725,8 +734,10 @@ function onExplorerDividerEnd(): void {
           :workspace-path="workspace ?? ''"
           :analyzer-model="analyzerModel"
           :backend="backend"
+          :dispatch-targets="dispatchTargets"
           @changes-count="gitChangesCount = $event"
           @open-workspace="$emit('workspace-browse', $event)"
+          @dispatch-issue="$emit('dispatch-issue', $event)"
         />
       </div>
       <div class="part-resize" title="Drag to resize" @mousedown="onExplorerDividerStart">

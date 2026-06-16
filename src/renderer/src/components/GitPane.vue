@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import { useIssues } from '../composables/useIssues'
+import type { IssueDetail } from '../composables/useIssues'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
@@ -14,6 +15,9 @@ const props = defineProps<{
   // When embedded in the editor window, "open in editor" opens in-place via the
   // `open-file` event instead of spawning a separate editor window.
   embedded?: boolean
+  // Running agent panes an issue can be dispatched to. Empty (e.g. editor
+  // window) hides the "Dispatch to Agent" control.
+  dispatchTargets?: { id: string; label: string }[]
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +27,7 @@ const emit = defineEmits<{
   (e: 'open-conflict', payload: { filepath: string; name: string }): void
   (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string }): void
   (e: 'open-branch-diff', payload: { base: string; compare: string }): void
+  (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
 }>()
 
 function openBranchDiffTab(base = 'main'): void {
@@ -967,6 +972,21 @@ function issueProviderLabel(): string {
   if (issueProvider.value.provider === 'github') return 'GitHub'
   if (issueProvider.value.provider === 'gitlab') return 'GitLab'
   return ''
+}
+
+// ── dispatch issue to a running agent pane ────────────────────────────────────
+const dispatchTargets = computed(() => props.dispatchTargets ?? [])
+const showDispatchMenu = ref(false)
+function dispatchTo(paneId: string): void {
+  const issue = selectedIssue.value
+  if (!issue) return
+  emit('dispatch-issue', { paneId, issue })
+  showDispatchMenu.value = false
+}
+function onDispatchClick(): void {
+  const targets = dispatchTargets.value
+  if (targets.length === 1) dispatchTo(targets[0].id)
+  else if (targets.length > 1) showDispatchMenu.value = !showDispatchMenu.value
 }
 
 // ── diff blame (used by toggleHistoryPanel) ───────────────────────────────────
@@ -2100,6 +2120,20 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <div class="input-row" style="margin-bottom:6px">
               <button class="btn-ghost sm" @click="closeIssueDetail">← Back</button>
               <div class="spacer" />
+              <div class="dispatch-wrap">
+                <button
+                  class="btn-ghost sm"
+                  :disabled="!dispatchTargets.length"
+                  :title="dispatchTargets.length ? 'Send this issue to a running agent' : 'No running agent'"
+                  @click="onDispatchClick"
+                >Dispatch to Agent</button>
+                <div v-if="showDispatchMenu" class="dispatch-menu">
+                  <button
+                    v-for="t in dispatchTargets" :key="t.id"
+                    class="dispatch-menu-item" @click="dispatchTo(t.id)"
+                  >{{ t.label }}</button>
+                </div>
+              </div>
               <a class="btn-ghost sm" :href="selectedIssue.url" target="_blank" rel="noopener">Open ↗</a>
               <button class="btn-ghost sm" :disabled="isIssueSubmitting" @click="toggleIssueState">
                 {{ selectedIssue.state === 'open' ? 'Close' : 'Reopen' }}
@@ -2851,6 +2885,17 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: var(--bg-muted); border-radius: 4px; padding: 6px; margin: 0 0 4px; font-family: inherit;
 }
 .issue-comment { border-top: 1px solid var(--border-faint, var(--border)); padding-top: 4px; margin-top: 4px; }
+.dispatch-wrap { position: relative; display: inline-block; }
+.dispatch-menu {
+  position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 2px;
+  background: var(--bg-elevated, var(--bg-muted)); border: 1px solid var(--border);
+  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.25); min-width: 120px; padding: 2px;
+}
+.dispatch-menu-item {
+  display: block; width: 100%; text-align: left; padding: 4px 8px; font-size: 11px;
+  background: none; border: none; color: var(--text-primary); cursor: pointer; border-radius: 3px;
+}
+.dispatch-menu-item:hover { background: var(--bg-hover-faint); }
 
 /* ── Config ─────────────────────────────────────────────────────────────────── */
 .config-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }

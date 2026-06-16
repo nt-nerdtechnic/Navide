@@ -243,3 +243,27 @@ export function useIssues(
     createIssue, addComment, setState,
   }
 }
+
+// Format an issue as the task text injected into a running agent pane. Pure so
+// it can be unit-tested without a component. No role/protocol preamble — the
+// target agent is already running with its own context.
+export function formatIssueForDispatch(issue: IssueDetail): string {
+  const parts: string[] = [
+    'Please work on this issue:',
+    '',
+    `#${issue.number} ${issue.title}`,
+  ]
+  if (issue.body.trim()) {
+    parts.push('', issue.body.trim())
+  }
+  if (issue.comments.length) {
+    parts.push('', '--- comments ---')
+    for (const c of issue.comments) {
+      parts.push(`${c.author}: ${c.body}`)
+    }
+  }
+  if (issue.url) {
+    parts.push('', `Link: ${issue.url}`)
+  }
+  return parts.join('\n')
+}

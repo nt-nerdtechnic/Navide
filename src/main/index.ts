@@ -694,7 +694,10 @@ app.on('before-quit', async (e) => {
     e.preventDefault()
     const b = backend
     backend = null
-    await b.stop()
+    // Never let a wedged backend block quit: cap the shutdown wait so the app
+    // always proceeds to quit even if stop() overruns.
+    const forced = new Promise<void>((r) => setTimeout(r, 3000))
+    await Promise.race([b.stop(), forced])
     app.quit()
   }
 })

@@ -29,6 +29,7 @@ import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
+import { formatIssueForDispatch, type IssueDetail } from './composables/useIssues'
 import type { RoleKey } from './data/roles'
 import {
   renderSlotKickoff,
@@ -631,6 +632,13 @@ async function injectPane(paneId: string, text: string, logLabel?: string, prese
   const ref = paneRefs[paneId]
   if (!ref?.sessionId) return false
   return injectText(ref.sessionId, text, logLabel, preserveNewlines)
+}
+
+// Dispatch a cloud issue into a running agent pane as a task (one-way: no
+// write-back to the issue). Reuses the pipeline-kickoff injection path.
+async function onDispatchIssue(payload: { paneId: string; issue: IssueDetail }): Promise<void> {
+  const ok = await injectPane(payload.paneId, formatIssueForDispatch(payload.issue), 'issue-dispatch', true)
+  if (!ok) console.warn(`[dispatch-issue] injection failed for pane ${payload.paneId}`)
 }
 
 // Default delay if no startup trust dialog is observed.
@@ -5173,6 +5181,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"
       @workspace-browse="onWorkspaceBrowse"
+      @dispatch-issue="onDispatchIssue"
     />
     <QuestionAlert
       :visible="!!activeQuestion"

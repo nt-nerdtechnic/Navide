@@ -110,11 +110,19 @@ export async function startBackend(): Promise<BackendHandle> {
           resolve()
           return
         }
-        proc.once('exit', () => resolve())
-        proc.kill('SIGTERM')
-        setTimeout(() => {
+        // Always resolve within the grace period. If the process already exited
+        // before this listener attached (e.g. the backend crashed, which is why
+        // the UI was stuck "connecting…"), 'exit' never fires again — so the
+        // timeout below must resolve unconditionally, or app quit hangs forever.
+        const timer = setTimeout(() => {
           if (proc.exitCode === null) proc.kill('SIGKILL')
+          resolve()
         }, 2000)
+        proc.once('exit', () => {
+          clearTimeout(timer)
+          resolve()
+        })
+        proc.kill('SIGTERM')
       })
   }
 
