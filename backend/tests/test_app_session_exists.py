@@ -47,6 +47,32 @@ def test_claude_session_file_encodes_non_alphanumeric_chars(
     assert _session_exists("claude", ws, session_id) is True
 
 
+def test_claude_session_exists_tolerates_trailing_slash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A trailing slash on the workspace path must not break resume lookup.
+
+    Claude encodes its normalized cwd (no trailing separator); the frontend may
+    pass a path with one. Without rstrip the extra '-' misses the real dir.
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    ws = "/Users/neillu/Desktop/Agent-Team"
+    session_id = "sess-789"
+    transcript = (
+        tmp_path
+        / ".claude"
+        / "projects"
+        / "-Users-neillu-Desktop-Agent-Team"
+        / f"{session_id}.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n", encoding="utf-8")
+
+    assert _session_exists("claude", ws + "/", session_id) is True
+    assert _session_exists("claude", ws, session_id) is True
+
+
 def test_detected_codex_gemini_sessions_are_trusted() -> None:
     assert _session_exists("codex", "/tmp/ws", "codex-sess") is True
     assert _session_exists("gemini", "/tmp/ws", "gemini-sess") is True

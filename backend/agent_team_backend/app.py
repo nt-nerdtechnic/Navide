@@ -518,8 +518,11 @@ def _project_payload(project) -> dict[str, Any]:
 
 def _claude_session_file(workspace_path: str, session_id: str) -> Path:
     # Claude Code encodes the cwd by replacing EVERY non-alphanumeric char
-    # with "-" (dots, underscores, spaces, unicode — not just "/").
-    project_dir = re.sub(r"[^A-Za-z0-9]", "-", workspace_path)
+    # with "-" (dots, underscores, spaces, unicode — not just "/"). It encodes
+    # its *normalized* cwd, which never carries a trailing separator, so strip
+    # one the frontend may have sent: otherwise the extra "-" makes the encoded
+    # dir miss the real one and resume falsely reports the session "not found".
+    project_dir = re.sub(r"[^A-Za-z0-9]", "-", workspace_path.rstrip("/"))
     return Path.home() / ".claude" / "projects" / project_dir / f"{session_id}.jsonl"
 
 

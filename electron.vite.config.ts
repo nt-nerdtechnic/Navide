@@ -57,6 +57,13 @@ export default defineConfig({
     define: {
       __APP_BUILD__: JSON.stringify(APP_BUILD)
     },
+    // Pre-bundle monaco-editor at startup so Vite doesn't trigger a mid-session
+    // dependency re-optimization the first time Monaco lazily imports a language
+    // chunk (e.g. yaml). That re-optimization forces a full reload and drops the
+    // in-flight dynamic import → "Failed to fetch dynamically imported module".
+    optimizeDeps: {
+      include: ['monaco-editor'],
+    },
     plugins: [
       vue(),
       // Block all non-Electron requests with a per-session random token.
