@@ -5319,7 +5319,7 @@ function paneIsCommander(p: ActivePane): boolean {
       >
         <div class="float-pip-header" @mousedown.prevent="onPipDragStart">
           <span class="float-pip-title">
-            Agents ({{ paneViews.filter(v => !v.isMinimized).length }})
+            Agents ({{ paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length }})
           </span>
           <button class="float-pip-toggle" @mousedown.stop @click="floatPipExpanded = !floatPipExpanded; clampPipPos()">
             {{ floatPipExpanded ? '▾' : '▸' }}
@@ -5327,7 +5327,7 @@ function paneIsCommander(p: ActivePane): boolean {
         </div>
         <div v-if="floatPipExpanded" class="float-pip-list" :style="{ maxHeight: floatPipListMaxHeight + 'px' }">
           <div
-            v-for="p in paneViews.filter(v => !v.isMinimized)"
+            v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
             :key="p.id"
             class="meeting-item"
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
@@ -5344,7 +5344,7 @@ function paneIsCommander(p: ActivePane): boolean {
             </div>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
-          <div v-if="paneViews.filter(v => !v.isMinimized).length === 0" class="meeting-empty">
+          <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
             只有一個 agent
           </div>
         </div>
