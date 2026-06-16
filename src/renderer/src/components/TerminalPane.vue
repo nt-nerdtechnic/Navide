@@ -93,11 +93,11 @@ onMounted(() => {
       <div class="header-main">
         <span v-if="pipeTag" class="pipe-tag">{{ pipeTag }}</span>
         <span class="title">{{ title }}</span>
-        <span v-if="isCommander" class="commander-inline" title="Global Manager — coordinates across stages, decides ---STAGE-DONE---">🎯 Mgr</span>
+        <span v-if="isCommander" class="commander-inline" :title="$t('pane.terminal.commander-tooltip')">🎯 Mgr</span>
         <span
           class="status"
           :data-status="displayStatus"
-          :title="displayStatus === 'idle' ? 'Process still alive, but agent has finished the last turn and is at an interactive prompt' : ''"
+          :title="displayStatus === 'idle' ? $t('pane.terminal.idle-status-tooltip') : ''"
         >{{ displayStatus }}</span>
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
