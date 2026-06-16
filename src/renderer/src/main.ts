@@ -57,6 +57,13 @@ function showFatalIfBlank(label: string, err: unknown): void {
 window.addEventListener('error', (e) => showFatalIfBlank('Uncaught error', e.error ?? e.message))
 window.addEventListener('unhandledrejection', (e) => logErr('Unhandled promise rejection', e.reason))
 
+// Dropping a file onto any area without its own drop handler would otherwise
+// navigate the whole window to that file (Electron default), wiping the app.
+// Swallow stray drags at the document level; explicit drop zones still work
+// because their handlers run during dispatch before this bubble-phase default.
+window.addEventListener('dragover', (e) => e.preventDefault())
+window.addEventListener('drop', (e) => e.preventDefault())
+
 try {
   const app = createApp(Root)
   app.use(i18n)
