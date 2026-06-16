@@ -19,6 +19,12 @@ export interface GitStatus {
   operation_in_progress: string // '' | 'merge' | 'rebase' | 'cherry-pick'
 }
 
+export interface DiscoveredRepo {
+  rel_path: string
+  abs_path: string
+  branch: string
+}
+
 export type IgnoreTarget = 'project' | 'nested' | 'local' | 'global'
 
 export interface CheckIgnoreResult {
@@ -126,6 +132,8 @@ export function useGit(
   const { send, on } = backend
 
   const gitStatus = ref<GitStatus>(emptyStatus())
+  // Nested git repos found by scanning downward when the root is NOT a repo.
+  const discoveredRepos = ref<DiscoveredRepo[]>([])
   const showIgnored = ref(false)
   const gitLog = ref<GitCommit[]>([])
   // History view scope (SourceTree-style): 'all' shows every branch's commits as
@@ -191,11 +199,37 @@ export function useGit(
       })
       if (resp.ok && resp.payload && workspacePath() === ws) {
         gitStatus.value = resp.payload
+        // Root isn't a repo — git only searches upward, so scan downward for
+        // nested repos to offer in the empty state. Clear stale results first.
+        if (resp.payload.is_git_repo) {
+          discoveredRepos.value = []
+        } else {
+          void discoverRepositories()
+        }
       }
     } catch {
       // transient WS error — loading flag reset in finally
     } finally {
       if (workspacePath() === ws) isLoadingStatus.value = false
+    }
+  }
+
+  async function discoverRepositories(): Promise<void> {
+    const ws = workspacePath()
+    if (!ws) {
+      discoveredRepos.value = []
+      return
+    }
+    try {
+      const resp = await send<{ ok: boolean; repositories: DiscoveredRepo[] }>(
+        'git.discover_repositories',
+        { workspace_path: ws },
+      )
+      if (resp.ok && resp.payload?.ok && workspacePath() === ws) {
+        discoveredRepos.value = resp.payload.repositories ?? []
+      }
+    } catch {
+      // transient WS error — leave previous list untouched
     }
   }
 
@@ -819,8 +853,10 @@ export function useGit(
 
   const isInitializing = ref(false)
 
-  async function initRepo(createGitignore = true): Promise<{ ok: boolean; error?: string; gitignore_created?: boolean }> {
-    const ws = workspacePath()
+  async function initRepo(createGitignore = true, targetPath?: string): Promise<{ ok: boolean; error?: string; gitignore_created?: boolean }> {
+    // targetPath lets the caller init a specific folder (e.g. a subfolder picked
+    // from the empty state) instead of the active workspace.
+    const ws = targetPath || workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     isInitializing.value = true
     try {
@@ -829,8 +865,12 @@ export function useGit(
         { workspace_path: ws, create_gitignore: createGitignore },
       )
       if (resp.ok && resp.payload?.ok) {
-        await loadStatus()
-        await loadLog()
+        // When initializing a different folder the caller re-points the
+        // workspace, which reloads status/log on its own — skip the in-place refresh.
+        if (!targetPath) {
+          await loadStatus()
+          await loadLog()
+        }
         return { ok: true, gitignore_created: resp.payload.gitignore_created }
       }
       return { ok: false, error: resp.payload?.error || resp.error?.message || 'git init failed' }
@@ -1220,7 +1260,7 @@ export function useGit(
 
   return {
     // state
-    gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+    gitStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
     gitWorktrees, gitConfig,
     logScope, logLimit, canLoadMoreLog,
     isLoadingStatus, isLoadingLog, isInitializing,
@@ -1228,7 +1268,7 @@ export function useGit(
     syncOutput, syncError,
     gitError, clearGitError,
     // loaders
-    loadStatus, loadLog, loadMoreLog, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
+    loadStatus, discoverRepositories, loadLog, loadMoreLog, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
     loadWorktrees, loadGitConfig,
     // init
     initRepo,

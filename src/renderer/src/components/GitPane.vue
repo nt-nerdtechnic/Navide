@@ -41,7 +41,7 @@ function openBranchDiffTab(base = 'main'): void {
 }
 
 const {
-  gitStatus, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+  gitStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
   logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
   isCommitting, isFetching, isGenerating, isInitializing,
@@ -364,6 +364,17 @@ async function doInit(createGitignore: boolean): Promise<void> {
   const r = await initRepo(createGitignore)
   if (!r.ok) initError.value = r.error || 'git init failed'
   else commitMessage.value = 'Initial commit'
+}
+
+// Pick any folder via the native picker and git init there, then open it.
+async function doInitInFolder(): Promise<void> {
+  initError.value = ''
+  if (!window.agentTeam?.pickWorkspace) return
+  const picked = await window.agentTeam.pickWorkspace(props.workspacePath || undefined)
+  if (!picked) return
+  const r = await initRepo(true, picked)
+  if (!r.ok) { initError.value = r.error || 'git init failed'; return }
+  emit('open-workspace', picked)
 }
 
 // ── clone ───────────────────────────────────────────────────────────────────────
@@ -1275,6 +1286,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <button class="btn-ghost w-full" style="font-size:11px" :disabled="isInitializing" @click="doInit(false)">
         {{ $t('label.init-no-gitignore') }}
       </button>
+      <button class="btn-ghost w-full" style="font-size:11px" :disabled="isInitializing" @click="doInitInFolder">
+        {{ $t('label.init-in-folder') }}
+      </button>
       <p v-if="initError" class="err-text">{{ initError }}</p>
 
       <!-- Connect existing directory to a remote -->
@@ -1291,6 +1305,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           {{ connecting ? $t('label.connecting') : $t('action.connect-to-remote') }}
         </button>
         <p v-if="connectError" class="err-text">{{ connectError }}</p>
+      </div>
+
+      <!-- Nested repos found by scanning downward (git rev-parse only looks up) -->
+      <div v-if="discoveredRepos.length" class="discovered-box">
+        <div class="clone-title">{{ $t('label.nested-repos-title', { n: discoveredRepos.length }) }}</div>
+        <div class="clone-hint">{{ $t('label.nested-repos-hint') }}</div>
+        <button
+          v-for="repo in discoveredRepos"
+          :key="repo.abs_path"
+          class="repo-row"
+          @click="emit('open-workspace', repo.abs_path)"
+        >
+          <svg class="repo-icon" width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85A.5.5 0 0 0 6.5 2h-5a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-10a.5.5 0 0 0-.5-.5z"/></svg>
+          <span class="repo-path">{{ repo.rel_path }}</span>
+          <span v-if="repo.branch" class="repo-branch">{{ repo.branch }}</span>
+        </button>
       </div>
     </div>
 
@@ -2356,6 +2386,20 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .clone-dir-row { display: flex; gap: 6px; }
 .clone-dir-row .clone-input { flex: 1; }
 .clone-pick { flex-shrink: 0; font-size: 11px; }
+/* Nested repos discovered by downward scan */
+.discovered-box {
+  width: 100%; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-muted);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.repo-row {
+  display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box;
+  background: var(--bg-base); border: 1px solid var(--border-default); border-radius: 5px;
+  color: var(--text-primary); font-size: 11px; padding: 5px 8px; cursor: pointer; text-align: left;
+}
+.repo-row:hover { border-color: var(--accent-emphasis); background: var(--bg-elevated); }
+.repo-icon { flex-shrink: 0; color: var(--text-muted); }
+.repo-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-branch { flex-shrink: 0; font-size: 10px; color: var(--text-muted); }
 /* In-progress operation banner */
 .op-banner {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

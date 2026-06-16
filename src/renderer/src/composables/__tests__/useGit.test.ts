@@ -462,4 +462,37 @@ describe('useGit', () => {
     expect(result.logLimit.value).toBe(100)
     scope.stop()
   })
+
+  it('discovers nested repos when root is not a git repo', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', { is_git_repo: false })
+    mock.setResponse('git.log', { commits: [] })
+    mock.setResponse('git.discover_repositories', {
+      ok: true,
+      repositories: [{ rel_path: 'a', abs_path: '/tmp/test-workspace/a', branch: 'main' }],
+    })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    expect(result.gitStatus.value.is_git_repo).toBe(false)
+    expect(mock.sent.find(s => s.type === 'git.discover_repositories')).toBeDefined()
+    expect(result.discoveredRepos.value).toHaveLength(1)
+    expect(result.discoveredRepos.value[0].rel_path).toBe('a')
+    scope.stop()
+  })
+
+  it('does not discover repos when root is already a git repo', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.status', mockStatus)
+    mock.setResponse('git.log', { commits: [] })
+
+    const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+    await flush()
+
+    expect(result.gitStatus.value.is_git_repo).toBe(true)
+    expect(mock.sent.find(s => s.type === 'git.discover_repositories')).toBeUndefined()
+    expect(result.discoveredRepos.value).toHaveLength(0)
+    scope.stop()
+  })
 })

@@ -243,6 +243,49 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
     return asdict(status)
 
 
+async def discover_repositories(
+    workspace_path: str, max_depth: int = 3, limit: int = 20
+) -> dict[str, Any]:
+    """Scan *workspace_path* downward for nested git repositories.
+
+    ``git rev-parse`` only searches UPWARD, so a non-repo root with child repos
+    (e.g. a monorepo-of-repos or a projects folder) shows nothing. This walks the
+    tree itself — bounded by *max_depth* and *limit*, skipping noise dirs — and
+    returns each nested repo root. A directory is a repo root when it contains a
+    ``.git`` entry (dir or file; worktrees/submodules use a ``.git`` file).
+    """
+    from .fs_service import _NOISE_SEGMENTS
+
+    root = Path(workspace_path).resolve()
+    if not root.is_dir():
+        return {"ok": False, "error": "workspace not found", "repositories": []}
+
+    repos: list[dict[str, str]] = []
+    truncated = False
+    for dirpath, dirnames, _filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _NOISE_SEGMENTS and not d.startswith(".")]
+        here = Path(dirpath)
+        depth = len(here.relative_to(root).parts)
+        # The root itself can't be a repo (we'd not be discovering otherwise);
+        # check depth >= 1 dirs for a `.git` entry.
+        if depth >= 1 and (here / ".git").exists():
+            repos.append({"rel_path": str(here.relative_to(root)), "abs_path": str(here)})
+            dirnames[:] = []  # don't descend into a found repo's subtree
+            if len(repos) >= limit:
+                truncated = True
+                break
+            continue
+        if depth >= max_depth:
+            dirnames[:] = []  # stop descending past the depth cap
+
+    # Annotate each repo with its current branch (best-effort; empty on failure).
+    for repo in repos:
+        rc, out, _ = await _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo["abs_path"])
+        repo["branch"] = out.strip() if rc == 0 else ""
+
+    return {"ok": True, "repositories": repos, "truncated": truncated}
+
+
 async def get_log(
     workspace_path: str, n: int = 20, all_branches: bool = False
 ) -> list[dict[str, Any]]:

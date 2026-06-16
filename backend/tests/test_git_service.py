@@ -1801,3 +1801,68 @@ class TestDiffBranches:
         result = await git_service.diff_branches(str(tmp_path), "main", "feature")
         assert result["ok"] is True
         assert len(result["diff"]) == 30_000
+
+
+# ── discover_repositories ───────────────────────────────────────────────────────
+
+class TestDiscoverRepositories:
+    @pytest.mark.asyncio
+    async def test_non_existent_dir(self, tmp_path):
+        result = await git_service.discover_repositories(str(tmp_path / "nope"))
+        assert result["ok"] is False
+        assert result["repositories"] == []
+
+    @pytest.mark.asyncio
+    async def test_no_nested_repos(self, tmp_path):
+        (tmp_path / "plain").mkdir()
+        result = await git_service.discover_repositories(str(tmp_path))
+        assert result["ok"] is True
+        assert result["repositories"] == []
+
+    @pytest.mark.asyncio
+    async def test_finds_nested_repos_and_skips_noise(self, tmp_path):
+        # Two real nested repos at different depths.
+        (tmp_path / "a").mkdir()
+        init_repo(tmp_path / "a")
+        (tmp_path / "b" / "c").mkdir(parents=True)
+        init_repo(tmp_path / "b" / "c")
+        # A repo buried inside a noise dir + a hidden dir must be skipped.
+        (tmp_path / "node_modules" / "x").mkdir(parents=True)
+        init_repo(tmp_path / "node_modules" / "x")
+        (tmp_path / ".hidden").mkdir()
+        init_repo(tmp_path / ".hidden")
+
+        result = await git_service.discover_repositories(str(tmp_path))
+        found = {r["rel_path"] for r in result["repositories"]}
+        assert found == {"a", str(Path("b") / "c")}
+        # Branch annotation is present (best-effort, non-empty for a real repo).
+        for r in result["repositories"]:
+            assert r["branch"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_descend_into_found_repo(self, tmp_path):
+        # A repo nested inside another repo must not be reported separately.
+        (tmp_path / "outer").mkdir()
+        init_repo(tmp_path / "outer")
+        (tmp_path / "outer" / "inner").mkdir()
+        init_repo(tmp_path / "outer" / "inner")
+        result = await git_service.discover_repositories(str(tmp_path))
+        found = {r["rel_path"] for r in result["repositories"]}
+        assert found == {"outer"}
+
+    @pytest.mark.asyncio
+    async def test_respects_max_depth(self, tmp_path):
+        deep = tmp_path / "x" / "y" / "z"
+        deep.mkdir(parents=True)
+        init_repo(deep)  # depth 3
+        result = await git_service.discover_repositories(str(tmp_path), max_depth=2)
+        assert result["repositories"] == []
+
+    @pytest.mark.asyncio
+    async def test_respects_limit(self, tmp_path):
+        for name in ("r1", "r2", "r3"):
+            (tmp_path / name).mkdir()
+            init_repo(tmp_path / name)
+        result = await git_service.discover_repositories(str(tmp_path), limit=2)
+        assert len(result["repositories"]) == 2
+        assert result["truncated"] is True

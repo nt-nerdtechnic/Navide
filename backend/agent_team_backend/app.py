@@ -1499,6 +1499,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = await git_service.get_status(ws_path, include_ignored=include_ignored)
             await session.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "git.discover_repositories":
+            ws_path = payload.get("workspace_path") or ""
+            max_depth = min(int(payload.get("max_depth", 3)), 8)
+            limit = min(int(payload.get("limit", 20)), 100)
+            result = await git_service.discover_repositories(ws_path, max_depth=max_depth, limit=limit)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "git.log":
             ws_path = payload.get("workspace_path") or ""
             n = min(int(payload.get("n", 20)), 500)
