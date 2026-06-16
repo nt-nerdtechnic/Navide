@@ -6,6 +6,7 @@ import ControlPane, {
   type AgentSpec,
   type ActivePaneView,
   type SpawnPayload,
+  type ResumePayload,
   type PipelineState,
   type PipelineStatusView,
   type ExistingProjectInfo,
@@ -1238,6 +1239,58 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
       void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
     }
+  }
+}
+
+// Resume an existing agent session by id (Manual Spawn → Resume button). Reuses
+// the same resume path as boot-restore: validate → buildResumeCommand → spawnPane
+// with isResume/skipRoleInjection. No role is injected (the session already
+// carries its own context).
+async function onManualResume(payload: ResumePayload): Promise<void> {
+  const { agentKey, workspacePath } = payload
+  const sessionId = payload.sessionId.trim()
+  if (!sessionId) return
+  // Authoritative existence check: the datalist may list a since-deleted id, or
+  // the user may have pasted a bad one. Never fall through to a fresh spawn —
+  // that would silently start a brand-new agent and confuse the user.
+  const exists = await canResumeSession(agentKey, workspacePath, sessionId)
+  if (!exists) {
+    controlPaneRef.value?.showResumeError(i18n.global.t('label.resume-session-not-found'))
+    return
+  }
+  const spec = agentSpecs.find((s) => s.agentKey === agentKey)
+  const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+  const commandOverride = buildResumeCommand(agentKey, sessionId, skipFlag)
+  const spawnGroupId =
+    activeTab.value === 'manual'
+      ? ''
+      : runGroups.value.some((g) => g.id === activeTab.value)
+        ? activeTab.value
+        : currentRunGroupId.value || ''
+  const paneId = await spawnPane({
+    agentKey: agentKey as AgentKey,
+    roleKey: '' as RoleKey,
+    stageId: '' as StageId,
+    commandOverride,
+    workspacePath,
+    origin: 'manual',
+    runGroupId: spawnGroupId || undefined,
+    isResume: true,
+    skipRoleInjection: true,
+    restoreMode: 'memory-resume',
+    resumeSessionId: sessionId,
+  })
+  if (paneId) {
+    await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+      workspace_path: workspacePath,
+      pane_id: paneId,
+      agent: agentKey,
+      role: '',
+      command: commandOverride,
+      session_id: sessionId,
+      session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
+      run_group_id: spawnGroupId,
+    })
   }
 }
 
@@ -5026,7 +5079,9 @@ function paneIsCommander(p: ActivePane): boolean {
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
       v-model:auto-answer-enabled="autoAnswerEnabled"
+      :spawn-history="spawnHistory"
       @spawn="onManualSpawn"
+      @spawn-resume="onManualResume"
       @kill="onKill"
       @interrupt="onInterrupt"
       @kill-all="onKillAll"

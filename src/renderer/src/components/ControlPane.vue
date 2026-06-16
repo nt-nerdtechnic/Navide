@@ -51,6 +51,22 @@ export interface SpawnPayload {
   workspacePath: string
 }
 
+export interface ResumePayload {
+  agentKey: string
+  sessionId: string
+  workspacePath: string
+}
+
+/** Slim view of App's SpawnHistoryEntry — just what the resume datalist needs. */
+export interface ResumeHistoryEntry {
+  agentKey: string
+  agentLabel: string
+  roleLabel: string
+  sessionId?: string
+  workspacePath: string
+  spawnedAt: string
+}
+
 export interface PipelineSummary {
   id: string
   name: string
@@ -136,6 +152,8 @@ interface Props {
   activePipelineId?: string
   /** Full backend instance — forwarded to GitPane for git operations. */
   backend?: ReturnType<typeof useBackend>
+  /** Past spawns (incl. backend-backfilled manual panes) for the resume datalist. */
+  spawnHistory?: ResumeHistoryEntry[]
 }
 
 const props = defineProps<Props>()
@@ -147,6 +165,7 @@ const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
 const emit = defineEmits<{
   (e: 'spawn', payload: SpawnPayload): void
+  (e: 'spawn-resume', payload: ResumePayload): void
   (e: 'kill', paneId: string): void
   (e: 'kill-all'): void
   (e: 'interrupt', paneId: string): void
@@ -295,7 +314,7 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onExplorerDividerEnd)
 })
 
-defineExpose({ openPipelineDetail })
+defineExpose({ openPipelineDetail, showResumeError })
 
 const manualAgentSpecs = computed(() =>
   props.agentSpecs.filter((spec) => spec.agentKey !== 'terminal')
@@ -405,6 +424,49 @@ async function openStagesWindow(): Promise<void> {
 const canSpawn = computed(
   () => props.backendStatus === 'connected' && workspacePath.value.trim().length > 0
 )
+
+// ── Resume an existing session by id (right of "Open Terminal") ───────────────
+const resumeSessionId = ref<string>('')
+// Validation runs in App.vue (it owns the backend round-trip); the not-found
+// message is pushed back here via the exposed showResumeError().
+const resumeNotice = ref<string>('')
+
+// Datalist options: past sessions for the currently-picked CLI in this
+// workspace that carry a session id, newest first, deduped by id.
+const resumeOptions = computed<{ sessionId: string; label: string }[]>(() => {
+  const seen = new Set<string>()
+  const out: { sessionId: string; label: string }[] = []
+  for (const entry of [...(props.spawnHistory ?? [])].reverse()) {
+    const sid = (entry.sessionId ?? '').trim()
+    if (!sid || entry.agentKey !== pickedAgent.value) continue
+    if (entry.workspacePath !== workspacePath.value || seen.has(sid)) continue
+    seen.add(sid)
+    const when = entry.spawnedAt.slice(0, 16).replace('T', ' ')
+    out.push({ sessionId: sid, label: `${entry.agentLabel} · ${entry.roleLabel || '—'} · ${when}` })
+  }
+  return out
+})
+
+const canResume = computed(() => canSpawn.value && resumeSessionId.value.trim().length > 0)
+
+// Clear a stale not-found hint as soon as the user edits the id.
+watch(resumeSessionId, () => {
+  resumeNotice.value = ''
+})
+
+function resumeAgent(): void {
+  if (!canResume.value) return
+  resumeNotice.value = ''
+  emit('spawn-resume', {
+    agentKey: pickedAgent.value,
+    sessionId: resumeSessionId.value.trim(),
+    workspacePath: workspacePath.value
+  })
+}
+
+function showResumeError(message: string): void {
+  resumeNotice.value = message
+}
 
 // Stage count for the pipeline currently being viewed (may differ from active pipeline)
 const effectiveStageCount = computed(() => {
@@ -953,6 +1015,24 @@ function onExplorerDividerEnd(): void {
             <button class="primary wide" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
             <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
           </div>
+          <div class="row resume-actions">
+            <input
+              v-model="resumeSessionId"
+              class="resume-input"
+              list="resume-session-list"
+              :placeholder="$t('label.resume-session-id')"
+              :disabled="!canSpawn"
+            />
+            <datalist id="resume-session-list">
+              <option v-for="opt in resumeOptions" :key="opt.sessionId" :value="opt.sessionId">
+                {{ opt.label }}
+              </option>
+            </datalist>
+            <button class="ghost resume-btn" :disabled="!canResume" @click="resumeAgent">
+              {{ $t('action.resume-agent') }}
+            </button>
+          </div>
+          <p v-if="resumeNotice" class="hint warn">{{ resumeNotice }}</p>
           <p v-if="!canSpawn" class="hint warn">
             {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
           </p>
@@ -1411,6 +1491,23 @@ textarea.drag-over {
 }
 .terminal-btn:hover:not(:disabled) {
   opacity: 1;
+}
+.resume-actions {
+  gap: 4px;
+  align-items: stretch;
+}
+.resume-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 4px 6px;
+  background: var(--bg-muted);
+  color: var(--text-bright);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+}
+.resume-btn {
+  flex-shrink: 0;
 }
 
 button {
