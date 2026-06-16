@@ -79,13 +79,13 @@ onMounted(() => {
       v-if="canRebuild"
       class="rebuild-btn"
       @click.stop="emit('rebuild')"
-      title="重建 (resume) — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。"
+      :title="$t('pane.terminal.rebuild-tooltip')"
     >↻</button>
-    <button class="minimize-btn" @click.stop="emit('minimize')" title="Minimize to sidebar">⊟</button>
+    <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
       class="pane-header"
       draggable="true"
-      title="拖曳到上方 tab 可移動到其他分頁"
+      :title="$t('pane.terminal.drag-to-tab-tooltip')"
       @click="emit('set-focus')"
       @dragstart="onHeaderDragStart"
       @contextmenu.prevent="emit('context-menu', $event)"

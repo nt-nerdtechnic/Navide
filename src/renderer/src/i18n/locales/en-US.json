@@ -4,7 +4,12 @@
     "explorer": { "title": "Explorer" },
     "ai-chat": { "title": "AI Chat", "tab-shortcut": "AI Chat (⌘⇧A)" },
     "search": { "title": "Search" },
-    "problems": { "title": "Problems", "tab-shortcut": "Problems (⌘⇧M)" }
+    "problems": { "title": "Problems", "tab-shortcut": "Problems (⌘⇧M)" },
+    "terminal": {
+      "rebuild-tooltip": "Rebuild (resume) — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
+      "minimize-tooltip": "Minimize to sidebar",
+      "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab"
+    }
   },
   "action": {
     "commit": "Commit",
