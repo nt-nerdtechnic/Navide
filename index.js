@@ -644,8 +644,10 @@ function openWorkspaceFromPath(p) {
     return false;
   }
   if (electron.app.isReady()) {
+    console.log("[main] open workspace from external path:", dir);
     void createWindow({ workspace_path: dir });
   } else {
+    console.log("[main] queue workspace from external path (pre-ready):", dir);
     pendingOpenPaths.push(dir);
   }
   return true;

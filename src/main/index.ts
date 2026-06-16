@@ -33,7 +33,7 @@ function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   }
 }
 
-async function createWindow(params: Record<string, string> = {}): Promise<void> {
+async function createWindow(params: Record<string, string> = {}): Promise<BrowserWindow> {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -58,6 +58,7 @@ async function createWindow(params: Record<string, string> = {}): Promise<void> 
   })
 
   loadWindow(win, { window: 'main', ...params })
+  return win
 }
 
 function openRolesWindow(): void {
@@ -614,8 +615,16 @@ function openWorkspaceFromPath(p: string): boolean {
     return false
   }
   if (app.isReady()) {
-    void createWindow({ workspace_path: dir })
+    console.log('[main] open workspace from external path:', dir)
+    // The app is usually backgrounded when a Quick Action / "Open With" fires,
+    // so bring it to the front and focus the new window — otherwise the window
+    // opens behind Finder and looks like nothing happened.
+    void createWindow({ workspace_path: dir }).then((win) => {
+      app.focus({ steal: true })
+      win.focus()
+    })
   } else {
+    console.log('[main] queue workspace from external path (pre-ready):', dir)
     pendingOpenPaths.push(dir)
   }
   return true
