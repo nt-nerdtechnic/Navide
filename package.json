@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "private": true,
   "description": "Navide (Agent-Team): macOS desktop terminal manager for Claude Code, Codex, and Gemini CLI",
   "main": "out/main/index.js",
@@ -50,7 +50,9 @@
             "CFBundleTypeName": "Folder",
             "CFBundleTypeRole": "Viewer",
             "LSHandlerRank": "Alternate",
-            "LSItemContentTypes": ["public.folder"]
+            "LSItemContentTypes": [
+              "public.folder"
+            ]
           }
         ]
       }
