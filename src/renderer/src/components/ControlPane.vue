@@ -431,18 +431,26 @@ const resumeSessionId = ref<string>('')
 // message is pushed back here via the exposed showResumeError().
 const resumeNotice = ref<string>('')
 
-// Datalist options: past sessions for the currently-picked CLI in this
-// workspace that carry a session id, newest first, deduped by id.
-const resumeOptions = computed<{ sessionId: string; label: string }[]>(() => {
+// Datalist options: past sessions for the currently-picked CLI across ALL
+// workspaces that carry a session id, newest first, deduped by id. Each option
+// keeps its origin workspacePath so resume can target the session's own cwd
+// (cross-workspace resume), not the currently-selected workspace. The label
+// shows the workspace folder so cross-workspace ids are distinguishable.
+const resumeOptions = computed<{ sessionId: string; label: string; workspacePath: string }[]>(() => {
   const seen = new Set<string>()
-  const out: { sessionId: string; label: string }[] = []
+  const out: { sessionId: string; label: string; workspacePath: string }[] = []
   for (const entry of [...(props.spawnHistory ?? [])].reverse()) {
     const sid = (entry.sessionId ?? '').trim()
     if (!sid || entry.agentKey !== pickedAgent.value) continue
-    if (entry.workspacePath !== workspacePath.value || seen.has(sid)) continue
+    if (seen.has(sid)) continue
     seen.add(sid)
     const when = entry.spawnedAt.slice(0, 16).replace('T', ' ')
-    out.push({ sessionId: sid, label: `${entry.agentLabel} · ${entry.roleLabel || '—'} · ${when}` })
+    const ws = entry.workspacePath.split('/').filter(Boolean).pop() ?? entry.workspacePath
+    out.push({
+      sessionId: sid,
+      label: `${entry.agentLabel} · ${entry.roleLabel || '—'} · ${ws} · ${when}`,
+      workspacePath: entry.workspacePath
+    })
   }
   return out
 })
@@ -457,10 +465,14 @@ watch(resumeSessionId, () => {
 function resumeAgent(): void {
   if (!canResume.value) return
   resumeNotice.value = ''
+  const sid = resumeSessionId.value.trim()
+  // A datalist pick carries its origin workspace (cross-workspace resume); a
+  // manually-pasted id with no history match falls back to the current one.
+  const origin = resumeOptions.value.find((o) => o.sessionId === sid)?.workspacePath
   emit('spawn-resume', {
     agentKey: pickedAgent.value,
-    sessionId: resumeSessionId.value.trim(),
-    workspacePath: workspacePath.value
+    sessionId: sid,
+    workspacePath: origin ?? workspacePath.value
   })
 }
 
