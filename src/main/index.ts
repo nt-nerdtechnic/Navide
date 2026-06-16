@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
 import { join } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
@@ -322,6 +322,36 @@ ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
   openEditorWindow(args ?? {})
   return { ok: true }
 })
+
+// Native OS notification for CLI state changes (turn done / needs input). The
+// renderer decides WHEN to call this (background-only, deduped) and supplies the
+// already-localized title/body; main stays i18n-agnostic. Clicking the
+// notification restores+focuses the most-recent main window and tells its
+// renderer which pane to switch to via `notify:focusPane`.
+ipcMain.handle(
+  'window:notify',
+  (_event, args: { paneId?: string; title?: string; body?: string }): { ok: boolean } => {
+    if (!Notification.isSupported()) return { ok: false }
+    const title = String(args?.title ?? '').trim()
+    if (!title) return { ok: false }
+    const notification = new Notification({
+      title,
+      body: String(args?.body ?? ''),
+      silent: false,
+    })
+    const paneId = String(args?.paneId ?? '')
+    notification.on('click', () => {
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      if (!win) return
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      if (paneId) win.webContents.send('notify:focusPane', paneId)
+    })
+    notification.show()
+    return { ok: true }
+  }
+)
 
 ipcMain.handle(
   'dialog:saveJson',

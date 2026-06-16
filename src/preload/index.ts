@@ -120,4 +120,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onLanguageChanged: (cb: (locale: string) => void): void => {
     ipcRenderer.on('settings:language-changed', (_event, locale: string) => cb(locale))
   },
+  notify: (args: { paneId?: string; title: string; body?: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:notify', args),
+  onFocusPane: (cb: (paneId: string) => void): void => {
+    ipcRenderer.on('notify:focusPane', (_event, paneId: string) => cb(paneId))
+  },
 })

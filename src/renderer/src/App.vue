@@ -28,6 +28,7 @@ import { useRoles } from './composables/useRoles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
+import { useSystemNotify } from './composables/useSystemNotify'
 import type { RoleKey } from './data/roles'
 import {
   renderSlotKickoff,
@@ -66,6 +67,8 @@ onMounted(() => {
   window.agentTeam?.onLanguageChanged?.((locale) => {
     settingsApi.setLanguage(locale)
   })
+  // Clicking a system notification focuses the window on the originating pane.
+  window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
   window.addEventListener('resize', onWindowResize)
 })
 
@@ -1410,6 +1413,8 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
   }
   panes.value = panes.value.filter((p) => p.id !== paneId)
   delete paneRefs[paneId]
+  clearDoneNotifyTimer(paneId)
+  sysNotify.forgetPane(paneId)
   syncViews()
 }
 
@@ -2913,16 +2918,75 @@ const paneLastActiveAt = new Map<string, number>()
 // path (whose watcher is already cancelled) still judge slotFinished correctly.
 const paneArmedAt = new Map<string, number>()
 
+// ── Background system notifications (CLI done / needs input) ─────────────────
+// Native OS notification when a pane's turn completes or it needs the user's
+// input — fired ONLY when the app is backgrounded (see useSystemNotify). This is
+// purely additive: it reads the same agent.activity signals as the pipeline
+// logic without altering paneTurnCompleteAt / paneLastActiveAt handling.
+const sysNotify = useSystemNotify()
+
+// Per-pane timer that fires a 'done' notification once turn_complete has stayed
+// the latest signal for TURN_COMPLETE_SETTLE_MS — mirroring turnCompleteDone so
+// a turn that ended to ask a QUESTION isn't mis-notified as completion.
+const paneDoneNotifyTimers = new Map<string, number>()
+
+function paneNotifyLabel(pane: { customName?: string; slotLabel?: string; agentLabel?: string }): string {
+  return pane.customName || pane.slotLabel || pane.agentLabel || ''
+}
+
+function clearDoneNotifyTimer(paneId: string): void {
+  const h = paneDoneNotifyTimers.get(paneId)
+  if (h != null) { window.clearTimeout(h); paneDoneNotifyTimers.delete(paneId) }
+}
+
+function scheduleDoneNotify(paneId: string): void {
+  clearDoneNotifyTimer(paneId)
+  const h = window.setTimeout(() => {
+    paneDoneNotifyTimers.delete(paneId)
+    const tc = paneTurnCompleteAt.get(paneId) ?? 0
+    const la = paneLastActiveAt.get(paneId) ?? 0
+    // Still finished? Suppress if the CLI went active again after turn_complete
+    // (e.g. a question arrived as hook:notification, or it resumed working).
+    if (tc <= 0 || la > tc) return
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (!pane) return
+    sysNotify.notifyPaneState(
+      paneId,
+      'done',
+      i18n.global.t('notify.done-title'),
+      i18n.global.t('notify.done-body', { label: paneNotifyLabel(pane) })
+    )
+  }, TURN_COMPLETE_SETTLE_MS)
+  paneDoneNotifyTimers.set(paneId, h)
+}
+
+function notifyAttention(paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  sysNotify.notifyPaneState(
+    paneId,
+    'attention',
+    i18n.global.t('notify.attention-title'),
+    i18n.global.t('notify.attention-body', { label: paneNotifyLabel(pane) })
+  )
+}
+
 // CLI lifecycle events (the reliable, non-buffer signal). agent_active = the CLI
 // is working; turn_complete = its turn ended. We timestamp both per pane; the
 // completion logic reads these instead of guessing from the TUI buffer.
 backend.on('agent.activity', (raw) => {
-  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string }
+  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string; detail?: string }
   if (!ev?.pane_id) return
   if (ev.event_type === 'turn_complete') {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
+    scheduleDoneNotify(ev.pane_id)
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
+    // A new turn re-arms 'done' notifications for this pane.
+    sysNotify.markActive(ev.pane_id)
+    // Claude's Notification hook (user attention requested, e.g. permission
+    // prompt) arrives as agent_active with detail 'hook:notification'.
+    if (ev.detail === 'hook:notification') notifyAttention(ev.pane_id)
     // Clear the restore-mode badge once the user interacts with the pane.
     const histEntry = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
     if (histEntry?.restoreMode) histEntry.restoreMode = undefined
@@ -3095,6 +3159,13 @@ interface ActiveQuestion {
   slotLabel: string
 }
 const activeQuestion = ref<ActiveQuestion | null>(null)
+// A buffer-detected question (Codex/Gemini, or any stage pane with allowQuestions)
+// surfaces here — fire an 'attention' notification so a backgrounded user is
+// pulled back. Claude's questions arrive earlier via the hook:notification path;
+// markActive (new turn) re-arms the pane so this isn't suppressed as a dup.
+watch(() => activeQuestion.value?.paneId, (paneId) => {
+  if (paneId) notifyAttention(paneId)
+})
 // FIFO queue: when a second (parallel) agent asks a question while the user
 // is still answering the first, we buffer it here and show it next.
 const questionQueue: ActiveQuestion[] = []

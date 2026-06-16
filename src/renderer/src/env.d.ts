@@ -69,6 +69,8 @@ declare global {
       writeKeybindings: (content: string) => Promise<{ ok: boolean; error?: string }>
       broadcastLanguageChange: (locale: string) => void
       onLanguageChanged: (cb: (locale: string) => void) => void
+      notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
+      onFocusPane: (cb: (paneId: string) => void) => void
     }
   }
 }

@@ -476,5 +476,11 @@
     "delete-pipeline": "Delete this pipeline",
     "ready-check": "Once all required items are ready, you can enter the main screen.",
     "not-ready": "Some required items are not yet ready"
+  },
+  "notify": {
+    "done-title": "CLI finished",
+    "done-body": "{label} completed its turn",
+    "attention-title": "CLI needs your input",
+    "attention-body": "{label} is waiting for your reply"
   }
 }
