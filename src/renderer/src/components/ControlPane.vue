@@ -312,8 +312,6 @@ onUnmounted(() => {
   // Guard against unmounting mid-drag leaving stale document listeners.
   document.removeEventListener('mousemove', onPipelineDividerMove)
   document.removeEventListener('mouseup', onPipelineDividerEnd)
-  document.removeEventListener('mousemove', onExplorerDividerMove)
-  document.removeEventListener('mouseup', onExplorerDividerEnd)
 })
 
 defineExpose({ openPipelineDetail, showResumeError })
@@ -668,38 +666,6 @@ function onPipelineDividerEnd(): void {
   document.removeEventListener('mousemove', onPipelineDividerMove)
   document.removeEventListener('mouseup', onPipelineDividerEnd)
 }
-
-// ── explorer pane: same split pattern ────────────────────────────────────────
-const explorerTopEl = ref<HTMLElement | null>(null)
-const explorerTopRatio = ref<number>(
-  (() => { try { return parseFloat(localStorage.getItem('agentTeam.explorerTopRatio') ?? '') || 0.60 } catch { return 0.60 } })()
-)
-watch(explorerTopRatio, (v) => { try { localStorage.setItem('agentTeam.explorerTopRatio', String(v)) } catch {} })
-
-let _exDragStartY = 0, _exDragStartTopPx = 0, _exDragContainerPx = 0
-function onExplorerDividerStart(e: MouseEvent): void {
-  const top = explorerTopEl.value
-  if (!top) return
-  _exDragStartY = e.clientY
-  _exDragStartTopPx = top.getBoundingClientRect().height
-  _exDragContainerPx = top.parentElement?.getBoundingClientRect().height || 0
-  document.body.style.userSelect = 'none'
-  document.body.style.cursor = 'row-resize'
-  document.addEventListener('mousemove', onExplorerDividerMove)
-  document.addEventListener('mouseup', onExplorerDividerEnd)
-  e.preventDefault()
-}
-function onExplorerDividerMove(e: MouseEvent): void {
-  if (!_exDragContainerPx) return
-  const ratio = (_exDragStartTopPx + e.clientY - _exDragStartY) / _exDragContainerPx
-  explorerTopRatio.value = Math.max(0.15, Math.min(0.85, ratio))
-}
-function onExplorerDividerEnd(): void {
-  document.body.style.userSelect = ''
-  document.body.style.cursor = ''
-  document.removeEventListener('mousemove', onExplorerDividerMove)
-  document.removeEventListener('mouseup', onExplorerDividerEnd)
-}
 </script>
 
 <template>
@@ -721,7 +687,7 @@ function onExplorerDividerEnd(): void {
 
     <!-- ── Explorer / Git tabs (shared split: panel on top, agent dock pinned at bottom) ── -->
     <div v-show="sidebarTab === 'explorer' || sidebarTab === 'git'" class="pane-split">
-      <div class="part-top" ref="explorerTopEl" :style="{ height: (explorerTopRatio * 100) + '%' }">
+      <div class="part-top" style="flex: 1">
         <ExplorerPane
           v-if="backend"
           v-show="sidebarTab === 'explorer'"
@@ -739,105 +705,6 @@ function onExplorerDividerEnd(): void {
           @open-workspace="$emit('workspace-browse', $event)"
           @dispatch-issue="$emit('dispatch-issue', $event)"
         />
-      </div>
-      <div class="part-resize" title="Drag to resize" @mousedown="onExplorerDividerStart">
-        <div class="part-resize-grip" />
-      </div>
-      <div class="part-bottom">
-        <section class="block panel-section">
-          <div class="row between agent-list-hdr">
-            <label class="lbl">{{ $t('label.active-agents', { running: runningCount, total: panes.length }) }}</label>
-            <div class="agent-header-actions">
-              <ViewPanel
-                :model-value="layoutMode ?? 'auto'"
-                @update:model-value="emit('update:layoutMode', $event)"
-              />
-              <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
-            </div>
-          </div>
-          <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
-          <ul v-else class="agent-list">
-            <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
-              <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
-                <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
-                <span class="badge">{{ p.agentLabel }}</span>
-                <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
-                <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
-                <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
-              </div>
-              <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
-              <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-                stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-              </div>
-              <div v-else-if="!p.isMinimized" class="stage-line">
-                manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-              </div>
-              <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
-              <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
-                🔖 session: <code>{{ p.sessionId }}</code>
-              </div>
-              <div v-if="p.error" class="err">{{ p.error }}</div>
-              <div class="row tight">
-                <template v-if="p.isMinimized">
-                  <button class="ghost" @click="emit('restore', p.id)">{{ $t('action.restore') }}</button>
-                  <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
-                </template>
-                <template v-else>
-                  <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">{{ $t('action.interrupt') }}</button>
-                  <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">{{ $t('action.reapply-role') }}</button>
-                  <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
-                </template>
-              </div>
-            </li>
-          </ul>
-
-          <div class="spawn-card">
-            <div class="spawn-card-hdr" @click="manualSpawnOpen = !manualSpawnOpen">
-              <span class="spawn-caret">{{ manualSpawnOpen ? '▾' : '▸' }}</span>
-              <span>{{ $t('label.manual-spawn') }}</span>
-            </div>
-            <div v-if="manualSpawnOpen" class="spawn-card-body">
-              <div class="row two-col">
-                <select v-model="pickedAgent">
-                  <option v-for="spec in manualAgentSpecs" :key="spec.agentKey" :value="spec.agentKey">
-                    {{ spec.label }}
-                  </option>
-                </select>
-                <select v-model="pickedRole">
-                  <option value="">{{ $t('label.select-role') }}</option>
-                  <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
-                </select>
-              </div>
-              <div class="row spawn-actions">
-                <button class="primary wide" :disabled="!canSpawn" @click="spawn">{{ $t('action.add-to-grid') }}</button>
-                <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
-              </div>
-              <p v-if="!canSpawn" class="hint warn">
-                {{ backendStatus !== 'connected' ? $t('label.waiting-backend') : $t('label.set-workspace-first') }}
-              </p>
-              <div v-if="currentRole" class="prompt-block">
-                <div class="prompt-head">
-                  <button class="link" @click="previewOpen = !previewOpen">
-                    {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
-                  </button>
-                  <button class="link tiny" @click="emit('open-settings')" :title="$t('action.settings')">
-                    ⚙ {{ $t('action.settings') }}
-                  </button>
-                </div>
-                <p class="role-line">{{ currentRole.one_line }}</p>
-                <pre v-if="previewOpen" class="prompt-preview">{{ currentRole.system_prompt }}</pre>
-              </div>
-              <div v-else class="prompt-block warn-block">
-                <p class="warn">
-                  {{ roles.length === 0 ? $t('label.no-roles-available') : $t('label.no-role-selected') }}
-                </p>
-                <div v-if="roles.length === 0" class="row tight">
-                  <button class="ghost" @click="emit('open-settings')">⚙ {{ $t('action.settings') }}</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
       </div>
     </div>
 
