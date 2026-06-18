@@ -393,9 +393,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // into arrow-key escape codes that navigate readline history.
     let scrollRemainder = 0
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
-      const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? e.deltaY
-        : e.deltaY / 3
+      // deltaY units depend on deltaMode: LINE → lines, PAGE → pages, PIXEL →
+      // pixels. PAGE mode (some mice / accessibility settings) reports ~1 per
+      // notch; without this branch it fell through to the pixel /3 path and
+      // scrolled ~0.3 line per notch (effectively stuck).
+      let delta: number
+      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) delta = e.deltaY
+      else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta = e.deltaY * term.rows
+      else delta = e.deltaY / 3
       scrollRemainder += delta
       const lines = Math.trunc(scrollRemainder)
       scrollRemainder -= lines
