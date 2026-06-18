@@ -1,8 +1,15 @@
 // Helpers used by the pipeline orchestrator to scrape clean text out of raw
 // PTY output and detect sentinels / question blocks.
 
-// Match common ANSI escape forms (CSI, OSC, single ESC sequences).
-const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|[@-Z\\-_])/g
+// Match ANSI/VT escape sequences. Mirrors the backend stripper (terminals.py)
+// so the cleanBuffer is scrubbed identically on both sides:
+//   CSI:  \x1b[ … final-byte
+//   OSC:  \x1b] … terminated by BEL (\x07) OR ST (\x1b\\)
+//   DCS/APC/SOS/PM: \x1bP|X|^|_ … \x1b\\
+//   single-byte Fe: \x1b followed by 0x40-0x5A or 0x5C-0x7E
+// The previous pattern only handled BEL-terminated OSC, so an ST-terminated
+// title sequence (e.g. set-title `\x1b]0;t\x1b\\`) left its body as residue.
+const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[@-Z\\-~])/g
 // Carriage returns alone (without paired \n) get used as cursor-back; we
 // normalise to nothing so detectors don't get fooled by partial overwrites.
 const LONE_CR_RE = /\r(?!\n)/g

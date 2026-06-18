@@ -19,6 +19,16 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\x1b]0;my title\x07text')).toBe('text')
   })
 
+  it('removes ST-terminated OSC sequences (no BEL)', () => {
+    // Set-title terminated by ST (\x1b\\) instead of BEL — previously left
+    // "0;my title" as residue in the cleanBuffer.
+    expect(stripAnsi('\x1b]0;my title\x1b\\text')).toBe('text')
+  })
+
+  it('removes a DCS sequence terminated by ST', () => {
+    expect(stripAnsi('\x1bPq;data\x1b\\text')).toBe('text')
+  })
+
   it('drops a lone CR (cursor-back overwrite) but keeps CRLF', () => {
     expect(stripAnsi('abc\rxyz')).toBe('abcxyz')
     expect(stripAnsi('line1\r\nline2')).toBe('line1\r\nline2')
