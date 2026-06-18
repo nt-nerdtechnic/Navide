@@ -28,7 +28,12 @@ export function stripAnsi(s: string): string {
 // and confuse the question-block parser / sentinel matcher / local analyzer.
 // We drop any cleaned line that, after lower+despace, contains a known
 // status-line keyword.
-const TUI_NOISE_RE = /(bypasspermissions|shift\+tab|tointerrupt|esctointerrupt|loadingpasted|pressentertoconfirm)/i
+// Matched against each line AFTER lowercasing + removing all whitespace.
+// `tointerrupt` already covers both "esc to interrupt" and "esctointerrupt".
+// `/effort` and `[end of text]` are Claude status-bar chrome the backend
+// stripper also drops (terminals.py). We deliberately do NOT include
+// "for agents": compacted to "foragents" it would mis-drop ordinary prose.
+const TUI_NOISE_RE = /(bypasspermissions|shift\+tab|tointerrupt|esctointerrupt|loadingpasted|pressentertoconfirm|\/effort|\[endoftext\])/i
 
 export function dropTuiNoise(text: string): string {
   let dirty = false

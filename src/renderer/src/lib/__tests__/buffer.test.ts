@@ -49,6 +49,15 @@ describe('dropTuiNoise', () => {
     expect(dropTuiNoise('keep\nEsc To Interrupt')).toBe('keep')
   })
 
+  it('drops the /effort and [end of text] status chrome', () => {
+    expect(dropTuiNoise('keep\n/effort high\n[end of text]\nalso keep')).toBe('keep\nalso keep')
+  })
+
+  it('does NOT drop prose containing "for agents"', () => {
+    const prose = 'this guide is for agents to read'
+    expect(dropTuiNoise(prose)).toBe(prose)
+  })
+
   it('returns the SAME string when nothing matches', () => {
     const clean = 'nothing to drop here'
     expect(dropTuiNoise(clean)).toBe(clean)
