@@ -241,4 +241,14 @@ describe('bufferTail', () => {
   it('returns text unchanged when exactly at the cap', () => {
     expect(bufferTail('abc', 3)).toBe('abc')
   })
+
+  it('does not start the tail on a lone low surrogate (emoji at the cut)', () => {
+    // '😀' is two UTF-16 code units. text = 'aaaaa' + 😀 + 'bcd' (length 10);
+    // cap 4 → cut index 6 lands on the low surrogate. The tail must drop it.
+    const text = 'aaaaa\u{1F600}bcd'
+    const tail = bufferTail(text, 4)
+    expect(tail).toBe('bcd')
+    const first = tail.charCodeAt(0)
+    expect(first >= 0xdc00 && first <= 0xdfff).toBe(false)
+  })
 })

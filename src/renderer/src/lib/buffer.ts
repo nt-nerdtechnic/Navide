@@ -297,5 +297,12 @@ export function findSentinel(text: string, sentinel: string, from: number = 0): 
 
 export function bufferTail(text: string, maxBytes: number = 64 * 1024): string {
   if (text.length <= maxBytes) return text
-  return text.slice(text.length - maxBytes)
+  let start = text.length - maxBytes
+  // Don't start the slice inside a surrogate pair: a lone low surrogate
+  // (0xDC00-0xDFFF) at the cut point renders as a replacement char (�) — an
+  // emoji or non-BMP CJK char straddling the boundary would be broken. Step
+  // one code unit forward so the tail begins on a whole character.
+  const code = text.charCodeAt(start)
+  if (code >= 0xdc00 && code <= 0xdfff) start++
+  return text.slice(start)
 }
