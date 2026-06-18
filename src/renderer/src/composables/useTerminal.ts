@@ -261,6 +261,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pasteText(`\x1b[48;${term.rows};${term.cols};${heightPx};${widthPx}t`)
   }
 
+  // Set when a reattached pane is waiting to repaint. We never force_redraw at
+  // reattach time: the renderer is mid-reflow then (reload, or a hidden tab
+  // being shown), so the width is transient and would repaint the live agent
+  // narrow. The reconciler fires the redraw only once container == xterm ==
+  // backend, so Claude's TUI clears the transient frame and repaints at the real
+  // width instead of stranding a narrow one in scrollback.
+  let pendingReattachRedraw = false
+
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
   // (background tab / spotlight / minimized → display:none) can leave the PTY
   // and xterm at different sizes — the CLI then draws its TUI for one width
@@ -273,12 +281,26 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     const el = containerRef.value
     if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
     const dims = fit.proposeDimensions()
-    if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
-        (dims.cols !== term.cols || dims.rows !== term.rows)) {
+    const sized = !!dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)
+    if (sized && (dims.cols !== term.cols || dims.rows !== term.rows)) {
       applyFit()
       return
     }
-    if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+    if (term.cols !== ackedCols || term.rows !== ackedRows) {
+      sendResizeNow()
+      return
+    }
+    // Fully settled (container == xterm == backend-acked). A reattached pane that
+    // has been waiting now repaints at this stable width — a no-op resize won't
+    // raise SIGWINCH, so nudge the agent explicitly via force_redraw.
+    if (sized && pendingReattachRedraw) {
+      pendingReattachRedraw = false
+      void backend.send('terminal.reattach', {
+        terminal_session_ids: [sessionId.value],
+        cols: term.cols,
+        rows: term.rows,
+      })
+    }
   }, RECONCILE_MS)
 
   // Single source of truth for sizing: fit xterm to its container, then push
@@ -587,13 +609,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   async function tryReattach(): Promise<boolean> {
     const prev = persistedSessionId()
     if (!prev) return false
-    await settleContainerWidth()  // measure the FINAL width before force_redraw
-    try { fit.fit() } catch { /* keep current size */ }
     try {
+      // Alive-check + claim the output target only (cols/rows 0 → backend skips
+      // force_redraw). The repaint is deferred to the reconciler, which fires it
+      // once the width has settled — forcing it now would repaint the live agent
+      // at the renderer's transient mid-reflow width (narrow).
       const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
         terminal_session_ids: [prev],
-        cols: term.cols || 80,
-        rows: term.rows || 24,
+        cols: 0,
+        rows: 0,
       })
       if (!resp.ok || !resp.payload || !resp.payload.alive.includes(prev)) {
         rememberSessionId('')  // stale id — fall through to a fresh spawn
@@ -605,7 +629,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     sessionId.value = prev
     status.value = 'running'
     bindSessionHandlers()
-    applyFit()  // sync size + drive the backend's SIGWINCH repaint
+    pendingReattachRedraw = true  // reconciler repaints once the width is settled
+    applyFit()                    // start syncing size (no-op while hidden)
     queueMicrotask(() => focus())
     return true
   }
