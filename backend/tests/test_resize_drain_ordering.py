@@ -48,6 +48,7 @@ async def test_resize_drains_buffered_output_before_ack() -> None:
     the CLI's repaints strand corrupt frames in scrollback."""
     ws = OrderRecordingWS()
     session = app.Session(ws)  # type: ignore[arg-type]
+    app._active_session = session  # route terminal output back to this ws
     sid = "term-drain"
     master, slave = _fake_session_entry(session, sid)
     svc = session.terminals

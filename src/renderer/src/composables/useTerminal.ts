@@ -506,6 +506,75 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
+  // The backend PTY id of this pane, persisted across a renderer reload so we
+  // can reattach to the still-running terminal (true persistence) instead of
+  // respawning. NOT the CLI --session-id; this is the backend terminal_session_id.
+  const PTY_KEY = `terminal-pty:${paneId}`
+  function rememberSessionId(id: string): void {
+    try {
+      if (id) localStorage.setItem(PTY_KEY, id)
+      else localStorage.removeItem(PTY_KEY)
+    } catch { /* ignore */ }
+  }
+  function persistedSessionId(): string {
+    try { return localStorage.getItem(PTY_KEY) || '' } catch { return '' }
+  }
+
+  // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
+  // spawn and a reattach so both bind identically.
+  function bindSessionHandlers(): void {
+    inputDisposer = term.onData((data) => {
+      void backend.send('terminal.input', {
+        terminal_session_id: sessionId.value,
+        data
+      })
+    })
+
+    outputUnsub = backend.on('terminal.output', (raw) => {
+      const payload = raw as { terminal_session_id: string; data: string }
+      if (payload.terminal_session_id !== sessionId.value) return
+      term.write(payload.data)
+      appendClean(payload.data)
+    })
+
+    exitUnsub = backend.on('terminal.exit', (raw) => {
+      const payload = raw as { terminal_session_id: string; reason: string; exit_code: number | null }
+      if (payload.terminal_session_id !== sessionId.value) return
+      status.value = 'exited'
+      rememberSessionId('')  // the PTY is gone — don't try to reattach to it
+      term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
+      cleanupSession()
+    })
+  }
+
+  // Try to rebind to a PTY that survived a reload. Returns true if the backend
+  // confirms the persisted id is still alive (and we've rebound); false if it's
+  // gone, in which case the caller spawns a fresh process.
+  async function tryReattach(): Promise<boolean> {
+    const prev = persistedSessionId()
+    if (!prev) return false
+    try { fit.fit() } catch { /* keep current size */ }
+    try {
+      const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
+        terminal_session_ids: [prev],
+        cols: term.cols || 80,
+        rows: term.rows || 24,
+      })
+      if (!resp.ok || !resp.payload || !resp.payload.alive.includes(prev)) {
+        rememberSessionId('')  // stale id — fall through to a fresh spawn
+        return false
+      }
+    } catch {
+      return false  // backend unreachable; let the caller decide (it will spawn)
+    }
+    sessionId.value = prev
+    status.value = 'running'
+    bindSessionHandlers()
+    applyFit()  // sync size + drive the backend's SIGWINCH repaint
+    queueMicrotask(() => focus())
+    return true
+  }
+
   async function spawn(opts: SpawnOptions): Promise<void> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
@@ -514,6 +583,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     status.value = 'starting'
     mode2048 = false  // a fresh process hasn't opted in yet
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // True persistence: a PTY from before a reload may still be running. Reattach
+    // to it (recovering bash/build panes too, with no --resume round-trip) before
+    // spawning anew. Falls through to a fresh spawn if the PTY is gone.
+    if (await tryReattach()) return
     // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
     // once per pane — the size measured at mount time can be mid-transition.
     // Wait until the container width holds steady for two consecutive frames
@@ -566,6 +639,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       sessionId.value = resp.payload.terminal_session_id
+      rememberSessionId(sessionId.value)  // enable reattach after a reload
       status.value = 'running'
 
       // Push the real size now that sessionId exists. The ResizeObserver's
@@ -577,27 +651,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // without having to click the pane.
       queueMicrotask(() => focus())
 
-      inputDisposer = term.onData((data) => {
-        void backend.send('terminal.input', {
-          terminal_session_id: sessionId.value,
-          data
-        })
-      })
-
-      outputUnsub = backend.on('terminal.output', (raw) => {
-        const payload = raw as { terminal_session_id: string; data: string }
-        if (payload.terminal_session_id !== sessionId.value) return
-        term.write(payload.data)
-        appendClean(payload.data)
-      })
-
-      exitUnsub = backend.on('terminal.exit', (raw) => {
-        const payload = raw as { terminal_session_id: string; reason: string; exit_code: number | null }
-        if (payload.terminal_session_id !== sessionId.value) return
-        status.value = 'exited'
-        term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
-        cleanupSession()
-      })
+      bindSessionHandlers()
     } catch (err) {
       status.value = 'error'
       error.value = String((err as Error).message ?? err)
@@ -620,6 +674,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   async function kill(): Promise<void> {
     if (!sessionId.value) return
+    rememberSessionId('')  // explicit kill — never reattach to this PTY
     await backend.send('terminal.kill', { terminal_session_id: sessionId.value })
   }
 
@@ -676,6 +731,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()
     if (sessionId.value) {
+      // Scope dispose = the pane was closed (NOT a reload — a hard reload tears
+      // down the JS without running this). The PTY should die with it, so clear
+      // the persisted id too or a future pane could reattach to a killed id.
+      rememberSessionId('')
       void backend.send('terminal.kill', { terminal_session_id: sessionId.value }).catch(() => {
         /* ignore */
       })
