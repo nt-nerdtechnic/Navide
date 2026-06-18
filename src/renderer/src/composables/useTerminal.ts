@@ -547,12 +547,35 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     })
   }
 
+  // Wait until the container width holds steady for two consecutive frames
+  // (bounded ~500ms) so a fit measures the FINAL width, not a mid-grid-reflow
+  // transient. Shared by spawn and reattach — sizing a PTY to a transient width
+  // leaves the CLI painting narrow (empty space on the right).
+  async function settleContainerWidth(): Promise<void> {
+    const settleEl = containerRef.value
+    if (!settleEl || settleEl.clientWidth === 0) return
+    let lastW = -1
+    const deadline = performance.now() + 500
+    while (performance.now() < deadline) {
+      // rAF with a timeout fallback — rAF is throttled (or fully paused) for
+      // occluded/background windows and must never stall.
+      await new Promise<void>((resolve) => {
+        const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
+        const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+      })
+      const w = settleEl.clientWidth
+      if (w === lastW) break
+      lastW = w
+    }
+  }
+
   // Try to rebind to a PTY that survived a reload. Returns true if the backend
   // confirms the persisted id is still alive (and we've rebound); false if it's
   // gone, in which case the caller spawns a fresh process.
   async function tryReattach(): Promise<boolean> {
     const prev = persistedSessionId()
     if (!prev) return false
+    await settleContainerWidth()  // measure the FINAL width before force_redraw
     try { fit.fit() } catch { /* keep current size */ }
     try {
       const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
@@ -587,28 +610,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // to it (recovering bash/build panes too, with no --resume round-trip) before
     // spawning anew. Falls through to a fresh spawn if the PTY is gone.
     if (await tryReattach()) return
-    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
-    // once per pane — the size measured at mount time can be mid-transition.
-    // Wait until the container width holds steady for two consecutive frames
-    // (bounded at ~500ms), THEN fit, so the size sent below is the one the
-    // CLI actually first paints at. A PTY created at a transient width leaves
-    // permanently wrapped first-paint residue in scrollback.
-    const settleEl = containerRef.value
-    if (settleEl && settleEl.clientWidth > 0) {
-      let lastW = -1
-      const deadline = performance.now() + 500
-      while (performance.now() < deadline) {
-        // rAF with a timeout fallback — rAF is throttled (or fully paused)
-        // for occluded/background windows and must never stall the spawn.
-        await new Promise<void>((resolve) => {
-          const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
-          const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
-        })
-        const w = settleEl.clientWidth
-        if (w === lastW) break
-        lastW = w
-      }
-    }
+    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it once
+    // per pane — the size measured at mount time can be mid-transition. Wait for
+    // the width to settle so the CLI's first paint is at the final width (a PTY
+    // created at a transient width leaves wrapped first-paint residue).
+    await settleContainerWidth()
     // Fit to the (now stable) container BEFORE spawning. No-op while hidden.
     try { fit.fit() } catch { /* keep current size */ }
     try {
