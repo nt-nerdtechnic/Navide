@@ -1190,6 +1190,10 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         slot_label: opts.slotLabel ?? ''          // stable by_pane key survives frontend restarts
       },
       outputLogFile,
+      // Stable reattach key: the pinned CLI session id is identical on first
+      // spawn and on restore (claude --session-id), so a reload reattaches to
+      // the live PTY instead of starting a second `--resume` that collides.
+      resumeKey: pinnedSessionId,
     })
 
     if ((ref.status as unknown as string) === 'running') {

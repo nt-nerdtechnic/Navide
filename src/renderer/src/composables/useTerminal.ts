@@ -81,6 +81,10 @@ export interface SpawnOptions {
   agentKey?: string
   metadata?: Record<string, unknown>
   outputLogFile?: string  // if set, backend writes ANSI-stripped output to this path
+  // Stable CLI session id (e.g. claude --session-id). Used as the reattach
+  // persistence key so a PTY can be rebound after a reload — the paneId is
+  // regenerated on restore and would never match. Falls back to paneId if absent.
+  resumeKey?: string
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -506,18 +510,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  // The backend PTY id of this pane, persisted across a renderer reload so we
-  // can reattach to the still-running terminal (true persistence) instead of
-  // respawning. NOT the CLI --session-id; this is the backend terminal_session_id.
-  const PTY_KEY = `terminal-pty:${paneId}`
+  // Persistence key for this pane's backend PTY id (terminal_session_id), stored
+  // so we can reattach to the still-running terminal after a reload instead of
+  // respawning. Defaults to paneId but is overridden at spawn() time by
+  // opts.resumeKey (the stable CLI session id) — the paneId is regenerated on
+  // restore and would never match.
+  let persistKey = paneId
+  function ptyKey(): string { return `terminal-pty:${persistKey}` }
   function rememberSessionId(id: string): void {
     try {
-      if (id) localStorage.setItem(PTY_KEY, id)
-      else localStorage.removeItem(PTY_KEY)
+      if (id) localStorage.setItem(ptyKey(), id)
+      else localStorage.removeItem(ptyKey())
     } catch { /* ignore */ }
   }
   function persistedSessionId(): string {
-    try { return localStorage.getItem(PTY_KEY) || '' } catch { return '' }
+    try { return localStorage.getItem(ptyKey()) || '' } catch { return '' }
   }
 
   // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
@@ -606,6 +613,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     status.value = 'starting'
     mode2048 = false  // a fresh process hasn't opted in yet
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // Use the stable CLI session id as the reattach key when provided, so the
+    // lookup below survives a reload (paneId does not).
+    if (opts.resumeKey) persistKey = opts.resumeKey
     // True persistence: a PTY from before a reload may still be running. Reattach
     // to it (recovering bash/build panes too, with no --resume round-trip) before
     // spawning anew. Falls through to a fresh spawn if the PTY is gone.
