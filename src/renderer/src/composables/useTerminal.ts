@@ -351,6 +351,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // terminals.drain_output), so nothing wide is still arriving when we
         // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
+        // [WD] temporary width diagnostic — remove once the narrow-pane bug is found.
+        console.log(
+          `[WD ${paneId.slice(0, 6)}] cw=${el.clientWidth}`,
+          `cell=${(term as any)._core?._renderService?.dimensions?.css?.cell?.width}`,
+          `prop=${dims?.cols} term=${term.cols}`,
+          dims && Number.isFinite(dims.cols) && dims.cols < term.cols ? 'SHRINK' : 'grow',
+        )
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
