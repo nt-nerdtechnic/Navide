@@ -536,11 +536,17 @@ async def ws(websocket: WebSocket) -> None:
         log.info("ws client disconnected")
     finally:
         _SESSIONS.discard(session)
-        # Detach, do NOT kill. PTYs outlive the connection so a reload / window
-        # close leaves agents running in the background; they end only on process
-        # exit, an explicit terminal.kill (user closes the pane), or app quit.
         if _active_session is session:
             _active_session = None
+        # Kill PTYs on disconnect. True background survival (detach + reattach)
+        # repainted the live agent at the renderer's transient mid-reflow width
+        # on reload, leaving panes stuck narrow. Reverted to the known-good model:
+        # a reload kills the PTYs and the frontend respawns with `<cli> --resume`,
+        # which restores the conversation from disk at the correct width. The
+        # app-level singleton + terminal.reattach handshake are kept but dormant —
+        # the alive-check finds nothing once the PTYs are gone, so the frontend
+        # always falls through to a fresh resume spawn.
+        session.terminals.shutdown()
         for t in session._chat_tasks:
             t.cancel()
         for t in session._review_tasks:

@@ -603,10 +603,19 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
+  // Reattach-to-live-PTY on reload is DISABLED. It repainted the running agent
+  // at the renderer's transient mid-reflow width, leaving panes stuck narrow.
+  // The backend now kills PTYs on disconnect, so a reload fresh-spawns with
+  // `<cli> --resume` (correct width, conversation restored from disk). The body
+  // below is kept so a future, width-safe version can be re-enabled by flipping
+  // this flag; the guard is typed `as boolean` so the body stays type-checked.
+  const REATTACH_ON_RELOAD = false as boolean
+
   // Try to rebind to a PTY that survived a reload. Returns true if the backend
   // confirms the persisted id is still alive (and we've rebound); false if it's
   // gone, in which case the caller spawns a fresh process.
   async function tryReattach(): Promise<boolean> {
+    if (!REATTACH_ON_RELOAD) return false
     const prev = persistedSessionId()
     if (!prev) return false
     try {
