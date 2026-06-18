@@ -73,6 +73,14 @@ describe('parseOptions', () => {
     expect(parseOptions('1. foo\n2. bar')).toEqual(['foo', 'bar'])
   })
 
+  it('parses paren-numbered lines (1) 2))', () => {
+    expect(parseOptions('1) foo\n2) bar\n3) baz')).toEqual(['foo', 'bar', 'baz'])
+  })
+
+  it('parses inline paren-numbered options', () => {
+    expect(parseOptions('1) a 2) b 3) c')).toEqual(['a', 'b', 'c'])
+  })
+
   it('parses inline dash-separated options', () => {
     expect(parseOptions('- a - b - c')).toEqual(['a', 'b', 'c'])
   })

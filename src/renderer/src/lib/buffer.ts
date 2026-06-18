@@ -137,13 +137,17 @@ export function findQuestionBlock(text: string, from: number = 0): QuestionBlock
 // full-width form Chinese agents often use (`－` U+FF0D), and bullet markers.
 // Without these, lines like `－ 台灣` or `— 全球` get treated as plain prose.
 const BULLET_CHARS = '[-*•‐‒–—−－]'
+// Numbered-list marker after the digits — ASCII "." / ")", plus the full-width
+// and ideographic forms Chinese agents use. Mirrors splitNumberedPrompt so a
+// "1) foo / 2) bar" list parses as options, not just "1. foo".
+const NUM_MARK = '[.、．）)]'
 
 /**
  * Extract bullet items from an options section. Handles:
  *   - "- foo\n- bar\n- baz"     (multi-line, dash bullets)
  *   - "* foo\n* bar"             (asterisk bullets)
  *   - "- foo - bar - baz"        (inline, single line)
- *   - "1. foo\n2. bar"           (numbered)
+ *   - "1. foo\n2. bar" / "1) foo\n2) bar"  (numbered, dot or paren)
  *   - mixed leading whitespace
  *   - Unicode dash variants (en/em dash, full-width hyphen)
  */
@@ -151,7 +155,7 @@ export function parseOptions(optsText: string): string[] {
   if (!optsText) return []
   // First pass: line-based bullets.
   const lineOpts: string[] = []
-  const lineRe = new RegExp(`^(?:${BULLET_CHARS}|\\d+\\.)\\s*(.+?)\\s*$`)
+  const lineRe = new RegExp(`^(?:${BULLET_CHARS}|\\d+${NUM_MARK})\\s*(.+?)\\s*$`)
   for (const raw of optsText.split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
@@ -170,10 +174,10 @@ export function parseOptions(optsText: string): string[] {
     .filter((p) => p.length > 0)
   if (parts.length > 1) return parts
 
-  // Fallback: numbered inline "1. a 2. b 3. c".
+  // Fallback: numbered inline "1. a 2. b 3. c" / "1) a 2) b 3) c".
   const numbered = flat
-    .split(/\s+\d+\.\s+/)
-    .map((p) => p.replace(/^\d+\.\s*/, '').trim())
+    .split(new RegExp(`\\s+\\d+${NUM_MARK}\\s+`))
+    .map((p) => p.replace(new RegExp(`^\\d+${NUM_MARK}\\s*`), '').trim())
     .filter((p) => p.length > 0)
   if (numbered.length > 1) return numbered
 
