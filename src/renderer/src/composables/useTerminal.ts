@@ -232,6 +232,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let ackedRows = 0
   function sendResize(cols: number, rows: number): Promise<boolean> {
     if (!sessionId.value) return Promise.resolve(false)
+    console.log(`[WD-SEND ${paneId.slice(0, 6)}] resize -> ${cols}x${rows}`)  // [WD] temp
     return backend.send('terminal.resize', {
       terminal_session_id: sessionId.value,
       cols,
@@ -700,6 +701,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
         return
       }
+      console.log(`[WD-SPAWN ${paneId.slice(0, 6)}] created at ${term.cols || 80}x${term.rows || 24} cw=${containerRef.value?.clientWidth}`)  // [WD] temp
       sessionId.value = resp.payload.terminal_session_id
       rememberSessionId(sessionId.value)  // enable reattach after a reload
       status.value = 'running'
