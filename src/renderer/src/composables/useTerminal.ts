@@ -232,7 +232,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let ackedRows = 0
   function sendResize(cols: number, rows: number): Promise<boolean> {
     if (!sessionId.value) return Promise.resolve(false)
-    console.log(`[WD-SEND ${paneId.slice(0, 6)}] resize -> ${cols}x${rows}`)  // [WD] temp
     return backend.send('terminal.resize', {
       terminal_session_id: sessionId.value,
       cols,
@@ -278,7 +277,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // backend may disagree with xterm. Heals any missed resize within seconds.
   const RECONCILE_MS = 2_000
   const reconcileInterval = window.setInterval(() => {
-    if (!mounted || !sessionId.value) return
+    if (!mounted) return
+    // A spawn parked while hidden creates as soon as the pane is measurable.
+    if (pendingSpawn) { void createWhenMeasurable(); return }
+    if (!sessionId.value) return
     const el = containerRef.value
     if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
     const dims = fit.proposeDimensions()
@@ -352,13 +354,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // terminals.drain_output), so nothing wide is still arriving when we
         // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
-        // [WD] temporary width diagnostic — remove once the narrow-pane bug is found.
-        console.log(
-          `[WD ${paneId.slice(0, 6)}] cw=${el.clientWidth}`,
-          `cell=${(term as any)._core?._renderService?.dimensions?.css?.cell?.width}`,
-          `prop=${dims?.cols} term=${term.cols}`,
-          dims && Number.isFinite(dims.cols) && dims.cols < term.cols ? 'SHRINK' : 'grow',
-        )
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
@@ -527,6 +522,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
       resizeDebounceTimer = setTimeout(() => {
         resizeDebounceTimer = null
+        // A hidden-tab pane parked its spawn; becoming measurable (the tab was
+        // shown) fires this — create the PTY now, at the real width.
+        if (pendingSpawn) { void createWhenMeasurable(); return }
         applyFit()
       }, RESIZE_QUIET_MS)
     })
@@ -652,6 +650,87 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     return true
   }
 
+  // A pane may be asked to spawn while its tab is hidden (clientWidth 0), where
+  // its width can't be measured. We must NOT create the PTY at a guessed width:
+  // the CLI's first paint (especially a `--resume` that reprints the whole
+  // conversation) would hard-wrap at that wrong width and stay stuck in
+  // scrollback. So the opts are parked here and the PTY is created only once the
+  // container is genuinely measurable — i.e. when the tab is shown.
+  let pendingSpawn: SpawnOptions | null = null
+  let _spawnPoked = false
+
+  // Create the PTY for a parked spawn, but only when the container has a real,
+  // measurable width. Returns silently (leaving it parked) until then; the
+  // reconciler / ResizeObserver retry it once the pane is shown.
+  function cellWidth(): number {
+    return (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
+  }
+  async function createWhenMeasurable(): Promise<void> {
+    const opts = pendingSpawn
+    if (!opts) return
+    let el = containerRef.value
+    if (!el || el.clientWidth === 0) return  // hidden — wait until the tab is shown
+    // Visible but xterm hasn't measured its character cell yet (just opened):
+    // poke, then AWAIT measurement (bounded). We await rather than defer so a
+    // fresh spawn resolves with status 'running' and the caller's role-injection
+    // flow proceeds; a hidden pane already returned above.
+    if (cellWidth() === 0) {
+      if (!_spawnPoked) {
+        try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
+        _spawnPoked = true
+      }
+      const deadline = performance.now() + 500
+      while (cellWidth() === 0 && performance.now() < deadline) {
+        await new Promise<void>((resolve) => {
+          const raf = requestAnimationFrame(() => { clearTimeout(t); resolve() })
+          const t = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+        })
+        el = containerRef.value
+        if (!el || el.clientWidth === 0) return  // hidden mid-wait — defer again
+      }
+      if (cellWidth() === 0) return  // still unmeasured — let the reconciler retry
+    }
+    pendingSpawn = null  // claim it so a concurrent retry can't double-create
+    // Wait for the width to settle, then fit, so the size below is the real one.
+    await settleContainerWidth()
+    try { fit.fit() } catch { /* keep current size */ }
+    try {
+      const resp = await backend.send<{
+        terminal_session_id: string
+        pid: number
+      }>('terminal.create', {
+        pane_id: paneId,
+        agent_key: opts.agentKey ?? null,
+        command: opts.command,
+        cwd: opts.cwd,
+        env: opts.env ?? null,
+        // The real, dynamically measured width — never a fixed default. The CLI
+        // first paints at exactly this width, so a resumed conversation is not
+        // hard-wrapped narrow and then stranded in scrollback.
+        cols: term.cols,
+        rows: term.rows,
+        metadata: opts.metadata ?? null,
+        output_log_file: opts.outputLogFile ?? null,
+      })
+      if (!resp.ok || !resp.payload) {
+        status.value = 'error'
+        error.value = resp.error?.message ?? 'spawn failed'
+        term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
+        return
+      }
+      sessionId.value = resp.payload.terminal_session_id
+      rememberSessionId(sessionId.value)  // enable reattach after a reload
+      status.value = 'running'
+      applyFit()  // sync the real size to the backend on first paint
+      queueMicrotask(() => focus())
+      bindSessionHandlers()
+    } catch (err) {
+      status.value = 'error'
+      error.value = String((err as Error).message ?? err)
+      term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
+    }
+  }
+
   async function spawn(opts: SpawnOptions): Promise<void> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
@@ -667,60 +746,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // to it (recovering bash/build panes too, with no --resume round-trip) before
     // spawning anew. Falls through to a fresh spawn if the PTY is gone.
     if (await tryReattach()) return
-    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it once
-    // per pane — the size measured at mount time can be mid-transition. Wait for
-    // the width to settle so the CLI's first paint is at the final width (a PTY
-    // created at a transient width leaves wrapped first-paint residue).
-    await settleContainerWidth()
-    // Fit to the (now stable) container BEFORE spawning. No-op while hidden.
-    try { fit.fit() } catch { /* keep current size */ }
-    try {
-      const resp = await backend.send<{
-        terminal_session_id: string
-        pid: number
-      }>('terminal.create', {
-        pane_id: paneId,
-        agent_key: opts.agentKey ?? null,
-        command: opts.command,
-        cwd: opts.cwd,
-        env: opts.env ?? null,
-        // Measured container size so the CLI's FIRST paint happens at the
-        // final width. Spawning at a placeholder let TUIs draw their banner /
-        // status bar at the wrong width; that stale first paint then lingered
-        // in scrollback after the real resize landed (visible as duplicated /
-        // misaligned lines). Hidden panes keep the 80×24 default — the size
-        // reconciler corrects them once visible.
-        cols: term.cols || 80,
-        rows: term.rows || 24,
-        metadata: opts.metadata ?? null,
-        output_log_file: opts.outputLogFile ?? null,
-      })
-      if (!resp.ok || !resp.payload) {
-        status.value = 'error'
-        error.value = resp.error?.message ?? 'spawn failed'
-        term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
-        return
-      }
-      console.log(`[WD-SPAWN ${paneId.slice(0, 6)}] created at ${term.cols || 80}x${term.rows || 24} cw=${containerRef.value?.clientWidth}`)  // [WD] temp
-      sessionId.value = resp.payload.terminal_session_id
-      rememberSessionId(sessionId.value)  // enable reattach after a reload
-      status.value = 'running'
-
-      // Push the real size now that sessionId exists. The ResizeObserver's
-      // initial fire happened before spawn (no session yet, so it bailed), so
-      // this is what syncs the backend to the actual container on first paint.
-      applyFit()
-
-      // Auto-focus once the PTY is wired up so the user can immediately type
-      // without having to click the pane.
-      queueMicrotask(() => focus())
-
-      bindSessionHandlers()
-    } catch (err) {
-      status.value = 'error'
-      error.value = String((err as Error).message ?? err)
-      term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
-    }
+    // Park the spawn and create the PTY only once the container is measurable, so
+    // the CLI paints at the real width. Visible panes create immediately; a
+    // hidden-tab pane creates when its tab is first shown (reconciler/observer).
+    pendingSpawn = opts
+    await createWhenMeasurable()
   }
 
   function pasteText(text: string): void {
