@@ -354,6 +354,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // terminals.drain_output), so nothing wide is still arriving when we
         // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
+        console.log(`[WD-FIT ${paneId.slice(0, 6)}] cw=${el.clientWidth} prop=${dims?.cols} term=${term.cols} -> ${dims && Number.isFinite(dims.cols) && dims.cols < term.cols ? 'SHRINK' : 'grow/eq'}`)  // [WD] temp
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
           void sendResize(dims.cols, dims.rows).then(() => {
@@ -522,6 +523,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
       resizeDebounceTimer = setTimeout(() => {
         resizeDebounceTimer = null
+        console.log(`[WD-RO ${paneId.slice(0, 6)}] observer fired cw=${containerRef.value?.clientWidth} term=${term.cols} pending=${!!pendingSpawn}`)  // [WD] temp
         // A hidden-tab pane parked its spawn; becoming measurable (the tab was
         // shown) fires this — create the PTY now, at the real width.
         if (pendingSpawn) { void createWhenMeasurable(); return }
