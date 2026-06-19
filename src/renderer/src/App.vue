@@ -1842,6 +1842,20 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       }
     }
     _loadRunGroups(path)
+    // Set the active tab BEFORE restoring panes. Without it, tab filtering is
+    // inactive (tabFilteredPaneIds falls back to "all panes"), so every tab's
+    // panes share one grid (e.g. 7 panes → 3 cols → ~282px). Each agent then
+    // resumes hard-wrapped at that narrow width (~34 cols) and the frame stays
+    // stuck in scrollback even after the later resize — visible as a pane whose
+    // text is much narrower than the cell. Filtering first makes each pane spawn
+    // into its final-width grid cell.
+    try {
+      const key = `agentTeam.activeTab.${path}`
+      const saved = localStorage.getItem(key)
+      activeTab.value = (saved && stageTabs.value.some((t) => t.key === saved))
+        ? saved
+        : (stageTabs.value[0]?.key ?? '')
+    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
     if (suppressPaneRestoreOnce) {
       // First load of a duplicated window: open the same workspace as a clean
       // view without re-resuming the source window's live agent sessions.
@@ -1849,16 +1863,6 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     } else {
       await restoreWorkspacePanes(resp, path)
     }
-    // Restore saved activeTab after panes are repopulated
-    try {
-      const key = `agentTeam.activeTab.${path}`
-      const saved = localStorage.getItem(key)
-      if (saved && stageTabs.value.some((t) => t.key === saved)) {
-        activeTab.value = saved
-      } else {
-        activeTab.value = stageTabs.value[0]?.key ?? ''
-      }
-    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
     // If the active tab has no panes (e.g. old project.json panes landed in a
     // different group via fallback), switch to the first tab that has panes so
     // the user is not greeted with an empty grid.
