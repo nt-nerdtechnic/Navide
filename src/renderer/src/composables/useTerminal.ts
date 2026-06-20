@@ -677,7 +677,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // container is genuinely measurable — i.e. when the tab is shown.
   // A ref so displayStatus can reflect a parked (deferred) spawn as idle.
   const pendingSpawn = shallowRef<SpawnOptions | null>(null)
-  let _spawnPoked = false
 
   // Create the PTY for a parked spawn, but only when the container has a real,
   // measurable width. Returns silently (leaving it parked) until then; the
@@ -706,13 +705,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // tab the user isn't currently viewing.
     if (opts.isResume && !visible) return  // resume + hidden — retry when shown
     if (visible && cellWidth() === 0) {
-      // xterm hasn't measured its character cell yet (just opened): poke, then
-      // AWAIT measurement (bounded) so a fresh spawn resolves 'running' and the
-      // caller's role-injection flow proceeds.
-      if (!_spawnPoked) {
-        try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
-        _spawnPoked = true
-      }
+      // xterm hasn't measured its character cell yet (just opened): poke once to
+      // force measurement, then AWAIT it (bounded) so a fresh spawn resolves
+      // 'running' and the caller's role-injection flow proceeds. Poking per
+      // attempt (not once ever) is what makes a re-parked pane measure again
+      // after it was hidden and shown a second time.
+      try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
       const deadline = performance.now() + 500
       while (cellWidth() === 0 && performance.now() < deadline) {
         await new Promise<void>((resolve) => {
