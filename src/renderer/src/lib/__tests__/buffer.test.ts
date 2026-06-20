@@ -103,6 +103,10 @@ describe('splitNumberedPrompt', () => {
     expect(splitNumberedPrompt('有三題：\n1. 問A\n2. 問B\n3. 問C')).toEqual(['問A', '問B', '問C'])
   })
 
+  it('splits a paren-numbered list (1) 2)) like the dot form', () => {
+    expect(splitNumberedPrompt('有兩題：\n1) 問A\n2) 問B')).toEqual(['問A', '問B'])
+  })
+
   it('joins continuation lines onto the current sub-question', () => {
     expect(splitNumberedPrompt('1. 第一行\n接續\n2. 第二題')).toEqual(['第一行 接續', '第二題'])
   })

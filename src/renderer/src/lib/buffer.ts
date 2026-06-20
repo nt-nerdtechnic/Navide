@@ -192,11 +192,14 @@ export function parseOptions(optsText: string): string[] {
  * Handles Chinese numbering (1. 2. 3.) and variants (1、 1） 1）).
  */
 export function splitNumberedPrompt(prompt: string): string[] {
+  // Same numbered-marker set as parseOptions — share NUM_MARK so the two never
+  // diverge (a "1)" list must split here exactly as it parses as options).
+  const lineRe = new RegExp(`^\\s*\\d+${NUM_MARK}\\s+(.+)`)
   const lines = prompt.split(/\r?\n/)
   const numbered: string[] = []
   let cur = ''
   for (const line of lines) {
-    const m = line.match(/^\s*\d+[.、．）)]\s+(.+)/)
+    const m = line.match(lineRe)
     if (m) {
       if (cur) numbered.push(cur.trim())
       cur = m[1].trim()
