@@ -85,6 +85,10 @@ export interface SpawnOptions {
   // persistence key so a PTY can be rebound after a reload — the paneId is
   // regenerated on restore and would never match. Falls back to paneId if absent.
   resumeKey?: string
+  // True when the command resumes a prior session (reprints the conversation),
+  // so the PTY must be created at the real measured width. A fresh spawn is
+  // empty and may be created immediately even while hidden (see createWhenMeasurable).
+  isResume?: boolean
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -677,12 +681,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     const opts = pendingSpawn
     if (!opts) return
     let el = containerRef.value
-    if (!el || el.clientWidth === 0) return  // hidden — wait until the tab is shown
-    // Visible but xterm hasn't measured its character cell yet (just opened):
-    // poke, then AWAIT measurement (bounded). We await rather than defer so a
-    // fresh spawn resolves with status 'running' and the caller's role-injection
-    // flow proceeds; a hidden pane already returned above.
-    if (cellWidth() === 0) {
+    const visible = !!el && el.clientWidth > 0
+    // A resume reprints the prior conversation and MUST paint at the real width,
+    // so wait until the pane is measurable. A fresh spawn is empty: create it now
+    // even while hidden (the reconciler corrects the width once the tab is shown).
+    // Deferring a fresh spawn would stall e.g. a pipeline stage spawned into a
+    // tab the user isn't currently viewing.
+    if (opts.isResume && !visible) return  // resume + hidden — retry when shown
+    if (visible && cellWidth() === 0) {
+      // xterm hasn't measured its character cell yet (just opened): poke, then
+      // AWAIT measurement (bounded) so a fresh spawn resolves 'running' and the
+      // caller's role-injection flow proceeds.
       if (!_spawnPoked) {
         try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
         _spawnPoked = true
@@ -694,22 +703,22 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
           const t = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
         })
         el = containerRef.value
-        if (!el || el.clientWidth === 0) return  // hidden mid-wait — defer again
+        if (opts.isResume && (!el || el.clientWidth === 0)) return  // hidden mid-wait
       }
-      if (cellWidth() === 0) return  // still unmeasured — let the reconciler retry
     }
     pendingSpawn = null  // claim it so a concurrent retry can't double-create
-    // Wait for the width to settle, then fit, so the size below is the real one.
-    await settleContainerWidth()
-    // The tab may have been switched away during the settle. Creating now would
-    // fit to a hidden (0/stale) width and a resume would paint narrow — re-park
-    // and let the reconciler/observer create it when the tab is shown again.
-    el = containerRef.value
-    if (!el || el.clientWidth === 0 || cellWidth() === 0) {
-      pendingSpawn = opts
-      return
+    if (visible) {
+      // Settle the width, then fit, so the create below uses the real size.
+      await settleContainerWidth()
+      // The tab may have been switched away during the settle. A resume must not
+      // create at a hidden/stale width (it would paint narrow) — re-park it.
+      el = containerRef.value
+      if (opts.isResume && (!el || el.clientWidth === 0 || cellWidth() === 0)) {
+        pendingSpawn = opts
+        return
+      }
+      try { fit.fit() } catch { /* keep current size */ }
     }
-    try { fit.fit() } catch { /* keep current size */ }
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -720,11 +729,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        // The real, dynamically measured width — never a fixed default. The CLI
-        // first paints at exactly this width, so a resumed conversation is not
-        // hard-wrapped narrow and then stranded in scrollback.
-        cols: term.cols,
-        rows: term.rows,
+        // Visible panes carry the real, measured width (so a resume's reprint
+        // isn't hard-wrapped narrow). A fresh hidden pane has no measured size
+        // yet → the 80x24 default; the reconciler corrects it once shown.
+        cols: term.cols || 80,
+        rows: term.rows || 24,
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
       })

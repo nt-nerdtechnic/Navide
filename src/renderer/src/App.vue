@@ -1194,6 +1194,10 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       // spawn and on restore (claude --session-id), so a reload reattaches to
       // the live PTY instead of starting a second `--resume` that collides.
       resumeKey: pinnedSessionId,
+      // Resume panes must create at the real width (reprint); fresh panes may
+      // create immediately even while hidden (empty CLI) so a pipeline stage
+      // spawned into a non-active tab still starts.
+      isResume: opts.isResume,
     })
 
     if ((ref.status as unknown as string) === 'running') {
