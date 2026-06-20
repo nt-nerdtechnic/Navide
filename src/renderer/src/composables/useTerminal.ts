@@ -701,6 +701,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pendingSpawn = null  // claim it so a concurrent retry can't double-create
     // Wait for the width to settle, then fit, so the size below is the real one.
     await settleContainerWidth()
+    // The tab may have been switched away during the settle. Creating now would
+    // fit to a hidden (0/stale) width and a resume would paint narrow — re-park
+    // and let the reconciler/observer create it when the tab is shown again.
+    el = containerRef.value
+    if (!el || el.clientWidth === 0 || cellWidth() === 0) {
+      pendingSpawn = opts
+      return
+    }
     try { fit.fit() } catch { /* keep current size */ }
     try {
       const resp = await backend.send<{
