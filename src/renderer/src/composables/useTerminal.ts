@@ -54,7 +54,9 @@ const XTERM_THEMES: Record<string, ITheme> = {
     white: '#d0d7de',    brightWhite: '#8c959f',  // NOT pure white — readable on light bg
   },
   'high-contrast': {
-    background: '#000000', foreground: '#ffffff',
+    // Match the app canvas (--bg-base #0a0c10) like every other theme, so the
+    // pane's padding frame is seamless. White-on-#0a0c10 is still ~20:1 contrast.
+    background: '#0a0c10', foreground: '#ffffff',
     cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
     black: '#686868',   brightBlack: '#a0a0a0',
     red: '#ff6b66',     brightRed: '#ff9a94',
