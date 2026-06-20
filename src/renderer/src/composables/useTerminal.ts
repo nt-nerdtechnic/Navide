@@ -354,22 +354,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // terminals.drain_output), so nothing wide is still arriving when we
         // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
-        console.log(`[WD-FIT ${paneId.slice(0, 6)}] cw=${el.clientWidth} prop=${dims?.cols} term=${term.cols} -> ${dims && Number.isFinite(dims.cols) && dims.cols < term.cols ? 'SHRINK' : 'grow/eq'}`)  // [WD] temp
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
             dims.cols < term.cols && sessionId.value) {
-          console.log(`[WD-SHRINK ${paneId.slice(0, 6)}] sending resize ${dims.cols}`)  // [WD] temp
-          void sendResize(dims.cols, dims.rows).then((ok) => {
-            console.log(`[WD-SHRINK ${paneId.slice(0, 6)}] ack=${ok}, scheduling fit in ${PTY_REPAINT_GRACE_MS}ms`)  // [WD] temp
+          void sendResize(dims.cols, dims.rows).then(() => {
             // Let the CLI repaint narrow into the still-wide xterm first, THEN
             // narrow xterm so nothing reflows. Fixed delay (timers run even when
             // the window is occluded, unlike rAF).
             setTimeout(() => {
               try {
                 fit.fit()
-                console.log(`[WD-SHRINK ${paneId.slice(0, 6)}] post-fit term=${term.cols} acked=${ackedCols}`)  // [WD] temp
                 // Container may have changed again while waiting.
                 if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-              } catch (e) { console.log(`[WD-SHRINK ${paneId.slice(0, 6)}] fit threw`, e) /* [WD] temp */ }
+              } catch { /* ignore transient fit errors during teardown */ }
             }, PTY_REPAINT_GRACE_MS)
           })
         } else {
@@ -526,7 +522,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
       resizeDebounceTimer = setTimeout(() => {
         resizeDebounceTimer = null
-        console.log(`[WD-RO ${paneId.slice(0, 6)}] observer fired cw=${containerRef.value?.clientWidth} term=${term.cols} pending=${!!pendingSpawn}`)  // [WD] temp
         // A hidden-tab pane parked its spawn; becoming measurable (the tab was
         // shown) fires this — create the PTY now, at the real width.
         if (pendingSpawn) { void createWhenMeasurable(); return }
