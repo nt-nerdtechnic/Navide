@@ -374,10 +374,6 @@ class TerminalService:
         except ProcessLookupError:
             pass
 
-    def shutdown(self) -> None:
-        for session in list(self._sessions.values()):
-            self.kill(session.id)
-
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)
         if not session:
