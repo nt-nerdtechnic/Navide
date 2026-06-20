@@ -354,8 +354,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // terminals.drain_output), so nothing wide is still arriving when we
         // narrow. GROW (or rows-only) is safe to fit immediately, then send.
         const dims = fit.proposeDimensions()
+        // The shrink invariant matters only while the CLI is actively printing
+        // (its in-flight old-width output would reflow). A pane that hasn't
+        // emitted anything recently is safe to narrow immediately — without that
+        // exception a drag that narrows an idle pane lagged behind the cursor
+        // (it only caught up a grace-period after the drag stopped, if at all).
+        const activelyPrinting = Date.now() - lastRawActivityAt.value < 400
         if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
-            dims.cols < term.cols && sessionId.value) {
+            dims.cols < term.cols && sessionId.value && activelyPrinting) {
           void sendResize(dims.cols, dims.rows).then(() => {
             // Let the CLI repaint narrow into the still-wide xterm first, THEN
             // narrow xterm so nothing reflows. Fixed delay (timers run even when
@@ -369,6 +375,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
             }, PTY_REPAINT_GRACE_MS)
           })
         } else {
+          // GROW, rows-only, or a SHRINK of an idle pane: fit immediately, then
+          // tell the PTY. drain_output on the backend still orders any output.
           fit.fit()
           sendResizeNow()
         }
