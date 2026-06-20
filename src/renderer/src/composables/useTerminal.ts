@@ -685,7 +685,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   function cellWidth(): number {
     return (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
   }
+  // Guarded entry point: only one create may be in flight. pendingSpawn isn't
+  // cleared until after the awaits in _doCreate, so without this the reconciler /
+  // ResizeObserver could start a second create for the same pane (two PTYs).
+  let _creating = false
   async function createWhenMeasurable(): Promise<void> {
+    if (_creating || !pendingSpawn.value) return
+    _creating = true
+    try { await _doCreate() } finally { _creating = false }
+  }
+  async function _doCreate(): Promise<void> {
     const opts = pendingSpawn.value
     if (!opts) return
     let el = containerRef.value

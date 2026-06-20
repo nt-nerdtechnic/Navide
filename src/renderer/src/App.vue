@@ -1211,6 +1211,12 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         return id
       }
       scheduleInjection(pane)
+    } else if ((ref.status as unknown as string) === 'starting') {
+      // A resume parked on a hidden tab returns 'starting' — its PTY (and the
+      // --resume) is created when the tab is shown. Resume reloads memory, so
+      // nothing is injected; this is a ready pane, NOT a spawn failure.
+      pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
     } else {
       pane.injectionStatus = 'skipped'
       pane.preparationStatus = 'failed'
