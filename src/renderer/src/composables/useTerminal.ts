@@ -152,6 +152,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 1_000)
 
   const displayStatus = computed<string>(() => {
+    // A resume parked for a hidden tab hasn't created its PTY yet — a resumed
+    // agent comes up idle, so show 'idle' instead of a stuck 'starting' in the
+    // agent list until the tab is shown. (Fresh spawns create immediately, so
+    // their brief parked window keeps the normal status.)
+    if (pendingSpawn.value?.isResume) return 'idle'
     if (status.value !== 'running') return status.value
     // Spawned but not a single byte of output yet — the CLI is still booting
     // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
@@ -283,7 +288,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const reconcileInterval = window.setInterval(() => {
     if (!mounted) return
     // A spawn parked while hidden creates as soon as the pane is measurable.
-    if (pendingSpawn) { void createWhenMeasurable(); return }
+    if (pendingSpawn.value) { void createWhenMeasurable(); return }
     if (!sessionId.value) return
     const el = containerRef.value
     if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
@@ -536,7 +541,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         resizeDebounceTimer = null
         // A hidden-tab pane parked its spawn; becoming measurable (the tab was
         // shown) fires this — create the PTY now, at the real width.
-        if (pendingSpawn) { void createWhenMeasurable(); return }
+        if (pendingSpawn.value) { void createWhenMeasurable(); return }
         applyFit()
       }, RESIZE_QUIET_MS)
     })
@@ -668,7 +673,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // conversation) would hard-wrap at that wrong width and stay stuck in
   // scrollback. So the opts are parked here and the PTY is created only once the
   // container is genuinely measurable — i.e. when the tab is shown.
-  let pendingSpawn: SpawnOptions | null = null
+  // A ref so displayStatus can reflect a parked (deferred) spawn as idle.
+  const pendingSpawn = shallowRef<SpawnOptions | null>(null)
   let _spawnPoked = false
 
   // Create the PTY for a parked spawn, but only when the container has a real,
@@ -678,7 +684,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     return (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
   }
   async function createWhenMeasurable(): Promise<void> {
-    const opts = pendingSpawn
+    const opts = pendingSpawn.value
     if (!opts) return
     let el = containerRef.value
     const visible = !!el && el.clientWidth > 0
@@ -706,7 +712,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         if (opts.isResume && (!el || el.clientWidth === 0)) return  // hidden mid-wait
       }
     }
-    pendingSpawn = null  // claim it so a concurrent retry can't double-create
+    pendingSpawn.value = null  // claim it so a concurrent retry can't double-create
     if (visible) {
       // Settle the width, then fit, so the create below uses the real size.
       await settleContainerWidth()
@@ -714,7 +720,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // create at a hidden/stale width (it would paint narrow) — re-park it.
       el = containerRef.value
       if (opts.isResume && (!el || el.clientWidth === 0 || cellWidth() === 0)) {
-        pendingSpawn = opts
+        pendingSpawn.value = opts
         return
       }
       try { fit.fit() } catch { /* keep current size */ }
@@ -774,7 +780,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // Park the spawn and create the PTY only once the container is measurable, so
     // the CLI paints at the real width. Visible panes create immediately; a
     // hidden-tab pane creates when its tab is first shown (reconciler/observer).
-    pendingSpawn = opts
+    pendingSpawn.value = opts
     await createWhenMeasurable()
   }
 
