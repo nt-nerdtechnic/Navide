@@ -449,7 +449,8 @@
     "not-git-repo-desc": "This folder does not have a .git directory",
     "load-failed": "Failed to load",
     "initialize-repository": "Initialize Repository",
-    "id-exists": "ID already exists"
+    "id-exists": "ID already exists",
+    "backend-start-failed": "Backend failed to start"
   },
   "status": {
     "not-git-repo": "Not a Git repository",

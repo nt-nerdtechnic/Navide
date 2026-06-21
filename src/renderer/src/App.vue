@@ -89,17 +89,31 @@ async function checkOnboarding(): Promise<void> {
 // First-boot loading overlay: shown until the backend first settles, then
 // dismissed for good (later reconnects use the status-bar indicator, not this).
 const booting = ref(true)
+const bootError = ref(false)
 const dismissBoot = (): void => { booting.value = false }
-// Safety net: never let the overlay trap the user if the backend never settles.
-window.setTimeout(dismissBoot, 10_000)
+let _bootTimer: number | undefined
+function armBootTimeout(): void {
+  if (_bootTimer) clearTimeout(_bootTimer)
+  // Safety net: dismiss a stuck spinner so the user is never trapped — but never
+  // override an error state, which stays put with a Retry button.
+  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 10_000)
+}
+armBootTimeout()
+function retryBackend(): void {
+  bootError.value = false
+  booting.value = true
+  armBootTimeout()
+  void backend.restart()
+}
 watch(
   () => backend.status.value,
   (s) => {
     if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
-    // Dismiss on success or hard failure (on error the user needs the status-bar
-    // controls underneath). 'disconnected' is left alone — it's transient during
-    // the reconnect backoff, and the 10s timeout covers a backend that never starts.
-    if (s === 'connected' || s === 'error') dismissBoot()
+    if (s === 'connected') { booting.value = false; bootError.value = false }
+    // On a hard failure, keep the overlay and show an error + Retry (the app is
+    // non-functional without a backend anyway). 'disconnected' is transient
+    // during reconnect backoff, so it's left alone.
+    else if (s === 'error') bootError.value = true
   },
   { immediate: true },
 )
@@ -5152,8 +5166,14 @@ function paneIsCommander(p: ActivePane): boolean {
     <div v-if="booting" class="boot-overlay">
       <div class="boot-card">
         <div class="boot-wordmark">Agent-Team</div>
-        <div class="boot-spinner" aria-label="loading" />
-        <div class="boot-status">{{ $t('label.loading') }}</div>
+        <template v-if="bootError">
+          <div class="boot-status boot-status-error">{{ $t('error.backend-start-failed') }}</div>
+          <button class="boot-retry" @click="retryBackend">{{ $t('action.retry') }}</button>
+        </template>
+        <template v-else>
+          <div class="boot-spinner" aria-label="loading" />
+          <div class="boot-status">{{ $t('label.loading') }}</div>
+        </template>
       </div>
     </div>
   </Transition>
@@ -5721,6 +5741,21 @@ function paneIsCommander(p: ActivePane): boolean {
   font-size: 12px;
   color: var(--text-secondary);
   letter-spacing: 0.02em;
+}
+.boot-status-error {
+  color: var(--danger-fg);
+}
+.boot-retry {
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.boot-retry:hover {
+  background: var(--bg-elevated);
 }
 @keyframes boot-spin {
   to { transform: rotate(360deg); }
