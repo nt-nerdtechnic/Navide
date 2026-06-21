@@ -5153,6 +5153,7 @@ function paneIsCommander(p: ActivePane): boolean {
       <div class="boot-card">
         <div class="boot-wordmark">Agent-Team</div>
         <div class="boot-spinner" aria-label="loading" />
+        <div class="boot-status">{{ $t('label.loading') }}</div>
       </div>
     </div>
   </Transition>
@@ -5715,6 +5716,11 @@ function paneIsCommander(p: ActivePane): boolean {
   border-top-color: var(--accent-bright);
   border-radius: 50%;
   animation: boot-spin 0.8s linear infinite;
+}
+.boot-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
 }
 @keyframes boot-spin {
   to { transform: rotate(360deg); }
