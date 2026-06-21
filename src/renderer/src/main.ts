@@ -41,8 +41,11 @@ function logErr(label: string, err: unknown): void {
 function showFatalIfBlank(label: string, err: unknown): void {
   logErr(label, err)
   const host = document.getElementById('app')
-  // Only take over the screen when nothing has rendered into #app.
-  if (!host || host.childElementCount > 0) return
+  // Only take over the screen when nothing has rendered into #app. The pre-mount
+  // splash counts as "blank" — if mount failed it's still sitting there, and the
+  // fatal error must replace it rather than be suppressed by its presence.
+  const onlyPreSplash = host?.childElementCount === 1 && host.firstElementChild?.id === 'pre-splash'
+  if (!host || (host.childElementCount > 0 && !onlyPreSplash)) return
   const detail = err instanceof Error ? `${err.message}\n\n${err.stack ?? ''}` : String(err)
   const box = document.createElement('pre')
   box.style.cssText =
