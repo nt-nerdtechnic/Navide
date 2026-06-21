@@ -107,8 +107,13 @@ let _bootTimer: number | undefined
 function armBootTimeout(): void {
   if (_bootTimer) clearTimeout(_bootTimer)
   // Safety net: dismiss a stuck spinner so the user is never trapped — but never
-  // override an error state, which stays put with a Retry button.
-  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 10_000)
+  // override an error state, which stays put with a Retry button. Kept just past
+  // useBackend's 20s init deadline: on a slow cold start the backend may take up
+  // to 20s to report ready (then connect) or to give up and set status='error'.
+  // Firing earlier would tear the overlay down mid-startup, revealing a bare
+  // unconnected shell and pre-empting the error+Retry the backend failure path
+  // is meant to show.
+  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 22_000)
 }
 armBootTimeout()
 function retryBackend(): void {
