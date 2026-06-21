@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { useBackend } from './composables/useBackend'
 import ExplorerPane from './components/ExplorerPane.vue'
 import SearchPane from './components/SearchPane.vue'
@@ -9,7 +9,12 @@ import DiffPane from './editor/DiffPane.vue'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
-import AIChatPane from './components/AIChatPane.vue'
+// Lazy-loaded: AIChatPane statically pulls mermaid + katex (heavy). Loading it
+// async keeps the editor window's first paint off the critical path — the panel
+// (v-show) hydrates a moment later. `import type` keeps the ref fully typed with
+// no runtime/bundle cost.
+import type AIChatPaneType from './components/AIChatPane.vue'
+const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vue'))
 import ProblemsPane from './components/ProblemsPane.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
@@ -56,7 +61,7 @@ function onResizeEnd(): void {
 
 // ── AI Panel resize ───────────────────────────────────────────────────────────
 const AI_PANEL_W_KEY = 'ide-ai-panel-width'
-const aiChatRef = ref<InstanceType<typeof AIChatPane> | null>(null)
+const aiChatRef = ref<InstanceType<typeof AIChatPaneType> | null>(null)
 const aiPanelOpen = ref(false)
 const aiPanelWidth = ref(Math.max(280, Math.min(600, parseInt(localStorage.getItem(AI_PANEL_W_KEY) ?? '320', 10))))
 let aiResizing = false
