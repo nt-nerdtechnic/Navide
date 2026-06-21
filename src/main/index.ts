@@ -15,6 +15,9 @@ if (process.platform === 'darwin') {
 }
 
 let backend: BackendHandle | null = null
+// In-flight initial backend start, so before-quit can wait for it (capped) and
+// stop the process instead of orphaning it when the user quits mid-startup.
+let backendStarting: Promise<void> | null = null
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -743,12 +746,20 @@ app.whenReady().then(async () => {
     }
   }
 
-  try {
-    backend = await startBackend()
-    console.log(`[main] backend ready at ${backend.host}:${backend.port}`)
-  } catch (err) {
-    console.error('[main] backend failed to start', err)
-  }
+  // Start the backend in PARALLEL with window creation, not before it. Awaiting
+  // here meant the first window (and its renderer's first paint) didn't even
+  // begin loading until the backend had fully spawned. The renderer shows its
+  // boot overlay and connects once the backend is ready (broadcastBackendChanged);
+  // it already tolerates a not-yet-ready backend (same path as a restart).
+  backendStarting = startBackend()
+    .then((b) => {
+      backend = b
+      console.log(`[main] backend ready at ${b.host}:${b.port}`)
+      broadcastBackendChanged()
+    })
+    .catch((err) => {
+      console.error('[main] backend failed to start', err)
+    })
 
   // Open any folders requested at launch: queued open-file events (macOS cold
   // launch from a Quick Action) plus CLI path args on a packaged build. Dev runs
@@ -773,14 +784,16 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', async (e) => {
-  if (backend) {
-    e.preventDefault()
-    const b = backend
-    backend = null
-    // Never let a wedged backend block quit: cap the shutdown wait so the app
-    // always proceeds to quit even if stop() overruns.
-    const forced = new Promise<void>((r) => setTimeout(r, 3000))
-    await Promise.race([b.stop(), forced])
-    app.quit()
-  }
+  if (!backend && !backendStarting) return
+  e.preventDefault()
+  // Never let a wedged/slow backend block quit: cap every wait below.
+  const forced = new Promise<void>((r) => setTimeout(r, 3000))
+  // If the backend is still spawning (quit mid-startup), wait for it (capped) so
+  // we can stop it rather than orphan the process.
+  if (!backend && backendStarting) await Promise.race([backendStarting, forced])
+  const b = backend
+  backend = null
+  backendStarting = null
+  if (b) await Promise.race([b.stop(), forced])
+  app.quit()
 })
