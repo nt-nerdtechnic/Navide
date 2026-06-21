@@ -294,6 +294,8 @@
     "selected": "selected",
     "initializing": "Initializing…",
     "loading": "Loading…",
+    "boot-starting": "Starting backend…",
+    "boot-connecting": "Connecting…",
     "no-items": "No items to display in this directory",
     "select-workspace": "Select a workspace to get started",
     "selected-count": "selected",

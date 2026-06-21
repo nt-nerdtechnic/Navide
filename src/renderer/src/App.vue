@@ -90,6 +90,15 @@ async function checkOnboarding(): Promise<void> {
 // dismissed for good (later reconnects use the status-bar indicator, not this).
 const booting = ref(true)
 const bootError = ref(false)
+// Reflect the real boot phase in the splash status instead of a flat "loading".
+const bootStatusKey = computed(() => {
+  switch (backend.status.value) {
+    case 'starting': return 'label.boot-starting'
+    case 'connecting':
+    case 'disconnected': return 'label.boot-connecting'
+    default: return 'label.loading'
+  }
+})
 const dismissBoot = (): void => { booting.value = false }
 let _bootTimer: number | undefined
 function armBootTimeout(): void {
@@ -5172,7 +5181,7 @@ function paneIsCommander(p: ActivePane): boolean {
         </template>
         <template v-else>
           <div class="boot-spinner" aria-label="loading" />
-          <div class="boot-status">{{ $t('label.loading') }}</div>
+          <div class="boot-status">{{ $t(bootStatusKey) }}</div>
         </template>
       </div>
     </div>
