@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import ControlPane, {
@@ -14,11 +14,8 @@ import ControlPane, {
   type WorkspaceMode
 } from './components/ControlPane.vue'
 import QuestionAlert from './components/QuestionAlert.vue'
-import CompletionModal from './components/CompletionModal.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
-import SettingsModal from './components/SettingsModal.vue'
 import NotificationHost from './components/NotificationHost.vue'
-import OnboardingWizard from './components/OnboardingWizard.vue'
 import Welcome from './components/Welcome.vue'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
@@ -51,6 +48,12 @@ import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/compl
 import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
+
+// Modals/wizard that only render behind a v-if (settings opened, run completed,
+// first-run onboarding) — defer them off the main shell's first-paint bundle.
+const CompletionModal = defineAsyncComponent(() => import('./components/CompletionModal.vue'))
+const SettingsModal = defineAsyncComponent(() => import('./components/SettingsModal.vue'))
+const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 
 const backend = useBackend()
 const rolesApi = useRoles(backend)
