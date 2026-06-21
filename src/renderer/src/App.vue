@@ -74,6 +74,15 @@ onMounted(() => {
   // Clicking a system notification focuses the window on the originating pane.
   window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
   window.addEventListener('resize', onWindowResize)
+  // Warm the heaviest deferred panel (Settings) during idle: it stays lazy to
+  // keep off first paint, but it's commonly opened, so pre-fetching once the
+  // shell is interactive makes its first open instant at no visible cost.
+  const warmSettings = (): void => { void import('./components/SettingsModal.vue') }
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(warmSettings, { timeout: 4000 })
+  } else {
+    window.setTimeout(warmSettings, 2500)
+  }
 })
 
 // ── First-run onboarding gate ────────────────────────────────────────────────
