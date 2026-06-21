@@ -39,6 +39,12 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
     height: 800,
     title: 'Agent-Team',
     titleBarStyle: 'hidden',
+    // Start hidden and show only once the renderer has painted its first frame,
+    // so the user never sees the white flash of an unpainted window. The dark
+    // backgroundColor matches the default theme as a safety net for the instant
+    // between show() and paint.
+    show: false,
+    backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -48,6 +54,16 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
   })
   mainWindows.add(win)
   mainWindow = win
+  // Show on first paint (theme already applied → no white/wrong-theme flash).
+  // Fallback timer guarantees the window appears even if ready-to-show is missed.
+  let _shown = false
+  const showOnce = (): void => {
+    if (_shown || win.isDestroyed()) return
+    _shown = true
+    win.show()
+  }
+  win.once('ready-to-show', showOnce)
+  setTimeout(showOnce, 4000)
   win.on('focus', () => { mainWindow = win })
   win.on('closed', () => {
     mainWindows.delete(win)
