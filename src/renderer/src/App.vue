@@ -86,10 +86,20 @@ async function checkOnboarding(): Promise<void> {
     onboardingComplete.value = true
   }
 }
+// First-boot loading overlay: shown until the backend first settles, then
+// dismissed for good (later reconnects use the status-bar indicator, not this).
+const booting = ref(true)
+const dismissBoot = (): void => { booting.value = false }
+// Safety net: never let the overlay trap the user if the backend never settles.
+window.setTimeout(dismissBoot, 10_000)
 watch(
   () => backend.status.value,
   (s) => {
     if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+    // Dismiss on success or hard failure (on error the user needs the status-bar
+    // controls underneath). 'disconnected' is left alone — it's transient during
+    // the reconnect backoff, and the 10s timeout covers a backend that never starts.
+    if (s === 'connected' || s === 'error') dismissBoot()
   },
   { immediate: true },
 )
@@ -5136,6 +5146,16 @@ function paneIsCommander(p: ActivePane): boolean {
     :backend="backend"
     @complete="onboardingComplete = true"
   />
+  <!-- First-boot loading overlay: covers the shell until the backend settles,
+       then fades out. Brand-only text so no i18n keys are needed. -->
+  <Transition name="boot-fade">
+    <div v-if="booting" class="boot-overlay">
+      <div class="boot-card">
+        <div class="boot-wordmark">Agent-Team</div>
+        <div class="boot-spinner" aria-label="loading" />
+      </div>
+    </div>
+  </Transition>
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
     <div class="titlebar">
@@ -5666,6 +5686,43 @@ function paneIsCommander(p: ActivePane): boolean {
 </template>
 
 <style scoped>
+/* First-boot loading overlay */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+}
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.boot-wordmark {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+}
+.boot-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border-muted);
+  border-top-color: var(--accent-bright);
+  border-radius: 50%;
+  animation: boot-spin 0.8s linear infinite;
+}
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+/* Fade the overlay out (no enter transition — it's there from first paint). */
+.boot-fade-leave-active { transition: opacity 0.3s ease; }
+.boot-fade-leave-to { opacity: 0; }
+
 .app {
   display: grid;
   /* Three columns: controls · terminal grid · token stats panel
