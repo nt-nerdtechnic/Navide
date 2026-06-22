@@ -220,22 +220,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
 
-  // xterm and the PTY must never be at different sizes on purpose. If xterm
-  // refits immediately while the PTY resize lags, a CLI still streaming at the
-  // old width gets wrapped at the new one, and inline TUIs (Claude Code's
-  // cursor-up repaints) then overwrite the wrong rows — corruption that stays
-  // in scrollback forever. So layout churn is debounced BEFORE the fit (xterm
-  // holds its old size, matching the PTY, while the grid settles), and once
-  // quiet, the fit and the backend resize are ordered so xterm is never
-  // narrower than the PTY (see applyFit).
+  // Layout churn is debounced BEFORE the fit: xterm holds its old size while the
+  // grid settles, then fits once (so a drag fires one resize, not dozens). Once
+  // quiet, applyFit resizes xterm to the container first and tells the PTY after
+  // — the VSCode-aligned ordering, so the CLI's SIGWINCH repaint lands at the
+  // final width (see applyFit).
   const RESIZE_QUIET_MS = 250
-  // On a width SHRINK we tell the PTY first, then wait this long before
-  // narrowing xterm — long enough for the CLI to process SIGWINCH and repaint
-  // its inline UI at the new (narrow) width. Narrowing xterm immediately would
-  // reflow the still-wide frame and desync the CLI's cursor-up repaint, leaving
-  // two frames overlapping (visible "跑版"). A single fixed timer — not the old
-  // quiet-wait loop, which could starve and leave xterm stuck.
-  const PTY_REPAINT_GRACE_MS = 180
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
@@ -400,40 +390,22 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       try {
-        // Invariant: xterm must never be NARROWER than the width the CLI
-        // believes, or in-flight old-width output wraps and the CLI's cursor-up
-        // repaints land on the wrong rows. So on a SHRINK we push the new size
-        // to the PTY first and only fit xterm once the resize is acked — and
-        // the backend drains all old-width output before that ack (see
-        // terminals.drain_output), so nothing wide is still arriving when we
-        // narrow. GROW (or rows-only) is safe to fit immediately, then send.
-        const dims = fit.proposeDimensions()
-        // The shrink invariant matters only while the CLI is actively printing
-        // (its in-flight old-width output would reflow). A pane that hasn't
-        // emitted anything recently is safe to narrow immediately — without that
-        // exception a drag that narrows an idle pane lagged behind the cursor
-        // (it only caught up a grace-period after the drag stopped, if at all).
-        const activelyPrinting = Date.now() - lastRawActivityAt.value < 400
-        if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
-            dims.cols < term.cols && sessionId.value && activelyPrinting) {
-          void sendResize(dims.cols, dims.rows).then(() => {
-            // Let the CLI repaint narrow into the still-wide xterm first, THEN
-            // narrow xterm so nothing reflows. Fixed delay (timers run even when
-            // the window is occluded, unlike rAF).
-            setTimeout(() => {
-              try {
-                fit.fit()
-                // Container may have changed again while waiting.
-                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-              } catch { /* ignore transient fit errors during teardown */ }
-            }, PTY_REPAINT_GRACE_MS)
-          })
-        } else {
-          // GROW, rows-only, or a SHRINK of an idle pane: fit immediately, then
-          // tell the PTY. drain_output on the backend still orders any output.
-          fit.fit()
-          sendResizeNow()
-        }
+        // VSCode-aligned ordering: resize xterm to the container FIRST, then
+        // tell the PTY. The PTY resize raises SIGWINCH, so the CLI repaints its
+        // cursor line (the live footer) directly into an already-correctly-sized
+        // xterm — nothing reflows that fresh frame afterward. xterm does not
+        // reflow the cursor line itself (reflowCursorLine defaults to false), so
+        // the CLI owns that repaint; we just give it the right width first.
+        //
+        // This replaces the old shrink-grace dance (push PTY narrow first, wait
+        // PTY_REPAINT_GRACE_MS, then fit xterm). That ordering left the CLI's
+        // narrow repaint sitting in a still-wide xterm, which the subsequent
+        // narrowing reflowed into the garbled-footer residue. The backend still
+        // drains output around its resize ack, so ordering is preserved server
+        // side; the brief client window where xterm is narrower than the PTY is
+        // the same tradeoff VSCode's integrated terminal accepts.
+        fit.fit()
+        sendResizeNow()
       } catch { /* ignore transient fit errors during teardown */ }
     }
     scheduleFrame(run)
