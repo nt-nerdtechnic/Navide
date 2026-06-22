@@ -280,6 +280,39 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // width instead of stranding a narrow one in scrollback.
   let pendingReattachRedraw = false
 
+  // After a width change settles and the CLI goes quiet, one SIGWINCH-based
+  // force_redraw makes the TUI repaint cleanly at the new width — clearing the
+  // reflow residue xterm leaves when it re-wraps the old frame (the garbled
+  // status footer seen on narrow drag-resize). Gated so it fires once per
+  // settle, only on a real WIDTH change, only when xterm == backend-acked, and
+  // never mid-output (a SIGWINCH while the CLI streams can land its repaint on
+  // the wrong rows). Triggered only from the ResizeObserver path (genuine layout
+  // churn), not from spawn/reattach which already paint fresh.
+  const RESIZE_REDRAW_SETTLE_MS = 220
+  let resizeRedrawTimer: ReturnType<typeof setTimeout> | null = null
+  let lastRedrawCols = 0
+  function scheduleResizeRedraw(): void {
+    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
+    resizeRedrawTimer = setTimeout(() => {
+      resizeRedrawTimer = null
+      if (!mounted || !sessionId.value) return
+      // Not fully settled yet (xterm still differs from the backend-acked size):
+      // wait for the resize to finish, then re-check.
+      if (term.cols !== ackedCols || term.rows !== ackedRows) { scheduleResizeRedraw(); return }
+      // Width unchanged since the last clean repaint (rows-only / no-op): skip.
+      if (term.cols === lastRedrawCols) return
+      // CLI is actively printing — redrawing now could corrupt in-flight output.
+      // Defer; the next settle (or the reconciler) will catch it once quiet.
+      if (Date.now() - lastRawActivityAt.value < RESIZE_QUIET_MS) { scheduleResizeRedraw(); return }
+      lastRedrawCols = term.cols
+      void backend.send('terminal.redraw', {
+        terminal_session_id: sessionId.value,
+        cols: term.cols,
+        rows: term.rows,
+      })
+    }, RESIZE_REDRAW_SETTLE_MS)
+  }
+
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
   // (background tab / spotlight / minimized → display:none) can leave the PTY
   // and xterm at different sizes — the CLI then draws its TUI for one width
@@ -545,6 +578,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // shown) fires this — create the PTY now, at the real width.
         if (pendingSpawn.value) { void createWhenMeasurable(); return }
         applyFit()
+        // Once this resize settles, repaint the TUI clean at the new width.
+        scheduleResizeRedraw()
       }, RESIZE_QUIET_MS)
     })
     resizeObserver.observe(el)
@@ -861,6 +896,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cancelAnimationFrame(resizeRafId)
     if (resizeFrameTimer) clearTimeout(resizeFrameTimer)
     if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
+    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()

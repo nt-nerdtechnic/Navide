@@ -812,6 +812,19 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.send_json(
                 make_response(msg_id, msg_type, {"alive": alive, "dead": dead})
             )
+        elif msg_type == "terminal.redraw":
+            # One-shot SIGWINCH nudge so a TUI repaints cleanly after a resize
+            # settles, clearing the reflow residue xterm leaves when it re-wraps
+            # the old frame at the new width. Unlike terminal.reattach this does
+            # NOT re-route the active session — it is a pure repaint of an
+            # already-attached, visible pane (the frontend gates it on width
+            # stable + CLI quiet, see useTerminal scheduleResizeRedraw).
+            tid = str(payload.get("terminal_session_id") or "")
+            cols = int(payload.get("cols", 0))
+            rows = int(payload.get("rows", 0))
+            if tid and cols > 0 and rows > 0:
+                session.terminals.force_redraw(tid, cols, rows)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "codex_home.cleanup":
             cleaned = codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))
             await session.send_json(
