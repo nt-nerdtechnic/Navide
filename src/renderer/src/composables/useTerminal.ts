@@ -305,6 +305,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       lastRedrawCols = term.cols
+      // TEMP diagnostic (remove once resize is confirmed working).
+      console.debug(`[redraw ${paneId}] fire cols=${term.cols} rows=${term.rows}`)
       void backend.send('terminal.redraw', {
         terminal_session_id: sessionId.value,
         cols: term.cols,
@@ -404,7 +406,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         // drains output around its resize ack, so ordering is preserved server
         // side; the brief client window where xterm is narrower than the PTY is
         // the same tradeoff VSCode's integrated terminal accepts.
+        const cwBefore = el.clientWidth
+        const colsBefore = term.cols
         fit.fit()
+        // TEMP diagnostic (remove once resize is confirmed working): proves the
+        // VSCode-aligned path ran and shows the widths it computed.
+        console.debug(
+          `[resize ${paneId}] cw=${cwBefore} cols ${colsBefore}->${term.cols} rows=${term.rows} acked=${ackedCols}x${ackedRows}`
+        )
         sendResizeNow()
       } catch { /* ignore transient fit errors during teardown */ }
     }
