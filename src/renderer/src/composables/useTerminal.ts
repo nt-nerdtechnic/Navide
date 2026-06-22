@@ -280,30 +280,40 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // width instead of stranding a narrow one in scrollback.
   let pendingReattachRedraw = false
 
-  // After a width change settles and the CLI goes quiet, one SIGWINCH-based
-  // force_redraw makes the TUI repaint cleanly at the new width — clearing the
-  // reflow residue xterm leaves when it re-wraps the old frame (the garbled
-  // status footer seen on narrow drag-resize). Gated so it fires once per
-  // settle, only on a real WIDTH change, only when xterm == backend-acked, and
-  // never mid-output (a SIGWINCH while the CLI streams can land its repaint on
-  // the wrong rows). Triggered only from the ResizeObserver path (genuine layout
-  // churn), not from spawn/reattach which already paint fresh.
+  // After a width change settles, one SIGWINCH-based force_redraw makes the TUI
+  // repaint cleanly at the new width — clearing the reflow residue xterm leaves
+  // when it re-wraps the old frame (the garbled status footer on narrow
+  // drag-resize). Gated so it fires once per settle, only on a real WIDTH
+  // change, and only when xterm == backend-acked. We PREFER a quiet gap so the
+  // repaint isn't interleaved with a burst, but a continuously-streaming agent
+  // never goes quiet — so after a bounded wait we fire anyway (a SIGWINCH is
+  // safe mid-output; it's exactly what a real terminal resize raises). Triggered
+  // only from the ResizeObserver path (genuine layout churn), not spawn/reattach.
   const RESIZE_REDRAW_SETTLE_MS = 220
+  const RESIZE_REDRAW_MAX_WAIT_MS = 1500
   let resizeRedrawTimer: ReturnType<typeof setTimeout> | null = null
+  let resizeRedrawDeadline = 0
   let lastRedrawCols = 0
-  function scheduleResizeRedraw(): void {
+  // Called on a genuine new settle: (re)start the bounded-wait clock, then arm.
+  function requestResizeRedraw(): void {
+    resizeRedrawDeadline = Date.now() + RESIZE_REDRAW_MAX_WAIT_MS
+    armResizeRedraw()
+  }
+  // Internal poll: reschedules without resetting the deadline so a busy pane
+  // can't postpone the redraw indefinitely.
+  function armResizeRedraw(): void {
     if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
     resizeRedrawTimer = setTimeout(() => {
       resizeRedrawTimer = null
       if (!mounted || !sessionId.value) return
       // Not fully settled yet (xterm still differs from the backend-acked size):
       // wait for the resize to finish, then re-check.
-      if (term.cols !== ackedCols || term.rows !== ackedRows) { scheduleResizeRedraw(); return }
+      if (term.cols !== ackedCols || term.rows !== ackedRows) { armResizeRedraw(); return }
       // Width unchanged since the last clean repaint (rows-only / no-op): skip.
       if (term.cols === lastRedrawCols) return
-      // CLI is actively printing — redrawing now could corrupt in-flight output.
-      // Defer; the next settle (or the reconciler) will catch it once quiet.
-      if (Date.now() - lastRawActivityAt.value < RESIZE_QUIET_MS) { scheduleResizeRedraw(); return }
+      // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
+      const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
+      if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       lastRedrawCols = term.cols
       void backend.send('terminal.redraw', {
         terminal_session_id: sessionId.value,
@@ -579,7 +589,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         if (pendingSpawn.value) { void createWhenMeasurable(); return }
         applyFit()
         // Once this resize settles, repaint the TUI clean at the new width.
-        scheduleResizeRedraw()
+        requestResizeRedraw()
       }, RESIZE_QUIET_MS)
     })
     resizeObserver.observe(el)
