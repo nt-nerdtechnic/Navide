@@ -832,6 +832,19 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 await session.terminals.drain_output(tid)
                 session.terminals.force_redraw(tid, cols, rows)
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "debug.log":
+            # TEMP: append a frontend diagnostic line to a file the dev can read
+            # directly (renderer console logs aren't otherwise reachable). Remove
+            # with the matching frontend diagnostics once resize is confirmed.
+            try:
+                import time as _t
+
+                line = str(payload.get("line", ""))
+                with open("/tmp/agent-team-resize.log", "a") as _f:
+                    _f.write(f"{_t.strftime('%H:%M:%S')} {line}\n")
+            except Exception:
+                pass
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "codex_home.cleanup":
             cleaned = codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))
             await session.send_json(

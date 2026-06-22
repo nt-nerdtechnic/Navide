@@ -270,6 +270,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // width instead of stranding a narrow one in scrollback.
   let pendingReattachRedraw = false
 
+  // TEMP diagnostic sink: route resize/redraw traces to a file the dev can read
+  // directly (/tmp/agent-team-resize.log via the backend), instead of the
+  // renderer console. Remove with the call sites once resize is confirmed.
+  function dbgLog(line: string): void {
+    if (!sessionId.value) return
+    void backend.send('debug.log', { line: `${paneId} ${line}` }).catch(() => {})
+  }
+
   // After a width change settles, one SIGWINCH-based force_redraw makes the TUI
   // repaint cleanly at the new width — clearing the reflow residue xterm leaves
   // when it re-wraps the old frame (the garbled status footer on narrow
@@ -306,7 +314,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       lastRedrawCols = term.cols
       // TEMP diagnostic (remove once resize is confirmed working).
-      console.debug(`[redraw ${paneId}] fire cols=${term.cols} rows=${term.rows}`)
+      dbgLog(`redraw fire cols=${term.cols} rows=${term.rows}`)
       void backend.send('terminal.redraw', {
         terminal_session_id: sessionId.value,
         cols: term.cols,
@@ -411,9 +419,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         fit.fit()
         // TEMP diagnostic (remove once resize is confirmed working): proves the
         // VSCode-aligned path ran and shows the widths it computed.
-        console.debug(
-          `[resize ${paneId}] cw=${cwBefore} cols ${colsBefore}->${term.cols} rows=${term.rows} acked=${ackedCols}x${ackedRows}`
-        )
+        dbgLog(`resize cw=${cwBefore} cols ${colsBefore}->${term.cols} rows=${term.rows} acked=${ackedCols}x${ackedRows}`)
         sendResizeNow()
       } catch { /* ignore transient fit errors during teardown */ }
     }
