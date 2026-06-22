@@ -23,6 +23,9 @@ let backendStarting: Promise<void> | null = null
 // holds them all for lifecycle code that must reach every main window.
 let mainWindow: BrowserWindow | null = null
 const mainWindows = new Set<BrowserWindow>()
+// Maps each main window to its workspace_path so we can focus an existing window
+// instead of creating a duplicate when the same folder is opened again.
+const mainWindowWorkspaces = new Map<BrowserWindow, string>()
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
@@ -57,6 +60,7 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
   })
   mainWindows.add(win)
   mainWindow = win
+  if (params.workspace_path) mainWindowWorkspaces.set(win, params.workspace_path)
   // Show on first paint (theme already applied → no white/wrong-theme flash).
   // Fallback timer guarantees the window appears even if ready-to-show is missed.
   let _shown = false
@@ -70,6 +74,7 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
   win.on('focus', () => { mainWindow = win })
   win.on('closed', () => {
     mainWindows.delete(win)
+    mainWindowWorkspaces.delete(win)
     if (mainWindow === win) {
       const remaining = [...mainWindows]
       mainWindow = remaining.length ? remaining[remaining.length - 1] : null
@@ -637,6 +642,15 @@ function openWorkspaceFromPath(p: string): boolean {
   }
   if (app.isReady()) {
     console.log('[main] open workspace from external path:', dir)
+    // If a window already has this workspace open, focus it instead of duplicating.
+    for (const [win, wp] of mainWindowWorkspaces) {
+      if (!win.isDestroyed() && wp === dir) {
+        if (win.isMinimized()) win.restore()
+        app.focus({ steal: true })
+        win.focus()
+        return true
+      }
+    }
     // The app is usually backgrounded when a Quick Action / "Open With" fires,
     // so bring it to the front and focus the new window — otherwise the window
     // opens behind Finder and looks like nothing happened.
