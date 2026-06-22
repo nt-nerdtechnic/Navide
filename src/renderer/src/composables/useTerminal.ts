@@ -793,6 +793,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       sessionId.value = resp.payload.terminal_session_id
       rememberSessionId(sessionId.value)  // enable reattach after a reload
       status.value = 'running'
+      // TEMP diagnostic: marks a fresh pane spawn so we can confirm the new code
+      // is actually loaded (opening a pane writes a line even without resizing).
+      dbgLog(`spawn cols=${term.cols} rows=${term.rows}`)
       applyFit()  // sync the real size to the backend on first paint
       queueMicrotask(() => focus())
       bindSessionHandlers()
