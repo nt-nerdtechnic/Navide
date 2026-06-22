@@ -823,6 +823,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             cols = int(payload.get("cols", 0))
             rows = int(payload.get("rows", 0))
             if tid and cols > 0 and rows > 0:
+                # Order the repaint SIGWINCH AFTER any pending output, the same
+                # barrier terminal.resize uses (drain_output). The frontend can
+                # fire this mid-stream when a busy pane hits its bounded-wait
+                # deadline; without draining first, the SIGWINCH could interrupt
+                # an in-flight frame and strand a corrupt repaint — exactly what
+                # the resize drain/grace machinery exists to prevent.
+                await session.terminals.drain_output(tid)
                 session.terminals.force_redraw(tid, cols, rows)
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "codex_home.cleanup":
