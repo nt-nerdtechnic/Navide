@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick, defineAsyncComponent } from 'vue'
 import { useBackend } from './composables/useBackend'
 import ExplorerPane from './components/ExplorerPane.vue'
 import SearchPane from './components/SearchPane.vue'
@@ -9,7 +9,12 @@ import DiffPane from './editor/DiffPane.vue'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
-import AIChatPane from './components/AIChatPane.vue'
+// Lazy-loaded: AIChatPane statically pulls mermaid + katex (heavy). Loading it
+// async keeps the editor window's first paint off the critical path — the panel
+// (v-show) hydrates a moment later. `import type` keeps the ref fully typed with
+// no runtime/bundle cost.
+import type AIChatPaneType from './components/AIChatPane.vue'
+const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vue'))
 import ProblemsPane from './components/ProblemsPane.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
@@ -56,7 +61,7 @@ function onResizeEnd(): void {
 
 // ── AI Panel resize ───────────────────────────────────────────────────────────
 const AI_PANEL_W_KEY = 'ide-ai-panel-width'
-const aiChatRef = ref<InstanceType<typeof AIChatPane> | null>(null)
+const aiChatRef = ref<InstanceType<typeof AIChatPaneType> | null>(null)
 const aiPanelOpen = ref(false)
 const aiPanelWidth = ref(Math.max(280, Math.min(600, parseInt(localStorage.getItem(AI_PANEL_W_KEY) ?? '320', 10))))
 let aiResizing = false
@@ -85,6 +90,19 @@ function selectionContext(relPath: string, selection: unknown): { label: string;
   return { label, content }
 }
 
+// AIChatPane is async-loaded (defineAsyncComponent); for a beat after the editor
+// window opens its ref is null until the chunk resolves. Retry briefly so an
+// early action (chip / draft / focus) isn't silently dropped on a slow first load.
+function withAiChat(fn: (pane: NonNullable<typeof aiChatRef.value>) => void): void {
+  let tries = 0
+  const attempt = (): void => {
+    const pane = aiChatRef.value
+    if (pane) { fn(pane); return }
+    if (tries++ < 100) window.setTimeout(attempt, 20)
+  }
+  void nextTick(attempt)
+}
+
 async function handleAskAiAboutFile(relPath: string): Promise<void> {
   aiPanelOpen.value = true
   await nextTick()
@@ -98,42 +116,42 @@ async function handleAskAiAboutFile(relPath: string): Promise<void> {
     const content = r.payload?.ok
       ? `// ${relPath}\n\`\`\`${ext}\n${(r.payload.content ?? '').slice(0, 3000)}\n\`\`\``
       : `// ${relPath} (read failed)`
-    aiChatRef.value?.addContextChip(label, content)
+    withAiChat((c) => c.addContextChip(label, content))
   } catch {
-    aiChatRef.value?.addContextChip(label, `// ${relPath}`)
+    withAiChat((c) => c.addContextChip(label, `// ${relPath}`))
   }
 }
 
 function addSelectionToChat(file: OpenFile, selection: unknown): void {
   const { label, content } = selectionContext(file.relPath, selection)
   aiPanelOpen.value = true
-  void nextTick(() => aiChatRef.value?.addContextChip(label, content))
+  withAiChat((c) => c.addContextChip(label, content))
 }
 
 function explainSelectionWithAi(file: OpenFile, selection: unknown): void {
   const { label, content } = selectionContext(file.relPath, selection)
   aiPanelOpen.value = true
-  void nextTick(() => {
-    aiChatRef.value?.addContextChip(label, content)
-    aiChatRef.value?.injectDraft('/explain Explain the selected code step by step.')
+  withAiChat((c) => {
+    c.addContextChip(label, content)
+    c.injectDraft('/explain Explain the selected code step by step.')
   })
 }
 
 function fixSelectionWithAi(file: OpenFile, selection: unknown): void {
   const { label, content } = selectionContext(file.relPath, selection)
   aiPanelOpen.value = true
-  void nextTick(() => {
-    aiChatRef.value?.addContextChip(label, content)
-    aiChatRef.value?.injectDraft('/fix Fix any bugs or issues in the selected code.')
+  withAiChat((c) => {
+    c.addContextChip(label, content)
+    c.injectDraft('/fix Fix any bugs or issues in the selected code.')
   })
 }
 
 function writeTestsWithAi(file: OpenFile, selection: unknown): void {
   const { label, content } = selectionContext(file.relPath, selection)
   aiPanelOpen.value = true
-  void nextTick(() => {
-    aiChatRef.value?.addContextChip(label, content)
-    aiChatRef.value?.injectDraft('/tests Generate comprehensive unit tests for the selected code.')
+  withAiChat((c) => {
+    c.addContextChip(label, content)
+    c.injectDraft('/tests Generate comprehensive unit tests for the selected code.')
   })
 }
 
@@ -141,9 +159,9 @@ function askSelectionWithAi(file: OpenFile, payload: unknown): void {
   const body = (payload ?? {}) as { selection?: unknown; question?: unknown }
   const { label, content } = selectionContext(file.relPath, body.selection)
   aiPanelOpen.value = true
-  void nextTick(() => {
-    aiChatRef.value?.addContextChip(label, content)
-    aiChatRef.value?.injectDraft(String(body.question ?? ''))
+  withAiChat((c) => {
+    c.addContextChip(label, content)
+    c.injectDraft(String(body.question ?? ''))
   })
 }
 
@@ -544,7 +562,7 @@ registerCommand('workbench.action.addSelectionToChat', () => {
   const content = rel
     ? `// Selection from: ${rel}\n\`\`\`${ext}\n${sel}\n\`\`\``
     : `// Selected code:\n\`\`\`\n${sel}\n\`\`\``
-  void nextTick(() => aiChatRef.value?.addContextChip(label, content))
+  withAiChat((c) => c.addContextChip(label, content))
 })
 function getActiveRelPath(): string { return activeRel.value }
 registerCommand('editor.action.toggleComment',    () => activeEditor()?.toggleLineComment())
@@ -1488,7 +1506,7 @@ function onAppKeydown(e: KeyboardEvent): void {
   if (mod && e.key === 'l') {
     e.preventDefault()
     if (!aiPanelOpen.value) aiPanelOpen.value = true
-    nextTick(() => aiChatRef.value?.focusInput())
+    withAiChat((c) => c.focusInput())
   }
 }
 
@@ -1637,10 +1655,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           const loc = `${p.diag.relPath}:${p.diag.line}${p.diag.col ? ':' + p.diag.col : ''}`
           const chipContent = `// ${p.diag.severity.toUpperCase()}: ${p.diag.message}\n// at ${loc}${p.diag.source ? ' (' + p.diag.source + ')' : ''}`
           aiPanelOpen = true
-          nextTick(() => {
-            aiChatRef?.addContextChip('@problems', chipContent)
-            aiChatRef?.injectDraft('/fix')
-          })
+          withAiChat((c) => { c.addContextChip('@problems', chipContent); c.injectDraft('/fix') })
         }"
       />
     </div>
@@ -1735,7 +1750,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :compare="f.compare ?? ''"
             :backend="backend"
             @open-file="openFile"
-            @ask-ai-fix="(text) => { aiPanelOpen = true; nextTick(() => aiChatRef?.injectDraft(text)) }"
+            @ask-ai-fix="(text) => { aiPanelOpen = true; withAiChat((c) => c.injectDraft(text)) }"
           />
         </template>
         <div v-if="!openFiles.length" class="ide-empty">

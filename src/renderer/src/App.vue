@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import ControlPane, {
@@ -14,11 +14,8 @@ import ControlPane, {
   type WorkspaceMode
 } from './components/ControlPane.vue'
 import QuestionAlert from './components/QuestionAlert.vue'
-import CompletionModal from './components/CompletionModal.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
-import SettingsModal from './components/SettingsModal.vue'
 import NotificationHost from './components/NotificationHost.vue'
-import OnboardingWizard from './components/OnboardingWizard.vue'
 import Welcome from './components/Welcome.vue'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
@@ -52,6 +49,12 @@ import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
+// Modals/wizard that only render behind a v-if (settings opened, run completed,
+// first-run onboarding) — defer them off the main shell's first-paint bundle.
+const CompletionModal = defineAsyncComponent(() => import('./components/CompletionModal.vue'))
+const SettingsModal = defineAsyncComponent(() => import('./components/SettingsModal.vue'))
+const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
+
 const backend = useBackend()
 const rolesApi = useRoles(backend)
 const pipelinesApi = usePipelines(backend)
@@ -71,6 +74,15 @@ onMounted(() => {
   // Clicking a system notification focuses the window on the originating pane.
   window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
   window.addEventListener('resize', onWindowResize)
+  // Warm the heaviest deferred panel (Settings) during idle: it stays lazy to
+  // keep off first paint, but it's commonly opened, so pre-fetching once the
+  // shell is interactive makes its first open instant at no visible cost.
+  const warmSettings = (): void => { void import('./components/SettingsModal.vue') }
+  if (typeof window.requestIdleCallback === 'function') {
+    window.requestIdleCallback(warmSettings, { timeout: 4000 })
+  } else {
+    window.setTimeout(warmSettings, 2500)
+  }
 })
 
 // ── First-run onboarding gate ────────────────────────────────────────────────
@@ -86,10 +98,48 @@ async function checkOnboarding(): Promise<void> {
     onboardingComplete.value = true
   }
 }
+// First-boot loading overlay: shown until the backend first settles, then
+// dismissed for good (later reconnects use the status-bar indicator, not this).
+const booting = ref(true)
+const bootError = ref(false)
+// Reflect the real boot phase in the splash status instead of a flat "loading".
+const bootStatusKey = computed(() => {
+  switch (backend.status.value) {
+    case 'starting': return 'label.boot-starting'
+    case 'connecting':
+    case 'disconnected': return 'label.boot-connecting'
+    default: return 'label.loading'
+  }
+})
+const dismissBoot = (): void => { booting.value = false }
+let _bootTimer: number | undefined
+function armBootTimeout(): void {
+  if (_bootTimer) clearTimeout(_bootTimer)
+  // Safety net: dismiss a stuck spinner so the user is never trapped — but never
+  // override an error state, which stays put with a Retry button. Kept just past
+  // useBackend's 20s init deadline: on a slow cold start the backend may take up
+  // to 20s to report ready (then connect) or to give up and set status='error'.
+  // Firing earlier would tear the overlay down mid-startup, revealing a bare
+  // unconnected shell and pre-empting the error+Retry the backend failure path
+  // is meant to show.
+  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 22_000)
+}
+armBootTimeout()
+function retryBackend(): void {
+  bootError.value = false
+  booting.value = true
+  armBootTimeout()
+  void backend.restart()
+}
 watch(
   () => backend.status.value,
   (s) => {
     if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+    if (s === 'connected') { booting.value = false; bootError.value = false }
+    // On a hard failure, keep the overlay and show an error + Retry (the app is
+    // non-functional without a backend anyway). 'disconnected' is transient
+    // during reconnect backoff, so it's left alone.
+    else if (s === 'error') bootError.value = true
   },
   { immediate: true },
 )
@@ -1190,6 +1240,14 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         slot_label: opts.slotLabel ?? ''          // stable by_pane key survives frontend restarts
       },
       outputLogFile,
+      // Stable reattach key: the pinned CLI session id is identical on first
+      // spawn and on restore (claude --session-id), so a reload reattaches to
+      // the live PTY instead of starting a second `--resume` that collides.
+      resumeKey: pinnedSessionId,
+      // Resume panes must create at the real width (reprint); fresh panes may
+      // create immediately even while hidden (empty CLI) so a pipeline stage
+      // spawned into a non-active tab still starts.
+      isResume: opts.isResume,
     })
 
     if ((ref.status as unknown as string) === 'running') {
@@ -1203,6 +1261,12 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         return id
       }
       scheduleInjection(pane)
+    } else if ((ref.status as unknown as string) === 'starting') {
+      // A resume parked on a hidden tab returns 'starting' — its PTY (and the
+      // --resume) is created when the tab is shown. Resume reloads memory, so
+      // nothing is injected; this is a ready pane, NOT a spawn failure.
+      pane.injectionStatus = 'skipped'
+      pane.preparationStatus = 'ready'
     } else {
       pane.injectionStatus = 'skipped'
       pane.preparationStatus = 'failed'
@@ -1457,8 +1521,12 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     runGroupId: pane.runGroupId,
     sessionHomeId: pane.sessionHomeId,
   }
+  // Preserve layout order: onKill removes the pane and spawnPane appends the
+  // replacement to the end, which would jump the rebuilt pane to the last slot.
+  // Capture its index and move the replacement back into place after spawn.
+  const origIndex = panes.value.findIndex((p) => p.id === paneId)
   await onKill(paneId, { markRemoved: false })
-  await spawnPane({
+  const newId = await spawnPane({
     agentKey: snap.agentKey,
     roleKey: snap.roleKey,
     stageId: snap.stageId,
@@ -1473,6 +1541,13 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     sessionHomeId: snap.sessionHomeId,
     resumeSessionId: sessionId,
   })
+  if (newId && origIndex >= 0) {
+    const from = panes.value.findIndex((p) => p.id === newId)
+    if (from >= 0 && from !== origIndex) {
+      const [moved] = panes.value.splice(from, 1)
+      panes.value.splice(origIndex, 0, moved)
+    }
+  }
 }
 
 async function onInterrupt(paneId: string): Promise<void> {
@@ -1540,6 +1615,18 @@ const workspaceBaseName = computed(() => {
   const parts = currentWorkspace.value.replace(/\\/g, '/').split('/')
   return parts.filter(Boolean).at(-1) || 'Navide (Agent-Team)'
 })
+
+// Reflect the open workspace in the real window title (document.title) so each
+// main window is distinguishable in macOS Mission Control / the Dock. Without
+// this every main window shows the static index.html <title>. Editor windows
+// already set their own document.title.
+watch(
+  workspaceBaseName,
+  (name) => {
+    document.title = currentWorkspace.value ? `${name} — Navide (Agent-Team)` : 'Navide (Agent-Team)'
+  },
+  { immediate: true },
+)
 
 interface StatusBarGit {
   branch: string
@@ -1838,6 +1925,20 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       }
     }
     _loadRunGroups(path)
+    // Set the active tab BEFORE restoring panes. Without it, tab filtering is
+    // inactive (tabFilteredPaneIds falls back to "all panes"), so every tab's
+    // panes share one grid (e.g. 7 panes → 3 cols → ~282px). Each agent then
+    // resumes hard-wrapped at that narrow width (~34 cols) and the frame stays
+    // stuck in scrollback even after the later resize — visible as a pane whose
+    // text is much narrower than the cell. Filtering first makes each pane spawn
+    // into its final-width grid cell.
+    try {
+      const key = `agentTeam.activeTab.${path}`
+      const saved = localStorage.getItem(key)
+      activeTab.value = (saved && stageTabs.value.some((t) => t.key === saved))
+        ? saved
+        : (stageTabs.value[0]?.key ?? '')
+    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
     if (suppressPaneRestoreOnce) {
       // First load of a duplicated window: open the same workspace as a clean
       // view without re-resuming the source window's live agent sessions.
@@ -1845,16 +1946,6 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     } else {
       await restoreWorkspacePanes(resp, path)
     }
-    // Restore saved activeTab after panes are repopulated
-    try {
-      const key = `agentTeam.activeTab.${path}`
-      const saved = localStorage.getItem(key)
-      if (saved && stageTabs.value.some((t) => t.key === saved)) {
-        activeTab.value = saved
-      } else {
-        activeTab.value = stageTabs.value[0]?.key ?? ''
-      }
-    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
     // If the active tab has no panes (e.g. old project.json panes landed in a
     // different group via fallback), switch to the first tab that has panes so
     // the user is not greeted with an empty grid.
@@ -5118,6 +5209,23 @@ function paneIsCommander(p: ActivePane): boolean {
     :backend="backend"
     @complete="onboardingComplete = true"
   />
+  <!-- First-boot loading overlay: covers the shell until the backend settles,
+       then fades out. Brand-only text so no i18n keys are needed. -->
+  <Transition name="boot-fade">
+    <div v-if="booting" class="boot-overlay">
+      <div class="boot-card">
+        <div class="boot-wordmark">Agent-Team</div>
+        <template v-if="bootError">
+          <div class="boot-status boot-status-error">{{ $t('error.backend-start-failed') }}</div>
+          <button class="boot-retry" @click="retryBackend">{{ $t('action.retry') }}</button>
+        </template>
+        <template v-else>
+          <div class="boot-spinner" aria-label="loading" />
+          <div class="boot-status">{{ $t(bootStatusKey) }}</div>
+        </template>
+      </div>
+    </div>
+  </Transition>
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftPanelWidth + 'px' }" :class="{ 'is-resizing': isDragging }">
     <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
     <div class="titlebar">
@@ -5648,6 +5756,63 @@ function paneIsCommander(p: ActivePane): boolean {
 </template>
 
 <style scoped>
+/* First-boot loading overlay */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+}
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.boot-wordmark {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+}
+.boot-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border-muted);
+  border-top-color: var(--accent-bright);
+  border-radius: 50%;
+  animation: boot-spin 0.8s linear infinite;
+}
+.boot-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.boot-status-error {
+  color: var(--danger-fg);
+}
+.boot-retry {
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-muted);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.boot-retry:hover {
+  background: var(--bg-elevated);
+}
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
+}
+/* Fade the overlay out (no enter transition — it's there from first paint). */
+.boot-fade-leave-active { transition: opacity 0.3s ease; }
+.boot-fade-leave-to { opacity: 0; }
+
 .app {
   display: grid;
   /* Three columns: controls · terminal grid · token stats panel
@@ -6035,8 +6200,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .spotlight-thumb--active {
   border-color: var(--accent-focus);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 25%, transparent);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 2px var(--accent-focus);
+  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-elevated));
 }
 .spotlight-thumb-info {
   flex: 1;
@@ -6126,8 +6291,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .meeting-item--active {
   border-color: var(--accent-focus);
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 20%, transparent);
+  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-elevated));
+  box-shadow: 0 0 0 2px var(--accent-focus);
 }
 .meeting-avatar {
   width: 28px;

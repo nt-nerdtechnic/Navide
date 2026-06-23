@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref, shallowRef } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -54,7 +54,9 @@ const XTERM_THEMES: Record<string, ITheme> = {
     white: '#d0d7de',    brightWhite: '#8c959f',  // NOT pure white — readable on light bg
   },
   'high-contrast': {
-    background: '#000000', foreground: '#ffffff',
+    // Match the app canvas (--bg-base #0a0c10) like every other theme, so the
+    // pane's padding frame is seamless. White-on-#0a0c10 is still ~20:1 contrast.
+    background: '#0a0c10', foreground: '#ffffff',
     cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
     black: '#686868',   brightBlack: '#a0a0a0',
     red: '#ff6b66',     brightRed: '#ff9a94',
@@ -81,6 +83,14 @@ export interface SpawnOptions {
   agentKey?: string
   metadata?: Record<string, unknown>
   outputLogFile?: string  // if set, backend writes ANSI-stripped output to this path
+  // Stable CLI session id (e.g. claude --session-id). Used as the reattach
+  // persistence key so a PTY can be rebound after a reload — the paneId is
+  // regenerated on restore and would never match. Falls back to paneId if absent.
+  resumeKey?: string
+  // True when the command resumes a prior session (reprints the conversation),
+  // so the PTY must be created at the real measured width. A fresh spawn is
+  // empty and may be created immediately even while hidden (see createWhenMeasurable).
+  isResume?: boolean
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -144,6 +154,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 1_000)
 
   const displayStatus = computed<string>(() => {
+    // A resume parked for a hidden tab hasn't created its PTY yet — a resumed
+    // agent comes up idle, so show 'idle' instead of a stuck 'starting' in the
+    // agent list until the tab is shown. (Fresh spawns create immediately, so
+    // their brief parked window keeps the normal status.)
+    if (pendingSpawn.value?.isResume) return 'idle'
     if (status.value !== 'running') return status.value
     // Spawned but not a single byte of output yet — the CLI is still booting
     // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
@@ -205,22 +220,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
 
-  // xterm and the PTY must never be at different sizes on purpose. If xterm
-  // refits immediately while the PTY resize lags, a CLI still streaming at the
-  // old width gets wrapped at the new one, and inline TUIs (Claude Code's
-  // cursor-up repaints) then overwrite the wrong rows — corruption that stays
-  // in scrollback forever. So layout churn is debounced BEFORE the fit (xterm
-  // holds its old size, matching the PTY, while the grid settles), and once
-  // quiet, the fit and the backend resize are ordered so xterm is never
-  // narrower than the PTY (see applyFit).
+  // Layout churn is debounced BEFORE the fit: xterm holds its old size while the
+  // grid settles, then fits once (so a drag fires one resize, not dozens). Once
+  // quiet, applyFit resizes xterm to the container first and tells the PTY after
+  // — the VSCode-aligned ordering, so the CLI's SIGWINCH repaint lands at the
+  // final width (see applyFit).
   const RESIZE_QUIET_MS = 250
-  // On a width SHRINK we tell the PTY first, then wait this long before
-  // narrowing xterm — long enough for the CLI to process SIGWINCH and repaint
-  // its inline UI at the new (narrow) width. Narrowing xterm immediately would
-  // reflow the still-wide frame and desync the CLI's cursor-up repaint, leaving
-  // two frames overlapping (visible "跑版"). A single fixed timer — not the old
-  // quiet-wait loop, which could starve and leave xterm stuck.
-  const PTY_REPAINT_GRACE_MS = 180
   let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   // Last size the backend CONFIRMED. The reconciler compares against this so a
   // dropped/failed resize message is retried instead of desyncing forever.
@@ -257,6 +262,67 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     pasteText(`\x1b[48;${term.rows};${term.cols};${heightPx};${widthPx}t`)
   }
 
+  // Set when a reattached pane is waiting to repaint. We never force_redraw at
+  // reattach time: the renderer is mid-reflow then (reload, or a hidden tab
+  // being shown), so the width is transient and would repaint the live agent
+  // narrow. The reconciler fires the redraw only once container == xterm ==
+  // backend, so Claude's TUI clears the transient frame and repaints at the real
+  // width instead of stranding a narrow one in scrollback.
+  let pendingReattachRedraw = false
+
+  // TEMP diagnostic sink: route resize/redraw traces to a file the dev can read
+  // directly (/tmp/agent-team-resize.log via the backend), instead of the
+  // renderer console. Remove with the call sites once resize is confirmed.
+  function dbgLog(line: string): void {
+    if (!sessionId.value) return
+    void backend.send('debug.log', { line: `${paneId} ${line}` }).catch(() => {})
+  }
+
+  // After a width change settles, one SIGWINCH-based force_redraw makes the TUI
+  // repaint cleanly at the new width — clearing the reflow residue xterm leaves
+  // when it re-wraps the old frame (the garbled status footer on narrow
+  // drag-resize). Gated so it fires once per settle, only on a real WIDTH
+  // change, and only when xterm == backend-acked. We PREFER a quiet gap so the
+  // repaint isn't interleaved with a burst, but a continuously-streaming agent
+  // never goes quiet — so after a bounded wait we fire anyway (a SIGWINCH is
+  // safe mid-output; it's exactly what a real terminal resize raises). Triggered
+  // only from the ResizeObserver path (genuine layout churn), not spawn/reattach.
+  const RESIZE_REDRAW_SETTLE_MS = 220
+  const RESIZE_REDRAW_MAX_WAIT_MS = 1500
+  let resizeRedrawTimer: ReturnType<typeof setTimeout> | null = null
+  let resizeRedrawDeadline = 0
+  let lastRedrawCols = 0
+  // Called on a genuine new settle: (re)start the bounded-wait clock, then arm.
+  function requestResizeRedraw(): void {
+    resizeRedrawDeadline = Date.now() + RESIZE_REDRAW_MAX_WAIT_MS
+    armResizeRedraw()
+  }
+  // Internal poll: reschedules without resetting the deadline so a busy pane
+  // can't postpone the redraw indefinitely.
+  function armResizeRedraw(): void {
+    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
+    resizeRedrawTimer = setTimeout(() => {
+      resizeRedrawTimer = null
+      if (!mounted || !sessionId.value) return
+      // Not fully settled yet (xterm still differs from the backend-acked size):
+      // wait for the resize to finish, then re-check.
+      if (term.cols !== ackedCols || term.rows !== ackedRows) { armResizeRedraw(); return }
+      // Width unchanged since the last clean repaint (rows-only / no-op): skip.
+      if (term.cols === lastRedrawCols) return
+      // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
+      const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
+      if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
+      lastRedrawCols = term.cols
+      // TEMP diagnostic (remove once resize is confirmed working).
+      dbgLog(`redraw fire cols=${term.cols} rows=${term.rows}`)
+      void backend.send('terminal.redraw', {
+        terminal_session_id: sessionId.value,
+        cols: term.cols,
+        rows: term.rows,
+      })
+    }, RESIZE_REDRAW_SETTLE_MS)
+  }
+
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
   // (background tab / spotlight / minimized → display:none) can leave the PTY
   // and xterm at different sizes — the CLI then draws its TUI for one width
@@ -265,16 +331,33 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // backend may disagree with xterm. Heals any missed resize within seconds.
   const RECONCILE_MS = 2_000
   const reconcileInterval = window.setInterval(() => {
-    if (!mounted || !sessionId.value) return
+    if (!mounted) return
+    // A spawn parked while hidden creates as soon as the pane is measurable.
+    if (pendingSpawn.value) { void createWhenMeasurable(); return }
+    if (!sessionId.value) return
     const el = containerRef.value
     if (!el || el.clientWidth === 0) return  // hidden — nothing to reconcile yet
     const dims = fit.proposeDimensions()
-    if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
-        (dims.cols !== term.cols || dims.rows !== term.rows)) {
+    const sized = !!dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)
+    if (sized && (dims.cols !== term.cols || dims.rows !== term.rows)) {
       applyFit()
       return
     }
-    if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
+    if (term.cols !== ackedCols || term.rows !== ackedRows) {
+      sendResizeNow()
+      return
+    }
+    // Fully settled (container == xterm == backend-acked). A reattached pane that
+    // has been waiting now repaints at this stable width — a no-op resize won't
+    // raise SIGWINCH, so nudge the agent explicitly via force_redraw.
+    if (sized && pendingReattachRedraw) {
+      pendingReattachRedraw = false
+      void backend.send('terminal.reattach', {
+        terminal_session_ids: [sessionId.value],
+        cols: term.cols,
+        rows: term.rows,
+      })
+    }
   }, RECONCILE_MS)
 
   // Single source of truth for sizing: fit xterm to its container, then push
@@ -317,32 +400,27 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       try {
-        // Invariant: xterm must never be NARROWER than the width the CLI
-        // believes, or in-flight old-width output wraps and the CLI's cursor-up
-        // repaints land on the wrong rows. So on a SHRINK we push the new size
-        // to the PTY first and only fit xterm once the resize is acked — and
-        // the backend drains all old-width output before that ack (see
-        // terminals.drain_output), so nothing wide is still arriving when we
-        // narrow. GROW (or rows-only) is safe to fit immediately, then send.
-        const dims = fit.proposeDimensions()
-        if (dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows) &&
-            dims.cols < term.cols && sessionId.value) {
-          void sendResize(dims.cols, dims.rows).then(() => {
-            // Let the CLI repaint narrow into the still-wide xterm first, THEN
-            // narrow xterm so nothing reflows. Fixed delay (timers run even when
-            // the window is occluded, unlike rAF).
-            setTimeout(() => {
-              try {
-                fit.fit()
-                // Container may have changed again while waiting.
-                if (term.cols !== ackedCols || term.rows !== ackedRows) sendResizeNow()
-              } catch { /* ignore transient fit errors during teardown */ }
-            }, PTY_REPAINT_GRACE_MS)
-          })
-        } else {
-          fit.fit()
-          sendResizeNow()
-        }
+        // VSCode-aligned ordering: resize xterm to the container FIRST, then
+        // tell the PTY. The PTY resize raises SIGWINCH, so the CLI repaints its
+        // cursor line (the live footer) directly into an already-correctly-sized
+        // xterm — nothing reflows that fresh frame afterward. xterm does not
+        // reflow the cursor line itself (reflowCursorLine defaults to false), so
+        // the CLI owns that repaint; we just give it the right width first.
+        //
+        // This replaces the old shrink-grace dance (push PTY narrow first, wait
+        // PTY_REPAINT_GRACE_MS, then fit xterm). That ordering left the CLI's
+        // narrow repaint sitting in a still-wide xterm, which the subsequent
+        // narrowing reflowed into the garbled-footer residue. The backend still
+        // drains output around its resize ack, so ordering is preserved server
+        // side; the brief client window where xterm is narrower than the PTY is
+        // the same tradeoff VSCode's integrated terminal accepts.
+        const cwBefore = el.clientWidth
+        const colsBefore = term.cols
+        fit.fit()
+        // TEMP diagnostic (remove once resize is confirmed working): proves the
+        // VSCode-aligned path ran and shows the widths it computed.
+        dbgLog(`resize cw=${cwBefore} cols ${colsBefore}->${term.cols} rows=${term.rows} acked=${ackedCols}x${ackedRows}`)
+        sendResizeNow()
       } catch { /* ignore transient fit errors during teardown */ }
     }
     scheduleFrame(run)
@@ -389,9 +467,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // into arrow-key escape codes that navigate readline history.
     let scrollRemainder = 0
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
-      const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE
-        ? e.deltaY
-        : e.deltaY / 3
+      // deltaY units depend on deltaMode: LINE → lines, PAGE → pages, PIXEL →
+      // pixels. PAGE mode (some mice / accessibility settings) reports ~1 per
+      // notch; without this branch it fell through to the pixel /3 path and
+      // scrolled ~0.3 line per notch (effectively stuck).
+      let delta: number
+      if (e.deltaMode === WheelEvent.DOM_DELTA_LINE) delta = e.deltaY
+      else if (e.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta = e.deltaY * term.rows
+      else delta = e.deltaY / 3
       scrollRemainder += delta
       const lines = Math.trunc(scrollRemainder)
       scrollRemainder -= lines
@@ -488,7 +571,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
       resizeDebounceTimer = setTimeout(() => {
         resizeDebounceTimer = null
+        // A hidden-tab pane parked its spawn; becoming measurable (the tab was
+        // shown) fires this — create the PTY now, at the real width.
+        if (pendingSpawn.value) { void createWhenMeasurable(); return }
         applyFit()
+        // Once this resize settles, repaint the TUI clean at the new width.
+        requestResizeRedraw()
       }, RESIZE_QUIET_MS)
     })
     resizeObserver.observe(el)
@@ -506,38 +594,216 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  async function spawn(opts: SpawnOptions): Promise<void> {
-    if (status.value === 'starting' || status.value === 'running') {
-      throw new Error('terminal already running')
-    }
-    error.value = ''
-    status.value = 'starting'
-    mode2048 = false  // a fresh process hasn't opted in yet
-    lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
-    // Spawning a pane re-flows the whole grid, and batch spawns re-flow it
-    // once per pane — the size measured at mount time can be mid-transition.
-    // Wait until the container width holds steady for two consecutive frames
-    // (bounded at ~500ms), THEN fit, so the size sent below is the one the
-    // CLI actually first paints at. A PTY created at a transient width leaves
-    // permanently wrapped first-paint residue in scrollback.
+  // Persistence key for this pane's backend PTY id (terminal_session_id), stored
+  // so we can reattach to the still-running terminal after a reload instead of
+  // respawning. Defaults to paneId but is overridden at spawn() time by
+  // opts.resumeKey (the stable CLI session id) — the paneId is regenerated on
+  // restore and would never match.
+  let persistKey = paneId
+  function ptyKey(): string { return `terminal-pty:${persistKey}` }
+  function rememberSessionId(id: string): void {
+    try {
+      if (id) localStorage.setItem(ptyKey(), id)
+      else localStorage.removeItem(ptyKey())
+    } catch { /* ignore */ }
+  }
+  function persistedSessionId(): string {
+    try { return localStorage.getItem(ptyKey()) || '' } catch { return '' }
+  }
+
+  // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
+  // spawn and a reattach so both bind identically.
+  function bindSessionHandlers(): void {
+    inputDisposer = term.onData((data) => {
+      void backend.send('terminal.input', {
+        terminal_session_id: sessionId.value,
+        data
+      })
+    })
+
+    outputUnsub = backend.on('terminal.output', (raw) => {
+      const payload = raw as { terminal_session_id: string; data: string }
+      if (payload.terminal_session_id !== sessionId.value) return
+      term.write(payload.data)
+      appendClean(payload.data)
+    })
+
+    exitUnsub = backend.on('terminal.exit', (raw) => {
+      const payload = raw as { terminal_session_id: string; reason: string; exit_code: number | null }
+      if (payload.terminal_session_id !== sessionId.value) return
+      status.value = 'exited'
+      rememberSessionId('')  // the PTY is gone — don't try to reattach to it
+      term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
+      cleanupSession()
+    })
+  }
+
+  // Wait until the container width holds steady for two consecutive frames
+  // (bounded ~500ms) so a fit measures the FINAL width, not a mid-grid-reflow
+  // transient. Shared by spawn and reattach — sizing a PTY to a transient width
+  // leaves the CLI painting narrow (empty space on the right).
+  async function settleContainerWidth(): Promise<void> {
     const settleEl = containerRef.value
-    if (settleEl && settleEl.clientWidth > 0) {
-      let lastW = -1
+    if (!settleEl || settleEl.clientWidth === 0) return
+    let lastW = -1
+    const deadline = performance.now() + 500
+    while (performance.now() < deadline) {
+      // rAF with a timeout fallback — rAF is throttled (or fully paused) for
+      // occluded/background windows and must never stall.
+      await new Promise<void>((resolve) => {
+        const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
+        const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+      })
+      const w = settleEl.clientWidth
+      if (w === lastW) break
+      lastW = w
+    }
+  }
+
+  // Reattach-to-live-PTY on reload is DISABLED. It repainted the running agent
+  // at the renderer's transient mid-reflow width, leaving panes stuck narrow.
+  // The backend now kills PTYs on disconnect, so a reload fresh-spawns with
+  // `<cli> --resume` (correct width, conversation restored from disk). The body
+  // below is kept so a future, width-safe version can be re-enabled by flipping
+  // this flag; the guard is typed `as boolean` so the body stays type-checked.
+  const REATTACH_ON_RELOAD = false as boolean
+
+  // Try to rebind to a PTY that survived a reload. Returns true if the backend
+  // confirms the persisted id is still alive (and we've rebound); false if it's
+  // gone, in which case the caller spawns a fresh process.
+  async function tryReattach(): Promise<boolean> {
+    if (!REATTACH_ON_RELOAD) return false
+    const prev = persistedSessionId()
+    if (!prev) return false
+    try {
+      // Alive-check + claim the output target only (cols/rows 0 → backend skips
+      // force_redraw). The repaint is deferred to the reconciler, which fires it
+      // once the width has settled — forcing it now would repaint the live agent
+      // at the renderer's transient mid-reflow width (narrow).
+      const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
+        terminal_session_ids: [prev],
+        cols: 0,
+        rows: 0,
+      })
+      if (!resp.ok || !resp.payload || !resp.payload.alive.includes(prev)) {
+        rememberSessionId('')  // stale id — fall through to a fresh spawn
+        return false
+      }
+    } catch {
+      return false  // backend unreachable; let the caller decide (it will spawn)
+    }
+    sessionId.value = prev
+    status.value = 'running'
+    bindSessionHandlers()
+    pendingReattachRedraw = true  // reconciler repaints once the width is settled
+    applyFit()                    // start syncing size (no-op while hidden)
+    queueMicrotask(() => focus())
+    return true
+  }
+
+  // Reattach to a PTY that survived a transient network disconnect. Called when
+  // the WS reconnects while the pane is already in 'running' state. Uses the
+  // same deferred-redraw pattern as tryReattach: cols/rows 0 skips the immediate
+  // SIGWINCH; the reconciler fires it once the width has settled.
+  async function reattachAfterReconnect(): Promise<void> {
+    if (status.value !== 'running' || !sessionId.value) return
+    const id = sessionId.value
+    try {
+      const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
+        terminal_session_ids: [id],
+        cols: 0,
+        rows: 0,
+      })
+      if (!resp.ok || !resp.payload || !resp.payload.alive.includes(id)) {
+        // PTY died while disconnected — mark exited so the user sees it
+        status.value = 'exited'
+        term.writeln('\r\n\x1b[33m[session ended while disconnected]\x1b[0m')
+        rememberSessionId('')
+        cleanupSession()
+        return
+      }
+    } catch {
+      return // WS not ready yet; the next status-change will retry
+    }
+    cleanupSession()
+    bindSessionHandlers()
+    pendingReattachRedraw = true
+    applyFit()
+  }
+
+  // When the backend WS reconnects while we have a live session, reattach so
+  // output resumes and the TUI repaints at the correct width.
+  watch(() => backend.status.value, (newStatus, oldStatus) => {
+    if (newStatus === 'connected' && oldStatus !== 'connected') {
+      void reattachAfterReconnect()
+    }
+  })
+
+  // A pane may be asked to spawn while its tab is hidden (clientWidth 0), where
+  // its width can't be measured. We must NOT create the PTY at a guessed width:
+  // the CLI's first paint (especially a `--resume` that reprints the whole
+  // conversation) would hard-wrap at that wrong width and stay stuck in
+  // scrollback. So the opts are parked here and the PTY is created only once the
+  // container is genuinely measurable — i.e. when the tab is shown.
+  // A ref so displayStatus can reflect a parked (deferred) spawn as idle.
+  const pendingSpawn = shallowRef<SpawnOptions | null>(null)
+
+  // Create the PTY for a parked spawn, but only when the container has a real,
+  // measurable width. Returns silently (leaving it parked) until then; the
+  // reconciler / ResizeObserver retry it once the pane is shown.
+  function cellWidth(): number {
+    return (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
+  }
+  // Guarded entry point: only one create may be in flight. pendingSpawn isn't
+  // cleared until after the awaits in _doCreate, so without this the reconciler /
+  // ResizeObserver could start a second create for the same pane (two PTYs).
+  let _creating = false
+  async function createWhenMeasurable(): Promise<void> {
+    if (_creating || !pendingSpawn.value) return
+    _creating = true
+    try { await _doCreate() } finally { _creating = false }
+  }
+  async function _doCreate(): Promise<void> {
+    const opts = pendingSpawn.value
+    if (!opts) return
+    let el = containerRef.value
+    const visible = !!el && el.clientWidth > 0
+    // A resume reprints the prior conversation and MUST paint at the real width,
+    // so wait until the pane is measurable. A fresh spawn is empty: create it now
+    // even while hidden (the reconciler corrects the width once the tab is shown).
+    // Deferring a fresh spawn would stall e.g. a pipeline stage spawned into a
+    // tab the user isn't currently viewing.
+    if (opts.isResume && !visible) return  // resume + hidden — retry when shown
+    if (visible && cellWidth() === 0) {
+      // xterm hasn't measured its character cell yet (just opened): poke once to
+      // force measurement, then AWAIT it (bounded) so a fresh spawn resolves
+      // 'running' and the caller's role-injection flow proceeds. Poking per
+      // attempt (not once ever) is what makes a re-parked pane measure again
+      // after it was hidden and shown a second time.
+      try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
       const deadline = performance.now() + 500
-      while (performance.now() < deadline) {
-        // rAF with a timeout fallback — rAF is throttled (or fully paused)
-        // for occluded/background windows and must never stall the spawn.
+      while (cellWidth() === 0 && performance.now() < deadline) {
         await new Promise<void>((resolve) => {
-          const raf = requestAnimationFrame(() => { clearTimeout(timer); resolve() })
-          const timer = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
+          const raf = requestAnimationFrame(() => { clearTimeout(t); resolve() })
+          const t = setTimeout(() => { cancelAnimationFrame(raf); resolve() }, 100)
         })
-        const w = settleEl.clientWidth
-        if (w === lastW) break
-        lastW = w
+        el = containerRef.value
+        if (opts.isResume && (!el || el.clientWidth === 0)) return  // hidden mid-wait
       }
     }
-    // Fit to the (now stable) container BEFORE spawning. No-op while hidden.
-    try { fit.fit() } catch { /* keep current size */ }
+    pendingSpawn.value = null  // claim it so a concurrent retry can't double-create
+    if (visible) {
+      // Settle the width, then fit, so the create below uses the real size.
+      await settleContainerWidth()
+      // The tab may have been switched away during the settle. A resume must not
+      // create at a hidden/stale width (it would paint narrow) — re-park it.
+      el = containerRef.value
+      if (opts.isResume && (!el || el.clientWidth === 0 || cellWidth() === 0)) {
+        pendingSpawn.value = opts
+        return
+      }
+      try { fit.fit() } catch { /* keep current size */ }
+    }
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -548,12 +814,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         command: opts.command,
         cwd: opts.cwd,
         env: opts.env ?? null,
-        // Measured container size so the CLI's FIRST paint happens at the
-        // final width. Spawning at a placeholder let TUIs draw their banner /
-        // status bar at the wrong width; that stale first paint then lingered
-        // in scrollback after the real resize landed (visible as duplicated /
-        // misaligned lines). Hidden panes keep the 80×24 default — the size
-        // reconciler corrects them once visible.
+        // Visible panes carry the real, measured width (so a resume's reprint
+        // isn't hard-wrapped narrow). A fresh hidden pane has no measured size
+        // yet → the 80x24 default; the reconciler corrects it once shown.
         cols: term.cols || 80,
         rows: term.rows || 24,
         metadata: opts.metadata ?? null,
@@ -566,43 +829,41 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       sessionId.value = resp.payload.terminal_session_id
+      rememberSessionId(sessionId.value)  // enable reattach after a reload
       status.value = 'running'
-
-      // Push the real size now that sessionId exists. The ResizeObserver's
-      // initial fire happened before spawn (no session yet, so it bailed), so
-      // this is what syncs the backend to the actual container on first paint.
-      applyFit()
-
-      // Auto-focus once the PTY is wired up so the user can immediately type
-      // without having to click the pane.
+      // TEMP diagnostic: marks a fresh pane spawn so we can confirm the new code
+      // is actually loaded (opening a pane writes a line even without resizing).
+      dbgLog(`spawn cols=${term.cols} rows=${term.rows}`)
+      applyFit()  // sync the real size to the backend on first paint
       queueMicrotask(() => focus())
-
-      inputDisposer = term.onData((data) => {
-        void backend.send('terminal.input', {
-          terminal_session_id: sessionId.value,
-          data
-        })
-      })
-
-      outputUnsub = backend.on('terminal.output', (raw) => {
-        const payload = raw as { terminal_session_id: string; data: string }
-        if (payload.terminal_session_id !== sessionId.value) return
-        term.write(payload.data)
-        appendClean(payload.data)
-      })
-
-      exitUnsub = backend.on('terminal.exit', (raw) => {
-        const payload = raw as { terminal_session_id: string; reason: string; exit_code: number | null }
-        if (payload.terminal_session_id !== sessionId.value) return
-        status.value = 'exited'
-        term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
-        cleanupSession()
-      })
+      bindSessionHandlers()
     } catch (err) {
       status.value = 'error'
       error.value = String((err as Error).message ?? err)
       term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
     }
+  }
+
+  async function spawn(opts: SpawnOptions): Promise<void> {
+    if (status.value === 'starting' || status.value === 'running') {
+      throw new Error('terminal already running')
+    }
+    error.value = ''
+    status.value = 'starting'
+    mode2048 = false  // a fresh process hasn't opted in yet
+    lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
+    // Use the stable CLI session id as the reattach key when provided, so the
+    // lookup below survives a reload (paneId does not).
+    if (opts.resumeKey) persistKey = opts.resumeKey
+    // True persistence: a PTY from before a reload may still be running. Reattach
+    // to it (recovering bash/build panes too, with no --resume round-trip) before
+    // spawning anew. Falls through to a fresh spawn if the PTY is gone.
+    if (await tryReattach()) return
+    // Park the spawn and create the PTY only once the container is measurable, so
+    // the CLI paints at the real width. Visible panes create immediately; a
+    // hidden-tab pane creates when its tab is first shown (reconciler/observer).
+    pendingSpawn.value = opts
+    await createWhenMeasurable()
   }
 
   function pasteText(text: string): void {
@@ -620,6 +881,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
   async function kill(): Promise<void> {
     if (!sessionId.value) return
+    rememberSessionId('')  // explicit kill — never reattach to this PTY
     await backend.send('terminal.kill', { terminal_session_id: sessionId.value })
   }
 
@@ -672,10 +934,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cancelAnimationFrame(resizeRafId)
     if (resizeFrameTimer) clearTimeout(resizeFrameTimer)
     if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
+    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()
     if (sessionId.value) {
+      // Scope dispose = the pane was closed (NOT a reload — a hard reload tears
+      // down the JS without running this). The PTY should die with it, so clear
+      // the persisted id too or a future pane could reattach to a killed id.
+      rememberSessionId('')
       void backend.send('terminal.kill', { terminal_session_id: sessionId.value }).catch(() => {
         /* ignore */
       })

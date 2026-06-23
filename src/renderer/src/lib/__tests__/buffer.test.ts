@@ -19,6 +19,16 @@ describe('stripAnsi', () => {
     expect(stripAnsi('\x1b]0;my title\x07text')).toBe('text')
   })
 
+  it('removes ST-terminated OSC sequences (no BEL)', () => {
+    // Set-title terminated by ST (\x1b\\) instead of BEL — previously left
+    // "0;my title" as residue in the cleanBuffer.
+    expect(stripAnsi('\x1b]0;my title\x1b\\text')).toBe('text')
+  })
+
+  it('removes a DCS sequence terminated by ST', () => {
+    expect(stripAnsi('\x1bPq;data\x1b\\text')).toBe('text')
+  })
+
   it('drops a lone CR (cursor-back overwrite) but keeps CRLF', () => {
     expect(stripAnsi('abc\rxyz')).toBe('abcxyz')
     expect(stripAnsi('line1\r\nline2')).toBe('line1\r\nline2')
@@ -39,6 +49,15 @@ describe('dropTuiNoise', () => {
     expect(dropTuiNoise('keep\nEsc To Interrupt')).toBe('keep')
   })
 
+  it('drops the /effort and [end of text] status chrome', () => {
+    expect(dropTuiNoise('keep\n/effort high\n[end of text]\nalso keep')).toBe('keep\nalso keep')
+  })
+
+  it('does NOT drop prose containing "for agents"', () => {
+    const prose = 'this guide is for agents to read'
+    expect(dropTuiNoise(prose)).toBe(prose)
+  })
+
   it('returns the SAME string when nothing matches', () => {
     const clean = 'nothing to drop here'
     expect(dropTuiNoise(clean)).toBe(clean)
@@ -52,6 +71,14 @@ describe('parseOptions', () => {
 
   it('parses numbered lines', () => {
     expect(parseOptions('1. foo\n2. bar')).toEqual(['foo', 'bar'])
+  })
+
+  it('parses paren-numbered lines (1) 2))', () => {
+    expect(parseOptions('1) foo\n2) bar\n3) baz')).toEqual(['foo', 'bar', 'baz'])
+  })
+
+  it('parses inline paren-numbered options', () => {
+    expect(parseOptions('1) a 2) b 3) c')).toEqual(['a', 'b', 'c'])
   })
 
   it('parses inline dash-separated options', () => {
@@ -74,6 +101,10 @@ describe('parseOptions', () => {
 describe('splitNumberedPrompt', () => {
   it('splits an embedded numbered list into sub-prompts', () => {
     expect(splitNumberedPrompt('有三題：\n1. 問A\n2. 問B\n3. 問C')).toEqual(['問A', '問B', '問C'])
+  })
+
+  it('splits a paren-numbered list (1) 2)) like the dot form', () => {
+    expect(splitNumberedPrompt('有兩題：\n1) 問A\n2) 問B')).toEqual(['問A', '問B'])
   })
 
   it('joins continuation lines onto the current sub-question', () => {
@@ -221,5 +252,15 @@ describe('bufferTail', () => {
 
   it('returns text unchanged when exactly at the cap', () => {
     expect(bufferTail('abc', 3)).toBe('abc')
+  })
+
+  it('does not start the tail on a lone low surrogate (emoji at the cut)', () => {
+    // '😀' is two UTF-16 code units. text = 'aaaaa' + 😀 + 'bcd' (length 10);
+    // cap 4 → cut index 6 lands on the low surrogate. The tail must drop it.
+    const text = 'aaaaa\u{1F600}bcd'
+    const tail = bufferTail(text, 4)
+    expect(tail).toBe('bcd')
+    const first = tail.charCodeAt(0)
+    expect(first >= 0xdc00 && first <= 0xdfff).toBe(false)
   })
 })

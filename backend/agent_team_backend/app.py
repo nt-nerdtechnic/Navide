@@ -162,8 +162,10 @@ class Session:
         # every outbound frame must go through send_json() below.
         self._send_lock = asyncio.Lock()
         # Token attribution now happens via log_readers (background log scan),
-        # NOT via PTY output. TerminalService runs without a token sink.
-        self.terminals = TerminalService(emit=self._send_event)
+        # NOT via PTY output. The TerminalService is app-level (PTYs outlive this
+        # connection); output routes back through _active_emit → the attached
+        # Session's send_json. See get_terminals().
+        self.terminals = get_terminals()
         # Track background tasks so they can be cancelled on disconnect.
         self._chat_tasks: set[asyncio.Task] = set()
         self._review_tasks: set[asyncio.Task] = set()
@@ -183,6 +185,44 @@ class Session:
 async def _broadcast_git_changed(ws_path: str) -> None:
     """GitWatcher sink: a repo's working tree / .git changed on disk."""
     await broadcast(make_event("git.changed", {"workspace_path": ws_path}))
+
+
+# ── App-level terminal ownership (true persistence) ──────────────────────────
+# PTYs must outlive any single WebSocket: a renderer reload / window close drops
+# the ws, but the terminal (agent CLI, bash, build) keeps running in the
+# background until it exits, the user explicitly kills the pane, or the whole
+# app quits. So a single app-level TerminalService owns every PTY, and its
+# output is routed to whichever Session is currently attached. When nothing is
+# attached (detached / background) output is dropped — no buffer; the TUI
+# repaints on reattach via SIGWINCH.
+_TERMINALS: TerminalService | None = None
+_active_session: "Session | None" = None
+
+
+async def _active_emit(event: dict[str, Any]) -> None:
+    """Output sink for the app-global TerminalService → the attached Session."""
+    sess = _active_session
+    if sess is None:
+        return  # detached: drop output, PTY keeps running, TUI redraws on reattach
+    try:
+        await sess.send_json(event)
+    except Exception as err:  # noqa: BLE001
+        log.warning("terminal output send failed: %s", err)
+
+
+def get_terminals() -> TerminalService:
+    """The one app-level TerminalService. Lazy (not at import) because
+    TerminalService.__init__ binds to the running event loop."""
+    global _TERMINALS
+    if _TERMINALS is None:
+        _TERMINALS = TerminalService(emit=_active_emit)
+    return _TERMINALS
+
+
+def set_active_session(session: "Session") -> None:
+    """Route terminal output to this Session (called on connect / reattach)."""
+    global _active_session
+    _active_session = session
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
@@ -471,8 +511,13 @@ async def claude_hook(request: Request) -> dict[str, Any]:
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
     log.info("ws client connected")
+    global _active_session
     session = Session(websocket)
     _SESSIONS.add(session)
+    # Become the terminal output target. MVP = single active target (last writer
+    # wins); two windows streaming the same PTY at once is out of scope here and
+    # interacts with the multi-main-window plan.
+    _active_session = session
     try:
         while True:
             try:
@@ -491,7 +536,11 @@ async def ws(websocket: WebSocket) -> None:
         log.info("ws client disconnected")
     finally:
         _SESSIONS.discard(session)
-        session.terminals.shutdown()
+        if _active_session is session:
+            _active_session = None
+        # PTYs survive this disconnect so the frontend can reattach after a
+        # transient network outage. They are killed only when the user explicitly
+        # closes a pane (terminal.kill) or the whole app process exits.
         for t in session._chat_tasks:
             t.cancel()
         for t in session._review_tasks:
@@ -724,6 +773,64 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             session.terminals.kill(term_session_id)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "terminal.reattach":
+            # A reconnecting renderer rebinds to still-running PTYs. Report which
+            # ids survived; the frontend rebinds those and falls back to
+            # spawn+resume for the rest. Force a one-shot SIGWINCH on survivors so
+            # agent TUIs repaint into the fresh (empty) xterm. This is NOT the
+            # forbidden "auto-redraw a running, visible pane" (no existing content
+            # to reflow-corrupt) — it's the only way a reattached blank xterm
+            # recovers its screen, since there is no server-side output buffer.
+            set_active_session(session)
+            ids = [str(x) for x in (payload.get("terminal_session_ids") or [])]
+            cols = int(payload.get("cols", 0))
+            rows = int(payload.get("rows", 0))
+            live_ids = {
+                s.id
+                for s in session.terminals._sessions.values()  # noqa: SLF001
+                if not s.closed
+            }
+            alive = [tid for tid in ids if tid in live_ids]
+            dead = [tid for tid in ids if tid not in live_ids]
+            if cols > 0 and rows > 0:
+                for tid in alive:
+                    session.terminals.force_redraw(tid, cols, rows)
+            await session.send_json(
+                make_response(msg_id, msg_type, {"alive": alive, "dead": dead})
+            )
+        elif msg_type == "terminal.redraw":
+            # One-shot SIGWINCH nudge so a TUI repaints cleanly after a resize
+            # settles, clearing the reflow residue xterm leaves when it re-wraps
+            # the old frame at the new width. Unlike terminal.reattach this does
+            # NOT re-route the active session — it is a pure repaint of an
+            # already-attached, visible pane (the frontend gates it on width
+            # stable + CLI quiet, see useTerminal scheduleResizeRedraw).
+            tid = str(payload.get("terminal_session_id") or "")
+            cols = int(payload.get("cols", 0))
+            rows = int(payload.get("rows", 0))
+            if tid and cols > 0 and rows > 0:
+                # Order the repaint SIGWINCH AFTER any pending output, the same
+                # barrier terminal.resize uses (drain_output). The frontend can
+                # fire this mid-stream when a busy pane hits its bounded-wait
+                # deadline; without draining first, the SIGWINCH could interrupt
+                # an in-flight frame and strand a corrupt repaint — exactly what
+                # the resize drain/grace machinery exists to prevent.
+                await session.terminals.drain_output(tid)
+                session.terminals.force_redraw(tid, cols, rows)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "debug.log":
+            # TEMP: append a frontend diagnostic line to a file the dev can read
+            # directly (renderer console logs aren't otherwise reachable). Remove
+            # with the matching frontend diagnostics once resize is confirmed.
+            try:
+                import time as _t
+
+                line = str(payload.get("line", ""))
+                with open("/tmp/agent-team-resize.log", "a") as _f:
+                    _f.write(f"{_t.strftime('%H:%M:%S')} {line}\n")
+            except Exception:
+                pass
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "codex_home.cleanup":
             cleaned = codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))

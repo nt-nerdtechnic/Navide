@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
-import GitPane from './GitPane.vue'
 import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
 import type { IssueDetail } from '../composables/useIssues'
+
+// GitPane (~276KB) lives behind the Git tab; load it async so it's off the main
+// window's first-paint path. Kept v-show (not v-if) so its changes-count badge
+// stays live while the Explorer tab is showing. ExplorerPane is the default tab
+// → kept static.
+const GitPane = defineAsyncComponent(() => import('./GitPane.vue'))
 
 export interface AgentSpec {
   agentKey: string

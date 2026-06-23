@@ -296,6 +296,17 @@ class TerminalService:
             return
         self._set_winsize(session.master_fd, rows, cols)
 
+    def force_redraw(self, session_id: str, cols: int, rows: int) -> None:
+        """Nudge the PTY size to raise SIGWINCH so a TUI repaints after reattach.
+        Resizing to the identical current size would not signal the program, so
+        set a transient off-by-one row then the real size. This is how a
+        reattaching renderer recovers the screen — there is no output buffer."""
+        session = self._sessions.get(session_id)
+        if not session or session.closed:
+            return
+        self._set_winsize(session.master_fd, max(rows - 1, 1), cols)
+        self._set_winsize(session.master_fd, rows, cols)
+
     async def drain_output(self, session_id: str) -> None:
         """Flush all pending and kernel-buffered output before the caller's
         next send (the resize ack), AWAITING each emit so it lands first.
@@ -362,10 +373,6 @@ class TerminalService:
             os.killpg(os.getpgid(session.proc.pid), signal.SIGTERM)
         except ProcessLookupError:
             pass
-
-    def shutdown(self) -> None:
-        for session in list(self._sessions.values()):
-            self.kill(session.id)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)

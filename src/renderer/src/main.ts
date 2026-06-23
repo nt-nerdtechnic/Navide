@@ -1,4 +1,4 @@
-import { createApp } from 'vue'
+import { createApp, type Component } from 'vue'
 import { i18n } from './i18n'
 
 // Theme token layers — order matters: primitives → semantic roles → theme overrides.
@@ -9,24 +9,24 @@ import './styles/tokens/themes/dark-forest.css'
 import './styles/tokens/themes/light.css'
 import './styles/tokens/themes/high-contrast.css'
 
-import App from './App.vue'
-import RolesManagerApp from './RolesManagerApp.vue'
-import StagesEditorApp from './StagesEditorApp.vue'
-import EditorWindowApp from './EditorWindowApp.vue'
-
 // Window-type dispatcher: Electron main appends `?window=roles`, `?window=stages`,
 // or `?window=editor` for secondary windows. Default is the main shell.
 const params = new URLSearchParams(window.location.search)
 const which = params.get('window') ?? 'main'
 
-const Root =
-  which === 'roles'
-    ? RolesManagerApp
-    : which === 'stages'
-      ? StagesEditorApp
-      : which === 'editor'
-        ? EditorWindowApp
-        : App
+// Lazy-load only the root app this window needs. Statically importing all four
+// pulled the editor window's heavy tree (Monaco) into every window's initial
+// bundle — including the main shell, which never renders it. Dynamic import lets
+// Vite code-split each root app so the main window's first paint isn't delayed by
+// parsing Monaco it won't use.
+const loadRoot = (): Promise<{ default: Component }> => {
+  switch (which) {
+    case 'roles':  return import('./RolesManagerApp.vue')
+    case 'stages': return import('./StagesEditorApp.vue')
+    case 'editor': return import('./EditorWindowApp.vue')
+    default:       return import('./App.vue')
+  }
+}
 
 // ── Fail-loud diagnostics ─────────────────────────────────────────────────────
 // Secondary windows render into their own renderer; if mount throws the window
@@ -41,8 +41,11 @@ function logErr(label: string, err: unknown): void {
 function showFatalIfBlank(label: string, err: unknown): void {
   logErr(label, err)
   const host = document.getElementById('app')
-  // Only take over the screen when nothing has rendered into #app.
-  if (!host || host.childElementCount > 0) return
+  // Only take over the screen when nothing has rendered into #app. The pre-mount
+  // splash counts as "blank" — if mount failed it's still sitting there, and the
+  // fatal error must replace it rather than be suppressed by its presence.
+  const onlyPreSplash = host?.childElementCount === 1 && host.firstElementChild?.id === 'pre-splash'
+  if (!host || (host.childElementCount > 0 && !onlyPreSplash)) return
   const detail = err instanceof Error ? `${err.message}\n\n${err.stack ?? ''}` : String(err)
   const box = document.createElement('pre')
   box.style.cssText =
@@ -64,11 +67,11 @@ window.addEventListener('unhandledrejection', (e) => logErr('Unhandled promise r
 window.addEventListener('dragover', (e) => e.preventDefault())
 window.addEventListener('drop', (e) => e.preventDefault())
 
-try {
-  const app = createApp(Root)
-  app.use(i18n)
-  app.config.errorHandler = (err, _instance, info) => showFatalIfBlank(`Vue error (${info})`, err)
-  app.mount('#app')
-} catch (err) {
-  showFatalIfBlank('App failed to mount', err)
-}
+loadRoot()
+  .then(({ default: Root }) => {
+    const app = createApp(Root)
+    app.use(i18n)
+    app.config.errorHandler = (err, _instance, info) => showFatalIfBlank(`Vue error (${info})`, err)
+    app.mount('#app')
+  })
+  .catch((err) => showFatalIfBlank('App failed to mount', err))

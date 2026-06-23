@@ -1,8 +1,15 @@
 // Helpers used by the pipeline orchestrator to scrape clean text out of raw
 // PTY output and detect sentinels / question blocks.
 
-// Match common ANSI escape forms (CSI, OSC, single ESC sequences).
-const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|[@-Z\\-_])/g
+// Match ANSI/VT escape sequences. Mirrors the backend stripper (terminals.py)
+// so the cleanBuffer is scrubbed identically on both sides:
+//   CSI:  \x1b[ … final-byte
+//   OSC:  \x1b] … terminated by BEL (\x07) OR ST (\x1b\\)
+//   DCS/APC/SOS/PM: \x1bP|X|^|_ … \x1b\\
+//   single-byte Fe: \x1b followed by 0x40-0x5A or 0x5C-0x7E
+// The previous pattern only handled BEL-terminated OSC, so an ST-terminated
+// title sequence (e.g. set-title `\x1b]0;t\x1b\\`) left its body as residue.
+const ANSI_RE = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[@-Z\\-~])/g
 // Carriage returns alone (without paired \n) get used as cursor-back; we
 // normalise to nothing so detectors don't get fooled by partial overwrites.
 const LONE_CR_RE = /\r(?!\n)/g
@@ -21,7 +28,12 @@ export function stripAnsi(s: string): string {
 // and confuse the question-block parser / sentinel matcher / local analyzer.
 // We drop any cleaned line that, after lower+despace, contains a known
 // status-line keyword.
-const TUI_NOISE_RE = /(bypasspermissions|shift\+tab|tointerrupt|esctointerrupt|loadingpasted|pressentertoconfirm)/i
+// Matched against each line AFTER lowercasing + removing all whitespace.
+// `tointerrupt` already covers both "esc to interrupt" and "esctointerrupt".
+// `/effort` and `[end of text]` are Claude status-bar chrome the backend
+// stripper also drops (terminals.py). We deliberately do NOT include
+// "for agents": compacted to "foragents" it would mis-drop ordinary prose.
+const TUI_NOISE_RE = /(bypasspermissions|shift\+tab|tointerrupt|esctointerrupt|loadingpasted|pressentertoconfirm|\/effort|\[endoftext\])/i
 
 export function dropTuiNoise(text: string): string {
   let dirty = false
@@ -125,13 +137,17 @@ export function findQuestionBlock(text: string, from: number = 0): QuestionBlock
 // full-width form Chinese agents often use (`－` U+FF0D), and bullet markers.
 // Without these, lines like `－ 台灣` or `— 全球` get treated as plain prose.
 const BULLET_CHARS = '[-*•‐‒–—−－]'
+// Numbered-list marker after the digits — ASCII "." / ")", plus the full-width
+// and ideographic forms Chinese agents use. Mirrors splitNumberedPrompt so a
+// "1) foo / 2) bar" list parses as options, not just "1. foo".
+const NUM_MARK = '[.、．）)]'
 
 /**
  * Extract bullet items from an options section. Handles:
  *   - "- foo\n- bar\n- baz"     (multi-line, dash bullets)
  *   - "* foo\n* bar"             (asterisk bullets)
  *   - "- foo - bar - baz"        (inline, single line)
- *   - "1. foo\n2. bar"           (numbered)
+ *   - "1. foo\n2. bar" / "1) foo\n2) bar"  (numbered, dot or paren)
  *   - mixed leading whitespace
  *   - Unicode dash variants (en/em dash, full-width hyphen)
  */
@@ -139,7 +155,7 @@ export function parseOptions(optsText: string): string[] {
   if (!optsText) return []
   // First pass: line-based bullets.
   const lineOpts: string[] = []
-  const lineRe = new RegExp(`^(?:${BULLET_CHARS}|\\d+\\.)\\s*(.+?)\\s*$`)
+  const lineRe = new RegExp(`^(?:${BULLET_CHARS}|\\d+${NUM_MARK})\\s*(.+?)\\s*$`)
   for (const raw of optsText.split(/\r?\n/)) {
     const line = raw.trim()
     if (!line) continue
@@ -158,10 +174,10 @@ export function parseOptions(optsText: string): string[] {
     .filter((p) => p.length > 0)
   if (parts.length > 1) return parts
 
-  // Fallback: numbered inline "1. a 2. b 3. c".
+  // Fallback: numbered inline "1. a 2. b 3. c" / "1) a 2) b 3) c".
   const numbered = flat
-    .split(/\s+\d+\.\s+/)
-    .map((p) => p.replace(/^\d+\.\s*/, '').trim())
+    .split(new RegExp(`\\s+\\d+${NUM_MARK}\\s+`))
+    .map((p) => p.replace(new RegExp(`^\\d+${NUM_MARK}\\s*`), '').trim())
     .filter((p) => p.length > 0)
   if (numbered.length > 1) return numbered
 
@@ -176,11 +192,14 @@ export function parseOptions(optsText: string): string[] {
  * Handles Chinese numbering (1. 2. 3.) and variants (1、 1） 1）).
  */
 export function splitNumberedPrompt(prompt: string): string[] {
+  // Same numbered-marker set as parseOptions — share NUM_MARK so the two never
+  // diverge (a "1)" list must split here exactly as it parses as options).
+  const lineRe = new RegExp(`^\\s*\\d+${NUM_MARK}\\s+(.+)`)
   const lines = prompt.split(/\r?\n/)
   const numbered: string[] = []
   let cur = ''
   for (const line of lines) {
-    const m = line.match(/^\s*\d+[.、．）)]\s+(.+)/)
+    const m = line.match(lineRe)
     if (m) {
       if (cur) numbered.push(cur.trim())
       cur = m[1].trim()
@@ -285,5 +304,12 @@ export function findSentinel(text: string, sentinel: string, from: number = 0): 
 
 export function bufferTail(text: string, maxBytes: number = 64 * 1024): string {
   if (text.length <= maxBytes) return text
-  return text.slice(text.length - maxBytes)
+  let start = text.length - maxBytes
+  // Don't start the slice inside a surrogate pair: a lone low surrogate
+  // (0xDC00-0xDFFF) at the cut point renders as a replacement char (�) — an
+  // emoji or non-BMP CJK char straddling the boundary would be broken. Step
+  // one code unit forward so the tail begins on a whole character.
+  const code = text.charCodeAt(start)
+  if (code >= 0xdc00 && code <= 0xdfff) start++
+  return text.slice(start)
 }

@@ -294,6 +294,8 @@
     "selected": "已選取",
     "initializing": "初始化中…",
     "loading": "載入中…",
+    "boot-starting": "正在啟動後端…",
+    "boot-connecting": "正在連線…",
     "no-items": "此目錄沒有可顯示的項目",
     "select-workspace": "請選擇工作區以開始使用",
     "selected-count": "已選取",
@@ -449,7 +451,8 @@
     "not-git-repo-desc": "此資料夾沒有 .git 目錄",
     "load-failed": "載入失敗",
     "initialize-repository": "初始化儲存庫",
-    "id-exists": "ID 已存在"
+    "id-exists": "ID 已存在",
+    "backend-start-failed": "後端啟動失敗"
   },
   "status": {
     "not-git-repo": "非 Git 儲存庫",
