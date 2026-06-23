@@ -312,9 +312,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
       const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
+      const shrank = lastRedrawCols > 0 && term.cols < lastRedrawCols
       lastRedrawCols = term.cols
+      // On a width SHRINK, xterm reflows the CLI's old wide frames (past footers)
+      // into mangled narrow lines it never repaints over. Drop that scrollback so
+      // the SIGWINCH redraw below leaves only a clean current frame. Shrink-only:
+      // a GROW un-wraps cleanly, so we keep history there. (User-authorized
+      // 2026-06-23, retrying the previously-problematic clear now that resize is
+      // xterm-first — watch for Ink desync / unresponsive panes.)
+      if (shrank) term.clear()
       // TEMP diagnostic (remove once resize is confirmed working).
-      dbgLog(`redraw fire cols=${term.cols} rows=${term.rows}`)
+      dbgLog(`redraw fire cols=${term.cols} rows=${term.rows} shrank=${shrank}`)
       void backend.send('terminal.redraw', {
         terminal_session_id: sessionId.value,
         cols: term.cols,
