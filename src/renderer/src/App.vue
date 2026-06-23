@@ -1521,8 +1521,12 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     runGroupId: pane.runGroupId,
     sessionHomeId: pane.sessionHomeId,
   }
+  // Preserve layout order: onKill removes the pane and spawnPane appends the
+  // replacement to the end, which would jump the rebuilt pane to the last slot.
+  // Capture its index and move the replacement back into place after spawn.
+  const origIndex = panes.value.findIndex((p) => p.id === paneId)
   await onKill(paneId, { markRemoved: false })
-  await spawnPane({
+  const newId = await spawnPane({
     agentKey: snap.agentKey,
     roleKey: snap.roleKey,
     stageId: snap.stageId,
@@ -1537,6 +1541,13 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     sessionHomeId: snap.sessionHomeId,
     resumeSessionId: sessionId,
   })
+  if (newId && origIndex >= 0) {
+    const from = panes.value.findIndex((p) => p.id === newId)
+    if (from >= 0 && from !== origIndex) {
+      const [moved] = panes.value.splice(from, 1)
+      panes.value.splice(origIndex, 0, moved)
+    }
+  }
 }
 
 async function onInterrupt(paneId: string): Promise<void> {
@@ -1604,6 +1615,18 @@ const workspaceBaseName = computed(() => {
   const parts = currentWorkspace.value.replace(/\\/g, '/').split('/')
   return parts.filter(Boolean).at(-1) || 'Navide (Agent-Team)'
 })
+
+// Reflect the open workspace in the real window title (document.title) so each
+// main window is distinguishable in macOS Mission Control / the Dock. Without
+// this every main window shows the static index.html <title>. Editor windows
+// already set their own document.title.
+watch(
+  workspaceBaseName,
+  (name) => {
+    document.title = currentWorkspace.value ? `${name} — Navide (Agent-Team)` : 'Navide (Agent-Team)'
+  },
+  { immediate: true },
+)
 
 interface StatusBarGit {
   branch: string
@@ -6177,8 +6200,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .spotlight-thumb--active {
   border-color: var(--accent-focus);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 25%, transparent);
-  background: var(--bg-elevated);
+  box-shadow: 0 0 0 2px var(--accent-focus);
+  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-elevated));
 }
 .spotlight-thumb-info {
   flex: 1;
@@ -6268,8 +6291,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .meeting-item--active {
   border-color: var(--accent-focus);
-  background: var(--bg-elevated);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-focus) 20%, transparent);
+  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-elevated));
+  box-shadow: 0 0 0 2px var(--accent-focus);
 }
 .meeting-avatar {
   width: 28px;

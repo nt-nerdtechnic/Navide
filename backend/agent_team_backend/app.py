@@ -166,11 +166,6 @@ class Session:
         # connection); output routes back through _active_emit → the attached
         # Session's send_json. See get_terminals().
         self.terminals = get_terminals()
-        # PTY ids this connection created. The TerminalService is an app-level
-        # singleton shared by every window, so on disconnect we must kill ONLY
-        # this window's PTYs, not the whole singleton (which would kill other
-        # windows' agents).
-        self.owned_terminals: set[str] = set()
         # Track background tasks so they can be cancelled on disconnect.
         self._chat_tasks: set[asyncio.Task] = set()
         self._review_tasks: set[asyncio.Task] = set()
@@ -543,16 +538,9 @@ async def ws(websocket: WebSocket) -> None:
         _SESSIONS.discard(session)
         if _active_session is session:
             _active_session = None
-        # Kill THIS window's PTYs on disconnect. True background survival (detach
-        # + reattach) repainted the live agent at the renderer's transient
-        # mid-reflow width on reload, leaving panes stuck narrow. Reverted to the
-        # known-good model: a reload kills the PTYs and the frontend respawns with
-        # `<cli> --resume`, restoring the conversation from disk at the correct
-        # width. We kill only this connection's owned PTYs (not the whole
-        # singleton) so another open window's agents survive. The app-level
-        # singleton + terminal.reattach handshake are kept but dormant.
-        for tid in list(session.owned_terminals):
-            session.terminals.kill(tid)
+        # PTYs survive this disconnect so the frontend can reattach after a
+        # transient network outage. They are killed only when the user explicitly
+        # closes a pane (terminal.kill) or the whole app process exits.
         for t in session._chat_tasks:
             t.cancel()
         for t in session._review_tasks:
@@ -707,7 +695,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
             )
-            session.owned_terminals.add(term.id)  # scope disconnect-kill to this window
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
             if agent_key in ("claude", "codex", "gemini", "antigravity"):

@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref, shallowRef } from 'vue'
+import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -700,6 +700,44 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     queueMicrotask(() => focus())
     return true
   }
+
+  // Reattach to a PTY that survived a transient network disconnect. Called when
+  // the WS reconnects while the pane is already in 'running' state. Uses the
+  // same deferred-redraw pattern as tryReattach: cols/rows 0 skips the immediate
+  // SIGWINCH; the reconciler fires it once the width has settled.
+  async function reattachAfterReconnect(): Promise<void> {
+    if (status.value !== 'running' || !sessionId.value) return
+    const id = sessionId.value
+    try {
+      const resp = await backend.send<{ alive: string[]; dead: string[] }>('terminal.reattach', {
+        terminal_session_ids: [id],
+        cols: 0,
+        rows: 0,
+      })
+      if (!resp.ok || !resp.payload || !resp.payload.alive.includes(id)) {
+        // PTY died while disconnected — mark exited so the user sees it
+        status.value = 'exited'
+        term.writeln('\r\n\x1b[33m[session ended while disconnected]\x1b[0m')
+        rememberSessionId('')
+        cleanupSession()
+        return
+      }
+    } catch {
+      return // WS not ready yet; the next status-change will retry
+    }
+    cleanupSession()
+    bindSessionHandlers()
+    pendingReattachRedraw = true
+    applyFit()
+  }
+
+  // When the backend WS reconnects while we have a live session, reattach so
+  // output resumes and the TUI repaints at the correct width.
+  watch(() => backend.status.value, (newStatus, oldStatus) => {
+    if (newStatus === 'connected' && oldStatus !== 'connected') {
+      void reattachAfterReconnect()
+    }
+  })
 
   // A pane may be asked to spawn while its tab is hidden (clientWidth 0), where
   // its width can't be measured. We must NOT create the PTY at a guessed width:

@@ -46,22 +46,18 @@ async def test_terminals_are_app_level_shared() -> None:
 
 
 @pytest.mark.asyncio
-async def test_disconnect_kills_only_owned_terminals() -> None:
-    """The TerminalService is an app-level singleton shared by every window, so a
-    disconnecting connection must kill only the PTYs it owns — not another open
-    window's agents."""
+async def test_disconnect_preserves_terminals() -> None:
+    """PTYs must survive a WS disconnect so the frontend can reattach after a
+    transient network outage. Only an explicit terminal.kill or app exit removes them."""
     s1 = app.Session(RecordingWS())  # type: ignore[arg-type]
     s2 = app.Session(RecordingWS())  # type: ignore[arg-type]
     m1, sl1 = _fake_session_entry(s1, "win1-pty")
     m2, sl2 = _fake_session_entry(s2, "win2-pty")
-    s1.owned_terminals.add("win1-pty")
-    s2.owned_terminals.add("win2-pty")
     try:
-        # Window 1 disconnects: kill only its owned PTYs (the ws() finally logic).
-        for tid in list(s1.owned_terminals):
-            s1.terminals.kill(tid)
-        # Window 1's PTY is gone; window 2's survives in the shared singleton.
-        assert "win1-pty" not in s1.terminals._sessions
+        # Simulate window 1 disconnecting (the ws() finally logic — no kills).
+        app._active_session = None
+        # Both PTYs survive in the shared singleton.
+        assert "win1-pty" in s1.terminals._sessions
         assert "win2-pty" in s2.terminals._sessions
     finally:
         for fd in (m1, sl1, m2, sl2):
