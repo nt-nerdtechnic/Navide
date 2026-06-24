@@ -26,6 +26,7 @@ import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
+import { playDoneSound, playAttentionSound } from './composables/useSoundNotify'
 import { formatIssueForDispatch, type IssueDetail } from './composables/useIssues'
 import type { RoleKey } from './data/roles'
 import {
@@ -3072,6 +3073,7 @@ function scheduleDoneNotify(paneId: string): void {
     if (tc <= 0 || la > tc) return
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane) return
+    playDoneSound()
     sysNotify.notifyPaneState(
       paneId,
       'done',
@@ -3085,6 +3087,7 @@ function scheduleDoneNotify(paneId: string): void {
 function notifyAttention(paneId: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
+  playAttentionSound()
   sysNotify.notifyPaneState(
     paneId,
     'attention',
