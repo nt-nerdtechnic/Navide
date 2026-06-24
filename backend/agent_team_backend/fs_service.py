@@ -9,6 +9,7 @@ contents are listed; git status is only an overlay decided elsewhere.
 
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 from pathlib import Path
@@ -405,6 +406,43 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
 
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc), "is_binary": False, "size": 0, "ext": ""}
+
+
+# MIME type per image extension. The renderer renders the returned data URL in
+# an <img>, which works in dev (http origin) and prod (file:// origin) alike —
+# unlike a raw file:// src, which webSecurity blocks from the dev http origin.
+_IMAGE_MIME: dict[str, str] = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+    ".ico": "image/x-icon", ".svg": "image/svg+xml", ".avif": "image/avif",
+}
+
+
+def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    """Read an image file and return it as a base64 ``data:`` URL.
+
+    Returns:
+        ok=True  → {"ok": True, "data_url": str, "mime": str, "size": int}
+        ok=False → {"ok": False, "error": str}
+
+    Rejects non-image extensions and files over the 10 MB read limit (base64
+    inflates ~33%, so the caller should fall back to a placeholder above it).
+    """
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if not target.is_file():
+            raise FsError("not a file")
+        ext = target.suffix.lower()
+        mime = _IMAGE_MIME.get(ext)
+        if mime is None:
+            return {"ok": False, "error": "not an image"}
+        size = target.stat().st_size
+        if size > _READ_SIZE_LIMIT:
+            return {"ok": False, "error": "file too large (> 10 MB)"}
+        b64 = base64.b64encode(target.read_bytes()).decode("ascii")
+        return {"ok": True, "data_url": f"data:{mime};base64,{b64}", "mime": mime, "size": size}
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool

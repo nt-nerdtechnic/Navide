@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, nextTick } from 'vue'
 
 export interface TabItem {
   key: string
@@ -14,8 +14,23 @@ const emit = defineEmits<{
   (e: 'add'): void
   (e: 'rename', key: string, name: string): void
   (e: 'delete', key: string): void
+  (e: 'close-group', key: string): void
   (e: 'move-pane', paneId: string, targetKey: string): void
 }>()
+
+const actionMenu = ref<{ show: boolean; key: string; x: number; y: number }>({ show: false, key: '', x: 0, y: 0 })
+
+function onCloseClick(e: MouseEvent, key: string): void {
+  actionMenu.value = { show: true, key, x: e.clientX, y: e.clientY }
+}
+function chooseMove(): void {
+  emit('delete', actionMenu.value.key)
+  actionMenu.value.show = false
+}
+function chooseClose(): void {
+  emit('close-group', actionMenu.value.key)
+  actionMenu.value.show = false
+}
 
 // The ✕ shows when there are at least 2 visible tabs. Actual deletion rules
 // live in App.vue because "手動" is a synthetic tab, not a persisted RunGroup.
@@ -85,14 +100,22 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
           <span
             v-if="tab.type !== 'manual' || tabs.length > 1"
             class="tab-close"
-            title="刪除此 tab（pane 會移到可承接的分組）"
-            @click.stop="emit('delete', tab.key)"
+            title="刪除此 tab"
+            @click.stop="onCloseClick($event, tab.key)"
           >✕</span>
         </template>
       </button>
     </template>
     <button class="tab-add-btn" title="新增 Pipeline 區塊" @click="emit('add')">+</button>
   </div>
+
+  <Teleport to="body">
+    <div v-if="actionMenu.show" class="tab-action-backdrop" @click="actionMenu.show = false" />
+    <div v-if="actionMenu.show" class="tab-action-menu" :style="{ top: actionMenu.y + 'px', left: actionMenu.x + 'px' }">
+      <button class="tab-action-item" @click="chooseMove()">移到其他分組</button>
+      <button class="tab-action-item danger" @click="chooseClose()">關閉所有 pane</button>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -215,4 +238,38 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   border-color: var(--accent-focus);
   background: var(--bg-hover);
 }
+
+.tab-action-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1999;
+}
+.tab-action-menu {
+  position: fixed;
+  z-index: 2000;
+  background: var(--bg-overlay, #1e1e1e);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  transform: translateX(-50%);
+}
+.tab-action-item {
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tab-action-item:hover { background: var(--bg-hover); }
+.tab-action-item.danger { color: var(--danger-bright, #f85149); }
+.tab-action-item.danger:hover { background: var(--danger-subtle, rgba(248,81,73,0.1)); }
 </style>

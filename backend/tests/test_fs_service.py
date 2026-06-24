@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 from agent_team_backend import fs_service
@@ -140,3 +141,37 @@ def test_write_file_roundtrip(tmp_path: Path) -> None:
 
 def test_write_file_blocks_internal_dir(tmp_path: Path) -> None:
     assert fs_service.write_file(_ws(tmp_path), ".agent-team/x", "y")["ok"] is False
+
+
+# ── read_image ────────────────────────────────────────────────────────────────
+
+# Smallest valid PNG: a 1x1 transparent pixel.
+_PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def test_read_image_returns_data_url(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    (Path(ws) / "pic.png").write_bytes(_PNG_1X1)
+    res = fs_service.read_image(ws, "pic.png")
+    assert res["ok"] is True
+    assert res["mime"] == "image/png"
+    assert res["data_url"].startswith("data:image/png;base64,")
+    assert res["size"] == len(_PNG_1X1)
+
+
+def test_read_image_rejects_non_image(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.read_image(ws, "README.md")
+    assert res["ok"] is False
+    assert "not an image" in res["error"]
+
+
+def test_read_image_missing_file(tmp_path: Path) -> None:
+    res = fs_service.read_image(_ws(tmp_path), "nope.png")
+    assert res["ok"] is False
+
+
+def test_read_image_rejects_escape(tmp_path: Path) -> None:
+    assert fs_service.read_image(_ws(tmp_path), "../../etc/secret.png")["ok"] is False

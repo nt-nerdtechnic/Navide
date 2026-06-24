@@ -6,6 +6,7 @@ import { setContext } from '../keybindings/useKeybindings'
 import EditorViewMonaco from './view/EditorViewMonaco.vue'
 import type { Range, Position } from './types'
 import { diagnosticsStore } from './diagnostics'
+import { loadImageDataUrl } from '../lib/imageData'
 
 const props = defineProps<{
   workspacePath: string
@@ -120,6 +121,7 @@ const fileEncoding = ref<string>('UTF-8')
 const fileBom = ref<boolean>(false)
 const isBinaryFile = ref<boolean>(false)
 const isImageFile = ref<boolean>(false)
+const imageDataUrl = ref<string>('')
 const binarySize = ref<number>(0)
 const binaryExt = ref<string>('')
 
@@ -155,6 +157,11 @@ async function load(): Promise<void> {
         binarySize.value = p?.size ?? 0
         binaryExt.value = p?.ext ?? ''
         loaded.value = true
+        // Fetch image bytes as a data URL (a raw file:// src is blocked by
+        // webSecurity from the dev http origin). Empty result → placeholder.
+        if (isImageFile.value) {
+          imageDataUrl.value = await loadImageDataUrl(props.backend, props.workspacePath, props.relPath)
+        }
         return
       }
       loadError.value = p?.error || 'Unable to read file'
@@ -977,8 +984,8 @@ defineExpose({
       <div v-if="loadError" class="ep-error">{{ loadError }}</div>
       <!-- Binary / image file preview -->
       <div v-else-if="loaded && isBinaryFile" class="ep-binary">
-        <div v-if="isImageFile" class="ep-binary-img-wrap">
-          <img :src="`file://${props.workspacePath}/${props.relPath}`" class="ep-binary-img" :alt="props.name" />
+        <div v-if="isImageFile && imageDataUrl" class="ep-binary-img-wrap">
+          <img :src="imageDataUrl" class="ep-binary-img" :alt="props.name" />
         </div>
         <div v-else class="ep-binary-placeholder">
           <span class="ep-binary-icon">⬛</span>

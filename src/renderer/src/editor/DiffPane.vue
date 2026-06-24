@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useNotify } from '../composables/useNotify'
 import { parseHunks, buildPatch, hunkHasChanges, toSideBySide, type Hunk } from '../lib/git-diff'
+import { loadImageDataUrl } from '../lib/imageData'
 import type { useBackend } from '../composables/useBackend'
 
 const props = defineProps<{
@@ -52,6 +53,21 @@ const parsed = computed(() => (rawDiff.value ? parseHunks(rawDiff.value) : { fil
 const isBinary = computed(() => rawDiff.value !== null && /^Binary files /m.test(rawDiff.value ?? ''))
 const isEmpty = computed(() => rawDiff.value !== null && !isBinary.value && parsed.value.hunks.length === 0)
 
+// Image preview: a binary image diff is meaningless as text, so show the
+// working-tree version itself (base64 data URL — origin-independent). Detected
+// by extension; before/after image diffs are out of scope.
+const _IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.svg', '.avif'])
+const isImage = computed(() => {
+  const m = props.filepath.toLowerCase().match(/\.[^./]+$/)
+  return m ? _IMAGE_EXTS.has(m[0]) : false
+})
+const imageDataUrl = ref('')
+async function loadImage(): Promise<void> {
+  imageDataUrl.value = ''
+  if (!isImage.value || !props.filepath) return
+  imageDataUrl.value = await loadImageDataUrl(props.backend, props.workspacePath, props.filepath)
+}
+
 async function loadDiff(): Promise<void> {
   if (!props.filepath) { rawDiff.value = null; return }
   const seq = ++_loadSeq
@@ -80,13 +96,14 @@ async function loadDiff(): Promise<void> {
 
 watch(
   () => props.backend.status.value,
-  (s) => { if (s === 'connected' && rawDiff.value === null) void loadDiff() },
+  (s) => { if (s === 'connected' && rawDiff.value === null) { void loadDiff(); void loadImage() } },
   { immediate: true },
 )
 
 watch([() => props.filepath, () => props.staged], () => {
   rawDiff.value = null
   void loadDiff()
+  void loadImage()
 })
 
 function toggleLine(hunkIdx: number, lineIdx: number): void {
@@ -166,6 +183,9 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
     <div ref="bodyRef" class="dp-body">
       <div v-if="loading" class="dp-msg">{{ $t('label.loading') }}</div>
       <div v-else-if="loadError" class="dp-msg err">{{ loadError }}</div>
+      <div v-else-if="isImage && imageDataUrl" class="dp-img-wrap">
+        <img :src="imageDataUrl" class="dp-img" :alt="name" />
+      </div>
       <div v-else-if="isBinary" class="dp-msg">{{ $t('label.binary-file') }}</div>
       <div v-else-if="isEmpty" class="dp-msg">{{ $t('label.no-changes') }}</div>
       <div v-else-if="rawDiff === null" class="dp-msg">
@@ -270,6 +290,9 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
 .dp-body { flex: 1; overflow: auto; }
 .dp-msg { padding: 24px; text-align: center; color: var(--text-muted); font-size: 12px; }
 .dp-msg.err { color: var(--danger-fg); }
+
+.dp-img-wrap { display: flex; justify-content: center; padding: 24px; }
+.dp-img { max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 4px; box-shadow: 0 2px 16px rgba(0,0,0,.3); }
 
 .dp-hunk { border-bottom: 1px solid var(--border-muted); }
 .dp-hunk.active { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }

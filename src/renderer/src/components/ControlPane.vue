@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import ExplorerPane from './ExplorerPane.vue'
@@ -353,6 +353,23 @@ const sidebarTab = ref<SidebarTab>(
   })()
 )
 watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /* ignore */ } })
+
+// Cmd+1/2/3 → switch sidebar tab (Explorer / Pipeline / Git)
+const SIDEBAR_TABS: SidebarTab[] = ['explorer', 'pipeline', 'git']
+function onSidebarTabShortcut(e: KeyboardEvent): void {
+  if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+  const idx = parseInt(e.key) - 1
+  if (idx < 0 || idx >= SIDEBAR_TABS.length) return
+  const el = document.activeElement as HTMLElement | null
+  const tag = el?.tagName ?? ''
+  // Allow from xterm helper textarea; block from other inputs and contenteditable
+  const isXterm = tag === 'TEXTAREA' && el?.classList.contains('xterm-helper-textarea')
+  if (!isXterm && (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable)) return
+  e.preventDefault()
+  sidebarTab.value = SIDEBAR_TABS[idx]
+}
+onMounted(() => document.addEventListener('keydown', onSidebarTabShortcut))
+onUnmounted(() => document.removeEventListener('keydown', onSidebarTabShortcut))
 
 // Git tab badge — updated by GitPane via changes-count event
 const gitChangesCount = ref(0)

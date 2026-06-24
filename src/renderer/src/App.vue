@@ -4528,6 +4528,19 @@ async function movePaneToGroup(paneId: string, targetKey: string): Promise<void>
  *  panes whose runGroupId is empty. Therefore deleting the last real RunGroup is
  *  valid when there is, or will be, a manual/ungrouped tab to show those panes.
  */
+async function closeRunGroup(id: string): Promise<void> {
+  const affected = id === 'manual'
+    ? panes.value.filter((p) => !p.runGroupId)
+    : panes.value.filter((p) => p.runGroupId === id)
+  for (const p of [...affected]) await onKill(p.id)
+  if (id !== 'manual') {
+    runGroups.value = runGroups.value.filter((g) => g.id !== id)
+    if (currentRunGroupId.value === id) currentRunGroupId.value = ''
+    if (activeTab.value === id) activeTab.value = runGroups.value[0]?.id ?? 'manual'
+    _saveRunGroups()
+  }
+}
+
 async function deleteRunGroup(id: string): Promise<void> {
   // 刪除「手動」tab：把未指派 pane 移到第一個 stage group
   if (id === 'manual') {
@@ -5454,6 +5467,7 @@ function paneIsCommander(p: ActivePane): boolean {
         @add="createRunGroup()"
         @rename="(key, name) => renameRunGroup(key, name)"
         @delete="(key) => deleteRunGroup(key)"
+        @close-group="(key) => closeRunGroup(key)"
         @move-pane="(paneId, targetKey) => movePaneToGroup(paneId, targetKey)"
       />
       <div v-if="panes.length === 0" class="empty">

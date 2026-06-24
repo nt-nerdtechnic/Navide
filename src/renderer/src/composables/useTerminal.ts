@@ -129,7 +129,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const sessionId = ref<string>('')
   const error = ref<string>('')
   const lastCommand = ref<string>('')
-  const isAltBuffer = ref(false)
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -356,8 +355,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const RECONCILE_MS = 2_000
   const reconcileInterval = window.setInterval(() => {
     if (!mounted) return
-    // Track alt buffer state so TerminalPane can hide the scrollbar in TUI mode.
-    isAltBuffer.value = term.buffer.active.type === 'alternate'
     // A spawn parked while hidden creates as soon as the pane is measurable.
     if (pendingSpawn.value) { void createWhenMeasurable(); return }
     if (!sessionId.value) return
@@ -1051,6 +1048,5 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     markBufferPosition,
     recleanBuffer,
     updateXtermTheme,
-    isAltBuffer,
   }
 }
