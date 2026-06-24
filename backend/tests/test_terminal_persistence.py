@@ -55,8 +55,7 @@ async def test_disconnect_preserves_terminals() -> None:
     m2, sl2 = _fake_session_entry(s2, "win2-pty")
     try:
         # Simulate window 1 disconnecting (the ws() finally logic — no kills).
-        app._active_session = None
-        # Both PTYs survive in the shared singleton.
+        # PTYs survive in the shared singleton regardless of ownership state.
         assert "win1-pty" in s1.terminals._sessions
         assert "win2-pty" in s2.terminals._sessions
     finally:
@@ -73,7 +72,6 @@ async def test_reattach_reports_alive_and_dead() -> None:
     rebinds the live one and falls back to spawn+resume for the rest."""
     ws = RecordingWS()
     session = app.Session(ws)  # type: ignore[arg-type]
-    app._active_session = session
     sid = "term-alive"
     master, slave = _fake_session_entry(session, sid)
     try:
@@ -97,14 +95,20 @@ async def test_reattach_reports_alive_and_dead() -> None:
 
 @pytest.mark.asyncio
 async def test_reattach_marks_requester_active() -> None:
-    """A reattach makes the requesting Session the output target — the surviving
-    PTY's output now flows to the reconnecting renderer."""
+    """A reattach transfers PTY ownership to the requesting Session so output
+    from the surviving PTY flows to the reconnecting renderer, not the old one."""
     first = app.Session(RecordingWS())  # type: ignore[arg-type]
-    app._active_session = first
     second = app.Session(RecordingWS())  # type: ignore[arg-type]
-    await app.handle_message(second, {
-        "id": "ra2",
-        "type": "terminal.reattach",
-        "payload": {"terminal_session_ids": [], "cols": 80, "rows": 24},
-    })
-    assert app._active_session is second
+    master, slave = _fake_session_entry(first, "shared-pty")
+    app._PTY_OWNERS["shared-pty"] = first  # initial owner is window 1
+    try:
+        await app.handle_message(second, {
+            "id": "ra2",
+            "type": "terminal.reattach",
+            "payload": {"terminal_session_ids": ["shared-pty"], "cols": 80, "rows": 24},
+        })
+    finally:
+        os.close(master)
+        os.close(slave)
+    # Window 2 reattached, so it now owns the PTY's output stream.
+    assert app._PTY_OWNERS.get("shared-pty") is second

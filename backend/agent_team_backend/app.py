@@ -191,17 +191,21 @@ async def _broadcast_git_changed(ws_path: str) -> None:
 # PTYs must outlive any single WebSocket: a renderer reload / window close drops
 # the ws, but the terminal (agent CLI, bash, build) keeps running in the
 # background until it exits, the user explicitly kills the pane, or the whole
-# app quits. So a single app-level TerminalService owns every PTY, and its
-# output is routed to whichever Session is currently attached. When nothing is
-# attached (detached / background) output is dropped — no buffer; the TUI
-# repaints on reattach via SIGWINCH.
+# app quits. So a single app-level TerminalService owns every PTY.
+# Output is routed per-PTY: each terminal session is owned by whichever WS
+# Session created or last reattached to it. A second window never steals PTYs
+# it didn't explicitly claim via terminal.create / terminal.reattach.
 _TERMINALS: TerminalService | None = None
-_active_session: "Session | None" = None
+# terminal_session_id → owning WS Session. Populated on terminal.create and
+# updated on terminal.reattach. Entries removed when the owning WS disconnects.
+_PTY_OWNERS: "dict[str, Session]" = {}
 
 
 async def _active_emit(event: dict[str, Any]) -> None:
-    """Output sink for the app-global TerminalService → the attached Session."""
-    sess = _active_session
+    """Output sink: route each PTY's output to its owning Session."""
+    payload = event.get("payload", {})
+    session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
+    sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:
         return  # detached: drop output, PTY keeps running, TUI redraws on reattach
     try:
@@ -219,10 +223,10 @@ def get_terminals() -> TerminalService:
     return _TERMINALS
 
 
-def set_active_session(session: "Session") -> None:
-    """Route terminal output to this Session (called on connect / reattach)."""
-    global _active_session
-    _active_session = session
+def _claim_ptys(session: "Session", terminal_session_ids: list[str]) -> None:
+    """Transfer ownership of the given PTY ids to `session`."""
+    for tid in terminal_session_ids:
+        _PTY_OWNERS[tid] = session
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
@@ -511,13 +515,8 @@ async def claude_hook(request: Request) -> dict[str, Any]:
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
     log.info("ws client connected")
-    global _active_session
     session = Session(websocket)
     _SESSIONS.add(session)
-    # Become the terminal output target. MVP = single active target (last writer
-    # wins); two windows streaming the same PTY at once is out of scope here and
-    # interacts with the multi-main-window plan.
-    _active_session = session
     try:
         while True:
             try:
@@ -536,8 +535,10 @@ async def ws(websocket: WebSocket) -> None:
         log.info("ws client disconnected")
     finally:
         _SESSIONS.discard(session)
-        if _active_session is session:
-            _active_session = None
+        # Release PTY ownership so their output is dropped until reattached.
+        orphaned = [tid for tid, owner in _PTY_OWNERS.items() if owner is session]
+        for tid in orphaned:
+            del _PTY_OWNERS[tid]
         # PTYs survive this disconnect so the frontend can reattach after a
         # transient network outage. They are killed only when the user explicitly
         # closes a pane (terminal.kill) or the whole app process exits.
@@ -721,6 +722,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     session_marker=str(metadata.get("session_marker") or ""),
                     session_home_id=str(metadata.get("session_home_id") or ""),
                 )
+            # The creating window owns this PTY's output stream.
+            _PTY_OWNERS[term.id] = session
             await session.send_json(
                 make_response(
                     msg_id,
@@ -782,7 +785,6 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             # forbidden "auto-redraw a running, visible pane" (no existing content
             # to reflow-corrupt) — it's the only way a reattached blank xterm
             # recovers its screen, since there is no server-side output buffer.
-            set_active_session(session)
             ids = [str(x) for x in (payload.get("terminal_session_ids") or [])]
             cols = int(payload.get("cols", 0))
             rows = int(payload.get("rows", 0))
@@ -793,6 +795,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             }
             alive = [tid for tid in ids if tid in live_ids]
             dead = [tid for tid in ids if tid not in live_ids]
+            # Transfer ownership of reattached PTYs to this window.
+            _claim_ptys(session, alive)
             if cols > 0 and rows > 0:
                 for tid in alive:
                     session.terminals.force_redraw(tid, cols, rows)
