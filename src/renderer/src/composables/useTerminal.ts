@@ -231,8 +231,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // Pending terminal output coalesced by requestAnimationFrame so multiple
   // rapid WS messages are written in one term.write() per frame instead of
   // individually — prevents the event loop from blocking on burst output.
+  // _outputTimer is a 50ms fallback: rAF is paused in packaged Electron when
+  // the window is occluded, which would leave output stuck in _pendingOutput.
   let _pendingOutput = ''
   let _outputRafId = 0
+  let _outputTimer: ReturnType<typeof setTimeout> | null = null
   // rAF is throttled/paused while a window is occluded or mid-fullscreen
   // transition, so a fit scheduled purely on rAF can be lost when the dev
   // window is behind another (then the terminal stays at its stale width —
@@ -711,14 +714,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (payload.terminal_session_id !== sessionId.value) return
       _pendingOutput += payload.data
       if (!_outputRafId) {
-        _outputRafId = requestAnimationFrame(() => {
+        let done = false
+        const flush = (): void => {
+          if (done) return
+          done = true
           _outputRafId = 0
+          if (_outputTimer) { clearTimeout(_outputTimer); _outputTimer = null }
           const chunk = _pendingOutput
           _pendingOutput = ''
+          if (!chunk) return
           term.write(chunk)
           appendClean(chunk)
           appendToScrollBuffer(chunk)
-        })
+        }
+        _outputRafId = requestAnimationFrame(flush)
+        _outputTimer = setTimeout(() => { cancelAnimationFrame(_outputRafId); flush() }, 50)
       }
     })
 
@@ -1056,6 +1066,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // intentionally clears rawScrollBuffer before calling us, so appending here
     // would re-populate a snapshot that should stay discarded.
     if (_outputRafId) { cancelAnimationFrame(_outputRafId); _outputRafId = 0 }
+    if (_outputTimer) { clearTimeout(_outputTimer); _outputTimer = null }
     if (_pendingOutput) {
       term.write(_pendingOutput)
       _pendingOutput = ''
