@@ -147,7 +147,8 @@ onMounted(() => {
     <div
       ref="containerRef"
       class="xterm-host"
-      :class="{ 'drag-over': isDragOver }"
+      :class="{ 'drag-over': isDragOver, 'alt-buffer': terminal.isAltBuffer.value }"
+      @mousedown="emit('set-focus')"
       @dragover.prevent
       @dragenter.prevent="isDragOver = true"
       @dragleave="isDragOver = false"
@@ -322,11 +323,18 @@ onMounted(() => {
   pointer-events: none;
 }
 
-/* xterm.js Monaco scrollbar fades to opacity:0 after 800 ms of inactivity.
-   Keep a persistent dim cue at rest. Slider color comes from ITheme
-   (scrollbarSliderBackground: rgba(255,255,255,0.30)); container at 0.5
-   gives ~15% effective opacity — a visible faint strip on dark backgrounds. */
-.xterm-host :deep(.xterm-scrollable-element > .invisible) {
-  opacity: 0.5 !important;
+/* xterm.js Monaco scrollbar: show track vs thumb contrast in main buffer.
+   xterm injects --vscode-scrollbarSlider-background from ITheme but the track
+   has no background — add a dim track so the thumb position is distinguishable. */
+/* xterm Monaco scrollbar: keep thumb (slider) always visible without a track
+   background. Track stays transparent so only the thumb shows as a colored
+   strip — white on dark themes, dark on light theme. Avoids the "all gray"
+   appearance caused by track + thumb blending to the same shade. */
+.xterm-host:not(.alt-buffer) :deep(.xterm-scrollable-element > .invisible) {
+  opacity: 0.7 !important;
+}
+/* Alt buffer (TUI): thumb fills 100% = no useful position info. Hide it. */
+.xterm-host.alt-buffer :deep(.xterm-scrollable-element > .invisible) {
+  opacity: 0.08 !important;
 }
 </style>

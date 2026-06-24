@@ -978,6 +978,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             project = project_store.record_manual_pane_unspawn(
                 payload["workspace_path"],
                 pane_id=payload["pane_id"],
+                session_id=payload.get("session_id", "") or "",
             )
             await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))

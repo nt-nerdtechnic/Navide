@@ -330,6 +330,7 @@ function openEditorWindow(params: Record<string, string>): void {
     width: 1100,
     height: 760,
     title: 'Agent-Team · Editor',
+    titleBarStyle: 'hidden',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

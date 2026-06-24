@@ -537,16 +537,33 @@ class ProjectStore:
         workspace_path: str,
         *,
         pane_id: str,
+        session_id: str = "",
     ) -> Project:
+        """Mark a manual pane removed so it isn't re-spawned on the next restart.
+
+        Matches by pane_id OR (when given) session_id, and removes EVERY matching
+        manual record. The pane_id is regenerated on each restart and re-linked
+        via previous_pane_id; if that link ever drifts, a stale 'spawned' record
+        would otherwise be orphaned (un-removable from the UI) and resurrect on
+        every launch. session_id is stable across restarts, so it reliably lands
+        on the right record — and clears any duplicate sharing that session.
+        """
         project = self.load_or_create(workspace_path)
-        pane = self._find_manual_pane(project, pane_id)
-        if pane is None:
+        sid = session_id.strip()
+        matches = [
+            p for p in project.panes
+            if p.origin == "manual"
+            and p.spawn_status != "removed"
+            and (p.pane_id == pane_id or (sid and p.session_id == sid))
+        ]
+        if not matches:
             return project
-        pane.spawn_status = "removed"
+        for pane in matches:
+            pane.spawn_status = "removed"
         self.save(project)
         self.append_event(
             workspace_path,
-            {"event": "manual_pane_unspawn", "pane_id": pane_id},
+            {"event": "manual_pane_unspawn", "pane_id": pane_id, "count": len(matches)},
             log_file_name=project.log_file_name,
         )
         return project

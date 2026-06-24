@@ -34,7 +34,7 @@ watch(dialog, async (d) => {
     </div>
 
     <!-- Alert / Confirm dialog (blocking) -->
-    <div v-if="dialog" ref="modalEl" class="modal" tabindex="-1" @keydown.esc="resolveDialog(false)">
+    <div v-if="dialog" ref="modalEl" class="modal" tabindex="-1" @keydown.esc="resolveDialog(false)" @keydown.enter="resolveDialog(true)">
       <div class="card" :class="dialog.kind">
         <header>
           <span class="dot"></span>

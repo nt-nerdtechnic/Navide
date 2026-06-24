@@ -1490,6 +1490,10 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
     await sendQuiet<ProjectPayload>('manual_pane.unspawn', {
       workspace_path: pane.workspacePath,
       pane_id: pane.id,
+      // session_id is stable across restarts (pane_id is regenerated each launch);
+      // sending it lets the backend remove the right record even if the id drifted,
+      // so a removed CLI can't resurrect on the next restart.
+      session_id: pane.pinnedSessionId ?? '',
     })
   }
   if (opts.markRemoved !== false && pane?.agentKey === 'codex' && pane.sessionHomeId) {

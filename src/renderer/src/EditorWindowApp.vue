@@ -1492,9 +1492,34 @@ registerCommand('workbench.action.closeModal', () => {
 // ── New file (⌘N) ─────────────────────────────────────────────────────────────
 registerCommand('workbench.action.newFile', openNewFileDialog)
 
+async function closeEditorWindow(): Promise<void> {
+  const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length > 0) {
+    const ok = await confirm(
+      `${dirty.length} file(s) have unsaved changes. Close the editor anyway?`,
+      { title: 'Close Editor', confirmText: 'Close' }
+    )
+    if (!ok) return
+  } else {
+    const ok = await confirm('Close the editor window?', {
+      title: 'Close Editor',
+      confirmText: 'Close',
+    })
+    if (!ok) return
+  }
+  window.close()
+}
+
 function onAppKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && tabCtxMenu.value) { tabCtxMenu.value = null; return }
   if (e.key === 'Escape' && bcDropdown.value) { bcDropdown.value = null; return }
+  if (e.key === 'Escape') {
+    // Skip if focus is inside Monaco (Monaco handles Escape internally)
+    if (document.activeElement?.closest('.monaco-editor')) return
+    e.preventDefault()
+    closeEditorWindow()
+    return
+  }
   const mod = e.metaKey || e.ctrlKey
   if (mod && (e.key === 'w' || e.key === 'W') && activeRel.value) {
     // Don't close the tab while focus is in a find/goto/cmdk text input.

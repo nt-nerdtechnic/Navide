@@ -28,9 +28,9 @@ const DARK_ANSI = {
 // Scrollbar slider colors applied directly to ITheme so Monaco's overlay
 // scrollbar is legible. Default (foreground @ 20%) is too faint on dark bg.
 const DARK_SCROLLBAR = {
-  scrollbarSliderBackground:       'rgba(255,255,255,0.30)',
-  scrollbarSliderHoverBackground:  'rgba(255,255,255,0.50)',
-  scrollbarSliderActiveBackground: 'rgba(255,255,255,0.65)',
+  scrollbarSliderBackground:       'rgba(255,255,255,0.55)',
+  scrollbarSliderHoverBackground:  'rgba(255,255,255,0.75)',
+  scrollbarSliderActiveBackground: 'rgba(255,255,255,0.90)',
 }
 
 const XTERM_THEMES: Record<string, ITheme> = {
@@ -52,9 +52,9 @@ const XTERM_THEMES: Record<string, ITheme> = {
   'light': {
     background: '#ffffff', foreground: '#1f2328',
     cursor: '#0969da', selectionBackground: 'rgba(9,105,218,0.2)',
-    scrollbarSliderBackground:       'rgba(0,0,0,0.20)',
-    scrollbarSliderHoverBackground:  'rgba(0,0,0,0.35)',
-    scrollbarSliderActiveBackground: 'rgba(0,0,0,0.50)',
+    scrollbarSliderBackground:       'rgba(0,0,0,0.35)',
+    scrollbarSliderHoverBackground:  'rgba(0,0,0,0.55)',
+    scrollbarSliderActiveBackground: 'rgba(0,0,0,0.70)',
     black: '#1f2328',    brightBlack: '#59636e',
     red: '#cf222e',      brightRed: '#a40e26',
     green: '#1a7f37',    brightGreen: '#22863a',
@@ -129,6 +129,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const sessionId = ref<string>('')
   const error = ref<string>('')
   const lastCommand = ref<string>('')
+  const isAltBuffer = ref(false)
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -227,6 +228,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mode2048 = false
   let resizeObserver: ResizeObserver | null = null
   let resizeRafId = 0
+  // Pending terminal output coalesced by requestAnimationFrame so multiple
+  // rapid WS messages are written in one term.write() per frame instead of
+  // individually — prevents the event loop from blocking on burst output.
+  let _pendingOutput = ''
+  let _outputRafId = 0
   // rAF is throttled/paused while a window is occluded or mid-fullscreen
   // transition, so a fit scheduled purely on rAF can be lost when the dev
   // window is behind another (then the terminal stays at its stale width —
@@ -355,6 +361,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const RECONCILE_MS = 2_000
   const reconcileInterval = window.setInterval(() => {
     if (!mounted) return
+    isAltBuffer.value = term.buffer.active.type === 'alternate'
     // A spawn parked while hidden creates as soon as the pane is measurable.
     if (pendingSpawn.value) { void createWhenMeasurable(); return }
     if (!sessionId.value) return
@@ -665,6 +672,30 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
+  // Strip everything from the last unmatched \x1b[?1049h onward so replaying
+  // the snapshot never renders alt-buffer TUI content (cursor-positioning codes
+  // written at the old terminal width) into the fresh xterm instance.
+  function stripAltBufferSuffix(snap: string): string {
+    const ENTER = '\x1b[?1049h'
+    const EXIT  = '\x1b[?1049l'
+    let depth = 0
+    let lastEnterPos = -1
+    let i = 0
+    while (i < snap.length) {
+      if (snap.startsWith(ENTER, i)) {
+        if (depth === 0) lastEnterPos = i
+        depth++
+        i += ENTER.length
+      } else if (snap.startsWith(EXIT, i)) {
+        if (depth > 0 && --depth === 0) lastEnterPos = -1
+        i += EXIT.length
+      } else {
+        i++
+      }
+    }
+    return depth > 0 && lastEnterPos !== -1 ? snap.slice(0, lastEnterPos) : snap
+  }
+
   // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
   // spawn and a reattach so both bind identically.
   function bindSessionHandlers(): void {
@@ -678,9 +709,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     outputUnsub = backend.on('terminal.output', (raw) => {
       const payload = raw as { terminal_session_id: string; data: string }
       if (payload.terminal_session_id !== sessionId.value) return
-      term.write(payload.data)
-      appendClean(payload.data)
-      appendToScrollBuffer(payload.data)
+      _pendingOutput += payload.data
+      if (!_outputRafId) {
+        _outputRafId = requestAnimationFrame(() => {
+          _outputRafId = 0
+          const chunk = _pendingOutput
+          _pendingOutput = ''
+          term.write(chunk)
+          appendClean(chunk)
+          appendToScrollBuffer(chunk)
+        })
+      }
     })
 
     exitUnsub = backend.on('terminal.exit', (raw) => {
@@ -758,6 +797,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // the TUI layout. The live PTY will repaint cleanly once the reconciler
     // fires terminal.reattach with the settled cols/rows (~2 s). Snapshot
     // replay is reserved for _doCreate (PTY dead, falls back to --resume).
+    // Reset mouse tracking modes so no stale xterm mouse state forwards events
+    // to the process's stdin before it has a chance to re-enable what it needs.
+    term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l')
     sessionId.value = prev
     status.value = 'running'
     bindSessionHandlers()
@@ -791,6 +833,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     } catch {
       return // WS not ready yet; the next status-change will retry
     }
+    // Reset mouse tracking modes on reconnect for the same reason as tryReattach.
+    term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l')
     cleanupSession()
     bindSessionHandlers()
     pendingReattachRedraw = true
@@ -874,14 +918,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // before the new PTY starts writing. Only for resume spawns that have a saved
     // snapshot — fresh spawns (no resumeKey) have no snapshot to replay.
     if (opts.resumeKey) {
-      const snap = loadScrollSnapshot()
+      // Strip any trailing alt-buffer content before replaying. The snapshot
+      // accumulates raw PTY output including Claude Code's TUI redraws; those
+      // cursor-positioning codes were written at the old terminal width and
+      // would render garbled in the fresh xterm. Only the main-buffer portion
+      // (before the last unmatched \x1b[?1049h) is safe to replay.
+      const snap = stripAltBufferSuffix(loadScrollSnapshot())
       if (snap) {
         term.write(snap)
         rawScrollBuffer = snap  // seed the buffer so new output appends correctly
-        // The snapshot may end with the alternate screen active (\x1b[?1049h from
-        // a TUI that was running when the session was interrupted). Exit it now so
-        // the main-buffer scrollback is accessible and the separator lands there.
-        term.write('\x1b[?1049l')  // DECRST 1049: leave alternate screen
+        // Reset any mouse tracking modes the previous session may have enabled.
+        term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l\x1b[?1004l\x1b[?2004l')
         term.write('\r\n\x1b[2m\x1b[38;5;240m─── reconnected ───\x1b[0m\r\n')
       }
     }
@@ -1004,6 +1051,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     outputUnsub = null
     exitUnsub?.()
     exitUnsub = null
+    // Flush any coalesced output that hadn't been written yet.
+    // We only update the visual terminal, not the scroll buffer: the exit handler
+    // intentionally clears rawScrollBuffer before calling us, so appending here
+    // would re-populate a snapshot that should stay discarded.
+    if (_outputRafId) { cancelAnimationFrame(_outputRafId); _outputRafId = 0 }
+    if (_pendingOutput) {
+      term.write(_pendingOutput)
+      _pendingOutput = ''
+    }
   }
 
   onScopeDispose(() => {
@@ -1048,5 +1104,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     markBufferPosition,
     recleanBuffer,
     updateXtermTheme,
+    isAltBuffer,
   }
 }

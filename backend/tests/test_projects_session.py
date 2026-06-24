@@ -194,6 +194,45 @@ def test_manual_pane_unspawn_marks_removed(store_with_stage: tuple[ProjectStore,
     assert pane.spawn_status == "removed"
 
 
+def test_manual_pane_unspawn_by_session_when_pane_id_drifted(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # Record persisted under an old id; the live pane now has a different id
+    # (id drift across restarts). Removing by the live id + stable session_id
+    # must still mark the right record removed so it can't resurrect.
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="old-id", agent="claude", session_id="sess-x")
+    store.record_manual_pane_unspawn(ws, pane_id="live-id", session_id="sess-x")
+
+    pane = next(p for p in store.peek(ws).panes if p.origin == "manual")
+    assert pane.spawn_status == "removed"
+
+
+def test_manual_pane_unspawn_clears_duplicates_sharing_session(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # Two spawned records share one session (orphan/duplicate accumulation):
+    # a single unspawn by session must clear BOTH so neither resurrects.
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="dup-a", agent="claude", session_id="sess-d")
+    store.record_manual_pane_spawn(ws, pane_id="dup-b", agent="claude", session_id="sess-d")
+    store.record_manual_pane_unspawn(ws, pane_id="dup-b", session_id="sess-d")
+
+    manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    assert all(p.spawn_status == "removed" for p in manual)
+
+
+def test_manual_pane_unspawn_no_match_is_noop(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="keep", agent="claude", session_id="sess-keep")
+    store.record_manual_pane_unspawn(ws, pane_id="ghost", session_id="sess-ghost")
+
+    pane = next(p for p in store.peek(ws).panes if p.origin == "manual")
+    assert pane.spawn_status == "spawned"  # untouched
+
+
 def test_manual_pane_session_fills_in_later(store_with_stage: tuple[ProjectStore, str]) -> None:
     store, ws = store_with_stage
     store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="gemini")

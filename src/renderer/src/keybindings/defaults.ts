@@ -137,6 +137,7 @@ export const defaults: KeybindingRule[] = [
   // ── Workbench: sidebar & view ────────────────────────────────────────────────
   { key: 'cmd+b',       command: 'workbench.action.toggleSidebar' },
   { key: 'cmd+shift+e', command: 'workbench.action.focusExplorer' },
+  { key: 'cmd+shift+r', command: 'workbench.action.focusPipeline' },
   { key: 'cmd+shift+g', command: 'workbench.action.focusSourceControl', when: '!findOpen' },
 
   // ── Editor tabs ──────────────────────────────────────────────────────────────

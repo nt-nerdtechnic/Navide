@@ -7,6 +7,7 @@ import type { IssueDetail } from '../composables/useIssues'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
+import { guardedDiscard } from '../lib/discardConfirm'
 
 const props = defineProps<{
   workspacePath: string
@@ -46,7 +47,7 @@ const {
   logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
   isCommitting, isFetching, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
-  initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles, discardFile,
+  initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
   createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch,
@@ -236,9 +237,9 @@ function ctxFolderUnstage(): void {
   closeCtxMenu()
 }
 function ctxFolderDiscard(): void {
-  discardTargets.value = filesUnderDir(ctxMenu.value.dir, false)
+  const paths = filesUnderDir(ctxMenu.value.dir, false)
   closeCtxMenu()
-  if (discardTargets.value.length) showDiscardConfirm.value = true
+  void confirmDiscard(paths)
 }
 async function ctxFolderAddIgnore(target: IgnoreTarget = 'project'): Promise<void> {
   if (ctxMenu.value.dir) await addToGitignore(ctxMenu.value.dir + '/', target)
@@ -303,8 +304,8 @@ function ctxStageToggle(): void {
 }
 function ctxDiscard(): void {
   const f = ctxMenu.value.file
-  if (f) discardFile(f.path)
   closeCtxMenu()
+  if (f) void confirmDiscard([f.path])
 }
 async function ctxStashFile(): Promise<void> {
   const f = ctxMenu.value.file
@@ -644,7 +645,7 @@ onUnmounted(() => {
 })
 
 // ── remote actions ────────────────────────────────────────────────────────────
-const { toast: notifyToast, alert: notifyAlert } = useNotify()
+const { toast: notifyToast, alert: notifyAlert, confirm: notifyConfirm } = useNotify()
 const remoteOpLabel: Record<string, string> = {
   fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: 'Sync', publish: 'Publish'
 }
@@ -1106,8 +1107,7 @@ async function unstageSelected(): Promise<void> {
   await unstageFiles(paths); clearSelection()
 }
 function discardSelected(): void {
-  const paths = selectedChangesPaths.value; if (!paths.length) return
-  discardTargets.value = paths; showDiscardConfirm.value = true
+  void confirmDiscard(selectedChangesPaths.value)
 }
 
 // ── file history + diff blame (combined ⊡ panel) ─────────────────────────────
@@ -1147,21 +1147,17 @@ async function doResolveTheirs(path: string): Promise<void> {
 // ── group actions: discard all (Changes) / unstage all (Staged) ─────────────────
 // Errors surface through the shared gitError channel (set inside useGit's
 // runWrite), so these handlers stay thin.
-// Discard confirm is shared by the "Discard All" group action and folder-level
-// discard; discardTargets holds whichever set of paths is being confirmed.
-const showDiscardConfirm = ref(false)
-const discardTargets = ref<string[]>([])
+// Discarding is destructive and irreversible, so EVERY path — single file,
+// selection, folder, and "Discard All" — routes through one modal confirm.
+async function confirmDiscard(paths: string[]): Promise<void> {
+  const ran = await guardedDiscard(paths, notifyConfirm, discardFiles)
+  if (ran) clearSelection()
+}
 function openDiscardAll(): void {
-  discardTargets.value = [
+  void confirmDiscard([
     ...(gitStatus.value.unstaged ?? []).map((f) => f.path),
     ...(gitStatus.value.untracked ?? []).map((f) => f.path),
-  ]
-  if (discardTargets.value.length) showDiscardConfirm.value = true
-}
-async function doDiscardConfirm(): Promise<void> {
-  await discardFiles(discardTargets.value)
-  showDiscardConfirm.value = false
-  clearSelection()
+  ])
 }
 async function doUnstageAll(): Promise<void> {
   await unstageFiles(gitStatus.value.staged.map((f) => f.path))
@@ -1650,16 +1646,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         </div>
       </div>
 
-      <!-- Discard confirm (shared by Discard All + folder discard) -->
-      <div v-if="showDiscardConfirm" class="clean-box">
-        <div class="clean-title">Discard {{ discardTargets.length }} change(s)? This cannot be undone.</div>
-        <div v-for="f in discardTargets" :key="f" class="clean-file">{{ f }}</div>
-        <div class="clean-actions">
-          <button class="btn-ghost" @click="showDiscardConfirm = false">Cancel</button>
-          <button class="btn-danger" @click="doDiscardConfirm">Discard</button>
-        </div>
-      </div>
-
       <!-- Stash with optional label -->
       <div v-if="showStashPrompt" class="stash-box">
         <div class="stash-title">{{ $t('action.save-draft-title') }}</div>
@@ -1698,7 +1684,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <span class="folder-name" :title="row.dir">{{ row.name }}</span>
                 <span class="folder-count">{{ row.fileCount }}</span>
                 <div class="row-actions">
-                  <button class="row-btn danger shrink" title="Discard folder" @click.stop="discardTargets = filesUnderDir(row.dir!, false); showDiscardConfirm = true">↩</button>
+                  <button class="row-btn danger shrink" title="Discard folder" @click.stop="confirmDiscard(filesUnderDir(row.dir!, false))">↩</button>
                   <button class="row-btn primary" title="Stage folder" @click.stop="stageFiles(filesUnderDir(row.dir!, false))">＋</button>
                 </div>
               </div>
@@ -1715,7 +1701,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <span class="file-name-only" :title="row.file!.path">{{ row.name }}</span>
                   <div class="row-actions">
                     <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
-                    <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(row.file!.path)">↩</button>
+                    <button class="row-btn danger shrink" title="Discard" @click.stop="confirmDiscard([row.file!.path])">↩</button>
                     <button class="row-btn primary" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
                   </div>
                 </div>
@@ -1760,7 +1746,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <span class="file-path-dim" :title="f.path">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
                   <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
-                  <button class="row-btn danger shrink" title="Discard" @click.stop="discardFile(f.path)">↩</button>
+                  <button class="row-btn danger shrink" title="Discard" @click.stop="confirmDiscard([f.path])">↩</button>
                   <button class="row-btn primary" title="Stage" @click.stop="stageFile(f.path)">＋</button>
                 </div>
               </div>
@@ -2993,11 +2979,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .conflict-file { color: var(--warning-fg) !important; opacity: 0.9; }
 .merge-conflict-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
 
-/* ── Clean confirm ──────────────────────────────────────────────────────────── */
-.clean-box {
-  margin: 4px 8px; background: var(--danger-subtle); border: 1px solid var(--danger-fg);
-  border-radius: 4px; padding: 8px 10px; font-size: 11px;
-}
+/* ── Danger confirm text (shared by merge-conflict box) ──────────────────────── */
 .clean-title { color: var(--danger-fg); font-weight: 600; margin-bottom: 4px; }
 .clean-file { color: var(--text-primary); padding: 1px 4px; font-family: monospace; font-size: 10px; }
 .clean-actions { display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; }
