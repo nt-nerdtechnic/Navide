@@ -22,7 +22,9 @@ export const defaults: KeybindingRule[] = [
   { key: 'ctrl+space', command: 'editor.action.triggerGhost', when: 'editorTextFocus' },
   { key: 'cmd+f', command: 'editor.action.openFind',              when: 'editorOpen && !terminalFocus' },
   { key: 'cmd+e', command: 'editor.action.useSelectionForFind', when: 'editorOpen && !terminalFocus' },
-  { key: 'cmd+h', command: 'editor.action.openReplace',          when: 'editorOpen && !terminalFocus' },
+  // Replace lives on Cmd+Alt+F (the macOS convention) so Cmd+H stays the system
+  // "Hide application" shortcut instead of being shadowed inside the editor.
+  { key: 'cmd+alt+f', command: 'editor.action.openReplace',       when: 'editorOpen && !terminalFocus' },
   { key: 'cmd+g', command: 'editor.action.nextMatch',     when: 'findOpen' },
   { key: 'cmd+shift+g', command: 'editor.action.prevMatch', when: 'findOpen' },
   { key: 'cmd+l', command: 'editor.action.gotoLine',      when: 'editorOpen' },

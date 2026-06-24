@@ -316,8 +316,9 @@ onMounted(() => {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {})
   // Cmd+S → EditorPane save handler
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {})
-  // Cmd+H → EditorPane find (replace) handler
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {})
+  // Cmd+Alt+F → EditorPane find (replace) handler. (Cmd+H is intentionally NOT
+  // overridden so it stays the macOS "Hide application" shortcut.)
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {})
 
   // Apply initial diagnostics
   if (props.diagnostics?.length) applyDiagnostics(props.diagnostics)

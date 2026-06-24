@@ -1098,7 +1098,7 @@ defineExpose({
       </div>
     </div>
 
-    <!-- Find / Replace bar (⌘F / ⌘H / Esc) -->
+    <!-- Find / Replace bar (⌘F / ⌘⌥F / Esc) -->
     <div v-if="findOpen" class="ep-find">
       <div class="ep-find-row">
         <input

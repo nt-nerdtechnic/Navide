@@ -986,7 +986,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'workbench.action.reopenClosedEditor',    label: 'Reopen Last Closed Tab', keys: '⌘⇧T' },
   { id: 'workbench.action.openKeyboardShortcuts', label: 'Show Keyboard Shortcuts',       keys: '⌘K ⌘S' },
   { id: 'workbench.action.selectTheme',           label: 'Select Color Theme',     keys: '⌘K ⌘T' },
-  { id: 'editor.action.openReplace',    label: 'Find and Replace',       keys: '⌘H' },
+  { id: 'editor.action.openReplace',    label: 'Find and Replace',       keys: '⌘⌥F' },
   { id: 'editor.action.formatDocument', label: 'Format Document',       keys: '⌥⇧F' },
   { id: 'editor.action.formatSelection',label: 'Format Selection',   keys: '⌘K ⌘F' },
   { id: 'workbench.action.toggleAIChat',         label: 'Toggle AI Chat',                   keys: '⌘⇧A / ⌃`' },
