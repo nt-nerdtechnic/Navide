@@ -147,7 +147,7 @@ onMounted(() => {
     <div
       ref="containerRef"
       class="xterm-host"
-      :class="{ 'drag-over': isDragOver }"
+      :class="{ 'drag-over': isDragOver, 'alt-buffer': terminal.isAltBuffer.value }"
       @dragover.prevent
       @dragenter.prevent="isDragOver = true"
       @dragleave="isDragOver = false"
@@ -320,5 +320,19 @@ onMounted(() => {
   font-size: 13px;
   font-family: inherit;
   pointer-events: none;
+}
+
+/* xterm.js Monaco scrollbar: keep a dim persistent cue for scroll position.
+   Slider color is set via ITheme at 30% white; container at 0.5 gives ~15%
+   effective opacity — visible as a faint strip on dark backgrounds. */
+.xterm-host :deep(.xterm-scrollable-element > .invisible) {
+  opacity: 0.5 !important;
+}
+
+/* In alt buffer (TUI apps like Claude Code), xterm has no scrollback so the
+   Monaco scrollbar thumb fills 100% of the track — visually a uniform gray
+   bar that conveys no useful position info. Hide it entirely in that mode. */
+.xterm-host.alt-buffer :deep(.xterm-scrollable-element > .scrollbar) {
+  display: none !important;
 }
 </style>

@@ -25,25 +25,36 @@ const DARK_ANSI = {
   white: '#b1bac4',   brightWhite: '#ffffff',
 }
 
+// Scrollbar slider colors applied directly to ITheme so Monaco's overlay
+// scrollbar is legible. Default (foreground @ 20%) is too faint on dark bg.
+const DARK_SCROLLBAR = {
+  scrollbarSliderBackground:       'rgba(255,255,255,0.30)',
+  scrollbarSliderHoverBackground:  'rgba(255,255,255,0.50)',
+  scrollbarSliderActiveBackground: 'rgba(255,255,255,0.65)',
+}
+
 const XTERM_THEMES: Record<string, ITheme> = {
   'dark-github': {
     background: '#0d1117', foreground: '#e6edf3',
     cursor: '#58a6ff', selectionBackground: 'rgba(56,139,253,0.35)',
-    ...DARK_ANSI,
+    ...DARK_ANSI, ...DARK_SCROLLBAR,
   },
   'dark-midnight': {
     background: '#0a0e14', foreground: '#c5d0e6',
     cursor: '#6cb0ff', selectionBackground: 'rgba(56,139,253,0.3)',
-    ...DARK_ANSI,
+    ...DARK_ANSI, ...DARK_SCROLLBAR,
   },
   'dark-forest': {
     background: '#0c130d', foreground: '#e9f2e7',
     cursor: '#6fc28a', selectionBackground: 'rgba(111,194,138,0.3)',
-    ...DARK_ANSI,
+    ...DARK_ANSI, ...DARK_SCROLLBAR,
   },
   'light': {
     background: '#ffffff', foreground: '#1f2328',
     cursor: '#0969da', selectionBackground: 'rgba(9,105,218,0.2)',
+    scrollbarSliderBackground:       'rgba(0,0,0,0.20)',
+    scrollbarSliderHoverBackground:  'rgba(0,0,0,0.35)',
+    scrollbarSliderActiveBackground: 'rgba(0,0,0,0.50)',
     black: '#1f2328',    brightBlack: '#59636e',
     red: '#cf222e',      brightRed: '#a40e26',
     green: '#1a7f37',    brightGreen: '#22863a',
@@ -58,6 +69,7 @@ const XTERM_THEMES: Record<string, ITheme> = {
     // pane's padding frame is seamless. White-on-#0a0c10 is still ~20:1 contrast.
     background: '#0a0c10', foreground: '#ffffff',
     cursor: '#71b7ff', selectionBackground: 'rgba(113,183,255,0.35)',
+    ...DARK_SCROLLBAR,
     black: '#686868',   brightBlack: '#a0a0a0',
     red: '#ff6b66',     brightRed: '#ff9a94',
     green: '#56d364',   brightGreen: '#7ee787',
@@ -102,6 +114,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cursorBlink: true,
     convertEol: false,
     scrollback: 10000,
+    // Auto-lift any low-contrast text (e.g. a TUI's dimmed/faint prompt that
+    // renders as near-background grey) to a readable foreground. We can't
+    // recolor a CLI's alt-buffer output directly, but this WCAG-AAA ratio forces
+    // xterm to nudge unreadable fg/bg pairs into legibility across all panes.
+    minimumContrastRatio: 7,
     theme: readXtermTheme()
   })
   const fit = new FitAddon()
@@ -112,6 +129,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const sessionId = ref<string>('')
   const error = ref<string>('')
   const lastCommand = ref<string>('')
+  const isAltBuffer = ref(false)
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -314,13 +332,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       const shrank = lastRedrawCols > 0 && term.cols < lastRedrawCols
       lastRedrawCols = term.cols
-      // On a width SHRINK, xterm reflows the CLI's old wide frames (past footers)
-      // into mangled narrow lines it never repaints over. Drop that scrollback so
-      // the SIGWINCH redraw below leaves only a clean current frame. Shrink-only:
-      // a GROW un-wraps cleanly, so we keep history there. (User-authorized
-      // 2026-06-23, retrying the previously-problematic clear now that resize is
-      // xterm-first — watch for Ink desync / unresponsive panes.)
-      if (shrank) term.clear()
+      // NOTE: we deliberately do NOT term.clear() on a width shrink. Wiping the
+      // scrollback drops the user's conversation history (and, on a rebuild/
+      // resume, the freshly reprinted transcript). Per user decision
+      // (2026-06-23): never clear history — accept any reflow residue, repaint
+      // the current frame via the SIGWINCH redraw below instead.
       // TEMP diagnostic (remove once resize is confirmed working).
       dbgLog(`redraw fire cols=${term.cols} rows=${term.rows} shrank=${shrank}`)
       void backend.send('terminal.redraw', {
@@ -340,6 +356,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const RECONCILE_MS = 2_000
   const reconcileInterval = window.setInterval(() => {
     if (!mounted) return
+    // Track alt buffer state so TerminalPane can hide the scrollbar in TUI mode.
+    isAltBuffer.value = term.buffer.active.type === 'alternate'
     // A spawn parked while hidden creates as soon as the pane is measurable.
     if (pendingSpawn.value) { void createWhenMeasurable(); return }
     if (!sessionId.value) return
@@ -475,6 +493,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // into arrow-key escape codes that navigate readline history.
     let scrollRemainder = 0
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
+      // Alternate buffer = TUI app (Claude Code, Codex, etc.) is active.
+      // The app has mouse tracking enabled and handles scroll internally —
+      // returning true lets xterm forward the event to the PTY natively,
+      // exactly as Cursor IDE does. Intercepting here would swallow the
+      // event with no visible effect (scrollLines is a no-op in alt buffer).
+      if (term.buffer.active.type === 'alternate') return true
+      // Main buffer: accumulate pixel-delta for smooth trackpad scrollback.
       // deltaY units depend on deltaMode: LINE → lines, PAGE → pages, PIXEL →
       // pixels. PAGE mode (some mice / accessibility settings) reports ~1 per
       // notch; without this branch it fell through to the pixel /3 path and
@@ -619,6 +644,30 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     try { return localStorage.getItem(ptyKey()) || '' } catch { return '' }
   }
 
+  // ── Scrollback snapshot ──────────────────────────────────────────────────────
+  // Rolling buffer of raw ANSI output, saved to localStorage so the user's
+  // terminal history survives a reload or restart. On next spawn of the same
+  // resumeKey, the snapshot is replayed into the fresh xterm instance before
+  // the new PTY starts writing — giving instant scrollback access to prior work.
+  const SCROLL_SNAP_MAX = 256 * 1024  // 256 KB rolling cap
+  let rawScrollBuffer = ''
+  function scrollSnapKey(): string { return `terminal-scroll:${persistKey}` }
+  function loadScrollSnapshot(): string {
+    try { return localStorage.getItem(scrollSnapKey()) ?? '' } catch { return '' }
+  }
+  function saveScrollSnapshot(): void {
+    try {
+      if (rawScrollBuffer) localStorage.setItem(scrollSnapKey(), rawScrollBuffer)
+      else localStorage.removeItem(scrollSnapKey())
+    } catch { /* quota exceeded — skip */ }
+  }
+  function appendToScrollBuffer(data: string): void {
+    rawScrollBuffer += data
+    if (rawScrollBuffer.length > SCROLL_SNAP_MAX) {
+      rawScrollBuffer = rawScrollBuffer.slice(-SCROLL_SNAP_MAX)
+    }
+  }
+
   // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
   // spawn and a reattach so both bind identically.
   function bindSessionHandlers(): void {
@@ -634,6 +683,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (payload.terminal_session_id !== sessionId.value) return
       term.write(payload.data)
       appendClean(payload.data)
+      appendToScrollBuffer(payload.data)
     })
 
     exitUnsub = backend.on('terminal.exit', (raw) => {
@@ -641,6 +691,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (payload.terminal_session_id !== sessionId.value) return
       status.value = 'exited'
       rememberSessionId('')  // the PTY is gone — don't try to reattach to it
+      // Session ended cleanly — discard its scrollback snapshot so a future
+      // pane with the same key doesn't see stale output from a closed session.
+      rawScrollBuffer = ''
+      try { localStorage.removeItem(scrollSnapKey()) } catch {}
       term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
       cleanupSession()
     })
@@ -668,13 +722,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
   }
 
-  // Reattach-to-live-PTY on reload is DISABLED. It repainted the running agent
-  // at the renderer's transient mid-reflow width, leaving panes stuck narrow.
-  // The backend now kills PTYs on disconnect, so a reload fresh-spawns with
-  // `<cli> --resume` (correct width, conversation restored from disk). The body
-  // below is kept so a future, width-safe version can be re-enabled by flipping
-  // this flag; the guard is typed `as boolean` so the body stays type-checked.
-  const REATTACH_ON_RELOAD = false as boolean
+  // Reattach-to-live-PTY on reload. The backend does NOT kill PTYs on WS
+  // disconnect (output is dropped but the process keeps running). A page reload
+  // or HMR cycle disconnects the WS briefly; when the renderer reconnects,
+  // tryReattach() finds the alive PTY and rebinds — no --resume round-trip, no
+  // conversation reprint. The width-narrow regression (original reason this was
+  // disabled) is fixed: we send cols/rows 0 and defer the force_redraw to the
+  // reconciler, which fires it only after the container width has settled.
+  const REATTACH_ON_RELOAD = true as boolean
 
   // Try to rebind to a PTY that survived a reload. Returns true if the backend
   // confirms the persisted id is still alive (and we've rebound); false if it's
@@ -700,6 +755,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     } catch {
       return false  // backend unreachable; let the caller decide (it will spawn)
     }
+    // PTY is alive — do NOT replay the snapshot here. The snapshot contains
+    // cursor-positioning escape codes written at the prior terminal width;
+    // replaying them into a fresh xterm (which may differ in width) garbles
+    // the TUI layout. The live PTY will repaint cleanly once the reconciler
+    // fires terminal.reattach with the settled cols/rows (~2 s). Snapshot
+    // replay is reserved for _doCreate (PTY dead, falls back to --resume).
     sessionId.value = prev
     status.value = 'running'
     bindSessionHandlers()
@@ -811,6 +872,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return
       }
       try { fit.fit() } catch { /* keep current size */ }
+    }
+    // Replay stored scrollback into the fresh xterm so prior history is visible
+    // before the new PTY starts writing. Only for resume spawns that have a saved
+    // snapshot — fresh spawns (no resumeKey) have no snapshot to replay.
+    if (opts.resumeKey) {
+      const snap = loadScrollSnapshot()
+      if (snap) {
+        term.write(snap)
+        rawScrollBuffer = snap  // seed the buffer so new output appends correctly
+        // The snapshot may end with the alternate screen active (\x1b[?1049h from
+        // a TUI that was running when the session was interrupted). Exit it now so
+        // the main-buffer scrollback is accessible and the separator lands there.
+        term.write('\x1b[?1049l')  // DECRST 1049: leave alternate screen
+        term.write('\r\n\x1b[2m\x1b[38;5;240m─── reconnected ───\x1b[0m\r\n')
+      }
     }
     try {
       const resp = await backend.send<{
@@ -934,6 +1010,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   }
 
   onScopeDispose(() => {
+    saveScrollSnapshot()  // persist scrollback before the pane is torn down
     cleanupSession()
     parserDisposers.forEach((d) => d.dispose())
     parserDisposers = []
@@ -946,15 +1023,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     term.dispose()
-    if (sessionId.value) {
-      // Scope dispose = the pane was closed (NOT a reload — a hard reload tears
-      // down the JS without running this). The PTY should die with it, so clear
-      // the persisted id too or a future pane could reattach to a killed id.
-      rememberSessionId('')
-      void backend.send('terminal.kill', { terminal_session_id: sessionId.value }).catch(() => {
-        /* ignore */
-      })
-    }
+    // PTY is intentionally NOT killed here. The backend keeps PTYs running
+    // after a WS disconnect so that tryReattach() can rebind after a page
+    // reload or HMR cycle. Explicit kills are handled by kill() (user-initiated
+    // pane removal). The backend terminates all PTYs when the app quits
+    // (backend process exit). The persisted session id is kept so that
+    // tryReattach() can locate the alive PTY on the next mount.
   })
 
   return {
@@ -976,6 +1050,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     lastRawActivityAt,
     markBufferPosition,
     recleanBuffer,
-    updateXtermTheme
+    updateXtermTheme,
+    isAltBuffer,
   }
 }

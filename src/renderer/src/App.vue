@@ -481,7 +481,26 @@ interface SpawnHistoryEntry {
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
 const persistedPaneSessions = new Set<string>()
-const spawnHistory = ref<SpawnHistoryEntry[]>([])
+const SPAWN_HISTORY_KEY = 'agentTeam.spawnHistory'
+const MAX_SPAWN_HISTORY = 100
+
+function loadSpawnHistory(): SpawnHistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(SPAWN_HISTORY_KEY)
+    if (!raw) return []
+    return (JSON.parse(raw) as SpawnHistoryEntry[]).slice(-MAX_SPAWN_HISTORY)
+  } catch {
+    return []
+  }
+}
+
+const spawnHistory = ref<SpawnHistoryEntry[]>(loadSpawnHistory())
+
+watch(spawnHistory, (v) => {
+  try {
+    localStorage.setItem(SPAWN_HISTORY_KEY, JSON.stringify(v.slice(-MAX_SPAWN_HISTORY)))
+  } catch {}
+}, { deep: true })
 
 function setPaneRef(id: string, el: unknown): void {
   paneRefs[id] = (el as InstanceType<typeof TerminalPane> | null) ?? null
@@ -5272,6 +5291,7 @@ function paneIsCommander(p: ActivePane): boolean {
       v-model:analyzer-model="analyzerModel"
       v-model:auto-answer-enabled="autoAnswerEnabled"
       :spawn-history="spawnHistory"
+      :focus-pane-id="effectiveFocusPaneId ?? undefined"
       @spawn="onManualSpawn"
       @spawn-resume="onManualResume"
       @kill="onKill"
@@ -6560,6 +6580,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .agent-history-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
 }

@@ -9906,7 +9906,8 @@ async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
 const dragOverChat = ref(false)
 function onChatDragOver(e: DragEvent): void {
   const hasFile = Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === 'file')
-  if (hasFile) { e.preventDefault(); dragOverChat.value = true }
+  const hasPath = !_chipDragId && (e.dataTransfer?.types ?? []).includes('text/plain')
+  if (hasFile || hasPath) { e.preventDefault(); dragOverChat.value = true }
 }
 function onChatDragLeave(e: DragEvent): void {
   if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
@@ -9916,13 +9917,14 @@ function onChatDragLeave(e: DragEvent): void {
 async function onChatDrop(e: DragEvent): Promise<void> {
   dragOverChat.value = false
   e.preventDefault()
+  const getPath = window.agentTeam?.getPathForFile
   const files = Array.from(e.dataTransfer?.files ?? [])
   for (const file of files) {
     if (file.type.startsWith('image/')) {
       _addImageFile(file)
       continue
     }
-    const filePath = (file as File & { path?: string }).path
+    const filePath = getPath ? getPath(file) : ''
     const wsRoot = props.workspacePath ? props.workspacePath.replace(/\/$/, '') : ''
     const relPath = filePath && wsRoot && (filePath === wsRoot || filePath.startsWith(wsRoot + '/'))
       ? filePath.slice(wsRoot.length).replace(/^\//, '')
@@ -9941,6 +9943,39 @@ async function onChatDrop(e: DragEvent): Promise<void> {
       })
     } catch {
       showToast(`Could not read: ${file.name}`)
+    }
+  }
+  // Handle in-app text/plain path drags (ExplorerPane, GitPane file rows)
+  if (!files.length && !_chipDragId) {
+    const text = e.dataTransfer?.getData('text/plain') ?? ''
+    const paths = text ? text.split('\n').map((p) => p.trim()).filter(Boolean) : []
+    const wsRoot = props.workspacePath ? props.workspacePath.replace(/\/$/, '') : ''
+    for (const absPath of paths.slice(0, 5)) {
+      const fileName = absPath.split('/').pop() ?? absPath
+      const relPath = wsRoot && (absPath === wsRoot || absPath.startsWith(wsRoot + '/'))
+        ? absPath.slice(wsRoot.length).replace(/^\//, '')
+        : absPath
+      const chipLabel = `@${fileName}`
+      if (contextChips.value.some((c) => c.label === chipLabel)) continue
+      try {
+        interface ReadResp { ok: boolean; content?: string }
+        const resp = await props.backend.send<ReadResp>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: relPath,
+        })
+        if (!resp.payload?.ok) { showToast(`Could not read: ${fileName}`); continue }
+        const content = resp.payload?.content ?? ''
+        const MAX = 80_000
+        const truncated = content.length > MAX ? content.slice(0, MAX) + '\n// … truncated' : content
+        const ext = fileName.split('.').pop() ?? ''
+        contextChips.value.push({
+          id: crypto.randomUUID(),
+          label: chipLabel,
+          content: `// File: ${relPath}\n\`\`\`${ext}\n${truncated}\n\`\`\``,
+        })
+      } catch {
+        showToast(`Could not read: ${fileName}`)
+      }
     }
   }
 }

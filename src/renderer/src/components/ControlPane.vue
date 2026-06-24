@@ -160,6 +160,8 @@ interface Props {
   backend?: ReturnType<typeof useBackend>
   /** Past spawns (incl. backend-backfilled manual panes) for the resume datalist. */
   spawnHistory?: ResumeHistoryEntry[]
+  /** The currently focused pane id — highlights the matching agent-item. */
+  focusPaneId?: string
 }
 
 const props = defineProps<Props>()
@@ -850,7 +852,7 @@ function onPipelineDividerEnd(): void {
       </div>
       <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
       <ul v-else class="agent-list">
-        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized }">
+        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId }">
           <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
@@ -1916,6 +1918,11 @@ button.icon-btn.muted:hover {
 .agent-item.manager {
   border-color: var(--attention-muted);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--manager-fg) 15%, transparent) inset;
+}
+.agent-item--focus {
+  border-color: var(--accent-focus);
+  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-subtle));
+  box-shadow: 0 0 0 2px var(--accent-focus);
 }
 .agent-line {
   display: flex;

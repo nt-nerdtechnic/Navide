@@ -824,6 +824,31 @@ async function doMergeInto(target: string): Promise<void> {
   }
 }
 
+async function doMergeIntoAndPush(target: string): Promise<void> {
+  mergeError.value = ''; mergeOutput.value = ''
+  ctxMenu.value.show = false
+  let mergeResult: { ok: boolean; conflict_files?: string[]; source_branch?: string; error?: string }
+  try {
+    mergeResult = await mergeInto(target)
+  } catch (err) {
+    mergeError.value = err instanceof Error ? err.message : 'merge failed'
+    return
+  }
+  if (!mergeResult.ok) {
+    if ((mergeResult.conflict_files ?? []).length > 0) {
+      mergeConflictContext.value = `Switched to ${target}, conflict occurred while merging ${mergeResult.source_branch || ''}`
+    }
+    _handleMergeResult(mergeResult)
+    return
+  }
+  await runRemote('push', async () => {
+    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    const r = await pushOnly('', target)
+    remoteOutput.value = r.output; remoteError.value = r.error
+    showRemoteOutput.value = !!(r.output || r.error)
+  })
+}
+
 async function doConflictAbort(): Promise<void> {
   const r = await abortOperation('merge')
   if (!r.ok) notifyToast(r.error || 'Abort failed', { type: 'error' })
@@ -1508,6 +1533,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <div
                 class="file-row" :style="treeIndent(row.depth)"
                 :class="{ 'row-conflict': row.file!.status === 'U', 'row-selected': selectedKeys.has('staged:' + row.file!.path) }"
+                draggable="true"
+                @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.file!.path))"
                 @click.stop="handleFileRowClick($event, row.file!.path, true)"
                 @contextmenu="openCtxMenu($event, row.file!, true)"
               >
@@ -1555,6 +1582,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <div
               class="file-row"
               :class="{ 'row-conflict': f.status === 'U', 'row-selected': selectedKeys.has('staged:' + f.path) }"
+              draggable="true"
+              @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(f.path))"
               @click.stop="handleFileRowClick($event, f.path, true)"
               @contextmenu="openCtxMenu($event, f, true)"
             >
@@ -1677,6 +1706,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div
                   class="file-row" :style="treeIndent(row.depth)"
                   :class="{ 'row-selected': selectedKeys.has('changes:' + row.file!.path) }"
+                  draggable="true"
+                  @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.file!.path))"
                   @click.stop="handleFileRowClick($event, row.file!.path, false)"
                   @contextmenu="openCtxMenu($event, row.file!, false)"
                 >
@@ -1719,6 +1750,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <div
                 class="file-row"
                 :class="{ 'row-selected': selectedKeys.has('changes:' + f.path) }"
+                draggable="true"
+                @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(f.path))"
                 @click.stop="handleFileRowClick($event, f.path, false)"
                 @contextmenu="openCtxMenu($event, f, false)"
               >
@@ -2308,6 +2341,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- Branch menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'branch'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="doMergeInto(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }}</button>
+        <button class="menu-item" @click="doMergeIntoAndPush(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }} &amp; push</button>
         <div class="menu-sep" />
         <button class="menu-item danger" @click="ctxDeleteBranch">Delete Branch</button>
       </div>
