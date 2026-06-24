@@ -359,8 +359,11 @@ watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /
 const SIDEBAR_TABS: SidebarTab[] = ['explorer', 'pipeline', 'git']
 function onSidebarTabShortcut(e: KeyboardEvent): void {
   if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+  // e.key is 'Meta' on the bare Cmd keydown — parseInt → NaN, which slips past
+  // the range check below (NaN comparisons are always false) and would blank the
+  // panel via SIDEBAR_TABS[NaN] === undefined. Guard the NaN explicitly.
   const idx = parseInt(e.key) - 1
-  if (idx < 0 || idx >= SIDEBAR_TABS.length) return
+  if (Number.isNaN(idx) || idx < 0 || idx >= SIDEBAR_TABS.length) return
   const el = document.activeElement as HTMLElement | null
   const tag = el?.tagName ?? ''
   // Allow from xterm helper textarea; block from other inputs and contenteditable
