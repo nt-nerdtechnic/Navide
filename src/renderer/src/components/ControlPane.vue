@@ -9,11 +9,10 @@ import type { Stage, StageId } from '../data/stages'
 import type { IssueDetail } from '../composables/useIssues'
 import { registerCommand } from '../keybindings/useKeybindings'
 
-// GitPane (~276KB) lives behind the Git tab; load it async so it's off the main
-// window's first-paint path. Kept v-show (not v-if) so its changes-count badge
-// stays live while the Explorer tab is showing. ExplorerPane is the default tab
-// → kept static.
-const GitPane = defineAsyncComponent(() => import('./GitPane.vue'))
+// MultiRepoGit wraps GitPane and adds a repo tab bar when 2+ repos are found.
+// Loaded async (same reasoning as GitPane: ~276KB, off first-paint path).
+// Kept v-show (not v-if) so its changes-count badge stays live while Explorer tab is showing.
+const MultiRepoGit = defineAsyncComponent(() => import('./MultiRepoGit.vue'))
 
 export interface AgentSpec {
   agentKey: string
@@ -738,7 +737,7 @@ function onPipelineDividerEnd(): void {
           :workspace-path="workspace ?? ''"
           :backend="backend"
         />
-        <GitPane
+        <MultiRepoGit
           v-if="backend"
           v-show="sidebarTab === 'git'"
           :workspace-path="workspace ?? ''"

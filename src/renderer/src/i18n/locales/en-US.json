@@ -374,6 +374,7 @@
     "connect-remote-hint": "Merge the current directory with a remote repo (no separate folder selection needed)",
     "nested-repos-title": "Found {n} Git repo(s) in subfolders",
     "nested-repos-hint": "Open one to manage it in the Git panel",
+    "git-repo-root": "⌂",
     "repo-url-placeholder": "Repository URL (https://… or git{'@'}…)",
     "connecting": "Connecting…",
     "committing": "Committing…",

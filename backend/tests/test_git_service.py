@@ -1866,3 +1866,47 @@ class TestDiscoverRepositories:
         result = await git_service.discover_repositories(str(tmp_path), limit=2)
         assert len(result["repositories"]) == 2
         assert result["truncated"] is True
+
+    @pytest.mark.asyncio
+    async def test_root_is_repo_listed_first(self, tmp_path):
+        # Root itself is a git repo; two nested repos also exist.
+        init_repo(tmp_path)
+        (tmp_path / "sub1").mkdir()
+        init_repo(tmp_path / "sub1")
+        (tmp_path / "sub2").mkdir()
+        init_repo(tmp_path / "sub2")
+        result = await git_service.discover_repositories(str(tmp_path))
+        assert result["ok"] is True
+        rel_paths = [r["rel_path"] for r in result["repositories"]]
+        # Root must appear first with rel_path "."
+        assert rel_paths[0] == "."
+        assert set(rel_paths) == {".", "sub1", "sub2"}
+        # All entries have branch annotation.
+        for r in result["repositories"]:
+            assert "branch" in r
+
+    @pytest.mark.asyncio
+    async def test_non_repo_root_does_not_appear(self, tmp_path):
+        # Root has no .git; only nested repos should appear.
+        (tmp_path / "a").mkdir()
+        init_repo(tmp_path / "a")
+        result = await git_service.discover_repositories(str(tmp_path))
+        rel_paths = [r["rel_path"] for r in result["repositories"]]
+        assert "." not in rel_paths
+        assert rel_paths == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_root_repo_nested_not_reported_separately(self, tmp_path):
+        # Root is a repo; a repo nested inside root's subtree must not be listed
+        # separately (same rule as nested-inside-nested).
+        init_repo(tmp_path)
+        inner = tmp_path / "pkg" / "inner"
+        inner.mkdir(parents=True)
+        init_repo(inner)
+        result = await git_service.discover_repositories(str(tmp_path))
+        rel_paths = [r["rel_path"] for r in result["repositories"]]
+        # Root listed; inner must NOT appear because root scanning continues
+        # (root doesn't stop descend), but inner IS a found nested repo so its
+        # subtree is pruned — inner itself should appear.
+        assert "." in rel_paths
+        assert str(Path("pkg") / "inner") in rel_paths

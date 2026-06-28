@@ -19,6 +19,9 @@ const props = defineProps<{
   // Running agent panes an issue can be dispatched to. Empty (e.g. editor
   // window) hides the "Dispatch to Agent" control.
   dispatchTargets?: { id: string; label: string }[]
+  // When true, hides the "Found N repos in subfolders" list (used by MultiRepoGit
+  // which already shows those repos as tabs).
+  hideDiscoveredRepos?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -1329,7 +1332,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
 
       <!-- Nested repos found by scanning downward (git rev-parse only looks up) -->
-      <div v-if="discoveredRepos.length" class="discovered-box">
+      <div v-if="discoveredRepos.length && !props.hideDiscoveredRepos" class="discovered-box">
         <div class="clone-title">{{ $t('label.nested-repos-title', { n: discoveredRepos.length }) }}</div>
         <div class="clone-hint">{{ $t('label.nested-repos-hint') }}</div>
         <button

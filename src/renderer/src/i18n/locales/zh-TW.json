@@ -374,6 +374,7 @@
     "connect-remote-hint": "與遠端儲存庫合併目前目錄（不需要另外選取資料夾）",
     "nested-repos-title": "在子資料夾中找到 {n} 個 Git 儲存庫",
     "nested-repos-hint": "開啟其中一個即可在 Git 面板中管理",
+    "git-repo-root": "⌂",
     "repo-url-placeholder": "儲存庫 URL（https://… 或 git{'@'}…）",
     "connecting": "連接中…",
     "committing": "提交中…",

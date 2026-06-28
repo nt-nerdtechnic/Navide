@@ -1,0 +1,297 @@
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue'
+import { defineAsyncComponent } from 'vue'
+import type { useBackend } from '../composables/useBackend'
+import type { IssueDetail } from '../composables/useIssues'
+import { useRepoDiscovery } from '../composables/useRepoDiscovery'
+import { useI18n } from 'vue-i18n'
+
+const GitPane = defineAsyncComponent(() => import('./GitPane.vue'))
+
+const props = defineProps<{
+  workspacePath: string
+  analyzerModel?: string
+  backend: ReturnType<typeof useBackend>
+  embedded?: boolean
+  dispatchTargets?: { id: string; label: string }[]
+}>()
+
+const emit = defineEmits<{
+  (e: 'changes-count', n: number): void
+  (e: 'open-workspace', path: string): void
+  (e: 'open-file', payload: { filepath: string; name: string }): void
+  (e: 'open-conflict', payload: { filepath: string; name: string }): void
+  (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string }): void
+  (e: 'open-branch-diff', payload: { base: string; compare: string }): void
+  (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
+}>()
+
+const { t } = useI18n()
+
+const { repositories } = useRepoDiscovery(() => props.workspacePath, props.backend)
+
+// When root is not a git repo, inject it as the first tab so init/connect features remain accessible.
+const allTabs = computed(() => {
+  const repos = repositories.value
+  const rootIncluded = repos.some((r) => r.rel_path === '.')
+  if (rootIncluded || !props.workspacePath) return repos
+  return [
+    { rel_path: '.', abs_path: props.workspacePath, branch: '', badge: { branch: '', dirtyCount: 0 } },
+    ...repos,
+  ]
+})
+
+// Multi-repo mode when >=2 repos discovered.
+const isMulti = computed(() => allTabs.value.length >= 2)
+
+// --- Single-repo mode: forward changes-count directly ---
+const singleChangesCount = ref(0)
+watch(singleChangesCount, (n) => {
+  if (!isMulti.value) emit('changes-count', n)
+})
+
+// --- Multi-repo mode ---
+const STORAGE_PREFIX = 'agentTeam.gitTabRepo.'
+
+function storageKey(): string {
+  return STORAGE_PREFIX + props.workspacePath
+}
+
+// Active tab: abs_path of the selected repo.
+const activeRepo = ref<string>('')
+
+// Track which tabs have been mounted at least once (lazy-mount).
+const mounted = ref<Set<string>>(new Set())
+
+// Per-repo changes count (keyed by abs_path).
+const repoChangesCounts = ref<Record<string, number>>({})
+
+const totalChangesCount = computed(() =>
+  Object.values(repoChangesCounts.value).reduce((s, n) => s + n, 0),
+)
+
+watch(totalChangesCount, (n) => {
+  if (isMulti.value) emit('changes-count', n)
+})
+
+// When tab list changes, ensure activeRepo is valid.
+watch(
+  allTabs,
+  (tabs) => {
+    if (tabs.length === 0) return
+
+    // Try to restore from localStorage.
+    let saved: string | null = null
+    try { saved = localStorage.getItem(storageKey()) } catch { /* ignore */ }
+
+    const validSaved = saved && tabs.some((r) => r.abs_path === saved)
+    if (validSaved) {
+      activeRepo.value = saved!
+    } else if (!tabs.some((r) => r.abs_path === activeRepo.value)) {
+      activeRepo.value = tabs[0].abs_path
+    }
+
+    // Ensure active tab is mounted.
+    if (activeRepo.value) mounted.value.add(activeRepo.value)
+  },
+  { immediate: true },
+)
+
+function selectTab(absPath: string): void {
+  activeRepo.value = absPath
+  mounted.value.add(absPath)
+  try { localStorage.setItem(storageKey(), absPath) } catch { /* ignore */ }
+}
+
+function repoLabel(relPath: string): string {
+  if (relPath === '.') return t('label.git-repo-root')
+  // Use the last path segment as the short name.
+  return relPath.split('/').filter(Boolean).pop() ?? relPath
+}
+</script>
+
+<template>
+  <!-- Single-repo (or 0 repo): transparent passthrough to GitPane -->
+  <GitPane
+    v-if="!isMulti"
+    :workspace-path="workspacePath"
+    :analyzer-model="analyzerModel"
+    :backend="backend"
+    :embedded="embedded"
+    :dispatch-targets="dispatchTargets"
+    @changes-count="singleChangesCount = $event; $emit('changes-count', $event)"
+    @open-workspace="$emit('open-workspace', $event)"
+    @open-file="$emit('open-file', $event)"
+    @open-conflict="$emit('open-conflict', $event)"
+    @open-diff="$emit('open-diff', $event)"
+    @open-branch-diff="$emit('open-branch-diff', $event)"
+    @dispatch-issue="$emit('dispatch-issue', $event)"
+  />
+
+
+  <!-- Multi-repo: tab bar + active GitPane -->
+  <div v-else class="multi-repo-root">
+    <!-- Tab bar -->
+    <div class="repo-tab-bar">
+      <button
+        v-for="repo in allTabs"
+        :key="repo.abs_path"
+        :class="['repo-tab', { active: activeRepo === repo.abs_path }]"
+        :title="repo.abs_path"
+        @click="selectTab(repo.abs_path)"
+      >
+        <span class="repo-tab-name">{{ repoLabel(repo.rel_path) }}</span>
+        <span v-if="repo.badge.branch || repo.badge.dirtyCount > 0" class="repo-tab-row2">
+          <span v-if="repo.badge.branch" class="repo-tab-branch">
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;opacity:0.7">
+              <path d="M11.75 2.5a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm.75 2.728a2.25 2.25 0 1 1 0-4.456 2.25 2.25 0 0 1 0 4.456zM2.75 13.5a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm.75 2.25a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5zM3.5 7.25A2.25 2.25 0 0 1 5.728 5h4.544a2.25 2.25 0 0 1 2.228 1.952V9.5a.75.75 0 0 1-1.5 0V6.952A.75.75 0 0 0 10.272 6.5H5.728a.75.75 0 0 0-.728.75V9.5a.75.75 0 0 1-1.5 0V7.25z"/>
+            </svg>
+            {{ repo.badge.branch }}
+          </span>
+          <span v-if="repo.badge.dirtyCount > 0" class="repo-tab-badge">
+            {{ repo.badge.dirtyCount > 99 ? '99+' : repo.badge.dirtyCount }}
+          </span>
+        </span>
+      </button>
+    </div>
+
+    <!-- One GitPane per repo; lazy-mount on first visit, v-show after -->
+    <div class="repo-pane-area">
+      <template v-for="repo in allTabs" :key="repo.abs_path">
+        <GitPane
+          v-if="mounted.has(repo.abs_path)"
+          v-show="activeRepo === repo.abs_path"
+          :workspace-path="repo.abs_path"
+          :analyzer-model="analyzerModel"
+          :backend="backend"
+          :embedded="embedded"
+          :dispatch-targets="dispatchTargets"
+          :hide-discovered-repos="true"
+          @changes-count="repoChangesCounts[repo.abs_path] = $event"
+          @open-workspace="$emit('open-workspace', $event)"
+          @open-file="$emit('open-file', $event)"
+          @open-conflict="$emit('open-conflict', $event)"
+          @open-diff="$emit('open-diff', $event)"
+          @open-branch-diff="$emit('open-branch-diff', $event)"
+          @dispatch-issue="$emit('dispatch-issue', $event)"
+        />
+      </template>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.multi-repo-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── Tab bar ─────────────────────────────────────────── */
+.repo-tab-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border-muted);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+  background: var(--bg-base);
+}
+.repo-tab-bar::-webkit-scrollbar { display: none; }
+
+.repo-tab {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 5px 11px 6px;
+  height: 42px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-muted);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  margin-bottom: -1px;
+  position: relative;
+}
+.repo-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-muted);
+}
+.repo-tab.active {
+  color: var(--text-bright);
+  background: var(--bg-base);
+  border-color: var(--border-muted);
+  border-bottom-color: var(--bg-base);
+  z-index: 1;
+}
+
+.repo-tab-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+}
+
+/* Second row: branch left, badge right — both inline */
+.repo-tab-row2 {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.repo-tab-branch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.85;
+  line-height: 1;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-tab.active .repo-tab-branch {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+
+.repo-tab-badge {
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--attention-fg);
+  color: var(--bg-base);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 999px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ── Pane area ───────────────────────────────────────── */
+.repo-pane-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+.repo-pane-area > * {
+  position: absolute;
+  inset: 0;
+}
+</style>

@@ -246,13 +246,17 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
 async def discover_repositories(
     workspace_path: str, max_depth: int = 3, limit: int = 20
 ) -> dict[str, Any]:
-    """Scan *workspace_path* downward for nested git repositories.
+    """Scan *workspace_path* for git repositories, including the root itself.
 
-    ``git rev-parse`` only searches UPWARD, so a non-repo root with child repos
-    (e.g. a monorepo-of-repos or a projects folder) shows nothing. This walks the
-    tree itself — bounded by *max_depth* and *limit*, skipping noise dirs — and
-    returns each nested repo root. A directory is a repo root when it contains a
-    ``.git`` entry (dir or file; worktrees/submodules use a ``.git`` file).
+    ``git rev-parse`` only searches UPWARD, so nested repos inside a projects
+    folder go undetected. This walks the tree — bounded by *max_depth* and
+    *limit*, skipping noise dirs — and returns every repo root found. A directory
+    is a repo root when it contains a ``.git`` entry (dir or file; worktrees and
+    submodules use a ``.git`` file).
+
+    The root is always checked first. If it is itself a repo it is listed as
+    ``rel_path: "."`` and scanning continues into its subtree to find nested repos.
+    Nested found repos are not descended into further.
     """
     from .fs_service import _NOISE_SEGMENTS
 
@@ -266,11 +270,12 @@ async def discover_repositories(
         dirnames[:] = [d for d in dirnames if d not in _NOISE_SEGMENTS and not d.startswith(".")]
         here = Path(dirpath)
         depth = len(here.relative_to(root).parts)
-        # The root itself can't be a repo (we'd not be discovering otherwise);
-        # check depth >= 1 dirs for a `.git` entry.
-        if depth >= 1 and (here / ".git").exists():
-            repos.append({"rel_path": str(here.relative_to(root)), "abs_path": str(here)})
-            dirnames[:] = []  # don't descend into a found repo's subtree
+        if (here / ".git").exists():
+            rel = "." if depth == 0 else str(here.relative_to(root))
+            repos.append({"rel_path": rel, "abs_path": str(here)})
+            if depth > 0:
+                # Don't descend into a nested repo's subtree.
+                dirnames[:] = []
             if len(repos) >= limit:
                 truncated = True
                 break
