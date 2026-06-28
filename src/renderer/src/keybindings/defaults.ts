@@ -141,6 +141,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+e', command: 'workbench.action.focusExplorer' },
   { key: 'cmd+shift+r', command: 'workbench.action.focusPipeline' },
   { key: 'cmd+shift+g', command: 'workbench.action.focusSourceControl', when: '!findOpen' },
+  { key: 'cmd+shift+i', command: 'workbench.action.openMiniIDE' },
 
   // ── Editor tabs ──────────────────────────────────────────────────────────────
   { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },

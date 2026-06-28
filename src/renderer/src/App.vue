@@ -1708,6 +1708,11 @@ registerCommand('workbench.action.findInFiles', async () => {
     await api.openEditorWindow({ workspace_path: currentWorkspace.value, sidebar: 'search' })
   }
 })
+registerCommand('workbench.action.openMiniIDE', async () => {
+  if (currentWorkspace.value) {
+    await window.agentTeam?.openEditorWindow({ workspace_path: currentWorkspace.value })
+  }
+})
 watch([showSettings, showCompletionModal], ([s, c]) => setContext('modalOpen', s || c))
 
 function onFocusPane(paneId: string): void {

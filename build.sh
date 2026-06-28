@@ -42,6 +42,11 @@ if [ "$NEW" != "$CURRENT" ]; then
   # Sync backend/pyproject.toml
   sed -i '' "s/^version = \".*\"/version = \"$NEW\"/" backend/pyproject.toml
   echo "Synced all version files to $NEW"
+  # Commit and tag
+  git add package.json backend/agent_team_backend/__init__.py backend/pyproject.toml
+  git commit -m "chore: bump version to $NEW"
+  git tag "v$NEW"
+  echo "Tagged: v$NEW"
 fi
 
 echo ""
