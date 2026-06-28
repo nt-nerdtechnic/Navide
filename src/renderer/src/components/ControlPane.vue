@@ -715,14 +715,14 @@ function onPipelineDividerEnd(): void {
   <aside class="sidebar">
     <!-- ── Top-level tab nav (icon style, Cursor-like) ────────────────────── -->
     <div class="sidebar-tabs">
-      <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer" @click="selectSidebarTab('explorer')">
+      <button :class="['tab-btn', { active: sidebarTab === 'explorer' }]" title="Explorer (⌘1)" @click="selectSidebarTab('explorer')">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
       </button>
 
-      <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline" @click="selectSidebarTab('pipeline')">
+      <button :class="['tab-btn', { active: sidebarTab === 'pipeline' }]" title="Pipeline (⌘2)" @click="selectSidebarTab('pipeline')">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
       </button>
-      <button :class="['tab-btn', { active: sidebarTab === 'git' }]" title="Git" @click="selectSidebarTab('git')">
+      <button :class="['tab-btn', { active: sidebarTab === 'git' }]" title="Git (⌘3)" @click="selectSidebarTab('git')">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
       </button>
