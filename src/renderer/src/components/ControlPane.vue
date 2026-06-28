@@ -975,7 +975,7 @@ function onPipelineDividerEnd(): void {
               <button class="link" @click="previewOpen = !previewOpen">
                 {{ previewOpen ? '▾' : '▸' }} {{ currentRole.label }} system prompt
               </button>
-              <button class="link tiny" @click="emit('open-settings')" :title="$t('action.settings')">
+              <button class="link tiny" @click="emit('open-settings')" :title="$t('action.settings') + ' (⌘,)'">
                 ⚙ {{ $t('action.settings') }}
               </button>
             </div>
