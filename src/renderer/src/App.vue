@@ -1630,8 +1630,32 @@ const pipeline = reactive<PipelineRun>({
 
 const showCompletionModal = ref(false)
 const showSettings = ref(false)
+const showKbPanel = ref(false)
+const kbQueryMain = ref('')
 const showHistory = ref(false)
 const confirmKillAll = ref(false)
+
+// ── Keyboard Shortcuts Panel ──────────────────────────────────────────────────
+const MAIN_SHORTCUTS = [
+  { label: 'Open Settings',              keys: '⌘,' },
+  { label: 'Open Mini IDE',              keys: '⌘⇧I' },
+  { label: 'Find in Files',             keys: '⌘⇧F' },
+  { label: 'Show Keyboard Shortcuts',   keys: '⌘K ⌘S' },
+  { label: 'New Main Window',           keys: '⌘⇧N' },
+  { label: 'Toggle AI Chat',            keys: '⌘⇧A / ⌘J' },
+  { label: 'Show Explorer',             keys: '⌘⇧E' },
+  { label: 'Show Pipeline',             keys: '⌘⇧R' },
+  { label: 'Show Source Control',       keys: '⌘⇧G' },
+  { label: 'Toggle Sidebar',            keys: '⌘B' },
+  { label: 'Sidebar: Explorer Tab',     keys: '⌘1' },
+  { label: 'Sidebar: Pipeline Tab',     keys: '⌘2' },
+  { label: 'Sidebar: Git Tab',          keys: '⌘3' },
+  { label: 'Close Modal / Escape',      keys: 'Esc' },
+]
+const kbMainItems = computed(() => {
+  const q = kbQueryMain.value.toLowerCase()
+  return q ? MAIN_SHORTCUTS.filter(s => s.label.toLowerCase().includes(q) || s.keys.toLowerCase().includes(q)) : MAIN_SHORTCUTS
+})
 
 // ── Titlebar & Status Bar ─────────────────────────────────────────────────────
 const workspaceBaseName = computed(() => {
@@ -1700,7 +1724,12 @@ registerCommand('workbench.action.newWindow', async () => {
 registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
 registerCommand('workbench.action.closeModal', () => {
   if (showSettings.value) showSettings.value = false
+  else if (showKbPanel.value) showKbPanel.value = false
   else if (showCompletionModal.value) showCompletionModal.value = false
+})
+registerCommand('workbench.action.openKeyboardShortcuts', () => {
+  showKbPanel.value = true
+  kbQueryMain.value = ''
 })
 registerCommand('workbench.action.findInFiles', async () => {
   const api = (window as Window & { agentTeam?: { openEditorWindow?: (args: { workspace_path: string; sidebar: 'search' }) => Promise<{ ok: boolean }> } }).agentTeam
@@ -1713,7 +1742,7 @@ registerCommand('workbench.action.openMiniIDE', async () => {
     await window.agentTeam?.openEditorWindow({ workspace_path: currentWorkspace.value })
   }
 })
-watch([showSettings, showCompletionModal], ([s, c]) => setContext('modalOpen', s || c))
+watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c))
 
 function onFocusPane(paneId: string): void {
   focusPaneId.value = paneId
@@ -5400,6 +5429,27 @@ function paneIsCommander(p: ActivePane): boolean {
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
     />
+    <div v-if="showKbPanel" class="kb-overlay" @mousedown.self="showKbPanel = false">
+      <div class="kb-panel">
+        <div class="kb-panel-header">
+          <span class="kb-panel-title">Keyboard Shortcuts</span>
+          <button class="kb-panel-close" @click="showKbPanel = false">✕</button>
+        </div>
+        <input
+          v-model="kbQueryMain"
+          class="kb-panel-search"
+          placeholder="Search shortcuts…"
+          autofocus
+          @keydown.esc.stop="showKbPanel = false"
+        />
+        <ul class="kb-panel-list">
+          <li v-for="s in kbMainItems" :key="s.label" class="kb-panel-item">
+            <span class="kb-panel-label">{{ s.label }}</span>
+            <span class="kb-panel-key">{{ s.keys }}</span>
+          </li>
+        </ul>
+      </div>
+    </div>
     <Teleport v-if="showHistory" to="body">
       <div class="history-overlay" @click.self="showHistory = false">
         <div class="history-modal">
@@ -5965,6 +6015,86 @@ function paneIsCommander(p: ActivePane): boolean {
 .titlebar-gear:hover {
   background: var(--bg-hover);
   color: var(--text-bright);
+}
+
+/* ── Keyboard Shortcuts Panel ────────────────────────────────────────────────── */
+.kb-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  justify-content: center;
+  padding-top: 80px;
+}
+.kb-panel {
+  width: 560px;
+  max-height: 520px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-overlay, var(--bg-inset));
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+}
+.kb-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 0;
+}
+.kb-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.kb-panel-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.kb-panel-close:hover { background: var(--bg-hover); color: var(--text-bright); }
+.kb-panel-search {
+  margin: 10px 12px;
+  padding: 6px 12px;
+  font-size: 13px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  color: var(--text-primary);
+  outline: none;
+}
+.kb-panel-search:focus { border-color: var(--border-focus, #4a90d9); }
+.kb-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+.kb-panel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  font-size: 13px;
+}
+.kb-panel-item:hover { background: var(--bg-hover); }
+.kb-panel-label { color: var(--text-primary); }
+.kb-panel-key {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
 }
 
 /* ── Status Bar ──────────────────────────────────────────────────────────────── */

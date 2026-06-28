@@ -24,6 +24,7 @@ import { allDiagnosticsSorted, setDiagnostics } from './editor/diagnostics'
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
+const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
 const initialRel = params.get('filepath') ?? ''
 const initialName = params.get('name') ?? (initialRel.split('/').pop() || initialRel)
 const initialLine = Number(params.get('line')) || 0
@@ -1605,6 +1606,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 
 <template>
   <div class="ide">
+    <!-- Titlebar -->
+    <div v-show="!zenMode" class="ide-titlebar">
+      <span class="ide-titlebar-name">{{ workspaceBaseName }}</span>
+    </div>
+    <div class="ide-body">
     <!-- Activity bar -->
     <div v-show="!zenMode" class="ide-activity">
       <button
@@ -1849,6 +1855,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :open-file="(relPath: string, line?: number) => openFile({ filepath: relPath, line })"
       />
     </div>
+    </div><!-- end ide-body -->
   </div>
   <!-- Color Theme Picker -->
   <div v-if="themeOpen" class="ide-palette-overlay" @mousedown.self="closeThemePicker(true)">
@@ -2124,10 +2131,41 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 <style scoped>
 .ide {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg-base);
   color: var(--text-primary);
   overflow: hidden;
+}
+.ide-titlebar {
+  flex-shrink: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: drag;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
+  user-select: none;
+  padding-left: 80px;
+  padding-right: 8px;
+  gap: 4px;
+}
+.ide-titlebar-name {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ide-body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
 }
 .ide-activity {
   flex-shrink: 0;

@@ -79,6 +79,9 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
       const remaining = [...mainWindows]
       mainWindow = remaining.length ? remaining[remaining.length - 1] : null
     }
+    if (mainWindows.size === 0) {
+      if (editorWindow && !editorWindow.isDestroyed()) editorWindow.close()
+    }
   })
 
   loadWindow(win, { window: 'main', ...params })
