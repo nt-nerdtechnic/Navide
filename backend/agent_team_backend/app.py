@@ -2181,6 +2181,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override)
             await session.send_json(make_response(msg_id, msg_type, result))
 
+        elif msg_type == "fs.stat_path":
+            result = fs_service.stat_path(payload.get("path", "") or "")
+            await session.send_json(make_response(msg_id, msg_type, result))
+
         elif msg_type == "fs.read_image":
             ws_path = payload.get("workspace_path") or ""
             result = fs_service.read_image(ws_path, payload.get("rel_path", "") or "")

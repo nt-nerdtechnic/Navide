@@ -16,6 +16,7 @@ interface Props {
    *  button (re-spawns the pane via --resume to recover from render corruption). */
   canRebuild?: boolean
   backend: ReturnType<typeof useBackend>
+  workspacePath?: string
 }
 
 const props = defineProps<Props>()
@@ -55,7 +56,7 @@ function onTitleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); _cancelledTitle = true; editingTitle.value = false }
 }
 
-const terminal = useTerminal(props.paneId, props.backend)
+const terminal = useTerminal(props.paneId, props.backend, { workspacePath: props.workspacePath })
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 

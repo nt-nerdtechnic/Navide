@@ -448,7 +448,10 @@ function insertCursorBelow(): void { editor?.trigger('', 'editor.action.insertCu
 function addCursorsToLineEnds(): void { editor?.trigger('', 'editor.action.insertCursorAtEndOfEachLineSelected', null) }
 
 // Navigation
-function revealLine(line: number): void { editor?.revealLineInCenterIfOutsideViewport(line + 1) }
+function revealLine(line: number): void {
+  editor?.revealLineInCenterIfOutsideViewport(line)
+  editor?.setPosition({ lineNumber: line, column: 1 })
+}
 function revealPosition(line: number, col: number): void {
   editor?.revealPositionInCenterIfOutsideViewport({ lineNumber: line + 1, column: col + 1 })
 }

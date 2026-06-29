@@ -107,7 +107,119 @@ export interface SpawnOptions {
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
 
-export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>) {
+// VS Code-style unix path regex — no extension whitelist.
+// Based on VS Code's unixLocalLinkClause from terminalLinkParsing.ts.
+// Matches: /abs/path, ./rel, ../rel, ~/rel, src/rel (relative with at least one /)
+// Excluded chars align with VS Code's ExcludedPathCharactersClause.
+const _EXCL_S = `[^\\x00<>?\\s!\`&*()[\\]'"\\\\;]`  // path start char
+const _EXCL   = `[^\\x00<>?\\s!\`&*()'"\\\\;]`       // subsequent chars
+const FILE_LINK_RE = new RegExp(
+  `((?:\\.{1,2}|~|(?:${_EXCL_S}${_EXCL}*))?(?:\\/${_EXCL}+)+)`,
+  'g'
+)
+
+// Strip a line:col suffix from the end of a raw path match.
+// Supports: :line :line:col :line.col (line) (line,col) [line] #line #line:col
+const _SUFFIX_RE = /(?::([\d]+)(?:[.:]([\d]+))?|[(\[]([\d]+)(?:[,:]([\d]+))?[)\]]|#([\d]+)(?::([\d]+))?)$/
+
+function splitSuffix(raw: string): { filepath: string; line?: number } {
+  const m = raw.match(_SUFFIX_RE)
+  if (!m || m.index === undefined) return { filepath: raw }
+  const lineStr = m[1] ?? m[3] ?? m[5]
+  return {
+    filepath: raw.slice(0, m.index),
+    line: lineStr ? parseInt(lineStr, 10) : undefined,
+  }
+}
+
+function resolveAbsPath(filepath: string, workspacePath: string | undefined): string {
+  if (filepath.startsWith('/')) return filepath
+  return workspacePath ? `${workspacePath}/${filepath}` : filepath
+}
+
+type AgentTeamApi = { openEditorWindow?: (a: Record<string, unknown>) => Promise<unknown> }
+
+function openInEditor(absPath: string, line: number | undefined): void {
+  const api = (window as Window & { agentTeam?: AgentTeamApi }).agentTeam
+  if (!api?.openEditorWindow) return
+  const lastSlash = absPath.lastIndexOf('/')
+  const wsPath = lastSlash > 0 ? absPath.slice(0, lastSlash) : absPath
+  const filepath = absPath.slice(lastSlash + 1)
+  void api.openEditorWindow({ workspace_path: wsPath, filepath, ...(line !== undefined ? { line } : {}) })
+}
+
+function buildFileLinkProvider(
+  term: import('@xterm/xterm').Terminal,
+  workspacePath: string | undefined,
+  backend: ReturnType<typeof useBackend>,
+  isCmdHeld: () => boolean
+): import('@xterm/xterm').ILinkProvider {
+  // Per-session cache: absPath → exists. Avoids repeated backend calls for the
+  // same path while the user moves the mouse around.
+  const existsCache = new Map<string, boolean>()
+
+  async function checkExists(absPath: string): Promise<boolean> {
+    if (existsCache.has(absPath)) return existsCache.get(absPath)!
+    try {
+      const r = await backend.send<{ exists: boolean }>('fs.stat_path', { path: absPath })
+      const exists = r.ok && !!r.payload?.exists
+      existsCache.set(absPath, exists)
+      return exists
+    } catch {
+      return false
+    }
+  }
+
+  return {
+    provideLinks(y, callback) {
+      if (!isCmdHeld()) { callback(undefined); return }
+      // y is 1-based absolute buffer row; getLine() uses 0-based index
+      const bufLine = term.buffer.active.getLine(y - 1)
+      if (!bufLine) { callback(undefined); return }
+      const text = bufLine.translateToString(true)
+      FILE_LINK_RE.lastIndex = 0
+
+      const candidates: Array<{ absPath: string; line?: number; startX: number; endX: number; raw: string }> = []
+      let m: RegExpExecArray | null
+      while ((m = FILE_LINK_RE.exec(text)) !== null) {
+        const raw = m[0]
+        if (raw.includes('://')) continue  // skip URLs
+        const { filepath, line } = splitSuffix(raw)
+        if (!filepath) continue
+        const absPath = resolveAbsPath(filepath, workspacePath)
+        const startX = m.index + 1  // xterm is 1-based
+        const endX = startX + raw.length - 1
+        candidates.push({ absPath, line, startX, endX, raw })
+      }
+
+      if (!candidates.length) { callback(undefined); return }
+
+      // Validate all candidates concurrently, then return only existing files.
+      void Promise.all(candidates.map(async (c) => {
+        const exists = await checkExists(c.absPath)
+        if (!exists) return null
+        const link: import('@xterm/xterm').ILink = {
+          range: { start: { x: c.startX, y }, end: { x: c.endX, y } },
+          text: c.raw,
+          decorations: { underline: true, pointerCursor: true },
+          activate(_event: MouseEvent) {
+            openInEditor(c.absPath, c.line)
+          },
+        }
+        return link
+      })).then((results) => {
+        const links = results.filter((l): l is import('@xterm/xterm').ILink => l !== null)
+        callback(links.length ? links : undefined)
+      })
+    },
+  }
+}
+
+export function useTerminal(
+  paneId: string,
+  backend: ReturnType<typeof useBackend>,
+  opts?: { workspacePath?: string }
+) {
   const term = new Terminal({
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontSize: 12,
@@ -245,6 +357,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let mounted = false
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
+  let _cmdClickHandler: ((e: MouseEvent) => void) | null = null
+  let _mousePosTracker: ((e: MouseEvent) => void) | null = null
+  let _cmdKeyDown: ((e: KeyboardEvent) => void) | null = null
+  let _cmdKeyUp: ((e: KeyboardEvent) => void) | null = null
 
   // Layout churn is debounced BEFORE the fit: xterm holds its old size while the
   // grid settles, then fits once (so a drag fires one resize, not dozens). Once
@@ -463,6 +579,29 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     containerRef.value = el
     term.open(el)
 
+    // ── File link provider (Cmd-hold underline + async fs validation) ────────
+    let _isCmdHeld = false
+    let _lastMouseX = 0
+    let _lastMouseY = 0
+
+    _mousePosTracker = (e: MouseEvent) => { _lastMouseX = e.clientX; _lastMouseY = e.clientY }
+    el.addEventListener('mousemove', _mousePosTracker)
+
+    _cmdKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Meta' || _isCmdHeld) return
+      _isCmdHeld = true
+      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMouseX, clientY: _lastMouseY, metaKey: true }))
+    }
+    _cmdKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== 'Meta') return
+      _isCmdHeld = false
+      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMouseX, clientY: _lastMouseY }))
+    }
+    window.addEventListener('keydown', _cmdKeyDown)
+    window.addEventListener('keyup', _cmdKeyUp)
+
+    parserDisposers.push(term.registerLinkProvider(buildFileLinkProvider(term, opts?.workspacePath, backend, () => _isCmdHeld)))
+
     // ── DEC mode 2048 (in-band resize) interception ──────────────────────────
     // Detect a CLI opting into in-band size reports and answer its query. All
     // handlers return false (don't swallow) so xterm still processes the other
@@ -604,6 +743,39 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       }
     }
     el.addEventListener('mousedown', _mousedownHandler)
+
+    // ── Cmd+Click file open (mousedown capture, runs before xterm mouse tracking) ──
+    _cmdClickHandler = (event: MouseEvent) => {
+      if (!event.metaKey || event.button !== 0) return
+      const xtermScreen = el.querySelector('.xterm-screen')
+      if (!xtermScreen) return
+      const rect = xtermScreen.getBoundingClientRect()
+      const cellW = (term as any)._core?._renderService?.dimensions?.css?.cell?.width || 0
+      const cellH = (term as any)._core?._renderService?.dimensions?.css?.cell?.height || 0
+      if (!cellW || !cellH) return
+      const col = Math.floor((event.clientX - rect.left) / cellW)
+      const row = Math.floor((event.clientY - rect.top) / cellH)
+      if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return
+      const bufferRow = term.buffer.active.viewportY + row
+      const line = term.buffer.active.getLine(bufferRow)
+      if (!line) return
+      const text = line.translateToString(true)
+      FILE_LINK_RE.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = FILE_LINK_RE.exec(text)) !== null) {
+        if (m[0].includes('://')) continue  // skip URLs
+        if (col >= m.index && col < m.index + m[0].length) {
+          event.preventDefault()
+          event.stopPropagation()
+          const { filepath, line: lineNum } = splitSuffix(m[0])
+          if (!filepath) return
+          openInEditor(resolveAbsPath(filepath, opts?.workspacePath), lineNum)
+          return
+        }
+      }
+    }
+    el.addEventListener('mousedown', _cmdClickHandler, { capture: true })
+
     mountedEl = el
     // Debounced: hold the old (PTY-consistent) size through layout churn,
     // then fit + resize the PTY together once the container is still.
@@ -1086,6 +1258,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
     resizeObserver?.disconnect()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
+    if (mountedEl && _mousePosTracker) mountedEl.removeEventListener('mousemove', _mousePosTracker)
+    if (_cmdKeyDown) window.removeEventListener('keydown', _cmdKeyDown)
+    if (_cmdKeyUp) window.removeEventListener('keyup', _cmdKeyUp)
+    if (mountedEl && _cmdClickHandler) mountedEl.removeEventListener('mousedown', _cmdClickHandler, { capture: true })
     term.dispose()
     // PTY is intentionally NOT killed here. The backend keeps PTYs running
     // after a WS disconnect so that tryReattach() can rebind after a page

@@ -142,6 +142,24 @@ describe('extractDropPaths', () => {
     expect(extractDropPaths(e)).toEqual(['/Users/a.ts', '/Users/b.ts'])
   })
 
+  it('in-app drag: string-kind item in dt.items falls through to text/plain (dir path)', () => {
+    // Simulates ExplorerPane @dragstart → setData('text/plain', absPath)
+    // dt.items gets one kind='string' entry; no file sources → text/plain fallback
+    const stringItem = { kind: 'string', type: 'text/plain', getAsFile: () => null } as unknown as DataTransferItem
+    const e = {
+      dataTransfer: {
+        items: {
+          length: 1,
+          0: stringItem,
+          [Symbol.iterator]: function* () { yield stringItem },
+        } as unknown as DataTransferItemList,
+        files: makeFileList([]),
+        getData: (type: string) => type === 'text/plain' ? '/Users/test/my-folder' : '',
+      },
+    } as unknown as DragEvent
+    expect(extractDropPaths(e)).toEqual(['/Users/test/my-folder'])
+  })
+
   it('native file sources take priority over text/plain', () => {
     mockGetPath.mockReturnValue('/Users/test/native.ts')
     const f = new File([], 'native.ts')

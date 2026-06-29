@@ -5602,6 +5602,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :is-focus="p.id === effectiveFocusPaneId"
           :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'gemini', 'antigravity'].includes(p.agentKey)"
           :backend="backend"
+          :workspace-path="p.workspacePath"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"

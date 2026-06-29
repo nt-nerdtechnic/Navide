@@ -474,6 +474,20 @@ def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, An
     return {"ok": True}
 
 
+def stat_path(abs_path: str) -> dict[str, Any]:
+    """Check whether an absolute filesystem path exists as a regular file.
+
+    Intentionally bypasses the workspace restriction — terminal output may
+    reference files anywhere on disk (e.g. system libraries, other projects).
+    Read-only: no content is returned, only existence.
+    """
+    try:
+        p = Path(abs_path).resolve()
+        return {"ok": True, "exists": p.is_file()}
+    except Exception:
+        return {"ok": True, "exists": False}
+
+
 def delete(workspace_path: str, rel_path: str) -> dict[str, Any]:
     """Delete a file or directory (including non-empty directories)."""
     try:
