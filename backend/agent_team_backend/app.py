@@ -2125,7 +2125,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "fs.list_files_flat":
             ws_path = payload.get("workspace_path") or ""
             query = payload.get("query", "") or ""
-            result = fs_service.list_files_flat(ws_path, query=query)
+            max_results = int(payload.get("max_results", 100))
+            result = fs_service.list_files_flat(ws_path, query=query, max_results=max_results)
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.glob_files":

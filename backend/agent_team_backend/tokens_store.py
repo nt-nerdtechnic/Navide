@@ -4,7 +4,10 @@ Records token deltas from two sources:
   - source="analyzer": local llama-cli classify / auto_answer real counts
   - source="cli":      vendor parser scraped from agent TUI output
 
-Per-workspace state lives in `<workspace>/.agent-team/tokens.json`.
+Per-workspace state lives in `<app_data>/workspaces/<sha256_8>/tokens.json`
+  where sha256_8 = first 8 hex chars of sha256(abs_workspace_path).
+  Keyed on the workspace identity rather than its path so tokens survive
+  workspace renames and moves.
 Global lifetime state lives in `<app_data>/tokens.json`.
 
 We never estimate — if a source can't produce a real number, we record 0.
@@ -12,9 +15,11 @@ We never estimate — if a source can't produce a real number, we record 0.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -27,6 +32,16 @@ log = logging.getLogger("agent_team_backend.tokens")
 
 TOKENS_FILE = "tokens.json"
 RECORDED_KEYS_FILE = "recorded-event-keys.json"
+WORKSPACES_SUBDIR = "workspaces"
+
+
+def _ws_dir_name(workspace_path: str) -> str:
+    """First 8 hex chars of sha256(abs_workspace_path).
+
+    Stable across workspace renames/moves — keyed on the canonical absolute
+    path at the time the workspace was first used.
+    """
+    return hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:8]
 
 
 def _now_iso() -> str:
@@ -82,16 +97,25 @@ def _new_run(run_id: str, task: str, run_dir: str) -> dict[str, Any]:
     }
 
 
+_SAVE_INTERVAL_S = 10  # batch window for dirty-flag saves
+
+
 class TokensStore:
-    """Thread-safe in-memory aggregator with atomic JSON persistence."""
+    """Thread-safe in-memory aggregator with atomic JSON persistence.
+
+    Writes are batched: record() marks dirty flags and a background thread
+    flushes every _SAVE_INTERVAL_S seconds. Call flush() before shutdown.
+    """
 
     def __init__(
         self,
         global_path: Path | None = None,
         recorded_keys_path: Path | None = None,
+        workspace_base_dir: Path | None = None,
     ) -> None:
         self._global_path = global_path or (app_data_dir() / TOKENS_FILE)
         self._recorded_keys_path = recorded_keys_path or (app_data_dir() / RECORDED_KEYS_FILE)
+        self._workspace_base_dir = workspace_base_dir or (app_data_dir() / WORKSPACES_SUBDIR)
         # RLock because reset() calls snapshot() while holding the lock.
         self._lock = RLock()
         self._workspace_cache: dict[str, dict[str, Any]] = {}
@@ -101,6 +125,18 @@ class TokensStore:
         # (after a workspace registration triggers a force-rescan) can't
         # double-count. Cleared by reset(scope="global").
         self._recorded_keys: set[str] = self._load_recorded_keys()
+
+        # Dirty flags (set inside _lock, consumed by save loop outside _lock)
+        self._dirty_recorded_keys: bool = False
+        self._dirty_workspaces: set[str] = set()
+        self._dirty_global: bool = False
+
+        # Background save loop
+        self._stop_event = threading.Event()
+        self._save_thread = threading.Thread(
+            target=self._save_loop, name="tokens_store.save", daemon=True
+        )
+        self._save_thread.start()
 
     # ───────────────────────── Disk I/O ────────────────────────────
 
@@ -115,12 +151,36 @@ class TokensStore:
             raise
 
     def _workspace_path(self, workspace_path: str) -> Path:
-        return Path(workspace_path) / PROJECT_DIR_NAME / TOKENS_FILE
+        return self._workspace_base_dir / _ws_dir_name(workspace_path) / TOKENS_FILE
+
+    def _migrate_workspace_tokens(self, old_path: Path, new_path: Path) -> None:
+        """Copy old per-workspace tokens.json to the new global path, then delete old.
+
+        Uses atomic write (write-tmp → replace) so the new file is never partial.
+        Only deletes the source after verifying the destination exists.
+        """
+        try:
+            content = old_path.read_bytes()
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = new_path.with_suffix(new_path.suffix + ".tmp")
+            tmp.write_bytes(content)
+            os.replace(tmp, new_path)
+            if new_path.exists():
+                old_path.unlink()
+                log.info("migrated tokens.json from %s to %s", old_path, new_path)
+        except Exception as err:  # noqa: BLE001
+            log.warning("failed to migrate tokens.json from %s: %s", old_path, err)
 
     def _load_workspace(self, workspace_path: str) -> dict[str, Any]:
         if workspace_path in self._workspace_cache:
             return self._workspace_cache[workspace_path]
         wp = self._workspace_path(workspace_path)
+        # Migrate from the old per-workspace location on first access if the new
+        # global path doesn't exist yet.
+        if not wp.exists():
+            old_wp = Path(workspace_path) / PROJECT_DIR_NAME / TOKENS_FILE
+            if old_wp.exists():
+                self._migrate_workspace_tokens(old_wp, wp)
         if not wp.exists():
             doc = _empty_workspace_doc()
         else:
@@ -161,6 +221,34 @@ class TokensStore:
             self._atomic_write(self._global_path, self._global_data)
         except Exception as err:  # noqa: BLE001
             log.warning("failed to write global tokens.json: %s", err)
+
+    # ───────────────────────── Batch save loop ──────────────────────
+
+    def _save_loop(self) -> None:
+        """Background thread: flush dirty state every _SAVE_INTERVAL_S seconds."""
+        while not self._stop_event.wait(timeout=_SAVE_INTERVAL_S):
+            self._flush_dirty()
+
+    def _flush_dirty(self) -> None:
+        """Write any dirty state to disk (called from save loop or flush())."""
+        with self._lock:
+            dirty_keys = self._dirty_recorded_keys
+            dirty_workspaces = set(self._dirty_workspaces)
+            dirty_global = self._dirty_global
+            self._dirty_recorded_keys = False
+            self._dirty_workspaces.clear()
+            self._dirty_global = False
+        if dirty_keys:
+            self._save_recorded_keys()
+        for ws in dirty_workspaces:
+            self._save_workspace(ws)
+        if dirty_global:
+            self._save_global()
+
+    def flush(self) -> None:
+        """Flush all pending dirty state synchronously. Call before shutdown."""
+        self._stop_event.set()
+        self._flush_dirty()
 
     def _load_recorded_keys(self) -> set[str]:
         if not self._recorded_keys_path.exists():

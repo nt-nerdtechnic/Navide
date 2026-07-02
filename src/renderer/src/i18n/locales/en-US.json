@@ -1,10 +1,24 @@
 {
   "pane": {
-    "git": { "title": "SOURCE CONTROL", "tab": "Source Control" },
-    "explorer": { "title": "Explorer" },
-    "ai-chat": { "title": "AI Chat", "tab-shortcut": "AI Chat (⌘⇧A)" },
-    "search": { "title": "Search" },
-    "problems": { "title": "Problems", "tab-shortcut": "Problems (⌘⇧M)" },
+    "git": {
+      "title": "SOURCE CONTROL",
+      "tab": "Source Control",
+      "repositories": "REPOSITORIES"
+    },
+    "explorer": {
+      "title": "Explorer"
+    },
+    "ai-chat": {
+      "title": "AI Chat",
+      "tab-shortcut": "AI Chat (⌘⇧A)"
+    },
+    "search": {
+      "title": "Search"
+    },
+    "problems": {
+      "title": "Problems",
+      "tab-shortcut": "Problems (⌘⇧M)"
+    },
     "terminal": {
       "rebuild-tooltip": "Rebuild (resume) — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "minimize-tooltip": "Minimize to sidebar",
@@ -100,7 +114,6 @@
     "add-slot": "+ Add Slot",
     "remove-slot": "Remove slot",
     "create": "Create",
-    "rename": "Rename",
     "close-settings-run": "Close settings and go to run",
     "clear-color-override": "Clear this color override",
     "click-to-zoom": "Click to zoom",

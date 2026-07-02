@@ -27,7 +27,7 @@ import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
 import { playDoneSound, playAttentionSound } from './composables/useSoundNotify'
-import { formatIssueForDispatch, type IssueDetail } from './composables/useIssues'
+import { formatIssueForDispatch, buildIssueKickoff, type IssueDetail, type Issue, type IssueProvider, type IssueHandlerMode } from './composables/useIssues'
 import type { RoleKey } from './data/roles'
 import {
   renderSlotKickoff,
@@ -482,6 +482,10 @@ interface SpawnHistoryEntry {
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
 const persistedPaneSessions = new Set<string>()
+
+// Tracks which issues have been dispatched/handled and to which pane.
+// key: issue.url  value: { paneId, mode, state }
+const issueHandoffs = ref<Map<string, { paneId: string; mode: string; state: 'handling' | 'pane-gone' }>>(new Map())
 const SPAWN_HISTORY_KEY = 'agentTeam.spawnHistory'
 const MAX_SPAWN_HISTORY = 100
 
@@ -709,6 +713,50 @@ async function injectPane(paneId: string, text: string, logLabel?: string, prese
 async function onDispatchIssue(payload: { paneId: string; issue: IssueDetail }): Promise<void> {
   const ok = await injectPane(payload.paneId, formatIssueForDispatch(payload.issue), 'issue-dispatch', true)
   if (!ok) console.warn(`[dispatch-issue] injection failed for pane ${payload.paneId}`)
+  if (ok) issueHandoffs.value.set(payload.issue.url, { paneId: payload.paneId, mode: 'dispatch', state: 'handling' })
+}
+
+// Spawn a new dedicated agent pane for an issue with a pre-generated kickoff
+// prompt. Mirrors onManualSpawn but injects the kickoff directly so the agent
+// starts working on the issue immediately (skipRoleInjection=true).
+async function onHandleIssue(payload: {
+  agentKey: string
+  mode: IssueHandlerMode
+  issue: Issue
+  provider: IssueProvider
+}): Promise<void> {
+  const { agentKey, mode, issue, provider } = payload
+  const kickoff = buildIssueKickoff(issue, provider, mode)
+  const spawnGroupId =
+    activeTab.value === 'manual'
+      ? ''
+      : runGroups.value.some((g) => g.id === activeTab.value)
+        ? activeTab.value
+        : currentRunGroupId.value || ''
+  const paneId = await spawnPane({
+    agentKey: agentKey as AgentKey,
+    roleKey: '' as RoleKey,
+    stageId: '' as StageId,
+    commandOverride: '',
+    workspacePath: currentWorkspace.value,
+    origin: 'manual',
+    runGroupId: spawnGroupId || undefined,
+    kickoffPrompt: kickoff,
+    skipRoleInjection: true,
+  })
+  if (paneId) {
+    await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+      workspace_path: currentWorkspace.value,
+      pane_id: paneId,
+      agent: agentKey,
+      role: '',
+      command: '',
+      session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+      session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
+      run_group_id: spawnGroupId,
+    })
+    issueHandoffs.value.set(issue.url, { paneId, mode, state: 'handling' })
+  }
 }
 
 // Default delay if no startup trust dialog is observed.
@@ -1508,6 +1556,9 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
     histEntry.removedAt = new Date().toISOString()
   }
   panes.value = panes.value.filter((p) => p.id !== paneId)
+  issueHandoffs.value.forEach((v, k) => {
+    if (v.paneId === paneId) issueHandoffs.value.set(k, { ...v, state: 'pane-gone' })
+  })
   delete paneRefs[paneId]
   clearDoneNotifyTimer(paneId)
   sysNotify.forgetPane(paneId)
@@ -1765,6 +1816,12 @@ watch(() => pipeline.state, (newState, oldState) => {
   if (newState === 'completed' && oldState === 'running') {
     showCompletionModal.value = true
   }
+})
+
+const issueHandoffView = computed<Record<string, { paneId: string; mode: string; state: string }>>(() => {
+  const result: Record<string, { paneId: string; mode: string; state: string }> = {}
+  issueHandoffs.value.forEach((v, k) => { result[k] = { paneId: v.paneId, mode: v.mode, state: v.state } })
+  return result
 })
 
 const pipelineView = computed<PipelineStatusView>(() => ({
@@ -5368,7 +5425,9 @@ function paneIsCommander(p: ActivePane): boolean {
       @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"
       @workspace-browse="onWorkspaceBrowse"
+      :issue-handoffs="issueHandoffView"
       @dispatch-issue="onDispatchIssue"
+      @spawn-for-issue="onHandleIssue"
     />
     <QuestionAlert
       :visible="!!activeQuestion"

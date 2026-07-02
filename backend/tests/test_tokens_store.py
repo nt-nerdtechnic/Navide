@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,7 +14,10 @@ from agent_team_backend.tokens_store import TokensStore
 @pytest.fixture
 def store(tmp_path: Path) -> TokensStore:
     """Fresh store with a temp global file (no contamination from real env)."""
-    return TokensStore(global_path=tmp_path / "global-tokens.json")
+    return TokensStore(
+        global_path=tmp_path / "global-tokens.json",
+        workspace_base_dir=tmp_path / "workspaces",
+    )
 
 
 @pytest.fixture
@@ -82,20 +86,22 @@ def test_starting_new_run_archives_previous(store: TokensStore, workspace: str) 
 
 def test_persistence_roundtrip(tmp_path: Path) -> None:
     global_path = tmp_path / "global.json"
+    workspace_base_dir = tmp_path / "workspaces"
     workspace = tmp_path / "ws"
     workspace.mkdir()
 
-    s1 = TokensStore(global_path=global_path)
+    s1 = TokensStore(global_path=global_path, workspace_base_dir=workspace_base_dir)
     s1.start_run(str(workspace), run_id="r1", task="t", run_dir="runs/r1")
     s1.record(str(workspace), source="analyzer", vendor="analyzer",
               input_tokens=10, output_tokens=20)
 
-    # Both files exist on disk
+    # Both files exist on disk at their new global locations
     assert global_path.exists()
-    assert (workspace / ".agent-team" / "tokens.json").exists()
+    sha = hashlib.sha256(str(workspace).encode()).hexdigest()[:8]
+    assert (workspace_base_dir / sha / "tokens.json").exists()
 
     # Fresh store reads back the same values
-    s2 = TokensStore(global_path=global_path)
+    s2 = TokensStore(global_path=global_path, workspace_base_dir=workspace_base_dir)
     snap = s2.snapshot(str(workspace))
     assert snap["workspace"]["cumulative"]["totals"]["input"] == 10
     assert snap["global"]["all_time"]["output"] == 20
@@ -104,14 +110,16 @@ def test_persistence_roundtrip(tmp_path: Path) -> None:
 def test_atomic_write_uses_tmp_then_replace(tmp_path: Path) -> None:
     """The .tmp file shouldn't survive after a successful save."""
     global_path = tmp_path / "global.json"
+    workspace_base_dir = tmp_path / "workspaces"
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    s = TokensStore(global_path=global_path)
+    s = TokensStore(global_path=global_path, workspace_base_dir=workspace_base_dir)
     s.start_run(str(workspace), run_id="r1", task="t", run_dir="runs/r1")
     s.record(str(workspace), source="cli", vendor="codex",
              input_tokens=5, output_tokens=5)
 
-    files = list((workspace / ".agent-team").iterdir())
+    sha = hashlib.sha256(str(workspace).encode()).hexdigest()[:8]
+    files = list((workspace_base_dir / sha).iterdir())
     # Only tokens.json should remain — no leftover .tmp
     assert {f.name for f in files} == {"tokens.json"}
 
@@ -168,7 +176,7 @@ def test_corrupt_json_recovers_gracefully(tmp_path: Path) -> None:
     (workspace / ".agent-team").mkdir()
     (workspace / ".agent-team" / "tokens.json").write_text("{not valid json", encoding="utf-8")
 
-    s = TokensStore(global_path=tmp_path / "g.json")
+    s = TokensStore(global_path=tmp_path / "g.json", workspace_base_dir=tmp_path / "workspaces")
     snap = s.snapshot(str(workspace))
     # Should fall back to empty doc, not raise
     assert snap["workspace"]["cumulative"]["totals"]["calls"] == 0

@@ -6,8 +6,9 @@ import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
 import type { Stage, StageId } from '../data/stages'
-import type { IssueDetail } from '../composables/useIssues'
+import type { Issue, IssueDetail, IssueProvider, IssueHandlerMode } from '../composables/useIssues'
 import { registerCommand } from '../keybindings/useKeybindings'
+import { useUpdater } from '../composables/useUpdater'
 
 // MultiRepoGit wraps GitPane and adds a repo tab bar when 2+ repos are found.
 // Loaded async (same reasoning as GitPane: ~276KB, off first-paint path).
@@ -162,6 +163,8 @@ interface Props {
   spawnHistory?: ResumeHistoryEntry[]
   /** The currently focused pane id — highlights the matching agent-item. */
   focusPaneId?: string
+  /** Issue dispatch/handle status — forwarded to GitPane for badges. */
+  issueHandoffs?: Record<string, { paneId: string; mode: string; state: string }>
 }
 
 const props = defineProps<Props>()
@@ -170,6 +173,8 @@ const props = defineProps<Props>()
 // shows exactly which build is running — avoids confusion over which version
 // is live when juggling worktrees / uncommitted changes.
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
+
+const { updateAvailable, downloadProgress, updateReady, startDownload, installUpdate } = useUpdater()
 
 const emit = defineEmits<{
   (e: 'spawn', payload: SpawnPayload): void
@@ -198,6 +203,7 @@ const emit = defineEmits<{
   (e: 'workspace-browse', path: string): void
   (e: 'update:layoutMode', v: LayoutMode): void
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
+  (e: 'spawn-for-issue', payload: { agentKey: string; mode: IssueHandlerMode; issue: Issue; provider: IssueProvider }): void
 }>()
 
 const yoloLocal = computed<boolean>({
@@ -325,6 +331,11 @@ defineExpose({ openPipelineDetail, showResumeError })
 
 const manualAgentSpecs = computed(() =>
   props.agentSpecs.filter((spec) => spec.agentKey !== 'terminal')
+)
+
+// Available agent types for "Handle Issue As…" pane spawn.
+const availableAgents = computed(() =>
+  manualAgentSpecs.value.map((spec) => ({ key: spec.agentKey, label: spec.label }))
 )
 
 const pickedAgent = ref<string>(manualAgentSpecs.value[0]?.agentKey ?? 'claude')
@@ -726,6 +737,23 @@ function onPipelineDividerEnd(): void {
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
       </button>
+
+      <!-- Update badge: shown when a new version is available, downloading, or ready -->
+      <div v-if="updateReady || downloadProgress !== null || updateAvailable" class="update-badge" :class="{ ready: !!updateReady, downloading: downloadProgress !== null }">
+        <template v-if="updateReady">
+          <span class="update-dot"></span>
+          <span class="update-label">v{{ updateReady }} ready</span>
+          <button class="update-action" @click="installUpdate">Restart</button>
+        </template>
+        <template v-else-if="downloadProgress !== null">
+          <span class="update-label">{{ downloadProgress }}%</span>
+        </template>
+        <template v-else-if="updateAvailable">
+          <span class="update-dot"></span>
+          <span class="update-label">v{{ updateAvailable }}</span>
+          <button class="update-action" @click="startDownload">Update</button>
+        </template>
+      </div>
     </div>
 
     <!-- ── Explorer / Git tabs (shared split: panel on top, agent dock pinned at bottom) ── -->
@@ -744,9 +772,13 @@ function onPipelineDividerEnd(): void {
           :analyzer-model="analyzerModel"
           :backend="backend"
           :dispatch-targets="dispatchTargets"
+          :available-agents="availableAgents"
+          :issue-handoffs="issueHandoffs"
           @changes-count="gitChangesCount = $event"
           @open-workspace="$emit('workspace-browse', $event)"
           @dispatch-issue="$emit('dispatch-issue', $event)"
+          @spawn-for-issue="$emit('spawn-for-issue', $event)"
+          @focus-pane="$emit('focus-pane', $event)"
         />
       </div>
     </div>
@@ -2250,5 +2282,62 @@ button.icon-btn.muted:hover {
 .pane-split .part-top > * {
   flex: 1;
   min-height: 0;
+}
+
+/* ── Update badge in sidebar-tabs bar ───────────────────────────────────── */
+.update-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-muted);
+  font-size: 10px;
+  color: var(--accent-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 140px;
+}
+.update-badge.ready {
+  background: var(--success-subtle);
+  border-color: color-mix(in srgb, var(--success-strong) 40%, transparent);
+  color: var(--success-fg);
+}
+.update-badge.downloading {
+  background: var(--attention-subtle);
+  border-color: color-mix(in srgb, var(--attention-fg) 30%, transparent);
+  color: var(--attention-fg);
+}
+.update-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.update-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+.update-action {
+  border: none;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.update-badge.ready .update-action {
+  background: var(--success-emphasis);
+}
+.update-action:hover {
+  opacity: 0.85;
 }
 </style>

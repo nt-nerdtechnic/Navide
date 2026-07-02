@@ -109,6 +109,40 @@ MODEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _refresh_path_from_login_shell() -> None:
+    """Merge PATH from a login shell into os.environ so newly-installed CLIs are visible.
+
+    POSIX-only, best-effort: all failures are swallowed silently.
+    """
+    if os.name != "posix":
+        return
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", "echo $PATH"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        raw = proc.stdout or ""
+        # Take the last non-empty line (login shells may emit banner text first)
+        lines = [l for l in raw.splitlines() if l.strip()]
+        if not lines:
+            return
+        shell_paths = lines[-1].split(":")
+        current_paths = os.environ.get("PATH", "").split(":")
+        current_set = set(current_paths)
+        seen: set[str] = set()
+        new_paths: list[str] = []
+        for p in shell_paths:
+            if p and p not in current_set and p not in seen:
+                seen.add(p)
+                new_paths.append(p)
+        if new_paths:
+            os.environ["PATH"] = ":".join(new_paths + current_paths)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _parse_version(text: str, regex: str) -> str:
     m = re.search(regex, text)
     return m.group(1) if m else ""
@@ -205,6 +239,7 @@ def compute_gate(dep_statuses: list[dict[str, Any]], models: list[str]) -> dict[
 
 def get_status() -> dict[str, Any]:
     """Full onboarding status: every dep + installed models + gate."""
+    _refresh_path_from_login_shell()
     deps = [detect_dep(d) for d in DEPS]
     models = detect_ollama_models()
     return {

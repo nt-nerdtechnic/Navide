@@ -1014,7 +1014,7 @@ function cancelRenameThread(): void {
   renamingTitle.value = ''
 }
 
-watch(messages, saveCurrentThread, { deep: true })
+watch(messages, saveCurrentThread)
 
 // ── Settings ───────────────────────────────────────────────────────────────────
 type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'google' | 'mistral' | 'xai' | 'openai_compatible'
@@ -2222,7 +2222,12 @@ function extractFollowUps(content: string, userContent?: string): string[] {
 }
 
 // ── Markdown lite renderer ─────────────────────────────────────────────────────
+const _mdCache = new Map<string, string>()
+const _MD_CACHE_MAX = 200
 function renderMarkdownLite(rawText: string): string {
+  const cached = _mdCache.get(rawText)
+  if (cached !== undefined) return cached
+
   // 1. Extract fenced code blocks so they are never touched by inline transforms
   const blocks: string[] = []
   let text = rawText.replace(/```([^\s\n]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
@@ -2546,6 +2551,12 @@ function renderMarkdownLite(rawText: string): string {
   if (mathBlocks.length) {
     html = html.replace(/\x00M(\d+)\x00/g, (_, i) => mathBlocks[Number(i)])
   }
+
+  // Cache completed renders (evict oldest when limit reached)
+  if (_mdCache.size >= _MD_CACHE_MAX) {
+    _mdCache.delete(_mdCache.keys().next().value!)
+  }
+  _mdCache.set(rawText, html)
 
   return html
 }
@@ -3281,6 +3292,7 @@ async function sendMessage(): Promise<void> {
     return
   }
 
+  if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
   streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
 
   // Build user content with context chips prepended
@@ -4273,6 +4285,7 @@ let unsubSettingsGet: (() => void) | null = null
 
 function setupListeners(): void {
   document.addEventListener('keydown', _onGlobalKeydown)
+  if (placeholderInterval !== null) { clearInterval(placeholderInterval); placeholderInterval = null }
   placeholderInterval = window.setInterval(() => {
     if (!inputText.value) placeholderIdx.value = (placeholderIdx.value + 1) % PLACEHOLDER_HINTS_ASK.length
   }, 5000)
@@ -4731,7 +4744,7 @@ function _sanitizeSvgNode(node: Element): void {
 async function renderMermaidBlocks(): Promise<void> {
   const els = messagesEl.value?.querySelectorAll<HTMLElement>('.ai-mermaid[data-graph]:not([data-rendered])')
   if (!els?.length) return
-  for (const el of Array.from(els)) {
+  await Promise.all(Array.from(els).map(async (el) => {
     el.setAttribute('data-rendered', '1') // prevent double-render even on error
     try {
       const code = decodeURIComponent(el.dataset.graph ?? '')
@@ -4750,7 +4763,7 @@ async function renderMermaidBlocks(): Promise<void> {
       errSpan.textContent = `Diagram error: ${String(err)}`
       el.replaceChildren(errSpan)
     }
-  }
+  }))
 }
 
 function relativeTime(ts: number): string {
@@ -5406,6 +5419,7 @@ ${historyText}`
     const sessionId = crypto.randomUUID()
     currentSessionId.value = sessionId
     sending.value = true
+    if (streamTickInterval !== null) { clearInterval(streamTickInterval); streamTickInterval = null }
     streamTickInterval = window.setInterval(() => { streamNow.value = Date.now() }, 500)
     messages.value.push({ role: 'user', content: '[Saving session summary to Notepad…]', timestamp: Date.now() })
     messages.value.push({ role: 'assistant', content: '', streaming: true, thinking: true, cards: [], timestamp: Date.now() })

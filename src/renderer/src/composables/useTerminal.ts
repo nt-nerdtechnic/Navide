@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
+import { createResizeController, type ResizeController } from './useTerminalResize'
 
 import type { ITheme } from '@xterm/xterm'
 
@@ -107,119 +108,62 @@ export interface SpawnOptions {
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
 
-// VS Code-style unix path regex — no extension whitelist.
-// Based on VS Code's unixLocalLinkClause from terminalLinkParsing.ts.
-// Matches: /abs/path, ./rel, ../rel, ~/rel, src/rel (relative with at least one /)
-// Excluded chars align with VS Code's ExcludedPathCharactersClause.
-const _EXCL_S = `[^\\x00<>?\\s!\`&*()[\\]'"\\\\;]`  // path start char
-const _EXCL   = `[^\\x00<>?\\s!\`&*()'"\\\\;]`       // subsequent chars
+// VS Code-style unix path regex (no extension whitelist).
+const _EXCL_S = `[^\\x00<>?\\s!\`&*()[\\]'"\\\\;]`
+const _EXCL   = `[^\\x00<>?\\s!\`&*()'"\\\\;]`
 const FILE_LINK_RE = new RegExp(
   `((?:\\.{1,2}|~|(?:${_EXCL_S}${_EXCL}*))?(?:\\/${_EXCL}+)+)`,
   'g'
 )
 
-// Strip a line:col suffix from the end of a raw path match.
-// Supports: :line :line:col :line.col (line) (line,col) [line] #line #line:col
 const _SUFFIX_RE = /(?::([\d]+)(?:[.:]([\d]+))?|[(\[]([\d]+)(?:[,:]([\d]+))?[)\]]|#([\d]+)(?::([\d]+))?)$/
 
 function splitSuffix(raw: string): { filepath: string; line?: number } {
   const m = raw.match(_SUFFIX_RE)
   if (!m || m.index === undefined) return { filepath: raw }
   const lineStr = m[1] ?? m[3] ?? m[5]
-  return {
-    filepath: raw.slice(0, m.index),
-    line: lineStr ? parseInt(lineStr, 10) : undefined,
-  }
+  return { filepath: raw.slice(0, m.index), line: lineStr ? parseInt(lineStr, 10) : undefined }
 }
 
-function resolveAbsPath(filepath: string, workspacePath: string | undefined): string {
-  if (filepath.startsWith('/')) return filepath
-  return workspacePath ? `${workspacePath}/${filepath}` : filepath
-}
-
-type AgentTeamApi = { openEditorWindow?: (a: Record<string, unknown>) => Promise<unknown> }
+type _AgentApi = { openEditorWindow?: (a: Record<string, unknown>) => Promise<unknown> }
 
 function openInEditor(absPath: string, line: number | undefined): void {
-  const api = (window as Window & { agentTeam?: AgentTeamApi }).agentTeam
+  const api = (window as Window & { agentTeam?: _AgentApi }).agentTeam
   if (!api?.openEditorWindow) return
-  const lastSlash = absPath.lastIndexOf('/')
-  const wsPath = lastSlash > 0 ? absPath.slice(0, lastSlash) : absPath
-  const filepath = absPath.slice(lastSlash + 1)
+  const slash = absPath.lastIndexOf('/')
+  const wsPath = slash > 0 ? absPath.slice(0, slash) : absPath
+  const filepath = absPath.slice(slash + 1)
   void api.openEditorWindow({ workspace_path: wsPath, filepath, ...(line !== undefined ? { line } : {}) })
 }
 
 function buildFileLinkProvider(
   term: import('@xterm/xterm').Terminal,
-  workspacePath: string | undefined,
-  backend: ReturnType<typeof useBackend>,
   isCmdHeld: () => boolean
 ): import('@xterm/xterm').ILinkProvider {
-  // Per-session cache: absPath → exists. Avoids repeated backend calls for the
-  // same path while the user moves the mouse around.
-  const existsCache = new Map<string, boolean>()
-
-  async function checkExists(absPath: string): Promise<boolean> {
-    if (existsCache.has(absPath)) return existsCache.get(absPath)!
-    try {
-      const r = await backend.send<{ exists: boolean }>('fs.stat_path', { path: absPath })
-      const exists = r.ok && !!r.payload?.exists
-      existsCache.set(absPath, exists)
-      return exists
-    } catch {
-      return false
-    }
-  }
-
   return {
     provideLinks(y, callback) {
       if (!isCmdHeld()) { callback(undefined); return }
-      // y is 1-based absolute buffer row; getLine() uses 0-based index
       const bufLine = term.buffer.active.getLine(y - 1)
       if (!bufLine) { callback(undefined); return }
       const text = bufLine.translateToString(true)
       FILE_LINK_RE.lastIndex = 0
-
-      const candidates: Array<{ absPath: string; line?: number; startX: number; endX: number; raw: string }> = []
+      const links: import('@xterm/xterm').ILink[] = []
       let m: RegExpExecArray | null
       while ((m = FILE_LINK_RE.exec(text)) !== null) {
-        const raw = m[0]
-        if (raw.includes('://')) continue  // skip URLs
-        const { filepath, line } = splitSuffix(raw)
-        if (!filepath) continue
-        const absPath = resolveAbsPath(filepath, workspacePath)
-        const startX = m.index + 1  // xterm is 1-based
-        const endX = startX + raw.length - 1
-        candidates.push({ absPath, line, startX, endX, raw })
-      }
-
-      if (!candidates.length) { callback(undefined); return }
-
-      // Validate all candidates concurrently, then return only existing files.
-      void Promise.all(candidates.map(async (c) => {
-        const exists = await checkExists(c.absPath)
-        if (!exists) return null
-        const link: import('@xterm/xterm').ILink = {
-          range: { start: { x: c.startX, y }, end: { x: c.endX, y } },
-          text: c.raw,
+        if (m[0].includes('://')) continue
+        links.push({
+          range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
+          text: m[0],
           decorations: { underline: true, pointerCursor: true },
-          activate(_event: MouseEvent) {
-            openInEditor(c.absPath, c.line)
-          },
-        }
-        return link
-      })).then((results) => {
-        const links = results.filter((l): l is import('@xterm/xterm').ILink => l !== null)
-        callback(links.length ? links : undefined)
-      })
+          activate: () => { /* click handled by _cmdClickHandler */ },
+        })
+      }
+      callback(links.length ? links : undefined)
     },
   }
 }
 
-export function useTerminal(
-  paneId: string,
-  backend: ReturnType<typeof useBackend>,
-  opts?: { workspacePath?: string }
-) {
+export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: { workspacePath?: string }) {
   const term = new Terminal({
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontSize: 12,
@@ -331,15 +275,6 @@ export function useTerminal(
   let inputDisposer: { dispose(): void } | null = null
   let outputUnsub: (() => void) | null = null
   let exitUnsub: (() => void) | null = null
-  let parserDisposers: { dispose(): void }[] = []
-  // DEC private mode 2048 (in-band resize): when a CLI opts in, it learns new
-  // sizes through its INPUT stream (ordered with keystrokes) instead of racing
-  // the out-of-band SIGWINCH — removing stale-cols repaint residue at the root.
-  // Most CLIs (incl. Claude Code today) don't request it; for them this stays
-  // false and the backend drain-before-ack barrier handles residue instead.
-  let mode2048 = false
-  let resizeObserver: ResizeObserver | null = null
-  let resizeRafId = 0
   // Pending terminal output coalesced by requestAnimationFrame so multiple
   // rapid WS messages are written in one term.write() per frame instead of
   // individually — prevents the event loop from blocking on burst output.
@@ -348,61 +283,13 @@ export function useTerminal(
   let _pendingOutput = ''
   let _outputRafId = 0
   let _outputTimer: ReturnType<typeof setTimeout> | null = null
-  // rAF is throttled/paused while a window is occluded or mid-fullscreen
-  // transition, so a fit scheduled purely on rAF can be lost when the dev
-  // window is behind another (then the terminal stays at its stale width —
-  // visible as empty space on the right). This timer is the fallback so the
-  // fit still runs. Mirrors the rAF+timeout pattern spawn() already uses.
-  let resizeFrameTimer: ReturnType<typeof setTimeout> | null = null
   let mounted = false
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
-  let _cmdClickHandler: ((e: MouseEvent) => void) | null = null
-  let _mousePosTracker: ((e: MouseEvent) => void) | null = null
   let _cmdKeyDown: ((e: KeyboardEvent) => void) | null = null
   let _cmdKeyUp: ((e: KeyboardEvent) => void) | null = null
-
-  // Layout churn is debounced BEFORE the fit: xterm holds its old size while the
-  // grid settles, then fits once (so a drag fires one resize, not dozens). Once
-  // quiet, applyFit resizes xterm to the container first and tells the PTY after
-  // — the VSCode-aligned ordering, so the CLI's SIGWINCH repaint lands at the
-  // final width (see applyFit).
-  const RESIZE_QUIET_MS = 250
-  let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
-  // Last size the backend CONFIRMED. The reconciler compares against this so a
-  // dropped/failed resize message is retried instead of desyncing forever.
-  let ackedCols = 0
-  let ackedRows = 0
-  function sendResize(cols: number, rows: number): Promise<boolean> {
-    if (!sessionId.value) return Promise.resolve(false)
-    return backend.send('terminal.resize', {
-      terminal_session_id: sessionId.value,
-      cols,
-      rows
-    }).then((resp) => {
-      if (resp?.ok) {
-        ackedCols = cols; ackedRows = rows
-        // For 2048-capable CLIs, report the new size in-band right after the
-        // ack — the ioctl is done, so the report carries the authoritative
-        // values and stays ordered with the user's keystrokes.
-        if (mode2048) sendSizeReport()
-        return true
-      }
-      return false
-    }).catch(() => false /* reconciler retries */)
-  }
-  function sendResizeNow(): void {
-    void sendResize(term.cols, term.rows)
-  }
-  // CSI 48 ; rows ; cols ; height_px ; width_px t — the mode-2048 size report.
-  // Pixel dims come from the render service when measured, else 0 (spec allows).
-  function sendSizeReport(): void {
-    if (!sessionId.value) return
-    const canvas = (term as any)._core?._renderService?.dimensions?.css?.canvas
-    const heightPx = Math.round(canvas?.height ?? 0) || 0
-    const widthPx = Math.round(canvas?.width ?? 0) || 0
-    pasteText(`\x1b[48;${term.rows};${term.cols};${heightPx};${widthPx}t`)
-  }
+  let _cmdClickHandler: ((e: MouseEvent) => void) | null = null
+  let _mousePosTracker: ((e: MouseEvent) => void) | null = null
 
   // Set when a reattached pane is waiting to repaint. We never force_redraw at
   // reattach time: the renderer is mid-reflow then (reload, or a hidden tab
@@ -420,56 +307,10 @@ export function useTerminal(
     void backend.send('debug.log', { line: `${paneId} ${line}` }).catch(() => {})
   }
 
-  // After a width change settles, one SIGWINCH-based force_redraw makes the TUI
-  // repaint cleanly at the new width — clearing the reflow residue xterm leaves
-  // when it re-wraps the old frame (the garbled status footer on narrow
-  // drag-resize). Gated so it fires once per settle, only on a real WIDTH
-  // change, and only when xterm == backend-acked. We PREFER a quiet gap so the
-  // repaint isn't interleaved with a burst, but a continuously-streaming agent
-  // never goes quiet — so after a bounded wait we fire anyway (a SIGWINCH is
-  // safe mid-output; it's exactly what a real terminal resize raises). Triggered
-  // only from the ResizeObserver path (genuine layout churn), not spawn/reattach.
-  const RESIZE_REDRAW_SETTLE_MS = 220
-  const RESIZE_REDRAW_MAX_WAIT_MS = 1500
-  let resizeRedrawTimer: ReturnType<typeof setTimeout> | null = null
-  let resizeRedrawDeadline = 0
-  let lastRedrawCols = 0
-  // Called on a genuine new settle: (re)start the bounded-wait clock, then arm.
-  function requestResizeRedraw(): void {
-    resizeRedrawDeadline = Date.now() + RESIZE_REDRAW_MAX_WAIT_MS
-    armResizeRedraw()
-  }
-  // Internal poll: reschedules without resetting the deadline so a busy pane
-  // can't postpone the redraw indefinitely.
-  function armResizeRedraw(): void {
-    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
-    resizeRedrawTimer = setTimeout(() => {
-      resizeRedrawTimer = null
-      if (!mounted || !sessionId.value) return
-      // Not fully settled yet (xterm still differs from the backend-acked size):
-      // wait for the resize to finish, then re-check.
-      if (term.cols !== ackedCols || term.rows !== ackedRows) { armResizeRedraw(); return }
-      // Width unchanged since the last clean repaint (rows-only / no-op): skip.
-      if (term.cols === lastRedrawCols) return
-      // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
-      const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
-      if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
-      const shrank = lastRedrawCols > 0 && term.cols < lastRedrawCols
-      lastRedrawCols = term.cols
-      // NOTE: we deliberately do NOT term.clear() on a width shrink. Wiping the
-      // scrollback drops the user's conversation history (and, on a rebuild/
-      // resume, the freshly reprinted transcript). Per user decision
-      // (2026-06-23): never clear history — accept any reflow residue, repaint
-      // the current frame via the SIGWINCH redraw below instead.
-      // TEMP diagnostic (remove once resize is confirmed working).
-      dbgLog(`redraw fire cols=${term.cols} rows=${term.rows} shrank=${shrank}`)
-      void backend.send('terminal.redraw', {
-        terminal_session_id: sessionId.value,
-        cols: term.cols,
-        rows: term.rows,
-      })
-    }, RESIZE_REDRAW_SETTLE_MS)
-  }
+  // Declared here (assigned after createWhenMeasurable is defined below) so the
+  // reconciler interval and other async closures can reference it safely.
+  // eslint-disable-next-line prefer-const
+  let resizeCtrl!: ResizeController
 
   // Self-healing size reconciler. A pane that spawns or resizes while hidden
   // (background tab / spotlight / minimized → display:none) can leave the PTY
@@ -489,11 +330,11 @@ export function useTerminal(
     const dims = fit.proposeDimensions()
     const sized = !!dims && Number.isFinite(dims.cols) && Number.isFinite(dims.rows)
     if (sized && (dims.cols !== term.cols || dims.rows !== term.rows)) {
-      applyFit()
+      resizeCtrl.applyFit()
       return
     }
-    if (term.cols !== ackedCols || term.rows !== ackedRows) {
-      sendResizeNow()
+    if (term.cols !== resizeCtrl.ackedCols || term.rows !== resizeCtrl.ackedRows) {
+      resizeCtrl.sendResizeNow()
       return
     }
     // Fully settled (container == xterm == backend-acked). A reattached pane that
@@ -509,126 +350,9 @@ export function useTerminal(
     }
   }, RECONCILE_MS)
 
-  // Single source of truth for sizing: fit xterm to its container, then push
-  // that size to the backend. Entry points: the (debounced) ResizeObserver,
-  // the post-spawn frame, the reconciler, and fitTerminal().
-  // Run `cb` on the next animation frame, but fall back to a timer if rAF
-  // doesn't fire in time — rAF is paused for occluded/background windows and
-  // during fullscreen transitions, which would otherwise strand a pending fit.
-  function scheduleFrame(cb: () => void): void {
-    cancelAnimationFrame(resizeRafId)
-    if (resizeFrameTimer) { clearTimeout(resizeFrameTimer); resizeFrameTimer = null }
-    let fired = false
-    const fire = (): void => {
-      if (fired) return
-      fired = true
-      cancelAnimationFrame(resizeRafId)
-      if (resizeFrameTimer) { clearTimeout(resizeFrameTimer); resizeFrameTimer = null }
-      cb()
-    }
-    resizeRafId = requestAnimationFrame(fire)
-    resizeFrameTimer = setTimeout(fire, 100)
-  }
-
-  function applyFit(): void {
-    let poked = false
-    const run = (): void => {
-      const el = containerRef.value
-      // Hidden (display:none ancestor → clientWidth 0): nothing to fit. It will
-      // be retried by the ResizeObserver when the pane is shown.
-      if (!el || el.clientWidth === 0) return
-      // xterm hasn't measured its character cell yet — happens when the pane was
-      // opened while hidden. fit.fit() is a no-op while cell.width is 0, so poke
-      // xterm once to force measurement, then retry next frame until it's ready.
-      if ((term as any)._core?._renderService?.dimensions?.css?.cell?.width === 0) {
-        if (!poked) {
-          try { term.resize(Math.max(term.cols, 2), Math.max(term.rows, 1)) } catch { /* ignore */ }
-          poked = true
-        }
-        scheduleFrame(run)
-        return
-      }
-      try {
-        // VSCode-aligned ordering: resize xterm to the container FIRST, then
-        // tell the PTY. The PTY resize raises SIGWINCH, so the CLI repaints its
-        // cursor line (the live footer) directly into an already-correctly-sized
-        // xterm — nothing reflows that fresh frame afterward. xterm does not
-        // reflow the cursor line itself (reflowCursorLine defaults to false), so
-        // the CLI owns that repaint; we just give it the right width first.
-        //
-        // This replaces the old shrink-grace dance (push PTY narrow first, wait
-        // PTY_REPAINT_GRACE_MS, then fit xterm). That ordering left the CLI's
-        // narrow repaint sitting in a still-wide xterm, which the subsequent
-        // narrowing reflowed into the garbled-footer residue. The backend still
-        // drains output around its resize ack, so ordering is preserved server
-        // side; the brief client window where xterm is narrower than the PTY is
-        // the same tradeoff VSCode's integrated terminal accepts.
-        const cwBefore = el.clientWidth
-        const colsBefore = term.cols
-        fit.fit()
-        // TEMP diagnostic (remove once resize is confirmed working): proves the
-        // VSCode-aligned path ran and shows the widths it computed.
-        dbgLog(`resize cw=${cwBefore} cols ${colsBefore}->${term.cols} rows=${term.rows} acked=${ackedCols}x${ackedRows}`)
-        sendResizeNow()
-      } catch { /* ignore transient fit errors during teardown */ }
-    }
-    scheduleFrame(run)
-  }
-
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
-
-    // ── File link provider (Cmd-hold underline + async fs validation) ────────
-    let _isCmdHeld = false
-    let _lastMouseX = 0
-    let _lastMouseY = 0
-
-    _mousePosTracker = (e: MouseEvent) => { _lastMouseX = e.clientX; _lastMouseY = e.clientY }
-    el.addEventListener('mousemove', _mousePosTracker)
-
-    _cmdKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Meta' || _isCmdHeld) return
-      _isCmdHeld = true
-      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMouseX, clientY: _lastMouseY, metaKey: true }))
-    }
-    _cmdKeyUp = (e: KeyboardEvent) => {
-      if (e.key !== 'Meta') return
-      _isCmdHeld = false
-      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMouseX, clientY: _lastMouseY }))
-    }
-    window.addEventListener('keydown', _cmdKeyDown)
-    window.addEventListener('keyup', _cmdKeyUp)
-
-    parserDisposers.push(term.registerLinkProvider(buildFileLinkProvider(term, opts?.workspacePath, backend, () => _isCmdHeld)))
-
-    // ── DEC mode 2048 (in-band resize) interception ──────────────────────────
-    // Detect a CLI opting into in-band size reports and answer its query. All
-    // handlers return false (don't swallow) so xterm still processes the other
-    // modes in the same DECSET/DECRST sequence; only the 2048 DECRQM reply is
-    // swallowed so a built-in xterm answer can't double-respond.
-    parserDisposers.push(
-      term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
-        if (params.includes(2048) && !mode2048) {
-          mode2048 = true
-          console.debug(`[pane ${paneId}] DEC mode 2048 (in-band resize) enabled`)
-          sendSizeReport()  // spec: report once immediately on enable
-        }
-        return false
-      }),
-      term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
-        if (params.includes(2048)) mode2048 = false
-        return false
-      }),
-      term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, (params) => {
-        // DECRQM: reply only for mode 2048 (1 = set, 2 = reset).
-        if (params[0] === 2048) {
-          pasteText(`\x1b[?2048;${mode2048 ? 1 : 2}$y`)
-          return true
-        }
-        return false
-      }),
-    )
 
     // Anchor for Shift+Arrow keyboard selection
     let selAnchorX = -1
@@ -744,7 +468,143 @@ export function useTerminal(
     }
     el.addEventListener('mousedown', _mousedownHandler)
 
-    // ── Cmd+Click file open (mousedown capture, runs before xterm mouse tracking) ──
+    // ── Cmd+Click file search overlay ────────────────────────────────────────
+    let _isCmdHeld = false
+    let _lastMX = 0
+    let _lastMY = 0
+
+    _mousePosTracker = (e: MouseEvent) => { _lastMX = e.clientX; _lastMY = e.clientY }
+    el.addEventListener('mousemove', _mousePosTracker)
+
+    _cmdKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Meta' || _isCmdHeld) return
+      _isCmdHeld = true
+      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMX, clientY: _lastMY, metaKey: true }))
+    }
+    _cmdKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== 'Meta') return
+      _isCmdHeld = false
+      el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: _lastMX, clientY: _lastMY }))
+    }
+    window.addEventListener('keydown', _cmdKeyDown)
+    window.addEventListener('keyup', _cmdKeyUp)
+
+    term.registerLinkProvider(buildFileLinkProvider(term, () => _isCmdHeld))
+
+    function showTerminalFilePicker(initialQuery: string, lineNum: number | undefined): void {
+      document.querySelector('.term-file-picker-root')?.remove()
+      const wsPath = opts?.workspacePath
+
+      const root = document.createElement('div')
+      root.className = 'term-file-picker-root'
+      Object.assign(root.style, {
+        position: 'fixed', inset: '0', zIndex: '99999',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+        paddingTop: '80px', background: 'rgba(0,0,0,0.35)',
+      })
+
+      const card = document.createElement('div')
+      Object.assign(card.style, {
+        background: '#161b22', border: '1px solid #30363d', borderRadius: '8px',
+        width: '560px', maxHeight: '420px', display: 'flex', flexDirection: 'column',
+        boxShadow: '0 16px 48px rgba(0,0,0,0.8)', overflow: 'hidden',
+      })
+
+      const pickerInput = document.createElement('input')
+      pickerInput.value = initialQuery
+      pickerInput.placeholder = 'Search files...'
+      Object.assign(pickerInput.style, {
+        background: 'transparent', border: 'none', borderBottom: '1px solid #21262d',
+        color: '#e6edf3', fontSize: '14px', padding: '12px 16px', outline: 'none',
+        fontFamily: 'inherit', width: '100%', boxSizing: 'border-box',
+      })
+
+      const itemList = document.createElement('div')
+      Object.assign(itemList.style, { overflowY: 'auto', flex: '1' })
+
+      card.appendChild(pickerInput)
+      card.appendChild(itemList)
+      root.appendChild(card)
+      document.body.appendChild(root)
+
+      let currentItems: { abs: string; name: string; dir: string }[] = []
+      let selectedIdx = 0
+      let debounceTimer: ReturnType<typeof setTimeout>
+
+      function renderList(): void {
+        itemList.innerHTML = ''
+        if (!currentItems.length) {
+          const msg = document.createElement('div')
+          msg.textContent = 'No files found'
+          Object.assign(msg.style, { padding: '10px 16px', color: '#6e7681', fontSize: '12px' })
+          itemList.appendChild(msg)
+          return
+        }
+        currentItems.forEach((item, i) => {
+          const row = document.createElement('div')
+          Object.assign(row.style, {
+            padding: '7px 16px', cursor: 'pointer',
+            display: 'flex', gap: '10px', alignItems: 'baseline',
+            background: i === selectedIdx ? 'rgba(56,139,253,0.2)' : '',
+          })
+          const nameSpan = document.createElement('span')
+          nameSpan.textContent = item.name
+          Object.assign(nameSpan.style, { color: '#e6edf3', fontSize: '13px' })
+          const dirSpan = document.createElement('span')
+          dirSpan.textContent = item.dir || '/'
+          Object.assign(dirSpan.style, { color: '#8b949e', fontSize: '11px' })
+          row.appendChild(nameSpan)
+          row.appendChild(dirSpan)
+          row.addEventListener('mouseenter', () => { selectedIdx = i; renderList() })
+          row.addEventListener('mousedown', (e) => { e.preventDefault(); close(); openInEditor(item.abs, lineNum) })
+          itemList.appendChild(row)
+        })
+      }
+
+      function close(): void { clearTimeout(debounceTimer); root.remove() }
+
+      async function doSearch(q: string): Promise<void> {
+        if (!q.trim() || !wsPath) { currentItems = []; renderList(); return }
+        try {
+          const r = await backend.send<{ files: string[] }>('fs.list_files_flat', {
+            workspace_path: wsPath, query: q, max_results: 20,
+          })
+          currentItems = (r.ok && r.payload?.files ? r.payload.files : []).map((rel) => {
+            const parts = rel.split('/')
+            const name = parts.pop() ?? rel
+            return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
+          })
+        } catch { currentItems = [] }
+        selectedIdx = 0
+        renderList()
+      }
+
+      pickerInput.addEventListener('input', () => {
+        clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(() => void doSearch(pickerInput.value), 150)
+      })
+
+      pickerInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Escape') { e.stopPropagation(); close(); return }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          if (selectedIdx < currentItems.length - 1) { selectedIdx++; renderList() }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          if (selectedIdx > 0) { selectedIdx--; renderList() }
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          const item = currentItems[selectedIdx]
+          if (item) { close(); openInEditor(item.abs, lineNum) }
+        }
+      })
+
+      root.addEventListener('mousedown', (e) => { if (e.target === root) close() })
+      pickerInput.focus()
+      pickerInput.select()
+      void doSearch(initialQuery)
+    }
+
     _cmdClickHandler = (event: MouseEvent) => {
       if (!event.metaKey || event.button !== 0) return
       const xtermScreen = el.querySelector('.xterm-screen')
@@ -757,19 +617,20 @@ export function useTerminal(
       const row = Math.floor((event.clientY - rect.top) / cellH)
       if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return
       const bufferRow = term.buffer.active.viewportY + row
-      const line = term.buffer.active.getLine(bufferRow)
-      if (!line) return
-      const text = line.translateToString(true)
+      const bufLine = term.buffer.active.getLine(bufferRow)
+      if (!bufLine) return
+      const text = bufLine.translateToString(true)
       FILE_LINK_RE.lastIndex = 0
       let m: RegExpExecArray | null
       while ((m = FILE_LINK_RE.exec(text)) !== null) {
-        if (m[0].includes('://')) continue  // skip URLs
+        if (m[0].includes('://')) continue
         if (col >= m.index && col < m.index + m[0].length) {
           event.preventDefault()
           event.stopPropagation()
           const { filepath, line: lineNum } = splitSuffix(m[0])
           if (!filepath) return
-          openInEditor(resolveAbsPath(filepath, opts?.workspacePath), lineNum)
+          const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
+          showTerminalFilePicker(basename, lineNum)
           return
         }
       }
@@ -777,21 +638,7 @@ export function useTerminal(
     el.addEventListener('mousedown', _cmdClickHandler, { capture: true })
 
     mountedEl = el
-    // Debounced: hold the old (PTY-consistent) size through layout churn,
-    // then fit + resize the PTY together once the container is still.
-    resizeObserver = new ResizeObserver(() => {
-      if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
-      resizeDebounceTimer = setTimeout(() => {
-        resizeDebounceTimer = null
-        // A hidden-tab pane parked its spawn; becoming measurable (the tab was
-        // shown) fires this — create the PTY now, at the real width.
-        if (pendingSpawn.value) { void createWhenMeasurable(); return }
-        applyFit()
-        // Once this resize settles, repaint the TUI clean at the new width.
-        requestResizeRedraw()
-      }, RESIZE_QUIET_MS)
-    })
-    resizeObserver.observe(el)
+    resizeCtrl.attachObserver(el)
     mounted = true
   }
 
@@ -985,8 +832,8 @@ export function useTerminal(
     sessionId.value = prev
     status.value = 'running'
     bindSessionHandlers()
-    pendingReattachRedraw = true  // reconciler repaints once the width is settled
-    applyFit()                    // start syncing size (no-op while hidden)
+    pendingReattachRedraw = true      // reconciler repaints once the width is settled
+    resizeCtrl.applyFit()             // start syncing size (no-op while hidden)
     queueMicrotask(() => focus())
     return true
   }
@@ -1020,7 +867,7 @@ export function useTerminal(
     cleanupSession()
     bindSessionHandlers()
     pendingReattachRedraw = true
-    applyFit()
+    resizeCtrl.applyFit()
   }
 
   // When the backend WS reconnects while we have a live session, reattach so
@@ -1144,7 +991,7 @@ export function useTerminal(
       // TEMP diagnostic: marks a fresh pane spawn so we can confirm the new code
       // is actually loaded (opening a pane writes a line even without resizing).
       dbgLog(`spawn cols=${term.cols} rows=${term.rows}`)
-      applyFit()  // sync the real size to the backend on first paint
+      resizeCtrl.applyFit()  // sync the real size to the backend on first paint
       queueMicrotask(() => focus())
       bindSessionHandlers()
     } catch (err) {
@@ -1154,13 +1001,27 @@ export function useTerminal(
     }
   }
 
+  // Assign here — after createWhenMeasurable is defined — so all callbacks
+  // close over the fully-initialized functions. The declaration is hoisted
+  // above the reconciler interval so async closures can reference it safely.
+  resizeCtrl = createResizeController(
+    term,
+    fit,
+    sessionId,
+    containerRef,
+    lastRawActivityAt,
+    backend.send,
+    dbgLog,
+    () => !!pendingSpawn.value,
+    () => { void createWhenMeasurable() },
+  )
+
   async function spawn(opts: SpawnOptions): Promise<void> {
     if (status.value === 'starting' || status.value === 'running') {
       throw new Error('terminal already running')
     }
     error.value = ''
     status.value = 'starting'
-    mode2048 = false  // a fresh process hasn't opted in yet
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
     // Use the stable CLI session id as the reattach key when provided, so the
     // lookup below survives a reload (paneId does not).
@@ -1197,7 +1058,7 @@ export function useTerminal(
 
   function fitTerminal(): void {
     if (!mounted) return
-    applyFit()
+    resizeCtrl.applyFit()
   }
 
   // Ask the CLI to repaint its current frame by sending Ctrl+L (the universal
@@ -1248,20 +1109,15 @@ export function useTerminal(
   onScopeDispose(() => {
     saveScrollSnapshot()  // persist scrollback before the pane is torn down
     cleanupSession()
-    parserDisposers.forEach((d) => d.dispose())
-    parserDisposers = []
     clearInterval(tickInterval)
     clearInterval(reconcileInterval)
-    cancelAnimationFrame(resizeRafId)
-    if (resizeFrameTimer) clearTimeout(resizeFrameTimer)
-    if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
-    if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
-    resizeObserver?.disconnect()
+    resizeCtrl.dispose()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
-    if (mountedEl && _mousePosTracker) mountedEl.removeEventListener('mousemove', _mousePosTracker)
     if (_cmdKeyDown) window.removeEventListener('keydown', _cmdKeyDown)
     if (_cmdKeyUp) window.removeEventListener('keyup', _cmdKeyUp)
+    if (mountedEl && _mousePosTracker) mountedEl.removeEventListener('mousemove', _mousePosTracker)
     if (mountedEl && _cmdClickHandler) mountedEl.removeEventListener('mousedown', _cmdClickHandler, { capture: true })
+    document.querySelector('.term-file-picker-root')?.remove()
     term.dispose()
     // PTY is intentionally NOT killed here. The backend keeps PTYs running
     // after a WS disconnect so that tryReattach() can rebind after a page

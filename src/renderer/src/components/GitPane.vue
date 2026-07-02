@@ -22,6 +22,8 @@ const props = defineProps<{
   // When true, hides the "Found N repos in subfolders" list (used by MultiRepoGit
   // which already shows those repos as tabs).
   hideDiscoveredRepos?: boolean
+  // Issue dispatch/handle status — shows badges on issue rows.
+  issueHandoffs?: Record<string, { paneId: string; mode: string; state: string }>
 }>()
 
 const emit = defineEmits<{
@@ -32,6 +34,7 @@ const emit = defineEmits<{
   (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string }): void
   (e: 'open-branch-diff', payload: { base: string; compare: string }): void
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
+  (e: 'focus-pane', paneId: string): void
 }>()
 
 function openBranchDiffTab(base = 'main'): void {
@@ -2232,6 +2235,13 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <span v-for="l in it.labels" :key="l" class="issue-label">{{ l }}</span>
                 </div>
               </div>
+              <span
+                v-if="props.issueHandoffs?.[it.url]"
+                class="issue-handoff-badge"
+                :class="props.issueHandoffs[it.url].state"
+                :title="props.issueHandoffs[it.url].state === 'handling' ? 'Being handled by agent' : 'Agent pane closed'"
+                @click.stop="props.issueHandoffs![it.url].state === 'handling' && emit('focus-pane', props.issueHandoffs![it.url].paneId)"
+              >{{ props.issueHandoffs[it.url].state === 'handling' ? '🤖' : '✓' }}</span>
             </div>
           </template>
           <p v-if="issuesError" class="err-text">{{ issuesError }}</p>
@@ -2952,6 +2962,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   background: var(--bg-muted); border-radius: 4px; padding: 6px; margin: 0 0 4px; font-family: inherit;
 }
 .issue-comment { border-top: 1px solid var(--border-faint, var(--border)); padding-top: 4px; margin-top: 4px; }
+.issue-handoff-badge { font-size: 11px; flex-shrink: 0; opacity: 0.75; line-height: 1; }
+.issue-handoff-badge.handling { cursor: pointer; }
+.issue-handoff-badge.handling:hover { opacity: 1; }
+.issue-handoff-badge.pane-gone { opacity: 0.45; }
 .dispatch-wrap { position: relative; display: inline-block; }
 .dispatch-menu {
   position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 2px;

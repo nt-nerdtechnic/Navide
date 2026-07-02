@@ -125,4 +125,18 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onFocusPane: (cb: (paneId: string) => void): void => {
     ipcRenderer.on('notify:focusPane', (_event, paneId: string) => cb(paneId))
   },
+  updater: {
+    check: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
+    download: (): Promise<unknown> => ipcRenderer.invoke('updater:download'),
+    install: (): void => { void ipcRenderer.invoke('updater:install') },
+    onUpdateAvailable: (cb: (info: { version: string }) => void): void => {
+      ipcRenderer.on('updater:update-available', (_e, info) => cb(info))
+    },
+    onDownloadProgress: (cb: (info: { percent: number }) => void): void => {
+      ipcRenderer.on('updater:download-progress', (_e, info) => cb(info))
+    },
+    onUpdateDownloaded: (cb: (info: { version: string }) => void): void => {
+      ipcRenderer.on('updater:update-downloaded', (_e, info) => cb(info))
+    },
+  },
 })

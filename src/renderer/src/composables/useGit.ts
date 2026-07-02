@@ -1001,7 +1001,8 @@ export function useGit(
       return { ok: false, message: '', error: resp.payload?.error || resp.error?.message || 'generation failed' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      gitError.value = `generateMessage: ${msg}`
+      // Transient connection errors (WebSocket closed/reconnect) are not user-facing failures.
+      if (!msg.includes('WebSocket')) gitError.value = `generateMessage: ${msg}`
       return { ok: false, message: '', error: msg }
     } finally {
       isGenerating.value = false

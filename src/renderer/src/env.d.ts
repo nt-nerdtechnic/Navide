@@ -71,6 +71,14 @@ declare global {
       onLanguageChanged: (cb: (locale: string) => void) => void
       notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
+      updater?: {
+        check: () => Promise<unknown>
+        download: () => Promise<unknown>
+        install: () => void
+        onUpdateAvailable: (cb: (info: { version: string }) => void) => void
+        onDownloadProgress: (cb: (info: { percent: number }) => void) => void
+        onUpdateDownloaded: (cb: (info: { version: string }) => void) => void
+      }
     }
   }
 }

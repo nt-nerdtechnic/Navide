@@ -16,6 +16,7 @@ import NotificationHost from './components/NotificationHost.vue'
 import type AIChatPaneType from './components/AIChatPane.vue'
 const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vue'))
 import ProblemsPane from './components/ProblemsPane.vue'
+import PlanFileView from './editor/PlanFileView.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
 import { useNotify } from './composables/useNotify'
@@ -174,6 +175,25 @@ function askSelectionWithAi(file: OpenFile, payload: unknown): void {
 interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
+
+// ── Plan file view mode ───────────────────────────────────────────────────────
+// Tracks which .plan.md files are shown in the rich plan view (vs raw editor).
+const planViewFiles = ref(new Set<string>())
+
+function isPlanFile(relPath: string): boolean {
+  return relPath.endsWith('.plan.md')
+}
+
+function togglePlanView(relPath: string): void {
+  const s = new Set(planViewFiles.value)
+  if (s.has(relPath)) {
+    s.delete(relPath)
+  } else {
+    s.add(relPath)
+  }
+  planViewFiles.value = s
+}
+
 const initialSidebar = (['explorer', 'search', 'git', 'problems'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
@@ -359,6 +379,12 @@ function openFile(p: { filepath: string; name?: string; line?: number }): void {
     }
   } else {
     openFiles.value.push({ kind: 'file', relPath, name, line: p.line ?? 0, dirty: false, revealSeq: 0 })
+    // Auto-enable plan view for .plan.md files.
+    if (isPlanFile(relPath)) {
+      const s = new Set(planViewFiles.value)
+      s.add(relPath)
+      planViewFiles.value = s
+    }
   }
   activeRel.value = relPath
 }
@@ -1716,8 +1742,16 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           </div>
         </div>
         <div v-if="activeFile?.kind === 'file'" class="ide-tab-actions">
-          <button class="ide-tab-act" :title="'AI complete (⌘I)'" @click="activeEditor()?.requestGhost()">✦ Complete</button>
-          <button class="ide-tab-act" :title="'AI rewrite selection (⌘K)'" @click="activeEditor()?.openCmdK()">✦ Cmd+K</button>
+          <button
+            v-if="activeFile && isPlanFile(activeFile.relPath)"
+            class="ide-tab-act ide-tab-act--plan-toggle"
+            :title="planViewFiles.has(activeFile.relPath) ? 'Switch to raw editor' : 'Switch to plan view'"
+            @click="togglePlanView(activeFile.relPath)"
+          >{{ planViewFiles.has(activeFile.relPath) ? 'Raw' : 'Plan' }}</button>
+          <template v-if="!isPlanFile(activeFile?.relPath ?? '')">
+            <button class="ide-tab-act" :title="'AI complete (⌘I)'" @click="activeEditor()?.requestGhost()">✦ Complete</button>
+            <button class="ide-tab-act" :title="'AI rewrite selection (⌘K)'" @click="activeEditor()?.openCmdK()">✦ Cmd+K</button>
+          </template>
         </div>
       </div>
 
@@ -1735,8 +1769,20 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 
       <div class="ide-editors">
         <template v-for="f in openFiles" :key="f.relPath">
+          <!-- Plan view: shown for .plan.md files when in plan mode -->
+          <PlanFileView
+            v-if="f.kind === 'file' && isPlanFile(f.relPath) && planViewFiles.has(f.relPath)"
+            v-show="f.relPath === activeRel"
+            :workspace-path="workspacePath"
+            :rel-path="f.relPath"
+            :backend="backend"
+            @dirty="(v) => markDirty(f.relPath, v)"
+          />
+          <!-- Code editor: shown for all non-plan files, and plan files in raw mode.
+               Key changes when toggling plan/raw, forcing a fresh load from disk. -->
           <EditorPane
-            v-if="f.kind === 'file'"
+            v-if="f.kind === 'file' && !(isPlanFile(f.relPath) && planViewFiles.has(f.relPath))"
+            :key="f.relPath + ':' + (planViewFiles.has(f.relPath) ? 'plan' : 'raw')"
             v-show="f.relPath === activeRel"
             :ref="(el) => setEditorRef(f.relPath, el)"
             :workspace-path="workspacePath"

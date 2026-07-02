@@ -5,6 +5,7 @@ import { readFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
+import { initUpdater } from './updater'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
@@ -793,6 +794,11 @@ app.whenReady().then(async () => {
     if (openWorkspaceFromPath(p)) openedAny = true
   }
   if (!openedAny) await createWindow()
+
+  // Auto-updater: only run in packaged builds — dev mode has no GitHub Release to check.
+  if (app.isPackaged) {
+    setTimeout(() => initUpdater(), 5000)
+  }
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()
