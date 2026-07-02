@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 import { initUpdater } from './updater'
+import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
@@ -27,6 +28,14 @@ const mainWindows = new Set<BrowserWindow>()
 // Maps each main window to its workspace_path so we can focus an existing window
 // instead of creating a duplicate when the same folder is opened again.
 const mainWindowWorkspaces = new Map<BrowserWindow, string>()
+// Crash-restore: persists open workspace windows so an unexpected exit can be
+// detected and offered for restore on the next launch (see window-registry.ts).
+// Path resolved lazily — dev re-points userData (…-dev) below, after imports.
+const windowRegistry = new WindowRegistry(() => join(app.getPath('userData'), 'open-windows.json'))
+// Windows from the previous (uncleanly exited) run, offered to the FIRST
+// renderer that asks via restore:getPending; cleared on apply/dismiss.
+let pendingRestore: WindowEntry[] | null = null
+let pendingRestoreClaimed = false
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
@@ -40,10 +49,14 @@ function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   }
 }
 
-async function createWindow(params: Record<string, string> = {}): Promise<BrowserWindow> {
+async function createWindow(
+  params: Record<string, string> = {},
+  opts?: { bounds?: WindowBounds }
+): Promise<BrowserWindow> {
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: opts?.bounds?.width ?? 1280,
+    height: opts?.bounds?.height ?? 800,
+    ...(opts?.bounds ? { x: opts.bounds.x, y: opts.bounds.y } : {}),
     title: 'Agent-Team',
     titleBarStyle: 'hidden',
     // Start hidden and show only once the renderer has painted its first frame,
@@ -61,7 +74,13 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
   })
   mainWindows.add(win)
   mainWindow = win
-  if (params.workspace_path) mainWindowWorkspaces.set(win, params.workspace_path)
+  const winId = win.id // captured — win.id is not readable after destroy
+  if (params.workspace_path) {
+    mainWindowWorkspaces.set(win, params.workspace_path)
+    windowRegistry.setWorkspace(winId, params.workspace_path)
+  }
+  win.on('moved', () => { if (!win.isDestroyed()) windowRegistry.setBounds(winId, win.getBounds()) })
+  win.on('resized', () => { if (!win.isDestroyed()) windowRegistry.setBounds(winId, win.getBounds()) })
   // Show on first paint (theme already applied → no white/wrong-theme flash).
   // Fallback timer guarantees the window appears even if ready-to-show is missed.
   let _shown = false
@@ -76,6 +95,7 @@ async function createWindow(params: Record<string, string> = {}): Promise<Browse
   win.on('closed', () => {
     mainWindows.delete(win)
     mainWindowWorkspaces.delete(win)
+    windowRegistry.remove(winId)
     if (mainWindow === win) {
       const remaining = [...mainWindows]
       mainWindow = remaining.length ? remaining[remaining.length - 1] : null
@@ -244,6 +264,57 @@ ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) =
   const ws = (args?.workspace_path ?? '').trim()
   if (ws) params.workspace_path = ws
   void createWindow(params)
+  return { ok: true }
+})
+
+// The renderer switches workspaces at runtime (Welcome picker / back-to-Welcome)
+// without reloading, so main's per-window workspace map — and the crash-restore
+// registry — must be told. Empty path = the window returned to Welcome.
+ipcMain.on('window:reportWorkspace', (event, workspacePath: string) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || !mainWindows.has(win)) return
+  const ws = String(workspacePath ?? '').trim()
+  if (ws) mainWindowWorkspaces.set(win, ws)
+  else mainWindowWorkspaces.delete(win)
+  windowRegistry.setWorkspace(win.id, ws)
+})
+
+// ── Crash-restore prompt (see window-registry.ts) ────────────────────────────
+// The first window to ask claims the banner; apply/dismiss both clear it.
+ipcMain.handle('restore:getPending', () => {
+  if (!pendingRestore || pendingRestoreClaimed) return null
+  pendingRestoreClaimed = true
+  return pendingRestore.map((w) => w.workspace_path)
+})
+
+ipcMain.handle('restore:apply', () => {
+  const entries = pendingRestore ?? []
+  pendingRestore = null
+  for (const entry of entries) {
+    // Already reopened manually → focus, don't duplicate.
+    let focused = false
+    for (const [win, wp] of mainWindowWorkspaces) {
+      if (!win.isDestroyed() && wp === entry.workspace_path) {
+        if (win.isMinimized()) win.restore()
+        win.focus()
+        focused = true
+        break
+      }
+    }
+    if (!focused) {
+      // restore=1 tells the renderer this is a crash-restore boot, not a
+      // duplicated window — pane restore must run (sessions are dead).
+      void createWindow(
+        { workspace_path: entry.workspace_path, restore: '1' },
+        entry.bounds ? { bounds: entry.bounds } : undefined
+      )
+    }
+  }
+  return { ok: true, opened: entries.length }
+})
+
+ipcMain.handle('restore:dismiss', () => {
+  pendingRestore = null
   return { ok: true }
 })
 
@@ -757,6 +828,16 @@ app.on('web-contents-created', (_e, contents) => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
+  // Detect an unclean previous exit and stash its windows for the restore
+  // banner. Always reset the file (start tracking this run) — but only OFFER
+  // restore in packaged builds: dev restarts (electron-vite) always look like
+  // crashes. AGENT_TEAM_FORCE_RESTORE=1 enables the offer in dev for testing.
+  {
+    const pending = windowRegistry.readPendingAndReset()
+    const restoreEnabled = app.isPackaged || process.env['AGENT_TEAM_FORCE_RESTORE'] === '1'
+    pendingRestore = restoreEnabled ? pending : null
+    if (pendingRestore) console.log('[main] unclean exit detected;', pendingRestore.length, 'workspace(s) restorable')
+  }
   // In dev mode, inject the per-session random token into every renderer →
   // dev-server request so browsers without the token get 403.
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
@@ -818,6 +899,9 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', async (e) => {
+  // A user-initiated quit is a clean exit — nothing to restore next launch.
+  // Must run before the early return below (backend may already be gone).
+  windowRegistry.markCleanExit()
   if (!backend && !backendStarting) return
   e.preventDefault()
   // Never let a wedged/slow backend block quit: cap every wait below.

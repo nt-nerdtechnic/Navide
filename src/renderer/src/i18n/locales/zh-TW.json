@@ -503,5 +503,10 @@
     "done-body": "{label} 已完成本回合",
     "attention-title": "CLI 需要你的回覆",
     "attention-body": "{label} 正在等待你的輸入"
+  },
+  "restore": {
+    "banner-text": "偵測到上次未正常關閉，要恢復 {count} 個 workspace 嗎？",
+    "apply": "恢復",
+    "dismiss": "忽略"
   }
 }

@@ -128,6 +128,14 @@ contextBridge.exposeInMainWorld('agentTeam', {
   setBadgeCount: (count: number): void => {
     ipcRenderer.send('window:setBadgeCount', count)
   },
+  reportWorkspace: (workspacePath: string): void => {
+    ipcRenderer.send('window:reportWorkspace', workspacePath)
+  },
+  restore: {
+    getPending: (): Promise<string[] | null> => ipcRenderer.invoke('restore:getPending'),
+    apply: (): Promise<{ ok: boolean; opened: number }> => ipcRenderer.invoke('restore:apply'),
+    dismiss: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('restore:dismiss'),
+  },
   updater: {
     check: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
     download: (): Promise<unknown> => ipcRenderer.invoke('updater:download'),

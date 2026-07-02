@@ -17,6 +17,7 @@ import QuestionAlert from './components/QuestionAlert.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
+import RestoreBanner from './components/RestoreBanner.vue'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -160,7 +161,10 @@ const WS_PATH_KEY = 'agentTeam.currentWorkspace'
 // panes (that would double-resume the same CLI sessions), so restore is
 // suppressed once on this first load — see onWorkspaceCheck.
 const _bootWorkspace = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
-let suppressPaneRestoreOnce = _bootWorkspace !== ''
+// Crash-restore windows (restore=1) carry a workspace URL param too, but their
+// sessions are dead — pane restore MUST run for them, unlike duplicated windows.
+const _bootIsRestore = new URLSearchParams(window.location.search).get('restore') === '1'
+let suppressPaneRestoreOnce = _bootWorkspace !== '' && !_bootIsRestore
 if (_bootWorkspace) {
   try {
     sessionStorage.setItem(WS_PATH_KEY, _bootWorkspace)
@@ -189,6 +193,24 @@ const workspaceSelected = ref<boolean>(
     }
   })()
 )
+
+// Crash-restore: keep main's open-windows registry in sync with this window's
+// workspace (Welcome picks/switches happen without a reload, so main can't see
+// them), and ask once whether the previous run exited uncleanly — only the
+// first window to ask gets the list and shows the banner.
+watch(currentWorkspace, (v) => { window.agentTeam?.reportWorkspace?.(v) }, { immediate: true })
+const restoreWorkspaces = ref<string[] | null>(null)
+void window.agentTeam?.restore?.getPending().then((list) => {
+  if (list?.length) restoreWorkspaces.value = list
+})
+function onRestoreApply(): void {
+  void window.agentTeam?.restore?.apply()
+  restoreWorkspaces.value = null
+}
+function onRestoreDismiss(): void {
+  void window.agentTeam?.restore?.dismiss()
+  restoreWorkspaces.value = null
+}
 
 function onWorkspaceSelected(path: string): void {
   currentWorkspace.value = path
@@ -5347,6 +5369,14 @@ function paneIsCommander(p: ActivePane): boolean {
     v-if="onboardingComplete === false"
     :backend="backend"
     @complete="onboardingComplete = true"
+  />
+  <!-- Crash-restore prompt: previous run exited uncleanly — offer to reopen
+       its workspace windows. Non-blocking; shown above Welcome or workspace. -->
+  <RestoreBanner
+    v-if="restoreWorkspaces"
+    :workspaces="restoreWorkspaces"
+    @apply="onRestoreApply"
+    @dismiss="onRestoreDismiss"
   />
   <!-- First-boot loading overlay: covers the shell until the backend settles,
        then fades out. Brand-only text so no i18n keys are needed. -->

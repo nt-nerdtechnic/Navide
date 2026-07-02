@@ -72,6 +72,12 @@ declare global {
       notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
       setBadgeCount: (count: number) => void
+      reportWorkspace: (workspacePath: string) => void
+      restore?: {
+        getPending: () => Promise<string[] | null>
+        apply: () => Promise<{ ok: boolean; opened: number }>
+        dismiss: () => Promise<{ ok: boolean }>
+      }
       updater?: {
         check: () => Promise<unknown>
         download: () => Promise<unknown>
