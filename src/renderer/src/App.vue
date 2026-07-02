@@ -3139,6 +3139,11 @@ const paneArmedAt = new Map<string, number>()
 // logic without altering paneTurnCompleteAt / paneLastActiveAt handling.
 const sysNotify = useSystemNotify()
 
+// Dock badge (macOS Terminal.app-style): reflect the count of panes with unseen
+// done/attention activity. Clearing on view happens via the focusPaneId watcher
+// below (once it's declared).
+watch(sysNotify.pendingCount, (count) => { window.agentTeam?.setBadgeCount(count) })
+
 // Per-pane timer that fires a 'done' notification once turn_complete has stayed
 // the latest signal for TURN_COMPLETE_SETTLE_MS — mirroring turnCompleteDone so
 // a turn that ended to ask a QUESTION isn't mis-notified as completion.
@@ -4521,6 +4526,10 @@ function truncate(s: string, n: number): string {
 const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
+
+// Any path that sets focusPaneId means the user is now looking at that pane —
+// clear its Dock badge pending state (see sysNotify.pendingCount above).
+watch(focusPaneId, (id) => { if (id) sysNotify.markSeen(id) })
 
 // ── Agent Run Group Tab Bar ───────────────────────────────────────────────────
 // Naming guide for this area:

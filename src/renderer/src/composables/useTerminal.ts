@@ -136,6 +136,144 @@ function openInEditor(absPath: string, line: number | undefined): void {
   void api.openEditorWindow({ workspace_path: wsPath, filepath, ...(line !== undefined ? { line } : {}) })
 }
 
+// A single character matching the FILE_LINK_RE path-body class (used to test
+// whether a path-like token runs right up against a row boundary).
+const _PATH_CHAR_RE = new RegExp(_EXCL)
+
+// A wrapped logical line, reconstructed from two signals:
+//   • xterm's `isWrapped` flag — authoritative for genuine terminal-width
+//     wraps (works for any content).
+//   • a content-boundary check — CLI TUIs (Claude Code, Codex, etc.) measure
+//     the terminal themselves and pre-wrap their output with real newlines at
+//     a width narrower than the pane, so isWrapped is never set and rows never
+//     reach term.cols. We join a row to the previous one when the previous row
+//     ends in a path char and this row's FIRST NON-GUTTER char is a path char.
+//     Continuation rows carry the block's gutter indent, so that leading
+//     whitespace is stripped from fullText; `strips` records how much, keeping
+//     buffer col ↔ fullText offset mapping exact.
+// Joining is deliberately permissive — text alone cannot distinguish "one
+// path wrapped across rows" from "two paths on adjacent rows"; the click
+// handler resolves that ambiguity via fs.stat_path (see _cmdClickHandler).
+// Shared by the hover/underline link provider and the click handler so both
+// always agree on where a path starts/ends, even across multiple rows.
+export interface WrappedLineGroup {
+  groupStart: number // absolute buffer row where the group starts
+  lineLengths: number[] // per-row contribution length in fullText (gutter stripped)
+  strips: number[] // per-row count of leading gutter chars dropped from fullText
+  fullText: string // concatenated text of every row in the group
+}
+
+export function getWrappedLineGroup(term: import('@xterm/xterm').Terminal, bufferRow: number): WrappedLineGroup {
+  const buffer = term.buffer.active
+  const lineTextAt = (r: number): string | null => {
+    const ln = buffer.getLine(r)
+    return ln ? ln.translateToString(true) : null
+  }
+  const leadingWs = (s: string): number => s.length - s.trimStart().length
+  // Whether row `r` is a continuation of row `r - 1`.
+  const continuesFromPrev = (r: number): boolean => {
+    if (r <= 0) return false
+    if (buffer.getLine(r)?.isWrapped) return true
+    const cur = lineTextAt(r)
+    const prev = lineTextAt(r - 1)
+    if (!cur || !prev) return false
+    return _PATH_CHAR_RE.test(prev[prev.length - 1]) && _PATH_CHAR_RE.test(cur[leadingWs(cur)])
+  }
+
+  let groupStart = bufferRow
+  for (let steps = 0; steps < 8 && groupStart > 0 && continuesFromPrev(groupStart); steps++) {
+    groupStart--
+  }
+
+  const lineLengths: number[] = []
+  const strips: number[] = []
+  let fullText = ''
+  for (let r = groupStart, steps = 0; steps < 16; r++, steps++) {
+    const lineText = lineTextAt(r)
+    if (lineText === null) break
+    // True xterm wraps keep their cells verbatim; only pre-wrapped (CLI-drawn)
+    // continuations have a gutter indent to strip.
+    const strip = r === groupStart || buffer.getLine(r)?.isWrapped ? 0 : leadingWs(lineText)
+    strips.push(strip)
+    lineLengths.push(lineText.length - strip)
+    fullText += lineText.slice(strip)
+    if (!continuesFromPrev(r + 1)) break
+  }
+
+  return { groupStart, lineLengths, strips, fullText }
+}
+
+/** Convert a 0-based offset into `group.fullText` back to an absolute buffer row/col. */
+export function groupPosToRowCol(group: WrappedLineGroup, pos: number): { row: number; col: number } {
+  let remaining = pos
+  for (let i = 0; i < group.lineLengths.length; i++) {
+    const len = group.lineLengths[i]
+    if (i === group.lineLengths.length - 1 || remaining < len) {
+      return { row: group.groupStart + i, col: remaining + group.strips[i] }
+    }
+    remaining -= len
+  }
+  return { row: group.groupStart, col: pos }
+}
+
+/** Convert an absolute buffer row/col to a 0-based offset into `group.fullText`,
+ *  or -1 when the position falls outside the row's contributed text (in the
+ *  stripped gutter, or right of the trimmed content). */
+export function groupRowColToPos(group: WrappedLineGroup, bufferRow: number, col: number): number {
+  const rowInGroup = bufferRow - group.groupStart
+  if (rowInGroup < 0 || rowInGroup >= group.lineLengths.length) return -1
+  const inRow = col - group.strips[rowInGroup]
+  if (inRow < 0 || inRow >= group.lineLengths[rowInGroup]) return -1
+  let pos = inRow
+  for (let i = 0; i < rowInGroup; i++) pos += group.lineLengths[i]
+  return pos
+}
+
+/** The FILE_LINK_RE match containing 0-based `pos` in `text`, or null. */
+export function findFileLinkMatchAt(text: string, pos: number): { text: string; index: number } | null {
+  if (pos < 0) return null
+  FILE_LINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = FILE_LINK_RE.exec(text)) !== null) {
+    if (m[0].includes('://')) continue
+    if (pos >= m.index && pos < m.index + m[0].length) return { text: m[0], index: m.index }
+  }
+  return null
+}
+
+export function findFileLinkAt(text: string, pos: number): string | null {
+  return findFileLinkMatchAt(text, pos)?.text ?? null
+}
+
+/** Split a fullText regex match back into per-path pieces at row boundaries
+ *  where the next row starts a fresh absolute path ('/' or '~'). List output
+ *  (find, ls) puts one path per row; joining glues adjacent paths into one
+ *  regex match, but a wrapped path's continuation fragment essentially never
+ *  begins with '/', while a NEW path on the next row does — so those
+ *  boundaries are where distinct paths meet. */
+export function splitMatchAtRowStarts(
+  group: WrappedLineGroup,
+  matchIndex: number,
+  matchText: string
+): Array<{ index: number; text: string }> {
+  const end = matchIndex + matchText.length
+  const cuts: number[] = []
+  let boundary = 0
+  for (let i = 0; i < group.lineLengths.length - 1; i++) {
+    boundary += group.lineLengths[i] // start offset of row i+1's contribution
+    if (boundary <= matchIndex || boundary >= end) continue
+    const c = group.fullText[boundary]
+    if (c === '/' || c === '~') cuts.push(boundary)
+  }
+  const pieces: Array<{ index: number; text: string }> = []
+  let start = matchIndex
+  for (const cut of [...cuts, end]) {
+    pieces.push({ index: start, text: group.fullText.slice(start, cut) })
+    start = cut
+  }
+  return pieces
+}
+
 function buildFileLinkProvider(
   term: import('@xterm/xterm').Terminal,
   isCmdHeld: () => boolean
@@ -143,20 +281,25 @@ function buildFileLinkProvider(
   return {
     provideLinks(y, callback) {
       if (!isCmdHeld()) { callback(undefined); return }
-      const bufLine = term.buffer.active.getLine(y - 1)
-      if (!bufLine) { callback(undefined); return }
-      const text = bufLine.translateToString(true)
+      const group = getWrappedLineGroup(term, y - 1)
       FILE_LINK_RE.lastIndex = 0
       const links: import('@xterm/xterm').ILink[] = []
       let m: RegExpExecArray | null
-      while ((m = FILE_LINK_RE.exec(text)) !== null) {
+      while ((m = FILE_LINK_RE.exec(group.fullText)) !== null) {
         if (m[0].includes('://')) continue
-        links.push({
-          range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
-          text: m[0],
-          decorations: { underline: true, pointerCursor: true },
-          activate: () => { /* click handled by _cmdClickHandler */ },
-        })
+        for (const piece of splitMatchAtRowStarts(group, m.index, m[0])) {
+          const start = groupPosToRowCol(group, piece.index)
+          const end = groupPosToRowCol(group, piece.index + piece.text.length - 1)
+          links.push({
+            range: {
+              start: { x: start.col + 1, y: start.row + 1 },
+              end: { x: end.col + 1, y: end.row + 1 },
+            },
+            text: piece.text,
+            decorations: { underline: true, pointerCursor: true },
+            activate: () => { /* click handled by _cmdClickHandler */ },
+          })
+        }
       }
       callback(links.length ? links : undefined)
     },
@@ -491,7 +634,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
     term.registerLinkProvider(buildFileLinkProvider(term, () => _isCmdHeld))
 
-    function showTerminalFilePicker(initialQuery: string, lineNum: number | undefined): void {
+    function showTerminalFilePicker(
+      initialQuery: string,
+      lineNum: number | undefined,
+      preferredAbsPath?: string,
+      displayText?: string
+    ): void {
       document.querySelector('.term-file-picker-root')?.remove()
       const wsPath = opts?.workspacePath
 
@@ -511,7 +659,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       })
 
       const pickerInput = document.createElement('input')
-      pickerInput.value = initialQuery
+      // Show the full clicked path in the box for context, but the actual search
+      // (see doSearch) still queries by basename — the backend only substring-
+      // matches filenames, not full relative paths.
+      pickerInput.value = displayText ?? initialQuery
       pickerInput.placeholder = 'Search files...'
       Object.assign(pickerInput.style, {
         background: 'transparent', border: 'none', borderBottom: '1px solid #21262d',
@@ -574,6 +725,20 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
             const name = parts.pop() ?? rel
             return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
           })
+          // The click resolved to an existing full path — surface it first so
+          // it's pre-selected, inserting it when the workspace search didn't
+          // include it (e.g. the file lives outside the workspace); the user
+          // still picks from the full list. Initial search only: once the user
+          // types a new query, show plain results.
+          if (preferredAbsPath && q === initialQuery) {
+            const idx = currentItems.findIndex((item) => item.abs === preferredAbsPath)
+            if (idx > 0) currentItems.unshift(currentItems.splice(idx, 1)[0])
+            else if (idx < 0) {
+              const parts = preferredAbsPath.split('/')
+              const name = parts.pop() ?? preferredAbsPath
+              currentItems.unshift({ abs: preferredAbsPath, name, dir: parts.join('/') })
+            }
+          }
         } catch { currentItems = [] }
         selectedIdx = 0
         renderList()
@@ -617,23 +782,47 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const row = Math.floor((event.clientY - rect.top) / cellH)
       if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return
       const bufferRow = term.buffer.active.viewportY + row
-      const bufLine = term.buffer.active.getLine(bufferRow)
-      if (!bufLine) return
-      const text = bufLine.translateToString(true)
-      FILE_LINK_RE.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = FILE_LINK_RE.exec(text)) !== null) {
-        if (m[0].includes('://')) continue
-        if (col >= m.index && col < m.index + m[0].length) {
-          event.preventDefault()
-          event.stopPropagation()
-          const { filepath, line: lineNum } = splitSuffix(m[0])
-          if (!filepath) return
-          const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
-          showTerminalFilePicker(basename, lineNum)
-          return
-        }
+      const group = getWrappedLineGroup(term, bufferRow)
+      const clickPos = groupRowColToPos(group, bufferRow, col)
+
+      const match = findFileLinkMatchAt(group.fullText, clickPos)
+      if (!match) return
+      event.preventDefault()
+      event.stopPropagation()
+
+      // A find/ls block glues every adjacent path into one regex match; the
+      // piece under the click (split at rows that start a fresh '/' path) is
+      // the most likely reading. Fall back to the whole match (a path that
+      // happened to wrap right before a '/') and the clicked row's own token,
+      // letting the filesystem pick whichever actually exists.
+      const piece = splitMatchAtRowStarts(group, match.index, match.text)
+        .find((p) => clickPos >= p.index && clickPos < p.index + p.text.length)
+      const pieceRaw = piece?.text ?? match.text
+      const rowText = term.buffer.active.getLine(bufferRow)?.translateToString(true) ?? ''
+      const singleRaw = findFileLinkAt(rowText, col)
+      const wsPath = opts?.workspacePath
+      const resolveAbs = (fp: string): string | undefined =>
+        fp.startsWith('/') ? fp : wsPath ? `${wsPath}/${fp.replace(/^\.\//, '')}` : undefined
+      const statOk = async (abs: string | undefined): Promise<boolean> => {
+        if (!abs) return false
+        try {
+          const r = await backend.send<{ exists: boolean }>('fs.stat_path', { path: abs })
+          return !!(r.ok && r.payload?.exists)
+        } catch { return false }
       }
+      void (async () => {
+        const cands = [pieceRaw, match.text, singleRaw].filter(
+          (c, i, arr): c is string => !!c && arr.indexOf(c) === i
+        )
+        const absList = cands.map((c) => resolveAbs(splitSuffix(c).filepath))
+        const stats = await Promise.all(absList.map(statOk))
+        const okIdx = stats.findIndex(Boolean)
+        const chosenRaw = okIdx >= 0 ? cands[okIdx] : pieceRaw
+        const { filepath, line: lineNum } = splitSuffix(chosenRaw)
+        if (!filepath) return
+        const basename = filepath.split('/').filter(Boolean).pop() ?? filepath
+        showTerminalFilePicker(basename, lineNum, okIdx >= 0 ? absList[okIdx] : undefined, filepath)
+      })()
     }
     el.addEventListener('mousedown', _cmdClickHandler, { capture: true })
 

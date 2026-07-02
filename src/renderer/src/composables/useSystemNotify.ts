@@ -1,4 +1,4 @@
-import { readonly, ref } from 'vue'
+import { computed, readonly, ref } from 'vue'
 
 /**
  * Native OS notifications for CLI pane state changes (turn done / needs input).
@@ -14,6 +14,12 @@ import { readonly, ref } from 'vue'
  *
  * The gating decision is factored into the pure `shouldNotify` so it can be
  * unit-tested without DOM focus events or the IPC bridge.
+ *
+ * Separately, `pendingCount` drives the macOS Dock badge (Terminal.app-style:
+ * a number for how many panes have unseen done/attention activity). Unlike the
+ * OS notification above, it is NOT gated by appFocused/dedup — it tracks true
+ * pending state, and only clears when the user actually switches to that pane
+ * (`markSeen`) or the pane starts a new turn (`markActive`).
  */
 
 export type NotifyKind = 'done' | 'attention'
@@ -36,6 +42,10 @@ const appFocused = ref(true)
 // Last kind notified per pane, for dedup. Cleared on markActive (new turn) and
 // forgetPane (pane removed).
 const lastKindByPane = new Map<string, NotifyKind>()
+// Panes with unseen done/attention activity, for the Dock badge count. Cleared
+// on markSeen (user switched to the pane), markActive (new turn superseded the
+// pending state), and forgetPane.
+const pendingPanes = ref(new Set<string>())
 let listenersBound = false
 
 function bindFocusListeners(): void {
@@ -58,6 +68,7 @@ function notifyPaneState(
   body: string
 ): void {
   bindFocusListeners()
+  pendingPanes.value.add(paneId)
   if (!shouldNotify({ appFocused: appFocused.value, lastKind: lastKindByPane.get(paneId), kind })) {
     return
   }
@@ -66,22 +77,34 @@ function notifyPaneState(
 }
 
 /** A pane produced new activity (new turn): re-arm notifications for it so the
- *  next done/attention fires even if it matches the previous notification. */
+ *  next done/attention fires even if it matches the previous notification, and
+ *  drop it from the Dock badge count since the pending state is superseded. */
 function markActive(paneId: string): void {
   lastKindByPane.delete(paneId)
+  pendingPanes.value.delete(paneId)
 }
 
-/** A pane was removed: drop its dedup state. */
+/** The user switched to this pane: clear its Dock badge pending state. */
+function markSeen(paneId: string): void {
+  pendingPanes.value.delete(paneId)
+}
+
+/** A pane was removed: drop its dedup and pending state. */
 function forgetPane(paneId: string): void {
   lastKindByPane.delete(paneId)
+  pendingPanes.value.delete(paneId)
 }
+
+const pendingCount = computed(() => pendingPanes.value.size)
 
 export function useSystemNotify() {
   bindFocusListeners()
   return {
     appFocused: readonly(appFocused),
+    pendingCount,
     notifyPaneState,
     markActive,
+    markSeen,
     forgetPane,
   }
 }

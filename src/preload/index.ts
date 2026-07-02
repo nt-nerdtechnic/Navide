@@ -125,6 +125,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onFocusPane: (cb: (paneId: string) => void): void => {
     ipcRenderer.on('notify:focusPane', (_event, paneId: string) => cb(paneId))
   },
+  setBadgeCount: (count: number): void => {
+    ipcRenderer.send('window:setBadgeCount', count)
+  },
   updater: {
     check: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
     download: (): Promise<unknown> => ipcRenderer.invoke('updater:download'),

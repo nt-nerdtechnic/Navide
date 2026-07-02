@@ -71,6 +71,7 @@ declare global {
       onLanguageChanged: (cb: (locale: string) => void) => void
       notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
+      setBadgeCount: (count: number) => void
       updater?: {
         check: () => Promise<unknown>
         download: () => Promise<unknown>

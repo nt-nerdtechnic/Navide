@@ -385,6 +385,14 @@ ipcMain.handle(
   }
 )
 
+// Dock badge (macOS-only, Terminal.app-style): a number for how many panes have
+// unseen done/attention activity. The renderer tracks WHEN to update it
+// (useSystemNotify's pendingCount); main just reflects the count.
+ipcMain.on('window:setBadgeCount', (_event, count: number) => {
+  if (process.platform !== 'darwin') return
+  app.dock?.setBadge(count > 0 ? String(count) : '')
+})
+
 ipcMain.handle(
   'dialog:saveJson',
   async (
