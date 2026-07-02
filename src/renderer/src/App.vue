@@ -1987,6 +1987,16 @@ const controlPaneRef = ref<InstanceType<typeof ControlPane> | null>(null)
 //   otherwise         → spawn
 const currentMode = ref<WorkspaceMode>('spawn')
 let workspaceCheckSeq = 0
+// Cold-boot race guard: a workspace window mounts (firing workspace-check ~400ms
+// in) seconds before the backend WS connects — and with several windows
+// restoring panes at once, an established backend can still be too busy to
+// answer project.peek within its timeout. Either way sendQuiet returns null and
+// pane restore would be silently skipped forever. Track the failure and retry:
+// on connect if we weren't connected, after a delay if we were.
+let workspaceCheckRetries = 0
+let recheckWorkspaceOnConnect = ''
+const WORKSPACE_CHECK_MAX_RETRIES = 4
+const WORKSPACE_CHECK_RETRY_DELAY_MS = 2500
 
 function detectMode(payload: ProjectPayload | null): WorkspaceMode {
   const proj = payload?.project
@@ -2040,6 +2050,24 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   }
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
   if (seq !== workspaceCheckSeq) return
+  if (resp === null) {
+    // Comm failure (ws not open, or a busy backend timed out) — NOT an empty
+    // workspace, which still returns a payload. Schedule a retry so pane
+    // restore isn't silently skipped; give up after the retry budget.
+    if (workspaceCheckRetries < WORKSPACE_CHECK_MAX_RETRIES) {
+      workspaceCheckRetries++
+      if (backend.status.value === 'connected') {
+        window.setTimeout(() => {
+          if (currentWorkspace.value === path) void onWorkspaceCheck(path)
+        }, WORKSPACE_CHECK_RETRY_DELAY_MS)
+      } else {
+        recheckWorkspaceOnConnect = path
+      }
+      return
+    }
+  } else {
+    workspaceCheckRetries = 0
+  }
   if (pipeline.state !== 'running') pipeline.workspacePath = path
   // Keep currentWorkspace in sync with the workspace being inspected so that
   // run-group localStorage keys match: _saveRunGroups() keys off currentWorkspace
@@ -2108,6 +2136,17 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     }
   }
 }
+
+// Fire the deferred workspace re-check as soon as the backend WS connects.
+watch(
+  () => backend.status.value,
+  (s) => {
+    if (s !== 'connected' || !recheckWorkspaceOnConnect) return
+    const p = recheckWorkspaceOnConnect
+    recheckWorkspaceOnConnect = ''
+    if (currentWorkspace.value === p) void onWorkspaceCheck(p)
+  }
+)
 
 /** Re-spawn CLI panes for all slots recorded in project.json.
  *  Called on workspace load so terminal screens appear immediately without
