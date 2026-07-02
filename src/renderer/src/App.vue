@@ -17,7 +17,7 @@ import QuestionAlert from './components/QuestionAlert.vue'
 import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
-import RestoreBanner from './components/RestoreBanner.vue'
+import { useNotify } from './composables/useNotify'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -197,20 +197,27 @@ const workspaceSelected = ref<boolean>(
 // Crash-restore: keep main's open-windows registry in sync with this window's
 // workspace (Welcome picks/switches happen without a reload, so main can't see
 // them), and ask once whether the previous run exited uncleanly — only the
-// first window to ask gets the list and shows the banner.
+// first window to ask gets the list and shows the restore prompt.
 watch(currentWorkspace, (v) => { window.agentTeam?.reportWorkspace?.(v) }, { immediate: true })
-const restoreWorkspaces = ref<string[] | null>(null)
+const notifyRestore = useNotify()
 void window.agentTeam?.restore?.getPending().then((list) => {
-  if (list?.length) restoreWorkspaces.value = list
+  if (!list?.length) return
+  const show = async (): Promise<void> => {
+    const ok = await notifyRestore.confirm(
+      `${i18n.global.t('restore.dialog-message', { count: list.length })}\n\n${list.join('\n')}`,
+      {
+        title: i18n.global.t('restore.dialog-title'),
+        confirmText: i18n.global.t('restore.apply'),
+        cancelText: i18n.global.t('restore.dismiss'),
+      }
+    )
+    if (ok) void window.agentTeam?.restore?.apply()
+    else void window.agentTeam?.restore?.dismiss()
+  }
+  // The boot overlay (z-9000) covers the confirm dialog (z-2100) — wait it out.
+  if (!booting.value) { void show(); return }
+  const stop = watch(booting, (b) => { if (!b) { stop(); void show() } })
 })
-function onRestoreApply(): void {
-  void window.agentTeam?.restore?.apply()
-  restoreWorkspaces.value = null
-}
-function onRestoreDismiss(): void {
-  void window.agentTeam?.restore?.dismiss()
-  restoreWorkspaces.value = null
-}
 
 function onWorkspaceSelected(path: string): void {
   currentWorkspace.value = path
@@ -5369,14 +5376,6 @@ function paneIsCommander(p: ActivePane): boolean {
     v-if="onboardingComplete === false"
     :backend="backend"
     @complete="onboardingComplete = true"
-  />
-  <!-- Crash-restore prompt: previous run exited uncleanly — offer to reopen
-       its workspace windows. Non-blocking; shown above Welcome or workspace. -->
-  <RestoreBanner
-    v-if="restoreWorkspaces"
-    :workspaces="restoreWorkspaces"
-    @apply="onRestoreApply"
-    @dismiss="onRestoreDismiss"
   />
   <!-- First-boot loading overlay: covers the shell until the backend settles,
        then fades out. Brand-only text so no i18n keys are needed. -->

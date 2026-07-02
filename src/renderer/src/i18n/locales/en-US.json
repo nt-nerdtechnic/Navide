@@ -505,7 +505,8 @@
     "attention-body": "{label} is waiting for your reply"
   },
   "restore": {
-    "banner-text": "The app didn't close properly last time. Restore {count} workspace(s)?",
+    "dialog-title": "Restore previous session?",
+    "dialog-message": "The app didn't close properly last time. Reopen {count} workspace(s)?",
     "apply": "Restore",
     "dismiss": "Dismiss"
   }

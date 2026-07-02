@@ -505,7 +505,8 @@
     "attention-body": "{label} 正在等待你的輸入"
   },
   "restore": {
-    "banner-text": "偵測到上次未正常關閉，要恢復 {count} 個 workspace 嗎？",
+    "dialog-title": "恢復上次的工作階段？",
+    "dialog-message": "偵測到上次未正常關閉。要重新開啟 {count} 個 workspace 嗎？",
     "apply": "恢復",
     "dismiss": "忽略"
   }
