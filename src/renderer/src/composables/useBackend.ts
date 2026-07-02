@@ -3,13 +3,14 @@ import { onScopeDispose, ref, shallowRef } from 'vue'
 export type BackendStatus = 'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'
 
 interface BackendInfo {
-  status: 'starting' | 'ready'
+  status: 'starting' | 'ready' | 'error'
   host?: string
   port?: number
   pid?: number
   shell?: string
   httpUrl?: string
   wsUrl?: string
+  error?: string
 }
 
 export interface WsRequest<TPayload = Record<string, unknown>> {
@@ -201,6 +202,16 @@ export function useBackend() {
       port.value = info.port ?? 0
       pid.value = info.pid ?? 0
       connect()
+    } else if (info.status === 'error') {
+      // A start/restart attempt gave up for good (e.g. the packaged binary
+      // never came up) — surface it instead of leaving the UI silently
+      // "disconnected" with a spinner that never resolves.
+      wsUrl.value = ''
+      httpUrl.value = ''
+      port.value = 0
+      pid.value = 0
+      status.value = 'error'
+      lastError.value = info.error ?? 'backend failed to start'
     } else {
       wsUrl.value = ''
       httpUrl.value = ''
@@ -223,15 +234,17 @@ export function useBackend() {
 
   async function init(): Promise<void> {
     let info: BackendInfo = { status: 'starting' }
-    const deadline = Date.now() + 20_000
+    // Kept just past backend.ts's own health-check timeout (45s) so this loop
+    // doesn't give up before main has finished trying.
+    const deadline = Date.now() + 50_000
     while (Date.now() < deadline) {
       info = (await window.agentTeam?.getBackendInfo?.()) ?? { status: 'starting' }
-      if (info.status === 'ready') break
+      if (info.status === 'ready' || info.status === 'error') break
       await new Promise((r) => setTimeout(r, 300))
     }
     if (info.status !== 'ready' || !info.wsUrl) {
       status.value = 'error'
-      lastError.value = 'backend did not start'
+      lastError.value = info.error ?? 'backend did not start'
       return
     }
     wsUrl.value = info.wsUrl

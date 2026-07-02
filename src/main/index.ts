@@ -1,16 +1,25 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
 import { join, dirname } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
-import { readFileSync, statSync, existsSync } from 'node:fs'
+import { appendFileSync, readFileSync, statSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
+import { setWindowDockTileBadge } from './dock-tile-badge'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
 process.title = 'agent-team-electron'
+
+// TEMP diagnostics for the Dock-tile badge: file-based so the trail is
+// readable regardless of how the app was launched. Remove once verified.
+function logDockThumb(msg: string): void {
+  const line = `${new Date().toISOString()} ${msg}`
+  console.log(`[dock-thumb] ${line}`)
+  try { appendFileSync(join(tmpdir(), 'agent-team-dock-thumb.log'), line + '\n') } catch { /* diagnostics only */ }
+}
 
 if (process.platform === 'darwin') {
   app.dock.setIcon(nativeImage.createFromPath(join(__dirname, '../../resources/icon.png')))
@@ -20,6 +29,10 @@ let backend: BackendHandle | null = null
 // In-flight initial backend start, so before-quit can wait for it (capped) and
 // stop the process instead of orphaning it when the user quits mid-startup.
 let backendStarting: Promise<void> | null = null
+// Message from the most recent failed start/restart attempt, so the renderer
+// can show a real error instead of sitting in "starting" forever after a
+// retry also fails. Cleared as soon as a start attempt succeeds.
+let backendLastError: string | null = null
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -134,7 +147,11 @@ function openRolesWindow(): void {
 }
 
 function backendInfoPayload() {
-  if (!backend) return { status: 'starting' as const }
+  if (!backend) {
+    return backendLastError
+      ? { status: 'error' as const, error: backendLastError }
+      : { status: 'starting' as const }
+  }
   return {
     status: 'ready' as const,
     host: backend.host,
@@ -172,10 +189,12 @@ ipcMain.handle('backend:restart', async () => {
     }
     try {
       backend = await startBackend()
+      backendLastError = null
       console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
     } catch (err) {
       console.error('[main] backend restart failed', err)
       backend = null
+      backendLastError = String(err)
     }
     broadcastBackendChanged()
     return backendInfoPayload()
@@ -262,7 +281,14 @@ function openDiffWindow(params: Record<string, string>): void {
 ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) => {
   const params: Record<string, string> = {}
   const ws = (args?.workspace_path ?? '').trim()
-  if (ws) params.workspace_path = ws
+  if (ws) {
+    params.workspace_path = ws
+    // duplicate=1 marks a window cloned from a live one (its source's CLI
+    // sessions are still running), so the renderer skips pane restore once.
+    // Externally-opened workspaces (openWorkspaceFromPath) must NOT carry
+    // this — their previous sessions are dead and restore should run.
+    params.duplicate = '1'
+  }
   void createWindow(params)
   return { ok: true }
 })
@@ -302,8 +328,8 @@ ipcMain.handle('restore:apply', () => {
       }
     }
     if (!focused) {
-      // restore=1 tells the renderer this is a crash-restore boot, not a
-      // duplicated window — pane restore must run (sessions are dead).
+      // No duplicate=1 flag: a crash-restore boot's sessions are dead, so the
+      // renderer runs pane restore (restore=1 is informational only).
       void createWindow(
         { workspace_path: entry.workspace_path, restore: '1' },
         entry.bounds ? { bounds: entry.bounds } : undefined
@@ -459,9 +485,16 @@ ipcMain.handle(
 // Dock badge (macOS-only, Terminal.app-style): a number for how many panes have
 // unseen done/attention activity. The renderer tracks WHEN to update it
 // (useSystemNotify's pendingCount); main just reflects the count.
-ipcMain.on('window:setBadgeCount', (_event, count: number) => {
+ipcMain.on('window:setBadgeCount', (event, count: number) => {
   if (process.platform !== 'darwin') return
   app.dock?.setBadge(count > 0 ? String(count) : '')
+  // Mirror the count onto the sender window's own Dock tile (Terminal.app-style):
+  // the system red badge shows on its thumbnail while the window is minimized.
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (win && !win.isDestroyed()) {
+    const ok = setWindowDockTileBadge(win, count > 0 ? String(count) : '')
+    logDockThumb(`badge count=${count} minimized=${win.isMinimized()} dockTile=${ok}`)
+  }
 })
 
 ipcMain.handle(
@@ -864,11 +897,14 @@ app.whenReady().then(async () => {
   backendStarting = startBackend()
     .then((b) => {
       backend = b
+      backendLastError = null
       console.log(`[main] backend ready at ${b.host}:${b.port}`)
       broadcastBackendChanged()
     })
     .catch((err) => {
       console.error('[main] backend failed to start', err)
+      backendLastError = String(err)
+      broadcastBackendChanged()
     })
 
   // Open any folders requested at launch: queued open-file events (macOS cold

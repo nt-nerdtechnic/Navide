@@ -84,8 +84,12 @@ function markActive(paneId: string): void {
   pendingPanes.value.delete(paneId)
 }
 
-/** The user switched to this pane: clear its Dock badge pending state. */
+/** The user switched to this pane: clear its Dock badge pending state.
+ *  Gated on app focus — programmatic focus changes while the app is
+ *  backgrounded (tab bookkeeping, pane add/remove) are not "seen". */
 function markSeen(paneId: string): void {
+  bindFocusListeners()
+  if (!appFocused.value) return
   pendingPanes.value.delete(paneId)
 }
 

@@ -7,13 +7,14 @@ declare module '*.vue' {
 }
 
 interface BackendInfo {
-  status: 'starting' | 'ready'
+  status: 'starting' | 'ready' | 'error'
   host?: string
   port?: number
   pid?: number
   shell?: string
   httpUrl?: string
   wsUrl?: string
+  error?: string
 }
 
 declare global {

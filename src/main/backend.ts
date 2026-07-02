@@ -127,7 +127,11 @@ export async function startBackend(): Promise<BackendHandle> {
   }
 
   try {
-    await waitForHealth(host, port, 15_000)
+    // Packaged (unsigned/non-notarized) builds can be held up for many seconds
+    // by macOS Gatekeeper scanning the bundled binary on first launch after
+    // download — 15s was too tight and surfaced as "backend failed to start"
+    // even though the process would have come up given more time.
+    await waitForHealth(host, port, 45_000)
   } catch (err) {
     // Health never came up — kill the orphaned child so it can't linger and
     // contend over the shared ~/.agent-team state on the next start attempt.

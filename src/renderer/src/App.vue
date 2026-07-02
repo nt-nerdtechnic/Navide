@@ -119,12 +119,13 @@ function armBootTimeout(): void {
   if (_bootTimer) clearTimeout(_bootTimer)
   // Safety net: dismiss a stuck spinner so the user is never trapped — but never
   // override an error state, which stays put with a Retry button. Kept just past
-  // useBackend's 20s init deadline: on a slow cold start the backend may take up
-  // to 20s to report ready (then connect) or to give up and set status='error'.
+  // useBackend's 50s init deadline: on a slow cold start (e.g. macOS Gatekeeper
+  // scanning an unsigned packaged binary on first launch) the backend may take
+  // up to 50s to report ready (then connect) or to give up and set status='error'.
   // Firing earlier would tear the overlay down mid-startup, revealing a bare
   // unconnected shell and pre-empting the error+Retry the backend failure path
   // is meant to show.
-  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 22_000)
+  _bootTimer = window.setTimeout(() => { if (!bootError.value) dismissBoot() }, 52_000)
 }
 armBootTimeout()
 function retryBackend(): void {
@@ -155,16 +156,16 @@ function reopenOnboarding(): void {
 // full app restart returns to Welcome.
 const WS_SELECTED_KEY = 'agentTeam.workspaceSelected'
 const WS_PATH_KEY = 'agentTeam.currentWorkspace'
-// A duplicated main window (cmd+shift+N) receives its workspace via URL param.
-// sessionStorage is per-window so it would otherwise boot to Welcome; the URL
-// param seeds it. The window must NOT auto-resume the source window's agent
-// panes (that would double-resume the same CLI sessions), so restore is
-// suppressed once on this first load — see onWorkspaceCheck.
+// A window opened with a workspace URL param boots straight into it (the param
+// seeds per-window sessionStorage, which would otherwise send it to Welcome).
+// Pane restore is suppressed only for duplicate=1 windows — ones cloned from a
+// live window whose CLI sessions are still running (restoring would
+// double-resume them). All other param-carrying boots (Finder "Open With",
+// Quick Action, CLI path args, crash-restore) come from dead sessions and MUST
+// restore — see onWorkspaceCheck.
 const _bootWorkspace = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
-// Crash-restore windows (restore=1) carry a workspace URL param too, but their
-// sessions are dead — pane restore MUST run for them, unlike duplicated windows.
-const _bootIsRestore = new URLSearchParams(window.location.search).get('restore') === '1'
-let suppressPaneRestoreOnce = _bootWorkspace !== '' && !_bootIsRestore
+const _bootIsDuplicate = new URLSearchParams(window.location.search).get('duplicate') === '1'
+let suppressPaneRestoreOnce = _bootWorkspace !== '' && _bootIsDuplicate
 if (_bootWorkspace) {
   try {
     sessionStorage.setItem(WS_PATH_KEY, _bootWorkspace)
@@ -4556,9 +4557,16 @@ const layoutMode = ref<LayoutMode>('grid')
 const focusPaneId = ref<string | null>(null)
 const minimizedPanes = ref(new Set<string>())
 
-// Any path that sets focusPaneId means the user is now looking at that pane —
-// clear its Dock badge pending state (see sysNotify.pendingCount above).
+// Focusing a pane while the app is in the foreground means the user is now
+// looking at it — clear its Dock badge pending state. markSeen itself gates on
+// app focus, so programmatic focus changes while backgrounded (tab bookkeeping,
+// pane add/remove) don't silently eat the badge.
 watch(focusPaneId, (id) => { if (id) sysNotify.markSeen(id) })
+// Regaining app focus with a pending pane already focused must also count as
+// seen — focusPaneId didn't change, so the watcher above won't fire.
+watch(sysNotify.appFocused, (focused) => {
+  if (focused && focusPaneId.value) sysNotify.markSeen(focusPaneId.value)
+})
 
 // ── Agent Run Group Tab Bar ───────────────────────────────────────────────────
 // Naming guide for this area:
