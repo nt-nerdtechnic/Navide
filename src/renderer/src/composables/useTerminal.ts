@@ -681,12 +681,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       let currentItems: { abs: string; name: string; dir: string }[] = []
       let selectedIdx = 0
       let debounceTimer: ReturnType<typeof setTimeout>
+      // Distinguishes "still looking" from "nothing matched" in the empty
+      // state, so the picker is never a silent blank while the backend works.
+      let searchPending = true
 
       function renderList(): void {
         itemList.innerHTML = ''
         if (!currentItems.length) {
           const msg = document.createElement('div')
-          msg.textContent = 'No files found'
+          msg.textContent = searchPending ? 'Searching…' : 'No files found'
           Object.assign(msg.style, { padding: '10px 16px', color: '#6e7681', fontSize: '12px' })
           itemList.appendChild(msg)
           return
@@ -715,7 +718,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       function close(): void { clearTimeout(debounceTimer); root.remove() }
 
       async function doSearch(q: string): Promise<void> {
-        if (!q.trim() || !wsPath) { currentItems = []; renderList(); return }
+        if (!q.trim() || !wsPath) { currentItems = []; searchPending = false; renderList(); return }
+        searchPending = true
         try {
           const r = await backend.send<{ files: string[] }>('fs.list_files_flat', {
             workspace_path: wsPath, query: q, max_results: 20,
@@ -740,6 +744,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
             }
           }
         } catch { currentItems = [] }
+        searchPending = false
         selectedIdx = 0
         renderList()
       }
@@ -767,6 +772,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       root.addEventListener('mousedown', (e) => { if (e.target === root) close() })
       pickerInput.focus()
       pickerInput.select()
+      renderList() // show 'Searching…' immediately, never a silent blank list
       void doSearch(initialQuery)
     }
 
@@ -806,7 +812,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const statOk = async (abs: string | undefined): Promise<boolean> => {
         if (!abs) return false
         try {
-          const r = await backend.send<{ exists: boolean }>('fs.stat_path', { path: abs })
+          // Short timeout: a busy/disconnected backend must not stall the
+          // picker from opening — unverified just means fuzzy-search fallback.
+          const r = await backend.send<{ exists: boolean }>('fs.stat_path', { path: abs }, 1500)
           return !!(r.ok && r.payload?.exists)
         } catch { return false }
       }
