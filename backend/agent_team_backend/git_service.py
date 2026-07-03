@@ -23,6 +23,9 @@ from agent_team_backend import commit_message_prompt
 log = logging.getLogger("agent_team_backend.git_service")
 
 _MAX_DIFF_CHARS = 8_000  # truncate staged diff before sending to Ollama
+_COMMIT_SUMMARY_FILE_THRESHOLD = 30
+_COMMIT_SUMMARY_LINE_THRESHOLD = 1_200
+_COMMIT_SUMMARY_UNTRACKED_BYTES_THRESHOLD = 32_000
 
 # Only allow https/http and SSH-style URLs; block git pseudo-protocols (ext::, fd::, file://, etc.)
 _SAFE_GIT_URL = re.compile(r"^(https?://|ssh://|git@[\w.\-]+:)")
@@ -1852,6 +1855,79 @@ async def get_recent_commit_messages(workspace_path: str, n: int = 5) -> dict[st
     return {"repository": repository, "user": user}
 
 
+def _parse_numstat(output: str) -> dict[str, dict[str, int | bool]]:
+    stats: dict[str, dict[str, int | bool]] = {}
+    for line in output.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        added_raw, deleted_raw, path = parts[0], parts[1], parts[-1]
+        binary = added_raw == "-" or deleted_raw == "-"
+        added = 0 if binary else int(added_raw or "0")
+        deleted = 0 if binary else int(deleted_raw or "0")
+        stats[path] = {"added": added, "deleted": deleted, "binary": binary}
+    return stats
+
+
+async def _commit_diff_summary(
+    workspace_path: str,
+    entries: list[tuple[str, str, bool]],
+    staged: bool,
+) -> dict[str, Any]:
+    if staged:
+        base_args = ["git", "-c", "core.quotePath=false", "diff", "--staged"]
+    else:
+        base_args = ["git", "-c", "core.quotePath=false", "diff"]
+
+    rc, numstat_out, _ = await _run([*base_args, "--numstat"], workspace_path)
+    numstat = _parse_numstat(numstat_out) if rc == 0 else {}
+
+    rc, stat_out, _ = await _run([*base_args, "--stat"], workspace_path)
+    diff_stat = stat_out.strip() if rc == 0 else ""
+
+    changes: list[dict[str, Any]] = []
+    total_added = 0
+    total_deleted = 0
+    has_binary = False
+    max_untracked_bytes = 0
+    for path, status, _is_staged in entries:
+        item = numstat.get(path, {"added": 0, "deleted": 0, "binary": False})
+        added = int(item["added"])
+        deleted = int(item["deleted"])
+        binary = bool(item["binary"])
+        size_bytes = 0
+        if status == "?":
+            try:
+                full_path = (Path(workspace_path) / path).resolve()
+                if full_path.is_file():
+                    size_bytes = full_path.stat().st_size
+                    max_untracked_bytes = max(max_untracked_bytes, size_bytes)
+            except OSError:
+                size_bytes = 0
+        total_added += added
+        total_deleted += deleted
+        has_binary = has_binary or binary
+        changes.append({
+            "path": path,
+            "status": status,
+            "added": added,
+            "deleted": deleted,
+            "binary": binary,
+            "size_bytes": size_bytes,
+        })
+
+    return {
+        "file_count": len(entries),
+        "added": total_added,
+        "deleted": total_deleted,
+        "line_count": total_added + total_deleted,
+        "has_binary": has_binary,
+        "max_untracked_bytes": max_untracked_bytes,
+        "diff_stat": diff_stat,
+        "changes": changes,
+    }
+
+
 async def get_commit_context(workspace_path: str) -> dict[str, Any]:
     """Collect per-file context for adaptive commit-message generation.
 
@@ -1869,6 +1945,34 @@ async def get_commit_context(workspace_path: str) -> dict[str, Any]:
         untracked = status.get("untracked") or []
         entries = [(e["path"], e["status"], False) for e in unstaged]
         entries += [(e["path"], "?", False) for e in untracked]
+
+    summary = await _commit_diff_summary(workspace_path, entries, bool(staged))
+    summary_reason = ""
+    if summary["file_count"] > _COMMIT_SUMMARY_FILE_THRESHOLD:
+        summary_reason = f"changed file count exceeds {_COMMIT_SUMMARY_FILE_THRESHOLD}"
+    elif summary["line_count"] > _COMMIT_SUMMARY_LINE_THRESHOLD:
+        summary_reason = f"changed line count exceeds {_COMMIT_SUMMARY_LINE_THRESHOLD}"
+    elif summary["max_untracked_bytes"] > _COMMIT_SUMMARY_UNTRACKED_BYTES_THRESHOLD:
+        summary_reason = f"untracked file size exceeds {_COMMIT_SUMMARY_UNTRACKED_BYTES_THRESHOLD} bytes"
+
+    if summary_reason:
+        return {
+            "repo_name": Path(workspace_path).name,
+            "branch": status.get("branch", ""),
+            "changes": summary["changes"],
+            "staged": bool(staged),
+            "mode": "summary",
+            "summary": {
+                "reason": summary_reason,
+                "file_count": summary["file_count"],
+                "added": summary["added"],
+                "deleted": summary["deleted"],
+                "line_count": summary["line_count"],
+                "has_binary": summary["has_binary"],
+                "max_untracked_bytes": summary["max_untracked_bytes"],
+                "diff_stat": summary["diff_stat"],
+            },
+        }
 
     changes: list[dict[str, str]] = []
     for path, st, is_staged in entries:
@@ -1908,6 +2012,7 @@ async def get_commit_context(workspace_path: str) -> dict[str, Any]:
         "branch": status.get("branch", ""),
         "changes": changes,
         "staged": bool(staged),
+        "mode": "full",
     }
 
 

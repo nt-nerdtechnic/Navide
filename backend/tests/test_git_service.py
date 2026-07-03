@@ -1614,6 +1614,38 @@ class TestCommitContext:
         ctx = await git_service.get_commit_context(str(tmp_path))
         assert ctx["changes"] == []
 
+    @pytest.mark.asyncio
+    async def test_summary_mode_for_large_staged_diff(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "README.md").write_text("\n".join(f"line {i}" for i in range(1305)))
+        await git_service.stage_files(str(tmp_path), ["README.md"])
+        ctx = await git_service.get_commit_context(str(tmp_path))
+        assert ctx["mode"] == "summary"
+        assert "changed line count" in ctx["summary"]["reason"]
+        assert ctx["summary"]["line_count"] > 1200
+        assert ctx["changes"] == [{
+            "path": "README.md",
+            "status": "M",
+            "added": 1305,
+            "deleted": 1,
+            "binary": False,
+            "size_bytes": 0,
+        }]
+        assert "diff" not in ctx["changes"][0]
+        assert "original" not in ctx["changes"][0]
+
+    @pytest.mark.asyncio
+    async def test_summary_mode_for_large_untracked_file(self, tmp_path):
+        init_repo(tmp_path)
+        (tmp_path / "large.txt").write_text("x" * 40000)
+        ctx = await git_service.get_commit_context(str(tmp_path))
+        assert ctx["mode"] == "summary"
+        assert "untracked file size" in ctx["summary"]["reason"]
+        change = ctx["changes"][0]
+        assert change["path"] == "large.txt"
+        assert change["status"] == "?"
+        assert change["size_bytes"] == 40000
+
 
 class TestBuildUserPrompt:
     def test_assembles_sections(self):
@@ -1648,6 +1680,32 @@ class TestBuildUserPrompt:
         }
         prompt = commit_message_prompt.build_user_prompt(context, {"repository": [], "user": []}, 200)
         assert "... (truncated)" in prompt
+
+    def test_summary_mode_prompt(self):
+        context = {
+            "repo_name": "r",
+            "branch": "b",
+            "mode": "summary",
+            "staged": True,
+            "summary": {
+                "reason": "changed line count exceeds 1200",
+                "file_count": 2,
+                "added": 1400,
+                "deleted": 10,
+                "has_binary": False,
+                "diff_stat": " a.py | 1400 +++++\n b.py | 10 -",
+            },
+            "changes": [
+                {"path": "a.py", "status": "M", "added": 1400, "deleted": 0, "binary": False, "size_bytes": 0},
+                {"path": "b.py", "status": "M", "added": 0, "deleted": 10, "binary": False, "size_bytes": 0},
+            ],
+        }
+        prompt = commit_message_prompt.build_user_prompt(context, {"repository": [], "user": []}, 1000)
+        assert "# CHANGE SUMMARY:" in prompt
+        assert "Summary mode reason: changed line count exceeds 1200" in prompt
+        assert "# FILE CHANGES:" in prompt
+        assert "- a.py (M, +1400/-0)" in prompt
+        assert "# CODE CHANGES:" not in prompt
 
 
 class TestParseCommitMessage:

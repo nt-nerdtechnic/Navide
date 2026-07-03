@@ -98,6 +98,46 @@ def build_user_prompt(context: dict, recent: dict, per_file_budget: int) -> str:
             lines.append(f"- {mod}: {', '.join(files)}")
         lines.append("")
 
+    if context.get("mode") == "summary":
+        summary = context.get("summary") or {}
+        lines.append("# CHANGE SUMMARY:")
+        reason = summary.get("reason") or "diff is too large for full context"
+        lines.append(f"Summary mode reason: {reason}")
+        lines.append(
+            "Totals: "
+            f"{summary.get('file_count', len(changes))} files, "
+            f"+{summary.get('added', 0)}/-{summary.get('deleted', 0)} lines"
+        )
+        if summary.get("has_binary"):
+            lines.append("Includes binary file changes.")
+        diff_stat = summary.get("diff_stat") or ""
+        if diff_stat:
+            lines.append("")
+            lines.append("# DIFF STAT:")
+            lines.append(_truncate(diff_stat, per_file_budget * 2))
+        if changes:
+            lines.append("")
+            lines.append("# FILE CHANGES:")
+            for change in changes:
+                status = change.get("status") or "?"
+                added = change.get("added", 0)
+                deleted = change.get("deleted", 0)
+                binary = " binary" if change.get("binary") else ""
+                size = change.get("size_bytes") or 0
+                size_note = f", {size} bytes" if size else ""
+                lines.append(f"- {change.get('path', '')} ({status}, +{added}/-{deleted}{binary}{size_note})")
+        lines.append("")
+        lines.append(
+            "The full diff was intentionally summarized. Generate a commit message "
+            "from the file paths, statuses, line counts, and diff stat above. "
+            "Prefer a concise high-level summary over naming every file."
+        )
+        lines.append("")
+        lines.append(
+            "ONLY return a single markdown ```text code block, with NO other prose."
+        )
+        return "\n".join(lines)
+
     half = max(1, per_file_budget // 2)
     for change in changes:
         lines.append(f"# FILE: {change.get('path', '')}")
