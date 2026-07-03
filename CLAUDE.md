@@ -1,80 +1,58 @@
 # CLAUDE.md
 
-Project-specific workflow and behavioral guidelines for coding agents.
+Agent-Team: Electron (Vue 3 + TypeScript, pnpm) frontend + Python (uv) backend.
+This file is a router — read the referenced file BEFORE doing the matching work.
 
-## Project Workflow Agreement (Cursor Plan Mode)
+## Route table
 
-This project uses plan-driven development.
+| Situation | Read first |
+|---|---|
+| Running tests / typecheck / build / dev app; git & commit rules; worktrees | `.claude/playbook/10-ops.md` |
+| Touching terminal, xterm, PTY, WebSocket, or panes | `.claude/playbook/20-pitfalls.md` |
+| Why this repo leaks tokens + the giant-file protocol | `.claude/playbook/00-diagnosis.md` |
+| Delegation, model choice, judgment calls (Claude Code only) | `~/.claude/playbook/` (see route table in global CLAUDE.md) |
 
-1. Before implementation, read the latest `.plan.md` file under `.cursor/plans/`.
-2. Implement tasks according to the plan `todos` phases.
-3. After each phase is completed, update that `.plan.md` todo `status`.
-4. If no plan exists and the task is complex, run Discovery -> Clarify -> Plan Artifact before implementation.
+Read routed files on demand, not all up front.
+
+## Always-on rules (the expensive-to-violate subset)
+
+1. **Tests**: `pnpm test:run`, never `pnpm test` (watch mode hangs). Backend:
+   `uv --project backend run pytest backend/tests` (the path argument is
+   required — without it pytest misses backend's ini config). Run verification
+   commands bare — no pipe to tail/head (it eats the exit code).
+2. **Never clear terminal scrollback** — no `term.clear()` in any
+   resize/redraw path.
+3. **No self-initiated commits** — the user decides when to commit, unless
+   they explicitly authorized committing for the task.
+4. **No UI automation** (cliclick/screencapture/AppleScript) — the user tests
+   UI manually.
+5. **Giant files** (AIChatPane.vue ~14K lines, App.vue ~7K, GitPane.vue ~3K,
+   EditorWindowApp.vue ~2.6K, backend/agent_team_backend/app.py ~2.7K):
+   Grep tool to locate → Read with offset/limit → batch edits through one
+   subagent. Never whole-file Read, never bash/python inline search.
+
+## Workflow (Cursor Plan Mode)
+
+Plan-driven development:
+
+1. Before implementation, read the latest `.plan.md` under `.cursor/plans/`.
+2. Implement by the plan's `todos` phases; update each todo's `status` in the
+   plan file as phases complete.
+3. No plan + complex task → Discovery → Clarify → Plan Artifact first.
 
 ## Language
 
-- **Codebase language**: English — all code, comments, commit messages, variable names, and documentation must be in English.
+**Codebase language: English** — all code, comments, commit messages, variable
+names, and in-repo documentation.
 
-## Behavioral Guidelines
+## Behavioral core
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-### 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them; don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-### 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-### 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it; don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-### 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" -> "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" -> "Write a test that reproduces it, then make it pass"
-- "I18n Migration" -> "全部清零，TypeScript 通過。Text: 0 / Placeholder: 0 / Title: 0 — 全部 Vue 模板的可見文字、placeholder、title 屬性已 100% 套用語言包。"
-
-For multi-step tasks, follow the plan format:
-
-```text
-1. [Step] -> verify: [check]
-2. [Step] -> verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+1. **Think first**: state assumptions; if multiple readings exist, list them —
+   don't pick silently; if truly unclear, ask.
+2. **Minimum code**: only what was asked; no speculative abstraction,
+   flexibility, or impossible-case error handling.
+3. **Surgical changes**: every changed line maps to the request; don't
+   "improve" adjacent code; clean up only orphans your own change created.
+4. **Goal-driven**: turn the task into verifiable acceptance criteria before
+   coding ("fix bug" → "write a reproducing test, make it pass"), then loop
+   until they verify.
