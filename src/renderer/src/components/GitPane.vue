@@ -512,6 +512,10 @@ function autoGrowCommit(): void {
   el.style.height = 'auto'
   el.style.height = `${el.scrollHeight}px`
 }
+function onCommitInput(): void {
+  commitError.value = ''
+  autoGrowCommit()
+}
 watch(commitMessage, () => nextTick(autoGrowCommit))
 
 // Commit variants mirror VS Code / Cursor's commit dropdown:
@@ -541,6 +545,7 @@ const genAttempt = ref(0)
 async function doGenerate(): Promise<void> {
   if (autoCommitRunning.value) return  // yield to in-flight auto-commit
   commitError.value = ''
+  clearGitError()
   const r = await generateMessage(props.analyzerModel || 'qwen2:latest', genAttempt.value)
   if (r.ok) { commitMessage.value = r.message; genAttempt.value++ }
   else commitError.value = r.error || 'generation failed'
@@ -1442,7 +1447,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             class="commit-input"
             :placeholder="amendMode ? 'Amend message…' : 'Message (⌘↩ to commit)'"
             rows="1"
-            @input="autoGrowCommit"
+            @input="onCommitInput"
             @keydown.meta.enter.prevent="canCommit && doCommit()"
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
@@ -1451,7 +1456,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
-        <p v-if="commitError" class="err-text" style="padding: 0 2px">{{ commitError }}</p>
+        <p v-if="commitError" class="err-text commit-error-row" style="padding: 0 2px">
+          {{ commitError }}
+          <button class="git-error-x" :title="$t('action.dismiss')" @click.stop="commitError = ''">✕</button>
+        </p>
 
         <!-- Commit button with dropdown -->
         <div class="commit-btn-row">
@@ -2378,7 +2386,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .part-bottom-cards { flex: 1 1 0; overflow-y: auto; min-height: 0; padding-bottom: 20px; }
 .spacer { flex: 1; }
 .err-text { color: var(--danger-fg); font-size: 11px; margin: 0; padding: 2px 12px; }
-.git-error-row { display: flex; align-items: flex-start; gap: 6px; }
+.git-error-row,
+.commit-error-row { display: flex; align-items: flex-start; gap: 6px; }
 .git-error-x {
   flex-shrink: 0; margin-left: auto; background: transparent; border: none;
   color: var(--danger-fg); cursor: pointer; font-size: 11px; line-height: 1; padding: 0 2px;
