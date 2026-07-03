@@ -1,6 +1,6 @@
 [project]
 name = "agent-team-backend"
-version = "0.1.30"
+version = "0.1.31"
 description = "Navide (Agent-Team) Python backend (Phase 1 minimal skeleton)"
 requires-python = ">=3.12"
 dependencies = [
