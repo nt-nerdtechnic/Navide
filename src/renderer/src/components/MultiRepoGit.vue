@@ -54,13 +54,17 @@ watch(singleChangesCount, (n) => {
   if (!isMulti.value) emit('changes-count', n)
 })
 
-// --- Multi-repo accordion mode ---
-const EXPANDED_PREFIX = 'agentTeam.gitExpanded.'
+// --- Multi-repo mode ---
+const STORAGE_PREFIX = 'agentTeam.gitTabRepo.'
 
-// Which repos are expanded (multi-expand supported).
-const expandedRepos = ref<Set<string>>(new Set())
+function storageKey(): string {
+  return STORAGE_PREFIX + props.workspacePath
+}
 
-// Which repos have been mounted at least once (lazy-mount guard).
+// Active tab: abs_path of the selected repo.
+const activeRepo = ref<string>('')
+
+// Track which tabs have been mounted at least once (lazy-mount).
 const mounted = ref<Set<string>>(new Set())
 
 // Per-repo changes count (keyed by abs_path).
@@ -74,36 +78,33 @@ watch(totalChangesCount, (n) => {
   if (isMulti.value) emit('changes-count', n)
 })
 
-// Restore expanded state from localStorage when tabs change.
+// When tab list changes, ensure activeRepo is valid.
 watch(
   allTabs,
   (tabs) => {
     if (tabs.length === 0) return
-    tabs.forEach((repo) => {
-      let saved: string | null = null
-      try { saved = localStorage.getItem(EXPANDED_PREFIX + repo.abs_path) } catch { /* ignore */ }
-      // Default: first repo expanded, others collapsed.
-      const shouldExpand = saved !== null ? saved === '1' : repo === tabs[0]
-      if (shouldExpand) {
-        expandedRepos.value.add(repo.abs_path)
-        mounted.value.add(repo.abs_path)
-      }
-    })
+
+    // Try to restore from localStorage.
+    let saved: string | null = null
+    try { saved = localStorage.getItem(storageKey()) } catch { /* ignore */ }
+
+    const validSaved = saved && tabs.some((r) => r.abs_path === saved)
+    if (validSaved) {
+      activeRepo.value = saved!
+    } else if (!tabs.some((r) => r.abs_path === activeRepo.value)) {
+      activeRepo.value = tabs[0].abs_path
+    }
+
+    // Ensure active tab is mounted.
+    if (activeRepo.value) mounted.value.add(activeRepo.value)
   },
   { immediate: true },
 )
 
-function toggleRepo(absPath: string): void {
-  const next = new Set(expandedRepos.value)
-  if (next.has(absPath)) {
-    next.delete(absPath)
-    try { localStorage.setItem(EXPANDED_PREFIX + absPath, '0') } catch { /* ignore */ }
-  } else {
-    next.add(absPath)
-    mounted.value.add(absPath)
-    try { localStorage.setItem(EXPANDED_PREFIX + absPath, '1') } catch { /* ignore */ }
-  }
-  expandedRepos.value = next
+function selectTab(absPath: string): void {
+  activeRepo.value = absPath
+  mounted.value.add(absPath)
+  try { localStorage.setItem(storageKey(), absPath) } catch { /* ignore */ }
 }
 
 function repoLabel(relPath: string): string {
@@ -136,36 +137,38 @@ function repoLabel(relPath: string): string {
   />
 
 
-  <!-- Multi-repo: accordion (VS Code style, multi-expand) -->
-  <div v-else class="repos-list">
-    <div class="repos-header">{{ t('pane.git.repositories') }}</div>
-
-    <div v-for="repo in allTabs" :key="repo.abs_path" class="repo-block">
-      <!-- Section header -->
+  <!-- Multi-repo: tab bar + active GitPane -->
+  <div v-else class="multi-repo-root">
+    <!-- Tab bar -->
+    <div class="repo-tab-bar">
       <button
-        class="repo-header"
-        :aria-expanded="expandedRepos.has(repo.abs_path)"
+        v-for="repo in allTabs"
+        :key="repo.abs_path"
+        :class="['repo-tab', { active: activeRepo === repo.abs_path }]"
         :title="repo.abs_path"
-        @click="toggleRepo(repo.abs_path)"
+        @click="selectTab(repo.abs_path)"
       >
-        <svg
-          class="chevron"
-          :class="{ expanded: expandedRepos.has(repo.abs_path) }"
-          width="10" height="10" viewBox="0 0 16 16" fill="currentColor"
-        >
-          <path d="M6 3l5 5-5 5V3z"/>
-        </svg>
-        <span class="repo-name">{{ repoLabel(repo.rel_path) }}</span>
-        <span v-if="repo.badge.branch" class="repo-branch">{{ repo.badge.branch }}</span>
-        <span v-if="repo.badge.dirtyCount > 0" class="repo-dirty-badge">
-          {{ repo.badge.dirtyCount > 99 ? '99+' : repo.badge.dirtyCount }}
+        <span class="repo-tab-name">{{ repoLabel(repo.rel_path) }}</span>
+        <span v-if="repo.badge.branch || repo.badge.dirtyCount > 0" class="repo-tab-row2">
+          <span v-if="repo.badge.branch" class="repo-tab-branch">
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;opacity:0.7">
+              <path d="M11.75 2.5a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm.75 2.728a2.25 2.25 0 1 1 0-4.456 2.25 2.25 0 0 1 0 4.456zM2.75 13.5a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0zm.75 2.25a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5zM3.5 7.25A2.25 2.25 0 0 1 5.728 5h4.544a2.25 2.25 0 0 1 2.228 1.952V9.5a.75.75 0 0 1-1.5 0V6.952A.75.75 0 0 0 10.272 6.5H5.728a.75.75 0 0 0-.728.75V9.5a.75.75 0 0 1-1.5 0V7.25z"/>
+            </svg>
+            {{ repo.badge.branch }}
+          </span>
+          <span v-if="repo.badge.dirtyCount > 0" class="repo-tab-badge">
+            {{ repo.badge.dirtyCount > 99 ? '99+' : repo.badge.dirtyCount }}
+          </span>
         </span>
       </button>
+    </div>
 
-      <!-- Lazy-mounted GitPane -->
-      <div v-show="expandedRepos.has(repo.abs_path)" class="repo-pane-wrapper">
+    <!-- One GitPane per repo; lazy-mount on first visit, v-show after -->
+    <div class="repo-pane-area">
+      <template v-for="repo in allTabs" :key="repo.abs_path">
         <GitPane
           v-if="mounted.has(repo.abs_path)"
+          v-show="activeRepo === repo.abs_path"
           :workspace-path="repo.abs_path"
           :analyzer-model="analyzerModel"
           :backend="backend"
@@ -184,84 +187,99 @@ function repoLabel(relPath: string): string {
           @spawn-for-issue="$emit('spawn-for-issue', $event)"
           @focus-pane="$emit('focus-pane', $event)"
         />
-      </div>
+      </template>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* ── REPOSITORIES accordion ─────────────────────────── */
-.repos-list {
+.multi-repo-root {
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-.repos-header {
-  padding: 6px 12px 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
+/* ── Tab bar ─────────────────────────────────────────── */
+.repo-tab-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border-muted);
+  overflow-x: auto;
+  scrollbar-width: none;
   flex-shrink: 0;
+  background: var(--bg-base);
 }
+.repo-tab-bar::-webkit-scrollbar { display: none; }
 
-.repo-block {
+.repo-tab {
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 5px 11px 6px;
+  height: 42px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-muted);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  margin-bottom: -1px;
+  position: relative;
+}
+.repo-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-muted);
+}
+.repo-tab.active {
+  color: var(--text-bright);
+  background: var(--bg-base);
+  border-color: var(--border-muted);
+  border-bottom-color: var(--bg-base);
+  z-index: 1;
 }
 
-.repo-header {
+.repo-tab-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+}
+
+/* Second row: branch left, badge right — both inline */
+.repo-tab-row2 {
   display: flex;
   align-items: center;
   gap: 5px;
   width: 100%;
-  padding: 4px 8px 4px 10px;
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border-muted);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-}
-.repo-header:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
 }
 
-.chevron {
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-.chevron.expanded {
-  transform: rotate(90deg);
-}
-
-.repo-name {
+.repo-tab-branch {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.85;
+  line-height: 1;
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.repo-tab.active .repo-tab-branch {
+  opacity: 1;
+  color: var(--text-secondary);
 }
 
-.repo-branch {
-  font-size: 10px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.repo-dirty-badge {
+.repo-tab-badge {
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
@@ -278,9 +296,14 @@ function repoLabel(relPath: string): string {
   flex-shrink: 0;
 }
 
-.repo-pane-wrapper {
-  min-height: 200px;
+/* ── Pane area ───────────────────────────────────────── */
+.repo-pane-area {
   flex: 1;
+  overflow: hidden;
   position: relative;
+}
+.repo-pane-area > * {
+  position: absolute;
+  inset: 0;
 }
 </style>

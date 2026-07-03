@@ -2,8 +2,7 @@
   "pane": {
     "git": {
       "title": "SOURCE CONTROL",
-      "tab": "Source Control",
-      "repositories": "REPOSITORIES"
+      "tab": "Source Control"
     },
     "explorer": {
       "title": "Explorer"

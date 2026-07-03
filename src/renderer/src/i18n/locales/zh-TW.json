@@ -2,8 +2,7 @@
   "pane": {
     "git": {
       "title": "原始碼控制",
-      "tab": "原始碼控制",
-      "repositories": "REPOSITORIES"
+      "tab": "原始碼控制"
     },
     "explorer": {
       "title": "檔案總管"
