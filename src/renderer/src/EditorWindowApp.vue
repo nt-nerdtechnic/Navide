@@ -8,6 +8,7 @@ import EditorPane from './editor/EditorPane.vue'
 import DiffPane from './editor/DiffPane.vue'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
+import PlansPane from './editor/PlansPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 // Lazy-loaded: AIChatPane statically pulls mermaid + katex (heavy). Loading it
 // async keeps the editor window's first paint off the critical path — the panel
@@ -194,10 +195,10 @@ function togglePlanView(relPath: string): void {
   planViewFiles.value = s
 }
 
-const initialSidebar = (['explorer', 'search', 'git', 'problems'] as const).find(
+const initialSidebar = (['explorer', 'search', 'git', 'plans', 'problems'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
-const sidebarView = ref<'explorer' | 'search' | 'git' | 'problems'>(initialSidebar)
+const sidebarView = ref<'explorer' | 'search' | 'git' | 'plans' | 'problems'>(initialSidebar)
 const sidebarHidden = ref(false)
 const zenMode = ref(false)
 const changesCount = ref(0)
@@ -1583,7 +1584,7 @@ onMounted(() => {
     }
   }).agentTeam
   api?.onSwitchEditorSidebar?.((sidebar) => {
-    if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
+    if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git' || sidebar === 'plans') {
       sidebarView.value = sidebar
       sidebarHidden.value = false
     }
@@ -1666,6 +1667,17 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </button>
       <button
         class="ide-act-btn"
+        :class="{ active: sidebarView === 'plans' }"
+        title="Plans"
+        @click="sidebarView = 'plans'; sidebarHidden = false"
+      >
+        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M2.75 2A1.75 1.75 0 0 0 1 3.75v8.5C1 13.216 1.784 14 2.75 14h10.5A1.75 1.75 0 0 0 15 12.25v-8.5A1.75 1.75 0 0 0 13.25 2H2.75Zm0 1.5h10.5a.25.25 0 0 1 .25.25v8.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-8.5a.25.25 0 0 1 .25-.25Z"/>
+          <path d="M4.25 5.25a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Zm0 3A.75.75 0 0 1 5 7.5h6a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Zm0 3a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Z"/>
+        </svg>
+      </button>
+      <button
+        class="ide-act-btn"
         :class="{ active: sidebarView === 'problems' }"
         :title="$t('pane.problems.tab-shortcut')"
         @click="sidebarView = 'problems'; sidebarHidden = false"
@@ -1705,6 +1717,12 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @open-conflict="openConflict"
         @open-branch-diff="openBranchDiff"
         @changes-count="changesCount = $event"
+      />
+      <PlansPane
+        v-show="sidebarView === 'plans'"
+        :workspace-path="workspacePath"
+        :backend="backend"
+        @open-file="openFile"
       />
       <ProblemsPane
         v-show="sidebarView === 'problems'"

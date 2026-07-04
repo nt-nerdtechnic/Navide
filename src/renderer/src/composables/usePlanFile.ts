@@ -15,6 +15,7 @@
  */
 
 export type TodoStatus = 'pending' | 'in-progress' | 'done'
+export type RawTodoStatus = TodoStatus | 'completed' | 'in_progress' | 'complete' | 'finished'
 
 export interface PlanTodo {
   id: string
@@ -33,6 +34,49 @@ export interface ParsedPlan {
   todos: PlanTodo[]
   sections: PlanSection[]
   isProject: boolean
+}
+
+export interface PlanProgress {
+  total: number
+  done: number
+  inProgress: number
+  pending: number
+  complete: boolean
+}
+
+export function normalizeTodoStatus(value: string): TodoStatus {
+  const v = value.trim().toLowerCase().replace(/_/g, '-')
+  if (v === 'done' || v === 'completed' || v === 'complete' || v === 'finished') return 'done'
+  if (v === 'in-progress' || v === 'inprogress' || v === 'active') return 'in-progress'
+  return 'pending'
+}
+
+export function planProgress(todos: PlanTodo[]): PlanProgress {
+  const done = todos.filter((t) => t.status === 'done').length
+  const inProgress = todos.filter((t) => t.status === 'in-progress').length
+  const pending = todos.length - done - inProgress
+  return {
+    total: todos.length,
+    done,
+    inProgress,
+    pending,
+    complete: todos.length > 0 && done === todos.length,
+  }
+}
+
+/** Serialize a status back to the Cursor-compatible alias used on disk. */
+function serializeStatus(status: TodoStatus): string {
+  if (status === 'done') return 'completed'
+  if (status === 'in-progress') return 'in_progress'
+  return 'pending'
+}
+
+function unquoteYamlScalar(value: string): string {
+  const v = value.trim()
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    return v.slice(1, -1)
+  }
+  return v
 }
 
 /**
@@ -74,10 +118,10 @@ function parseYaml(yaml: string): { name: string; overview: string; todos: PlanT
 
   for (const line of lines) {
     if (line.match(/^name:\s*/)) {
-      name = line.replace(/^name:\s*/, '').trim()
+      name = unquoteYamlScalar(line.replace(/^name:\s*/, ''))
       inTodos = false
     } else if (line.match(/^overview:\s*/)) {
-      overview = line.replace(/^overview:\s*/, '').trim()
+      overview = unquoteYamlScalar(line.replace(/^overview:\s*/, ''))
       inTodos = false
     } else if (line.match(/^isProject:\s*/)) {
       isProject = line.replace(/^isProject:\s*/, '').trim() === 'true'
@@ -86,12 +130,12 @@ function parseYaml(yaml: string): { name: string; overview: string; todos: PlanT
       inTodos = true
     } else if (inTodos && line.match(/^\s+-\s+id:\s*/)) {
       flushTodo()
-      currentTodo = { id: line.replace(/^\s+-\s+id:\s*/, '').trim(), status: 'pending' }
+      currentTodo = { id: unquoteYamlScalar(line.replace(/^\s+-\s+id:\s*/, '')), status: 'pending' }
     } else if (inTodos && currentTodo && line.match(/^\s+content:\s*/)) {
-      currentTodo.content = line.replace(/^\s+content:\s*/, '').trim()
+      currentTodo.content = unquoteYamlScalar(line.replace(/^\s+content:\s*/, ''))
     } else if (inTodos && currentTodo && line.match(/^\s+status:\s*/)) {
       const val = line.replace(/^\s+status:\s*/, '').trim()
-      currentTodo.status = val === 'done' || val === 'in-progress' ? val : 'pending'
+      currentTodo.status = normalizeTodoStatus(val)
     } else if (line.match(/^\w/) && !line.match(/^todos:/)) {
       // Non-indented line means we've left the todos block.
       flushTodo()
@@ -179,7 +223,7 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
       for (const todo of parsed.todos) {
         newYamlLines.push(`  - id: ${todo.id}`)
         newYamlLines.push(`    content: ${todo.content}`)
-        newYamlLines.push(`    status: ${todo.status}`)
+        newYamlLines.push(`    status: ${serializeStatus(todo.status)}`)
       }
       todosWritten = true
     } else if (inTodos && (line.match(/^\s+-\s+id:/) || line.match(/^\s+(content|status):/))) {
@@ -196,15 +240,33 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
     }
   }
 
-  // Sync body checkboxes: map each `- [ ]`/`- [x]` line to its corresponding todo.
-  // We match todos to checkboxes in document order.
+  // Frontmatter without a `todos:` block: append one so newly added todos persist.
+  if (!todosWritten && parsed.todos.length > 0) {
+    newYamlLines.push('todos:')
+    for (const todo of parsed.todos) {
+      newYamlLines.push(`  - id: ${todo.id}`)
+      newYamlLines.push(`    content: ${todo.content}`)
+      newYamlLines.push(`    status: ${serializeStatus(todo.status)}`)
+    }
+  }
+
+  // Sync body checkboxes only when they map 1:1 onto the frontmatter todos.
+  // Plans whose Detailed Todos are finer-grained than the phase-level todos
+  // (more checkboxes than todos) would be corrupted by an order-based mapping,
+  // so those bodies are left untouched.
   let body = parts.body
-  let todoIdx = 0
-  body = body.replace(/^(\s*-\s+)\[[ x]\]/gm, (_match, prefix) => {
-    const todo = parsed.todos[todoIdx++]
-    if (!todo) return _match
-    return `${prefix}[${todo.status === 'done' ? 'x' : ' '}]`
-  })
+  const checkboxPattern = /^(\s*-\s+)\[[ x]\](\s*status:\s*[A-Za-z_-]+\s*\|)?/gm
+  const boxCount = (body.match(checkboxPattern) ?? []).length
+  if (boxCount === parsed.todos.length) {
+    let todoIdx = 0
+    body = body.replace(checkboxPattern, (_match, prefix: string, label?: string) => {
+      const todo = parsed.todos[todoIdx++]
+      if (!todo) return _match
+      const mark = todo.status === 'done' ? 'x' : ' '
+      const newLabel = label !== undefined ? ` status: ${serializeStatus(todo.status)} |` : ''
+      return `${prefix}[${mark}]${newLabel}`
+    })
+  }
 
   // body already starts with `\n` (e.g. `\n\n# Goals...`), so no extra separator needed.
   return `---\n${newYamlLines.join('\n')}\n---${body}`

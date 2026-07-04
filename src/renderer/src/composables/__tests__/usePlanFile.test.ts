@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePlanFile, writePlanFile } from '../usePlanFile'
+import { parsePlanFile, planProgress, writePlanFile } from '../usePlanFile'
 
 const SAMPLE_PLAN = `---
 name: Test Plan
@@ -98,6 +98,38 @@ isProject: false
     const result = parsePlanFile(raw)!
     expect(result.todos[0].status).toBe('pending')
   })
+
+  it('normalizes Cursor-style status aliases and quoted scalar values', () => {
+    const raw = `---
+name: "Plan"
+overview: "Desc"
+todos:
+  - id: t1
+    content: "Completed task"
+    status: completed
+  - id: t2
+    content: Active task
+    status: in_progress
+isProject: false
+---
+`
+    const result = parsePlanFile(raw)!
+    expect(result.name).toBe('Plan')
+    expect(result.overview).toBe('Desc')
+    expect(result.todos[0]).toEqual({ id: 't1', content: 'Completed task', status: 'done' })
+    expect(result.todos[1].status).toBe('in-progress')
+  })
+
+  it('computes plan progress', () => {
+    const result = parsePlanFile(SAMPLE_PLAN)!
+    expect(planProgress(result.todos)).toEqual({
+      total: 3,
+      done: 1,
+      inProgress: 1,
+      pending: 1,
+      complete: false,
+    })
+  })
 })
 
 describe('writePlanFile', () => {
@@ -153,5 +185,57 @@ describe('writePlanFile', () => {
     const raw = '# Just markdown'
     const plan = parsePlanFile(SAMPLE_PLAN)!
     expect(writePlanFile(plan, raw)).toBe(raw)
+  })
+
+  it('syncs body checkboxes and status labels when they map 1:1 onto todos', () => {
+    const raw = `---
+name: P
+overview: O
+todos:
+  - id: t1
+    content: First
+    status: pending
+  - id: t2
+    content: Second
+    status: pending
+isProject: false
+---
+
+# Detailed Todos
+
+- [ ] status: pending | First
+- [ ] status: pending | Second
+`
+    const plan = parsePlanFile(raw)!
+    const updated = {
+      ...plan,
+      todos: plan.todos.map((t, i) => (i === 0 ? { ...t, status: 'done' as const } : t)),
+    }
+    const written = writePlanFile(updated, raw)
+    expect(written).toContain('- [x] status: completed | First')
+    expect(written).toContain('- [ ] status: pending | Second')
+  })
+
+  it('leaves body checkboxes untouched when counts do not match the todos', () => {
+    const raw = `---
+name: P
+overview: O
+todos:
+  - id: t1
+    content: Phase A
+    status: pending
+isProject: false
+---
+
+- [ ] status: pending | fine-grained one
+- [ ] status: pending | fine-grained two
+`
+    const plan = parsePlanFile(raw)!
+    const updated = { ...plan, todos: [{ ...plan.todos[0], status: 'done' as const }] }
+    const written = writePlanFile(updated, raw)
+    // Body untouched (2 checkboxes vs 1 todo), frontmatter updated.
+    expect(written).toContain('- [ ] status: pending | fine-grained one')
+    expect(written).toContain('- [ ] status: pending | fine-grained two')
+    expect(written).toContain('    status: completed')
   })
 })
