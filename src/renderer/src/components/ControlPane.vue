@@ -41,7 +41,7 @@ export interface ActivePaneView {
    *  the stage config — shown as 🎯 指揮官 badge in the active-agents list
    *  and the pane header. */
   isCommander?: boolean
-  /** CLI session id for resume. Claude: pinned at launch; Codex/Gemini: filled
+  /** CLI session id for resume. Claude: pinned at launch; Codex/Antigravity: filled
    *  once detected from the session file. Shown so the user can confirm capture. */
   sessionId?: string
   /** Human-readable slot label (e.g. "Architecture"). Empty for single-agent
@@ -795,7 +795,7 @@ function onPipelineDividerEnd(): void {
         <input v-model="yoloLocal" type="checkbox" />
         <span>
           <strong>{{ $t('label.yolo-mode') }}</strong> {{ $t('label.yolo-bypass') }}
-          <span class="muted-inline">(claude / codex / gemini)</span>
+          <span class="muted-inline">(claude / codex / antigravity)</span>
         </span>
       </label>
     </section>

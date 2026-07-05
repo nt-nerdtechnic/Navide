@@ -319,7 +319,7 @@ async function rImport() {
 const AGENT_OPTIONS = [
   { key: 'claude', label: 'Claude Code' },
   { key: 'codex', label: 'Codex' },
-  { key: 'gemini', label: 'Gemini CLI' }
+  { key: 'antigravity', label: 'Antigravity CLI' }
 ]
 
 const sSelectedId = ref<string | null>(null)

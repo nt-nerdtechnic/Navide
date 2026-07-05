@@ -1,5 +1,5 @@
-"""LogWatcher session_sink: fires for Codex/Gemini session files so session-id
-capture (resume-on-restart) works independent of token parsing."""
+"""LogWatcher session_sink: fires for Codex/Antigravity session files so
+session-id capture (resume-on-restart) works independent of token parsing."""
 
 from __future__ import annotations
 
@@ -43,18 +43,18 @@ async def test_session_sink_fires_for_codex(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_sink_fires_for_gemini_json(tmp_path: Path) -> None:
-    root = tmp_path / "gemini"; root.mkdir()
+async def test_session_sink_fires_for_antigravity(tmp_path: Path) -> None:
+    root = tmp_path / "antigravity"; root.mkdir()
     seen: list[tuple[str, str]] = []
 
     async def sink(vendor: str, path: Path) -> None:
         seen.append((vendor, path.name))
 
     watcher = LogWatcher(sink=_noop, session_sink=sink, seen_path=tmp_path / "seen.json")
-    watcher.add_reader(_Reader("gemini", root))
-    f = root / "session.json"; f.write_text("{}")  # single-object .json
+    watcher.add_reader(_Reader("antigravity", root))
+    f = root / "session.db"; f.write_text("")
     await watcher._process_path(f)  # noqa: SLF001
-    assert seen == [("gemini", "session.json")]
+    assert seen == [("antigravity", "session.db")]
 
 
 @pytest.mark.asyncio

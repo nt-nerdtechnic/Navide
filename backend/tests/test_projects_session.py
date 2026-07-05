@@ -126,7 +126,7 @@ def test_record_slot_spawn_persists_session_home_id(store_with_stage: tuple[Proj
 
 
 def test_record_slot_session_fills_in_later(store_with_stage: tuple[ProjectStore, str]) -> None:
-    """Codex/Gemini path: spawn first with no id, detect + persist later."""
+    """Codex/Antigravity path: spawn first with no id, detect + persist later."""
     store, ws = store_with_stage
     store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
                             pane_id="pane-1", agent="codex")
@@ -235,11 +235,11 @@ def test_manual_pane_unspawn_no_match_is_noop(
 
 def test_manual_pane_session_fills_in_later(store_with_stage: tuple[ProjectStore, str]) -> None:
     store, ws = store_with_stage
-    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="gemini")
-    store.record_manual_pane_session(ws, pane_id="pane-1", session_id="gemini-sess")
+    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="codex")
+    store.record_manual_pane_session(ws, pane_id="pane-1", session_id="codex-sess")
 
     pane = next(p for p in store.peek(ws).panes if p.origin == "manual")
-    assert pane.session_id == "gemini-sess"
+    assert pane.session_id == "codex-sess"
 
 
 def test_manual_pane_session_can_be_cleared(store_with_stage: tuple[ProjectStore, str]) -> None:

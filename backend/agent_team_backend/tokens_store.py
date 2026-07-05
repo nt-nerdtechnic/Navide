@@ -314,7 +314,7 @@ class TokensStore:
         workspace_path: str | None,
         *,
         source: str,           # "analyzer" | "cli"
-        vendor: str,           # "claude" | "codex" | "gemini" | "analyzer"
+        vendor: str,           # "claude" | "codex" | "analyzer"
         agent_key: str | None = None,
         pane_id: str | None = None,
         stage_id: str | None = None,

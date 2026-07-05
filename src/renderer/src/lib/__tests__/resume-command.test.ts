@@ -10,10 +10,6 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('codex', 'abc')).toBe('codex resume abc')
   })
 
-  it('uses --session-file for gemini', () => {
-    expect(buildResumeCommand('gemini', '/tmp/session.json')).toBe('gemini --session-file "/tmp/session.json"')
-  })
-
   it('uses agy --conversation for antigravity', () => {
     expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
   })
@@ -36,6 +32,6 @@ describe('buildResumeCommand', () => {
   })
 
   it('trims the session id', () => {
-    expect(buildResumeCommand('gemini', '  /tmp/session.json  ')).toBe('gemini --session-file "/tmp/session.json"')
+    expect(buildResumeCommand('antigravity', '  abc  ')).toBe('agy --conversation abc')
   })
 })

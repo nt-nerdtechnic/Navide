@@ -306,51 +306,12 @@ async def test_terminal_create_claude_metadata_session_id_wins_over_command(
 
 
 @pytest.mark.asyncio
-async def test_terminal_create_gemini_registers_explicit_session_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_attr = FakeAttribution()
-    monkeypatch.setattr(app, "attribution", fake_attr)
-    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
-    session = _session()
-
-    await app.handle_message(session, {
-        "id": "m2",
-        "type": "terminal.create",
-        "payload": {
-            "pane_id": "gemini-pane",
-            "agent_key": "gemini",
-            "command": "gemini --session-id gemini-uuid",
-            "cwd": "/ws",
-            "metadata": {
-                "workspace_path": "/ws",
-                "explicit_session_id": "gemini-uuid",
-            },
-        },
-    })
-
-    created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["env"] is None
-    assert fake_attr.registered == [{
-        "pane_id": "gemini-pane",
-        "vendor": "gemini",
-        "cwd": "/ws",
-        "workspace_path": "/ws",
-        "stage_id": None,
-        "slot_key": "",
-        "explicit_session_id": "gemini-uuid",
-        "session_marker": "",
-        "session_home_id": "",
-    }]
-
-
-@pytest.mark.asyncio
 async def test_terminal_create_antigravity_registers_session_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Antigravity has no launch-time session identity; its marker MUST reach
     attribution.register_pane or binding/resume can never happen (regression:
-    the register gate was hardcoded to claude/codex/gemini)."""
+    the register gate was hardcoded to claude/codex only)."""
     fake_attr = FakeAttribution()
     monkeypatch.setattr(app, "attribution", fake_attr)
     monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)

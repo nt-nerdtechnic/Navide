@@ -273,13 +273,6 @@ const agentSpecs: AgentSpec[] = [
     hint: 'implementer'
   },
   {
-    agentKey: 'gemini',
-    label: 'Gemini CLI',
-    defaultCommand: 'gemini',
-    skipPermissionFlag: '--yolo --skip-trust',
-    hint: 'tester + verifier'
-  },
-  {
     agentKey: 'antigravity',
     label: 'Antigravity CLI',
     defaultCommand: 'agy',
@@ -481,12 +474,12 @@ interface ActivePane {
    *  inlining the whole terminal buffer into the kickoff. */
   outputLogFile?: string
   /** CLI session id used to resume this pane on restart. Known immediately for
-   *  Claude (the --session-id we pinned); filled in later for Codex/Gemini once
+   *  Claude (the --session-id we pinned); filled in later for Codex/Antigravity once
    *  their CLI-generated id is detected from the session file. */
   pinnedSessionId?: string
   /** Stable Codex CODEX_HOME id. It can differ from the live pane id after restore. */
   sessionHomeId?: string
-  /** Unique marker embedded in this pane's kickoff (Codex/Gemini only) so the
+  /** Unique marker embedded in this pane's kickoff (Codex/Antigravity only) so the
    *  backend can match the right session file to this pane when several
    *  same-vendor panes share a workspace. */
   sessionMarker?: string
@@ -578,7 +571,7 @@ onUnmounted(() => {
 watch(panes, syncViews, { deep: true, immediate: true })
 
 // PTY-friendly paste: wraps text with bracketed-paste escape sequences so
-// modern CLIs (Claude Code / Codex / Gemini TUI) accept it as a single paste
+// modern CLIs (Claude Code / Codex / Antigravity TUI) accept it as a single paste
 // rather than interpreting embedded newlines as submit signals.
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
@@ -641,7 +634,7 @@ async function injectText(
   const CHUNK = 512
   const payload = preserveNewlines
     // Bracketed-paste so the TUI treats embedded newlines as literal chars
-    // instead of Enter keypresses (Claude Code / Codex / Gemini all support it).
+    // instead of Enter keypresses (Claude Code / Codex / Antigravity all support it).
     ? BRACKETED_PASTE_START + text + BRACKETED_PASTE_END
     : flattenForInjection(text)
   const sendChunks = async (): Promise<boolean> => {
@@ -808,7 +801,7 @@ const KICKOFF_DELAY_MS = 3000
 // How long to watch for a startup trust dialog before giving up.
 const DISMISS_TIMEOUT_MS = 8000
 
-// Patterns surfacing on first launch of Codex / Claude / Gemini when the CLI
+// Patterns surfacing on first launch of Codex / Claude / Antigravity when the CLI
 // asks the user to trust the workspace. Matching one means we should send a
 // single \r to accept the default option (which is always "yes" / "continue").
 const TRUST_DIALOG_PATTERNS: RegExp[] = [
@@ -1027,7 +1020,7 @@ function scheduleInjection(pane: ActivePane): void {
       }
     }
 
-    // 2. Fixed settle delay — empirically enough for Claude/Codex/Gemini to
+    // 2. Fixed settle delay — empirically enough for Claude/Codex/Antigravity to
     //    finish rendering their first screen. Shorter after a known dismiss
     //    since the CLI usually transitions to a stable prompt immediately.
     const settleMs = dismissed ? 2500 : ROLE_PROMPT_DELAY_MS
@@ -1063,7 +1056,7 @@ function scheduleInjection(pane: ActivePane): void {
       pipelineLog(`${tag} ✕ role '${pane.roleKey}' not found in registry`)
       return
     }
-    // Embed the session marker in the role prompt too (Codex/Gemini), not just
+    // Embed the session marker in the role prompt too (Codex/Antigravity), not just
     // the kickoff — the role is injected at pre-spawn, so the marker lands in
     // the session file (and gets detected) within seconds, instead of waiting
     // for this slot's stage to activate (which for late stages is much later).
@@ -1169,7 +1162,7 @@ interface SpawnInternal {
   skipRoleInjection?: boolean
   /** True when commandOverride is a `--resume`/`resume` command restoring a
    *  prior session. Suppresses the fresh Claude --session-id and the
-   *  Codex/Gemini detection marker — the session id is already known. */
+   *  Codex/Antigravity detection marker — the session id is already known. */
   isResume?: boolean
   /** Pipeline stage index. */
   stageIndex?: number
@@ -1179,7 +1172,7 @@ interface SpawnInternal {
   resumeSessionId?: string
 }
 
-/** Trailing line embedded in a Codex/Gemini kickoff so the backend can match
+/** Trailing line embedded in a Codex/Antigravity kickoff so the backend can match
  *  the resulting CLI session file back to this pane (those CLIs can't pin a
  *  session id at launch). Innocuous to the agent; only the marker text matters.
  *  Empty marker (Claude / manual panes) → no line added. */
@@ -1242,9 +1235,6 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   if (opts.agentKey === 'claude' && !opts.isResume && !command.includes('--session-id')) {
     explicitSessionId = crypto.randomUUID()
     command = `${command} --session-id ${explicitSessionId}`
-  } else if (opts.agentKey === 'gemini' && !opts.isResume && !command.includes('--session-id')) {
-    explicitSessionId = crypto.randomUUID()
-    command = `${command} --session-id ${explicitSessionId}`
   }
   const sessionHomeId = opts.agentKey === 'codex'
     ? (opts.sessionHomeId || id)
@@ -1252,11 +1242,9 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const pinnedSessionId = opts.isResume
     ? (opts.resumeSessionId?.trim() || undefined)
     : (opts.agentKey === 'claude' ? explicitSessionId || undefined : undefined)
-  // Codex keeps a marker fallback during rollout. Gemini now pins a session id
-  // at launch, so it only needs the marker if the explicit path fails and the
-  // pane is non-resume. Antigravity can't pin an id at launch (`agy
-  // --conversation` only resumes existing ids), so the marker is its ONLY
-  // session-binding path.
+  // Codex keeps a marker fallback during rollout. Antigravity can't pin an id
+  // at launch (`agy --conversation` only resumes existing ids), so the marker
+  // is its ONLY session-binding path.
   const sessionMarker =
     !opts.isResume &&
     (opts.agentKey === 'codex' || opts.agentKey === 'antigravity')
@@ -1332,7 +1320,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         stage_id: opts.stageId,                 // snake_case alias for backend token sink
         origin: opts.origin,
         workspace_path: opts.workspacePath ?? '',
-        explicit_session_id: explicitSessionId,  // Claude/Gemini --session-id → precise pane attribution
+        explicit_session_id: explicitSessionId,  // Claude --session-id → precise pane attribution
         session_marker: sessionMarker,           // Codex → marker fallback session detection
         session_home_id: sessionHomeId,           // Codex per-pane CODEX_HOME id
         slot_label: opts.slotLabel ?? ''          // stable by_pane key survives frontend restarts
@@ -1947,7 +1935,7 @@ function looksLikeResumeCommand(agentKey: string, command: string): boolean {
   const cmd = command.trim()
   if (!cmd) return false
   if (agentKey === 'codex') return /^codex\s+resume\s+\S+/.test(cmd)
-  if (agentKey === 'gemini') return /^gemini\s+--session-file\s+\S+/.test(cmd)
+  if (agentKey === 'antigravity') return /^agy\s+--conversation\s+\S+/.test(cmd)
   return new RegExp(`^${agentKey}\\s+--resume\\s+\\S+`).test(cmd)
 }
 
@@ -2511,7 +2499,7 @@ async function preSpawnStage(index: number): Promise<void> {
         pane_id: paneId,
         agent: slot.agentKey,
         role: slot.roleKey,
-        // Claude's pinned id is known now; Codex/Gemini stay "" until detected.
+        // Claude's pinned id is known now; Codex/Antigravity stay "" until detected.
         session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
         session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
         run_group_id: currentRunGroupId.value,
@@ -3184,7 +3172,7 @@ const stageCompletions = new Map<number, { expected: number; done: Set<string> }
 // ── Per-pane turn-complete signal (CLI lifecycle, not a buffer guess) ────────
 // The backend broadcasts `agent.activity` with event_type "turn_complete" when
 // a CLI ends its turn (Claude Stop hook = 100% reliable, or JSONL turn-end for
-// Codex/Gemini). We record the wall-clock time per pane. A pane only counts as
+// Codex/Antigravity). We record the wall-clock time per pane. A pane only counts as
 // "turn complete for the current stage" when this timestamp is AFTER the
 // watcher armed (see slotFinished), so a stale signal from a prior stage/turn
 // is never reused — no explicit reset needed.
@@ -3297,10 +3285,10 @@ backend.on('agent.activity', (raw) => {
   }
 })
 
-// Codex/Gemini sessions are persisted after the backend observes their session
-// files: Gemini announces the durable session-file path from its explicit
-// --session-id owner, while Codex announces the resume id from its per-pane
-// CODEX_HOME path. Marker matching remains a fallback for older sessions.
+// Codex/Antigravity sessions are persisted after the backend observes their
+// session files: Codex announces the resume id from its per-pane CODEX_HOME
+// path, while Antigravity relies on marker matching (it has no identity path
+// at launch). Marker matching remains a fallback for older sessions.
 backend.on('session.detected', (raw) => {
   const ev = raw as { pane_id?: string; session_id?: string }
   if (!ev?.pane_id || !ev.session_id) return
@@ -3449,7 +3437,7 @@ interface ActiveQuestion {
   slotLabel: string
 }
 const activeQuestion = ref<ActiveQuestion | null>(null)
-// A buffer-detected question (Codex/Gemini, or any stage pane with allowQuestions)
+// A buffer-detected question (Codex/Antigravity, or any stage pane with allowQuestions)
 // surfaces here — fire an 'attention' notification so a backgrounded user is
 // pulled back. Claude's questions arrive earlier via the hook:notification path;
 // markActive (new turn) re-arms the pane so this isn't suppressed as a dup.
@@ -4610,7 +4598,7 @@ watch(sysNotify.appFocused, (focused) => {
 // ── Agent Run Group Tab Bar ───────────────────────────────────────────────────
 // Naming guide for this area:
 //   Pipeline = the configured workflow template/run selected in the left panel.
-//   Pane     = one live terminal session running Claude Code / Codex / Gemini.
+//   Pane     = one live terminal session running Claude Code / Codex / Antigravity.
 //   RunGroup = a frontend grouping bucket for panes; rendered to the user as a tab.
 //   Tab      = the visible UI affordance for selecting one RunGroup.
 //
@@ -5744,7 +5732,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
-          :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'gemini', 'antigravity'].includes(p.agentKey)"
+          :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'antigravity'].includes(p.agentKey)"
           :backend="backend"
           :workspace-path="p.workspacePath"
           @set-focus="onSetFocus(p.id)"

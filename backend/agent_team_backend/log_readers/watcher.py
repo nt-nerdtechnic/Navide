@@ -56,8 +56,7 @@ class _Handler(FileSystemEventHandler):
         if s.endswith(".db-wal"):
             self._on_path(Path(s[: -len("-wal")]))
             return
-        # Gemini's newer versions write conversation files as single-object
-        # .json (not line-delimited .jsonl), so accept both. .db = Antigravity.
+        # .db = Antigravity.
         if not s.endswith((".jsonl", ".json", ".db")):
             return
         self._on_path(Path(s))
@@ -261,9 +260,9 @@ class LogWatcher:
 
         When `workspace_path` is given, only that workspace's files are
         re-enqueued: readers that map a workspace to a specific folder (Claude)
-        return just that subset; readers that can't (Codex by-date, Gemini
-        by-project) fall back to all their files — those vendors keep far fewer
-        files so the cost stays bounded. This avoids re-parsing the entire
+        return just that subset; readers that can't (Codex by-date) fall back
+        to all their files — those vendors keep far fewer files so the cost
+        stays bounded. This avoids re-parsing the entire
         (multi-GB) Claude history on every new workspace registration, which
         would saturate the event loop and stall the whole backend.
 
@@ -369,11 +368,11 @@ class LogWatcher:
         reader = self._reader_for(path)
         if reader is None:
             return
-        # Session-id capture for resume (Codex/Gemini/Antigravity). Runs
+        # Session-id capture for resume (Codex/Antigravity). Runs
         # independent of token parsing so it works even for session-file formats
         # the token reader doesn't (yet) understand — it only needs the file to
         # exist + contain the pane marker.
-        if self._session_sink is not None and reader.vendor in ("codex", "gemini", "antigravity"):
+        if self._session_sink is not None and reader.vendor in ("codex", "antigravity"):
             try:
                 await self._session_sink(reader.vendor, path)
             except Exception as err:  # noqa: BLE001

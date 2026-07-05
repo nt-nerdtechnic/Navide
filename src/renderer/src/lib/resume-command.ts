@@ -5,7 +5,6 @@
 // launch, but all support resuming a known id):
 //   • claude --resume <id>
 //   • codex resume <id>      ← subcommand, NOT a --flag
-//   • gemini --session-file <path>
 //   • agy --conversation <id>
 //
 // `skipFlag` is the vendor's permission-bypass flag (or "" when YOLO is off),
@@ -21,8 +20,6 @@ export function buildResumeCommand(
   const base =
     agentKey === 'codex'
       ? `codex resume ${id}`
-      : agentKey === 'gemini'
-        ? `gemini --session-file ${JSON.stringify(id)}`
       : agentKey === 'antigravity'
         ? `agy --conversation ${id}`
       : `${agentKey} --resume ${id}`

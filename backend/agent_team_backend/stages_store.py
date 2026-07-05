@@ -284,7 +284,7 @@ sentinel 輸出規則：最後一行只有 ---REVIEW-DONE---
             sentinel="---TEST-DONE---",
             slots=[
                 SlotDef(
-                    agent_key="gemini",
+                    agent_key="codex",
                     role_key="qa",
                     label="Testing",
                     kickoff_body="""[Stage 05 · Testing]

@@ -79,10 +79,10 @@ const allTime = computed<TokenBucket>(() => snapshot.value?.global?.all_time ?? 
 const VENDOR_LABELS: Record<string, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  gemini: 'Gemini',
+  antigravity: 'Antigravity',
   analyzer: 'Local analyzer'
 }
-const KNOWN_VENDORS = ['claude', 'codex', 'gemini', 'analyzer']
+const KNOWN_VENDORS = ['claude', 'codex', 'antigravity', 'analyzer']
 
 // Vendor / Stage breakdowns come from workspace CUMULATIVE (not just current run)
 // so they remain visible even when no pipeline is actively running. The current

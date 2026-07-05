@@ -368,7 +368,7 @@
     "pipeline-completed": "✓ Pipeline completed all 4 stages. Review each pane on the right.",
     "provide-task": "Provide task description + workspace, then start.",
     "missing": "⚠ missing",
-    "tagline": "Drive Claude Code · Codex · Gemini CLI together",
+    "tagline": "Drive Claude Code · Codex · Antigravity CLI together",
     "open-workspace": "📂 Open Workspace",
     "recent": "🕓 Recent",
     "no-recent-workspaces": "No recent workspaces yet. Click <strong>Browse…</strong> to open a project folder.",

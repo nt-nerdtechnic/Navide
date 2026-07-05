@@ -40,7 +40,6 @@ from .log_readers import (
     AntigravityLogReader,
     ClaudeLogReader,
     CodexLogReader,
-    GeminiLogReader,
     LogWatcher,
     TokenUsage,
 )
@@ -130,7 +129,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
     return await _llama_benchmark(progress_cb=progress_cb)
 
 # Log readers: one per vendor. Attribution maps log session files to panes.
-_readers = [ClaudeLogReader(), CodexLogReader(), GeminiLogReader(), AntigravityLogReader()]
+_readers = [ClaudeLogReader(), CodexLogReader(), AntigravityLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
@@ -230,7 +229,7 @@ def _claim_ptys(session: "Session", terminal_session_ids: list[str]) -> None:
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
-    """Codex/Gemini: when a session file is first matched to its pane, tell
+    """Codex/Antigravity: when a session file is first matched to its pane, tell
     the frontend so it can persist the id/path for resume-on-restart."""
     bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
     if not bound:
@@ -245,7 +244,7 @@ async def _maybe_announce_session(usage: TokenUsage) -> None:
 
 
 async def _on_session_file(vendor: str, path: Path) -> None:
-    """Watcher session sink: a Codex/Gemini session file changed. Attempt marker
+    """Watcher session sink: a Codex/Antigravity session file changed. Attempt marker
     binding directly off the file (decoupled from token parsing, so it works for
     session-file formats the token reader doesn't understand)."""
     reader = next((r for r in _readers if r.vendor == vendor), None)
@@ -358,8 +357,8 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         # already-counted events safe. Scope to THIS workspace so we don't
         # re-parse the entire (multi-GB) Claude history and stall the loop.
         #
-        # force_rescan still enumerates session files synchronously (Codex /
-        # Gemini readers fall back to ALL their files), which blocks the event
+        # force_rescan still enumerates session files synchronously (Codex
+        # readers fall back to ALL their files), which blocks the event
         # loop and stalls every terminal.create queued behind it. Run it
         # off-loop so spawns return immediately; the rescan only backfills
         # stats, so its timing isn't on the critical path.
@@ -612,8 +611,6 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
         return False
     if agent == "claude":
         return _claude_session_file(workspace_path, session_id).is_file()
-    if agent == "gemini" and ("/" in session_id or session_id.endswith((".json", ".jsonl"))):
-        return Path(session_id).is_file()
     if agent == "antigravity":
         # Antigravity stores each conversation as a SQLite db; the id is the
         # filename stem accepted by `agy --conversation <id>`.
@@ -621,7 +618,7 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
             Path.home() / ".gemini" / "antigravity-cli" / "conversations"
             / f"{session_id}.db"
         ).is_file()
-    # Codex/Gemini ids are detected from their session files. Keep trusting
+    # Codex ids are detected from their session files. Keep trusting
     # persisted ids until vendor-specific preflight checks are added.
     return True
 
@@ -698,7 +695,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
-            if agent_key in ("claude", "codex", "gemini", "antigravity"):
+            if agent_key in ("claude", "codex", "antigravity"):
                 ws_for_pane = str(metadata.get("workspace_path") or payload["cwd"])
                 # Workspace registration via helper triggers a force-rescan
                 # if the workspace is newly known — so historic CLI sessions
@@ -935,7 +932,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 pane_id=payload["pane_id"],
                 agent=payload.get("agent", ""),
                 role=payload.get("role", ""),
-                # Claude passes its pinned --session-id here; Codex/Gemini pass
+                # Claude passes its pinned --session-id here; Codex/Antigravity pass
                 # "" and persist later via pipeline.slot_session once detected.
                 session_id=payload.get("session_id", ""),
                 session_home_id=payload.get("session_home_id", ""),

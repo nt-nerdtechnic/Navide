@@ -17,7 +17,7 @@ useTheme().loadTheme()
 const AGENT_OPTIONS: { key: AgentKey; label: string }[] = [
   { key: 'claude', label: 'Claude Code' },
   { key: 'codex', label: 'Codex' },
-  { key: 'gemini', label: 'Gemini CLI' }
+  { key: 'antigravity', label: 'Antigravity CLI' }
 ]
 
 // ── State ──────────────────────────────────────────────────────────────────

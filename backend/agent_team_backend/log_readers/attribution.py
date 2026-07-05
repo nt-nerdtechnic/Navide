@@ -7,7 +7,6 @@ Design (B — workspace ↔ CLI folder association):
      Each workspace records its expected CLI session folders:
        • Claude  → ~/.claude/projects/<cwd-with-slashes-as-dashes>/
        • Codex   → matched by session_meta.cwd at parse time
-       • Gemini  → matched by usage.cwd (resolved from ~/.gemini/projects.json)
   2. When a token-usage event arrives, we look up which registered workspace
      the file belongs to. Events outside any registered workspace are dropped
      by the sink layer (workspace_path=None) so "All time" only tracks usage
@@ -63,7 +62,6 @@ class SessionBinding:
 class WorkspaceMapping:
     workspace_path: str
     claude_dir: str = ""        # ~/.claude/projects/<encoded>/ (or "" if unknown)
-    gemini_project_name: str = ""  # corresponding entry in ~/.gemini/projects.json (best effort)
     registered_at: float = field(default_factory=time.time)
 
 
@@ -79,7 +77,7 @@ class _PaneRegistration:
     baseline_files: set[Path] = field(default_factory=set)
     claimed_session_ids: set[str] = field(default_factory=set)
     session_home_id: str = ""
-    # Codex/Gemini only: unique string embedded in this pane's kickoff so the
+    # Codex/Antigravity only: unique string embedded in this pane's kickoff so the
     # first session file containing it can be bound to this pane (those CLIs
     # can't pin a session id at launch, unlike Claude's --session-id).
     session_marker: str = ""
@@ -94,7 +92,6 @@ def _extract_resume_id(vendor: str, text: str) -> str:
 
     Codex:  the session_meta record's payload.id (the filename stem has a
             timestamp prefix and is NOT accepted by `codex resume`).
-    Gemini: the top-level `sessionId`.
     Returns "" when the expected shape isn't found (caller falls back).
     """
     if vendor == "codex":
@@ -110,25 +107,6 @@ def _extract_resume_id(vendor: str, text: str) -> str:
                 payload = rec.get("payload") or {}
                 if isinstance(payload, dict) and payload.get("id"):
                     return str(payload["id"])
-        return ""
-    if vendor == "gemini":
-        # Newer Gemini: single-object .json with a top-level sessionId.
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict) and data.get("sessionId"):
-                return str(data["sessionId"])
-        except json.JSONDecodeError:
-            pass
-        # Older Gemini: line-delimited .jsonl whose header line carries sessionId.
-        for line in text.splitlines():
-            if '"sessionId"' not in line:
-                continue
-            try:
-                rec = json.loads(line.strip())
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict) and rec.get("sessionId"):
-                return str(rec["sessionId"])
         return ""
     return ""
 
@@ -151,7 +129,7 @@ class Attribution:
         self._workspaces_path = workspaces_path or (app_data_dir() / "workspace-associations.json")
         self._panes: dict[str, _PaneRegistration] = {}
         self._session_owner: dict[str, str] = {}  # session_id → pane_id (ephemeral)
-        self._unbound_markers: dict[str, str] = {}  # session_marker → pane_id (Codex/Gemini)
+        self._unbound_markers: dict[str, str] = {}  # session_marker → pane_id (Codex/Antigravity)
         self._announced_session_keys: set[str] = set()
         self._lock = Lock()
         self._load_workspaces()
@@ -173,7 +151,6 @@ class Attribution:
                 self._workspaces[str(ws_path)] = WorkspaceMapping(
                     workspace_path=str(ws_path),
                     claude_dir=str(body.get("claude_dir") or ""),
-                    gemini_project_name=str(body.get("gemini_project_name") or ""),
                     registered_at=float(body.get("registered_at") or time.time()),
                 )
         log.info("loaded %d workspace association(s)", len(self._workspaces))
@@ -211,18 +188,12 @@ class Attribution:
                     mapping.claude_dir = str(root / encoded)
                     break
 
-            # Gemini: try to find the project name from projects.json by
-            # reverse-looking-up the cwd. Best-effort; if not found, leave blank
-            # — Gemini events still match via usage.cwd at attribute() time.
-            mapping.gemini_project_name = self._reverse_lookup_gemini_project(workspace_path)
-
             self._workspaces[workspace_path] = mapping
             self._save_workspaces()
         log.info(
-            "registered workspace=%s claude_dir=%s gemini=%s",
+            "registered workspace=%s claude_dir=%s",
             workspace_path,
             mapping.claude_dir or "(none)",
-            mapping.gemini_project_name or "(none)",
         )
 
     def unregister_workspace(self, workspace_path: str) -> None:
@@ -233,24 +204,6 @@ class Attribution:
     def known_workspaces(self) -> list[str]:
         with self._lock:
             return sorted(self._workspaces.keys())
-
-    def _reverse_lookup_gemini_project(self, workspace_path: str) -> str:
-        """Search ~/.gemini/projects.json for a project entry whose path matches."""
-        try:
-            projects_json = Path.home() / ".gemini" / "projects.json"
-            data = json.loads(projects_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return ""
-        if not isinstance(data, dict):
-            return ""
-        for name, body in data.items():
-            if isinstance(body, dict):
-                cwd = body.get("path") or body.get("cwd") or body.get("root")
-                if isinstance(cwd, str) and cwd == workspace_path:
-                    return str(name)
-            elif isinstance(body, str) and body == workspace_path:
-                return str(name)
-        return ""
 
     # ───────────────────────── pane lifecycle ──────────────────────────────
 
@@ -277,7 +230,7 @@ class Attribution:
         for that session then maps to THIS pane directly — no first-come-claim
         guessing, which mis-routed sessions across panes sharing one workspace.
 
-        `session_marker` (Codex/Gemini): those CLIs can't pin a session id, so
+        `session_marker` (Codex/Antigravity): those CLIs can't pin a session id, so
         instead a unique marker is embedded in the kickoff. maybe_bind_by_marker()
         binds the first session file containing it to this pane.
         """
@@ -353,9 +306,7 @@ class Attribution:
     def maybe_announce_session(self, usage: TokenUsage) -> SessionBinding | None:
         """Return the first pane binding that should be persisted for resume.
 
-        Handles the preferred non-marker identity paths first:
-          - Gemini: explicit --session-id owner, with the session file path as
-            the durable resume value (`gemini --session-file <path>`).
+        Handles the preferred non-marker identity path first:
           - Codex: per-pane CODEX_HOME path encodes pane_id; resume id is
             session_meta.payload.id.
 
@@ -364,25 +315,13 @@ class Attribution:
         create a chosen id), so it relies on marker matching exclusively; its
         resume id is the conversation .db filename stem (= usage.session_id).
         """
-        if usage.vendor not in ("codex", "gemini", "antigravity"):
+        if usage.vendor not in ("codex", "antigravity"):
             return None
 
         try:
             text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
         except OSError:
             text = ""
-
-        if usage.vendor == "gemini":
-            resume_id = str(Path(usage.file_path))
-            session_id = _extract_resume_id("gemini", text) or usage.session_id
-            binding = self._announce_owned_session(
-                vendor=usage.vendor,
-                session_id=session_id,
-                resume_id=resume_id,
-                session_file=usage.file_path,
-            )
-            if binding:
-                return binding
 
         if usage.vendor == "codex":
             pane_id = self._pane_id_from_codex_home_path(usage.file_path)
@@ -414,7 +353,7 @@ class Attribution:
             )
 
     def maybe_bind_by_marker(self, usage: TokenUsage) -> tuple[str, str] | None:
-        """Codex/Gemini: bind a session file to its pane by the marker embedded
+        """Codex/Antigravity: bind a session file to its pane by the marker embedded
         in the kickoff. Returns (pane_id, resume_id) on the binding transition
         (the first time this session is matched), else None.
 
@@ -422,14 +361,13 @@ class Attribution:
         NOT the same as the reader's `usage.session_id`:
           • Codex:  session_meta `payload.id` (the filename stem includes a
             timestamp prefix, so the stem can't be passed to `codex resume`).
-          • Gemini: the top-level `sessionId`.
         Falls back to usage.session_id if the file shape is unexpected.
 
         Reads the session file only while there are still unbound markers for an
         unowned session — once bound, the session_owner short-circuit means no
         further reads. The file read happens outside the lock.
         """
-        if usage.vendor not in ("codex", "gemini", "antigravity"):
+        if usage.vendor not in ("codex", "antigravity"):
             return None
         sid = usage.session_id
         with self._lock:
@@ -470,39 +408,6 @@ class Attribution:
             self._unbound_markers.pop(reg.session_marker, None)
         log.info("bound session=%s → pane=%s via marker (resume_id=%s)", sid, matched_pane, resume_id)
         return matched_pane, resume_id
-
-    def _announce_owned_session(
-        self,
-        *,
-        vendor: str,
-        session_id: str,
-        resume_id: str,
-        session_file: str,
-    ) -> SessionBinding | None:
-        if not session_id or not resume_id:
-            return None
-        key = f"{vendor}:{session_id}:{resume_id}"
-        with self._lock:
-            owner = self._session_owner.get(session_id)
-            if owner is None or key in self._announced_session_keys:
-                return None
-            reg = self._panes.get(owner)
-            if reg is None:
-                return None
-            self._announced_session_keys.add(key)
-            reg.claimed_session_ids.add(session_id)
-            binding = SessionBinding(
-                pane_id=reg.pane_id,
-                resume_id=resume_id,
-                workspace_path=reg.workspace_path,
-                stage_id=reg.stage_id,
-                session_file=session_file,
-            )
-        log.info(
-            "announced session=%s → pane=%s via explicit owner (resume_id=%s)",
-            session_id, binding.pane_id, resume_id,
-        )
-        return binding
 
     def _bind_and_announce_path_session(
         self,
@@ -579,15 +484,6 @@ class Attribution:
                 # Codex puts cwd in session_meta → usage.cwd
                 if usage.cwd and usage.cwd == ws_path:
                     return ws_path
-            elif usage.vendor == "gemini":
-                # usage.cwd is resolved from ~/.gemini/projects.json by the
-                # gemini reader; fall back to project-name comparison if not.
-                if usage.cwd and usage.cwd == ws_path:
-                    return ws_path
-                if mapping.gemini_project_name:
-                    needle = f"/.gemini/tmp/{mapping.gemini_project_name}/"
-                    if needle in file_path:
-                        return ws_path
         return None
 
     def _lookup_pane_for(self, usage: TokenUsage) -> tuple[str | None, str | None, str | None]:
@@ -636,7 +532,7 @@ class Attribution:
         if usage.vendor == "claude":
             expected_dir = _encode_claude_cwd(pane_cwd)
             return f"/{expected_dir}/" in file_path
-        if usage.vendor in ("codex", "gemini", "antigravity"):
+        if usage.vendor in ("codex", "antigravity"):
             return usage.cwd == pane_cwd
         return False
 

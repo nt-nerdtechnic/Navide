@@ -35,7 +35,7 @@ def _usage(vendor: str, session_id: str, path: Path, cwd: str) -> TokenUsage:
     )
 
 
-def test_pipeline_prebind_detects_and_persists_two_codex_plus_gemini(
+def test_pipeline_prebind_detects_and_persists_three_codex_panes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -55,38 +55,37 @@ def test_pipeline_prebind_detects_and_persists_two_codex_plus_gemini(
             "slots": [
                 {"label": "Codex A", "agent": "codex"},
                 {"label": "Codex B", "agent": "codex"},
-                {"label": "Gemini", "agent": "gemini"},
+                {"label": "Codex C", "agent": "codex"},
             ],
         }],
     )
     store.record_slot_spawn(ws, stage_index=0, slot_label="Codex A", pane_id="pane-a", agent="codex", session_home_id="home-a")
     store.record_slot_spawn(ws, stage_index=0, slot_label="Codex B", pane_id="pane-b", agent="codex", session_home_id="home-b")
-    store.record_slot_spawn(ws, stage_index=0, slot_label="Gemini", pane_id="pane-g", agent="gemini")
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Codex C", pane_id="pane-c", agent="codex", session_home_id="home-c")
 
     attr = Attribution(
         [
             FakeReader("codex", tmp_path / ".codex"),
-            FakeReader("gemini", tmp_path / ".gemini"),
         ],
         workspaces_path=tmp_path / "ws.json",
     )
     attr.register_pane("pane-a", vendor="codex", cwd=ws, workspace_path=ws, session_home_id="home-a")
     attr.register_pane("pane-b", vendor="codex", cwd=ws, workspace_path=ws, session_home_id="home-b")
-    attr.register_pane("pane-g", vendor="gemini", cwd=ws, workspace_path=ws, explicit_session_id="gemini-uuid")
+    attr.register_pane("pane-c", vendor="codex", cwd=ws, workspace_path=ws, session_home_id="home-c")
 
     codex_a = tmp_path / ".codex-panes" / "home-a" / "sessions" / "rollout-a.jsonl"
     codex_b = tmp_path / ".codex-panes" / "home-b" / "sessions" / "rollout-b.jsonl"
-    gemini = tmp_path / ".gemini" / "tmp" / "ws" / "chats" / "session.json"
+    codex_c = tmp_path / ".codex-panes" / "home-c" / "sessions" / "rollout-c.jsonl"
     codex_a.parent.mkdir(parents=True)
     codex_b.parent.mkdir(parents=True)
-    gemini.parent.mkdir(parents=True)
+    codex_c.parent.mkdir(parents=True)
     codex_a.write_text(json.dumps({"type": "session_meta", "payload": {"id": "resume-a", "cwd": ws}}) + "\n", encoding="utf-8")
     codex_b.write_text(json.dumps({"type": "session_meta", "payload": {"id": "resume-b", "cwd": ws}}) + "\n", encoding="utf-8")
-    gemini.write_text(json.dumps({"sessionId": "gemini-uuid", "messages": []}), encoding="utf-8")
+    codex_c.write_text(json.dumps({"type": "session_meta", "payload": {"id": "resume-c", "cwd": ws}}) + "\n", encoding="utf-8")
 
     for label, usage in [
         ("Codex B", _usage("codex", codex_b.stem, codex_b, ws)),
-        ("Gemini", _usage("gemini", "session", gemini, ws)),
+        ("Codex C", _usage("codex", codex_c.stem, codex_c, ws)),
         ("Codex A", _usage("codex", codex_a.stem, codex_a, ws)),
     ]:
         binding = attr.maybe_announce_session(usage)
@@ -99,7 +98,7 @@ def test_pipeline_prebind_detects_and_persists_two_codex_plus_gemini(
     assert sessions == {
         "Codex A": "resume-a",
         "Codex B": "resume-b",
-        "Gemini": str(gemini),
+        "Codex C": "resume-c",
     }
     assert attr.attribute(_usage("codex", codex_a.stem, codex_a, ws)).pane_id == "pane-a"
     assert attr.attribute(_usage("codex", codex_b.stem, codex_b, ws)).pane_id == "pane-b"

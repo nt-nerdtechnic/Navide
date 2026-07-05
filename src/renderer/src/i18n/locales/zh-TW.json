@@ -368,7 +368,7 @@
     "pipeline-completed": "✓ 流程完成所有 4 個階段。請查看右側各面板。",
     "provide-task": "請提供任務描述 + 工作區，然後開始。",
     "missing": "⚠ 遺失",
-    "tagline": "同時驅動 Claude Code · Codex · Gemini CLI",
+    "tagline": "同時驅動 Claude Code · Codex · Antigravity CLI",
     "open-workspace": "📂 開啟工作區",
     "recent": "🕓 最近",
     "no-recent-workspaces": "尚無最近的工作區。點擊 <strong>瀏覽…</strong> 以開啟專案資料夾。",

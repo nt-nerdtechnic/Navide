@@ -73,9 +73,8 @@ def test_claude_session_exists_tolerates_trailing_slash(
     assert _session_exists("claude", ws, session_id) is True
 
 
-def test_detected_codex_gemini_sessions_are_trusted() -> None:
+def test_detected_codex_sessions_are_trusted() -> None:
     assert _session_exists("codex", "/tmp/ws", "codex-sess") is True
-    assert _session_exists("gemini", "/tmp/ws", "gemini-sess") is True
     assert _session_exists("codex", "/tmp/ws", "") is False
 
 
@@ -91,11 +90,3 @@ def test_antigravity_session_checks_conversation_db(
 
     assert _session_exists("antigravity", "/tmp/ws", session_id) is True
     assert _session_exists("antigravity", "/tmp/ws", "missing-id") is False
-
-
-def test_gemini_session_file_path_must_exist(tmp_path: Path) -> None:
-    session_file = tmp_path / "session.json"
-    session_file.write_text("{}", encoding="utf-8")
-
-    assert _session_exists("gemini", "/tmp/ws", str(session_file)) is True
-    assert _session_exists("gemini", "/tmp/ws", str(tmp_path / "missing.json")) is False

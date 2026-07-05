@@ -20,7 +20,7 @@ class TokenUsage:
     tokens for vendors that report them.
     """
 
-    vendor: str                # "claude" | "codex" | "gemini"
+    vendor: str                # "claude" | "codex"
     input_tokens: int
     output_tokens: int
     cwd: str                   # absolute working directory the session ran in
@@ -66,7 +66,7 @@ class LogReader(ABC):
     `seen_keys` which the caller passes in to enable per-file dedup.
     """
 
-    #: Vendor identifier matching `agent_key` in panes ("claude" | "codex" | "gemini").
+    #: Vendor identifier matching `agent_key` in panes ("claude" | "codex").
     vendor: str = ""
 
     @abstractmethod

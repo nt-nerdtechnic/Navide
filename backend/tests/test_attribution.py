@@ -225,7 +225,7 @@ def test_register_pane_with_unknown_vendor_is_safe(claude_attr: tuple[Attributio
     # No reader for "mystery" — should not raise.
     attr.register_pane("p", vendor="mystery", cwd="/x", workspace_path="/x")
     # Workspace gets registered as a side-effect; but the usage's vendor has
-    # no folder mapping, so unless cwd matches workspace via codex/gemini rules
+    # no folder mapping, so unless cwd matches workspace via codex rules
     # we return None for unknown vendor.
     r = attr.attribute(_make_usage("mystery", session_id="s", file_path="/whatever"))
     assert r.workspace_path is None
@@ -303,30 +303,7 @@ def test_explicit_session_id_takes_priority_over_file_claim(
     )
 
 
-def test_gemini_explicit_session_announces_session_file(tmp_path: Path) -> None:
-    root = tmp_path / "gemini"; root.mkdir()
-    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane(
-        "g1", vendor="gemini", cwd="/ws", workspace_path="/ws",
-        explicit_session_id="gemini-uuid",
-    )
-    f = root / "session.json"
-    f.write_text(json.dumps({"sessionId": "gemini-uuid", "messages": []}))
-
-    binding = attr.maybe_announce_session(
-        _make_usage("gemini", session_id="session", file_path=str(f), cwd="/ws")
-    )
-
-    assert binding is not None
-    assert binding.pane_id == "g1"
-    assert binding.resume_id == str(f)
-    assert binding.workspace_path == "/ws"
-    assert attr.maybe_announce_session(
-        _make_usage("gemini", session_id="session", file_path=str(f), cwd="/ws")
-    ) is None
-
-
-# ─────────────────── session_marker (Codex/Gemini resume capture) ────────────
+# ─────────────────── session_marker (Codex/Antigravity resume capture) ───────
 
 @pytest.fixture
 def codex_attr(tmp_path: Path) -> tuple[Attribution, Path]:
@@ -415,32 +392,6 @@ def test_codex_home_path_prevents_same_cwd_first_claim(monkeypatch: pytest.Monke
     assert b2.resume_id == "resume-b"
     assert b1.pane_id == "pane-a"
     assert b1.resume_id == "resume-a"
-
-
-def test_gemini_marker_returns_top_level_session_id(tmp_path: Path) -> None:
-    root = tmp_path / "gemini"; root.mkdir()
-    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane("g1", vendor="gemini", cwd="/ws", workspace_path="/ws", session_marker="at-pane:g1")
-    f = root / "session-x.json"
-    f.write_text(json.dumps({
-        "sessionId": "real-gemini-uuid",
-        "messages": [{"type": "user", "content": [{"text": "go <!-- agent-team-session: at-pane:g1 -->"}]}],
-    }))
-    assert attr.maybe_bind_by_marker(_make_usage("gemini", session_id="session-x", file_path=str(f))) == ("g1", "real-gemini-uuid")
-
-
-def test_gemini_marker_old_jsonl_header_session_id(tmp_path: Path) -> None:
-    """Older Gemini .jsonl: sessionId is on the header line, body is $set ops."""
-    root = tmp_path / "gemini"; root.mkdir()
-    attr = Attribution([FakeReader("gemini", root)], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane("g1", vendor="gemini", cwd="/ws", workspace_path="/ws", session_marker="at-pane:g1")
-    f = root / "session-y.jsonl"
-    f.write_text(
-        json.dumps({"sessionId": "legacy-uuid", "kind": "main"}) + "\n" +
-        json.dumps({"$set": {"messages": [{"type": "user",
-                   "content": [{"text": "hi <!-- agent-team-session: at-pane:g1 -->"}]}]}}) + "\n"
-    )
-    assert attr.maybe_bind_by_marker(_make_usage("gemini", session_id="session-y", file_path=str(f))) == ("g1", "legacy-uuid")
 
 
 def test_marker_returns_none_when_absent(codex_attr: tuple[Attribution, Path]) -> None:
