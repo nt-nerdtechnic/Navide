@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
@@ -2016,6 +2017,13 @@ async def get_commit_context(workspace_path: str) -> dict[str, Any]:
     }
 
 
+# Total end-to-end budget for generate_commit_message (context gathering + LLM
+# call). The frontend's git.generate_message request timeout (useGit.ts) must
+# stay comfortably above this so it never fires while the backend is still
+# within its own deadline.
+_GENERATE_MESSAGE_BUDGET_S = 60.0
+
+
 async def generate_commit_message(
     workspace_path: str,
     ollama_url: str,
@@ -2036,6 +2044,7 @@ async def generate_commit_message(
     If *settings* contains ``provider == "anthropic"``, the Anthropic API is
     used (non-streaming) instead of Ollama.
     """
+    start = time.monotonic()
     context = await get_commit_context(workspace_path)
     if not context["changes"]:
         return {"ok": False, "error": "no changes", "message": ""}
@@ -2045,6 +2054,11 @@ async def generate_commit_message(
     system = commit_message_prompt.SYSTEM_PROMPT
     prompt = commit_message_prompt.build_user_prompt(context, recent, per_file_budget)
     temperature = min(0.2 * (1 + attempt_count), 1.0)
+
+    # Context gathering above can itself take several seconds; shrink the LLM
+    # call's timeout by however much of the shared budget it already used, so
+    # the two phases combined never exceed a single deadline.
+    remaining = max(5.0, _GENERATE_MESSAGE_BUDGET_S - (time.monotonic() - start))
 
     provider = (settings or {}).get("provider", "ollama")
 
@@ -2063,6 +2077,7 @@ async def generate_commit_message(
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
+                timeout=remaining,
             )
             raw = ""
             for block in response.content:
@@ -2078,7 +2093,7 @@ async def generate_commit_message(
 
     # Default: Ollama path
     try:
-        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=45.0) as client:
+        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=remaining) as client:
             resp = await client.post("/api/generate", json={
                 "model": model,
                 "system": system,

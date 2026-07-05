@@ -1189,6 +1189,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // is actually loaded (opening a pane writes a line even without resizing).
       dbgLog(`spawn cols=${term.cols} rows=${term.rows}`)
       resizeCtrl.applyFit()  // sync the real size to the backend on first paint
+      // The width measured above can still be a mid-layout snapshot (e.g. this
+      // spawn's own pane is still settling into a freshly reflowed grid) that
+      // differs from the width the container settles at moments later. Any
+      // banner/output the CLI already drew at the wrong width won't reflow on
+      // its own — request the same gated (width-stable + CLI-quiet + once) SIGWINCH
+      // repaint the ResizeObserver path uses, so a stale narrow first frame gets
+      // corrected instead of stranded.
+      resizeCtrl.requestResizeRedraw()
       queueMicrotask(() => focus())
       bindSessionHandlers()
     } catch (err) {

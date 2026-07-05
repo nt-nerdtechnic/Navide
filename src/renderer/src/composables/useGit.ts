@@ -990,10 +990,14 @@ export function useGit(
     if (!ws) return { ok: false, message: '', error: 'no workspace' }
     isGenerating.value = true
     try {
+      // Backend bounds context-gathering + LLM call to a single 60s budget
+      // (see _GENERATE_MESSAGE_BUDGET_S in git_service.py); this timeout must
+      // stay above that budget plus network/serialization margin, or it fires
+      // while the backend is still within its own deadline.
       const resp = await send<{ ok: boolean; message: string; error?: string }>(
         'git.generate_message',
         { workspace_path: ws, model, attempt_count: attemptCount },
-        45_000,
+        75_000,
       )
       if (resp.ok && resp.payload?.ok) {
         return { ok: true, message: resp.payload.message }

@@ -8,6 +8,7 @@ type BackendSend = ReturnType<typeof useBackend>['send']
 export interface ResizeController {
   applyFit(): void
   sendResizeNow(): void
+  requestResizeRedraw(): void
   readonly ackedCols: number
   readonly ackedRows: number
   attachObserver(el: HTMLElement): void
@@ -148,8 +149,11 @@ export function createResizeController(
   // change, and only when xterm == backend-acked. We PREFER a quiet gap so the
   // repaint isn't interleaved with a burst, but a continuously-streaming agent
   // never goes quiet — so after a bounded wait we fire anyway (a SIGWINCH is
-  // safe mid-output; it's exactly what a real terminal resize raises). Triggered
-  // only from the ResizeObserver path (genuine layout churn), not spawn/reattach.
+  // safe mid-output; it's exactly what a real terminal resize raises). Called
+  // from the ResizeObserver path (genuine layout churn) and from _doCreate()
+  // after a fresh spawn/resume — both can settle at a width that differs from
+  // the one the CLI's first frame was drawn at, and only a SIGWINCH-based
+  // repaint (not a numeric resize) fixes already-printed content.
   function requestResizeRedraw(): void {
     resizeRedrawDeadline = Date.now() + RESIZE_REDRAW_MAX_WAIT_MS
     armResizeRedraw()
@@ -220,6 +224,7 @@ export function createResizeController(
   return {
     applyFit,
     sendResizeNow,
+    requestResizeRedraw,
     get ackedCols() { return _ackedCols },
     get ackedRows() { return _ackedRows },
     attachObserver,
