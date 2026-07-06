@@ -15,13 +15,15 @@ import secrets
 import shutil
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import httpx
 
 from agent_team_backend import commit_message_prompt
+from agent_team_backend.pending_registry import TIMEOUT, PendingRegistry
 
 log = logging.getLogger("agent_team_backend.git_service")
 
@@ -903,21 +905,26 @@ async def show_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     ))}
 
 
+@asynccontextmanager
 async def _askpass_env(
     on_credential_request: Callable[[str, str], Awaitable[None]] | None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None,
-) -> tuple[dict[str, str] | None, Callable[[], Awaitable[None]] | None]:
-    """Build the subprocess env + cleanup for an optional GIT_ASKPASS flow.
+) -> AsyncIterator[dict[str, str] | None]:
+    """Yield the subprocess env for an optional GIT_ASKPASS flow, cleaning up on exit.
 
-    Returns (None, None) when *on_credential_request* is None, so callers get
+    Yields None when *on_credential_request* is None, so callers get
     byte-for-byte the same subprocess env as before this credential wiring
     existed."""
     if on_credential_request is None:
-        return None, None
+        yield None
+        return
     askpass_env, cleanup = await create_askpass_context(
         on_credential_request, on_settled=on_credential_settled
     )
-    return {**os.environ, **askpass_env}, cleanup
+    try:
+        yield {**os.environ, **askpass_env}
+    finally:
+        await cleanup()
 
 
 async def push_set_upstream(
@@ -933,17 +940,13 @@ async def push_set_upstream(
         return {"ok": False, "output": "", "error": err}
     if err := _validate_ref_name(remote, "remote name"):
         return {"ok": False, "output": "", "error": err}
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(
             ["git", "push", "--set-upstream", remote.strip(), branch.strip()],
             workspace_path,
             timeout=60.0,
             env=env,
         )
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -954,14 +957,10 @@ async def fetch(
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run `git fetch --prune` to update remote-tracking refs."""
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(
             ["git", "fetch", "--prune"], workspace_path, timeout=60.0, env=env
         )
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -972,14 +971,10 @@ async def pull_only(
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run `git pull` (fast-forward preferred)."""
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(
             ["git", "pull"], workspace_path, timeout=60.0, env=env
         )
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -1001,12 +996,8 @@ async def push_only(
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0, env=env)
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -1017,14 +1008,10 @@ async def pull_rebase(
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Run `git pull --rebase` (replay local commits on top of upstream)."""
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(
             ["git", "pull", "--rebase"], workspace_path, timeout=60.0, env=env
         )
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -1049,12 +1036,8 @@ async def push_force(
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0, env=env)
-    finally:
-        if cleanup is not None:
-            await cleanup()
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -1625,8 +1608,7 @@ async def sync(
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Pull (rebase) then push.  Returns stdout/stderr for both steps."""
-    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
-    try:
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
         pull_rc, pull_out, pull_err = await _run_with_timeout(
             ["git", "pull", "--rebase"], workspace_path, timeout=60.0, env=env
         )
@@ -1642,9 +1624,6 @@ async def sync(
             return asdict(GitSyncResult(ok=False, pull_output=pull_output, push_output=push_output, error="push failed"))
 
         return asdict(GitSyncResult(ok=True, pull_output=pull_output, push_output=push_output))
-    finally:
-        if cleanup is not None:
-            await cleanup()
 
 
 async def get_staged_diff(workspace_path: str) -> str:
@@ -1756,7 +1735,13 @@ async def init_repo(workspace_path: str, create_gitignore: bool = True) -> dict[
     return {"ok": True, "gitignore_created": gitignore_created}
 
 
-async def clone_repo(url: str, target_dir: str) -> dict[str, Any]:
+async def clone_repo(
+    url: str,
+    target_dir: str,
+    *,
+    on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
+    on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """Clone *url* into *target_dir*.
 
     Returns ``{"ok": bool, "path": str, "error": str}`` where ``path`` is the
@@ -1773,9 +1758,12 @@ async def clone_repo(url: str, target_dir: str) -> dict[str, Any]:
         return {"ok": False, "path": "", "error": "target directory is not empty"}
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Run from the parent dir so a relative/new target works; pass paths via `--`.
-    rc, out, stderr = await _run(
-        ["git", "clone", "--", url, str(dest)], str(dest.parent)
-    )
+    # Uses _run_with_timeout (not _run) so a GIT_ASKPASS env can be injected for
+    # private repos, same as the other network-writing git operations below.
+    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+        rc, out, stderr = await _run_with_timeout(
+            ["git", "clone", "--", url, str(dest)], str(dest.parent), timeout=60.0, env=env
+        )
     if rc != 0:
         return {"ok": False, "path": "", "error": stderr.strip() or out.strip()}
     return {"ok": True, "path": str(dest)}
@@ -2213,23 +2201,19 @@ async def generate_commit_message(
         return {"ok": False, "error": str(exc), "message": ""}
 
 
-# ── GIT_ASKPASS credential IPC (Phase A skeleton) ────────────────────────────
-# Maps request_id -> Future[str | None]. A later phase resolves these via
-# `resolve_credential()` once the frontend responds to a WS `git.credential_submit`
-# message (or a timeout/cancellation supplies None). Mirrors the
-# `_pending_approvals` pattern in ai_chat_tools.py.
-_pending_credentials: dict[str, "asyncio.Future[str | None]"] = {}
+# ── GIT_ASKPASS credential IPC ────────────────────────────────────────────────
+# Maps request_id -> Future[str | None], resolved via `resolve_credential()`
+# once the frontend responds to a WS `git.credential_submit` message (or a
+# timeout/cancellation supplies None). Shares its implementation with the
+# `_approvals` registry in ai_chat_tools.py via pending_registry.PendingRegistry.
+_credentials: PendingRegistry[str | None] = PendingRegistry()
 
 _ASKPASS_HELPER_PATH = str(Path(__file__).parent / "git_askpass_helper.py")
 
 
 def resolve_credential(request_id: str, value: str | None) -> bool:
     """Resolve a pending credential request Future. Returns False if not found."""
-    fut = _pending_credentials.get(request_id)
-    if fut is None or fut.done():
-        return False
-    fut.set_result(value)
-    return True
+    return _credentials.resolve(request_id, value)
 
 
 async def create_askpass_context(
@@ -2281,13 +2265,10 @@ async def create_askpass_context(
             prompt = str(request.get("prompt") or "")
 
             request_id = uuid.uuid4().hex
-            loop = asyncio.get_running_loop()
-            fut: asyncio.Future[str | None] = loop.create_future()
-            _pending_credentials[request_id] = fut
+            fut = _credentials.register(request_id)
             await on_request(request_id, prompt)
-            try:
-                value = await asyncio.wait_for(asyncio.shield(fut), timeout=timeout)
-            except asyncio.TimeoutError:
+            value = await _credentials.wait(request_id, fut, timeout=timeout)
+            if value is TIMEOUT:
                 value = None
 
             if on_settled is not None:
@@ -2301,8 +2282,11 @@ async def create_askpass_context(
         except Exception as exc:
             log.warning("git askpass: connection handling failed: %s", exc)
         finally:
+            # Normally already popped by _credentials.wait()'s own cleanup;
+            # this only catches an error between register() and wait() (e.g.
+            # on_request() raising) that would otherwise leak the entry.
             if request_id is not None:
-                _pending_credentials.pop(request_id, None)
+                _credentials.discard(request_id)
             writer.close()
             try:
                 await writer.wait_closed()

@@ -10,20 +10,18 @@ import shlex
 from pathlib import Path
 
 from .ai_chat_service import stream_chat
+from .pending_registry import TIMEOUT, PendingRegistry
 
 log = logging.getLogger("agent_team_backend.ai_chat_tools")
 
 # ── Command approval registry ────────────────────────────────────────────────
 # Maps f"{session_id}:{tool_id}" → Future[bool] (True=approved, False=rejected)
-_pending_approvals: dict[str, "asyncio.Future[bool]"] = {}
+_approvals: PendingRegistry[bool] = PendingRegistry()
 
 
 def approve_command(session_id: str, tool_id: str, *, approved: bool) -> None:
     """Resolve a pending command approval Future from a WebSocket handler."""
-    key = f"{session_id}:{tool_id}"
-    fut = _pending_approvals.get(key)
-    if fut is not None and not fut.done():
-        fut.set_result(approved)
+    _approvals.resolve(f"{session_id}:{tool_id}", approved)
 
 # ── Tool definitions (Anthropic schema) ──────────────────────────────────────
 
@@ -536,15 +534,10 @@ async def _run_command_with_approval(
     })
 
     key = f"{session_id}:{tool_id}"
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future[bool] = loop.create_future()
-    _pending_approvals[key] = fut
-    try:
-        approved = await asyncio.wait_for(asyncio.shield(fut), timeout=300.0)
-    except asyncio.TimeoutError:
+    fut = _approvals.register(key)
+    approved = await _approvals.wait(key, fut, timeout=300.0)
+    if approved is TIMEOUT:
         return "Command proposal timed out — user did not respond within 5 minutes."
-    finally:
-        _pending_approvals.pop(key, None)
 
     if not approved:
         return "Command rejected by user."

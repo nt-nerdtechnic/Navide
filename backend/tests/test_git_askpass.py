@@ -59,7 +59,7 @@ class TestCreateAskpassContext:
             response = await response_future
             assert response == {"value": "s3cr3t-token"}
             # Pending entry must be cleaned up once resolved.
-            assert request_id not in git_service._pending_credentials
+            assert request_id not in git_service._credentials.pending
         finally:
             await cleanup()
 

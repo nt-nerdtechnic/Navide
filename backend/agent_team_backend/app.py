@@ -2117,7 +2117,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "git.clone":
             url = payload.get("url") or ""
             target_dir = payload.get("target_dir") or ""
-            result = await git_service.clone_repo(url, target_dir)
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.clone_repo(
+                url,
+                target_dir,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.ignore":
@@ -2220,24 +2226,29 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Explorer filesystem (fs.*) ──────────────────────────────────────
+        # Read-only directory scans run in a worker thread: os.scandir/os.walk
+        # on a large repo or slow/network disk would otherwise block the event
+        # loop and stall every other in-flight request on the connection.
         elif msg_type == "fs.list_dir":
             ws_path = payload.get("workspace_path") or ""
             rel = payload.get("rel_path", "") or ""
             show_hidden = bool(payload.get("show_hidden", False))
-            result = fs_service.list_dir(ws_path, rel, show_hidden=show_hidden)
+            result = await asyncio.to_thread(fs_service.list_dir, ws_path, rel, show_hidden=show_hidden)
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.list_files_flat":
             ws_path = payload.get("workspace_path") or ""
             query = payload.get("query", "") or ""
             max_results = int(payload.get("max_results", 100))
-            result = fs_service.list_files_flat(ws_path, query=query, max_results=max_results)
+            result = await asyncio.to_thread(
+                fs_service.list_files_flat, ws_path, query=query, max_results=max_results
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.glob_files":
             ws_path = payload.get("workspace_path") or ""
             pattern = payload.get("pattern", "") or ""
-            result = fs_service.glob_files(ws_path, pattern=pattern)
+            result = await asyncio.to_thread(fs_service.glob_files, ws_path, pattern=pattern)
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.mkdir":
@@ -2288,7 +2299,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.stat_path":
-            result = fs_service.stat_path(payload.get("path", "") or "")
+            result = await asyncio.to_thread(fs_service.stat_path, payload.get("path", "") or "")
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.read_image":

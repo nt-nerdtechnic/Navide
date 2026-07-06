@@ -1093,6 +1093,7 @@ export function useGit(
       const resp = await send<{ ok: boolean; path: string; error?: string }>('git.clone', {
         url,
         target_dir,
+        workspace_path: workspacePath(),
       })
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -1284,8 +1285,12 @@ export function useGit(
   const credentialSubmitting = ref(false)
   const showCredentialPrompt = computed(() => credentialPrompt.value !== null && !credentialSubmitting.value)
 
-  function isUsernamePrompt(prompt: string): boolean { return /username/i.test(prompt) }
-  function isPasswordPrompt(prompt: string): boolean { return /password/i.test(prompt) }
+  // Anchored to git's askpass prompt format ("Username for '<url>': " /
+  // "Password for '<url>': ") rather than a bare substring test — the URL
+  // itself can legitimately contain "username" (e.g. an embedded login
+  // https://username@host/...), which a substring test would misclassify.
+  function isUsernamePrompt(prompt: string): boolean { return /^username\b/i.test(prompt) }
+  function isPasswordPrompt(prompt: string): boolean { return /^password\b/i.test(prompt) }
 
   const _offCredentialRequest = on('git.credential_request', (payload: unknown) => {
     const p = payload as { request_id?: string; workspace_path?: string; host?: string; prompt?: string }
@@ -1347,8 +1352,14 @@ export function useGit(
     credentialSubmitting.value = true
     if (current.usernameRequestId) void send('git.credential_submit', { request_id: current.usernameRequestId, value: current.username })
     if (current.passwordRequestId) void send('git.credential_submit', { request_id: current.passwordRequestId, value: current.password })
-    // Both fields already had a request_id — nothing left to wait for.
-    if (current.usernameRequestId && current.passwordRequestId) {
+    // git always asks for Password last (Username, if asked at all, comes
+    // first) — so once passwordRequestId has arrived, this credential round
+    // is complete and nothing more is coming, whether or not a username was
+    // ever asked for (it's skipped entirely when already known via URL/config).
+    // Requiring BOTH ids here left credentialSubmitting stuck true forever on
+    // a password-only prompt, which then silently auto-submitted a blank
+    // value to the next unrelated request for this host (see _offCredentialRequest).
+    if (current.passwordRequestId) {
       credentialPrompt.value = null
       credentialSubmitting.value = false
     }
