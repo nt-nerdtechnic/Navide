@@ -235,6 +235,22 @@ ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
   return result.filePaths[0]
 })
 
+ipcMain.handle('workspace:new', async () => {
+  const opts: Electron.OpenDialogOptions = {
+    title: 'New workspace folder',
+    defaultPath: app.getPath('home'),
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Use this folder'
+  }
+
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, opts)
+    : await dialog.showOpenDialog(opts)
+
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
 function openStagesWindow(): void {
   if (stagesWindow && !stagesWindow.isDestroyed()) {
     stagesWindow.focus()

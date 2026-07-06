@@ -29,6 +29,7 @@ declare global {
       stopBackend: () => Promise<{ ok: boolean }>
       onBackendChanged: (cb: (info: BackendInfo) => void) => void
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
+      newWorkspace: () => Promise<string | null>
       openPath: (target: string) => Promise<{ ok: boolean; revealed?: boolean; error?: string }>
       revealPath: (target: string) => Promise<{ ok: boolean; error?: string }>
       openTerminal: (command: string) => Promise<{ ok: boolean; error?: string }>

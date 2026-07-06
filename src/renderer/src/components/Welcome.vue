@@ -9,6 +9,7 @@ const emit = defineEmits<{ (e: 'select', path: string): void; (e: 'open-settings
 const { recent, loaded, error, touch, pin, unpin, remove } = useRecentWorkspaces(props.backend)
 
 const picking = ref(false)
+const creating = ref(false)
 
 // Pinned first, then most-recent-first (backend already orders by recency).
 const ordered = computed<RecentWorkspace[]>(() => {
@@ -64,6 +65,17 @@ async function browse(): Promise<void> {
   }
 }
 
+async function newWorkspace(): Promise<void> {
+  if (!window.agentTeam) return
+  creating.value = true
+  try {
+    const picked = await window.agentTeam.newWorkspace()
+    if (picked) await openWorkspace(picked)
+  } finally {
+    creating.value = false
+  }
+}
+
 async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
   ev.stopPropagation()
   if (item.pinned) await unpin(item.path)
@@ -89,6 +101,9 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
         <div class="w-open-btns">
           <button class="primary" :disabled="picking" @click="browse">
             {{ picking ? '…' : $t('action.browse') }}
+          </button>
+          <button class="ghost" :disabled="creating" @click="newWorkspace">
+            {{ creating ? '…' : $t('action.new-workspace') }}
           </button>
         </div>
       </section>

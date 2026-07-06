@@ -128,6 +128,7 @@
     "add-memory": "新增記憶",
     "pin-file-path": "固定檔案路徑以永遠包含",
     "browse": "瀏覽…",
+    "new-workspace": "新增…",
     "add-to-grid": "開啟 Agent",
     "open-terminal": ">_ 開啟 Terminal",
     "resume-agent": "↻ 接續",
