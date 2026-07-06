@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
   newWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:new'),
+  getHomeDir: (): Promise<string> => ipcRenderer.invoke('app:home-dir'),
   openPath: (target: string): Promise<{ ok: boolean; revealed?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openPath', target),
   revealPath: (target: string): Promise<{ ok: boolean; error?: string }> =>

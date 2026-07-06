@@ -76,8 +76,10 @@ async function newWorkspace(): Promise<void> {
   }
 }
 
-async function openFromRoot(): Promise<void> {
-  await openWorkspace('/')
+async function openHome(): Promise<void> {
+  if (!window.agentTeam) return
+  const home = await window.agentTeam.getHomeDir()
+  if (home) await openWorkspace(home)
 }
 
 async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
@@ -109,8 +111,8 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
           <button class="ghost" :disabled="creating" @click="newWorkspace">
             {{ creating ? '…' : $t('action.new-workspace') }}
           </button>
-          <button class="ghost" @click="openFromRoot">
-            {{ $t('action.open-from-root') }}
+          <button class="ghost" @click="openHome">
+            {{ $t('action.open-home') }}
           </button>
         </div>
       </section>

@@ -251,6 +251,7 @@ ipcMain.handle('workspace:new', async () => {
   return result.filePaths[0]
 })
 
+ipcMain.handle('app:home-dir', () => app.getPath('home'))
 
 function openStagesWindow(): void {
   if (stagesWindow && !stagesWindow.isDestroyed()) {
