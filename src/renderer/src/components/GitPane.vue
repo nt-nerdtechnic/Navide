@@ -8,6 +8,7 @@ import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
 import { guardedDiscard } from '../lib/discardConfirm'
+import GitCredentialModal from './GitCredentialModal.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -66,6 +67,7 @@ const {
   setGitConfig,
   cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
+  credentialPrompt, showCredentialPrompt, submitCredential, cancelCredential,
 } = useGit(() => props.workspacePath, props.backend)
 
 const {
@@ -2363,6 +2365,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="btn-ghost sm" @click="ignoreResult = null">Close</button>
       </div>
     </Teleport>
+
+    <!-- ── Git credential prompt (askpass) ─────────────────────────────── -->
+    <GitCredentialModal
+      :show="showCredentialPrompt"
+      :prompt="credentialPrompt"
+      @submit="submitCredential"
+      @cancel="cancelCredential"
+    />
   </div>
 </template>
 

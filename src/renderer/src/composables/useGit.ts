@@ -112,6 +112,18 @@ export interface GitCommitDetail {
   files: string[]
 }
 
+// Git's askpass helper is invoked once per field (Username, then Password),
+// each as an independent request_id — see git_askpass_helper.py / app.py
+// build_credential_request_emitter(). This shape pairs the two requests of a
+// single push/pull/fetch operation so the Modal can show both fields at once.
+export interface GitCredentialPrompt {
+  host: string
+  usernameRequestId: string | null
+  passwordRequestId: string | null
+  username: string
+  password: string
+}
+
 const emptyStatus = (): GitStatus => ({
   is_git_repo: false,
   branch: '',
@@ -1261,6 +1273,96 @@ export function useGit(
     if (_gitChangedTimer !== null) { clearTimeout(_gitChangedTimer); _gitChangedTimer = null }
   })
 
+  // ── Git credential prompt (askpass) ──────────────────────────────────────
+  // null while no push/pull/fetch is waiting on credentials.
+  const credentialPrompt = ref<GitCredentialPrompt | null>(null)
+  // True once the user has hit "submit". git resolves askpass invocations
+  // sequentially (Username, then Password), so the second field's request_id
+  // may not exist yet at submit time — this flag keeps the pairing alive
+  // (with the Modal hidden) so the still-pending field can be auto-answered
+  // with the value already typed, without asking the user again.
+  const credentialSubmitting = ref(false)
+  const showCredentialPrompt = computed(() => credentialPrompt.value !== null && !credentialSubmitting.value)
+
+  function isUsernamePrompt(prompt: string): boolean { return /username/i.test(prompt) }
+  function isPasswordPrompt(prompt: string): boolean { return /password/i.test(prompt) }
+
+  const _offCredentialRequest = on('git.credential_request', (payload: unknown) => {
+    const p = payload as { request_id?: string; workspace_path?: string; host?: string; prompt?: string }
+    if (!p?.request_id) return
+    if (p.workspace_path && p.workspace_path !== workspacePath()) return
+    const host = p.host ?? ''
+    const prompt = p.prompt ?? ''
+    const field = isUsernamePrompt(prompt) ? 'username' : isPasswordPrompt(prompt) ? 'password' : null
+
+    const current = credentialPrompt.value
+    if (!current || current.host !== host) {
+      // New pairing (or a stale one for a different host) — start fresh.
+      credentialSubmitting.value = false
+      credentialPrompt.value = {
+        host,
+        usernameRequestId: field === 'username' ? p.request_id : null,
+        passwordRequestId: field === 'password' ? p.request_id : null,
+        username: '',
+        password: '',
+      }
+      return
+    }
+
+    // Second field of an already in-flight pairing.
+    if (field === 'username') current.usernameRequestId = p.request_id
+    else if (field === 'password') current.passwordRequestId = p.request_id
+
+    // The user already submitted while this field's request was still in
+    // flight — auto-answer it now with the value they already typed.
+    if (credentialSubmitting.value) {
+      if (field === 'username') void send('git.credential_submit', { request_id: p.request_id, value: current.username })
+      else if (field === 'password') void send('git.credential_submit', { request_id: p.request_id, value: current.password })
+      credentialPrompt.value = null
+      credentialSubmitting.value = false
+    }
+  })
+
+  const _offCredentialCancelled = on('git.credential_cancelled', (payload: unknown) => {
+    const p = payload as { request_id?: string }
+    const current = credentialPrompt.value
+    if (!current || !p?.request_id) return
+    // Backend timed out or cancelled one of the two pending fields — the
+    // whole pairing is now moot, close the modal so the user isn't left
+    // staring at an input that will never resolve.
+    if (p.request_id === current.usernameRequestId || p.request_id === current.passwordRequestId) {
+      credentialPrompt.value = null
+      credentialSubmitting.value = false
+    }
+  })
+
+  onScopeDispose(() => {
+    _offCredentialRequest()
+    _offCredentialCancelled()
+  })
+
+  async function submitCredential(): Promise<void> {
+    const current = credentialPrompt.value
+    if (!current) return
+    credentialSubmitting.value = true
+    if (current.usernameRequestId) void send('git.credential_submit', { request_id: current.usernameRequestId, value: current.username })
+    if (current.passwordRequestId) void send('git.credential_submit', { request_id: current.passwordRequestId, value: current.password })
+    // Both fields already had a request_id — nothing left to wait for.
+    if (current.usernameRequestId && current.passwordRequestId) {
+      credentialPrompt.value = null
+      credentialSubmitting.value = false
+    }
+  }
+
+  async function cancelCredential(): Promise<void> {
+    const current = credentialPrompt.value
+    if (!current) return
+    if (current.usernameRequestId) void send('git.credential_cancel', { request_id: current.usernameRequestId })
+    if (current.passwordRequestId) void send('git.credential_cancel', { request_id: current.passwordRequestId })
+    credentialPrompt.value = null
+    credentialSubmitting.value = false
+  }
+
   return {
     // state
     gitStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
@@ -1300,5 +1402,7 @@ export function useGit(
     // vscode-parity additions
     applyPatch, cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
     pullRebase, pushForce,
+    // credential prompt (askpass)
+    credentialPrompt, showCredentialPrompt, submitCredential, cancelCredential,
   }
 }

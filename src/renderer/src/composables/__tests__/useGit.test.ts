@@ -495,4 +495,162 @@ describe('useGit', () => {
     expect(result.discoveredRepos.value).toHaveLength(0)
     scope.stop()
   })
+
+  describe('credential prompt (askpass)', () => {
+    it('pairs the independent Username/Password requests by host', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+      expect(result.showCredentialPrompt.value).toBe(true)
+      expect(result.credentialPrompt.value?.usernameRequestId).toBe('req-user')
+      expect(result.credentialPrompt.value?.passwordRequestId).toBeNull()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-pass', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Password for 'https://gitlab.com': ",
+      })
+      expect(result.credentialPrompt.value?.usernameRequestId).toBe('req-user')
+      expect(result.credentialPrompt.value?.passwordRequestId).toBe('req-pass')
+      expect(result.credentialPrompt.value?.host).toBe('gitlab.com')
+      scope.stop()
+    })
+
+    it('ignores credential_request events for a different workspace', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: '/other/path', host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+      expect(result.credentialPrompt.value).toBeNull()
+      scope.stop()
+    })
+
+    it('submitCredential sends git.credential_submit for both fields and closes the modal', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+      mock.setResponse('git.credential_submit', { ok: true })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+      mock.emit('git.credential_request', {
+        request_id: 'req-pass', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Password for 'https://gitlab.com': ",
+      })
+      result.credentialPrompt.value!.username = 'octocat'
+      result.credentialPrompt.value!.password = 'ghp_token'
+
+      await result.submitCredential()
+      await flush()
+
+      const submits = mock.sent.filter(s => s.type === 'git.credential_submit')
+      expect(submits).toHaveLength(2)
+      expect(submits.find(s => s.payload.request_id === 'req-user')?.payload.value).toBe('octocat')
+      expect(submits.find(s => s.payload.request_id === 'req-pass')?.payload.value).toBe('ghp_token')
+      expect(result.credentialPrompt.value).toBeNull()
+      scope.stop()
+    })
+
+    it('auto-submits the second field once its request arrives after submit', async () => {
+      // git resolves askpass invocations sequentially: Password's request_id
+      // may not exist yet when the user hits submit.
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+      mock.setResponse('git.credential_submit', { ok: true })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+      result.credentialPrompt.value!.username = 'octocat'
+      result.credentialPrompt.value!.password = 'ghp_token'
+
+      await result.submitCredential()
+      await flush()
+
+      // Username submitted immediately; modal hidden while password is pending.
+      expect(mock.sent.filter(s => s.type === 'git.credential_submit')).toHaveLength(1)
+      expect(result.showCredentialPrompt.value).toBe(false)
+
+      // Backend resolves the username future, git now invokes askpass for Password.
+      mock.emit('git.credential_request', {
+        request_id: 'req-pass', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Password for 'https://gitlab.com': ",
+      })
+      await flush()
+
+      const submits = mock.sent.filter(s => s.type === 'git.credential_submit')
+      expect(submits).toHaveLength(2)
+      expect(submits.find(s => s.payload.request_id === 'req-pass')?.payload.value).toBe('ghp_token')
+      expect(result.credentialPrompt.value).toBeNull()
+      scope.stop()
+    })
+
+    it('cancelCredential sends git.credential_cancel and closes the modal', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+      mock.setResponse('git.credential_cancel', { ok: true })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+
+      await result.cancelCredential()
+      await flush()
+
+      const cancels = mock.sent.filter(s => s.type === 'git.credential_cancel')
+      expect(cancels).toHaveLength(1)
+      expect(cancels[0].payload.request_id).toBe('req-user')
+      expect(result.credentialPrompt.value).toBeNull()
+      scope.stop()
+    })
+
+    it('closes the modal when the backend broadcasts credential_cancelled for a pending request', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('git.status', mockStatus)
+      mock.setResponse('git.log', { commits: [] })
+
+      const { result, scope } = withScope(() => useGit(() => WS, mock.backend))
+      await flush()
+
+      mock.emit('git.credential_request', {
+        request_id: 'req-user', workspace_path: WS, host: 'gitlab.com',
+        prompt: "Username for 'https://gitlab.com': ",
+      })
+      expect(result.credentialPrompt.value).not.toBeNull()
+
+      mock.emit('git.credential_cancelled', { request_id: 'req-user', workspace_path: WS })
+
+      expect(result.credentialPrompt.value).toBeNull()
+      scope.stop()
+    })
+  })
 })

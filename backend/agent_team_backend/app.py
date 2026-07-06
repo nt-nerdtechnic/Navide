@@ -6,7 +6,8 @@ import re
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -184,6 +185,68 @@ class Session:
 async def _broadcast_git_changed(ws_path: str) -> None:
     """GitWatcher sink: a repo's working tree / .git changed on disk."""
     await broadcast(make_event("git.changed", {"workspace_path": ws_path}))
+
+
+_ASKPASS_PROMPT_URL_RE = re.compile(r"for '([^']+)'")
+
+
+def _extract_host_from_prompt(prompt: str) -> str:
+    """Best-effort remote host extraction from a git askpass prompt, e.g.
+    "Username for 'https://gitlab.com': " -> "gitlab.com". Empty string if the
+    prompt doesn't match git's usual "<field> for '<url>':" format."""
+    match = _ASKPASS_PROMPT_URL_RE.search(prompt)
+    if not match:
+        return ""
+    try:
+        return urlparse(match.group(1)).hostname or ""
+    except ValueError:
+        return ""
+
+
+def build_credential_request_emitter(
+    workspace_path: str,
+) -> Callable[[str, str], Awaitable[None]]:
+    """Build the `on_request` callback for git_service.create_askpass_context()
+    (Phase C). Broadcasts a git.credential_request event to every connected
+    session; frontends filter by workspace_path, same convention as
+    git.changed. Each call corresponds to exactly one askpass prompt (git asks
+    Username and Password as separate invocations), so `request_id` here
+    identifies a single field's answer, not a combined credential pair."""
+
+    async def _on_request(request_id: str, prompt: str) -> None:
+        await broadcast(
+            make_event(
+                "git.credential_request",
+                {
+                    "request_id": request_id,
+                    "workspace_path": workspace_path,
+                    "host": _extract_host_from_prompt(prompt),
+                    "prompt": prompt,
+                },
+            )
+        )
+
+    return _on_request
+
+
+def build_credential_settled_emitter(
+    workspace_path: str,
+) -> Callable[[str, str | None], Awaitable[None]]:
+    """Build the `on_settled` callback for git_service.create_askpass_context()
+    (Phase C). Emits git.credential_cancelled only when a request settles with
+    no value (timeout or explicit cancellation), so the frontend can close its
+    modal; a successful submission needs no further event."""
+
+    async def _on_settled(request_id: str, value: str | None) -> None:
+        if value is None:
+            await broadcast(
+                make_event(
+                    "git.credential_cancelled",
+                    {"request_id": request_id, "workspace_path": workspace_path},
+                )
+            )
+
+    return _on_settled
 
 
 # ── App-level terminal ownership (true persistence) ──────────────────────────
@@ -1677,14 +1740,22 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.fetch":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.fetch(ws_path)
+            result = await git_service.fetch(
+                ws_path,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.pull":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.pull_only(ws_path)
+            result = await git_service.pull_only(
+                ws_path,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1693,10 +1764,27 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             remote = payload.get("remote") or ""
             branch = payload.get("branch") or ""
-            result = await git_service.push_only(ws_path, remote, branch)
+            result = await git_service.push_only(
+                ws_path,
+                remote,
+                branch,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.credential_submit":
+            request_id = str(payload.get("request_id") or "")
+            value = payload.get("value")
+            ok = git_service.resolve_credential(request_id, str(value) if value is not None else None)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": ok}))
+
+        elif msg_type == "git.credential_cancel":
+            request_id = str(payload.get("request_id") or "")
+            ok = git_service.resolve_credential(request_id, None)
+            await session.send_json(make_response(msg_id, msg_type, {"ok": ok}))
 
         elif msg_type == "git.branches":
             ws_path = payload.get("workspace_path") or ""
@@ -2001,7 +2089,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             branch = payload.get("branch") or ""
             remote = payload.get("remote") or "origin"
-            result = await git_service.push_set_upstream(ws_path, branch, remote)
+            result = await git_service.push_set_upstream(
+                ws_path,
+                branch,
+                remote,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -2056,7 +2150,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.pull_rebase":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.pull_rebase(ws_path)
+            result = await git_service.pull_rebase(
+                ws_path,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -2065,7 +2163,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             remote = payload.get("remote") or ""
             branch = payload.get("branch") or ""
-            result = await git_service.push_force(ws_path, remote, branch)
+            result = await git_service.push_force(
+                ws_path,
+                remote,
+                branch,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
