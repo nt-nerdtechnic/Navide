@@ -20,9 +20,12 @@ class PendingRegistry(Generic[T]):
     def register(self, key: str) -> "asyncio.Future[T]":
         """Create and register a pending Future for *key*.
 
-        Register before notifying whoever will eventually call resolve() --
-        otherwise a fast resolve() could arrive before the key exists and be
-        silently dropped.
+        Calling this before notifying whoever will eventually call resolve()
+        closes a race where a fast resolve() could otherwise arrive before the
+        key exists and be silently dropped. Not every caller can afford that
+        ordering (e.g. a notification that must report the request as already
+        proposed before it has an id) -- weigh the race against your own
+        notify step's latency before deciding.
         """
         fut: asyncio.Future[T] = asyncio.get_running_loop().create_future()
         self.pending[key] = fut

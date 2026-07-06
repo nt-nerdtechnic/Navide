@@ -379,6 +379,8 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `pushUpstream: ${msg}`
       return { ok: false, error: msg }
+    } finally {
+      settleCredentialPrompt()
     }
   }
 
@@ -706,6 +708,7 @@ export function useGit(
       return { ok: false, output: '', error: msg }
     } finally {
       isFetching.value = false
+      settleCredentialPrompt()
     }
   }
 
@@ -720,6 +723,8 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `pullOnly: ${msg}`
       return { ok: false, output: '', error: msg }
+    } finally {
+      settleCredentialPrompt()
     }
   }
 
@@ -734,6 +739,8 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `pushOnly: ${msg}`
       return { ok: false, output: '', error: msg }
+    } finally {
+      settleCredentialPrompt()
     }
   }
 
@@ -991,6 +998,7 @@ export function useGit(
       syncError.value = e instanceof Error ? e.message : String(e)
     } finally {
       isSyncing.value = false
+      settleCredentialPrompt()
     }
   }
 
@@ -1089,17 +1097,22 @@ export function useGit(
     url: string,
     target_dir: string,
   ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    const tag = `__clone__:${target_dir}`
+    _activeCloneTag.value = tag
     try {
       const resp = await send<{ ok: boolean; path: string; error?: string }>('git.clone', {
         url,
         target_dir,
-        workspace_path: workspacePath(),
+        workspace_path: tag,
       })
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `cloneRepo: ${msg}`
       return { ok: false, error: msg }
+    } finally {
+      _activeCloneTag.value = null
+      settleCredentialPrompt()
     }
   }
 
@@ -1189,6 +1202,8 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `pullRebase: ${msg}`
       return { ok: false, error: msg }
+    } finally {
+      settleCredentialPrompt()
     }
   }
 
@@ -1205,6 +1220,8 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `pushForce: ${msg}`
       return { ok: false, error: msg }
+    } finally {
+      settleCredentialPrompt()
     }
   }
 
@@ -1284,6 +1301,17 @@ export function useGit(
   // with the value already typed, without asking the user again.
   const credentialSubmitting = ref(false)
   const showCredentialPrompt = computed(() => credentialPrompt.value !== null && !credentialSubmitting.value)
+  // Set while this composable's cloneRepo() is in flight, tagged with a
+  // synthetic id (not a real workspace path) rather than the pane's current
+  // workspacePath(). The clone target isn't an open workspace anywhere yet,
+  // so unlike every other operation below there's no stable "this is the repo
+  // it's for" path to tag events with; using the pane's live, unrelated
+  // workspacePath() would (a) drop the event if the pane navigates elsewhere
+  // before the prompt arrives, since the filter re-reads workspacePath() live,
+  // and (b) pop the prompt in every other window that happens to have that
+  // same pre-clone folder open. The synthetic tag only ever matches this one
+  // in-flight clone.
+  const _activeCloneTag = ref<string | null>(null)
 
   // Anchored to git's askpass prompt format ("Username for '<url>': " /
   // "Password for '<url>': ") rather than a bare substring test — the URL
@@ -1295,7 +1323,7 @@ export function useGit(
   const _offCredentialRequest = on('git.credential_request', (payload: unknown) => {
     const p = payload as { request_id?: string; workspace_path?: string; host?: string; prompt?: string }
     if (!p?.request_id) return
-    if (p.workspace_path && p.workspace_path !== workspacePath()) return
+    if (p.workspace_path && p.workspace_path !== workspacePath() && p.workspace_path !== _activeCloneTag.value) return
     const host = p.host ?? ''
     const prompt = p.prompt ?? ''
     const field = isUsernamePrompt(prompt) ? 'username' : isPasswordPrompt(prompt) ? 'password' : null
@@ -1372,6 +1400,24 @@ export function useGit(
     if (current.passwordRequestId) void send('git.credential_cancel', { request_id: current.passwordRequestId })
     credentialPrompt.value = null
     credentialSubmitting.value = false
+  }
+
+  // submitCredential()'s passwordRequestId check only catches the pairing
+  // completing normally. It stays stuck if Password is never asked at all
+  // (e.g. a credential helper already had it cached, so git only needed
+  // Username via askpass) — there's no local signal for "no more fields are
+  // coming" other than the whole git operation finishing. The backend awaits
+  // the entire subprocess (including any askpass round-trips) before replying
+  // to the git.* request, so by the time that response arrives no further
+  // credential_request for this call can still be in flight — safe to clear
+  // a leftover single-field pairing here. Guarded on credentialSubmitting so
+  // it never touches an actively-displayed prompt still waiting on the user
+  // (which, by the same reasoning, can't coexist with this operation settling).
+  function settleCredentialPrompt(): void {
+    if (credentialSubmitting.value) {
+      credentialPrompt.value = null
+      credentialSubmitting.value = false
+    }
   }
 
   return {
