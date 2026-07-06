@@ -30,6 +30,10 @@ case "$choice" in
 esac
 
 if [ "$NEW" != "$CURRENT" ]; then
+  if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "ERROR: invalid version '$NEW' (expected X.Y.Z)" >&2
+    exit 1
+  fi
   echo "Bumping $CURRENT → $NEW"
   # Update package.json
   node -e "
@@ -41,16 +45,13 @@ if [ "$NEW" != "$CURRENT" ]; then
   sed -i '' "s/__version__ = \".*\"/__version__ = \"$NEW\"/" backend/agent_team_backend/__init__.py
   # Sync backend/pyproject.toml
   sed -i '' "s/^version = \".*\"/version = \"$NEW\"/" backend/pyproject.toml
+  # Sync backend/uv.lock with the new pyproject version
+  uv --project backend lock
   echo "Synced all version files to $NEW"
-  # Commit and tag
-  git add package.json backend/agent_team_backend/__init__.py backend/pyproject.toml
-  git commit -m "chore: bump version to $NEW"
-  git tag "v$NEW"
-  echo "Tagged: v$NEW"
 fi
 
 echo ""
-echo "=== [1/3] Building Python backend ==="
+echo "=== [1/4] Building Python backend ==="
 cd backend
 uv run pyinstaller agent_team_backend.spec
 cd ..
@@ -72,5 +73,20 @@ else
 fi
 
 echo ""
-echo "=== [4/4] Done ==="
+echo "=== [4/4] Committing version bump ==="
+if [ "$NEW" != "$CURRENT" ]; then
+  # Pathspec commit: only these files, regardless of what else is staged
+  git commit -m "chore: bump version to $NEW" -- \
+    package.json \
+    backend/agent_team_backend/__init__.py \
+    backend/pyproject.toml \
+    backend/uv.lock
+  git tag "v$NEW"
+  echo "Tagged: v$NEW"
+else
+  echo "Version unchanged; nothing to commit"
+fi
+
+echo ""
+echo "Done."
 open dist-release
