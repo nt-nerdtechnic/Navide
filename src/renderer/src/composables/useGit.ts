@@ -186,7 +186,10 @@ export function useGit(
   ): Promise<{ ok: boolean; error?: string }> {
     gitError.value = ''
     try {
-      const resp = await send<{ ok: boolean; error?: string }>(type, payload)
+      // 20s stays above the backend's 15s git-subprocess timeout so a slow but
+      // successful write (large stage/commit) isn't cut short by the frontend
+      // first with a spurious "request … timeout".
+      const resp = await send<{ ok: boolean; error?: string }>(type, payload, 20_000)
       const r = resp.payload ?? { ok: false, error: 'no response' }
       if (!r.ok) gitError.value = r.error || `${type} failed`
       return r
