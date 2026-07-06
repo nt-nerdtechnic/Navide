@@ -1708,6 +1708,7 @@ const confirmKillAll = ref(false)
 const MAIN_SHORTCUTS = [
   { label: 'Open Settings',              keys: '⌘,' },
   { label: 'Open Mini IDE',              keys: '⌘⇧I' },
+  { label: 'Open Agent',                 keys: '⌘⇧U' },
   { label: 'Find in Files',             keys: '⌘⇧F' },
   { label: 'Show Keyboard Shortcuts',   keys: '⌘K ⌘S' },
   { label: 'New Main Window',           keys: '⌘⇧N' },

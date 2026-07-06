@@ -391,6 +391,9 @@ onUnmounted(() => document.removeEventListener('keydown', onSidebarTabShortcut))
 registerCommand('workbench.action.focusExplorer', () => selectSidebarTab('explorer'))
 registerCommand('workbench.action.focusPipeline', () => selectSidebarTab('pipeline'))
 registerCommand('workbench.action.focusSourceControl', () => selectSidebarTab('git'))
+// Cmd+Shift+U → spawn an agent with the currently picked CLI/role (the green
+// "Open Agent" button); spawn() itself no-ops when canSpawn is false.
+registerCommand('workbench.action.spawnAgent', () => spawn())
 
 // Git tab badge — updated by GitPane via changes-count event
 const gitChangesCount = ref(0)
