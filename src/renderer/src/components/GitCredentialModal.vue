@@ -54,7 +54,7 @@ watch(() => props.show, (visible) => {
             @keydown.enter="emit('submit')"
           />
         </div>
-        <p class="cred-hint">{{ $t('label.git-credential-token') }}</p>
+        <p class="cred-hint">{{ $t('hint.git-credential-token') }}</p>
         <div class="cred-actions">
           <button class="btn-ghost sm" @click="emit('cancel')">{{ $t('action.cancel') }}</button>
           <button class="btn-primary" @click="emit('submit')">{{ $t('action.submit') }}</button>

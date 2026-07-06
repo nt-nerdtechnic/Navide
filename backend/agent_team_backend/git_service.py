@@ -1618,21 +1618,33 @@ async def commit(workspace_path: str, message: str, all: bool = False) -> dict[s
     return {"ok": True, "hash": hash_match.group(1) if hash_match else ""}
 
 
-async def sync(workspace_path: str) -> dict[str, Any]:
+async def sync(
+    workspace_path: str,
+    *,
+    on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
+    on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """Pull (rebase) then push.  Returns stdout/stderr for both steps."""
-    pull_rc, pull_out, pull_err = await _run_with_timeout(
-        ["git", "pull", "--rebase"], workspace_path, timeout=60.0
-    )
-    pull_output = (pull_out + pull_err).strip()
-    if pull_rc != 0:
-        return asdict(GitSyncResult(ok=False, pull_output=pull_output, error="pull failed"))
+    env, cleanup = await _askpass_env(on_credential_request, on_credential_settled)
+    try:
+        pull_rc, pull_out, pull_err = await _run_with_timeout(
+            ["git", "pull", "--rebase"], workspace_path, timeout=60.0, env=env
+        )
+        pull_output = (pull_out + pull_err).strip()
+        if pull_rc != 0:
+            return asdict(GitSyncResult(ok=False, pull_output=pull_output, error="pull failed"))
 
-    push_rc, push_out, push_err = await _run_with_timeout(["git", "push"], workspace_path, timeout=60.0)
-    push_output = (push_out + push_err).strip()
-    if push_rc != 0:
-        return asdict(GitSyncResult(ok=False, pull_output=pull_output, push_output=push_output, error="push failed"))
+        push_rc, push_out, push_err = await _run_with_timeout(
+            ["git", "push"], workspace_path, timeout=60.0, env=env
+        )
+        push_output = (push_out + push_err).strip()
+        if push_rc != 0:
+            return asdict(GitSyncResult(ok=False, pull_output=pull_output, push_output=push_output, error="push failed"))
 
-    return asdict(GitSyncResult(ok=True, pull_output=pull_output, push_output=push_output))
+        return asdict(GitSyncResult(ok=True, pull_output=pull_output, push_output=push_output))
+    finally:
+        if cleanup is not None:
+            await cleanup()
 
 
 async def get_staged_diff(workspace_path: str) -> str:

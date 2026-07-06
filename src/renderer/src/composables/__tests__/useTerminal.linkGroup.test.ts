@@ -72,6 +72,22 @@ describe('getWrappedLineGroup', () => {
     const term = mockTerm([{ text: '/Users/a/one.md' }, { text: '' }, { text: '/Users/a/two.md' }])
     expect(getWrappedLineGroup(term, 0).fullText).toBe('/Users/a/one.md')
   })
+
+  it('keeps the clicked path intact in column-aligned output (git create mode)', () => {
+    // Rows here end where their content ends, not at a width limit — a
+    // measurably longer neighbour proves that, so the clicked row must not
+    // have the next row glued onto it ('…Test.phpcreate').
+    const rows = [
+      { text: '      create mode 100644 lang/zh_TW/conversations.php' },
+      { text: '      create mode 100644 resources/views/employer/conversations/index.blade.php' },
+      { text: '      create mode 100644 tests/Feature/WaTemplateControllerTest.php' },
+      { text: '      create mode 100644 tests/Unit/OrganizationTest.php' },
+    ]
+    const g = getWrappedLineGroup(mockTerm(rows), 2)
+    expect(g.fullText).not.toContain('OrganizationTest')
+    const pos = groupRowColToPos(g, 2, rows[2].text.indexOf('tests/'))
+    expect(findFileLinkAt(g.fullText, pos)).toBe('tests/Feature/WaTemplateControllerTest.php')
+  })
 })
 
 describe('position mapping', () => {
@@ -95,36 +111,34 @@ describe('position mapping', () => {
 })
 
 describe('splitMatchAtRowStarts', () => {
-  // The exact find-output block from the bug report: alternating wrapped
-  // paths, every row joins with the next, gluing the whole block into one
-  // regex match.
-  const term = mockTerm([
-    { text: '     /Users/neillu/Desktop/Leankoo/Leankoo1/vendor/seba' },
-    { text: '     stian/lines-of-code/README.md' },
-    { text: '     /Users/neillu/Desktop/Leankoo/Leankoo1/vendor/seba' },
-    { text: '     stian/type/README.md' },
-    { text: '     /Users/neillu/Desktop/Leankoo/Leankoo1/vendor/seba' },
-    { text: '     stian/cli-parser/README.md' },
-  ])
+  // find-output where every row is near the same width: the width-limit check
+  // cannot tell "one wrapped path" from "adjacent full-width paths", so the
+  // whole block still glues into one regex match — the genuinely ambiguous
+  // case the split-back heuristic exists for.
+  const GLUE_PATHS = ['alpha', 'bravo', 'gamma'].map(
+    (n) => `/Users/neillu/Desktop/Leankoo/Leankoo1/vendor/sebastian/pkg-${n}/README.md`
+  )
+  const WRAP = 40 // pre-wrap column; must not fall on a '/' (asserted below)
+  const term = mockTerm(
+    GLUE_PATHS.flatMap((p) => [
+      { text: '     ' + p.slice(0, WRAP) },
+      { text: '     ' + p.slice(WRAP) },
+    ])
+  )
   const g = getWrappedLineGroup(term, 5)
-  const clickPos = groupRowColToPos(g, 5, 7) // click 'ian' in the last row
+  const clickPos = groupRowColToPos(g, 5, 7) // click inside the last path's tail
   const m = findFileLinkMatchAt(g.fullText, clickPos)!
 
   it('splits a glued find-output block back into per-path pieces', () => {
-    expect(splitMatchAtRowStarts(g, m.index, m.text).map((p) => p.text)).toEqual([
-      '/Users/neillu/Desktop/Leankoo/Leankoo1/vendor/sebastian/lines-of-code/README.md',
-      '/Users/neillu/Desktop/Leankoo/Leankoo1/vendor/sebastian/type/README.md',
-      '/Users/neillu/Desktop/Leankoo/Leankoo1/vendor/sebastian/cli-parser/README.md',
-    ])
+    expect(GLUE_PATHS.every((p) => p[WRAP] !== '/' && p[WRAP] !== '~')).toBe(true)
+    expect(splitMatchAtRowStarts(g, m.index, m.text).map((p) => p.text)).toEqual(GLUE_PATHS)
   })
 
   it('the piece under the click is the wrapped path, not the whole block', () => {
     const piece = splitMatchAtRowStarts(g, m.index, m.text).find(
       (p) => clickPos >= p.index && clickPos < p.index + p.text.length
     )
-    expect(piece?.text).toBe(
-      '/Users/neillu/Desktop/Leankoo/Leankoo1/vendor/sebastian/cli-parser/README.md'
-    )
+    expect(piece?.text).toBe(GLUE_PATHS[2])
   })
 
   it('leaves a match with no fresh-path row starts as a single piece', () => {

@@ -1718,7 +1718,11 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "git.sync":
             ws_path = payload.get("workspace_path") or ""
-            result = await git_service.sync(ws_path)
+            result = await git_service.sync(
+                ws_path,
+                on_credential_request=build_credential_request_emitter(ws_path),
+                on_credential_settled=build_credential_settled_emitter(ws_path),
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))

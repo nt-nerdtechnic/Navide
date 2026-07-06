@@ -140,6 +140,15 @@ function openInEditor(absPath: string, line: number | undefined): void {
 // whether a path-like token runs right up against a row boundary).
 const _PATH_CHAR_RE = new RegExp(_EXCL)
 
+// Content-boundary joining: a row only counts as pre-wrapped if no row within
+// this window is more than this many chars longer than it — a pre-wrap break
+// happens only where the CLI ran out of width, so a genuinely broken row must
+// be about as long as the longest row nearby. Rows measurably shorter than a
+// neighbour ended by content, not by the width limit (git's aligned
+// `create mode …` output, ls -l, …), and joining them corrupts the path.
+const _PREWRAP_WINDOW = 4
+const _PREWRAP_SLACK = 8
+
 // A wrapped logical line, reconstructed from two signals:
 //   • xterm's `isWrapped` flag — authoritative for genuine terminal-width
 //     wraps (works for any content).
@@ -147,7 +156,10 @@ const _PATH_CHAR_RE = new RegExp(_EXCL)
 //     the terminal themselves and pre-wrap their output with real newlines at
 //     a width narrower than the pane, so isWrapped is never set and rows never
 //     reach term.cols. We join a row to the previous one when the previous row
-//     ends in a path char and this row's FIRST NON-GUTTER char is a path char.
+//     ends in a path char, this row's FIRST NON-GUTTER char is a path char,
+//     and the previous row is about as long as the longest row nearby (only a
+//     row that hit the width limit can be a genuine pre-wrap break — see
+//     _PREWRAP_WINDOW / _PREWRAP_SLACK).
 //     Continuation rows carry the block's gutter indent, so that leading
 //     whitespace is stripped from fullText; `strips` records how much, keeping
 //     buffer col ↔ fullText offset mapping exact.
@@ -170,6 +182,15 @@ export function getWrappedLineGroup(term: import('@xterm/xterm').Terminal, buffe
     return ln ? ln.translateToString(true) : null
   }
   const leadingWs = (s: string): number => s.length - s.trimStart().length
+  // Whether row `r` could have been broken by the CLI's width limit: no row
+  // within the window is measurably longer than it.
+  const nearWidthLimit = (r: number): boolean => {
+    const len = lineTextAt(r)?.length ?? 0
+    for (let i = r - _PREWRAP_WINDOW; i <= r + _PREWRAP_WINDOW; i++) {
+      if (i !== r && (lineTextAt(i)?.length ?? 0) > len + _PREWRAP_SLACK) return false
+    }
+    return true
+  }
   // Whether row `r` is a continuation of row `r - 1`.
   const continuesFromPrev = (r: number): boolean => {
     if (r <= 0) return false
@@ -177,7 +198,11 @@ export function getWrappedLineGroup(term: import('@xterm/xterm').Terminal, buffe
     const cur = lineTextAt(r)
     const prev = lineTextAt(r - 1)
     if (!cur || !prev) return false
-    return _PATH_CHAR_RE.test(prev[prev.length - 1]) && _PATH_CHAR_RE.test(cur[leadingWs(cur)])
+    return (
+      _PATH_CHAR_RE.test(prev[prev.length - 1]) &&
+      _PATH_CHAR_RE.test(cur[leadingWs(cur)]) &&
+      nearWidthLimit(r - 1)
+    )
   }
 
   let groupStart = bufferRow
