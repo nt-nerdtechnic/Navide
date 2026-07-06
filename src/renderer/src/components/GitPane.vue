@@ -92,9 +92,6 @@ const sortBy = ref<'name' | 'path' | 'status'>('path')
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
 const showCommitMenuPos = ref({ top: 0, right: 0 })
-const showCommitRowMenu = ref(false)
-const commitRowMenuPos = ref({ top: 0, right: 0 })
-const commitRowMenuHash = ref('')
 const showRemoteMenu = ref(false)
 const remoteMenuPos = ref({ top: 0, right: 0 })
 function openRemoteMenu(e: MouseEvent): void {
@@ -116,18 +113,6 @@ function openCommitMenu(e: MouseEvent): void {
   showCommitMenuPos.value = { top: rect.bottom + 4, right: window.innerWidth - rect.right }
   showCommitMenu.value = !showCommitMenu.value
   showViewMenu.value = false
-}
-
-// Cherry-pick / Revert are low-frequency, unconfirmed, history-rewriting
-// actions — tuck them behind a per-commit "⋯" menu instead of always-on
-// buttons so they can't be fat-fingered while scanning the log.
-function openCommitRowMenu(e: MouseEvent, hash: string): void {
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  commitRowMenuPos.value = { top: rect.bottom + 4, right: window.innerWidth - rect.right }
-  commitRowMenuHash.value = hash
-  showCommitRowMenu.value = true
-  showViewMenu.value = false
-  showCommitMenu.value = false
 }
 
 function toggleDir(key: string): void {
@@ -201,19 +186,20 @@ function treeIndent(depth: number): Record<string, string> {
 // ── file context menu (right-click) ─────────────────────────────────────────────
 const ctxMenu = ref<{
   show: boolean; x: number; y: number
-  kind: 'file' | 'folder' | 'branch'
+  kind: 'file' | 'folder' | 'branch' | 'commit'
   file: GitFileEntry | null
   dir: string
   branch: string
+  hash: string
   staged: boolean
-}>({ show: false, x: 0, y: 0, kind: 'file', file: null, dir: '', branch: '', staged: false })
+}>({ show: false, x: 0, y: 0, kind: 'file', file: null, dir: '', branch: '', hash: '', staged: false })
 
 function openCtxMenu(e: MouseEvent, file: GitFileEntry, staged: boolean): void {
   e.preventDefault()
   // Clamp so the menu stays on-screen (menu is ~220×300).
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
-  ctxMenu.value = { show: true, x, y, kind: 'file', file, dir: '', branch: '', staged }
+  ctxMenu.value = { show: true, x, y, kind: 'file', file, dir: '', branch: '', hash: '', staged }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
@@ -222,7 +208,20 @@ function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
   e.stopPropagation()
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
-  ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, branch: '', staged }
+  ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, branch: '', hash: '', staged }
+  showViewMenu.value = false
+  showCommitMenu.value = false
+}
+// Cherry-pick / Revert are low-frequency, unconfirmed, history-rewriting
+// actions — reach them by right-clicking a commit rather than always-on
+// buttons, so they can't be fat-fingered while scanning the log.
+function openCommitCtxMenu(e: MouseEvent, hash: string): void {
+  e.preventDefault()
+  e.stopPropagation()
+  // Two-item menu (~90px tall).
+  const x = Math.min(e.clientX, window.innerWidth - 224)
+  const y = Math.min(e.clientY, window.innerHeight - 96)
+  ctxMenu.value = { show: true, x, y, kind: 'commit', file: null, dir: '', branch: '', hash, staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
@@ -232,7 +231,7 @@ function openBranchCtxMenu(e: MouseEvent, name: string): void {
   // Branch menu has a single item (~48px), so clamp to its real height, not the file menu's.
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 48)
-  ctxMenu.value = { show: true, x, y, kind: 'branch', file: null, dir: '', branch: name, staged: false }
+  ctxMenu.value = { show: true, x, y, kind: 'branch', file: null, dir: '', branch: name, hash: '', staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
@@ -1318,7 +1317,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 </script>
 
 <template>
-  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; showCommitRowMenu = false; clearSelection()">
+  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; clearSelection()">
 
     <div v-if="!workspacePath" class="empty-state">{{ $t('label.select-workspace') }}</div>
 
@@ -1957,7 +1956,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? 'No matches' : 'No commits yet' }}</div>
         <div v-else class="commit-list">
           <div v-for="{ c, gi } in pagedLog" :key="c.hash">
-            <div class="commit-row" @click="toggleCommitDetail(c.hash)">
+            <div class="commit-row" @click="toggleCommitDetail(c.hash)" @contextmenu="gi > 0 && openCommitCtxMenu($event, c.hash)">
               <div class="graph-col" :style="{ width: graphWidth + 'px' }">
                 <svg class="graph-svg" :viewBox="`0 0 ${graphWidth} 100`" preserveAspectRatio="none">
                   <line
@@ -1983,7 +1982,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
               </div>
               <div class="commit-btns-right" @click.stop>
-                <button v-if="gi > 0" class="row-btn always" title="More actions" @click.stop="openCommitRowMenu($event, c.hash)">⋯</button>
                 <span class="expand-caret">{{ expandedCommitHash === c.hash ? '▾' : '▸' }}</span>
               </div>
             </div>
@@ -2000,11 +1998,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </template>
             </div>
           </div>
-        </div>
-        <div v-if="showCommitRowMenu" class="tp-backdrop" @click="showCommitRowMenu = false" />
-        <div v-if="showCommitRowMenu" class="tp-dropdown" :style="{ top: commitRowMenuPos.top + 'px', right: commitRowMenuPos.right + 'px' }" @click.stop>
-          <button class="menu-item" @click="doCherryPick(commitRowMenuHash); showCommitRowMenu = false">🍒 Cherry-pick</button>
-          <button class="menu-item" @click="doRevert(commitRowMenuHash); showCommitRowMenu = false">↺ Revert</button>
         </div>
         <div v-if="historyPageCount > 1" class="history-pagination">
           <button class="pg-btn" :disabled="historyPage === 0" @click="historyPage--">‹</button>
@@ -2372,6 +2365,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="menu-item" @click="doMergeIntoAndPush(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }} &amp; push</button>
         <div class="menu-sep" />
         <button class="menu-item danger" @click="ctxDeleteBranch">Delete Branch</button>
+      </div>
+
+      <div v-else-if="ctxMenu.show && ctxMenu.kind === 'commit'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button class="menu-item" @click="doCherryPick(ctxMenu.hash); closeCtxMenu()">🍒 Cherry-pick</button>
+        <button class="menu-item" @click="doRevert(ctxMenu.hash); closeCtxMenu()">↺ Revert</button>
       </div>
     </Teleport>
 
