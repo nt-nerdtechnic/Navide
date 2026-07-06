@@ -129,6 +129,7 @@
     "pin-file-path": "Pin a file path to always include",
     "browse": "Browse…",
     "new-workspace": "New…",
+    "open-from-root": "Open /",
     "add-to-grid": "Open Agent",
     "open-terminal": ">_ Open Terminal",
     "resume-agent": "↻ Resume",

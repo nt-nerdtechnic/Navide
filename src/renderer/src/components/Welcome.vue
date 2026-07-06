@@ -76,6 +76,10 @@ async function newWorkspace(): Promise<void> {
   }
 }
 
+async function openFromRoot(): Promise<void> {
+  await openWorkspace('/')
+}
+
 async function togglePin(item: RecentWorkspace, ev: Event): Promise<void> {
   ev.stopPropagation()
   if (item.pinned) await unpin(item.path)
@@ -104,6 +108,9 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
           </button>
           <button class="ghost" :disabled="creating" @click="newWorkspace">
             {{ creating ? '…' : $t('action.new-workspace') }}
+          </button>
+          <button class="ghost" @click="openFromRoot">
+            {{ $t('action.open-from-root') }}
           </button>
         </div>
       </section>

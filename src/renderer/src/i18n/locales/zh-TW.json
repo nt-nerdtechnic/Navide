@@ -129,6 +129,7 @@
     "pin-file-path": "固定檔案路徑以永遠包含",
     "browse": "瀏覽…",
     "new-workspace": "新增…",
+    "open-from-root": "從 / 開啟",
     "add-to-grid": "開啟 Agent",
     "open-terminal": ">_ 開啟 Terminal",
     "resume-agent": "↻ 接續",

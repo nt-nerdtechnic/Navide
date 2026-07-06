@@ -251,6 +251,7 @@ ipcMain.handle('workspace:new', async () => {
   return result.filePaths[0]
 })
 
+
 function openStagesWindow(): void {
   if (stagesWindow && !stagesWindow.isDestroyed()) {
     stagesWindow.focus()
