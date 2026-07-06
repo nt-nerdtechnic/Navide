@@ -80,12 +80,17 @@ const {
 } = useTheme()
 
 // ── Appearance (language) ─────────────────────────────────────────────────────
-const { language: currentLanguage, setLanguage } = useSettings()
+const { language: currentLanguage, setLanguage, healthCheckTimeoutSec, setHealthCheckTimeoutSec } = useSettings()
 
 const SUPPORTED_LANGUAGES = [
   { value: 'zh-TW', label: '繁體中文' },
   { value: 'en-US', label: 'English' },
 ]
+
+function onHealthTimeoutChange(raw: string): void {
+  const n = Number(raw)
+  if (Number.isFinite(n)) setHealthCheckTimeoutSec(n)
+}
 
 const { confirm: notifyConfirm } = useNotify()
 
@@ -1552,6 +1557,21 @@ async function plDelete(id: string, name: string) {
             <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
             <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
           </section>
+
+          <section class="ap-section">
+            <h3 class="ap-title">{{ $t('settings.appearance.backend-timeout') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.backend-timeout-hint') }}</p>
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('settings.appearance.backend-timeout-label') }}</label>
+              <input
+                type="number"
+                min="15"
+                max="120"
+                :value="healthCheckTimeoutSec"
+                @change="onHealthTimeoutChange(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </section>
         </div>
 
 
@@ -1702,6 +1722,7 @@ async function plDelete(id: string, name: string) {
 }
 .ap-lang-btn:hover { border-color: var(--border-strong); background: var(--bg-muted); }
 .ap-lang-btn.active { border-color: var(--accent-emphasis); box-shadow: 0 0 0 1px var(--accent-emphasis); }
+.ap-timeout-field { max-width: 140px; }
 .ap-reset {
   font-size: 11px;
   padding: 4px 10px;
@@ -1804,7 +1825,7 @@ async function plDelete(id: string, name: string) {
 /* ── Fields ───────────────────────────────────────────────────────────────── */
 .field { display: flex; flex-direction: column; gap: 4px; }
 .lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
-input[type='text'], input[type='email'], textarea, select {
+input[type='text'], input[type='email'], input[type='number'], textarea, select {
   background: var(--bg-subtle);
   border: 1px solid var(--border-default);
   color: var(--text-bright);

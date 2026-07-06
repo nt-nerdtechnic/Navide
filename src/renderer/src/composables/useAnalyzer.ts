@@ -96,6 +96,10 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   const loading = ref<boolean>(false)
   const lastError = ref<string>('')
   let lastHealthAt = 0
+  // Pane ids currently queued behind a running llama-cli call (analyzer.py's
+  // _llama_sem serialises inference; a queued call can wait 10-60s with no
+  // other feedback, which otherwise looks like a hung/broken connection).
+  const queuedPaneIds = ref<Set<string>>(new Set())
 
   // ── Analyzer settings ─────────────────────────────────────────────────────
   const analyzerSettings = ref<AnalyzerSettings>({
@@ -259,6 +263,12 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     } catch (err) {
       lastError.value = String((err as Error).message ?? err)
       return null
+    } finally {
+      if (ctx?.paneId && queuedPaneIds.value.has(ctx.paneId)) {
+        const next = new Set(queuedPaneIds.value)
+        next.delete(ctx.paneId)
+        queuedPaneIds.value = next
+      }
     }
   }
 
@@ -291,6 +301,11 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   })
   const _offPullProgress = backend.on('analyzer.pull_progress', (payload) => {
     pullProgress.value = payload as PullProgress
+  })
+  const _offQueued = backend.on('analyzer.queued', (payload) => {
+    const p = payload as { pane_id?: string; stage_id?: string; workspace_path?: string }
+    if (!p.pane_id) return
+    queuedPaneIds.value = new Set(queuedPaneIds.value).add(p.pane_id)
   })
   const _offPullDone = backend.on('analyzer.pull_done', (payload) => {
     const p = payload as { name: string; ok: boolean; error?: string }
@@ -336,7 +351,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   onScopeDispose(() => {
     if (pollHandle !== null) window.clearInterval(pollHandle)
     _offBenchmarkProgress(); _offBenchmarkDone()
-    _offSettingsChanged(); _offPullProgress(); _offPullDone()
+    _offSettingsChanged(); _offPullProgress(); _offPullDone(); _offQueued()
   })
 
   return {
@@ -354,6 +369,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     refreshHealth,
     refreshModels,
     classify,
+    queuedPaneIds,
     benchmark,
     benchmarkResults,
     benchmarking,

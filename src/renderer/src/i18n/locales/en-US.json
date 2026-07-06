@@ -217,7 +217,10 @@
       "tweaks-hint": "Tweaks are layered on top of the current theme and preserved when switching themes.",
       "environment": "Environment",
       "environment-hint": "Re-run the first-launch environment detection wizard (checks Homebrew / Node / CLI / Ollama, etc.).",
-      "rerun-env-check": "↻ Re-run environment check"
+      "rerun-env-check": "↻ Re-run environment check",
+      "backend-timeout": "Backend Startup Timeout",
+      "backend-timeout-hint": "How long to wait for the backend to become healthy on startup or restart before giving up. Raise this on slower machines (15–120 seconds).",
+      "backend-timeout-label": "Timeout (seconds)"
     },
     "roles": {
       "title": "Roles",
@@ -311,6 +314,7 @@
     "loading": "Loading…",
     "boot-starting": "Starting backend…",
     "boot-connecting": "Connecting…",
+    "boot-countdown": "({seconds}s)",
     "no-items": "No items to display in this directory",
     "select-workspace": "Select a workspace to get started",
     "selected-count": "selected",

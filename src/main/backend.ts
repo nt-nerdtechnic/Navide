@@ -41,7 +41,7 @@ function getLoginShellEnv(): Promise<{ shell: string; path: string | null }> {
   })
 }
 
-export async function startBackend(): Promise<BackendHandle> {
+export async function startBackend(healthCheckTimeoutMs = 45_000): Promise<BackendHandle> {
   const port = await findFreePort()
   const host = '127.0.0.1'
 
@@ -130,8 +130,9 @@ export async function startBackend(): Promise<BackendHandle> {
     // Packaged (unsigned/non-notarized) builds can be held up for many seconds
     // by macOS Gatekeeper scanning the bundled binary on first launch after
     // download — 15s was too tight and surfaced as "backend failed to start"
-    // even though the process would have come up given more time.
-    await waitForHealth(host, port, 45_000)
+    // even though the process would have come up given more time. Now
+    // configurable via Settings (default 45s) — see src/main/health-timeout.ts.
+    await waitForHealth(host, port, healthCheckTimeoutMs)
   } catch (err) {
     // Health never came up — kill the orphaned child so it can't linger and
     // contend over the shared ~/.agent-team state on the next start attempt.
@@ -142,7 +143,7 @@ export async function startBackend(): Promise<BackendHandle> {
 }
 
 
-async function waitForHealth(host: string, port: number, timeoutMs: number): Promise<void> {
+export async function waitForHealth(host: string, port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
   let lastErr: unknown = null
   while (Date.now() < deadline) {

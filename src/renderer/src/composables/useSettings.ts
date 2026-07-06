@@ -54,6 +54,38 @@ function setLanguage(locale: string): void {
   window.agentTeam?.broadcastLanguageChange?.(locale)
 }
 
+// Health-check timeout (seconds): how long the main process waits for the
+// backend's /health endpoint before giving up on startup/restart. Persisted
+// in a main-owned file (not localStorage) because main needs the value before
+// any renderer window exists — see src/main/health-timeout.ts.
+export const DEFAULT_HEALTH_CHECK_TIMEOUT_SEC = 45
+export const MIN_HEALTH_CHECK_TIMEOUT_SEC = 15
+export const MAX_HEALTH_CHECK_TIMEOUT_SEC = 120
+
+function clampHealthCheckTimeoutSec(raw: number): number {
+  if (!Number.isFinite(raw)) return DEFAULT_HEALTH_CHECK_TIMEOUT_SEC
+  return Math.min(MAX_HEALTH_CHECK_TIMEOUT_SEC, Math.max(MIN_HEALTH_CHECK_TIMEOUT_SEC, Math.round(raw)))
+}
+
+const healthCheckTimeoutSec = ref<number>(DEFAULT_HEALTH_CHECK_TIMEOUT_SEC)
+
+async function loadHealthCheckTimeoutSec(): Promise<void> {
+  try {
+    const result = await window.agentTeam?.readHealthCheckTimeout?.()
+    if (result?.ok && typeof result.timeoutSec === 'number') {
+      healthCheckTimeoutSec.value = clampHealthCheckTimeoutSec(result.timeoutSec)
+    }
+  } catch {
+    // IPC unavailable — keep default
+  }
+}
+
+function setHealthCheckTimeoutSec(sec: number): void {
+  const clamped = clampHealthCheckTimeoutSec(sec)
+  healthCheckTimeoutSec.value = clamped
+  void window.agentTeam?.writeHealthCheckTimeout?.(clamped)
+}
+
 async function syncToBackend(
   sender: (type: string, payload: Record<string, unknown>) => Promise<unknown>,
   workspacePath: string,
@@ -70,5 +102,13 @@ async function syncToBackend(
 }
 
 export function useSettings() {
-  return { language, loadLanguage, setLanguage, syncToBackend }
+  return {
+    language,
+    loadLanguage,
+    setLanguage,
+    syncToBackend,
+    healthCheckTimeoutSec,
+    loadHealthCheckTimeoutSec,
+    setHealthCheckTimeoutSec,
+  }
 }

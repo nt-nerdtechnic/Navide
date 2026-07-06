@@ -151,6 +151,16 @@ def _find_gguf_path(model_name: str) -> Path:
 # memory; two concurrent calls OOM-crash each other. One at a time is correct.
 _llama_sem = asyncio.Semaphore(1)
 
+
+def llama_cli_busy() -> bool:
+    """True if a llama-cli call is already running, so the next one will queue.
+
+    Callers use this to warn the frontend before blocking on `_llama_sem` —
+    without it, a queued call just looks hung until the running one finishes.
+    """
+    return _llama_sem.locked()
+
+
 _JSON_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
 
 # llama.cpp perf-print stderr patterns. Format is stable across llama-cli and

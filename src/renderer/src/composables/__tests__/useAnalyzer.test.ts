@@ -75,4 +75,21 @@ describe('useAnalyzer', () => {
     expect(await result.classify('some text')).toBeNull()
     scope.stop()
   })
+
+  it('analyzer.queued adds the pane id, classify() clears it once it resolves', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('analyzer.health', { ok: true, default_model: 'qwen' })
+    mock.setResponse('analyzer.models', { models: [], default: 'qwen' })
+    mock.setResponse('analyzer.classify', okResult)
+
+    const { result, scope } = withScope(() => useAnalyzer(mock.backend))
+    await flush()
+
+    mock.emit('analyzer.queued', { pane_id: 'p1', stage_id: 's1', workspace_path: '/ws' })
+    expect(result.queuedPaneIds.value.has('p1')).toBe(true)
+
+    await result.classify('agent 列出了選項...', 'qwen', { paneId: 'p1' })
+    expect(result.queuedPaneIds.value.has('p1')).toBe(false)
+    scope.stop()
+  })
 })

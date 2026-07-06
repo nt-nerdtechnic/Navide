@@ -20,6 +20,7 @@ from .analyzer import (
     list_models as _llama_list_models,
     auto_answer as _llama_auto_answer,
     benchmark as _llama_benchmark,
+    llama_cli_busy as _llama_cli_busy,
 )
 from .analyzer_ollama import (
     classify as _ollama_classify,
@@ -1522,6 +1523,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "analyzer.classify":
             text = payload.get("text", "") or ""
             model = payload.get("model") or ANALYZER_DEFAULT_MODEL
+            # llama_cpp calls are serialised via _llama_sem (analyzer.py); if one
+            # is already running, this call will queue behind it for up to 60s.
+            # Tell the frontend now so it shows "queued" instead of looking hung.
+            if not _az_is_ollama() and _llama_cli_busy():
+                await broadcast(make_event("analyzer.queued", {
+                    "pane_id": payload.get("pane_id") or "",
+                    "stage_id": payload.get("stage_id") or "",
+                    "workspace_path": payload.get("workspace_path") or "",
+                }))
             result = await analyzer_classify(text, model)
             _record_analyzer_tokens(result, payload)
             await session.send_json(make_response(msg_id, msg_type, result))

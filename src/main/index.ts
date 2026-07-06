@@ -8,6 +8,8 @@ import { startBackend, type BackendHandle } from './backend'
 import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 import { setWindowDockTileBadge } from './dock-tile-badge'
+import { BackendBroadcastTracker } from './backend-broadcast'
+import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
@@ -45,6 +47,10 @@ const mainWindowWorkspaces = new Map<BrowserWindow, string>()
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
 const windowRegistry = new WindowRegistry(() => join(app.getPath('userData'), 'open-windows.json'))
+// Health-check timeout: user-configurable via Settings, persisted here so
+// startBackend() (called before any renderer window exists) can read it.
+// Path resolved lazily for the same reason as windowRegistry's, above.
+const healthTimeoutPath = (): string => join(app.getPath('userData'), 'health-check-timeout.json')
 // Windows from the previous (uncleanly exited) run, offered to the FIRST
 // renderer that asks via restore:getPending; cleared on apply/dismiss.
 let pendingRestore: WindowEntry[] | null = null
@@ -165,12 +171,31 @@ function backendInfoPayload() {
 
 // Push the current backend info to every window so each renderer's useBackend
 // can reconnect after a restart (the port changes) or show disconnected on stop.
+// Only the focused window(s) get it immediately — otherwise a single backend
+// blip flashes "reconnecting" in every open window at once. Backgrounded
+// windows get the latest snapshot queued and delivered on their next 'focus'
+// event (see below).
+const backendBroadcastTracker = new BackendBroadcastTracker<ReturnType<typeof backendInfoPayload>>()
+
 function broadcastBackendChanged(): void {
   const payload = backendInfoPayload()
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('backend:changed', payload)
+    if (win.isDestroyed()) continue
+    const { immediate } = backendBroadcastTracker.dispatch(win.id, win.isFocused(), payload)
+    if (immediate) win.webContents.send('backend:changed', payload)
   }
 }
+
+// Flush a queued backend info snapshot to a window as soon as it regains
+// focus, and stop tracking it once closed. Registered on every BrowserWindow
+// (not just main windows) so Roles/Stages/Editor windows behave the same way.
+app.on('browser-window-created', (_event, win) => {
+  win.on('focus', () => {
+    const payload = backendBroadcastTracker.takePending(win.id)
+    if (payload !== undefined && !win.isDestroyed()) win.webContents.send('backend:changed', payload)
+  })
+  win.on('closed', () => backendBroadcastTracker.forget(win.id))
+})
 
 ipcMain.handle('backend:info', () => backendInfoPayload())
 
@@ -188,7 +213,7 @@ ipcMain.handle('backend:restart', async () => {
       await b.stop()
     }
     try {
-      backend = await startBackend()
+      backend = await startBackend(readHealthCheckTimeoutSec(healthTimeoutPath()) * 1000)
       backendLastError = null
       console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
     } catch (err) {
@@ -739,6 +764,19 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
   }
 })
 
+ipcMain.handle('settings:health-timeout-read', () => {
+  return { ok: true, timeoutSec: readHealthCheckTimeoutSec(healthTimeoutPath()) }
+})
+
+ipcMain.handle('settings:health-timeout-write', (_event, timeoutSec: number) => {
+  try {
+    writeHealthCheckTimeoutSec(healthTimeoutPath(), timeoutSec)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 // Disable hardware-accelerated rendering entirely.
 // --disable-gpu eliminates the GPU subprocess without running GPU code in-process.
 // Previously we used --in-process-gpu to prevent a separate GPU process from
@@ -912,7 +950,7 @@ app.whenReady().then(async () => {
   // begin loading until the backend had fully spawned. The renderer shows its
   // boot overlay and connects once the backend is ready (broadcastBackendChanged);
   // it already tolerates a not-yet-ready backend (same path as a restart).
-  backendStarting = startBackend()
+  backendStarting = startBackend(readHealthCheckTimeoutSec(healthTimeoutPath()) * 1000)
     .then((b) => {
       backend = b
       backendLastError = null

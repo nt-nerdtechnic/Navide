@@ -217,7 +217,10 @@
       "tweaks-hint": "自訂調整會疊加在目前主題上，切換主題時仍會保留。",
       "environment": "環境",
       "environment-hint": "重新執行首次啟動的環境偵測精靈（檢查 Homebrew / Node / CLI / Ollama 等）。",
-      "rerun-env-check": "↻ 重新執行環境檢測"
+      "rerun-env-check": "↻ 重新執行環境檢測",
+      "backend-timeout": "後端啟動逾時",
+      "backend-timeout-hint": "啟動或重啟時等待後端變為健康狀態的時間，逾時就放棄。較慢的機器可拉長此值（15–120 秒）。",
+      "backend-timeout-label": "逾時秒數"
     },
     "roles": {
       "title": "角色",
@@ -311,6 +314,7 @@
     "loading": "載入中…",
     "boot-starting": "正在啟動後端…",
     "boot-connecting": "正在連線…",
+    "boot-countdown": "（{seconds} 秒）",
     "no-items": "此目錄沒有可顯示的項目",
     "select-workspace": "請選擇工作區以開始使用",
     "selected-count": "已選取",

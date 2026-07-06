@@ -70,6 +70,7 @@ const settingsApi = useSettings()
 onMounted(() => {
   themeApi.loadTheme()
   settingsApi.loadLanguage()
+  void settingsApi.loadHealthCheckTimeoutSec()
   window.agentTeam?.onLanguageChanged?.((locale) => {
     settingsApi.setLanguage(locale)
   })
@@ -134,6 +135,22 @@ function retryBackend(): void {
   armBootTimeout()
   void backend.restart()
 }
+// Countdown display for the boot overlay, driven by the configured health-check
+// timeout (Settings → Appearance). Purely cosmetic — it doesn't change when the
+// overlay actually gets dismissed (see armBootTimeout's own 52s safety net above).
+const bootCountdown = ref<number>(settingsApi.healthCheckTimeoutSec.value)
+let _bootCountdownTimer: number | undefined
+function startBootCountdown(): void {
+  if (_bootCountdownTimer) clearInterval(_bootCountdownTimer)
+  bootCountdown.value = settingsApi.healthCheckTimeoutSec.value
+  _bootCountdownTimer = window.setInterval(() => {
+    if (bootCountdown.value > 0) bootCountdown.value -= 1
+  }, 1000)
+}
+watch(booting, (b) => {
+  if (b) startBootCountdown()
+  else if (_bootCountdownTimer) { clearInterval(_bootCountdownTimer); _bootCountdownTimer = undefined }
+}, { immediate: true })
 watch(
   () => backend.status.value,
   (s) => {
@@ -5334,6 +5351,19 @@ async function onStopBackend(): Promise<void> {
   try { await backend.stop() } finally { backendBusy.value = false }
 }
 
+// Log a one-line "queued" notice the moment a pane's analyzer call starts
+// waiting behind another (already-running) llama-cli call, so the user sees
+// why it's taking a while instead of assuming the connection is stuck.
+watch(analyzerApi.queuedPaneIds, (ids, prevIds) => {
+  for (const paneId of ids) {
+    if (prevIds?.has(paneId)) continue
+    const pane = panes.value.find((p) => p.id === paneId)
+    const stage = pane ? stagesApi.stages.value.find((s) => s.id === pane.stageId) : undefined
+    const tag = stage ? `Stage ${stage.id}` : `Pane ${paneId.slice(0, 8)}`
+    pipelineLog(`${tag} 🧠 queued — waiting for another analyzer call to finish`)
+  }
+})
+
 const analyzerStatus = computed<AnalyzerStatusView>(() => ({
   available: !!analyzerApi.health.value?.ok,
   version: analyzerApi.health.value?.version ?? '',
@@ -5425,7 +5455,7 @@ function paneIsCommander(p: ActivePane): boolean {
         </template>
         <template v-else>
           <div class="boot-spinner" aria-label="loading" />
-          <div class="boot-status">{{ $t(bootStatusKey) }}</div>
+          <div class="boot-status">{{ $t(bootStatusKey) }} {{ $t('label.boot-countdown', { seconds: bootCountdown }) }}</div>
         </template>
       </div>
     </div>

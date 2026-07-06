@@ -123,6 +123,10 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onLanguageChanged: (cb: (locale: string) => void): void => {
     ipcRenderer.on('settings:language-changed', (_event, locale: string) => cb(locale))
   },
+  readHealthCheckTimeout: (): Promise<{ ok: boolean; timeoutSec?: number }> =>
+    ipcRenderer.invoke('settings:health-timeout-read'),
+  writeHealthCheckTimeout: (timeoutSec: number): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('settings:health-timeout-write', timeoutSec),
   notify: (args: { paneId?: string; title: string; body?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:notify', args),
   onFocusPane: (cb: (paneId: string) => void): void => {

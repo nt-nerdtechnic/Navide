@@ -337,6 +337,71 @@ async def test_classify_gguf_override_missing_file(tmp_path):
     assert "missing.gguf" in result["_error"]
 
 
+# ── analyzer.classify WS handler: queued notification ────────────────────────
+
+class _FakeWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, payload: dict) -> None:
+        self.sent.append(payload)
+
+
+@pytest.mark.asyncio
+async def test_classify_broadcasts_queued_when_semaphore_busy(tmp_path):
+    """A queued analyzer.classify (llama-cli already busy) should broadcast
+    analyzer.queued with the request's pane/stage identification before
+    running, so the frontend doesn't just look stuck until it finishes."""
+    store = AnalyzerSettingsStore(tmp_path / "s.json")
+    store.set({"backend": "llama_cpp"})
+
+    from agent_team_backend import app
+    session = app.Session(_FakeWebSocket())
+
+    with patch.object(app, "analyzer_settings_store", store), \
+         patch.object(app, "_llama_cli_busy", return_value=True), \
+         patch.object(app, "analyzer_classify", new_callable=AsyncMock) as mock_classify, \
+         patch.object(app, "broadcast", new_callable=AsyncMock) as mock_broadcast:
+        mock_classify.return_value = {"intent": "in_progress", "questions": [], "summary": ""}
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "analyzer.classify",
+            "payload": {"text": "hello", "pane_id": "pane-1", "stage_id": "stage-1", "workspace_path": "/ws"},
+        })
+
+    mock_broadcast.assert_called_once()
+    event = mock_broadcast.call_args.args[0]
+    assert event["type"] == "analyzer.queued"
+    assert event["payload"] == {"pane_id": "pane-1", "stage_id": "stage-1", "workspace_path": "/ws"}
+    # The classify call itself still proceeds and responds normally.
+    assert session.websocket.sent[0]["payload"]["intent"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_classify_no_queued_event_when_semaphore_free(tmp_path):
+    """When llama-cli is idle, classify should run immediately with no
+    analyzer.queued broadcast."""
+    store = AnalyzerSettingsStore(tmp_path / "s.json")
+    store.set({"backend": "llama_cpp"})
+
+    from agent_team_backend import app
+    session = app.Session(_FakeWebSocket())
+
+    with patch.object(app, "analyzer_settings_store", store), \
+         patch.object(app, "_llama_cli_busy", return_value=False), \
+         patch.object(app, "analyzer_classify", new_callable=AsyncMock) as mock_classify, \
+         patch.object(app, "broadcast", new_callable=AsyncMock) as mock_broadcast:
+        mock_classify.return_value = {"intent": "completion", "questions": [], "summary": ""}
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "analyzer.classify",
+            "payload": {"text": "hello", "pane_id": "pane-1"},
+        })
+
+    mock_broadcast.assert_not_called()
+    assert session.websocket.sent[0]["payload"]["intent"] == "completion"
+
+
 @pytest.mark.asyncio
 async def test_routing_passes_gguf_path_to_classify(tmp_path):
     """app.analyzer_classify should pass gguf_path_override from settings."""
