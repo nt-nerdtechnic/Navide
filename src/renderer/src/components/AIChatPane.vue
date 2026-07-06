@@ -9995,6 +9995,10 @@ async function onChatDrop(e: DragEvent): Promise<void> {
 }
 
 function onTextareaKeydown(e: KeyboardEvent): void {
+  // IME guard: while composing (e.g. Zhuyin/Pinyin), Enter/arrows/Escape belong
+  // to the input method (confirm/select/cancel candidate) — don't hijack them
+  // for send, menu navigation, history, or stop-streaming.
+  if (e.isComposing || e.keyCode === 229) return
   if (showSlashMenu.value) {
     if (e.key === 'ArrowDown') {
       e.preventDefault()

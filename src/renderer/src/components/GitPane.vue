@@ -92,6 +92,9 @@ const sortBy = ref<'name' | 'path' | 'status'>('path')
 const showViewMenu = ref(false)
 const viewMenuPos = ref({ top: 0, right: 0 })
 const showCommitMenuPos = ref({ top: 0, right: 0 })
+const showCommitRowMenu = ref(false)
+const commitRowMenuPos = ref({ top: 0, right: 0 })
+const commitRowMenuHash = ref('')
 const showRemoteMenu = ref(false)
 const remoteMenuPos = ref({ top: 0, right: 0 })
 function openRemoteMenu(e: MouseEvent): void {
@@ -113,6 +116,18 @@ function openCommitMenu(e: MouseEvent): void {
   showCommitMenuPos.value = { top: rect.bottom + 4, right: window.innerWidth - rect.right }
   showCommitMenu.value = !showCommitMenu.value
   showViewMenu.value = false
+}
+
+// Cherry-pick / Revert are low-frequency, unconfirmed, history-rewriting
+// actions — tuck them behind a per-commit "⋯" menu instead of always-on
+// buttons so they can't be fat-fingered while scanning the log.
+function openCommitRowMenu(e: MouseEvent, hash: string): void {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  commitRowMenuPos.value = { top: rect.bottom + 4, right: window.innerWidth - rect.right }
+  commitRowMenuHash.value = hash
+  showCommitRowMenu.value = true
+  showViewMenu.value = false
+  showCommitMenu.value = false
 }
 
 function toggleDir(key: string): void {
@@ -1303,7 +1318,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 </script>
 
 <template>
-  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; clearSelection()">
+  <div class="git-pane" @click="showViewMenu = false; showCommitMenu = false; showCommitRowMenu = false; clearSelection()">
 
     <div v-if="!workspacePath" class="empty-state">{{ $t('label.select-workspace') }}</div>
 
@@ -1968,8 +1983,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 </div>
               </div>
               <div class="commit-btns-right" @click.stop>
-                <button v-if="gi > 0" class="row-btn always" title="Revert" @click="doRevert(c.hash)">↺</button>
-                <button v-if="gi > 0" class="row-btn always" title="Cherry-pick" @click="doCherryPick(c.hash)">🍒</button>
+                <button v-if="gi > 0" class="row-btn always" title="More actions" @click.stop="openCommitRowMenu($event, c.hash)">⋯</button>
                 <span class="expand-caret">{{ expandedCommitHash === c.hash ? '▾' : '▸' }}</span>
               </div>
             </div>
@@ -1986,6 +2000,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               </template>
             </div>
           </div>
+        </div>
+        <div v-if="showCommitRowMenu" class="tp-backdrop" @click="showCommitRowMenu = false" />
+        <div v-if="showCommitRowMenu" class="tp-dropdown" :style="{ top: commitRowMenuPos.top + 'px', right: commitRowMenuPos.right + 'px' }" @click.stop>
+          <button class="menu-item" @click="doCherryPick(commitRowMenuHash); showCommitRowMenu = false">🍒 Cherry-pick</button>
+          <button class="menu-item" @click="doRevert(commitRowMenuHash); showCommitRowMenu = false">↺ Revert</button>
         </div>
         <div v-if="historyPageCount > 1" class="history-pagination">
           <button class="pg-btn" :disabled="historyPage === 0" @click="historyPage--">‹</button>

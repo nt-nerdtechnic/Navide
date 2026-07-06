@@ -136,6 +136,36 @@ function openInEditor(absPath: string, line: number | undefined): void {
   void api.openEditorWindow({ workspace_path: wsPath, filepath, ...(line !== undefined ? { line } : {}) })
 }
 
+export interface PickerItem {
+  abs: string
+  name: string
+  dir: string
+}
+
+/** Merge a click-resolved absolute path into the workspace-search results:
+ *  pull it to the front if already present, insert it if absent. Only on the
+ *  initial (basename) query — once the user types, plain results show. This is
+ *  the sole way a file outside the workspace, or any file when the pane has no
+ *  workspace to search, reaches the picker, so it must run even when the
+ *  workspace search returned (or could not run) with nothing. */
+export function mergePreferredPath(
+  items: PickerItem[],
+  preferredAbsPath: string | undefined,
+  isInitialQuery: boolean
+): PickerItem[] {
+  if (!preferredAbsPath || !isInitialQuery) return items
+  const idx = items.findIndex((item) => item.abs === preferredAbsPath)
+  if (idx === 0) return items
+  if (idx > 0) {
+    const copy = items.slice()
+    copy.unshift(copy.splice(idx, 1)[0])
+    return copy
+  }
+  const parts = preferredAbsPath.split('/')
+  const name = parts.pop() ?? preferredAbsPath
+  return [{ abs: preferredAbsPath, name, dir: parts.join('/') }, ...items]
+}
+
 // A single character matching the FILE_LINK_RE path-body class (used to test
 // whether a path-like token runs right up against a row boundary).
 const _PATH_CHAR_RE = new RegExp(_EXCL)
@@ -703,7 +733,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       root.appendChild(card)
       document.body.appendChild(root)
 
-      let currentItems: { abs: string; name: string; dir: string }[] = []
+      let currentItems: PickerItem[] = []
       let selectedIdx = 0
       let debounceTimer: ReturnType<typeof setTimeout>
       // Distinguishes "still looking" from "nothing matched" in the empty
@@ -743,32 +773,27 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       function close(): void { clearTimeout(debounceTimer); root.remove() }
 
       async function doSearch(q: string): Promise<void> {
-        if (!q.trim() || !wsPath) { currentItems = []; searchPending = false; renderList(); return }
         searchPending = true
-        try {
-          const r = await backend.send<{ files: string[] }>('fs.list_files_flat', {
-            workspace_path: wsPath, query: q, max_results: 20,
-          })
-          currentItems = (r.ok && r.payload?.files ? r.payload.files : []).map((rel) => {
-            const parts = rel.split('/')
-            const name = parts.pop() ?? rel
-            return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
-          })
-          // The click resolved to an existing full path — surface it first so
-          // it's pre-selected, inserting it when the workspace search didn't
-          // include it (e.g. the file lives outside the workspace); the user
-          // still picks from the full list. Initial search only: once the user
-          // types a new query, show plain results.
-          if (preferredAbsPath && q === initialQuery) {
-            const idx = currentItems.findIndex((item) => item.abs === preferredAbsPath)
-            if (idx > 0) currentItems.unshift(currentItems.splice(idx, 1)[0])
-            else if (idx < 0) {
-              const parts = preferredAbsPath.split('/')
-              const name = parts.pop() ?? preferredAbsPath
-              currentItems.unshift({ abs: preferredAbsPath, name, dir: parts.join('/') })
-            }
-          }
-        } catch { currentItems = [] }
+        // Workspace substring search — only possible when this pane has a
+        // workspace and the user typed something. When it can't run, results
+        // stay empty but the click-resolved path below still surfaces.
+        let items: PickerItem[] = []
+        if (q.trim() && wsPath) {
+          try {
+            const r = await backend.send<{ files: string[] }>('fs.list_files_flat', {
+              workspace_path: wsPath, query: q, max_results: 20,
+            })
+            items = (r.ok && r.payload?.files ? r.payload.files : []).map((rel) => {
+              const parts = rel.split('/')
+              const name = parts.pop() ?? rel
+              return { abs: `${wsPath}/${rel}`, name, dir: parts.join('/') }
+            })
+          } catch { items = [] }
+        }
+        // Surface the click-resolved absolute path (pre-selected) even when the
+        // search couldn't run (no workspace) or didn't include it (file outside
+        // the workspace) — otherwise a verified-existing file shows as missing.
+        currentItems = mergePreferredPath(items, preferredAbsPath, q === initialQuery)
         searchPending = false
         selectedIdx = 0
         renderList()
