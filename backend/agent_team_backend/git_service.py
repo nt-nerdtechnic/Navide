@@ -905,22 +905,52 @@ async def show_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     ))}
 
 
+def _field_for_prompt(prompt: str) -> str:
+    """Classify a git askpass prompt as 'username' or 'password'."""
+    return "username" if prompt.strip().lower().startswith("username") else "password"
+
+
+def _git_base(credential: dict[str, str] | None) -> list[str]:
+    """Base git argv. With a bound credential, disable inherited credential
+    helpers (e.g. macOS osxkeychain) so git falls through to our GIT_ASKPASS
+    auto-answer for that account, instead of using whatever single credential
+    the OS keychain holds for the host."""
+    return ["git", "-c", "credential.helper="] if credential else ["git"]
+
+
 @asynccontextmanager
 async def _askpass_env(
     on_credential_request: Callable[[str, str], Awaitable[None]] | None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None,
+    credential: dict[str, str] | None = None,
 ) -> AsyncIterator[dict[str, str] | None]:
     """Yield the subprocess env for an optional GIT_ASKPASS flow, cleaning up on exit.
 
-    Yields None when *on_credential_request* is None, so callers get
-    byte-for-byte the same subprocess env as before this credential wiring
-    existed."""
-    if on_credential_request is None:
+    Three modes:
+      * *credential* given -- auto-answer askpass prompts from the bound
+        account's username/token, with no frontend modal. This is what lets a
+        workspace push as its bound account (see gitAccountsStore.ts).
+      * else *on_credential_request* given -- forward prompts to the frontend
+        modal (the original interactive flow).
+      * else -- yield None, so callers get byte-for-byte the same subprocess env
+        as before any credential wiring existed.
+    """
+    if credential is not None:
+        async def _auto_answer(request_id: str, prompt: str) -> None:
+            field = _field_for_prompt(prompt)
+            value = credential.get("username", "") if field == "username" else credential.get("token", "")
+            resolve_credential(request_id, value)
+
+        on_request: Callable[[str, str], Awaitable[None]] | None = _auto_answer
+        on_settled: Callable[[str, str | None], Awaitable[None]] | None = None
+    elif on_credential_request is not None:
+        on_request = on_credential_request
+        on_settled = on_credential_settled
+    else:
         yield None
         return
-    askpass_env, cleanup = await create_askpass_context(
-        on_credential_request, on_settled=on_credential_settled
-    )
+
+    askpass_env, cleanup = await create_askpass_context(on_request, on_settled=on_settled)
     try:
         yield {**os.environ, **askpass_env}
     finally:
@@ -934,15 +964,16 @@ async def push_set_upstream(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Push branch and set upstream tracking (`git push --set-upstream <remote> <branch>`)."""
     if err := _validate_ref_name(branch, "branch name"):
         return {"ok": False, "output": "", "error": err}
     if err := _validate_ref_name(remote, "remote name"):
         return {"ok": False, "output": "", "error": err}
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(
-            ["git", "push", "--set-upstream", remote.strip(), branch.strip()],
+            _git_base(credential) + ["push", "--set-upstream", remote.strip(), branch.strip()],
             workspace_path,
             timeout=60.0,
             env=env,
@@ -955,11 +986,12 @@ async def fetch(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run `git fetch --prune` to update remote-tracking refs."""
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(
-            ["git", "fetch", "--prune"], workspace_path, timeout=60.0, env=env
+            _git_base(credential) + ["fetch", "--prune"], workspace_path, timeout=60.0, env=env
         )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
@@ -969,11 +1001,12 @@ async def pull_only(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run `git pull` (fast-forward preferred)."""
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(
-            ["git", "pull"], workspace_path, timeout=60.0, env=env
+            _git_base(credential) + ["pull"], workspace_path, timeout=60.0, env=env
         )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
@@ -985,9 +1018,10 @@ async def push_only(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run `git push`, or `git push <remote> <branch>` when a remote is given."""
-    cmd = ["git", "push"]
+    cmd = _git_base(credential) + ["push"]
     if remote:
         if err := _validate_ref_name(remote, "remote name"):
             return {"ok": False, "output": "", "error": err}
@@ -996,7 +1030,7 @@ async def push_only(
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0, env=env)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
@@ -1006,11 +1040,12 @@ async def pull_rebase(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run `git pull --rebase` (replay local commits on top of upstream)."""
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(
-            ["git", "pull", "--rebase"], workspace_path, timeout=60.0, env=env
+            _git_base(credential) + ["pull", "--rebase"], workspace_path, timeout=60.0, env=env
         )
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
@@ -1022,12 +1057,13 @@ async def push_force(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run `git push --force-with-lease` (safe force: aborts if remote moved).
 
     When a remote is given, targets `git push --force-with-lease <remote> <branch>`.
     """
-    cmd = ["git", "push", "--force-with-lease"]
+    cmd = _git_base(credential) + ["push", "--force-with-lease"]
     if remote:
         if err := _validate_ref_name(remote, "remote name"):
             return {"ok": False, "output": "", "error": err}
@@ -1036,7 +1072,7 @@ async def push_force(
             if err := _validate_ref_name(branch, "branch name"):
                 return {"ok": False, "output": "", "error": err}
             cmd.append(branch.strip())
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         rc, out, stderr = await _run_with_timeout(cmd, workspace_path, timeout=60.0, env=env)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
@@ -1606,18 +1642,19 @@ async def sync(
     *,
     on_credential_request: Callable[[str, str], Awaitable[None]] | None = None,
     on_credential_settled: Callable[[str, str | None], Awaitable[None]] | None = None,
+    credential: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Pull (rebase) then push.  Returns stdout/stderr for both steps."""
-    async with _askpass_env(on_credential_request, on_credential_settled) as env:
+    async with _askpass_env(on_credential_request, on_credential_settled, credential) as env:
         pull_rc, pull_out, pull_err = await _run_with_timeout(
-            ["git", "pull", "--rebase"], workspace_path, timeout=60.0, env=env
+            _git_base(credential) + ["pull", "--rebase"], workspace_path, timeout=60.0, env=env
         )
         pull_output = (pull_out + pull_err).strip()
         if pull_rc != 0:
             return asdict(GitSyncResult(ok=False, pull_output=pull_output, error="pull failed"))
 
         push_rc, push_out, push_err = await _run_with_timeout(
-            ["git", "push"], workspace_path, timeout=60.0, env=env
+            _git_base(credential) + ["push"], workspace_path, timeout=60.0, env=env
         )
         push_output = (push_out + push_err).strip()
         if push_rc != 0:

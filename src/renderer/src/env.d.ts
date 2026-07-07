@@ -17,6 +17,26 @@ interface BackendInfo {
   error?: string
 }
 
+interface GitAccountPublic {
+  id: string
+  label: string
+  host: string
+  username: string
+  tokenLast4: string
+}
+
+interface GitAccountInput {
+  label: string
+  host: string
+  username: string
+  token: string
+}
+
+interface GitCredential {
+  username: string
+  token: string
+}
+
 declare global {
   // Build tag injected by electron.vite.config.ts (git short-hash + dirty + time).
   const __APP_BUILD__: string
@@ -35,6 +55,10 @@ declare global {
       revealPath: (target: string) => Promise<{ ok: boolean; error?: string }>
       openTerminal: (command: string) => Promise<{ ok: boolean; error?: string }>
       openTempFile: (filename: string, content: string) => Promise<{ ok: boolean; path?: string; error?: string }>
+      detachGroup: (args: { groupId: string; workspacePath: string; bounds?: { x: number; y: number; width: number; height: number } }) => Promise<{ ok: boolean }>
+      getDetachedGroups: () => Promise<string[]>
+      onGroupDetached: (cb: (groupId: string) => void) => void
+      onGroupReattached: (cb: (groupId: string) => void) => void
       openRolesWindow: () => Promise<{ ok: boolean }>
       openStagesWindow: () => Promise<{ ok: boolean }>
       openDiffWindow: (args: {
@@ -82,6 +106,8 @@ declare global {
         getPending: () => Promise<string[] | null>
         apply: () => Promise<{ ok: boolean; opened: number }>
         dismiss: () => Promise<{ ok: boolean }>
+        getAutoRestore: () => Promise<boolean>
+        setAutoRestore: (value: boolean) => Promise<{ ok: boolean }>
       }
       updater?: {
         check: () => Promise<unknown>
@@ -90,6 +116,19 @@ declare global {
         onUpdateAvailable: (cb: (info: { version: string }) => void) => void
         onDownloadProgress: (cb: (info: { percent: number }) => void) => void
         onUpdateDownloaded: (cb: (info: { version: string }) => void) => void
+      }
+      gitAccounts?: {
+        isAvailable: () => Promise<{ ok: boolean; available?: boolean; error?: string }>
+        list: () => Promise<{ ok: boolean; accounts?: GitAccountPublic[]; error?: string }>
+        add: (input: GitAccountInput) => Promise<{ ok: boolean; account?: GitAccountPublic; error?: string }>
+        update: (id: string, patch: Partial<GitAccountInput>) => Promise<{ ok: boolean; error?: string }>
+        remove: (id: string) => Promise<{ ok: boolean; error?: string }>
+        bind: (workspacePath: string, accountId: string) => Promise<{ ok: boolean; error?: string }>
+        unbind: (workspacePath: string) => Promise<{ ok: boolean; error?: string }>
+        getBinding: (workspacePath: string) => Promise<{ ok: boolean; accountId?: string | null; error?: string }>
+        getCredential: (
+          workspacePath: string
+        ) => Promise<{ ok: boolean; credential?: GitCredential | null; error?: string }>
       }
     }
   }

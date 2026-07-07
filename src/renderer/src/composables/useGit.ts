@@ -374,7 +374,7 @@ export function useGit(
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
       const resp = await send<{ ok: boolean; output: string; error: string }>(
-        'git.push_upstream', { workspace_path: ws, branch, remote }, 30_000
+        'git.push_upstream', await withCredential(ws, { workspace_path: ws, branch, remote }), 30_000
       )
       if (resp.ok && resp.payload?.ok) await loadStatus()
       return resp.payload ?? { ok: false, error: 'no response' }
@@ -696,12 +696,28 @@ export function useGit(
     await loadStatus()
   }
 
+  // Attach the workspace's bound account credential (decrypted on demand from
+  // the main-process safeStorage store) to a remote-op payload, so the backend
+  // auto-answers GIT_ASKPASS as that account instead of the single host-keyed
+  // osxkeychain entry. No binding (or no gitAccounts bridge) → payload is
+  // returned unchanged, so the normal interactive askpass flow still applies.
+  // Declared with `function` so it hoists above every remote-op caller below.
+  async function withCredential<T extends Record<string, unknown>>(ws: string, payload: T): Promise<T> {
+    try {
+      const res = await window.agentTeam?.gitAccounts?.getCredential(ws)
+      if (res?.ok && res.credential) return { ...payload, credential: res.credential }
+    } catch {
+      /* fall back to interactive askpass */
+    }
+    return payload
+  }
+
   async function fetchRemote(): Promise<{ ok: boolean; output: string; error: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     isFetching.value = true
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.fetch', { workspace_path: ws }, 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.fetch', await withCredential(ws, { workspace_path: ws }), 30_000)
       await loadStatus()
       await loadBranches()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
@@ -719,7 +735,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', { workspace_path: ws }, 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', await withCredential(ws, { workspace_path: ws }), 30_000)
       await loadStatus()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
     } catch (e) {
@@ -735,7 +751,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', { workspace_path: ws, remote, branch }, 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', await withCredential(ws, { workspace_path: ws, remote, branch }), 30_000)
       await loadStatus()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
     } catch (e) {
@@ -987,7 +1003,7 @@ export function useGit(
     try {
       const resp = await send<{ ok: boolean; pull_output: string; push_output: string; error: string }>(
         'git.sync',
-        { workspace_path: ws },
+        await withCredential(ws, { workspace_path: ws }),
         30_000,
       )
       if (resp.ok && resp.payload) {
@@ -1193,9 +1209,9 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', await withCredential(ws, {
         workspace_path: ws,
-      })
+      }))
       if (resp.ok && resp.payload?.ok) {
         await loadStatus()
         await loadLog()
@@ -1214,9 +1230,9 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', await withCredential(ws, {
         workspace_path: ws, remote, branch,
-      })
+      }))
       if (resp.ok && resp.payload?.ok) await loadStatus()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {

@@ -7,7 +7,9 @@ import { parseRegistryDoc, pendingFromDoc, WindowRegistry } from './window-regis
 describe('parseRegistryDoc', () => {
   it('returns a clean empty doc for missing or corrupt content', () => {
     for (const text of [null, '', 'not json', '[]', '{"windows": "nope"}']) {
-      expect(parseRegistryDoc(text)).toEqual({ version: 1, cleanExit: true, windows: [] })
+      expect(parseRegistryDoc(text)).toEqual({
+        version: 1, cleanExit: true, windows: [], snapshot: [], restoreOnLaunch: true,
+      })
     }
   })
 
@@ -31,16 +33,18 @@ describe('parseRegistryDoc', () => {
 })
 
 describe('pendingFromDoc', () => {
+  const base = { snapshot: [], restoreOnLaunch: true }
+
   it('offers nothing after a clean exit', () => {
-    expect(pendingFromDoc({ version: 1, cleanExit: true, windows: [{ workspace_path: '/a' }] })).toBeNull()
+    expect(pendingFromDoc({ version: 1, cleanExit: true, windows: [{ workspace_path: '/a' }], ...base })).toBeNull()
   })
 
   it('offers nothing when no workspaces were open', () => {
-    expect(pendingFromDoc({ version: 1, cleanExit: false, windows: [] })).toBeNull()
+    expect(pendingFromDoc({ version: 1, cleanExit: false, windows: [], ...base })).toBeNull()
   })
 
   it('offers the windows after an unclean exit', () => {
-    expect(pendingFromDoc({ version: 1, cleanExit: false, windows: [{ workspace_path: '/a' }] }))
+    expect(pendingFromDoc({ version: 1, cleanExit: false, windows: [{ workspace_path: '/a' }], ...base }))
       .toEqual([{ workspace_path: '/a' }])
   })
 })
@@ -82,6 +86,50 @@ describe('WindowRegistry', () => {
 
     const run2 = new WindowRegistry(file)
     expect(run2.readPendingAndReset()).toBeNull()
+  })
+
+  it('clean exit snapshots open windows for auto-restore, surviving the remove() sweep', () => {
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.setWorkspace(1, '/ws/alpha')
+    run1.setWorkspace(2, '/ws/beta')
+    run1.markCleanExit()
+    // Quit sequence: each window closes → remove(). This used to wipe the
+    // snapshot to [] (the bug); it must survive.
+    run1.remove(1)
+    run1.remove(2)
+
+    const run2 = new WindowRegistry(file)
+    expect(run2.readPendingAndReset()).toBeNull() // clean exit → no crash banner
+    expect(run2.cleanExitRestore()).toEqual([
+      { workspace_path: '/ws/alpha' },
+      { workspace_path: '/ws/beta' },
+    ])
+  })
+
+  it('restoreOnLaunch=false suppresses clean-exit auto-restore and persists across reset', () => {
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.setWorkspace(1, '/ws/alpha')
+    run1.setRestoreOnLaunch(false)
+    run1.markCleanExit()
+    run1.remove(1)
+
+    const run2 = new WindowRegistry(file)
+    run2.readPendingAndReset()
+    expect(run2.cleanExitRestore()).toEqual([]) // setting off → nothing
+    expect(run2.getRestoreOnLaunch()).toBe(false) // setting preserved across the reset
+  })
+
+  it('a crash yields a restore banner but no clean-exit auto-restore', () => {
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.setWorkspace(1, '/ws/alpha')
+    // ...crash: no markCleanExit, no remove...
+
+    const run2 = new WindowRegistry(file)
+    expect(run2.readPendingAndReset()).toEqual([{ workspace_path: '/ws/alpha' }]) // banner
+    expect(run2.cleanExitRestore()).toEqual([]) // not clean → no auto-restore
   })
 
   it('closing a window or returning to Welcome removes its entry', () => {

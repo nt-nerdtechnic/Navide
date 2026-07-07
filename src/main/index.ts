@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, safeStorage, session, shell } from 'electron'
 import { join, dirname } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { appendFileSync, readFileSync, statSync, existsSync } from 'node:fs'
@@ -10,6 +10,11 @@ import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-re
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { BackendBroadcastTracker } from './backend-broadcast'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
+import {
+  GitAccountsStore,
+  type GitAccountCrypto,
+  type GitAccountInput
+} from './gitAccountsStore'
 
 // Give the Electron process a distinct name so it can be targeted precisely
 // with `pkill -f agent-team-electron` without affecting other Electron apps.
@@ -43,6 +48,23 @@ const mainWindows = new Set<BrowserWindow>()
 // Maps each main window to its workspace_path so we can focus an existing window
 // instead of creating a duplicate when the same folder is opened again.
 const mainWindowWorkspaces = new Map<BrowserWindow, string>()
+// Detached run-group child windows. A detached window shows only one run group of
+// its workspace. It is deliberately kept OUT of mainWindowWorkspaces and the
+// crash-restore registry (see detachedWindowIds) so it is never treated as a
+// standalone workspace window (no focus-instead-of-open, no restore reopen).
+const detachedGroups = new Map<string, BrowserWindow>()          // groupId → child window
+const detachedGroupWorkspace = new Map<string, string>()         // groupId → workspace_path
+const detachedWindowIds = new Set<number>()                      // child window ids
+
+// Send an event to every non-detached main window bound to a workspace (used to
+// hand a run group off to / back from a detached child window).
+function broadcastToWorkspace(workspacePath: string, channel: string, payload: unknown): void {
+  for (const win of mainWindows) {
+    if (win.isDestroyed() || detachedWindowIds.has(win.id)) continue
+    if (mainWindowWorkspaces.get(win) !== workspacePath) continue
+    win.webContents.send(channel, payload)
+  }
+}
 // Crash-restore: persists open workspace windows so an unexpected exit can be
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
@@ -51,6 +73,23 @@ const windowRegistry = new WindowRegistry(() => join(app.getPath('userData'), 'o
 // startBackend() (called before any renderer window exists) can read it.
 // Path resolved lazily for the same reason as windowRegistry's, above.
 const healthTimeoutPath = (): string => join(app.getPath('userData'), 'health-check-timeout.json')
+// Git account registry: main-owned, safeStorage-encrypted PATs bound per
+// workspace (see gitAccountsStore.ts). Built lazily so app.getPath / safeStorage
+// are only touched after the app is ready (IPC calls arrive from renderers).
+let gitAccountsStore: GitAccountsStore | null = null
+function getGitAccountsStore(): GitAccountsStore {
+  if (!gitAccountsStore) {
+    const crypto: GitAccountCrypto = {
+      get available(): boolean {
+        return safeStorage.isEncryptionAvailable()
+      },
+      encrypt: (plain: string): string => safeStorage.encryptString(plain).toString('base64'),
+      decrypt: (enc: string): string => safeStorage.decryptString(Buffer.from(enc, 'base64'))
+    }
+    gitAccountsStore = new GitAccountsStore(join(app.getPath('userData'), 'git-accounts.json'), crypto)
+  }
+  return gitAccountsStore
+}
 // Windows from the previous (uncleanly exited) run, offered to the FIRST
 // renderer that asks via restore:getPending; cleared on apply/dismiss.
 let pendingRestore: WindowEntry[] | null = null
@@ -94,7 +133,11 @@ async function createWindow(
   mainWindows.add(win)
   mainWindow = win
   const winId = win.id // captured — win.id is not readable after destroy
-  if (params.workspace_path) {
+  // A detached run-group child window is scoped to one group of its workspace —
+  // never track it as a standalone workspace window (no dedup focus, no restore).
+  if (params.detached_group) {
+    detachedWindowIds.add(winId)
+  } else if (params.workspace_path) {
     mainWindowWorkspaces.set(win, params.workspace_path)
     windowRegistry.setWorkspace(winId, params.workspace_path)
   }
@@ -115,6 +158,7 @@ async function createWindow(
     mainWindows.delete(win)
     mainWindowWorkspaces.delete(win)
     windowRegistry.remove(winId)
+    detachedWindowIds.delete(winId)
     if (mainWindow === win) {
       const remaining = [...mainWindows]
       mainWindow = remaining.length ? remaining[remaining.length - 1] : null
@@ -342,6 +386,7 @@ ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) =
 ipcMain.on('window:reportWorkspace', (event, workspacePath: string) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win || !mainWindows.has(win)) return
+  if (detachedWindowIds.has(win.id)) return // detached child — never registry-tracked
   const ws = String(workspacePath ?? '').trim()
   if (ws) mainWindowWorkspaces.set(win, ws)
   else mainWindowWorkspaces.delete(win)
@@ -385,6 +430,56 @@ ipcMain.handle('restore:apply', () => {
 ipcMain.handle('restore:dismiss', () => {
   pendingRestore = null
   return { ok: true }
+})
+
+ipcMain.handle('restore:getAutoRestore', () => windowRegistry.getRestoreOnLaunch())
+
+ipcMain.handle('restore:setAutoRestore', (_e, value: boolean) => {
+  windowRegistry.setRestoreOnLaunch(value === true)
+  return { ok: true }
+})
+
+// ── Detached run-group windows ───────────────────────────────────────────────
+// Open a run group of a workspace in its own scoped child window. The main
+// window(s) of that workspace are told to hand the group off (group:detached);
+// when the child closes, they are told to take it back (group:reattached).
+ipcMain.handle(
+  'window:detachGroup',
+  async (_e, arg: { groupId?: string; workspacePath?: string; bounds?: WindowBounds }) => {
+    const groupId = String(arg?.groupId ?? '')
+    const workspacePath = String(arg?.workspacePath ?? '')
+    if (!groupId || !workspacePath) return { ok: false }
+    const existing = detachedGroups.get(groupId)
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore()
+      existing.focus()
+      return { ok: true }
+    }
+    const child = await createWindow(
+      { window: 'main', workspace_path: workspacePath, detached_group: groupId },
+      arg.bounds ? { bounds: arg.bounds } : undefined
+    )
+    detachedGroups.set(groupId, child)
+    detachedGroupWorkspace.set(groupId, workspacePath)
+    broadcastToWorkspace(workspacePath, 'group:detached', { groupId })
+    child.on('closed', () => {
+      detachedGroups.delete(groupId)
+      detachedGroupWorkspace.delete(groupId)
+      broadcastToWorkspace(workspacePath, 'group:reattached', { groupId })
+    })
+    return { ok: true }
+  }
+)
+
+ipcMain.handle('window:getDetachedGroups', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  const ws = win ? mainWindowWorkspaces.get(win) : undefined
+  if (!ws) return [] as string[]
+  const result: string[] = []
+  for (const [gid, child] of detachedGroups) {
+    if (!child.isDestroyed() && detachedGroupWorkspace.get(gid) === ws) result.push(gid)
+  }
+  return result
 })
 
 ipcMain.handle('window:openRoles', () => {
@@ -777,6 +872,86 @@ ipcMain.handle('settings:health-timeout-write', (_event, timeoutSec: number) => 
   }
 })
 
+// Git account registry IPC. CRUD + per-workspace binding live in main because
+// safeStorage (token encryption) is a main-process API; the renderer only sees
+// masked accounts and, at git-op time, the decrypted credential for the bound
+// account. Handlers never throw across the IPC boundary — always { ok, ... }.
+ipcMain.handle('git-accounts:available', () => {
+  try {
+    return { ok: true, available: getGitAccountsStore().available }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:list', () => {
+  try {
+    return { ok: true, accounts: getGitAccountsStore().list() }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:add', (_event, input: GitAccountInput) => {
+  try {
+    return { ok: true, account: getGitAccountsStore().add(input) }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:update', (_event, id: string, patch: Partial<GitAccountInput>) => {
+  try {
+    getGitAccountsStore().update(id, patch)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:remove', (_event, id: string) => {
+  try {
+    getGitAccountsStore().remove(id)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:bind', (_event, workspacePath: string, accountId: string) => {
+  try {
+    getGitAccountsStore().bind(workspacePath, accountId)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:unbind', (_event, workspacePath: string) => {
+  try {
+    getGitAccountsStore().unbind(workspacePath)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:getBinding', (_event, workspacePath: string) => {
+  try {
+    return { ok: true, accountId: getGitAccountsStore().getBinding(workspacePath) }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+ipcMain.handle('git-accounts:getCredential', (_event, workspacePath: string) => {
+  try {
+    return { ok: true, credential: getGitAccountsStore().getCredentialForWorkspace(workspacePath) }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
 // Disable hardware-accelerated rendering entirely.
 // --disable-gpu eliminates the GPU subprocess without running GPU code in-process.
 // Previously we used --in-process-gpu to prevent a separate GPU process from
@@ -973,6 +1148,24 @@ app.whenReady().then(async () => {
   let openedAny = false
   for (const p of launchPaths) {
     if (openWorkspaceFromPath(p)) openedAny = true
+  }
+  // Clean-exit auto-restore: when nothing was launched explicitly (no Quick
+  // Action / CLI path), reopen the windows that were open at the last clean
+  // quit — each in its workspace with its saved bounds. Gated by the
+  // restoreOnLaunch setting inside cleanExitRestore(); empty after a crash
+  // (that path uses the restore banner instead).
+  if (!openedAny) {
+    const autoRestore = windowRegistry.cleanExitRestore()
+    if (autoRestore.length) {
+      console.log('[main] clean-exit restore;', autoRestore.length, 'workspace window(s)')
+      for (const entry of autoRestore) {
+        await createWindow(
+          { workspace_path: entry.workspace_path, restore: '1' },
+          entry.bounds ? { bounds: entry.bounds } : undefined
+        )
+      }
+      openedAny = true
+    }
   }
   if (!openedAny) await createWindow()
 

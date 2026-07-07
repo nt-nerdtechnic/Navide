@@ -1,0 +1,126 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  GitAccountsStore,
+  EncryptionUnavailableError,
+  type GitAccountCrypto
+} from './gitAccountsStore'
+
+// Fake safeStorage: a reversible base64 codec, so tests exercise the store's
+// encrypt/decrypt wiring without pulling in Electron (the real crypto is
+// injected in index.ts). `available` is toggled to test the disabled path.
+function fakeCrypto(available = true): GitAccountCrypto {
+  return {
+    available,
+    encrypt: (plain: string) => Buffer.from(plain, 'utf-8').toString('base64'),
+    decrypt: (enc: string) => Buffer.from(enc, 'base64').toString('utf-8')
+  }
+}
+
+describe('GitAccountsStore', () => {
+  let dir: string
+  let file: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'git-accounts-'))
+    file = join(dir, 'git-accounts.json')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('round-trips an account and never exposes the plaintext token in list()', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    const added = store.add({
+      label: 'work',
+      host: 'github.com',
+      username: 'nt-nerdtechnic',
+      token: 'ghp_secret1234'
+    })
+    expect(added.tokenLast4).toBe('1234')
+    expect(added).not.toHaveProperty('token')
+    expect(added).not.toHaveProperty('tokenEnc')
+
+    const listed = store.list()
+    expect(listed).toHaveLength(1)
+    expect(listed[0].username).toBe('nt-nerdtechnic')
+    expect(JSON.stringify(listed)).not.toContain('ghp_secret1234')
+  })
+
+  it('decrypts the bound account credential for a workspace', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    const account = store.add({
+      label: 'work',
+      host: 'github.com',
+      username: 'nt-nerdtechnic',
+      token: 'ghp_secret1234'
+    })
+    store.bind('/Users/me/repo-a', account.id)
+
+    expect(store.getBinding('/Users/me/repo-a')).toBe(account.id)
+    expect(store.getCredentialForWorkspace('/Users/me/repo-a')).toEqual({
+      username: 'nt-nerdtechnic',
+      token: 'ghp_secret1234'
+    })
+    // Unbound workspace → no credential, no throw.
+    expect(store.getCredentialForWorkspace('/Users/me/repo-b')).toBeNull()
+  })
+
+  it('persists across store instances (same file)', () => {
+    const account = new GitAccountsStore(file, fakeCrypto()).add({
+      label: 'work',
+      host: 'github.com',
+      username: 'u',
+      token: 'tok-abcd'
+    })
+    const reopened = new GitAccountsStore(file, fakeCrypto())
+    expect(reopened.getCredentialForWorkspace('/ws')).toBeNull()
+    reopened.bind('/ws', account.id)
+    expect(reopened.getCredentialForWorkspace('/ws')?.token).toBe('tok-abcd')
+  })
+
+  it('re-encrypts the token on update and leaves it out when omitted', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    const account = store.add({ label: 'a', host: 'github.com', username: 'u', token: 'old-1111' })
+    store.bind('/ws', account.id)
+
+    store.update(account.id, { label: 'renamed' })
+    expect(store.list()[0].label).toBe('renamed')
+    expect(store.getCredentialForWorkspace('/ws')?.token).toBe('old-1111')
+
+    store.update(account.id, { token: 'new-2222' })
+    expect(store.getCredentialForWorkspace('/ws')?.token).toBe('new-2222')
+    expect(store.list()[0].tokenLast4).toBe('2222')
+  })
+
+  it('removing an account drops its workspace bindings', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    const account = store.add({ label: 'a', host: 'github.com', username: 'u', token: 'tok-9999' })
+    store.bind('/ws', account.id)
+
+    store.remove(account.id)
+    expect(store.list()).toHaveLength(0)
+    expect(store.getBinding('/ws')).toBeNull()
+    expect(store.getCredentialForWorkspace('/ws')).toBeNull()
+  })
+
+  it('rejects binding to a non-existent account', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    expect(() => store.bind('/ws', 'nope')).toThrow(/account not found/)
+  })
+
+  it('refuses to add when encryption is unavailable', () => {
+    const store = new GitAccountsStore(file, fakeCrypto(false))
+    expect(store.available).toBe(false)
+    expect(() => store.add({ label: 'a', host: 'github.com', username: 'u', token: 't' })).toThrow(
+      EncryptionUnavailableError
+    )
+  })
+
+  it('survives a corrupt file on disk (→ empty store)', () => {
+    writeFileSync(file, '{truncated', 'utf-8')
+    const store = new GitAccountsStore(file, fakeCrypto())
+    expect(store.list()).toEqual([])
+    expect(store.getCredentialForWorkspace('/ws')).toBeNull()
+  })
+})

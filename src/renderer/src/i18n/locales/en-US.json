@@ -1,4 +1,12 @@
 {
+  "git": {
+    "account": {
+      "selector-title": "Account for this workspace",
+      "unbound": "No account",
+      "none": "No accounts saved yet",
+      "save-and-bind": "Save as account & bind this workspace"
+    }
+  },
   "pane": {
     "git": {
       "title": "SOURCE CONTROL",
@@ -212,6 +220,9 @@
       "language-zh-TW": "繁體中文",
       "language-en-US": "English",
       "language-hint": "Language is a user-level preference applied across all workspaces.",
+      "restore-windows": "Restore Windows",
+      "restore-windows-hint": "Reopen the workspace windows you had open when you last quit.",
+      "restore-windows-label": "Reopen windows on next launch",
       "custom-colors": "Custom Colors",
       "reset-to-defaults": "↺ Reset to defaults",
       "tweaks-hint": "Tweaks are layered on top of the current theme and preserved when switching themes.",
@@ -244,7 +255,26 @@
       "pipelines": "🔀 Pipelines",
       "mcp": "🔌 MCP",
       "analyzer": "🧠 Analyzer",
-      "appearance": "🎨 Appearance"
+      "appearance": "🎨 Appearance",
+      "accounts": "🔑 Accounts"
+    },
+    "accounts": {
+      "title": "Git Accounts",
+      "encrypted-note": "Tokens are encrypted at rest with your OS keychain (safeStorage) and stored locally on this machine.",
+      "unavailable": "Encryption is unavailable on this system, so accounts cannot be added. This usually means the OS keychain is not accessible.",
+      "empty": "No accounts yet.",
+      "new-account": "+ New account",
+      "edit": "Edit",
+      "delete": "Delete",
+      "save": "Save",
+      "cancel": "Cancel",
+      "label": "Label",
+      "host": "Host",
+      "username": "Username",
+      "token": "Token",
+      "token-hint": "Paste a Personal Access Token. It is encrypted with safeStorage and stored locally — never in plain text.",
+      "token-keep": "Leave blank to keep the current token",
+      "delete-confirm": "Delete this account?"
     },
     "color": {
       "bg-base": "Background",

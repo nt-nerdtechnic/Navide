@@ -250,6 +250,17 @@ def build_credential_settled_emitter(
     return _on_settled
 
 
+def _git_credential(payload: dict[str, Any]) -> dict[str, str] | None:
+    """Extract a bound-account credential from a git op payload, if the renderer
+    attached one (main-process safeStorage store, decrypted just for this op).
+    Returns None when absent/malformed so git_service falls back to the normal
+    interactive askpass flow."""
+    cred = payload.get("credential")
+    if isinstance(cred, dict) and cred.get("token"):
+        return {"username": str(cred.get("username") or ""), "token": str(cred.get("token"))}
+    return None
+
+
 # ── App-level terminal ownership (true persistence) ──────────────────────────
 # PTYs must outlive any single WebSocket: a renderer reload / window close drops
 # the ws, but the terminal (agent CLI, bash, build) keeps running in the
@@ -1732,6 +1743,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 ws_path,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -1758,6 +1770,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 ws_path,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -1769,6 +1782,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 ws_path,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -1784,6 +1798,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 branch,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -2109,6 +2124,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 remote,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -2174,6 +2190,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 ws_path,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -2189,6 +2206,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 branch,
                 on_credential_request=build_credential_request_emitter(ws_path),
                 on_credential_settled=build_credential_settled_emitter(ws_path),
+                credential=_git_credential(payload),
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):

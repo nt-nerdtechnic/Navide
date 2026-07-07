@@ -49,6 +49,7 @@ import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
+import { resolveActiveTab } from './lib/runGroups'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -183,6 +184,14 @@ const WS_PATH_KEY = 'agentTeam.currentWorkspace'
 const _bootWorkspace = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
 const _bootIsDuplicate = new URLSearchParams(window.location.search).get('duplicate') === '1'
 let suppressPaneRestoreOnce = _bootWorkspace !== '' && _bootIsDuplicate
+// Detached child window: shows only one run group of its workspace. When set,
+// this window renders just that group's tab/panes and never writes the shared
+// runGroups/activeTab/layout localStorage (the main window owns those).
+const detachedGroupId = new URLSearchParams(window.location.search).get('detached_group') ?? ''
+const isDetachedWindow = detachedGroupId !== ''
+// Groups that THIS (main) window has handed off to a detached child window —
+// filtered out of the tab bar and pane view until the child closes.
+const detachedGroupIds = ref<Set<string>>(new Set())
 if (_bootWorkspace) {
   try {
     sessionStorage.setItem(WS_PATH_KEY, _bootWorkspace)
@@ -1606,7 +1615,11 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
  *  restart-resume path). Only offered for panes with a resumable session id
  *  (see :can-rebuild). Interrupts the in-flight turn and reprints the
  *  conversation; no-ops if the id isn't actually resumable. */
+// Guards against double-click re-entrancy: the kill→respawn window is async, so
+// a second click on the same pane would otherwise spawn a duplicate resumed CLI.
+const rebuildingPanes = new Set<string>()
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
+  if (rebuildingPanes.has(paneId)) return
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
   const sessionId = (pane.pinnedSessionId ?? '').trim()
@@ -1631,32 +1644,37 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     runGroupId: pane.runGroupId,
     sessionHomeId: pane.sessionHomeId,
   }
-  // Preserve layout order: onKill removes the pane and spawnPane appends the
-  // replacement to the end, which would jump the rebuilt pane to the last slot.
-  // Capture its index and move the replacement back into place after spawn.
-  const origIndex = panes.value.findIndex((p) => p.id === paneId)
-  await onKill(paneId, { markRemoved: false })
-  const newId = await spawnPane({
-    agentKey: snap.agentKey,
-    roleKey: snap.roleKey,
-    stageId: snap.stageId,
-    slotLabel: snap.slotLabel,
-    commandOverride: resumeCmd,
-    workspacePath: snap.workspacePath,
-    origin: snap.origin,
-    runGroupId: snap.runGroupId || undefined,
-    isResume: true,
-    skipRoleInjection: true,
-    restoreMode: 'memory-resume',
-    sessionHomeId: snap.sessionHomeId,
-    resumeSessionId: sessionId,
-  })
-  if (newId && origIndex >= 0) {
-    const from = panes.value.findIndex((p) => p.id === newId)
-    if (from >= 0 && from !== origIndex) {
-      const [moved] = panes.value.splice(from, 1)
-      panes.value.splice(origIndex, 0, moved)
+  rebuildingPanes.add(paneId)
+  try {
+    // Preserve layout order: onKill removes the pane and spawnPane appends the
+    // replacement to the end, which would jump the rebuilt pane to the last slot.
+    // Capture its index and move the replacement back into place after spawn.
+    const origIndex = panes.value.findIndex((p) => p.id === paneId)
+    await onKill(paneId, { markRemoved: false })
+    const newId = await spawnPane({
+      agentKey: snap.agentKey,
+      roleKey: snap.roleKey,
+      stageId: snap.stageId,
+      slotLabel: snap.slotLabel,
+      commandOverride: resumeCmd,
+      workspacePath: snap.workspacePath,
+      origin: snap.origin,
+      runGroupId: snap.runGroupId || undefined,
+      isResume: true,
+      skipRoleInjection: true,
+      restoreMode: 'memory-resume',
+      sessionHomeId: snap.sessionHomeId,
+      resumeSessionId: sessionId,
+    })
+    if (newId && origIndex >= 0) {
+      const from = panes.value.findIndex((p) => p.id === newId)
+      if (from >= 0 && from !== origIndex) {
+        const [moved] = panes.value.splice(from, 1)
+        panes.value.splice(origIndex, 0, moved)
+      }
     }
+  } finally {
+    rebuildingPanes.delete(paneId)
   }
 }
 
@@ -2206,7 +2224,10 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     allProjectPanes = [...fromSlots, ...fromManual]
   }
 
-  const toRestore = allProjectPanes.filter((p) => p.spawn_status === 'spawned')
+  let toRestore = allProjectPanes.filter((p) => p.spawn_status === 'spawned')
+  // Detached child window restores only the panes of its scoped run group; the
+  // live PTYs are kept alive by the main window's hand-off, so these reattach.
+  if (isDetachedWindow) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === detachedGroupId)
   if (toRestore.length === 0) return
 
   pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
@@ -4628,16 +4649,47 @@ const runGroups = ref<RunGroup[]>([])
 const currentRunGroupId = ref<string>('')  // ID assigned to newly spawned pipeline panes
 const activeTab = ref<string>('')
 
+// True while applying a runGroups change received from another window via the
+// `storage` event. Guards _saveRunGroups so a remote-applied value is not
+// written straight back, which would ping-pong between the two windows.
+const applyingRemote = ref(false)
+
 function _runGroupsKey(): string {
   return currentWorkspace.value ? `agentTeam.runGroups.${currentWorkspace.value}` : ''
 }
 
 function _saveRunGroups(): void {
+  if (applyingRemote.value || isDetachedWindow) return
   try {
     const key = _runGroupsKey()
     if (key) localStorage.setItem(key, JSON.stringify(runGroups.value))
   } catch { /* ignore */ }
 }
+
+/** Cross-window sync: when another window writes this workspace's runGroups to
+ *  localStorage, adopt it here so both windows stay consistent (fixes the
+ *  last-write-wins race where one window silently overwrote the other). Only the
+ *  runGroups key is synced — activeTab and layout are per-window view state and
+ *  are intentionally left independent. The `storage` event never fires in the
+ *  window that made the write, so this only runs on peer windows; applyingRemote
+ *  prevents the adopted value from being written straight back. */
+function onRunGroupsStorageSync(e: StorageEvent): void {
+  const ws = currentWorkspace.value
+  if (!ws) return
+  if (e.key !== `agentTeam.runGroups.${ws}`) return
+  if (e.newValue == null) return
+  let parsed: RunGroup[]
+  try { parsed = JSON.parse(e.newValue) as RunGroup[] } catch { return }
+  if (!Array.isArray(parsed)) return
+  applyingRemote.value = true
+  runGroups.value = parsed
+  activeTab.value = resolveActiveTab(parsed, activeTab.value)
+  currentRunGroupId.value = parsed[parsed.length - 1]?.id ?? ''
+  void nextTick(() => { applyingRemote.value = false })
+}
+
+onMounted(() => { window.addEventListener('storage', onRunGroupsStorageSync) })
+onUnmounted(() => { window.removeEventListener('storage', onRunGroupsStorageSync) })
 
 /** Fixed id for the always-present default tab. Using a constant id (rather than
  *  a timestamp) makes "預設" idempotent: it can exist at most once per workspace,
@@ -4784,9 +4836,17 @@ const stageTabs = computed<TabItem[]>(() => {
 
   const tabs: TabItem[] = []
   for (const group of runGroups.value) {
+    // Detached child window shows ONLY its own group; a main window hides any
+    // group it has handed off to a detached child. Both filters are inert for a
+    // normal window (isDetachedWindow=false, empty detachedGroupIds).
+    if (isDetachedWindow) {
+      if (group.id !== detachedGroupId) continue
+    } else if (detachedGroupIds.value.has(group.id)) {
+      continue
+    }
     tabs.push({ key: group.id, label: group.name, count: groupCounts[group.id] ?? 0, type: 'stage' })
   }
-  if (unassignedCount > 0) {
+  if (!isDetachedWindow && unassignedCount > 0) {
     tabs.push({ key: 'manual', label: '手動', count: unassignedCount, type: 'manual' })
   }
   return tabs
@@ -4817,7 +4877,8 @@ const activeTabStorageKey = computed(() =>
 )
 watch(activeTab, (v) => {
   try {
-    if (activeTabStorageKey.value) localStorage.setItem(activeTabStorageKey.value, v)
+    // Detached child windows never own the shared activeTab key.
+    if (!isDetachedWindow && activeTabStorageKey.value) localStorage.setItem(activeTabStorageKey.value, v)
   } catch { /* ignore */ }
   // Keep currentRunGroupId in sync with the active tab so that "+ Add to grid"
   // always spawns into whichever tab the user is currently viewing.

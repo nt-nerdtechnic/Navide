@@ -10,6 +10,8 @@ import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCa
 import { useTheme } from '../composables/useTheme'
 import { useSettings } from '../composables/useSettings'
 import { useNotify } from '../composables/useNotify'
+import { useGitAccounts } from '../composables/useGitAccounts'
+import GitAccountsPane from './GitAccountsPane.vue'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -25,8 +27,11 @@ const emit = defineEmits<{
 }>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'
 const activeTab = ref<Tab>('roles')
+
+// Git account manager (safeStorage-backed). Lazy-loaded on tab entry.
+const accountsApi = useGitAccounts()
 
 // ── AI provider credentials (shown in Analyzer tab) ──────────────────────────
 const aiProviderKeys = ref({
@@ -81,6 +86,19 @@ const {
 
 // ── Appearance (language) ─────────────────────────────────────────────────────
 const { language: currentLanguage, setLanguage, healthCheckTimeoutSec, setHealthCheckTimeoutSec } = useSettings()
+
+// Auto-restore workspace windows on next launch (main-process setting, stored in
+// the window registry). Loaded lazily when the appearance tab is opened.
+const autoRestoreWindows = ref(true)
+async function loadAutoRestore(): Promise<void> {
+  try {
+    const v = await window.agentTeam?.restore?.getAutoRestore?.()
+    if (typeof v === 'boolean') autoRestoreWindows.value = v
+  } catch { /* ignore — keep the default */ }
+}
+async function onAutoRestoreChange(): Promise<void> {
+  try { await window.agentTeam?.restore?.setAutoRestore?.(autoRestoreWindows.value) } catch { /* ignore */ }
+}
 
 const SUPPORTED_LANGUAGES = [
   { value: 'zh-TW', label: '繁體中文' },
@@ -631,6 +649,8 @@ async function mOpenConfig() {
 watch(activeTab, (tab) => {
   if (tab === 'mcp' && mServers.value.length === 0) mLoad()
   if (tab === 'analyzer') fetchAiChatSettings()
+  if (tab === 'appearance') void loadAutoRestore()
+  if (tab === 'accounts') void accountsApi.refresh()
 })
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -770,6 +790,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">{{ $t('settings.tab.mcp') }}</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
           </div>
           <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
@@ -1516,6 +1537,15 @@ async function plDelete(id: string, name: string) {
           </section>
 
           <section class="ap-section">
+            <h3 class="ap-title">{{ $t('settings.appearance.restore-windows') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.restore-windows-hint') }}</p>
+            <label class="ap-toggle-row">
+              <input type="checkbox" v-model="autoRestoreWindows" @change="onAutoRestoreChange" />
+              <span>{{ $t('settings.appearance.restore-windows-label') }}</span>
+            </label>
+          </section>
+
+          <section class="ap-section">
             <div class="ap-section-head">
               <h3 class="ap-title">{{ $t('settings.appearance.custom-colors') }}</h3>
               <button
@@ -1572,6 +1602,10 @@ async function plDelete(id: string, name: string) {
               />
             </div>
           </section>
+        </div>
+
+        <div v-show="activeTab === 'accounts'" class="s-body">
+          <GitAccountsPane :api="accountsApi" />
         </div>
 
 
@@ -1709,6 +1743,8 @@ async function plDelete(id: string, name: string) {
 .ap-theme-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
 .ap-check { position: absolute; top: 10px; right: 11px; font-size: 12px; color: var(--accent-fg); }
 .ap-lang-row { display: flex; gap: 10px; }
+.ap-toggle-row { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-primary); font-size: 13px; }
+.ap-toggle-row input { cursor: pointer; }
 .ap-lang-btn {
   position: relative;
   padding: 8px 20px;

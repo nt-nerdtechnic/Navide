@@ -11,6 +11,26 @@ export interface BackendInfo {
   error?: string
 }
 
+export interface GitAccountPublic {
+  id: string
+  label: string
+  host: string
+  username: string
+  tokenLast4: string
+}
+
+export interface GitAccountInput {
+  label: string
+  host: string
+  username: string
+  token: string
+}
+
+export interface GitCredential {
+  username: string
+  token: string
+}
+
 contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
   version: __APP_VERSION__,
@@ -34,6 +54,15 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('shell:openTempFile', filename, content),
   openMainWindow: (args?: { workspace_path?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:openMain', args ?? {}),
+  detachGroup: (args: { groupId: string; workspacePath: string; bounds?: { x: number; y: number; width: number; height: number } }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:detachGroup', args),
+  getDetachedGroups: (): Promise<string[]> => ipcRenderer.invoke('window:getDetachedGroups'),
+  onGroupDetached: (cb: (groupId: string) => void): void => {
+    ipcRenderer.on('group:detached', (_event, arg: { groupId: string }) => cb(arg.groupId))
+  },
+  onGroupReattached: (cb: (groupId: string) => void): void => {
+    ipcRenderer.on('group:reattached', (_event, arg: { groupId: string }) => cb(arg.groupId))
+  },
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
   openDiffWindow: (args: {
@@ -142,6 +171,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
     getPending: (): Promise<string[] | null> => ipcRenderer.invoke('restore:getPending'),
     apply: (): Promise<{ ok: boolean; opened: number }> => ipcRenderer.invoke('restore:apply'),
     dismiss: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('restore:dismiss'),
+    getAutoRestore: (): Promise<boolean> => ipcRenderer.invoke('restore:getAutoRestore'),
+    setAutoRestore: (value: boolean): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('restore:setAutoRestore', value),
   },
   updater: {
     check: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
@@ -156,5 +188,27 @@ contextBridge.exposeInMainWorld('agentTeam', {
     onUpdateDownloaded: (cb: (info: { version: string }) => void): void => {
       ipcRenderer.on('updater:update-downloaded', (_e, info) => cb(info))
     },
+  },
+  gitAccounts: {
+    isAvailable: (): Promise<{ ok: boolean; available?: boolean; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:available'),
+    list: (): Promise<{ ok: boolean; accounts?: GitAccountPublic[]; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:list'),
+    add: (input: GitAccountInput): Promise<{ ok: boolean; account?: GitAccountPublic; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:add', input),
+    update: (id: string, patch: Partial<GitAccountInput>): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:update', id, patch),
+    remove: (id: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:remove', id),
+    bind: (workspacePath: string, accountId: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:bind', workspacePath, accountId),
+    unbind: (workspacePath: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:unbind', workspacePath),
+    getBinding: (workspacePath: string): Promise<{ ok: boolean; accountId?: string | null; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:getBinding', workspacePath),
+    getCredential: (
+      workspacePath: string
+    ): Promise<{ ok: boolean; credential?: GitCredential | null; error?: string }> =>
+      ipcRenderer.invoke('git-accounts:getCredential', workspacePath),
   },
 })

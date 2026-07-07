@@ -4,6 +4,7 @@ import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import { useIssues } from '../composables/useIssues'
 import type { IssueDetail } from '../composables/useIssues'
+import { useGitAccounts } from '../composables/useGitAccounts'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
@@ -78,6 +79,42 @@ const {
   openIssue, closeDetail: closeIssueDetail,
   createIssue, addComment, setState: setIssueState,
 } = useIssues(() => props.workspacePath, props.backend)
+
+// ── git account binding (safeStorage-backed) ───────────────────────────────────
+const gitAccounts = useGitAccounts()
+const boundAccountId = ref<string | null>(null)
+const showAccountMenu = ref(false)
+const accountMenuPos = ref({ top: 0, right: 0 })
+
+const boundAccount = computed(() =>
+  gitAccounts.accounts.value.find((a) => a.id === boundAccountId.value) ?? null
+)
+
+async function loadAccountBinding(): Promise<void> {
+  if (!props.workspacePath) {
+    boundAccountId.value = null
+    return
+  }
+  await gitAccounts.refresh()
+  boundAccountId.value = await gitAccounts.getBinding(props.workspacePath)
+}
+
+function openAccountMenu(e: MouseEvent): void {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  accountMenuPos.value = { top: rect.bottom + 4, right: window.innerWidth - rect.right }
+  showAccountMenu.value = !showAccountMenu.value
+  if (showAccountMenu.value) void loadAccountBinding()
+}
+
+async function selectAccount(accountId: string | null): Promise<void> {
+  showAccountMenu.value = false
+  if (!props.workspacePath) return
+  if (accountId) {
+    if (await gitAccounts.bind(props.workspacePath, accountId)) boundAccountId.value = accountId
+  } else {
+    if (await gitAccounts.unbind(props.workspacePath)) boundAccountId.value = null
+  }
+}
 
 // ── path helpers ──────────────────────────────────────────────────────────────
 function fileName(path: string): string { return path.split('/').at(-1) ?? path }
@@ -1305,7 +1342,9 @@ watch(() => props.workspacePath, () => {
   remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
   branchError.value = ''; stashError.value = ''
   clearGitError()
-})
+  boundAccountId.value = null
+  void loadAccountBinding()
+}, { immediate: true })
 
 function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remotes)\//, '') }
 // A commit is HEAD when its ref names include "HEAD" (e.g. "HEAD -> branch", or
@@ -1850,6 +1889,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span v-if="aheadBehind" class="ab-text">{{ aheadBehind }}</span>
         </button>
         <div class="spacer" />
+        <button
+          class="remote-btn account-pill"
+          :title="$t('git.account.selector-title')"
+          @click.stop="openAccountMenu($event)"
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0"><path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.622 0zM8 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+          <span class="account-pill-label">{{ boundAccount ? boundAccount.label : $t('git.account.unbound') }}</span>
+        </button>
         <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" :class="{ busy: remoteBusy === 'publish' }" :title="$t('action.publish-branch')" :disabled="!!remoteBusy" @click="doPushUpstream">
           <span v-if="remoteBusy === 'publish'" class="spinner">⟳</span><template v-else>↑ Publish</template>
         </button>
@@ -1884,6 +1931,29 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 class="menu-item"
                 @click="doPush(r.name); showRemoteMenu = false"
               >↑ {{ r.name }}</button>
+            </template>
+          </div>
+        </Teleport>
+        <Teleport to="body">
+          <div v-if="showAccountMenu" class="tp-backdrop" @click="showAccountMenu = false" />
+          <div v-if="showAccountMenu" class="tp-dropdown" :style="{ top: accountMenuPos.top + 'px', right: accountMenuPos.right + 'px' }" @click.stop>
+            <div class="menu-group-label">{{ $t('git.account.selector-title') }}</div>
+            <button class="menu-item" :class="{ active: !boundAccountId }" @click="selectAccount(null)">
+              {{ $t('git.account.unbound') }}
+            </button>
+            <template v-if="gitAccounts.accounts.value.length">
+              <div class="menu-sep" />
+              <button
+                v-for="a in gitAccounts.accounts.value"
+                :key="a.id"
+                class="menu-item"
+                :class="{ active: a.id === boundAccountId }"
+                @click="selectAccount(a.id)"
+              >{{ a.label }} <span class="acct-meta">{{ a.username }}</span></button>
+            </template>
+            <template v-else>
+              <div class="menu-sep" />
+              <div class="menu-empty">{{ $t('git.account.none') }}</div>
             </template>
           </div>
         </Teleport>
@@ -2387,6 +2457,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
     <GitCredentialModal
       :show="showCredentialPrompt"
       :prompt="credentialPrompt"
+      :workspace-path="workspacePath"
       @submit="submitCredential"
       @cancel="cancelCredential"
     />
@@ -2847,6 +2918,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .remote-btn.busy { opacity: 1; color: var(--accent-fg); cursor: progress; }
 .publish-btn { color: var(--attention-fg); font-size: 10px; }
 .ahead-num { font-size: 9px; color: var(--attention-fg); font-weight: 700; }
+.account-pill { font-size: 10px; max-width: 140px; }
+.account-pill-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-dropdown .menu-item.active { color: var(--accent-fg); font-weight: 600; }
+.tp-dropdown .acct-meta { color: var(--text-muted); font-size: 10px; margin-left: 4px; }
+.tp-dropdown .menu-empty { padding: 4px 10px; font-size: 11px; color: var(--text-muted); }
 
 /* ── Remote output ──────────────────────────────────────────────────────────── */
 .remote-output {

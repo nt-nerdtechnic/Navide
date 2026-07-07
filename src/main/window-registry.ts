@@ -27,21 +27,39 @@ export interface RegistryDoc {
   version: 1
   cleanExit: boolean
   windows: WindowEntry[]
+  /** Windows open at the last clean exit — the auto-restore snapshot. Kept
+   *  separate from `windows` (live tracking) so the per-window remove() calls
+   *  during the quit sequence can't wipe it. */
+  snapshot: WindowEntry[]
+  /** User setting: reopen the last clean-exit windows on next launch. */
+  restoreOnLaunch: boolean
+}
+
+/** Keep only well-formed workspace entries (used for both windows and snapshot). */
+function sanitizeEntries(list: unknown): WindowEntry[] {
+  if (!Array.isArray(list)) return []
+  return list
+    .filter((w: unknown): w is WindowEntry =>
+      typeof w === 'object' && w !== null && typeof (w as WindowEntry).workspace_path === 'string'
+      && (w as WindowEntry).workspace_path.length > 0)
+    .map((w: WindowEntry) => ({ workspace_path: w.workspace_path, ...(w.bounds ? { bounds: w.bounds } : {}) }))
 }
 
 /** Parse a registry file's text, tolerating missing/corrupt content. */
 export function parseRegistryDoc(text: string | null): RegistryDoc {
-  const empty: RegistryDoc = { version: 1, cleanExit: true, windows: [] }
+  const empty: RegistryDoc = { version: 1, cleanExit: true, windows: [], snapshot: [], restoreOnLaunch: true }
   if (!text) return empty
   try {
     const data = JSON.parse(text)
     if (typeof data !== 'object' || data === null || !Array.isArray(data.windows)) return empty
-    const windows: WindowEntry[] = data.windows
-      .filter((w: unknown): w is WindowEntry =>
-        typeof w === 'object' && w !== null && typeof (w as WindowEntry).workspace_path === 'string'
-        && (w as WindowEntry).workspace_path.length > 0)
-      .map((w: WindowEntry) => ({ workspace_path: w.workspace_path, ...(w.bounds ? { bounds: w.bounds } : {}) }))
-    return { version: 1, cleanExit: data.cleanExit === true, windows }
+    return {
+      version: 1,
+      cleanExit: data.cleanExit === true,
+      windows: sanitizeEntries(data.windows),
+      snapshot: sanitizeEntries(data.snapshot),
+      // Missing/undefined defaults to true (feature on); only explicit false disables.
+      restoreOnLaunch: data.restoreOnLaunch !== false,
+    }
   } catch {
     return empty
   }
@@ -57,6 +75,9 @@ export function pendingFromDoc(doc: RegistryDoc): WindowEntry[] | null {
 export class WindowRegistry {
   private entries = new Map<number, WindowEntry>()
   private cleanExit = false
+  private snapshot: WindowEntry[] = []
+  private restoreOnLaunch = true
+  private lastCleanRestore: WindowEntry[] = []
   private persistTimer: ReturnType<typeof setTimeout> | null = null
 
   // Accepts a path PROVIDER so the location can be resolved lazily: the dev
@@ -74,9 +95,23 @@ export class WindowRegistry {
   readPendingAndReset(): WindowEntry[] | null {
     let text: string | null = null
     try { text = readFileSync(this.filePath, 'utf-8') } catch { /* first run */ }
-    const pending = pendingFromDoc(parseRegistryDoc(text))
+    const doc = parseRegistryDoc(text)
+    // Preserve the user setting across the reset, and capture the clean-exit
+    // auto-restore list NOW — before persistNow() wipes the file to this run's
+    // empty state. Crash pending and clean-exit restore are mutually exclusive:
+    // cleanExit gates which one is non-empty.
+    this.restoreOnLaunch = doc.restoreOnLaunch
+    this.lastCleanRestore = (doc.cleanExit && doc.restoreOnLaunch) ? doc.snapshot : []
+    const pending = pendingFromDoc(doc)
     this.persistNow()
     return pending
+  }
+
+  /** Windows to auto-restore after a clean exit. Valid only after
+   *  readPendingAndReset() has run; empty if the last exit wasn't clean, the
+   *  setting is off, or nothing was open. */
+  cleanExitRestore(): WindowEntry[] {
+    return this.lastCleanRestore
   }
 
   /** Record/replace the workspace for a window; empty path (back to Welcome)
@@ -106,11 +141,29 @@ export class WindowRegistry {
   /** Mark this run as a clean exit. Synchronous — called from before-quit. */
   markCleanExit(): void {
     this.cleanExit = true
+    // Freeze the currently-open windows so the per-window remove() calls that
+    // follow during the quit sequence can't empty the restore snapshot.
+    this.snapshot = [...this.entries.values()]
+    this.persistNow()
+  }
+
+  getRestoreOnLaunch(): boolean {
+    return this.restoreOnLaunch
+  }
+
+  setRestoreOnLaunch(value: boolean): void {
+    this.restoreOnLaunch = value
     this.persistNow()
   }
 
   private doc(): RegistryDoc {
-    return { version: 1, cleanExit: this.cleanExit, windows: [...this.entries.values()] }
+    return {
+      version: 1,
+      cleanExit: this.cleanExit,
+      windows: [...this.entries.values()],
+      snapshot: this.snapshot,
+      restoreOnLaunch: this.restoreOnLaunch,
+    }
   }
 
   private persistNow(): void {
