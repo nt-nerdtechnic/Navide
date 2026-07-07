@@ -763,12 +763,12 @@ export function useGit(
     }
   }
 
-  async function createBranch(name: string): Promise<{ ok: boolean; error?: string }> {
+  async function createBranch(name: string, start_point = ''): Promise<{ ok: boolean; error?: string }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true })
-      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches() }
+      const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true, start_point })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -802,6 +802,31 @@ export function useGit(
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `checkoutRemoteBranch: ${msg}`
       return { ok: false, error: msg }
+    }
+  }
+
+  async function checkoutCommit(commit_hash: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.checkout_commit', { workspace_path: ws, commit_hash })
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `checkoutCommit: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function commitFileDiff(commit_hash: string, filepath: string): Promise<DiffBlameHunk[]> {
+    const ws = workspacePath()
+    if (!ws) return []
+    try {
+      const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[] }>('git.commit_file_diff', { workspace_path: ws, commit_hash, filepath })
+      return resp.ok && resp.payload?.ok ? resp.payload.hunks ?? [] : []
+    } catch {
+      return []
     }
   }
 
@@ -1461,8 +1486,9 @@ export function useGit(
     fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
     addRemote, removeRemote,
     // branches
-    createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+    createBranch, switchBranch, checkoutRemoteBranch, checkoutCommit, deleteBranch, mergeBranch, mergeInto, rebaseOn,
     compareBranches, diffBranches, restoreFileFromBranch,
+    commitFileDiff,
     // stash
     stashPush, stashPop, stashDrop,
     // tags

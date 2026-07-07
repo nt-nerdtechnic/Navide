@@ -1824,7 +1824,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             switch_to = bool(payload.get("switch_to", True))
-            result = await git_service.create_branch(ws_path, name, switch_to=switch_to)
+            start_point = payload.get("start_point") or ""
+            result = await git_service.create_branch(
+                ws_path, name, switch_to=switch_to, start_point=start_point
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1833,6 +1836,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path") or ""
             name = payload.get("name") or ""
             result = await git_service.switch_branch(ws_path, name)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.checkout_commit":
+            ws_path = payload.get("workspace_path") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            result = await git_service.checkout_commit(ws_path, commit_hash)
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
@@ -1911,6 +1922,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             filepath = payload.get("filepath") or ""
             staged = bool(payload.get("staged", False))
             result = await git_service.diff_blame(ws_path, filepath, staged=staged)
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "git.commit_file_diff":
+            ws_path = payload.get("workspace_path") or ""
+            commit_hash = payload.get("commit_hash") or ""
+            filepath = payload.get("filepath") or ""
+            result = await git_service.commit_file_diff(ws_path, commit_hash, filepath)
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "git.diff_all":

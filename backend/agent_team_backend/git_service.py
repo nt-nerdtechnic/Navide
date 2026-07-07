@@ -907,6 +907,27 @@ async def show_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     ))}
 
 
+async def commit_file_diff(workspace_path: str, commit_hash: str, filepath: str) -> dict[str, Any]:
+    """Return the diff of *filepath* introduced by a single commit, as parsed hunks.
+
+    Reuses _annotate_diff with empty blame maps (no per-line blame for historical
+    commits). Merge commits produce no diff here (plain ``git show``), which the UI
+    surfaces as "No changes to display".
+    """
+    if err := _validate_commit_hash(commit_hash):
+        return {"ok": False, "hunks": [], "error": err}
+    fp = filepath.strip()
+    if not fp or fp.startswith("-"):
+        return {"ok": False, "hunks": [], "error": "invalid filepath"}
+    rc, out, stderr = await _run(
+        ["git", "-c", "core.quotePath=false", "show", "--format=", commit_hash.strip(), "--", fp],
+        workspace_path,
+    )
+    if rc != 0:
+        return {"ok": False, "hunks": [], "error": stderr.strip()}
+    return {"ok": True, "hunks": _annotate_diff(out, {}, {})}
+
+
 def _field_for_prompt(prompt: str) -> str:
     """Classify a git askpass prompt as 'username' or 'password'."""
     return "username" if prompt.strip().lower().startswith("username") else "password"
@@ -1411,15 +1432,23 @@ def _validate_branch_name(name: str) -> str | None:
     return None
 
 
-async def create_branch(workspace_path: str, name: str, switch_to: bool = True) -> dict[str, Any]:
-    """Create (and optionally switch to) a new branch."""
+async def create_branch(
+    workspace_path: str, name: str, switch_to: bool = True, start_point: str = ""
+) -> dict[str, Any]:
+    """Create (and optionally switch to) a new branch, optionally from *start_point*."""
     if err := _validate_branch_name(name):
+        return {"ok": False, "error": err}
+    sp = start_point.strip()
+    if sp and (err := _validate_commit_hash(sp)):
         return {"ok": False, "error": err}
     if switch_to:
         # git checkout -b does not accept -- before <new_branch>; rely on the leading-dash check above.
-        rc, _, stderr = await _run(["git", "checkout", "-b", name], workspace_path)
+        args = ["git", "checkout", "-b", name]
     else:
-        rc, _, stderr = await _run(["git", "branch", "--", name], workspace_path)
+        args = ["git", "branch", "--", name]
+    if sp:
+        args.append(sp)
+    rc, _, stderr = await _run(args, workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
@@ -1428,6 +1457,14 @@ async def switch_branch(workspace_path: str, name: str) -> dict[str, Any]:
     if err := _validate_branch_name(name):
         return {"ok": False, "error": err}
     rc, _, stderr = await _run(["git", "switch", "--", name], workspace_path)
+    return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+async def checkout_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
+    """Check out a commit in detached-HEAD state."""
+    if err := _validate_commit_hash(commit_hash):
+        return {"ok": False, "error": err}
+    rc, _, stderr = await _run(["git", "checkout", "--detach", commit_hash.strip()], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 

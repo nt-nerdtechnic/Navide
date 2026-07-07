@@ -59,8 +59,8 @@ const {
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
-  createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
-  compareBranches, restoreFileFromBranch,
+  createBranch, switchBranch, checkoutRemoteBranch, checkoutCommit, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+  compareBranches, restoreFileFromBranch, commitFileDiff,
   stashPush, stashPop, stashDrop,
   commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage, checkStaged,
   fileLog, showFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
@@ -257,9 +257,9 @@ function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
 function openCommitCtxMenu(e: MouseEvent, hash: string): void {
   e.preventDefault()
   e.stopPropagation()
-  // Two-item menu (~90px tall).
+  // Ten-item menu with separators (~330px tall) — clamp so it stays on-screen.
   const x = Math.min(e.clientX, window.innerWidth - 224)
-  const y = Math.min(e.clientY, window.innerHeight - 96)
+  const y = Math.min(e.clientY, window.innerHeight - 330)
   ctxMenu.value = { show: true, x, y, kind: 'commit', file: null, dir: '', branch: '', hash, staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
@@ -1244,13 +1244,27 @@ async function doUnstageAll(): Promise<void> {
 
 // ── commit detail ─────────────────────────────────────────────────────────────
 const expandedCommitHash = ref(''), commitDetailData = ref<import('../composables/useGit').GitCommitDetail | null>(null), commitDetailLoading = ref(false)
+// Per-file inline diff within the expanded commit detail ("Open Changes").
+const commitDiffFile = ref(''), commitDiffHunks = ref<import('../composables/useGit').DiffBlameHunk[]>([]), commitDiffLoading = ref(false)
+function resetCommitDiff(): void { commitDiffFile.value = ''; commitDiffHunks.value = [] }
 async function toggleCommitDetail(hash: string): Promise<void> {
+  resetCommitDiff()
   if (expandedCommitHash.value === hash) { expandedCommitHash.value = ''; commitDetailData.value = null; return }
   expandedCommitHash.value = hash; commitDetailLoading.value = true
   try {
     commitDetailData.value = await showCommit(hash)
   } finally {
     commitDetailLoading.value = false
+  }
+}
+async function toggleCommitFileDiff(hash: string, file: string): Promise<void> {
+  if (commitDiffFile.value === file) { resetCommitDiff(); return }
+  commitDiffFile.value = file; commitDiffHunks.value = []; commitDiffLoading.value = true
+  try {
+    const hunks = await commitFileDiff(hash, file)
+    if (commitDiffFile.value === file) commitDiffHunks.value = hunks
+  } finally {
+    commitDiffLoading.value = false
   }
 }
 
@@ -1260,6 +1274,43 @@ async function doCherryPick(hash: string): Promise<void> {
 }
 async function doRevert(hash: string): Promise<void> {
   const r = await revertCommit(hash); if (!r.ok) notifyToast(r.error || 'revert failed', { type: 'error' })
+}
+
+// ── commit context-menu actions (VS Code / Cursor parity) ──────────────────────
+async function doOpenChanges(hash: string): Promise<void> {
+  // Expand the commit detail (per-file inline diffs live there).
+  if (expandedCommitHash.value !== hash) await toggleCommitDetail(hash)
+}
+async function doCheckoutCommit(hash: string): Promise<void> {
+  const r = await checkoutCommit(hash); if (!r.ok) notifyToast(r.error || 'checkout failed', { type: 'error' })
+}
+function copyCommitId(hash: string): void {
+  void navigator.clipboard.writeText(hash)
+  notifyToast('Commit ID copied', { type: 'info' })
+}
+function copyCommitMessage(hash: string): void {
+  const c = gitLog.value.find((x) => x.hash === hash)
+  void navigator.clipboard.writeText(c?.message ?? '')
+  notifyToast('Commit message copied', { type: 'info' })
+}
+
+// Name-input modal shared by "Create Branch…" / "Create Tag…" from a commit.
+const commitRefModal = ref<{ kind: 'branch' | 'tag'; hash: string; name: string; message: string; error: string } | null>(null)
+function startCreateBranchFromCommit(hash: string): void {
+  commitRefModal.value = { kind: 'branch', hash, name: '', message: '', error: '' }
+  closeCtxMenu()
+}
+function startCreateTagFromCommit(hash: string): void {
+  commitRefModal.value = { kind: 'tag', hash, name: '', message: '', error: '' }
+  closeCtxMenu()
+}
+async function submitCommitRef(): Promise<void> {
+  const m = commitRefModal.value; if (!m) return
+  const name = m.name.trim(); if (!name) { m.error = 'name required'; return }
+  const r = m.kind === 'branch'
+    ? await createBranch(name, m.hash)
+    : await createTag(name, m.message.trim(), m.hash)
+  if (r.ok) commitRefModal.value = null; else m.error = r.error || 'failed'
 }
 
 // ── history ───────────────────────────────────────────────────────────────────
@@ -2082,7 +2133,23 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div v-if="commitDetailData.body" class="cd-body">{{ commitDetailData.body }}</div>
                 <div v-if="commitDetailData.files.length">
                   <div class="cd-key">Files ({{ commitDetailData.files.length }})</div>
-                  <div v-for="f in commitDetailData.files" :key="f" class="cd-file">{{ f }}</div>
+                  <template v-for="f in commitDetailData.files" :key="f">
+                    <div class="cd-file cd-file-clickable" @click="toggleCommitFileDiff(c.hash, f)">
+                      <span class="expand-caret">{{ commitDiffFile === f ? '▾' : '▸' }}</span> {{ f }}
+                    </div>
+                    <div v-if="commitDiffFile === f" class="subpanel green-border diffblame-inline">
+                      <div v-if="commitDiffLoading" class="loading-text">Loading…</div>
+                      <div v-else-if="!commitDiffHunks.length" class="loading-text">No changes to display</div>
+                      <template v-else v-for="(dh, dhi) in commitDiffHunks" :key="dhi">
+                        <div class="db-hunk-head">{{ dh.header }}</div>
+                        <div v-for="(dl, dli) in dh.lines" :key="dhi + ':' + dli" class="db-line" :class="`db-${dl.kind === '+' ? 'add' : dl.kind === '-' ? 'del' : 'ctx'}`">
+                          <span class="db-no">{{ dl.new_no ?? dl.old_no ?? '' }}</span>
+                          <span class="db-sign">{{ dl.kind === ' ' ? '' : dl.kind }}</span>
+                          <code class="db-code">{{ dl.text }}</code>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
                 </div>
               </template>
             </div>
@@ -2457,8 +2524,34 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       </div>
 
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'commit'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button class="menu-item" @click="doOpenChanges(ctxMenu.hash); closeCtxMenu()">⇄ Open Changes</button>
+        <div class="menu-sep" />
+        <button class="menu-item" @click="doCheckoutCommit(ctxMenu.hash); closeCtxMenu()">⎇ Checkout (Detached)</button>
+        <button class="menu-item" @click="startCreateBranchFromCommit(ctxMenu.hash)">＋ Create Branch…</button>
+        <button class="menu-item" @click="startCreateTagFromCommit(ctxMenu.hash)">🏷 Create Tag…</button>
+        <div class="menu-sep" />
         <button class="menu-item" @click="doCherryPick(ctxMenu.hash); closeCtxMenu()">🍒 Cherry-pick</button>
         <button class="menu-item" @click="doRevert(ctxMenu.hash); closeCtxMenu()">↺ Revert</button>
+        <div class="menu-sep" />
+        <button class="menu-item" @click="copyCommitId(ctxMenu.hash); closeCtxMenu()">⧉ Copy Commit ID</button>
+        <button class="menu-item" @click="copyCommitMessage(ctxMenu.hash); closeCtxMenu()">⧉ Copy Commit Message</button>
+      </div>
+    </Teleport>
+
+    <!-- ── Create branch / tag from a commit ────────────────────────────── -->
+    <Teleport to="body">
+      <div v-if="commitRefModal" class="tp-backdrop" @click="commitRefModal = null" />
+      <div v-if="commitRefModal" class="ignore-modal" @click.stop>
+        <div class="ignore-modal-path">
+          {{ commitRefModal.kind === 'branch' ? 'Create branch from' : 'Create tag at' }} {{ commitRefModal.hash.slice(0, 7) }}
+        </div>
+        <input v-model="commitRefModal.name" class="git-input" :placeholder="commitRefModal.kind === 'branch' ? 'branch name…' : 'v1.0.0'" @keydown.enter="submitCommitRef" />
+        <input v-if="commitRefModal.kind === 'tag'" v-model="commitRefModal.message" class="git-input" placeholder="Message (optional)" @keydown.enter="submitCommitRef" />
+        <p v-if="commitRefModal.error" class="err-text">{{ commitRefModal.error }}</p>
+        <div style="display:flex; gap:6px; justify-content:flex-end">
+          <button class="btn-ghost sm" @click="commitRefModal = null">Cancel</button>
+          <button class="btn-ghost sm" @click="submitCommitRef">Create</button>
+        </div>
       </div>
     </Teleport>
 
@@ -3066,6 +3159,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .cd-key { color: var(--text-muted); min-width: 46px; flex-shrink: 0; }
 .cd-body { color: var(--text-secondary); margin: 4px 0; white-space: pre-wrap; font-size: 10px; }
 .cd-file { color: var(--text-primary); font-family: monospace; font-size: 10px; padding: 1px 0; }
+.cd-file-clickable { cursor: pointer; }
+.cd-file-clickable:hover { color: var(--accent, #4a9eff); }
 
 /* ── Generic rows (stashes, remotes, tags) ──────────────────────────────────── */
 .generic-row {

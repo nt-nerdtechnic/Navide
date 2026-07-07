@@ -1968,3 +1968,77 @@ class TestDiscoverRepositories:
         # subtree is pruned — inner itself should appear.
         assert "." in rel_paths
         assert str(Path("pkg") / "inner") in rel_paths
+
+
+# ── commit context-menu actions (VS Code / Cursor parity) ──────────────────────
+
+def _head_hash(path: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _add_commit(path: Path, filename: str, content: str, message: str) -> str:
+    (path / filename).write_text(content)
+    subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, capture_output=True)
+    return _head_hash(path)
+
+
+class TestCommitContextMenu:
+    @pytest.mark.asyncio
+    async def test_create_branch_from_start_point(self, tmp_path):
+        init_repo(tmp_path)
+        first = _head_hash(tmp_path)
+        _add_commit(tmp_path, "b.txt", "second", "second")  # advance HEAD past `first`
+        result = await git_service.create_branch(
+            str(tmp_path), "from-first", switch_to=True, start_point=first
+        )
+        assert result["ok"] is True
+        # New branch HEAD must sit on the start-point commit, not the latest one.
+        assert _head_hash(tmp_path) == first
+
+    @pytest.mark.asyncio
+    async def test_create_branch_rejects_bad_start_point(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.create_branch(
+            str(tmp_path), "bad-start", start_point="-flag"
+        )
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_checkout_commit_detaches(self, tmp_path):
+        init_repo(tmp_path)
+        first = _head_hash(tmp_path)
+        _add_commit(tmp_path, "b.txt", "second", "second")
+        result = await git_service.checkout_commit(str(tmp_path), first)
+        assert result["ok"] is True
+        assert _head_hash(tmp_path) == first
+        # Detached HEAD → symbolic-ref for HEAD fails.
+        rc = subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"], cwd=tmp_path, capture_output=True
+        ).returncode
+        assert rc != 0
+
+    @pytest.mark.asyncio
+    async def test_checkout_commit_rejects_bad_hash(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.checkout_commit(str(tmp_path), "-flag")
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_commit_file_diff_returns_hunks(self, tmp_path):
+        init_repo(tmp_path)
+        h = _add_commit(tmp_path, "b.txt", "line1\nline2\n", "add b")
+        result = await git_service.commit_file_diff(str(tmp_path), h, "b.txt")
+        assert result["ok"] is True
+        assert result["hunks"]
+        texts = [ln["text"] for hunk in result["hunks"] for ln in hunk["lines"]]
+        assert "line1" in texts
+
+    @pytest.mark.asyncio
+    async def test_commit_file_diff_rejects_bad_hash(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.commit_file_diff(str(tmp_path), "-flag", "b.txt")
+        assert result["ok"] is False
+        assert result["hunks"] == []
