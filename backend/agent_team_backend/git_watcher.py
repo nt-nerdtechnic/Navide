@@ -46,6 +46,9 @@ _IGNORE_SEGMENTS = frozenset({
     # this, every log write fires git.changed → a 7-request git fan-out in the
     # frontend, flooding the shared WebSocket and stalling pipeline messages.
     ".agent-team",
+    # Laravel's storage/ dir: file-based session/cache drivers write here on
+    # every HTTP request the dev server handles, same fan-out problem as above.
+    "storage",
 })
 
 # First-level entries under `.git/` that are pure internal churn — reacting to

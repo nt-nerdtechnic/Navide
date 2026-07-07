@@ -35,7 +35,7 @@ describe('GitAccountsStore', () => {
       label: 'work',
       host: 'github.com',
       username: 'nt-nerdtechnic',
-      token: 'ghp_secret1234'
+      token: 'ghp_secret1234' // gitleaks:allow — fixture token, not a real credential
     })
     expect(added.tokenLast4).toBe('1234')
     expect(added).not.toHaveProperty('token')
@@ -53,14 +53,14 @@ describe('GitAccountsStore', () => {
       label: 'work',
       host: 'github.com',
       username: 'nt-nerdtechnic',
-      token: 'ghp_secret1234'
+      token: 'ghp_secret1234' // gitleaks:allow — fixture token, not a real credential
     })
     store.bind('/Users/me/repo-a', account.id)
 
     expect(store.getBinding('/Users/me/repo-a')).toBe(account.id)
     expect(store.getCredentialForWorkspace('/Users/me/repo-a')).toEqual({
       username: 'nt-nerdtechnic',
-      token: 'ghp_secret1234'
+      token: 'ghp_secret1234' // gitleaks:allow — fixture token, not a real credential
     })
     // Unbound workspace → no credential, no throw.
     expect(store.getCredentialForWorkspace('/Users/me/repo-b')).toBeNull()
