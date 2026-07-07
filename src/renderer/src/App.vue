@@ -1867,12 +1867,21 @@ function onFocusPane(paneId: string): void {
 }
 
 function onReviveAgent(entry: SpawnHistoryEntry): void {
-  void onManualSpawn({
-    agentKey: entry.agentKey,
-    roleKey: entry.roleKey,
-    stageId: '',
-    workspacePath: entry.workspacePath || currentWorkspace.value,
-  })
+  const sessionId = entry.sessionId?.trim()
+  if (sessionId) {
+    void onManualResume({
+      agentKey: entry.agentKey,
+      workspacePath: entry.workspacePath || currentWorkspace.value,
+      sessionId,
+    })
+  } else {
+    void onManualSpawn({
+      agentKey: entry.agentKey,
+      roleKey: entry.roleKey,
+      stageId: '',
+      workspacePath: entry.workspacePath || currentWorkspace.value,
+    })
+  }
   showHistory.value = false
 }
 watch(() => pipeline.state, (newState, oldState) => {
