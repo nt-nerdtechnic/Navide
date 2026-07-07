@@ -4,6 +4,7 @@
       "selector-title": "Account for this workspace",
       "unbound": "No account",
       "none": "No accounts saved yet",
+      "add-new": "Add new account…",
       "save-and-bind": "Save as account & bind this workspace",
       "credential-invalid": "This workspace's bound account credential may be invalid — update it in Settings › Accounts."
     }

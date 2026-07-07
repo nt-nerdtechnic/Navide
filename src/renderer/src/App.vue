@@ -1734,6 +1734,11 @@ const pipeline = reactive<PipelineRun>({
 
 const showCompletionModal = ref(false)
 const showSettings = ref(false)
+const settingsInitialTab = ref<'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'>('roles')
+function openSettingsAccounts(): void {
+  settingsInitialTab.value = 'accounts'
+  showSettings.value = true
+}
 const showKbPanel = ref(false)
 const kbQueryMain = ref('')
 const showHistory = ref(false)
@@ -5648,6 +5653,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @refresh-analyzer="onRefreshAnalyzer"
       @focus-pane="onFocusPane"
       @open-settings="showSettings = true"
+      @open-git-accounts="openSettingsAccounts"
       @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"
       @workspace-browse="onWorkspaceBrowse"
@@ -5710,7 +5716,8 @@ function paneIsCommander(p: ActivePane): boolean {
       :stages-api="stagesApi"
       :analyzer-api="analyzerApi"
       :pipelines-api="pipelinesApi"
-      @close="showSettings = false"
+      :initial-tab="settingsInitialTab"
+      @close="showSettings = false; settingsInitialTab = 'roles'"
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
     />

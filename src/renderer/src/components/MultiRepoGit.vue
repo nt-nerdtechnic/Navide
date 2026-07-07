@@ -28,6 +28,7 @@ const emit = defineEmits<{
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
   (e: 'spawn-for-issue', payload: { agentKey: string; mode: IssueHandlerMode; issue: Issue; provider: IssueProvider }): void
   (e: 'focus-pane', paneId: string): void
+  (e: 'open-git-accounts'): void
 }>()
 
 const { t } = useI18n()
@@ -134,6 +135,7 @@ function repoLabel(relPath: string): string {
     @dispatch-issue="$emit('dispatch-issue', $event)"
     @spawn-for-issue="$emit('spawn-for-issue', $event)"
     @focus-pane="$emit('focus-pane', $event)"
+    @open-git-accounts="$emit('open-git-accounts')"
   />
 
 

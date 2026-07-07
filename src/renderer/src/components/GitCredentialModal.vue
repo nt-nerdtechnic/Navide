@@ -15,7 +15,7 @@ const emit = defineEmits<{
   (e: 'cancel'): void
 }>()
 
-// Autofocus the first empty field whenever the modal (re)opens.
+// Autofocus the current step's field whenever the modal (re)opens or advances.
 const usernameInputRef = ref<HTMLInputElement | null>(null)
 const passwordInputRef = ref<HTMLInputElement | null>(null)
 
@@ -24,16 +24,28 @@ const gitAccounts = useGitAccounts()
 const saveAsAccount = ref(false)
 const saveLabel = ref('')
 
+// VS Code/Cursor-style Quick Input shows one field at a time. Password is
+// always asked (git resolves it last); Username is skipped entirely when a
+// credential helper or the URL already supplied it, so start on Password
+// in that case instead of showing a step that will never receive an id.
+type Step = 'username' | 'password'
+const step = ref<Step>('username')
+
 watch(() => props.show, (visible) => {
   if (!visible) return
   saveAsAccount.value = false
   saveLabel.value = ''
-  if (props.workspacePath) void gitAccounts.refresh()
+  step.value = props.prompt?.usernameRequestId ? 'username' : 'password'
   void nextTick(() => {
-    const target = props.prompt?.usernameRequestId ? usernameInputRef.value : passwordInputRef.value
-    target?.focus()
+    if (props.workspacePath) void gitAccounts.refresh()
+    ;(step.value === 'username' ? usernameInputRef.value : passwordInputRef.value)?.focus()
   })
 })
+
+function goToPassword(): void {
+  step.value = 'password'
+  void nextTick(() => passwordInputRef.value?.focus())
+}
 
 async function onSubmit(): Promise<void> {
   // Best-effort: persist + bind before submitting the credential so a failure
@@ -63,50 +75,55 @@ async function onSubmit(): Promise<void> {
   <Teleport to="body">
     <template v-if="show && prompt">
       <div class="tp-backdrop" @click="emit('cancel')" />
-      <div class="cred-modal" @click.stop @keydown.esc="emit('cancel')">
-        <div class="cred-title">{{ $t('label.git-credential-title', { host: prompt.host }) }}</div>
-        <div class="cred-field">
-          <label class="cred-label">{{ $t('label.git-credential-username') }}</label>
-          <input
-            ref="usernameInputRef"
-            v-model="prompt.username"
-            class="cred-input"
-            type="text"
-            autocomplete="username"
-            spellcheck="false"
-            @keydown.enter="passwordInputRef?.focus()"
-          />
-        </div>
-        <div class="cred-field">
-          <label class="cred-label">{{ $t('label.git-credential-password') }}</label>
-          <input
-            ref="passwordInputRef"
-            v-model="prompt.password"
-            class="cred-input"
-            type="password"
-            autocomplete="current-password"
-            spellcheck="false"
-            @keydown.enter="onSubmit"
-          />
-        </div>
-        <p class="cred-hint">{{ $t('hint.git-credential-token') }}</p>
-        <template v-if="workspacePath && gitAccounts.available.value">
-          <label class="cred-save-row">
-            <input type="checkbox" v-model="saveAsAccount" />
-            <span>{{ $t('git.account.save-and-bind') }}</span>
-          </label>
-          <input
-            v-if="saveAsAccount"
-            v-model="saveLabel"
-            class="cred-input"
-            type="text"
-            spellcheck="false"
-            :placeholder="$t('settings.accounts.label')"
-          />
+      <div class="cred-quick-input" @click.stop @keydown.esc="emit('cancel')">
+        <div class="qi-title">{{ $t('label.git-credential-title', { host: prompt.host }) }}</div>
+
+        <input
+          v-if="step === 'username'"
+          ref="usernameInputRef"
+          v-model="prompt.username"
+          class="qi-input"
+          type="text"
+          autocomplete="username"
+          spellcheck="false"
+          :placeholder="$t('label.git-credential-username')"
+          @keydown.enter="goToPassword"
+        />
+        <input
+          v-else
+          ref="passwordInputRef"
+          v-model="prompt.password"
+          class="qi-input"
+          type="password"
+          autocomplete="current-password"
+          spellcheck="false"
+          :placeholder="$t('label.git-credential-password')"
+          @keydown.enter="onSubmit"
+        />
+
+        <template v-if="step === 'password'">
+          <p class="qi-hint">{{ $t('hint.git-credential-token') }}</p>
+          <template v-if="workspacePath && gitAccounts.available.value">
+            <label class="qi-save-row">
+              <input type="checkbox" v-model="saveAsAccount" />
+              <span>{{ $t('git.account.save-and-bind') }}</span>
+            </label>
+            <input
+              v-if="saveAsAccount"
+              v-model="saveLabel"
+              class="qi-input sm"
+              type="text"
+              spellcheck="false"
+              :placeholder="$t('settings.accounts.label')"
+            />
+          </template>
         </template>
-        <div class="cred-actions">
+
+        <div class="qi-actions">
+          <span class="qi-kbd-hint">↵ {{ step === 'username' ? $t('action.next') : $t('action.submit') }} &nbsp;·&nbsp; Esc {{ $t('action.cancel') }}</span>
           <button class="btn-ghost sm" @click="emit('cancel')">{{ $t('action.cancel') }}</button>
-          <button class="btn-primary" @click="onSubmit">{{ $t('action.submit') }}</button>
+          <button v-if="step === 'username'" class="btn-primary" @click="goToPassword">{{ $t('action.next') }}</button>
+          <button v-else class="btn-primary" @click="onSubmit">{{ $t('action.submit') }}</button>
         </div>
       </div>
     </template>
@@ -119,56 +136,49 @@ async function onSubmit(): Promise<void> {
   inset: 0;
   z-index: 9998;
 }
-.cred-modal {
+/* VS Code/Cursor Quick Input: a single narrow bar anchored near the top of
+   the window, not a centered modal box. */
+.cred-quick-input {
   position: fixed;
   z-index: 9999;
-  top: 50%;
+  top: 18vh;
   left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(360px, 85vw);
+  transform: translateX(-50%);
+  width: min(440px, 85vw);
   background: var(--bg-subtle);
   border: 1px solid var(--border-default);
-  border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 12px 32px var(--shadow-scrim);
+  border-radius: 6px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 24px var(--shadow-scrim);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
-.cred-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+.qi-title {
+  font-size: 11.5px;
+  color: var(--text-secondary);
   word-break: break-word;
 }
-.cred-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.cred-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.cred-input {
+.qi-input {
   background: var(--bg-base);
   border: 1px solid var(--border-default);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 12px;
-  padding: 5px 8px;
+  font-size: 13px;
+  padding: 7px 9px;
 }
-.cred-input:focus {
+.qi-input.sm { font-size: 12px; padding: 5px 8px; }
+.qi-input:focus {
   outline: none;
   border-color: var(--accent-focus);
 }
-.cred-hint {
+.qi-hint {
   font-size: 11px;
   color: var(--text-muted);
   margin: 0;
   line-height: 1.4;
 }
-.cred-save-row {
+.qi-save-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -176,11 +186,17 @@ async function onSubmit(): Promise<void> {
   color: var(--text-secondary);
   cursor: pointer;
 }
-.cred-actions {
+.qi-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
+}
+.qi-kbd-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-right: auto;
 }
 
 /* Mirrors GitPane.vue's .btn-primary/.btn-ghost — scoped styles don't cross

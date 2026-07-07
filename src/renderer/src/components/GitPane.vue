@@ -38,6 +38,7 @@ const emit = defineEmits<{
   (e: 'open-branch-diff', payload: { base: string; compare: string }): void
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
   (e: 'focus-pane', paneId: string): void
+  (e: 'open-git-accounts'): void
 }>()
 
 function openBranchDiffTab(base = 'main'): void {
@@ -1969,6 +1970,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <div class="menu-sep" />
               <div class="menu-empty">{{ $t('git.account.none') }}</div>
             </template>
+            <div class="menu-sep" />
+            <button class="menu-item" @click="showAccountMenu = false; emit('open-git-accounts')">
+              + {{ $t('git.account.add-new') }}
+            </button>
           </div>
         </Teleport>
       </div>

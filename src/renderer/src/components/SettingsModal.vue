@@ -19,6 +19,7 @@ const props = defineProps<{
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
   pipelinesApi?: ReturnType<typeof usePipelines>
+  initialTab?: Tab
 }>()
 const emit = defineEmits<{
   (e: 'close'): void
@@ -28,7 +29,7 @@ const emit = defineEmits<{
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
 type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'
-const activeTab = ref<Tab>('roles')
+const activeTab = ref<Tab>(props.initialTab ?? 'roles')
 
 // Git account manager (safeStorage-backed). Lazy-loaded on tab entry.
 const accountsApi = useGitAccounts()

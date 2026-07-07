@@ -351,6 +351,7 @@ function openDiffWindow(params: Record<string, string>): void {
   if (editorWindow && !editorWindow.isDestroyed()) {
     editorWindow.webContents.send('editor:openDiff', params)
     editorWindow.webContents.send('editor:switchSidebar', 'git')
+    if (editorWindow.isMinimized()) editorWindow.restore()
     editorWindow.focus()
     return
   }
@@ -500,6 +501,7 @@ ipcMain.handle('window:openDiff', (_event, args: Record<string, string>) => {
 function openBranchDiffWindow(params: Record<string, string>): void {
   if (editorWindow && !editorWindow.isDestroyed()) {
     editorWindow.webContents.send('editor:openBranchDiff', params)
+    if (editorWindow.isMinimized()) editorWindow.restore()
     editorWindow.focus()
     return
   }
@@ -558,10 +560,12 @@ function openEditorWindow(params: Record<string, string>): void {
     // If only switching sidebar (no new file), avoid reload — just focus + notify sidebar.
     if (!params.filepath && params.sidebar) {
       editorWindow.webContents.send('editor:switchSidebar', params.sidebar)
+      if (editorWindow.isMinimized()) editorWindow.restore()
       editorWindow.focus()
       return
     }
     loadWindow(editorWindow, search)
+    if (editorWindow.isMinimized()) editorWindow.restore()
     editorWindow.focus()
     return
   }

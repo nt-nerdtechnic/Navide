@@ -204,6 +204,7 @@ const emit = defineEmits<{
   (e: 'update:layoutMode', v: LayoutMode): void
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
   (e: 'spawn-for-issue', payload: { agentKey: string; mode: IssueHandlerMode; issue: Issue; provider: IssueProvider }): void
+  (e: 'open-git-accounts'): void
 }>()
 
 const yoloLocal = computed<boolean>({
@@ -782,6 +783,7 @@ function onPipelineDividerEnd(): void {
           @dispatch-issue="$emit('dispatch-issue', $event)"
           @spawn-for-issue="$emit('spawn-for-issue', $event)"
           @focus-pane="$emit('focus-pane', $event)"
+          @open-git-accounts="$emit('open-git-accounts')"
         />
       </div>
     </div>

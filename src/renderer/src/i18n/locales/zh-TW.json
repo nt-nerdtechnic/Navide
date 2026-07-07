@@ -4,6 +4,7 @@
       "selector-title": "此工作區使用的帳號",
       "unbound": "未綁定帳號",
       "none": "尚未儲存任何帳號",
+      "add-new": "新增帳號…",
       "save-and-bind": "儲存為帳號並綁定此工作區",
       "credential-invalid": "此工作區綁定帳號的憑證可能已失效——請至「設定 › Accounts」更新。"
     }
