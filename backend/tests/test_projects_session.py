@@ -349,3 +349,26 @@ def test_rename_pane_survives_respawn_with_new_id(
 def test_rename_pane_unknown_workspace_returns_none(tmp_path: Path) -> None:
     store = ProjectStore()
     assert store.rename_pane(str(tmp_path), pane_id="x", custom_name="Y") is None
+
+
+def test_rename_pane_before_record_exists_upserts(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """A manual-pane rename can arrive before manual_pane.spawn persists the
+    PaneRecord (persist races the spawn). The name must land on a pending stub
+    and survive the later spawn without producing a duplicate."""
+    store, ws = store_with_stage
+    # Rename first — no PaneRecord for this pane_id exists yet.
+    store.rename_pane(ws, pane_id="race-pane", custom_name="風格")
+    stub = next((p for p in store.peek(ws).panes if p.pane_id == "race-pane"), None)
+    assert stub is not None
+    assert stub.custom_name == "風格"
+    # Pending stub is skipped by restore until the spawn upgrades it.
+    assert stub.spawn_status == "pending"
+    # The spawn arrives — it fills fields without clobbering custom_name.
+    store.record_manual_pane_spawn(ws, pane_id="race-pane", agent="claude")
+    panes = [p for p in store.peek(ws).panes if p.pane_id == "race-pane"]
+    assert len(panes) == 1  # upserted, not duplicated
+    assert panes[0].spawn_status == "spawned"
+    assert panes[0].agent == "claude"
+    assert panes[0].custom_name == "風格"

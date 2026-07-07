@@ -579,13 +579,20 @@ class ProjectStore:
 
         Empty custom_name resets to the default label. Returns None when no project
         exists for the workspace.
+
+        Upsert: a rename can race manual_pane.spawn — the PaneRecord may not exist
+        yet. Rather than silently dropping the name, create a pending stub keyed by
+        pane_id; the later spawn finds it via _find_manual_pane and fills in the
+        remaining fields without touching custom_name. An unspawned stub stays
+        'pending' and is skipped by restore, so it can't resurrect an empty pane.
         """
         project = self.peek(workspace_path)
         if project is None:
             return None
         pane = next((p for p in project.panes if p.pane_id == pane_id), None)
         if pane is None:
-            return project
+            pane = PaneRecord(pane_id=pane_id, origin="manual")
+            project.panes.append(pane)
         pane.custom_name = custom_name
         self.save(project)
         return project
