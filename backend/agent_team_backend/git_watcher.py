@@ -46,9 +46,6 @@ _IGNORE_SEGMENTS = frozenset({
     # this, every log write fires git.changed → a 7-request git fan-out in the
     # frontend, flooding the shared WebSocket and stalling pipeline messages.
     ".agent-team",
-    # Laravel's storage/ dir: file-based session/cache drivers write here on
-    # every HTTP request the dev server handles, same fan-out problem as above.
-    "storage",
 })
 
 # First-level entries under `.git/` that are pure internal churn — reacting to
@@ -56,6 +53,13 @@ _IGNORE_SEGMENTS = frozenset({
 # effect. Everything else at the first level (index, HEAD, refs, MERGE_HEAD,
 # ORIG_HEAD, FETCH_HEAD, packed-refs …) is meaningful git state.
 _IGNORE_GIT_FIRST_LEVEL = frozenset({"objects", "logs", "hooks", "lfs"})
+
+# Sub-dirs of a Laravel storage/ dir that churn on every HTTP request via
+# file-based session/cache drivers — same fan-out problem as .agent-team
+# above. Scoped narrowly (not a bare "storage" entry in _IGNORE_SEGMENTS) so a
+# tracked storage/ dir in a non-Laravel project (e.g. Rails Active Storage)
+# still reports changes normally.
+_IGNORE_STORAGE_SUBDIRS = frozenset({"framework", "logs"})
 
 
 class _RepoHandler(FileSystemEventHandler):
@@ -96,6 +100,11 @@ class _RepoHandler(FileSystemEventHandler):
             if not sub:
                 return False
             return sub[0] not in _IGNORE_GIT_FIRST_LEVEL
+        if "storage" in parts:
+            si = parts.index("storage")
+            sub = parts[si + 1:]
+            if sub and sub[0] in _IGNORE_STORAGE_SUBDIRS:
+                return False
         # Working tree: drop anything under a known build/dependency dir.
         return not any(seg in _IGNORE_SEGMENTS for seg in parts)
 

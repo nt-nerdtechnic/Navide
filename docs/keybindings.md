@@ -34,6 +34,8 @@ and when-clause conditions.
 | `⌘J` | Toggle AI Chat panel |
 | `⌘⇧A` | Toggle AI Chat panel |
 | `` ⌃` `` | Toggle AI Chat panel |
+| `⌘⇧U` | Open Agent |
+| `⌘⇧B` | Rebuild Pane (Resume) |
 | `Escape` | Close modal dialog |
 
 ### Quick Open

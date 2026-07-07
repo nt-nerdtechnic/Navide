@@ -26,6 +26,15 @@ def test_build_dirs_are_ignored(tmp_path: Path) -> None:
         assert h._is_relevant(str(tmp_path / noise)) is False, noise
 
 
+def test_laravel_storage_churn_is_scoped(tmp_path: Path) -> None:
+    h = _handler(tmp_path)
+    for noise in ("storage/framework/sessions/abc", "storage/logs/laravel.log"):
+        assert h._is_relevant(str(tmp_path / noise)) is False, noise
+    # Other storage/ content (e.g. tracked uploads) must still be reported —
+    # the scoping must not swallow a whole "storage" dir in unrelated projects.
+    assert h._is_relevant(str(tmp_path / "storage" / "app" / "upload.jpg")) is True
+
+
 def test_git_state_files_are_relevant(tmp_path: Path) -> None:
     h = _handler(tmp_path)
     for state in (".git/index", ".git/HEAD", ".git/MERGE_HEAD",
