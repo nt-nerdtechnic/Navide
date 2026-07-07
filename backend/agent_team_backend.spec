@@ -10,7 +10,13 @@ a = Analysis(
     ['run.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=[
+        # git execs GIT_ASKPASS by path (no shell), so this must exist as a
+        # real file on disk in the onefile extraction dir -- PyInstaller only
+        # extracts modules bundled in the PYZ archive on demand as .pyc, never
+        # as the loose .py file git_service.py's GIT_ASKPASS path points to.
+        ('agent_team_backend/git_askpass_helper.py', 'agent_team_backend'),
+    ],
     hiddenimports=[
         # The top-level app object (imported by name in __main__.py, but listed
         # here as belt-and-suspenders for PyInstaller's graph walk).

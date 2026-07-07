@@ -13,6 +13,8 @@ import os
 import re
 import secrets
 import shutil
+import stat
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -2246,6 +2248,16 @@ async def generate_commit_message(
 _credentials: PendingRegistry[str | None] = PendingRegistry()
 
 _ASKPASS_HELPER_PATH = str(Path(__file__).parent / "git_askpass_helper.py")
+
+if getattr(sys, "frozen", False):
+    # git execs this path directly (no shell); PyInstaller's onefile
+    # extraction doesn't reliably preserve the +x bit on bundled datas, so
+    # restore it explicitly before any git subprocess can reference it.
+    try:
+        helper = Path(_ASKPASS_HELPER_PATH)
+        helper.chmod(helper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
 
 
 def resolve_credential(request_id: str, value: str | None) -> bool:
