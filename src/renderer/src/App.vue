@@ -1744,6 +1744,7 @@ const MAIN_SHORTCUTS = [
   { label: 'Open Settings',              keys: '⌘,' },
   { label: 'Open Mini IDE',              keys: '⌘⇧I' },
   { label: 'Open Agent',                 keys: '⌘⇧U' },
+  { label: 'Rebuild Pane (Resume)',      keys: '⌘⇧B' },
   { label: 'Find in Files',             keys: '⌘⇧F' },
   { label: 'Show Keyboard Shortcuts',   keys: '⌘K ⌘S' },
   { label: 'New Main Window',           keys: '⌘⇧N' },
@@ -1846,6 +1847,9 @@ registerCommand('workbench.action.openMiniIDE', async () => {
   if (currentWorkspace.value) {
     await window.agentTeam?.openEditorWindow({ workspace_path: currentWorkspace.value })
   }
+})
+registerCommand('workbench.action.rebuildFocusedPane', async () => {
+  if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
 watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c))
 

@@ -28,7 +28,7 @@
       "tab-shortcut": "Problems (⌘⇧M)"
     },
     "terminal": {
-      "rebuild-tooltip": "Rebuild (resume) — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
+      "rebuild-tooltip": "Rebuild (resume) ⌘⇧B — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "minimize-tooltip": "Minimize to sidebar",
       "drag-to-tab-tooltip": "Drag onto a tab above to move this pane to another tab",
       "commander-tooltip": "Global Manager — coordinates across stages, decides ---STAGE-DONE---",
