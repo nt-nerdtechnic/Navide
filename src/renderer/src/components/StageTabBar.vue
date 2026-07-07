@@ -16,6 +16,7 @@ const emit = defineEmits<{
   (e: 'delete', key: string): void
   (e: 'close-group', key: string): void
   (e: 'move-pane', paneId: string, targetKey: string): void
+  (e: 'detach', key: string, x: number, y: number): void
 }>()
 
 const actionMenu = ref<{ show: boolean; key: string; x: number; y: number }>({ show: false, key: '', x: 0, y: 0 })
@@ -41,6 +42,21 @@ function onTabDrop(e: DragEvent, key: string): void {
   dragOverKey.value = null
   const paneId = e.dataTransfer?.getData('application/x-pane-id') || ''
   if (paneId) emit('move-pane', paneId, key)
+}
+
+// Drag-out: dragging a stage tab and releasing OUTSIDE this window's viewport
+// detaches that run group into its own child window. Uses a distinct data type
+// so it never collides with the pane-drop-onto-tab flow above.
+function onTabDragStart(e: DragEvent, tab: TabItem): void {
+  if (tab.type !== 'stage') { e.preventDefault(); return }
+  e.dataTransfer?.setData('application/x-tab-key', tab.key)
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+function onTabDragEnd(e: DragEvent, tab: TabItem): void {
+  if (tab.type !== 'stage') return
+  const outside =
+    e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
+  if (outside) emit('detach', tab.key, e.screenX, e.screenY)
 }
 
 const editingKey = ref<string | null>(null)
@@ -77,8 +93,11 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
         role="tab"
         :aria-selected="tab.key === modelValue"
         :class="['tab-btn', `tab-type-${tab.type}`, { active: tab.key === modelValue, 'drag-over': dragOverKey === tab.key }]"
+        :draggable="tab.type === 'stage' && editingKey !== tab.key"
         @click="emit('update:modelValue', tab.key)"
         @dblclick.prevent="startRename(tab)"
+        @dragstart="onTabDragStart($event, tab)"
+        @dragend="onTabDragEnd($event, tab)"
         @dragover.prevent
         @dragenter.prevent="dragOverKey = tab.key"
         @dragleave="dragOverKey = (dragOverKey === tab.key ? null : dragOverKey)"

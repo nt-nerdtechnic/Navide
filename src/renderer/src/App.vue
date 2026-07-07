@@ -2181,7 +2181,7 @@ watch(
  *  is injected (no role, no kickoff): the pane sits idle with memory loaded
  *  until the user drives it. Slots without an id fall back to a fresh spawn
  *  (role re-injected), the same as before this feature. */
-async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string): Promise<void> {
+async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string, onlyGroupId?: string): Promise<void> {
   // Don't restore if pipeline is active or paused — panes are already alive.
   if (pipeline.state === 'running' || pipeline.state === 'aborted') return
 
@@ -2228,6 +2228,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // Detached child window restores only the panes of its scoped run group; the
   // live PTYs are kept alive by the main window's hand-off, so these reattach.
   if (isDetachedWindow) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === detachedGroupId)
+  // Main-window reattach after a child closes: restore just the returning group.
+  else if (onlyGroupId !== undefined) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === onlyGroupId)
   if (toRestore.length === 0) return
 
   pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
@@ -4691,6 +4693,61 @@ function onRunGroupsStorageSync(e: StorageEvent): void {
 onMounted(() => { window.addEventListener('storage', onRunGroupsStorageSync) })
 onUnmounted(() => { window.removeEventListener('storage', onRunGroupsStorageSync) })
 
+// ── Detached run-group windows (main-window side) ────────────────────────────
+/** Drag-out gesture from the tab bar → ask main to open the group in its own
+ *  window. The resulting group:detached broadcast (which reaches this window too)
+ *  drives handleGroupDetached, so the hand-off has a single source of truth. */
+function onDetachGroup(groupId: string, x: number, y: number): void {
+  if (isDetachedWindow || !groupId || groupId === 'manual') return
+  const path = currentWorkspace.value
+  if (!path) return
+  const bounds = { x: Math.round(x), y: Math.round(y), width: 900, height: 700 }
+  void window.agentTeam?.detachGroup?.({ groupId, workspacePath: path, bounds })
+}
+
+/** Hand a run group off to a detached child window: drop its panes from THIS
+ *  window WITHOUT killing them — onScopeDispose keeps the backend PTYs alive so
+ *  the child reattaches — and hide its tab. */
+function handleGroupDetached(groupId: string): void {
+  if (isDetachedWindow || !groupId) return
+  const next = new Set(detachedGroupIds.value)
+  next.add(groupId)
+  detachedGroupIds.value = next
+  for (const p of panes.value) {
+    if ((p.runGroupId ?? '') === groupId) delete paneRefs[p.id]
+  }
+  panes.value = panes.value.filter((p) => (p.runGroupId ?? '') !== groupId)
+  if (activeTab.value === groupId) {
+    activeTab.value = resolveActiveTab(runGroups.value.filter((g) => !next.has(g.id)), '')
+  }
+  syncViews()
+}
+
+/** Take a run group back when its detached child window closes: reattach only
+ *  that group's panes here (they resume against the PTYs the child released). */
+async function handleGroupReattached(groupId: string): Promise<void> {
+  if (isDetachedWindow || !groupId) return
+  const next = new Set(detachedGroupIds.value)
+  next.delete(groupId)
+  detachedGroupIds.value = next
+  const path = currentWorkspace.value
+  if (!path) return
+  const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
+  if (resp) await restoreWorkspacePanes(resp, path, groupId)
+}
+
+onMounted(() => {
+  if (isDetachedWindow) return // child windows don't coordinate hand-offs
+  window.agentTeam?.onGroupDetached?.(handleGroupDetached)
+  window.agentTeam?.onGroupReattached?.((gid) => void handleGroupReattached(gid))
+  // A main window that (re)loaded while a child is already open must hide the
+  // groups that are currently detached. Best-effort: no-op if the main process
+  // doesn't yet know this window's workspace.
+  void window.agentTeam?.getDetachedGroups?.().then((ids) => {
+    for (const gid of ids ?? []) handleGroupDetached(gid)
+  })
+})
+
 /** Fixed id for the always-present default tab. Using a constant id (rather than
  *  a timestamp) makes "預設" idempotent: it can exist at most once per workspace,
  *  so reloads/re-checks never spawn a duplicate. */
@@ -5755,6 +5812,7 @@ function paneIsCommander(p: ActivePane): boolean {
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"
         @move-pane="(paneId, targetKey) => movePaneToGroup(paneId, targetKey)"
+        @detach="(key, x, y) => onDetachGroup(key, x, y)"
       />
       <div v-if="panes.length === 0" class="empty">
         <!-- Pipeline is starting but the first pane hasn't appeared yet.

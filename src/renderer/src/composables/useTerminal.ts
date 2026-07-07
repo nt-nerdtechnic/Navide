@@ -589,6 +589,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const curX = buf.cursorX
       const curY = buf.baseY + buf.cursorY
 
+      // ── Shift+Enter: newline without submitting ────────────────────────────
+      // Plain Enter and Shift+Enter both produce the same '\r' byte in xterm's
+      // default (non-CSI-u) key handling, so a CLI reading raw PTY input can't
+      // tell them apart. Send the CSI u sequence modern CLIs (Claude Code,
+      // Codex) recognize for "Enter with Shift" so they can insert a literal
+      // newline instead of submitting. A plain shell ignores unrecognized CSI
+      // sequences, so this is safe to apply unconditionally across all panes.
+      if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Enter') {
+        pasteText('\x1b[13;2u')
+        return false
+      }
+
       // ── Shift+←/→: extend selection character by character ────────────────
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey &&
           (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
