@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import { useIssues } from '../composables/useIssues'
@@ -710,6 +711,14 @@ onUnmounted(() => {
 
 // ── remote actions ────────────────────────────────────────────────────────────
 const { toast: notifyToast, alert: notifyAlert, confirm: notifyConfirm } = useNotify()
+const { t } = useI18n()
+
+// A bound-account push/pull that fails on auth almost always means the stored
+// token is stale/revoked — point the user at Settings › Accounts to update it,
+// rather than leaving them staring at git's generic "Authentication failed".
+function isAuthLikeError(msg: string): boolean {
+  return /authentication|auth failed|403|401|access denied|could not read (username|password)|invalid credential|permission denied/i.test(msg)
+}
 const remoteOpLabel: Record<string, string> = {
   fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: 'Sync', publish: 'Publish'
 }
@@ -728,8 +737,13 @@ async function runRemote(op: Exclude<typeof remoteBusy.value, ''>, fn: () => Pro
     // Surface the outcome through the modular notification system:
     // failures as a blocking alert (full git output), success as a toast.
     const label = remoteOpLabel[op] ?? op
-    if (remoteError.value) void notifyAlert(remoteError.value, { title: `${label} failed` })
-    else if (remoteOutput.value) notifyToast(`${label} done`, { type: 'success' })
+    if (remoteError.value) {
+      const hint =
+        boundAccount.value && isAuthLikeError(remoteError.value)
+          ? `\n\n${t('git.account.credential-invalid')}`
+          : ''
+      void notifyAlert(remoteError.value + hint, { title: `${label} failed` })
+    } else if (remoteOutput.value) notifyToast(`${label} done`, { type: 'success' })
   } finally {
     remoteBusy.value = ''
   }
