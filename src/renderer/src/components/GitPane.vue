@@ -2045,7 +2045,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? 'No matches' : 'No commits yet' }}</div>
         <div v-else class="commit-list">
           <div v-for="{ c, gi } in pagedLog" :key="c.hash">
-            <div class="commit-row" @click="toggleCommitDetail(c.hash)" @contextmenu="gi > 0 && openCommitCtxMenu($event, c.hash)">
+            <div class="commit-row" @click="toggleCommitDetail(c.hash)" @contextmenu.prevent="!isHeadCommit(c) && openCommitCtxMenu($event, c.hash)">
               <div class="graph-col" :style="{ width: graphWidth + 'px' }">
                 <svg class="graph-svg" :viewBox="`0 0 ${graphWidth} 100`" preserveAspectRatio="none">
                   <line
