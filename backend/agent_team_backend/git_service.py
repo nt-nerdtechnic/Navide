@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 
 import httpx
 
+from agent_team_backend.applog import app_data_dir
 from agent_team_backend import commit_message_prompt
 from agent_team_backend.pending_registry import TIMEOUT, PendingRegistry
 
@@ -2284,17 +2285,35 @@ async def generate_commit_message(
 # `_approvals` registry in ai_chat_tools.py via pending_registry.PendingRegistry.
 _credentials: PendingRegistry[str | None] = PendingRegistry()
 
-_ASKPASS_HELPER_PATH = str(Path(__file__).parent / "git_askpass_helper.py")
+def _resolve_askpass_helper_path() -> str:
+    """Return a stable executable helper path for Git's GIT_ASKPASS.
 
-if getattr(sys, "frozen", False):
-    # git execs this path directly (no shell); PyInstaller's onefile
-    # extraction doesn't reliably preserve the +x bit on bundled datas, so
-    # restore it explicitly before any git subprocess can reference it.
+    In PyInstaller onefile builds, bundled data files live under a temporary
+    `_MEI...` extraction directory. Git may invoke GIT_ASKPASS after that path
+    has gone stale, so copy the helper to Agent-Team's app-data dir and point
+    Git at the stable copy instead.
+    """
+    source = Path(__file__).parent / "git_askpass_helper.py"
+    helper = source
+    if getattr(sys, "frozen", False):
+        helper = app_data_dir() / "runtime" / "git_askpass_helper.py"
+        try:
+            helper.parent.mkdir(parents=True, exist_ok=True)
+            if not helper.exists() or helper.read_bytes() != source.read_bytes():
+                shutil.copyfile(source, helper)
+        except OSError as err:
+            log.warning("git askpass: stable helper copy failed: %s", err)
+            helper = source
+
+    # git execs this path directly (no shell), so keep it executable.
     try:
-        helper = Path(_ASKPASS_HELPER_PATH)
         helper.chmod(helper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
         pass
+    return str(helper)
+
+
+_ASKPASS_HELPER_PATH = _resolve_askpass_helper_path()
 
 
 def resolve_credential(request_id: str, value: str | None) -> bool:
