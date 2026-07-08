@@ -337,9 +337,12 @@ class Attribution:
                     return binding
 
         marker_binding = self.maybe_bind_by_marker(usage)
-        if not marker_binding:
+        if marker_binding:
+            pane_id, resume_id = marker_binding
+        elif usage.vendor == "antigravity":
+            return self._bind_antigravity_new_conversation(usage)
+        else:
             return None
-        pane_id, resume_id = marker_binding
         with self._lock:
             reg = self._panes.get(pane_id)
             if reg is None:
@@ -416,6 +419,54 @@ class Attribution:
         log.info("bound session=%s → pane=%s via marker (resume_id=%s)", sid, matched_pane, resume_id)
         return matched_pane, resume_id
 
+    def _bind_antigravity_new_conversation(self, usage: TokenUsage) -> SessionBinding | None:
+        """Fallback Antigravity resume capture when the marker is not yet visible.
+
+        Antigravity writes SQLite conversations and may create the .db before the
+        injected marker lands in either the main db or WAL. If exactly one
+        registered Antigravity pane in this cwd has a new, unclaimed conversation
+        file, bind it to that pane. Multiple candidates are intentionally left
+        unbound so marker matching can resolve them later without cross-pane
+        corruption.
+        """
+        if usage.vendor != "antigravity" or not usage.session_id:
+            return None
+        file_path = Path(usage.file_path)
+        key = f"{usage.vendor}:{usage.session_id}:{usage.session_id}"
+        with self._lock:
+            if key in self._announced_session_keys:
+                return None
+            owner = self._session_owner.get(usage.session_id)
+            if owner is not None:
+                return None
+            candidates = [
+                reg for reg in self._panes.values()
+                if reg.vendor == "antigravity"
+                and self._cwd_matches(reg.cwd, usage)
+                and file_path not in reg.baseline_files
+                and not reg.claimed_session_ids
+            ]
+            if len(candidates) != 1:
+                return None
+            reg = candidates[0]
+            self._session_owner[usage.session_id] = reg.pane_id
+            reg.claimed_session_ids.add(usage.session_id)
+            if reg.session_marker:
+                self._unbound_markers.pop(reg.session_marker, None)
+            self._announced_session_keys.add(key)
+            binding = SessionBinding(
+                pane_id=reg.pane_id,
+                resume_id=usage.session_id,
+                workspace_path=reg.workspace_path,
+                stage_id=reg.stage_id,
+                session_file=usage.file_path,
+            )
+        log.info(
+            "bound antigravity session=%s → pane=%s via new conversation fallback",
+            usage.session_id, binding.pane_id,
+        )
+        return binding
+
     def _bind_and_announce_path_session(
         self,
         *,
@@ -489,6 +540,10 @@ class Attribution:
                     return ws_path
             elif usage.vendor == "codex":
                 # Codex puts cwd in session_meta → usage.cwd
+                if usage.cwd and usage.cwd == ws_path:
+                    return ws_path
+            elif usage.vendor == "antigravity":
+                # Antigravity cwd is extracted from trajectory_metadata_blob.
                 if usage.cwd and usage.cwd == ws_path:
                     return ws_path
         return None

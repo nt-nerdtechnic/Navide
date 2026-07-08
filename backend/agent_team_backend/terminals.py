@@ -120,7 +120,6 @@ class TerminalService:
     ) -> None:
         self._sessions: dict[str, TerminalSession] = {}
         self._emit = emit
-        self._MAX_SESSIONS = 32
         self._token_event_sink = token_event_sink
         self._loop = asyncio.get_event_loop()
         # Per-session output batching state
@@ -148,8 +147,6 @@ class TerminalService:
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
     ) -> TerminalSession:
-        if len(self._sessions) >= self._MAX_SESSIONS:
-            raise RuntimeError(f"Too many terminal sessions (max {self._MAX_SESSIONS})")
         argv = self._resolve_command(command)
         if not os.path.isdir(cwd):
             raise FileNotFoundError(f"cwd does not exist: {cwd}")

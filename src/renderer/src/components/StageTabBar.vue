@@ -22,6 +22,12 @@ const emit = defineEmits<{
 const actionMenu = ref<{ show: boolean; key: string; x: number; y: number }>({ show: false, key: '', x: 0, y: 0 })
 
 function onCloseClick(e: MouseEvent, key: string): void {
+  const tab = props.tabs.find((t) => t.key === key)
+  if (tab && tab.count <= 0) {
+    emit('delete', key)
+    actionMenu.value.show = false
+    return
+  }
   actionMenu.value = { show: true, key, x: e.clientX, y: e.clientY }
 }
 function chooseMove(): void {

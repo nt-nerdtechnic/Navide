@@ -144,3 +144,61 @@ def test_marker_in_wal_only_still_binds(tmp_path: Path, monkeypatch) -> None:
     assert binding is not None
     assert binding.pane_id == "pane-ag-2"
     assert binding.resume_id == "aaaa1111-0000-0000-0000-000000000000"
+
+
+def test_new_conversation_fallback_binds_single_antigravity_pane(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """If the marker has not reached SQLite yet, a single new conversation in
+    the pane's cwd is still enough to capture the resume id."""
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane(
+        "pane-ag-single", vendor="antigravity", cwd=str(ws),
+        workspace_path=str(ws), session_marker="at-pane:single",
+    )
+
+    db = reader.project_dirs()[0] / "single-new-session.db"
+    _make_conversation_db(db, ws)
+    usage = TokenUsage(
+        vendor="antigravity", input_tokens=0, output_tokens=0,
+        cwd=str(ws), session_id=db.stem, file_path=str(db), dedup_key="",
+    )
+
+    binding = attr.maybe_announce_session(usage)
+
+    assert binding is not None
+    assert binding.pane_id == "pane-ag-single"
+    assert binding.resume_id == "single-new-session"
+
+
+def test_new_conversation_fallback_does_not_guess_between_two_antigravity_panes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Two fresh Antigravity panes in one cwd must wait for marker matching
+    rather than claiming the first new db arbitrarily."""
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane(
+        "pane-ag-a", vendor="antigravity", cwd=str(ws),
+        workspace_path=str(ws), session_marker="at-pane:a",
+    )
+    attr.register_pane(
+        "pane-ag-b", vendor="antigravity", cwd=str(ws),
+        workspace_path=str(ws), session_marker="at-pane:b",
+    )
+
+    db = reader.project_dirs()[0] / "ambiguous-session.db"
+    _make_conversation_db(db, ws)
+    usage = TokenUsage(
+        vendor="antigravity", input_tokens=0, output_tokens=0,
+        cwd=str(ws), session_id=db.stem, file_path=str(db), dedup_key="",
+    )
+
+    assert attr.maybe_announce_session(usage) is None
