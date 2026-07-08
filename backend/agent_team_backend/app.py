@@ -33,7 +33,7 @@ from .analyzer_ollama import (
 )
 from .analyzer_settings import AnalyzerSettingsStore
 from .ai_chat_settings import AIChatSettingsStore
-from .applog import backend_log_path, backend_port_file
+from .applog import app_data_dir, backend_log_path, backend_port_file
 from .claude_hooks import install_hooks as install_claude_hooks
 from .codex_home import CodexHomeManager
 from .ipc import make_error, make_event, make_response
@@ -100,6 +100,129 @@ def _az_llama_cli() -> str | None:
 def _az_gguf_path() -> str | None:
     v = _az_settings().get("gguf_path", "").strip()
     return v or None
+
+_AI_SECRET_KEYS = {
+    "anthropic_api_key",
+    "openai_api_key",
+    "google_api_key",
+    "groq_api_key",
+    "deepseek_api_key",
+    "mistral_api_key",
+    "xai_api_key",
+    "openai_compatible_api_key",
+}
+
+
+def _settings_paths() -> dict[str, str]:
+    return {
+        "app_data_dir": str(app_data_dir()),
+        "roles": str(roles_store.path),
+        "pipelines": str(stages_store.path),
+        "mcp": str(mcp_settings_store.path),
+        "analyzer": str(analyzer_settings_store.path),
+        "ai_chat": str(ai_chat_settings_store.path),
+        "backend_log": str(backend_log_path()),
+    }
+
+
+def _redact_ai_chat_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: ("__redacted__" if key in _AI_SECRET_KEYS and value else value)
+        for key, value in settings.items()
+        if key != "model"
+    }
+
+
+def _settings_bundle() -> dict[str, Any]:
+    return {
+        "format_version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "paths": _settings_paths(),
+        "roles": roles_store.list(),
+        "pipelines_document": stages_store.export_document(),
+        "mcp_servers": mcp_settings_store.list_servers(),
+        "analyzer": analyzer_settings_store.get(),
+        "ai_chat": _redact_ai_chat_settings(ai_chat_settings_store.get()),
+        "notes": {
+            "secrets": "API keys and tokens are redacted and are not restored on import.",
+        },
+    }
+
+
+async def _test_ai_provider(provider: str, overrides: dict[str, Any]) -> dict[str, Any]:
+    settings = {**ai_chat_settings_store.get(), **overrides}
+    provider = provider or settings.get("provider", "ollama")
+    try:
+        import httpx
+    except Exception as err:  # noqa: BLE001
+        return {"ok": False, "message": f"httpx unavailable: {err}"}
+
+    def _key(name: str) -> str:
+        return str(settings.get(name, "") or "").strip()
+
+    base_urls = {
+        "openai": "https://api.openai.com/v1",
+        "groq": "https://api.groq.com/openai/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "mistral": "https://api.mistral.ai/v1",
+        "xai": "https://api.x.ai/v1",
+    }
+    key_fields = {
+        "anthropic": "anthropic_api_key",
+        "openai": "openai_api_key",
+        "google": "google_api_key",
+        "groq": "groq_api_key",
+        "deepseek": "deepseek_api_key",
+        "mistral": "mistral_api_key",
+        "xai": "xai_api_key",
+        "openai_compatible": "openai_compatible_api_key",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            if provider == "ollama":
+                base = str(settings.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+                resp = await client.get(f"{base}/api/tags")
+            elif provider == "google":
+                api_key = _key("google_api_key")
+                if not api_key:
+                    return {"ok": False, "message": "Missing Google Gemini API key"}
+                resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    params={"key": api_key},
+                )
+            elif provider == "anthropic":
+                api_key = _key("anthropic_api_key")
+                if not api_key:
+                    return {"ok": False, "message": "Missing Anthropic API key"}
+                resp = await client.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                )
+            elif provider == "openai_compatible":
+                base = str(settings.get("openai_compatible_base_url") or "").rstrip("/")
+                if not base:
+                    return {"ok": False, "message": "Missing OpenAI-compatible base URL"}
+                headers = {}
+                api_key = _key("openai_compatible_api_key")
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+                resp = await client.get(f"{base}/models", headers=headers)
+            elif provider in base_urls:
+                api_key = _key(key_fields[provider])
+                if not api_key:
+                    return {"ok": False, "message": f"Missing {provider} API key"}
+                resp = await client.get(
+                    f"{base_urls[provider]}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            else:
+                return {"ok": False, "message": f"Unsupported provider: {provider}"}
+        if 200 <= resp.status_code < 300:
+            return {"ok": True, "message": f"Connection OK ({resp.status_code})", "status": resp.status_code}
+        text = resp.text[:240].replace("\n", " ")
+        return {"ok": False, "message": f"HTTP {resp.status_code}: {text}", "status": resp.status_code}
+    except Exception as err:  # noqa: BLE001
+        return {"ok": False, "message": str(err)}
 
 async def analyzer_health() -> dict:
     if _az_is_ollama():
@@ -1267,6 +1390,60 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await broadcast(
                 make_event("workspace.recent_changed", {"recent": recent, "reason": "remove"})
             )
+
+        # -------- settings bundle / metadata --------
+        elif msg_type == "settings.paths":
+            await session.send_json(make_response(msg_id, msg_type, {"paths": _settings_paths()}))
+
+        elif msg_type == "settings.bundle.export":
+            await session.send_json(make_response(msg_id, msg_type, {"bundle": _settings_bundle()}))
+
+        elif msg_type == "settings.bundle.import":
+            bundle = payload.get("bundle") if isinstance(payload.get("bundle"), dict) else payload
+            if not isinstance(bundle, dict):
+                await session.send_json(make_error(msg_id, msg_type, "INVALID_BUNDLE", "settings bundle must be an object"))
+                return
+            applied: list[str] = []
+            if isinstance(bundle.get("roles"), list):
+                roles = roles_store.replace_all(bundle["roles"])
+                applied.append("roles")
+                await broadcast(make_event("roles.changed", {"roles": roles, "reason": "bundle_import"}))
+            if isinstance(bundle.get("pipelines_document"), dict):
+                stages_store.replace_document(bundle["pipelines_document"])
+                pipelines = stages_store.list_pipelines()
+                active_id = stages_store.get_active_pipeline_id()
+                applied.append("pipelines")
+                await broadcast(make_event("pipelines.changed", {
+                    "pipelines": pipelines,
+                    "active_pipeline_id": active_id,
+                    "reason": "bundle_import",
+                }))
+                await broadcast(make_event("stages.changed", {
+                    "stages": stages_store.list(active_id),
+                    "pipeline_id": active_id,
+                    "reason": "bundle_import",
+                }))
+            if isinstance(bundle.get("mcp_servers"), list):
+                mcp_settings_store.replace_servers(bundle["mcp_servers"])
+                await mcp_manager.reload(mcp_settings_store.path)
+                applied.append("mcp")
+            if isinstance(bundle.get("analyzer"), dict):
+                updated = analyzer_settings_store.set(bundle["analyzer"])
+                applied.append("analyzer")
+                await broadcast(make_event("analyzer.settings_changed", updated))
+            if isinstance(bundle.get("ai_chat"), dict):
+                safe_chat = {
+                    k: v for k, v in bundle["ai_chat"].items()
+                    if k not in _AI_SECRET_KEYS and v != "__redacted__"
+                }
+                if safe_chat:
+                    ai_chat_settings_store.set(safe_chat)
+                    applied.append("ai_chat")
+            await session.send_json(make_response(msg_id, msg_type, {
+                "ok": True,
+                "applied": applied,
+                "paths": _settings_paths(),
+            }))
 
         # -------- roles registry --------
         elif msg_type == "roles.list":
@@ -2499,6 +2676,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "ai.chat.settings.set":
             updated = ai_chat_settings_store.set(payload)
             await session.send_json(make_response(msg_id, msg_type, updated))
+
+        elif msg_type == "ai.chat.provider.test":
+            provider = str(payload.get("provider") or "")
+            overrides = payload.get("settings") if isinstance(payload.get("settings"), dict) else {}
+            result = await _test_ai_provider(provider, overrides)
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "ai.chat.start":
             session_id = payload.get("session_id", "") or str(__import__("uuid").uuid4())

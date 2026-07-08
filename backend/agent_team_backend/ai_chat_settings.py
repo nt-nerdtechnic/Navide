@@ -74,6 +74,10 @@ class AIChatSettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or (app_data_dir() / SETTINGS_FILE)
 
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def get(self) -> dict[str, Any]:
         if not self._path.exists():
             result = dict(DEFAULTS)

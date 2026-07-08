@@ -192,6 +192,37 @@ class RolesStore:
             self._write(seed)
             return seed
 
+    def replace_all(self, roles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not roles:
+            raise ValueError("roles cannot be empty")
+        clean: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        now = _now_iso()
+        for entry in roles:
+            key = str(entry.get("key", "")).strip()
+            self._validate_key(key)
+            if key in seen:
+                raise ValueError(f"duplicate role key: {key}")
+            label = str(entry.get("label", "")).strip()
+            system_prompt = str(entry.get("system_prompt", ""))
+            if not label:
+                raise ValueError(f"label is required for role: {key}")
+            if not system_prompt.strip():
+                raise ValueError(f"system_prompt is required for role: {key}")
+            seen.add(key)
+            clean.append({
+                "key": key,
+                "label": label,
+                "one_line": str(entry.get("one_line", "")).strip(),
+                "system_prompt": system_prompt,
+                "is_default": bool(entry.get("is_default", False)),
+                "created_at": str(entry.get("created_at") or now),
+                "updated_at": now,
+            })
+        with self._lock:
+            self._write(clean)
+        return clean
+
     def _validate_key(self, key: str) -> None:
         if not _KEY_RE.match(key):
             raise ValueError(

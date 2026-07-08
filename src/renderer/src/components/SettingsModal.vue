@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import type { useRoles } from '../composables/useRoles'
 import type { useStages } from '../composables/useStages'
@@ -30,6 +30,166 @@ const emit = defineEmits<{
 // ── Tab ───────────────────────────────────────────────────────────────────────
 type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
+
+interface SettingsSearchItem {
+  id: string
+  tab: Tab
+  section: string
+  title: string
+  group: string
+  summary: string
+  keywords: string
+  mcpView?: MView
+}
+
+const settingsSearchQuery = ref('')
+const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
+  {
+    id: 'roles',
+    tab: 'roles',
+    section: 'roles',
+    title: 'Roles / 角色',
+    group: 'Roles',
+    summary: 'Role keys, labels, one-line summaries, system prompts, JSON import/export.',
+    keywords: 'roles role 角色 身分 prompt system prompt 系統提示詞 key label import export json 匯入 匯出',
+  },
+  {
+    id: 'pipelines',
+    tab: 'pipelines',
+    section: 'pipelines',
+    title: 'Pipelines / 流程',
+    group: 'Pipelines',
+    summary: 'Create, rename, delete, set default, and run pipelines.',
+    keywords: 'pipelines pipeline 流程 管線 default rename delete run 預設 重新命名 刪除 執行',
+  },
+  {
+    id: 'stages',
+    tab: 'pipelines',
+    section: 'pipeline-stages',
+    title: 'Stages & Slots / 階段與 Slot',
+    group: 'Pipelines',
+    summary: 'Stage ID, title, sentinel, questions, Context7 query, slots, roles, agents, manager, kickoff.',
+    keywords: 'stage stages slot slots 階段 sentinel questions allow questions context7 kickoff manager commander agent role codex claude antigravity',
+  },
+  {
+    id: 'mcp-installed',
+    tab: 'mcp',
+    section: 'mcp-installed',
+    title: 'Installed MCP Servers / 已安裝 MCP',
+    group: 'MCP',
+    summary: 'Refresh, open config, enable/disable, remove, inspect tools, edit command, args, and env vars.',
+    keywords: 'mcp server servers tools command args env context7 enable disable config refresh 已安裝 工具 環境變數 設定檔',
+  },
+  {
+    id: 'mcp-catalog',
+    tab: 'mcp',
+    section: 'mcp-catalog',
+    title: 'MCP Catalog / MCP 目錄',
+    group: 'MCP',
+    summary: 'Search and add context-reading MCP servers from the catalog.',
+    keywords: 'mcp catalog add install search context reading 新增 安裝 搜尋 目錄',
+    mcpView: 'catalog',
+  },
+  {
+    id: 'analyzer-backend',
+    tab: 'analyzer',
+    section: 'analyzer-backend',
+    title: 'Inference Backend / 推論後端',
+    group: 'Analyzer',
+    summary: 'Switch Ollama REST or llama.cpp, set base URL, llama-cli path, and GGUF model path.',
+    keywords: 'analyzer inference backend 推論 分析器 ollama llama llama.cpp llama-cli gguf url base url health',
+  },
+  {
+    id: 'analyzer-models',
+    tab: 'analyzer',
+    section: 'analyzer-models',
+    title: 'Models & Benchmark / 模型與基準測試',
+    group: 'Analyzer',
+    summary: 'Download/delete Ollama models and run model benchmark tasks.',
+    keywords: 'model models benchmark download delete pull ollama 模型 基準測試 下載 刪除',
+  },
+  {
+    id: 'cloud-keys',
+    tab: 'analyzer',
+    section: 'cloud-keys',
+    title: 'Cloud Provider Keys / 雲端 API 金鑰',
+    group: 'Analyzer',
+    summary: 'Anthropic, OpenAI, Gemini, Groq, DeepSeek, Mistral, xAI, and OpenAI-compatible endpoint settings.',
+    keywords: 'api key keys token cloud provider anthropic openai google gemini groq deepseek mistral xai grok compatible endpoint base url 金鑰 雲端',
+  },
+  {
+    id: 'appearance-theme',
+    tab: 'appearance',
+    section: 'appearance-theme',
+    title: 'Theme & Custom Colors / 主題與自訂顏色',
+    group: 'Appearance',
+    summary: 'Built-in themes and semantic color overrides.',
+    keywords: 'appearance theme custom colors color 外觀 主題 自訂顏色 背景 文字 邊框 accent high contrast',
+  },
+  {
+    id: 'settings-management',
+    tab: 'appearance',
+    section: 'settings-management',
+    title: 'Settings Management / 設定管理',
+    group: 'Appearance',
+    summary: 'Export/import the full settings bundle and inspect where settings are stored.',
+    keywords: 'settings management export import bundle config path location scope user workspace 設定管理 匯出 匯入 全集 位置 路徑 層級',
+  },
+  {
+    id: 'appearance-language',
+    tab: 'appearance',
+    section: 'appearance-language',
+    title: 'Language / 語言',
+    group: 'Appearance',
+    summary: 'Switch between Traditional Chinese and English.',
+    keywords: 'language locale 語言 繁體中文 english en-us zh-tw',
+  },
+  {
+    id: 'appearance-runtime',
+    tab: 'appearance',
+    section: 'appearance-runtime',
+    title: 'Runtime & Environment / 執行環境',
+    group: 'Appearance',
+    summary: 'Restore windows, rerun environment check, and set backend startup timeout.',
+    keywords: 'restore windows environment onboarding backend timeout health check 啟動逾時 還原視窗 環境檢測',
+  },
+  {
+    id: 'accounts',
+    tab: 'accounts',
+    section: 'accounts',
+    title: 'Git Accounts / Git 帳號',
+    group: 'Accounts',
+    summary: 'Add, edit, and remove encrypted Git host credentials and tokens.',
+    keywords: 'git account accounts credential credentials token github safeStorage 帳號 憑證 金鑰 加密',
+  },
+])
+
+const settingsSearchResults = computed(() => {
+  const q = settingsSearchQuery.value.trim().toLowerCase()
+  if (!q) return []
+  const terms = q.split(/\s+/).filter(Boolean)
+  return settingsSearchItems.value
+    .map((item) => {
+      const haystack = `${item.title} ${item.group} ${item.summary} ${item.keywords}`.toLowerCase()
+      const score = terms.reduce((acc, term) => acc + (haystack.includes(term) ? 1 : 0), 0)
+      return { item, score }
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score || a.item.title.localeCompare(b.item.title))
+    .slice(0, 8)
+    .map(({ item }) => item)
+})
+
+async function openSettingsSearchResult(item: SettingsSearchItem): Promise<void> {
+  activeTab.value = item.tab
+  if (item.tab === 'mcp' && item.mcpView) mView.value = item.mcpView
+  settingsSearchQuery.value = ''
+  await nextTick()
+  requestAnimationFrame(() => {
+    const target = document.querySelector<HTMLElement>(`[data-settings-section="${item.section}"]`)
+    target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  })
+}
 
 // Git account manager (safeStorage-backed). Lazy-loaded on tab entry.
 const accountsApi = useGitAccounts()
@@ -82,6 +242,7 @@ const {
   CUSTOMIZABLE_TOKENS,
   setTheme,
   setCustomOverride,
+  setCustomOverrides,
   resetCustom,
 } = useTheme()
 
@@ -112,6 +273,164 @@ function onHealthTimeoutChange(raw: string): void {
 }
 
 const { confirm: notifyConfirm } = useNotify()
+
+// ── Settings management / metadata ──────────────────────────────────────────
+interface SettingsPaths {
+  app_data_dir?: string
+  roles?: string
+  pipelines?: string
+  mcp?: string
+  analyzer?: string
+  ai_chat?: string
+  backend_log?: string
+}
+const settingsPaths = ref<SettingsPaths>({})
+const settingsBundleBusy = ref(false)
+const settingsBundleSummary = ref('')
+const settingsBundleError = ref('')
+
+const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' }> = {
+  roles: { scope: 'User', storage: 'roles' },
+  pipelines: { scope: 'User', storage: 'pipelines' },
+  mcp: { scope: 'User', storage: 'mcp' },
+  analyzer: { scope: 'User', storage: 'analyzer' },
+  appearance: { scope: 'User', storage: 'localStorage' },
+  accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
+}
+
+async function loadSettingsPaths(): Promise<void> {
+  try {
+    const resp = await props.backend.send<{ paths: SettingsPaths }>('settings.paths', {})
+    if (resp.ok && resp.payload?.paths) settingsPaths.value = resp.payload.paths
+  } catch { /* non-fatal */ }
+}
+
+function pathForTab(tab: Tab): string {
+  const storage = settingsScopeNotes[tab].storage
+  if (storage === 'localStorage') return 'Browser localStorage + workspace backup'
+  if (storage === 'mainProcess') return 'Electron main process userData'
+  if (storage === 'safeStorage') return 'Encrypted local safeStorage registry'
+  return settingsPaths.value[storage] ?? ''
+}
+
+async function openSettingsPath(path?: string): Promise<void> {
+  if (!path) return
+  await window.agentTeam?.openPath?.(path)
+}
+
+function stampForFile(): string {
+  return new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+}
+
+async function exportSettingsBundle(): Promise<void> {
+  if (!window.agentTeam?.saveJson) return
+  settingsBundleBusy.value = true
+  settingsBundleError.value = ''
+  try {
+    const resp = await props.backend.send<{ bundle: Record<string, unknown> }>('settings.bundle.export', {})
+    if (!resp.ok || !resp.payload?.bundle) {
+      settingsBundleError.value = resp.error?.message ?? 'Export failed'
+      return
+    }
+    const bundle = {
+      ...resp.payload.bundle,
+      appearance: {
+        theme: currentTheme.value,
+        theme_custom: customOverrides.value,
+        language: currentLanguage.value,
+        health_check_timeout_sec: healthCheckTimeoutSec.value,
+        auto_restore_windows: autoRestoreWindows.value,
+      },
+    }
+    const result = await window.agentTeam.saveJson({
+      title: 'Export settings bundle',
+      defaultName: `agent-team-settings-${stampForFile()}.json`,
+      content: JSON.stringify(bundle, null, 2),
+    })
+    if (result.ok) settingsBundleSummary.value = 'Settings bundle exported'
+  } catch (err) {
+    settingsBundleError.value = err instanceof Error ? err.message : 'Export failed'
+  } finally {
+    settingsBundleBusy.value = false
+  }
+}
+
+async function importSettingsBundle(): Promise<void> {
+  if (!window.agentTeam?.openJson) return
+  settingsBundleBusy.value = true
+  settingsBundleError.value = ''
+  try {
+    const result = await window.agentTeam.openJson({ title: 'Import settings bundle JSON' })
+    if (!result.ok || !result.content) return
+    const bundle = JSON.parse(result.content) as Record<string, unknown>
+    const resp = await props.backend.send<{ applied: string[]; paths: SettingsPaths }>('settings.bundle.import', { bundle })
+    if (!resp.ok) {
+      settingsBundleError.value = resp.error?.message ?? 'Import failed'
+      return
+    }
+    const appearance = bundle.appearance as Record<string, unknown> | undefined
+    if (appearance) {
+      if (typeof appearance.theme === 'string') setTheme(appearance.theme)
+      if (appearance.theme_custom && typeof appearance.theme_custom === 'object') {
+        setCustomOverrides(appearance.theme_custom as Record<string, string>)
+      }
+      if (typeof appearance.language === 'string') setLanguage(appearance.language)
+      if (typeof appearance.health_check_timeout_sec === 'number') setHealthCheckTimeoutSec(appearance.health_check_timeout_sec)
+      if (typeof appearance.auto_restore_windows === 'boolean') {
+        autoRestoreWindows.value = appearance.auto_restore_windows
+        await onAutoRestoreChange()
+      }
+    }
+    if (resp.payload?.paths) settingsPaths.value = resp.payload.paths
+    await Promise.all([
+      props.rolesApi.refresh(),
+      props.stagesApi.refresh(),
+      props.pipelinesApi?.refresh() ?? Promise.resolve(),
+      props.analyzerApi.refreshSettings(),
+    ])
+    fetchAiChatSettings()
+    if (mServers.value.length > 0) await mLoad()
+    settingsBundleSummary.value = `Imported: ${(resp.payload?.applied ?? []).join(', ') || 'appearance'}`
+  } catch (err) {
+    settingsBundleError.value = err instanceof Error ? err.message : 'Import failed'
+  } finally {
+    settingsBundleBusy.value = false
+  }
+}
+
+interface ProviderTestState { busy?: boolean; ok?: boolean; message?: string }
+const aiProviderTests = ref<Record<string, ProviderTestState>>({})
+
+function aiProviderTestState(provider: string): ProviderTestState {
+  return aiProviderTests.value[provider] ?? {}
+}
+
+async function testAiProvider(provider: string): Promise<void> {
+  aiProviderTests.value = {
+    ...aiProviderTests.value,
+    [provider]: { busy: true, message: 'Testing…' },
+  }
+  try {
+    const resp = await props.backend.send<{ ok: boolean; message: string }>('ai.chat.provider.test', {
+      provider,
+      settings: { ...aiProviderKeys.value },
+    }, 15_000)
+    const payload = resp.payload
+    aiProviderTests.value = {
+      ...aiProviderTests.value,
+      [provider]: {
+        busy: false,
+        ok: !!(resp.ok && payload?.ok),
+        message: payload?.message ?? resp.error?.message ?? 'Test failed',
+      },
+    }
+  } catch (err) {
+    aiProviderTests.value = {
+      ...aiProviderTests.value,
+      [provider]: { busy: false, ok: false, message: err instanceof Error ? err.message : 'Test failed' },
+    }
+  }
+}
 
 // Live value bound to each color picker. Seeded from the override map; when an
 // override is absent we fall back to the resolved computed token value so the
@@ -157,7 +476,10 @@ const THEME_SWATCHES: Record<string, string[]> = {
 
 // Close on ESC
 function onKeyDown(e: KeyboardEvent) { if (e.key === 'Escape') emit('close') }
-onMounted(() => window.addEventListener('keydown', onKeyDown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  void loadSettingsPaths()
+})
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
   if (previewTimer) { clearTimeout(previewTimer); previewTimer = null }
@@ -793,11 +1115,43 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
           </div>
+          <div class="s-search-box">
+            <input
+              v-model="settingsSearchQuery"
+              class="s-search-input"
+              type="search"
+              :placeholder="$t('settings.search.placeholder')"
+              spellcheck="false"
+              @keydown.escape="settingsSearchQuery = ''"
+            />
+            <div v-if="settingsSearchQuery.trim()" class="s-search-results">
+              <button
+                v-for="item in settingsSearchResults"
+                :key="item.id"
+                class="s-search-result"
+                @click="openSettingsSearchResult(item)"
+              >
+                <span class="s-search-result-main">
+                  <span class="s-search-result-title">{{ item.title }}</span>
+                  <span class="s-search-result-group">{{ item.group }}</span>
+                </span>
+                <span class="s-search-result-summary">{{ item.summary }}</span>
+              </button>
+              <div v-if="settingsSearchResults.length === 0" class="s-search-empty">
+                {{ $t('settings.search.no-results') }}
+              </div>
+            </div>
+          </div>
           <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
         </div>
 
         <!-- ── ROLES TAB ─────────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'roles'" class="s-body">
+        <div v-show="activeTab === 'roles'" class="s-body" data-settings-section="roles">
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ settingsScopeNotes.roles.scope }}</span>
+            <span class="settings-path" :title="pathForTab('roles')">{{ pathForTab('roles') }}</span>
+            <button class="settings-path-btn" :disabled="!settingsPaths.roles" @click="openSettingsPath(settingsPaths.roles)">{{ $t('action.open') }}</button>
+          </div>
           <div class="tab-toolbar">
             <button class="ghost" :disabled="rExportBusy" @click="rExport">{{ rExportBusy ? '…' : $t('settings.roles.export-json') }}</button>
             <button class="ghost" :disabled="rImporting" @click="rImport">{{ rImporting ? '…' : $t('settings.roles.import-json') }}</button>
@@ -856,13 +1210,18 @@ async function plDelete(id: string, name: string) {
 
           <!-- ── LIST VIEW ──────────────────────────────────────────────── -->
           <template v-if="mView === 'list'">
-            <div class="mcp-topbar">
+            <div class="mcp-topbar" data-settings-section="mcp-installed">
               <span class="mcp-page-title">{{ $t('label.installed-mcp-servers') }}</span>
               <div class="mcp-topbar-actions">
                 <button class="mcp-action-btn" @click="mView = 'catalog'">{{ $t('action.add-mcp') }}</button>
                 <button class="mcp-action-btn" @click="mLoad" :disabled="mLoading">{{ $t('action.refresh') }}</button>
                 <button class="mcp-action-btn" @click="mOpenConfig" :disabled="!mConfigPath">{{ $t('action.open-mcp-config') }}</button>
               </div>
+            </div>
+            <div class="settings-meta-row">
+              <span class="scope-badge">{{ settingsScopeNotes.mcp.scope }}</span>
+              <span class="settings-path" :title="pathForTab('mcp')">{{ pathForTab('mcp') }}</span>
+              <button class="settings-path-btn" :disabled="!settingsPaths.mcp" @click="openSettingsPath(settingsPaths.mcp)">{{ $t('action.open') }}</button>
             </div>
             <p v-if="mError" class="err-msg" style="margin:6px 16px 0">{{ mError }}</p>
             <span v-if="mSummary" class="mcp-summary-ok">{{ mSummary }}</span>
@@ -943,7 +1302,7 @@ async function plDelete(id: string, name: string) {
 
           <!-- ── CATALOG VIEW ────────────────────────────────────────────── -->
           <template v-else>
-            <div class="mcp-topbar">
+            <div class="mcp-topbar" data-settings-section="mcp-catalog">
               <button class="mcp-back-btn" @click="mView = 'list'">← Back</button>
               <span class="mcp-page-title">Add MCP Servers</span>
             </div>
@@ -977,9 +1336,17 @@ async function plDelete(id: string, name: string) {
 
         <!-- ── ANALYZER TAB ─────────────────────────────────────────────── -->
         <div v-show="activeTab === 'analyzer'" class="s-body analyzer-body">
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ settingsScopeNotes.analyzer.scope }}</span>
+            <span class="settings-path" :title="settingsPaths.analyzer">{{ settingsPaths.analyzer }}</span>
+            <button class="settings-path-btn" :disabled="!settingsPaths.analyzer" @click="openSettingsPath(settingsPaths.analyzer)">{{ $t('action.open') }}</button>
+            <span class="settings-path-divider">·</span>
+            <span class="settings-path" :title="settingsPaths.ai_chat">AI keys: {{ settingsPaths.ai_chat }}</span>
+            <button class="settings-path-btn" :disabled="!settingsPaths.ai_chat" @click="openSettingsPath(settingsPaths.ai_chat)">{{ $t('action.open') }}</button>
+          </div>
 
           <!-- ① Inference backend -->
-          <div class="az-section">
+          <div class="az-section" data-settings-section="analyzer-backend">
             <div class="az-section-title">{{ $t('settings.analyzer.inference-backend') }}</div>
             <div class="az-backend-toggle">
               <button
@@ -1092,7 +1459,7 @@ async function plDelete(id: string, name: string) {
           </div>
 
           <!-- ② Model manager (Ollama mode only) -->
-          <div v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'" class="az-section az-models-section">
+          <div v-if="props.analyzerApi.analyzerSettings.value.backend === 'ollama'" class="az-section az-models-section" data-settings-section="analyzer-models">
             <div class="az-section-header">
               <div class="az-section-title">{{ $t('settings.analyzer.model-manager') }}</div>
               <span class="az-section-note">{{ $t('settings.analyzer.model-manager-note') }}</span>
@@ -1165,7 +1532,7 @@ async function plDelete(id: string, name: string) {
           </div>
 
           <!-- ③ Model benchmark -->
-          <div class="az-section az-benchmark-section">
+          <div class="az-section az-benchmark-section" data-settings-section="analyzer-models">
             <div class="az-section-header">
               <div class="az-section-title">{{ $t('settings.analyzer.model-benchmark') }}</div>
               <button
@@ -1242,7 +1609,7 @@ async function plDelete(id: string, name: string) {
           </div>
 
           <!-- ⑤ Cloud Provider API Keys -->
-          <div class="az-section">
+          <div class="az-section" data-settings-section="cloud-keys">
             <div class="az-section-title">{{ $t('settings.analyzer.cloud-keys') }}</div>
             <p class="az-hint">{{ $t('settings.analyzer.cloud-keys-hint') }}</p>
 
@@ -1251,30 +1618,37 @@ async function plDelete(id: string, name: string) {
                 <tr>
                   <td class="az-key-label">Anthropic</td>
                   <td><input v-model="aiProviderKeys.anthropic_api_key" type="password" class="az-key-input" placeholder="sk-ant-…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('anthropic').busy" @click="testAiProvider('anthropic')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('anthropic').ok, err: aiProviderTestState('anthropic').ok === false }">{{ aiProviderTestState('anthropic').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">OpenAI</td>
                   <td><input v-model="aiProviderKeys.openai_api_key" type="password" class="az-key-input" placeholder="sk-…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('openai').busy" @click="testAiProvider('openai')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('openai').ok, err: aiProviderTestState('openai').ok === false }">{{ aiProviderTestState('openai').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">Google Gemini</td>
                   <td><input v-model="aiProviderKeys.google_api_key" type="password" class="az-key-input" placeholder="AIza…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('google').busy" @click="testAiProvider('google')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('google').ok, err: aiProviderTestState('google').ok === false }">{{ aiProviderTestState('google').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">Groq</td>
                   <td><input v-model="aiProviderKeys.groq_api_key" type="password" class="az-key-input" placeholder="gsk_…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('groq').busy" @click="testAiProvider('groq')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('groq').ok, err: aiProviderTestState('groq').ok === false }">{{ aiProviderTestState('groq').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">DeepSeek</td>
                   <td><input v-model="aiProviderKeys.deepseek_api_key" type="password" class="az-key-input" placeholder="sk-…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('deepseek').busy" @click="testAiProvider('deepseek')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('deepseek').ok, err: aiProviderTestState('deepseek').ok === false }">{{ aiProviderTestState('deepseek').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">Mistral AI</td>
                   <td><input v-model="aiProviderKeys.mistral_api_key" type="password" class="az-key-input" placeholder="…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('mistral').busy" @click="testAiProvider('mistral')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('mistral').ok, err: aiProviderTestState('mistral').ok === false }">{{ aiProviderTestState('mistral').message }}</span></td>
                 </tr>
                 <tr>
                   <td class="az-key-label">xAI (Grok)</td>
                   <td><input v-model="aiProviderKeys.xai_api_key" type="password" class="az-key-input" placeholder="xai-…" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('xai').busy" @click="testAiProvider('xai')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('xai').ok, err: aiProviderTestState('xai').ok === false }">{{ aiProviderTestState('xai').message }}</span></td>
                 </tr>
               </tbody>
             </table>
@@ -1294,6 +1668,7 @@ async function plDelete(id: string, name: string) {
                 <tr>
                   <td class="az-key-label">Default Model</td>
                   <td><input v-model="aiProviderKeys.openai_compatible_model" type="text" class="az-key-input" placeholder="e.g. llama-3.3-70b" @input="aiKeysDirty = true" /></td>
+                  <td class="az-key-test-cell"><button class="ghost tiny" :disabled="aiProviderTestState('openai_compatible').busy" @click="testAiProvider('openai_compatible')">Test</button><span class="az-key-test" :class="{ ok: aiProviderTestState('openai_compatible').ok, err: aiProviderTestState('openai_compatible').ok === false }">{{ aiProviderTestState('openai_compatible').message }}</span></td>
                 </tr>
               </tbody>
             </table>
@@ -1304,7 +1679,12 @@ async function plDelete(id: string, name: string) {
         </div>
 
         <!-- ── PIPELINES TAB ────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'pipelines'" class="s-body pipelines-body">
+        <div v-show="activeTab === 'pipelines'" class="s-body pipelines-body" data-settings-section="pipelines">
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ settingsScopeNotes.pipelines.scope }}</span>
+            <span class="settings-path" :title="pathForTab('pipelines')">{{ pathForTab('pipelines') }}</span>
+            <button class="settings-path-btn" :disabled="!settingsPaths.pipelines" @click="openSettingsPath(settingsPaths.pipelines)">{{ $t('action.open') }}</button>
+          </div>
 
           <!-- ── LIST VIEW ──────────────────────────────────────────────── -->
           <template v-if="plView === 'list'">
@@ -1336,7 +1716,7 @@ async function plDelete(id: string, name: string) {
           <!-- ── DETAIL VIEW: pipeline + stage editor ───────────────────── -->
           <template v-else>
             <!-- Detail header: back + pipeline name (inline rename) + actions -->
-            <div class="pl-detail-header">
+            <div class="pl-detail-header" data-settings-section="pipeline-stages">
               <button class="pl-back-btn" @click="plBackToList">← Back</button>
               <!-- Inline rename mode -->
               <template v-if="plRenamingId === plEditingId">
@@ -1497,7 +1877,24 @@ async function plDelete(id: string, name: string) {
 
         <!-- ══ APPEARANCE TAB ══ -->
         <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="settings-management">
+            <div class="ap-section-head">
+              <h3 class="ap-title">{{ $t('settings.management.title') }}</h3>
+              <div class="row-g gap">
+                <button class="ap-reset" :disabled="settingsBundleBusy" @click="exportSettingsBundle">{{ $t('settings.management.export-bundle') }}</button>
+                <button class="ap-reset" :disabled="settingsBundleBusy" @click="importSettingsBundle">{{ $t('settings.management.import-bundle') }}</button>
+              </div>
+            </div>
+            <p class="ap-hint">{{ $t('settings.management.bundle-hint') }}</p>
+            <div class="settings-meta-row inline">
+              <span class="scope-badge">{{ settingsScopeNotes.appearance.scope }}</span>
+              <span class="settings-path" :title="pathForTab('appearance')">{{ pathForTab('appearance') }}</span>
+            </div>
+            <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
+            <p v-if="settingsBundleError" class="err-msg">{{ settingsBundleError }}</p>
+          </section>
+
+          <section class="ap-section" data-settings-section="appearance-theme">
             <h3 class="ap-title">{{ $t('settings.appearance.theme') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.theme-hint') }}</p>
             <div class="ap-theme-grid">
@@ -1521,7 +1918,7 @@ async function plDelete(id: string, name: string) {
             </div>
           </section>
 
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="appearance-language">
             <h3 class="ap-title">{{ $t('settings.appearance.language') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.language-hint') }}</p>
             <div class="ap-lang-row">
@@ -1537,7 +1934,7 @@ async function plDelete(id: string, name: string) {
             </div>
           </section>
 
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="appearance-runtime">
             <h3 class="ap-title">{{ $t('settings.appearance.restore-windows') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.restore-windows-hint') }}</p>
             <label class="ap-toggle-row">
@@ -1546,7 +1943,7 @@ async function plDelete(id: string, name: string) {
             </label>
           </section>
 
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="appearance-theme">
             <div class="ap-section-head">
               <h3 class="ap-title">{{ $t('settings.appearance.custom-colors') }}</h3>
               <button
@@ -1583,13 +1980,13 @@ async function plDelete(id: string, name: string) {
             </div>
           </section>
 
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="appearance-runtime">
             <h3 class="ap-title">{{ $t('settings.appearance.environment') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
             <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
           </section>
 
-          <section class="ap-section">
+          <section class="ap-section" data-settings-section="appearance-runtime">
             <h3 class="ap-title">{{ $t('settings.appearance.backend-timeout') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.backend-timeout-hint') }}</p>
             <div class="field ap-timeout-field">
@@ -1605,7 +2002,11 @@ async function plDelete(id: string, name: string) {
           </section>
         </div>
 
-        <div v-show="activeTab === 'accounts'" class="s-body">
+        <div v-show="activeTab === 'accounts'" class="s-body" data-settings-section="accounts">
+          <div class="settings-meta-row">
+            <span class="scope-badge">{{ settingsScopeNotes.accounts.scope }}</span>
+            <span class="settings-path">{{ pathForTab('accounts') }}</span>
+          </div>
           <GitAccountsPane :api="accountsApi" />
         </div>
 
@@ -1697,6 +2098,7 @@ async function plDelete(id: string, name: string) {
   display: flex;
   gap: 4px;
   flex: 1;
+  min-width: 0;
 }
 .s-tab {
   border: 1px solid transparent;
@@ -1712,6 +2114,88 @@ async function plDelete(id: string, name: string) {
 .s-tab:hover { background: var(--bg-subtle); color: var(--text-bright); }
 .s-tab.active { background: var(--bg-muted); border-color: var(--border-default); color: var(--accent-fg); }
 .s-tab:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 1px; }
+
+.s-search-box {
+  position: relative;
+  width: min(280px, 28vw);
+  flex-shrink: 0;
+}
+.s-search-input {
+  width: 100%;
+  height: 30px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 0 10px;
+}
+.s-search-input:focus {
+  outline: none;
+  border-color: var(--accent-emphasis);
+  box-shadow: 0 0 0 2px var(--accent-focus);
+}
+.s-search-results {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 9100;
+  width: min(420px, 78vw);
+  max-height: min(420px, 64vh);
+  overflow-y: auto;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(0,0,0,0.45);
+  padding: 6px;
+}
+.s-search-result {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  border-radius: 6px;
+  padding: 8px 9px;
+  cursor: pointer;
+}
+.s-search-result:hover,
+.s-search-result:focus-visible {
+  background: var(--bg-muted);
+  outline: none;
+}
+.s-search-result-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+.s-search-result-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-search-result-group {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.s-search-result-summary {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+.s-search-empty {
+  padding: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
 
 /* ── Appearance tab ─────────────────────────────────────────────────────────── */
 .appearance-body { padding: 18px 22px; }
@@ -1823,6 +2307,56 @@ async function plDelete(id: string, name: string) {
   min-height: 0;
   overflow: hidden;
 }
+.settings-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-muted);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-size: 11px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.settings-meta-row.inline {
+  padding: 7px 9px;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  margin-top: 10px;
+}
+.scope-badge {
+  flex-shrink: 0;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--accent-fg);
+  background: var(--bg-muted);
+  font-weight: 600;
+}
+.settings-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.settings-path-divider { color: var(--text-muted); }
+.settings-path-btn {
+  flex-shrink: 0;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.settings-path-btn:hover:not(:disabled) {
+  color: var(--text-bright);
+  background: var(--bg-muted);
+}
+.settings-path-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ── Toolbar inside tab ───────────────────────────────────────────────────── */
 .tab-toolbar {
@@ -1834,6 +2368,11 @@ async function plDelete(id: string, name: string) {
   flex-shrink: 0;
 }
 .tab-toolbar button { font-size: 11px; padding: 5px 10px; }
+button.tiny {
+  padding: 3px 7px;
+  font-size: 10.5px;
+  line-height: 1.2;
+}
 .summary-ok { font-size: 11px; color: var(--success-fg); margin-left: 6px; }
 
 /* ── Split layout (list + detail) ─────────────────────────────────────────── */
@@ -2359,6 +2898,24 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-key-label { width: 130px; font-size: 12px; color: var(--text-muted); padding-right: 10px; white-space: nowrap; vertical-align: middle; }
 .az-key-input { width: 100%; box-sizing: border-box; padding: 6px 10px; font-size: 12px; border: 1px solid var(--border-default); border-radius: 5px; background: var(--bg-inset); color: var(--text-bright); font-family: monospace; }
 .az-key-input:focus { outline: none; border-color: var(--accent-emphasis); }
+.az-key-test-cell {
+  width: 260px;
+  padding-left: 8px;
+  vertical-align: middle;
+}
+.az-key-test {
+  display: inline-block;
+  max-width: 190px;
+  margin-left: 6px;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.az-key-test.ok { color: var(--success-fg); }
+.az-key-test.err { color: var(--danger-fg); }
 .ai-chat-key-input {
   flex: 1;
   padding: 7px 10px;

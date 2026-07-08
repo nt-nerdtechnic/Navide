@@ -212,9 +212,20 @@
     "match-whole-word": "Match whole word (⌥W)",
     "use-regex": "Use regular expression (⌥R)",
     "toggle-replace": "Toggle replace (⌘H)",
-    "delete-pipeline": "Delete this pipeline"
+    "delete-pipeline": "Delete this pipeline",
+    "open": "Open"
   },
   "settings": {
+    "search": {
+      "placeholder": "Search settings…",
+      "no-results": "No matching settings"
+    },
+    "management": {
+      "title": "Settings Management",
+      "export-bundle": "Export Settings Bundle",
+      "import-bundle": "Import Settings Bundle",
+      "bundle-hint": "Exports Roles, Pipelines, MCP, Analyzer, non-sensitive AI Chat settings, and appearance preferences. API keys and tokens are redacted and are not overwritten on import."
+    },
     "appearance": {
       "language": "Language",
       "theme": "Theme",

@@ -535,6 +535,52 @@ class StagesStore:
         doc = self._read_doc()
         return doc.get("active_pipeline_id", "default")
 
+    def export_document(self) -> dict[str, Any]:
+        return self._read_doc()
+
+    def replace_document(self, incoming: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(incoming, dict):
+            raise ValueError("pipelines document must be an object")
+        pipelines = incoming.get("pipelines")
+        if not isinstance(pipelines, list) or not pipelines:
+            raise ValueError("pipelines document must contain at least one pipeline")
+        active_pipeline_id = str(incoming.get("active_pipeline_id") or pipelines[0].get("id") or "default")
+        clean_pipelines: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in pipelines:
+            if not isinstance(raw, dict):
+                raise ValueError("pipeline entries must be objects")
+            pid = str(raw.get("id", "")).strip()
+            if not pid or pid in seen:
+                raise ValueError(f"invalid or duplicate pipeline id: {pid}")
+            stages = raw.get("stages", [])
+            if not isinstance(stages, list):
+                raise ValueError(f"pipeline stages must be a list: {pid}")
+            migrated_stages = [_migrate(s) for s in stages]
+            for stage in migrated_stages:
+                sid = str(stage.get("id", ""))
+                if not self._ID_RE.match(sid):
+                    raise ValueError(f"invalid stage id {sid!r}: use alphanumeric, hyphen, underscore, dot only")
+                if not stage.get("slots"):
+                    raise ValueError(f"stage must have at least one slot: {sid}")
+            seen.add(pid)
+            clean_pipelines.append({
+                "id": pid,
+                "name": str(raw.get("name") or pid),
+                "builtin": bool(raw.get("builtin", False)),
+                "stages": migrated_stages,
+            })
+        if active_pipeline_id not in seen:
+            active_pipeline_id = clean_pipelines[0]["id"]
+        doc = {
+            "version": 2,
+            "active_pipeline_id": active_pipeline_id,
+            "pipelines": clean_pipelines,
+        }
+        with self._lock:
+            self._write_doc(doc)
+        return doc
+
     def create_pipeline(self, name: str) -> dict[str, Any]:
         doc = self._read_doc()
         pid = uuid.uuid4().hex[:8]

@@ -212,9 +212,20 @@
     "match-whole-word": "完整比對單字（⌥W）",
     "use-regex": "使用正規表達式（⌥R）",
     "toggle-replace": "切換取代（⌘H）",
-    "delete-pipeline": "刪除此管線"
+    "delete-pipeline": "刪除此管線",
+    "open": "開啟"
   },
   "settings": {
+    "search": {
+      "placeholder": "搜尋設定…",
+      "no-results": "找不到相符設定"
+    },
+    "management": {
+      "title": "設定管理",
+      "export-bundle": "匯出設定全集",
+      "import-bundle": "匯入設定全集",
+      "bundle-hint": "匯出內容包含 Roles、Pipelines、MCP、Analyzer、AI Chat 非敏感設定與外觀偏好；API key 和 token 會被遮蔽，匯入時不會覆蓋。"
+    },
     "appearance": {
       "language": "語言",
       "theme": "主題",
