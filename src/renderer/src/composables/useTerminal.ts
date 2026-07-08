@@ -384,6 +384,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const error = ref<string>('')
   const lastCommand = ref<string>('')
   const isAltBuffer = ref(false)
+  let isDisposed = false
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -1237,6 +1238,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         metadata: opts.metadata ?? null,
         output_log_file: opts.outputLogFile ?? null,
       })
+      if (isDisposed) {
+        // If the composable was torn down while the spawn was in flight,
+        // kill the orphaned terminal session immediately so it doesn't leak.
+        if (resp.ok && resp.payload?.terminal_session_id) {
+          backend.send('terminal.kill', { terminal_session_id: resp.payload.terminal_session_id }).catch(() => {})
+        }
+        return
+      }
       if (!resp.ok || !resp.payload) {
         status.value = 'error'
         error.value = resp.error?.message ?? 'spawn failed'
@@ -1373,6 +1382,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   }
 
   onScopeDispose(() => {
+    isDisposed = true
     saveScrollSnapshot()  // persist scrollback before the pane is torn down
     cleanupSession()
     clearInterval(tickInterval)
