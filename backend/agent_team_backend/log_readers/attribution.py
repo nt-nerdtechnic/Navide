@@ -378,7 +378,14 @@ class Attribution:
         try:
             # Markers live in the first user turn; cap the read so a long session
             # doesn't cost a full file scan on every event.
-            text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
+            if usage.vendor == "antigravity":
+                reader = self._readers.get("antigravity")
+                if reader:
+                    text = reader._metadata_text(Path(usage.file_path))[:524_288]
+                else:
+                    text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
+            else:
+                text = Path(usage.file_path).read_text(encoding="utf-8", errors="ignore")[:524_288]
         except OSError:
             return None
         if usage.vendor == "antigravity":

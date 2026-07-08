@@ -1346,7 +1346,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         stage_id: opts.stageId,                 // snake_case alias for backend token sink
         origin: opts.origin,
         workspace_path: opts.workspacePath ?? '',
-        explicit_session_id: explicitSessionId,  // Claude --session-id → precise pane attribution
+        explicit_session_id: pinnedSessionId || explicitSessionId,  // Claude/Antigravity --session-id → precise pane attribution
         session_marker: sessionMarker,           // Codex → marker fallback session detection
         session_home_id: sessionHomeId,           // Codex per-pane CODEX_HOME id
         slot_label: opts.slotLabel ?? ''          // stable by_pane key survives frontend restarts
@@ -1666,11 +1666,26 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       sessionHomeId: snap.sessionHomeId,
       resumeSessionId: sessionId,
     })
-    if (newId && origIndex >= 0) {
-      const from = panes.value.findIndex((p) => p.id === newId)
-      if (from >= 0 && from !== origIndex) {
-        const [moved] = panes.value.splice(from, 1)
-        panes.value.splice(origIndex, 0, moved)
+    if (newId) {
+      if (snap.origin === 'manual') {
+        await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+          workspace_path: snap.workspacePath,
+          pane_id: newId,
+          previous_pane_id: paneId,
+          agent: snap.agentKey,
+          role: snap.roleKey || '',
+          command: resumeCmd,
+          session_id: sessionId,
+          session_home_id: snap.sessionHomeId || '',
+          run_group_id: snap.runGroupId || '',
+        })
+      }
+      if (origIndex >= 0) {
+        const from = panes.value.findIndex((p) => p.id === newId)
+        if (from >= 0 && from !== origIndex) {
+          const [moved] = panes.value.splice(from, 1)
+          panes.value.splice(origIndex, 0, moved)
+        }
       }
     }
   } finally {
