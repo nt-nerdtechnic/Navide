@@ -591,13 +591,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
       // ── Shift+Enter: newline without submitting ────────────────────────────
       // Plain Enter and Shift+Enter both produce the same '\r' byte in xterm's
-      // default (non-CSI-u) key handling, so a CLI reading raw PTY input can't
-      // tell them apart. Send the CSI u sequence modern CLIs (Claude Code,
-      // Codex) recognize for "Enter with Shift" so they can insert a literal
-      // newline instead of submitting. A plain shell ignores unrecognized CSI
-      // sequences, so this is safe to apply unconditionally across all panes.
+      // default key handling, so a CLI reading raw PTY input can't tell them
+      // apart. Paste a literal newline with bracketed-paste markers; the agent
+      // TUIs already use bracketed paste for multi-line prompts, so this follows
+      // the same path instead of relying on vendor-specific CSI-u support.
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Enter') {
-        pasteText('\x1b[13;2u')
+        pasteText('\x1b[200~\n\x1b[201~')
         return false
       }
 
