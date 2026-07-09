@@ -42,6 +42,7 @@
       "settling": "等待 CLI 提示字元",
       "injecting-role": "注入角色中",
       "waiting-agent": "等待 Agent",
+      "detecting-session": "取得 Session ID 中",
       "ready": "就緒",
       "failed": "設定失敗"
     }

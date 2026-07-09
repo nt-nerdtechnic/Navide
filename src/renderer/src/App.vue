@@ -5547,6 +5547,9 @@ function paneSubtitle(p: ActivePane): string {
 }
 
 function panePreparationLabel(p: ActivePane): string {
+  if (paneWaitingForSessionId(p)) {
+    return i18n.global.t('pane.prep.detecting-session')
+  }
   switch (p.preparationStatus) {
     case 'starting':
       return i18n.global.t('pane.prep.starting')
@@ -5563,6 +5566,17 @@ function panePreparationLabel(p: ActivePane): string {
     case 'failed':
       return i18n.global.t('pane.prep.failed')
   }
+}
+
+function paneWaitingForSessionId(p: ActivePane): boolean {
+  return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity'].includes(p.agentKey)
+}
+
+function paneShowsPrepOverlay(p: ActivePane): boolean {
+  return (
+    (p.preparationStatus !== 'ready' && p.preparationStatus !== 'failed') ||
+    paneWaitingForSessionId(p)
+  )
 }
 
 /** The effective Commander slot for a stage, or null. Commander mode only applies
@@ -5918,6 +5932,8 @@ function paneIsCommander(p: ActivePane): boolean {
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
           :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'antigravity'].includes(p.agentKey)"
+          :is-preparing="paneShowsPrepOverlay(p)"
+          :preparing-label="panePreparationLabel(p)"
           :backend="backend"
           :workspace-path="p.workspacePath"
           @set-focus="onSetFocus(p.id)"

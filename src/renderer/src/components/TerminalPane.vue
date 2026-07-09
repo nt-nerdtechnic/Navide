@@ -15,6 +15,8 @@ interface Props {
   /** True when this pane has a resumable CLI session id — enables the rebuild
    *  button (re-spawns the pane via --resume to recover from render corruption). */
   canRebuild?: boolean
+  isPreparing?: boolean
+  preparingLabel?: string
   backend: ReturnType<typeof useBackend>
   workspacePath?: string
 }
@@ -155,6 +157,12 @@ onMounted(() => {
       @dragleave="isDragOver = false"
       @drop.prevent="onTerminalDrop"
     ></div>
+    <div v-if="isPreparing" class="prep-overlay" aria-live="polite">
+      <div class="prep-panel">
+        <div class="prep-spinner" />
+        <div class="prep-text">{{ preparingLabel || 'Preparing CLI' }}</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -322,6 +330,50 @@ onMounted(() => {
   font-size: 13px;
   font-family: inherit;
   pointer-events: none;
+}
+.prep-overlay {
+  position: absolute;
+  inset: 31px 0 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-base) 78%, transparent);
+  backdrop-filter: blur(1px);
+  pointer-events: none;
+}
+.prep-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(78%, 360px);
+  padding: 8px 12px;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  color: var(--text-primary);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--bg-inverse) 10%, transparent);
+}
+.prep-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid var(--border-muted);
+  border-top-color: var(--accent-emphasis);
+  animation: prep-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+.prep-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+@keyframes prep-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* xterm.js Monaco scrollbar: show track vs thumb contrast in main buffer.

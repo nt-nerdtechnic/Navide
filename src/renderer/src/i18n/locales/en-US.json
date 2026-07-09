@@ -42,6 +42,7 @@
       "settling": "waiting for CLI prompt",
       "injecting-role": "injecting role",
       "waiting-agent": "waiting for agent",
+      "detecting-session": "detecting session ID",
       "ready": "ready",
       "failed": "setup failed"
     }
