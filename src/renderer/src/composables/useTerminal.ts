@@ -361,7 +361,7 @@ function buildFileLinkProvider(
   }
 }
 
-export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: { workspacePath?: string }) {
+export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: { workspacePath?: string; onClear?: () => void }) {
   const term = new Terminal({
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontSize: 12,
@@ -980,7 +980,24 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // Wire input/output/exit handlers for the current sessionId. Shared by a fresh
   // spawn and a reattach so both bind identically.
   function bindSessionHandlers(): void {
+    let inputBuffer = ''
     inputDisposer = term.onData((data) => {
+      if (data === '\r' || data === '\n' || data === '\r\n') {
+        if (inputBuffer.trim() === '/clear' && opts?.onClear) {
+          inputBuffer = ''
+          opts.onClear()
+          return
+        }
+        inputBuffer = ''
+      } else if (data === '\x7f' || data === '\b') {
+        inputBuffer = inputBuffer.slice(0, -1)
+      } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+        inputBuffer += data
+      } else if (data.length > 1) {
+        inputBuffer += data.replace(/[\x00-\x1f\x7f]/g, '')
+      }
+      if (inputBuffer.length > 100) inputBuffer = inputBuffer.slice(-100)
+
       void backend.send('terminal.input', {
         terminal_session_id: sessionId.value,
         data
@@ -1424,5 +1441,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     recleanBuffer,
     updateXtermTheme,
     isAltBuffer,
+    setDisableStdin: (disabled: boolean) => { term.options.disableStdin = disabled },
   }
 }

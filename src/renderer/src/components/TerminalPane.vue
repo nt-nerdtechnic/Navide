@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (e: 'set-focus'): void
   (e: 'minimize'): void
   (e: 'rebuild'): void
+  (e: 'rebuild-clean'): void
   (e: 'rename', name: string): void
   (e: 'context-menu', ev: MouseEvent): void
 }>()
@@ -58,9 +59,15 @@ function onTitleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); _cancelledTitle = true; editingTitle.value = false }
 }
 
-const terminal = useTerminal(props.paneId, props.backend, { workspacePath: props.workspacePath })
+const terminal = useTerminal(props.paneId, props.backend, { workspacePath: props.workspacePath, onClear: () => emit('rebuild-clean') })
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
+
+watch(() => props.isPreparing, (isPrep) => {
+  if (terminal.setDisableStdin) {
+    terminal.setDisableStdin(!!isPrep)
+  }
+}, { immediate: true })
 
 // RUNNING vs IDLE is driven entirely by the CLI-execution signal inside
 // useTerminal (agent.activity events), not by guessing from the output buffer.
@@ -340,7 +347,7 @@ onMounted(() => {
   justify-content: center;
   background: color-mix(in srgb, var(--bg-base) 78%, transparent);
   backdrop-filter: blur(1px);
-  pointer-events: none;
+  pointer-events: auto;
 }
 .prep-panel {
   display: inline-flex;

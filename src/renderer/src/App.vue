@@ -1693,6 +1693,58 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   }
 }
 
+async function rebuildPaneClean(paneId: string): Promise<void> {
+  if (rebuildingPanes.has(paneId)) return
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const snap = {
+    agentKey: pane.agentKey,
+    roleKey: pane.roleKey,
+    stageId: pane.stageId,
+    slotLabel: pane.slotLabel,
+    workspacePath: pane.workspacePath,
+    origin: pane.origin,
+    runGroupId: pane.runGroupId,
+  }
+  rebuildingPanes.add(paneId)
+  try {
+    const origIndex = panes.value.findIndex((p) => p.id === paneId)
+    await onKill(paneId, { markRemoved: false })
+    const newId = await spawnPane({
+      agentKey: snap.agentKey,
+      roleKey: snap.roleKey,
+      stageId: snap.stageId,
+      slotLabel: snap.slotLabel,
+      commandOverride: '',
+      workspacePath: snap.workspacePath,
+      origin: snap.origin,
+      runGroupId: snap.runGroupId || undefined,
+      isResume: false,
+    })
+    if (newId) {
+      if (snap.origin === 'manual') {
+        await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+          workspace_path: snap.workspacePath,
+          pane_id: newId,
+          previous_pane_id: paneId,
+          agent: snap.agentKey,
+          role: snap.roleKey || '',
+          run_group_id: snap.runGroupId || '',
+        })
+      }
+      if (origIndex >= 0) {
+        const from = panes.value.findIndex((p) => p.id === newId)
+        if (from >= 0 && from !== origIndex) {
+          const [moved] = panes.value.splice(from, 1)
+          panes.value.splice(origIndex, 0, moved)
+        }
+      }
+    }
+  } finally {
+    rebuildingPanes.delete(paneId)
+  }
+}
+
 async function onInterrupt(paneId: string): Promise<void> {
   const ref = paneRefs[paneId]
   if (!ref?.sessionId) return
@@ -5939,6 +5991,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
+          @rebuild-clean="rebuildPaneClean(p.id)"
           @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
         />
