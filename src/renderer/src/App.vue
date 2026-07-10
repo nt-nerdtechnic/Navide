@@ -2342,6 +2342,18 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     return _restoreGroupId
   }
 
+  // A saved run_group_id with no matching tab means the tab list was lost, not
+  // the pane's assignment. Recreate the tab under the SAME id so the pane keeps
+  // its stored group — routing it to another group would be written back by the
+  // spawn upsert below and permanently overwrite the saved assignment.
+  const ensureSavedGroup = (gid: string): string => {
+    if (!runGroups.value.some((g) => g.id === gid)) {
+      runGroups.value = [...runGroups.value, { id: gid, name: `Run ${runGroups.value.length + 1}`, createdAt: Date.now() }]
+      _saveRunGroups()
+    }
+    return gid
+  }
+
   // New pane ids per toRestore slot — spawnPane assigns fresh ids, so the
   // post-restore re-sort below maps the saved order onto the new ids.
   const restoredPaneIds: (string | undefined)[] = new Array(toRestore.length)
@@ -2353,12 +2365,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       : ''
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-    // Reuse the saved group only if its tab still exists; otherwise pipeline
-    // panes collapse into one restore group, manual panes stay ungrouped (手動).
+    // A pane with a saved group keeps it, recreating the tab if it is missing
+    // (ensureSavedGroup). Only panes that never had a group fall back: pipeline
+    // panes collapse into one restore group, manual panes go to the first tab.
     const savedGid = saved.run_group_id || ''
-    const groupStillExists = !!savedGid && runGroups.value.some((g) => g.id === savedGid)
-    const runGroupId = groupStillExists
-      ? savedGid
+    const runGroupId = savedGid
+      ? ensureSavedGroup(savedGid)
       : (saved.origin === 'pipeline' ? ensureRestoreGroup() : (runGroups.value[0]?.id ?? ''))
 
     // Unified session-resume logic for all pane types
