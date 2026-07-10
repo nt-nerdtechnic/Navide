@@ -1210,6 +1210,22 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 project.layout_mode = mode
                 project_store.save(project)
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.set_pane_order":
+            ws_raw = payload.get("workspace_path", "") or ""
+            pane_ids = payload.get("pane_ids") or []
+            if isinstance(pane_ids, list):
+                project_store.set_pane_order(
+                    ws_raw, pane_ids=[p for p in pane_ids if isinstance(p, str)]
+                )
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.set_tab_order":
+            ws_raw = payload.get("workspace_path", "") or ""
+            tab_order = payload.get("tab_order") or []
+            if isinstance(tab_order, list):
+                project_store.set_tab_order(
+                    ws_raw, tab_order=[t for t in tab_order if isinstance(t, str)]
+                )
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "project.rename_pane":
             ws_raw = payload.get("workspace_path", "") or ""
             pane_id = payload.get("pane_id", "") or ""

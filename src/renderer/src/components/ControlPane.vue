@@ -197,6 +197,7 @@ const emit = defineEmits<{
   (e: 'pipeline-resume'): void
   (e: 'pipeline-restart', payload: { task: string; workspacePath: string }): void
   (e: 'focus-pane', paneId: string): void
+  (e: 'reorder-pane', fromId: string, toId: string): void
   (e: 'open-settings'): void
   (e: 'open-history'): void
   (e: 'switch-workspace'): void
@@ -676,6 +677,44 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   }
 }
 
+// ── Active Agents list: drag-reorder (mirrors the TerminalPane header drop) ──
+// Dragging one agent-line onto another agent-item emits 'reorder-pane'; App.vue
+// splices `panes.value`, so the Grid and this list reorder together. During
+// dragover the payload is unreadable (dataTransfer protected mode), so hovering
+// is gated on the data TYPE plus a local drag-source id — the actual id check
+// happens on drop.
+const reorderDragOverId = ref('')
+let draggingPaneId = ''
+
+function onAgentDragStart(e: DragEvent, paneId: string): void {
+  if (!e.dataTransfer) return
+  e.dataTransfer.setData('application/x-pane-id', paneId)
+  e.dataTransfer.effectAllowed = 'move'
+  draggingPaneId = paneId
+}
+
+function onAgentDragEnd(): void {
+  draggingPaneId = ''
+  reorderDragOverId.value = ''
+}
+
+function onAgentDragOver(e: DragEvent, paneId: string): void {
+  if (draggingPaneId === paneId || !e.dataTransfer?.types.includes('application/x-pane-id')) return
+  e.preventDefault()
+  reorderDragOverId.value = paneId
+}
+
+function onAgentDragLeave(paneId: string): void {
+  if (reorderDragOverId.value === paneId) reorderDragOverId.value = ''
+}
+
+function onAgentDrop(e: DragEvent, paneId: string): void {
+  reorderDragOverId.value = ''
+  const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
+  if (!draggedId || draggedId === paneId) return
+  emit('reorder-pane', draggedId, paneId)
+}
+
 function onWorkspaceDrop(e: DragEvent): void {
   const paths = extractDropPaths(e)
   if (!paths.length) return
@@ -925,8 +964,17 @@ function onPipelineDividerEnd(): void {
       </div>
       <div v-if="panes.length === 0" class="empty">{{ $t('label.no-agents-running') }}</div>
       <ul v-else class="agent-list">
-        <li v-for="p in panes" :key="p.id" class="agent-item" :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId }">
-          <div class="agent-line" role="button" title="Focus pane" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
+        <li
+          v-for="p in panes"
+          :key="p.id"
+          class="agent-item"
+          :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'drag-over': reorderDragOverId === p.id }"
+          @dragover="onAgentDragOver($event, p.id)"
+          @dragenter="onAgentDragOver($event, p.id)"
+          @dragleave="onAgentDragLeave(p.id)"
+          @drop.prevent="onAgentDrop($event, p.id)"
+        >
+          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <span class="badge">{{ p.agentLabel }}</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
@@ -1996,6 +2044,11 @@ button.icon-btn.muted:hover {
   border-color: var(--accent-focus);
   background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-subtle));
   box-shadow: 0 0 0 2px var(--accent-focus);
+}
+/* Reorder drop target feedback, matching .pane-header.drag-over in TerminalPane.vue. */
+.agent-item.drag-over {
+  background: var(--accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .agent-line {
   display: flex;
