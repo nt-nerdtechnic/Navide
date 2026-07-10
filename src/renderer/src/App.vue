@@ -806,6 +806,11 @@ const ROLE_STANDBY_SUFFIX = `
 const KICKOFF_DELAY_MS = 3000
 // How long to watch for a startup trust dialog before giving up.
 const DISMISS_TIMEOUT_MS = 8000
+// A trust dialog is always part of the CLI's first screen. Once output has
+// appeared and stayed quiet this long without matching a dialog pattern, no
+// dialog is coming — bail out early instead of waiting out the full deadline
+// (trusted workspaces would otherwise dead-wait all 8s on every spawn).
+const NO_DIALOG_QUIET_MS = 1500
 
 // Patterns surfacing on first launch of Codex / Claude / Antigravity when the CLI
 // asks the user to trust the workspace. Matching one means we should send a
@@ -881,6 +886,8 @@ async function waitForActivityThenSettle(
 
 async function dismissStartupDialog(paneId: string, timeoutMs = DISMISS_TIMEOUT_MS): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
+  let lastSize = -1
+  let stableSince = Date.now()
   while (Date.now() < deadline) {
     if (!paneAlive(paneId)) return false
     const ref = paneRefs[paneId]
@@ -895,6 +902,12 @@ async function dismissStartupDialog(paneId: string, timeoutMs = DISMISS_TIMEOUT_
       }
       pipelineLog(`✓ dismissed startup dialog (pane ${paneId.slice(0, 8)})`)
       return true
+    }
+    if (buf.length !== lastSize) {
+      lastSize = buf.length
+      stableSince = Date.now()
+    } else if (buf.length > 0 && Date.now() - stableSince >= NO_DIALOG_QUIET_MS) {
+      return false
     }
     await sleep(250)
   }
@@ -1026,13 +1039,14 @@ function scheduleInjection(pane: ActivePane): void {
       }
     }
 
-    // 2. Fixed settle delay — empirically enough for Claude/Codex/Antigravity to
-    //    finish rendering their first screen. Shorter after a known dismiss
-    //    since the CLI usually transitions to a stable prompt immediately.
-    const settleMs = dismissed ? 2500 : ROLE_PROMPT_DELAY_MS
+    // 2. Quiet-based settle — proceed as soon as the first screen stops
+    //    rendering, with the previous fixed delays kept as upper bounds. After
+    //    a dismiss the CLI repaints, so require a fresh quiet window; without
+    //    one the buffer is already quiet (dismissStartupDialog proved it), so
+    //    a short confirmation suffices.
     pane.preparationStatus = 'settling'
     syncViews()
-    await sleep(settleMs)
+    await waitForQuiet(pane.id, dismissed ? 2000 : 1000, dismissed ? 2500 : ROLE_PROMPT_DELAY_MS)
     if (!paneAlive(pane.id)) return
 
     // 3. Inject role system prompt — unless this is a pre-spawn pane that

@@ -1284,6 +1284,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // repaint the ResizeObserver path uses, so a stale narrow first frame gets
       // corrected instead of stranded.
       resizeCtrl.requestResizeRedraw()
+      // The fit above can still have captured a pre-settle width — re-check
+      // after the layout truly settles (see scheduleFreshSpawnRefit).
+      scheduleFreshSpawnRefit()
       queueMicrotask(() => focus())
       bindSessionHandlers()
     } catch (err) {
@@ -1291,6 +1294,31 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       error.value = String((err as Error).message ?? err)
       term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
     }
+  }
+
+  // A spawn measures its width once right before terminal.create
+  // (settleContainerWidth only waits for 2-frame stability), so a pane spawned
+  // into a still-reflowing layout (e.g. a new tab maximizing over the previous
+  // multi-pane grid) can pin the PTY, xterm, AND the acked size to the same
+  // pre-settle width — every recovery net then sees a consistent (but wrong)
+  // size and no-ops. Re-check shortly after the create: if the container now
+  // fits to a different size, re-run the normal gated fit + redraw path.
+  // Idempotent — when the fitted size already matches xterm, it does nothing.
+  let freshSpawnRefitTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleFreshSpawnRefit(): void {
+    const attempt = (): void => {
+      if (isDisposed || !sessionId.value) return
+      const dims = fit.proposeDimensions()
+      // Hidden/unmeasurable panes yield no finite dims — the reconciler owns those.
+      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+      if (dims.cols === term.cols && dims.rows === term.rows) return
+      resizeCtrl.applyFit()
+      resizeCtrl.requestResizeRedraw()
+    }
+    // Two frames let the in-flight layout reflow commit; the timer retry covers
+    // a slower settle and rAF throttling in occluded/background windows.
+    requestAnimationFrame(() => requestAnimationFrame(attempt))
+    freshSpawnRefitTimer = setTimeout(() => { freshSpawnRefitTimer = null; attempt() }, 350)
   }
 
   // Assign here — after createWhenMeasurable is defined — so all callbacks
@@ -1410,6 +1438,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     cleanupSession()
     clearInterval(tickInterval)
     clearInterval(reconcileInterval)
+    if (freshSpawnRefitTimer) clearTimeout(freshSpawnRefitTimer)
     resizeCtrl.dispose()
     if (mountedEl && _mousedownHandler) mountedEl.removeEventListener('mousedown', _mousedownHandler)
     if (_cmdKeyDown) window.removeEventListener('keydown', _cmdKeyDown)
