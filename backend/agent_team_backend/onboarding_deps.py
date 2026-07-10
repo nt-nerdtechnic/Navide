@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .applog import app_data_dir
+
 
 @dataclass(frozen=True)
 class Dep:
@@ -286,7 +288,30 @@ def pull_model(model: str) -> dict[str, Any]:
 
 # ── Completion flag ───────────────────────────────────────────────────────────
 def _flag_path() -> Path:
+    return app_data_dir() / "onboarding.json"
+
+
+def _legacy_flag_path() -> Path:
     return Path.home() / ".agent-team" / "onboarding.json"
+
+
+def _migrate_legacy_flag() -> None:
+    """One-time copy of the legacy ~/.agent-team/onboarding.json to app_data_dir().
+
+    Best-effort: existing users must not see onboarding again, so on copy
+    failure `is_complete()` still falls back to reading the legacy path.
+    """
+    new = _flag_path()
+    if new.exists():
+        return
+    legacy = _legacy_flag_path()
+    if not legacy.exists():
+        return
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(legacy, new)
+    except OSError:
+        pass
 
 
 def should_skip() -> bool:
@@ -296,11 +321,14 @@ def should_skip() -> bool:
 def is_complete() -> bool:
     if should_skip():
         return True
-    try:
-        data = json.loads(_flag_path().read_text(encoding="utf-8"))
-        return bool(data.get("complete"))
-    except (OSError, ValueError):
-        return False
+    _migrate_legacy_flag()
+    for path in (_flag_path(), _legacy_flag_path()):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return bool(data.get("complete"))
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def set_complete(value: bool) -> None:

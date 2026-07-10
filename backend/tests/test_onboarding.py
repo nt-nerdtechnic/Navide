@@ -97,16 +97,63 @@ def test_pull_model_rejects_bad_name() -> None:
 
 
 # ── completion flag ───────────────────────────────────────────────────────────
-def test_complete_flag_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    flag = tmp_path / "onboarding.json"
+def _patch_flag_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Path, Path]:
+    """Point both the new and the legacy flag path into tmp_path."""
+    flag = tmp_path / "app-data" / "onboarding.json"
+    legacy = tmp_path / "legacy" / "onboarding.json"
     monkeypatch.setattr(ob, "_flag_path", lambda: flag)
+    monkeypatch.setattr(ob, "_legacy_flag_path", lambda: legacy)
     monkeypatch.delenv("AGENT_TEAM_SKIP_ONBOARDING", raising=False)
+    return flag, legacy
+
+
+def test_complete_flag_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_flag_paths(monkeypatch, tmp_path)
     assert ob.is_complete() is False
     ob.set_complete(True)
     assert ob.is_complete() is True
 
 
 def test_skip_env_forces_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob, "_flag_path", lambda: tmp_path / "none.json")
+    _patch_flag_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("AGENT_TEAM_SKIP_ONBOARDING", "1")
     assert ob.is_complete() is True
+
+
+def test_legacy_flag_migrated_to_new_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Existing user with only the legacy flag must not see onboarding again."""
+    flag, legacy = _patch_flag_paths(monkeypatch, tmp_path)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text('{"complete": true}', encoding="utf-8")
+    assert ob.is_complete() is True
+    # First read copies the legacy file to the new location.
+    assert flag.exists()
+    assert ob.is_complete() is True
+
+
+def test_legacy_fallback_read_when_copy_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even if the copy fails, is_complete() falls back to reading the legacy path."""
+    _, legacy = _patch_flag_paths(monkeypatch, tmp_path)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text('{"complete": true}', encoding="utf-8")
+    monkeypatch.setattr(ob, "_migrate_legacy_flag", lambda: None)
+    assert ob.is_complete() is True
+
+
+def test_new_flag_wins_over_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A flag already present at the new path is read as-is (no legacy override)."""
+    flag, legacy = _patch_flag_paths(monkeypatch, tmp_path)
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text('{"complete": false}', encoding="utf-8")
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text('{"complete": true}', encoding="utf-8")
+    assert ob.is_complete() is False
+
+
+def test_set_complete_writes_new_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    flag, legacy = _patch_flag_paths(monkeypatch, tmp_path)
+    ob.set_complete(True)
+    assert flag.exists()
+    assert not legacy.exists()

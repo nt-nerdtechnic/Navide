@@ -49,12 +49,14 @@ from .log_readers.attribution import Attribution
 from .doc_injector import fetch_stage_docs
 from .mcp_manager import MCPManager
 from .mcp_settings import MCPServersDocument, MCPSettingsStore
+from .chat_store import ChatStore
 from .projects import ProjectStore
 from .recent_workspaces import RecentWorkspacesStore
 from .roles_store import RolesStore
 from .stages_store import StagesStore
 from .terminals import TerminalService
 from .tokens_store import TokensStore
+from .ui_settings import UiSettingsStore
 from .history_store import HistoryStore
 from . import git_service
 from . import issue_service
@@ -81,6 +83,8 @@ mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
 analyzer_settings_store = AnalyzerSettingsStore()
 ai_chat_settings_store = AIChatSettingsStore()
+ui_settings_store = UiSettingsStore()
+chat_store = ChatStore()
 
 # ─── Analyzer backend routing ────────────────────────────────────────────────
 
@@ -266,9 +270,11 @@ _git_watcher: GitWatcher | None = None
 _SESSIONS: set["Session"] = set()
 
 
-async def broadcast(event: dict[str, Any]) -> None:
-    """Fire-and-forget send to every connected session."""
+async def broadcast(event: dict[str, Any], *, exclude: "Session | None" = None) -> None:
+    """Fire-and-forget send to every connected session (optionally minus one)."""
     for session in list(_SESSIONS):
+        if session is exclude:
+            continue
         try:
             await session.send_json(event)
         except Exception as err:  # noqa: BLE001
@@ -1226,6 +1232,42 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     ws_raw, tab_order=[t for t in tab_order if isinstance(t, str)]
                 )
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+        elif msg_type == "project.set_ui_state":
+            ws_raw = payload.get("workspace_path", "") or ""
+            raw_groups = payload.get("run_groups")
+            run_groups = (
+                [g for g in raw_groups if isinstance(g, dict)]
+                if isinstance(raw_groups, list)
+                else None
+            )
+            raw_tab = payload.get("active_tab")
+            active_tab = raw_tab if isinstance(raw_tab, str) else None
+            raw_repo = payload.get("git_tab_repo")
+            git_tab_repo = raw_repo if isinstance(raw_repo, str) else None
+            project = project_store.set_ui_state(
+                ws_raw,
+                run_groups=run_groups,
+                active_tab=active_tab,
+                git_tab_repo=git_tab_repo,
+            )
+            if project is not None:
+                # Peer windows on the same workspace adopt the change live
+                # (replaces the old cross-window localStorage `storage` event).
+                delta: dict[str, Any] = {"workspace_path": project.workspace_path}
+                if run_groups is not None:
+                    delta["run_groups"] = run_groups
+                if active_tab is not None:
+                    delta["active_tab"] = active_tab
+                if git_tab_repo is not None:
+                    delta["git_tab_repo"] = git_tab_repo
+                await broadcast(
+                    make_event("project.ui_state_changed", delta), exclude=session
+                )
+            # ok mirrors persistence so the frontend's one-time localStorage
+            # migration only deletes its legacy copy after a real ack.
+            await session.send_json(
+                make_response(msg_id, msg_type, {"ok": project is not None})
+            )
         elif msg_type == "project.rename_pane":
             ws_raw = payload.get("workspace_path", "") or ""
             pane_id = payload.get("pane_id", "") or ""
@@ -1406,6 +1448,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await broadcast(
                 make_event("workspace.recent_changed", {"recent": recent, "reason": "remove"})
             )
+
+        # -------- UI settings (generic KV store, localStorage replacement) --------
+        elif msg_type == "ui.settings.get":
+            await session.send_json(
+                make_response(msg_id, msg_type, {"settings": ui_settings_store.get()})
+            )
+
+        elif msg_type == "ui.settings.set":
+            updates = payload.get("updates")
+            delta = ui_settings_store.set(updates) if isinstance(updates, dict) else {}
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+            if delta:
+                # Other windows (EditorWindow, roles/stages) hold their own ws
+                # connections — broadcast the merged delta so their caches
+                # converge; the sender already applied it locally.
+                await broadcast(
+                    make_event("ui.settings_changed", {"settings": delta}),
+                    exclude=session,
+                )
 
         # -------- settings bundle / metadata --------
         elif msg_type == "settings.paths":
@@ -2692,6 +2753,45 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "ai.chat.settings.set":
             updated = ai_chat_settings_store.set(payload)
             await session.send_json(make_response(msg_id, msg_type, updated))
+
+        elif msg_type == "ai.chat.threads.get":
+            ws_raw = payload.get("workspace_path", "") or ""
+            await session.send_json(
+                make_response(msg_id, msg_type, {"threads": chat_store.get_threads(ws_raw)})
+            )
+
+        elif msg_type == "ai.chat.threads.set":
+            ws_raw = payload.get("workspace_path", "") or ""
+            threads = payload.get("threads")
+            saved = (
+                chat_store.set_threads(ws_raw, threads)
+                if isinstance(threads, list)
+                else None
+            )
+            # ok mirrors persistence — gates the frontend's one-time
+            # localStorage migration (legacy copy deleted only after ack).
+            await session.send_json(
+                make_response(msg_id, msg_type, {"ok": saved is not None})
+            )
+
+        elif msg_type == "ai.chat.notes.get":
+            ws_raw = payload.get("workspace_path", "") or ""
+            await session.send_json(
+                make_response(msg_id, msg_type, chat_store.get_notes(ws_raw))
+            )
+
+        elif msg_type == "ai.chat.notes.set":
+            ws_raw = payload.get("workspace_path", "") or ""
+            notes = payload.get("notes")
+            notepads = payload.get("notepads")
+            saved = chat_store.set_notes(
+                ws_raw,
+                notes=notes if isinstance(notes, str) else "",
+                notepads=notepads if isinstance(notepads, list) else [],
+            )
+            await session.send_json(
+                make_response(msg_id, msg_type, {"ok": saved is not None})
+            )
 
         elif msg_type == "ai.chat.provider.test":
             provider = str(payload.get("provider") or "")

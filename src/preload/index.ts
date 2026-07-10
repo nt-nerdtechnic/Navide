@@ -146,6 +146,10 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('keybindings:read'),
   writeKeybindings: (content: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('keybindings:write', content),
+  // Synchronous on purpose: seeds the renderer settings cache before first
+  // paint (zero-flash theme/language). Returns the ui_settings.json text,
+  // '{}' when missing/corrupt.
+  getBootstrapSettings: (): string => ipcRenderer.sendSync('settings:bootstrap') as string,
   broadcastLanguageChange: (locale: string): void => {
     ipcRenderer.send('settings:language-changed', locale)
   },
