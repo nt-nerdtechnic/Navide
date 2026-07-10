@@ -819,9 +819,13 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return []
     try {
-      const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[] }>('git.commit_file_diff', { workspace_path: ws, commit_hash, filepath })
-      return resp.ok && resp.payload?.ok ? resp.payload.hunks ?? [] : []
-    } catch {
+      const resp = await send<{ ok: boolean; hunks: DiffBlameHunk[]; error?: string }>('git.commit_file_diff', { workspace_path: ws, commit_hash, filepath })
+      if (resp.ok && resp.payload?.ok) return resp.payload.hunks ?? []
+      gitError.value = `commitFileDiff: ${resp.payload?.error || 'no response'}`
+      return []
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `commitFileDiff: ${msg}`
       return []
     }
   }

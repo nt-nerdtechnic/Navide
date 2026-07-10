@@ -1,6 +1,6 @@
 # CLI Extension Guide
 
-How to add a new CLI agent (e.g. `aider`, `amp`, Cursor CLI) to the Agent-Team
+How to add a new CLI agent (e.g. `aider`, `amp`, Grok CLI) to the Agent-Team
 pipeline — the impact map (which layers a new CLI touches), the process to
 follow, and a record of past integrations and candidate research.
 
@@ -124,6 +124,26 @@ Role and kickoff injection waits for the CLI's input box to become ready
 (CLI-quiet + echo tail-match), but a CLI with unusual prompt rendering may
 need tuning. Verify manually with a role-assigned spawn.
 
+### 10. Onboarding dependency entry (install assistance)
+
+**`backend/agent_team_backend/onboarding_deps.py:44`** — `DEPS` registry
+
+Register the CLI so the onboarding wizard can detect it, offer one-click
+install, and re-check after installation:
+
+```python
+Dep("grok", "Grok CLI", "superagent-ai Grok coding agent", "agent_cli",
+    ["grok", "--version"], r"(\d+\.\d+\.\d+)",
+    install_cmd="curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
+    needs_terminal=True, optional=True, docs_url="https://grokcli.io"),
+```
+
+`needs_terminal=True` makes the wizard run the install in a real pane so the
+user can complete any interactive auth. API-key-based CLIs (Grok needs
+`GROK_API_KEY`) can additionally be wired to the AI-chat settings store
+(`ai_chat_settings.py` already holds an `xai_api_key` field) and injected into
+the spawn env — see the per-pane env pattern in layer 8.
+
 ### Effort summary
 
 | Layer | File | Effort |
@@ -137,6 +157,7 @@ need tuning. Verify manually with a role-assigned spawn.
 | Token stats | `src/renderer/src/components/TokenStatsPanel.vue` | trivial |
 | Per-pane home | `backend/agent_team_backend/codex_home.py` pattern | none–medium (CLI-dependent) |
 | Settle heuristics | `App.vue` injection path | usually none |
+| Onboarding install | `backend/agent_team_backend/onboarding_deps.py` | trivial |
 
 ---
 

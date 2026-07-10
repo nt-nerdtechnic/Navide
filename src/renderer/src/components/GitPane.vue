@@ -2129,6 +2129,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <div v-if="expandedCommitHash === c.hash" class="commit-detail">
               <div v-if="commitDetailLoading" class="loading-text">Loading…</div>
               <template v-else-if="commitDetailData">
+                <div class="cd-body">{{ commitDetailData.message }}</div>
                 <div class="cd-row"><span class="cd-key">Author</span><span>{{ commitDetailData.author_name }} &lt;{{ commitDetailData.author_email }}&gt;</span></div>
                 <div class="cd-row"><span class="cd-key">Date</span><span>{{ new Date(commitDetailData.date).toLocaleString() }}</span></div>
                 <div v-if="commitDetailData.body" class="cd-body">{{ commitDetailData.body }}</div>
