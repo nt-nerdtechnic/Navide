@@ -180,42 +180,53 @@ need tuning. Verify manually with a role-assigned spawn.
 - Do not re-add. Historical implementation retrievable from git history if a
   similar JSONL-based CLI ever needs a reference.
 
-### Cursor CLI — researched 2026-07-10 (candidate, not yet integrated)
+### Grok CLI — researched 2026-07-10 (candidate, not yet integrated)
 
-Source: https://cursor.com/docs/cli/overview (+ installation, parameters
-reference; community sources for storage internals).
+Source: https://grokcli.io/ → https://github.com/superagent-ai/grok-cli
+(open-source coding agent for the Grok API by superagent-ai).
+
+Disambiguation: this is NOT xAI's official "Grok Build" CLI
+(`curl https://x.ai/cli/install.sh`, subscription-gated) — both install a
+`grok` command, so confirm which one is on the user's PATH before integrating.
 
 | Question | Finding |
 |---|---|
-| Install | `curl https://cursor.com/install -fsS \| bash` → binary **`agent`** in `~/.local/bin`; auto-updates itself; `agent update` |
-| Launch | `agent` (interactive) or `agent "prompt"`; non-interactive `-p/--print` with `--output-format text\|json\|stream-json` |
-| YOLO flag | `-f, --force` ("force allow commands unless explicitly denied"); `--yolo` is an alias. Also `--approve-mcps`, `--trust` (headless) |
-| Modes | `--mode agent\|plan\|ask`; `--model <m>`, `--list-models`; `--sandbox enabled\|disabled` |
-| Resume | `agent ls` (list), `agent resume` (latest), `--continue` (= `--resume=-1`), `--resume <chatId>` |
-| Pin id at launch | **Not documented** → assume marker-based binding (layer 3) needed |
-| Session storage | Not in official docs; community-verified: SQLite `store.db` files under `~/.cursor/chats/` — an SQLite reader like `antigravity.py` is the likely shape |
-| Chat id discovery | Printed on Ctrl-C interrupt; enumerable via `agent ls` |
+| Install | `curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh \| bash` or `bun add -g grok-dev` → binary **`grok`** |
+| Launch | `grok` (interactive TUI), `grok -d <dir>`; headless `grok --prompt "..."` with `--format json` |
+| Auth | `GROK_API_KEY` env var / `.env` / `grok -k <key>` / `~/.grok/user-settings.json` `"apiKey"` |
+| YOLO flag | **Not documented** — no auto-approve/force flag found in README; sandbox/hooks settings live in `~/.grok/user-settings.json` (open question 1) |
+| Resume | `grok --session latest` or `grok -s <session-id>` — flag-based, fits the default `resume-command.ts` shape |
+| Pin id at launch | Not documented → assume marker-based binding (layer 3) needed |
+| Session storage | Project-level `.grok/` + user-level `~/.grok/` — exact session file path/format not documented (open question 2) |
+| Config | Project `.grok/settings.json` (model, mcpServers), user `~/.grok/user-settings.json`; instructions via `AGENTS.md` / `AGENTS.override.md` |
+| Model | `grok models` to list; `GROK_MODEL` env or settings; defaults like `grok-4.3` |
+| MCP | Supported (`/mcps` in TUI or `mcpServers` in settings) |
 
-Suggested spec entry when integrating:
+Suggested spec entry when integrating (pending open question 1):
 
 ```ts
 {
-  agentKey: 'cursor',
-  label: 'Cursor CLI',
-  defaultCommand: 'agent',
-  skipPermissionFlag: '--force',
+  agentKey: 'grok',
+  label: 'Grok CLI',
+  defaultCommand: 'grok',
+  skipPermissionFlag: '???', // no documented auto-approve flag yet
   hint: 'generalist'
 }
 ```
 
 Open questions to verify on a real install before writing the log reader:
-1. Exact schema/layout of `~/.cursor/chats/` (per-project subdirs? id scheme?)
-   and whether a freshly started session appears there immediately.
-2. Whether token usage is recorded in `store.db` (needed for TokenStats).
-3. Whether an injected `at-pane:` marker is persisted verbatim into the chat
-   store (required for marker-based `session.detected` binding).
-4. Auth flow (`agent login`?) and behavior when unauthenticated.
-5. PATH collision risk: the binary name `agent` is generic — confirm
-   `defaultCommand` resolution on the user's machine.
-6. Concurrency: whether multiple `agent` instances share mutable global state
-   (decides if a `codex_home.py`-style isolation layer is needed).
+1. Whether a skip-confirmation/auto-approve mode exists (flag or
+   `user-settings.json` field) — required for YOLO mode parity; without it the
+   agent will block on tool confirmations inside the pane.
+2. Exact session file location/format under `.grok/` or `~/.grok/`
+   (JSONL? JSON per session?) and how fast a new session appears on disk.
+3. Whether token usage is recorded in session files (needed for TokenStats).
+4. Whether an injected `at-pane:` marker is persisted verbatim into the
+   session file (required for marker-based `session.detected` binding).
+5. Session-id discovery: how ids are listed (a `grok sessions` command?) for
+   the resume history datalist.
+6. Concurrency: whether multiple `grok` instances in the same project share
+   `.grok/` state safely (decides if a `codex_home.py`-style isolation layer
+   is needed). Note sessions being project-level (`.grok/` in repo) differs
+   from Claude/Codex's user-home storage — the log reader's `project_dirs()`
+   must scan workspace dirs, not the home dir.
