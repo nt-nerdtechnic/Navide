@@ -1348,9 +1348,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     await backend.send('terminal.kill', { terminal_session_id: sessionId.value })
   }
 
-  function fitTerminal(): void {
+  function fitTerminal(opts?: { redrawAfterSettle?: boolean }): void {
     if (!mounted) return
     resizeCtrl.applyFit()
+    // Explicit refit paths (layout-mode switch, tab/minimize toggles, window
+    // resize safety net) exist because the ResizeObserver is unreliable while
+    // the pane is hidden/occluded — so when a caller opts in, arm the same
+    // gated once-per-settle redraw the observer path uses. Default (no flag)
+    // keeps spawn/reconciler call sites byte-for-byte unchanged.
+    if (opts?.redrawAfterSettle) resizeCtrl.requestResizeRedraw()
   }
 
   // Ask the CLI to repaint its current frame by sending Ctrl+L (the universal
