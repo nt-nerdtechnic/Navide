@@ -62,6 +62,7 @@ from .history_store import HistoryStore
 from . import git_service
 from . import issue_service
 from . import fs_service
+from . import pty_registry
 from . import search_service
 from . import editor_service
 from . import onboarding_deps
@@ -579,6 +580,13 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
 
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
+    # Reap PTY children left behind by a previous run that died without its
+    # shutdown sweep (SIGKILL, crash). Blocking ps/sleep — off the loop.
+    try:
+        await asyncio.to_thread(pty_registry.reap_stale)
+    except Exception as err:  # noqa: BLE001
+        log.warning("pty orphan reap failed: %s", err)
+
     global _log_watcher
     _log_watcher = LogWatcher(
         sink=_on_log_token_usage,
@@ -617,6 +625,14 @@ async def _start_log_watcher() -> None:
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
     global _log_watcher, _git_watcher
+    # PTY children are detached process groups (start_new_session=True); they
+    # must be killed here or they outlive the app as CPU-spinning orphans.
+    # Guarded so a sweep failure never skips the watcher/MCP teardown below.
+    if _TERMINALS is not None:
+        try:
+            await _TERMINALS.kill_all()
+        except Exception as err:  # noqa: BLE001
+            log.warning("pty shutdown sweep failed: %s", err)
     if _log_watcher is not None:
         _log_watcher.stop()
     if _git_watcher is not None:

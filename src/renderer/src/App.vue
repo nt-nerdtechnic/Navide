@@ -790,6 +790,11 @@ async function onHandleIssue(payload: {
 
 // Default delay if no startup trust dialog is observed.
 const ROLE_PROMPT_DELAY_MS = 4000
+// Minimum time between the start of dialog-watching and role injection.
+// Quiet-based settling can pass while the CLI is still silently loading
+// (MCP servers etc. attach stdin late without repainting) — this floor keeps
+// a small guaranteed lead without restoring the old fixed 12s wait.
+const MIN_INJECTION_LEAD_MS = 2500
 
 // Appended to every role prompt at injection time so agents stay silent
 // after receiving the role and wait for the actual task kickoff.
@@ -832,6 +837,15 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/** Monotonic count of clean output bytes for a pane. Unlike
+ *  cleanBuffer.length — which pins constant once the 128KB buffer cap is
+ *  reached even while output streams — this keeps growing, so it is the only
+ *  safe "did new output arrive" signal during large session replays. */
+function paneCleanBytes(paneId: string): number {
+  const r = paneRefs[paneId]
+  return Number((r?.cleanBytesSeen as unknown as number | undefined) ?? 0)
+}
+
 /**
  * Wait for the agent to:
  *   1. start producing new output (it's processing our injection), then
@@ -848,16 +862,15 @@ async function waitForActivityThenSettle(
 ): Promise<'settled' | 'no-activity' | 'timeout'> {
   const ref = paneRefs[paneId]
   if (!ref) return 'no-activity'
-  const startSize = ((ref.cleanBuffer as unknown as string) ?? '').length
+  const startSize = paneCleanBytes(paneId)
   const deadline = Date.now() + maxWaitMs
   // Phase 1: wait for activity
   let activeSize = startSize
   while (Date.now() < deadline) {
     if (!paneAlive(paneId)) return 'no-activity'
     await sleep(300)
-    const r = paneRefs[paneId]
-    if (!r) return 'no-activity'
-    const size = ((r.cleanBuffer as unknown as string) ?? '').length
+    if (!paneRefs[paneId]) return 'no-activity'
+    const size = paneCleanBytes(paneId)
     if (size > startSize) {
       activeSize = size
       break
@@ -871,9 +884,8 @@ async function waitForActivityThenSettle(
   while (Date.now() < deadline) {
     if (!paneAlive(paneId)) return 'settled'
     await sleep(300)
-    const r = paneRefs[paneId]
-    if (!r) return 'settled'
-    const size = ((r.cleanBuffer as unknown as string) ?? '').length
+    if (!paneRefs[paneId]) return 'settled'
+    const size = paneCleanBytes(paneId)
     if (size === lastSize) {
       if (Date.now() - stableSince >= settleMs) return 'settled'
     } else {
@@ -903,10 +915,11 @@ async function dismissStartupDialog(paneId: string, timeoutMs = DISMISS_TIMEOUT_
       pipelineLog(`✓ dismissed startup dialog (pane ${paneId.slice(0, 8)})`)
       return true
     }
-    if (buf.length !== lastSize) {
-      lastSize = buf.length
+    const bytes = paneCleanBytes(paneId)
+    if (bytes !== lastSize) {
+      lastSize = bytes
       stableSince = Date.now()
-    } else if (buf.length > 0 && Date.now() - stableSince >= NO_DIALOG_QUIET_MS) {
+    } else if (bytes > 0 && Date.now() - stableSince >= NO_DIALOG_QUIET_MS) {
       return false
     }
     await sleep(250)
@@ -930,14 +943,13 @@ async function waitForQuiet(
   const ref = paneRefs[paneId]
   if (!ref) return
   const deadline = Date.now() + timeoutMs
-  let lastSize = ((ref.cleanBuffer as unknown as string) ?? '').length
+  let lastSize = paneCleanBytes(paneId)
   let stableSince = Date.now()
   while (Date.now() < deadline) {
     if (!paneAlive(paneId)) return
     await sleep(250)
-    const r = paneRefs[paneId]
-    if (!r) return
-    const size = ((r.cleanBuffer as unknown as string) ?? '').length
+    if (!paneRefs[paneId]) return
+    const size = paneCleanBytes(paneId)
     if (size === lastSize) {
       if (Date.now() - stableSince >= requiredQuietMs) return
     } else {
@@ -1022,6 +1034,7 @@ function scheduleInjection(pane: ActivePane): void {
   pane.preparationStatus = 'checking-dialog'
   syncViews()
   const tag = `[pane ${pane.id.slice(0, 8)}]`
+  const startedAt = Date.now()
   ;(async () => {
     // 1. Try to dismiss a startup trust dialog (best-effort, up to 8s).
     pipelineLog(`${tag} watching for startup dialog (up to ${DISMISS_TIMEOUT_MS / 1000}s)`)
@@ -1067,6 +1080,32 @@ function scheduleInjection(pane: ActivePane): void {
       syncViews()
       pipelineLog(`${tag} ⏸ role deferred (pre-spawn — will inject at stage activation)`)
       return
+    }
+    // Injection guards. Floor: hold until MIN_INJECTION_LEAD_MS has passed
+    // since dialog-watching began, so a fast first paint + silent load can't
+    // land the prompt before the CLI reads stdin. Late dialog: a CLI that
+    // pauses longer than NO_DIALOG_QUIET_MS between banner and trust dialog
+    // slips past the watcher — re-check once and dismiss before typing a
+    // multi-line prompt into the dialog.
+    const lead = Date.now() - startedAt
+    if (lead < MIN_INJECTION_LEAD_MS) {
+      await sleep(MIN_INJECTION_LEAD_MS - lead)
+      if (!paneAlive(pane.id)) return
+    }
+    if (!dismissed) {
+      const lateBuf = ((paneRefs[pane.id]?.cleanBuffer as unknown as string) ?? '')
+      if (TRUST_DIALOG_PATTERNS.some((re) => re.test(lateBuf))) {
+        pipelineLog(`${tag} late startup dialog detected — dismissing`)
+        const r = paneRefs[pane.id]
+        if (r?.sessionId) {
+          await backend.send('terminal.input', {
+            terminal_session_id: r.sessionId as string,
+            data: '\r'
+          })
+        }
+        await waitForQuiet(pane.id, 2000, 2500)
+        if (!paneAlive(pane.id)) return
+      }
     }
     const role = rolesApi.find(pane.roleKey)
     if (!role) {
@@ -4818,11 +4857,23 @@ function onRunGroupsRemoteSync(raw: unknown): void {
   const ws = currentWorkspace.value
   if (!ws || !d || d.workspace_path !== ws) return
   if (!Array.isArray(d.run_groups)) return
+  // Union merge instead of wholesale adoption: keep local groups that live
+  // panes still reference but the remote list lacks (e.g. a tab recreated
+  // mid-restore by ensureSavedGroup racing another window's save) — dropping
+  // them would leave those panes assigned to a tab that no longer exists.
+  // The union is persisted below so both windows converge on it.
+  const incomingIds = new Set(d.run_groups.map((g) => g.id))
+  const referenced = new Set(panes.value.map((p) => p.runGroupId).filter(Boolean))
+  const missing = runGroups.value.filter((g) => !incomingIds.has(g.id) && referenced.has(g.id))
+  const merged = missing.length ? [...d.run_groups, ...missing] : d.run_groups
   applyingRemote.value = true
-  runGroups.value = d.run_groups
-  activeTab.value = resolveActiveTab(d.run_groups, activeTab.value)
-  currentRunGroupId.value = d.run_groups[d.run_groups.length - 1]?.id ?? ''
-  void nextTick(() => { applyingRemote.value = false })
+  runGroups.value = merged
+  activeTab.value = resolveActiveTab(merged, activeTab.value)
+  currentRunGroupId.value = merged[merged.length - 1]?.id ?? ''
+  void nextTick(() => {
+    applyingRemote.value = false
+    if (missing.length) _saveRunGroups()
+  })
 }
 
 let _offUiStateChanged: (() => void) | null = null
@@ -4951,14 +5002,15 @@ function pipelineRunGroupName(pipelineId?: string): string {
 }
 
 /** Persist a pane's run-group reassignment to project.json (survives restart). */
-async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promise<void> {
+async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promise<boolean> {
   const ws = pane.workspacePath || currentWorkspace.value
-  if (!ws) return
-  await sendQuiet('pane.set_run_group', {
+  if (!ws) return false
+  const resp = await sendQuiet('pane.set_run_group', {
     workspace_path: ws,
     pane_id: pane.id,
     run_group_id: runGroupId,
   })
+  return resp !== null
 }
 
 /** Persist the current pane order to project.json (survives restart). */
@@ -5021,16 +5073,22 @@ async function closeRunGroup(id: string): Promise<void> {
 }
 
 async function deleteRunGroup(id: string): Promise<void> {
+  // Persist pane reassignments BEFORE mutating local state or saving the
+  // group list, and abort when any write fails: deleting the tab while a
+  // pane still references it on disk would resurrect the tab on the next
+  // restore (ensureSavedGroup) — or orphan the pane.
   // 刪除「手動」tab：把未指派 pane 移到第一個 stage group
   if (id === 'manual') {
     if (stageTabs.value.length <= 1) return  // only the manual tab left — nothing to do
     const target = runGroups.value[0]
     if (!target) return
     const affected = panes.value.filter((p) => !p.runGroupId)
-    await Promise.all(affected.map((p) => {
-      p.runGroupId = target.id
-      return persistPaneRunGroup(p, target.id)
-    }))
+    const saved = await Promise.all(affected.map((p) => persistPaneRunGroup(p, target.id)))
+    if (!saved.every(Boolean)) {
+      pipelineLog(`✕ delete tab aborted — pane reassignment did not persist`)
+      return
+    }
+    affected.forEach((p) => { p.runGroupId = target.id })
     if (activeTab.value === 'manual') activeTab.value = target.id
     return
   }
@@ -5038,10 +5096,12 @@ async function deleteRunGroup(id: string): Promise<void> {
   const affected = panes.value.filter((p) => p.runGroupId === id)
 
   if (!target) {
-    await Promise.all(affected.map((p) => {
-      p.runGroupId = undefined
-      return persistPaneRunGroup(p, '')
-    }))
+    const saved = await Promise.all(affected.map((p) => persistPaneRunGroup(p, '')))
+    if (!saved.every(Boolean)) {
+      pipelineLog(`✕ delete tab aborted — pane reassignment did not persist`)
+      return
+    }
+    affected.forEach((p) => { p.runGroupId = undefined })
     runGroups.value = runGroups.value.filter((g) => g.id !== id)
     if (currentRunGroupId.value === id) currentRunGroupId.value = ''
     if (activeTab.value === id) activeTab.value = 'manual'
@@ -5049,10 +5109,12 @@ async function deleteRunGroup(id: string): Promise<void> {
     return
   }
 
-  await Promise.all(affected.map((p) => {
-    p.runGroupId = target.id
-    return persistPaneRunGroup(p, target.id)
-  }))
+  const saved = await Promise.all(affected.map((p) => persistPaneRunGroup(p, target.id)))
+  if (!saved.every(Boolean)) {
+    pipelineLog(`✕ delete tab aborted — pane reassignment did not persist`)
+    return
+  }
+  affected.forEach((p) => { p.runGroupId = target.id })
   runGroups.value = runGroups.value.filter((g) => g.id !== id)
   if (currentRunGroupId.value === id) currentRunGroupId.value = target.id
   if (activeTab.value === id) activeTab.value = target.id

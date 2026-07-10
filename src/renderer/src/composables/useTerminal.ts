@@ -390,6 +390,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
   // memory predictable across long-running panes.
   const cleanBuffer = ref<string>('')
+  const cleanBytesSeen = ref(0)
   // `lastActivityAt` only updates when CLEANED text changes — i.e. real content.
   // Used for analyzer triggers and sentinel scans.
   const lastActivityAt = ref<number>(0)
@@ -451,6 +452,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
     const cleaned = dropTuiNoise(stripAnsi(chunk))
     if (!cleaned) return
+    // Monotonic total — unlike cleanBuffer.length, this keeps growing after
+    // the buffer hits BUFFER_CAP, so quiet-detection (waitForQuiet etc.) can
+    // tell "still streaming" from "quiet" during large session replays.
+    cleanBytesSeen.value += cleaned.length
     const next = cleanBuffer.value + cleaned
     cleanBuffer.value = bufferTail(next, BUFFER_CAP)
     // Skip the activity timestamp if this chunk arrived inside the focus
@@ -1470,6 +1475,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error,
     lastCommand,
     cleanBuffer,
+    cleanBytesSeen,
     lastActivityAt,
     lastRawActivityAt,
     markBufferPosition,

@@ -85,6 +85,7 @@ defineExpose({
   error: terminal.error,
   lastCommand: terminal.lastCommand,
   cleanBuffer: terminal.cleanBuffer,
+  cleanBytesSeen: terminal.cleanBytesSeen,
   lastActivityAt: terminal.lastActivityAt,
   lastRawActivityAt: terminal.lastRawActivityAt,
   markBufferPosition: terminal.markBufferPosition,

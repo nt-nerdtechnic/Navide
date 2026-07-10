@@ -922,9 +922,11 @@ async def commit_file_diff(workspace_path: str, commit_hash: str, filepath: str)
         return {"ok": False, "hunks": [], "error": "invalid filepath"}
     # :(top) anchors the pathspec to the repo root — file lists come from
     # diff-tree as root-relative paths, so a cwd inside a subdirectory would
-    # otherwise silently match nothing (empty diff, rc=0).
+    # otherwise silently match nothing (empty diff, rc=0). literal disables
+    # glob interpretation: those paths are literal names, and metacharacters
+    # in them (e.g. Next/Nuxt's [id].vue) would match the wrong file.
     rc, out, stderr = await _run(
-        ["git", "-c", "core.quotePath=false", "show", "--format=", commit_hash.strip(), "--", f":(top){fp}"],
+        ["git", "-c", "core.quotePath=false", "show", "--format=", commit_hash.strip(), "--", f":(top,literal){fp}"],
         workspace_path,
     )
     if rc != 0:

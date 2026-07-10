@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
+from . import pty_registry
+
 
 # Strip ALL ANSI/VT escape sequences for clean log output:
 #   CSI:  \x1b[ ... final-byte
@@ -181,6 +183,9 @@ class TerminalService:
             os.close(slave)
             raise
         os.close(slave)
+        # Record the child so a future backend start can reap it if this
+        # process dies without running its shutdown sweep.
+        pty_registry.register(proc.pid, argv)
 
         # Open output log file if requested (pipeline panes pass a path).
         log_fp: IO[str] | None = None
@@ -367,9 +372,74 @@ class TerminalService:
             return
         self._close(session, reason="killed")
         try:
-            os.killpg(os.getpgid(session.proc.pid), signal.SIGTERM)
+            pgid = os.getpgid(session.proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            # Group already gone — closing the PTY master HUPs the child, so
+            # it often dies before the SIGTERM lands. The escalation task
+            # still runs to reap it and drop its crash-recovery record.
+            pgid = 0
+        # A CLI that traps SIGTERM would survive the close and, being gone
+        # from _sessions, escape the shutdown sweep — escalate to SIGKILL
+        # after a grace period and only then drop its crash-recovery record.
+        self._loop.create_task(self._escalate_kill(session, pgid))
+
+    async def _escalate_kill(self, session: TerminalSession, pgid: int, grace: float = 1.0) -> None:
+        deadline = self._loop.time() + grace
+        while session.proc.poll() is None and self._loop.time() < deadline:
+            await asyncio.sleep(0.05)
+        if session.proc.poll() is None and pgid > 0:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                # Reap the zombie so poll() flips before we unregister.
+                await asyncio.to_thread(session.proc.wait, 1.0)
+            except Exception:  # noqa: BLE001
+                pass
+        if session.proc.poll() is not None:
+            pty_registry.unregister(session.proc.pid)
+
+    async def kill_all(self, grace: float = 1.0) -> None:
+        """Terminate every live PTY child. Children run with
+        start_new_session=True (own process group), so killing the backend
+        never propagates to them — without this explicit sweep on shutdown
+        they outlive the app as orphans."""
+        targets: list[tuple[TerminalSession, int]] = []
+        for session in list(self._sessions.values()):
+            if session.closed:
+                continue
+            try:
+                targets.append((session, os.getpgid(session.proc.pid)))
+            except ProcessLookupError:
+                # Child already gone — still close so the session is removed
+                # and its registry entry is dropped.
+                self._close(session, reason="shutdown")
+        for _, pgid in targets:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+        deadline = self._loop.time() + grace
+        while (
+            any(s.proc.poll() is None for s, _ in targets)
+            and self._loop.time() < deadline
+        ):
+            await asyncio.sleep(0.05)
+        for session, pgid in targets:
+            if session.proc.poll() is None:
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                try:
+                    # Reap immediately (SIGKILL is not trappable) so _close's
+                    # death-confirmed unregister drops the registry entry.
+                    session.proc.wait(timeout=1.0)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._close(session, reason="shutdown")
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)
@@ -550,3 +620,9 @@ class TerminalService:
         )
         self._loop.create_task(self._emit(event))
         self._sessions.pop(session.id, None)
+        # Drop the crash-recovery record only once the child is confirmed
+        # dead: a still-live child (e.g. a TERM-trapping CLI) must stay
+        # visible to the next start's reap_stale. kill()'s escalation task
+        # and kill_all() unregister the survivors they put down.
+        if session.proc.poll() is not None:
+            pty_registry.unregister(session.proc.pid)
