@@ -47,9 +47,11 @@ import {
 import { i18n } from './i18n'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
+import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
-import { resolveActiveTab } from './lib/runGroups'
+import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
+import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -59,6 +61,9 @@ const SettingsModal = defineAsyncComponent(() => import('./components/SettingsMo
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 
 const backend = useBackend()
+// Hook the settings cache to the ws: reconciles + flushes queued writes once
+// connected, and applies ui.settings_changed broadcasts from other windows.
+initSettingsBackend(backend)
 const rolesApi = useRoles(backend)
 const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
@@ -66,7 +71,7 @@ const analyzerApi = useAnalyzer(backend)
 const themeApi = useTheme()
 const settingsApi = useSettings()
 
-// Apply the theme and language as early as possible (localStorage → default).
+// Apply the theme and language as early as possible (settings store → default).
 // The backend backup is adopted later inside onWorkspaceCheck.
 onMounted(() => {
   themeApi.loadTheme()
@@ -185,8 +190,8 @@ const _bootWorkspace = new URLSearchParams(window.location.search).get('workspac
 const _bootIsDuplicate = new URLSearchParams(window.location.search).get('duplicate') === '1'
 let suppressPaneRestoreOnce = _bootWorkspace !== '' && _bootIsDuplicate
 // Detached child window: shows only one run group of its workspace. When set,
-// this window renders just that group's tab/panes and never writes the shared
-// runGroups/activeTab/layout localStorage (the main window owns those).
+// this window renders just that group's tab/panes and never persists the shared
+// runGroups/activeTab/layout state to project.json (the main window owns those).
 const detachedGroupId = new URLSearchParams(window.location.search).get('detached_group') ?? ''
 const isDetachedWindow = detachedGroupId !== ''
 // Groups that THIS (main) window has handed off to a detached child window —
@@ -257,17 +262,6 @@ function onWorkspaceSelected(path: string): void {
   }
 }
 
-// Best-effort backup of theme prefs to the workspace JSON (source of truth stays
-// in localStorage). Fires whenever the active theme or custom overrides change.
-watch(
-  [themeApi.theme, themeApi.customOverrides],
-  () => {
-    if (currentWorkspace.value) {
-      void themeApi.syncToBackend(backend.send, currentWorkspace.value)
-    }
-  },
-  { deep: true },
-)
 // Best-effort backup of language pref to the workspace JSON.
 watch(settingsApi.language, () => {
   if (currentWorkspace.value) {
@@ -313,24 +307,16 @@ const agentSpecs: AgentSpec[] = [
   }
 ]
 
-// Sticky toggles — defaults ON. Saved to localStorage so they survive reloads.
+// Sticky toggles — defaults ON. Saved to the settings store so they survive reloads.
 function makeStickyBool(key: string, fallback: boolean) {
   const r = ref<boolean>(
     (() => {
-      try {
-        const stored = localStorage.getItem(key)
-        return stored === null ? fallback : stored === '1'
-      } catch {
-        return fallback
-      }
+      const stored = settingsGet<string | null>(key, null)
+      return stored === null ? fallback : stored === '1'
     })()
   )
   watch(r, (v) => {
-    try {
-      localStorage.setItem(key, v ? '1' : '0')
-    } catch {
-      /* ignore */
-    }
+    settingsSet(key, v ? '1' : '0')
   })
   return r
 }
@@ -340,21 +326,21 @@ const autoAnswerEnabled = makeStickyBool('agentTeam.autoAnswer', false)
 // Strict completion: when ON, idle/cap timeouts do NOT auto-advance — instead they
 // prompt the user (or, if Full auto is also on, an LLM-styled 5-sec auto-advance).
 // Drives the third grid column width on .app. TokenStatsPanel persists its
-// own expanded/collapsed sticky state to localStorage; this ref mirrors the
-// component state via v-model:expanded so the layout knows its width.
+// own expanded/collapsed sticky state to the settings store; this ref mirrors
+// the component state via v-model:expanded so the layout knows its width.
 const tokenPanelExpanded = ref<boolean>(
-  (() => { try { return localStorage.getItem('agentTeam.tokenPanel.expanded') === '1' } catch { return false } })()
+  settingsGet<string | null>('agentTeam.tokenPanel.expanded', null) === '1'
 )
 const rightPanelWidth = ref<number>(
-  (() => { try { return parseInt(localStorage.getItem('agentTeam.rightWidth') ?? '300') || 300 } catch { return 300 } })()
+  parseInt(settingsGet('agentTeam.rightWidth', '300')) || 300
 )
-watch(rightPanelWidth, (v) => { try { localStorage.setItem('agentTeam.rightWidth', String(v)) } catch {} })
+watch(rightPanelWidth, (v) => { settingsSet('agentTeam.rightWidth', String(v)) })
 const tokenPanelWidth = computed(() => (tokenPanelExpanded.value ? `${rightPanelWidth.value}px` : '36px'))
 
 const leftPanelWidth = ref<number>(
-  (() => { try { return parseInt(localStorage.getItem('agentTeam.leftWidth') ?? '360') || 360 } catch { return 360 } })()
+  parseInt(settingsGet('agentTeam.leftWidth', '360')) || 360
 )
-watch(leftPanelWidth, (v) => { try { localStorage.setItem('agentTeam.leftWidth', String(v)) } catch {} })
+watch(leftPanelWidth, (v) => { settingsSet('agentTeam.leftWidth', String(v)) })
 
 type DragTarget = 'left' | 'right'
 let _dragTarget: DragTarget | null = null
@@ -388,7 +374,8 @@ function onResizeMove(e: MouseEvent): void {
 function refitAllTerminals(): void {
   void nextTick(() => requestAnimationFrame(() => {
     for (const ref of Object.values(paneRefs)) {
-      (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
+      (ref as unknown as { fitTerminal?: (opts?: { redrawAfterSettle?: boolean }) => void })
+        ?.fitTerminal?.({ redrawAfterSettle: true })
     }
   }))
 }
@@ -415,21 +402,9 @@ function onResizeEnd(): void {
 }
 
 function makeStickyStr(key: string, fallback: string) {
-  const r = ref<string>(
-    (() => {
-      try {
-        return localStorage.getItem(key) ?? fallback
-      } catch {
-        return fallback
-      }
-    })()
-  )
+  const r = ref<string>(settingsGet(key, fallback))
   watch(r, (v) => {
-    try {
-      localStorage.setItem(key, v)
-    } catch {
-      /* ignore */
-    }
+    settingsSet(key, v)
   })
   return r
 }
@@ -540,7 +515,7 @@ const MAX_SPAWN_HISTORY = 100
 
 function loadSpawnHistory(): SpawnHistoryEntry[] {
   try {
-    const raw = localStorage.getItem(SPAWN_HISTORY_KEY)
+    const raw = settingsGet<string | null>(SPAWN_HISTORY_KEY, null)
     if (!raw) return []
     return (JSON.parse(raw) as SpawnHistoryEntry[]).slice(-MAX_SPAWN_HISTORY)
   } catch {
@@ -551,9 +526,7 @@ function loadSpawnHistory(): SpawnHistoryEntry[] {
 const spawnHistory = ref<SpawnHistoryEntry[]>(loadSpawnHistory())
 
 watch(spawnHistory, (v) => {
-  try {
-    localStorage.setItem(SPAWN_HISTORY_KEY, JSON.stringify(v.slice(-MAX_SPAWN_HISTORY)))
-  } catch {}
+  settingsSet(SPAWN_HISTORY_KEY, JSON.stringify(v.slice(-MAX_SPAWN_HISTORY)))
 }, { deep: true })
 
 function setPaneRef(id: string, el: unknown): void {
@@ -778,10 +751,10 @@ async function onHandleIssue(payload: {
   const kickoff = buildIssueKickoff(issue, provider, mode)
   const spawnGroupId =
     activeTab.value === 'manual'
-      ? ''
+      ? (runGroups.value[0]?.id ?? '')
       : runGroups.value.some((g) => g.id === activeTab.value)
         ? activeTab.value
-        : currentRunGroupId.value || ''
+        : currentRunGroupId.value || (runGroups.value[0]?.id ?? '')
   const paneId = await spawnPane({
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
@@ -1395,10 +1368,10 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
   // sent panes to a different tab than the one being viewed.
   const spawnGroupId =
     activeTab.value === 'manual'
-      ? ''
+      ? (runGroups.value[0]?.id ?? '')
       : runGroups.value.some((g) => g.id === activeTab.value)
         ? activeTab.value
-        : currentRunGroupId.value || ''
+        : currentRunGroupId.value || (runGroups.value[0]?.id ?? '')
   const paneId = await spawnPane({
     agentKey: payload.agentKey,
     roleKey: payload.roleKey,
@@ -1450,10 +1423,10 @@ async function onManualResume(payload: ResumePayload): Promise<void> {
   const commandOverride = buildResumeCommand(agentKey, sessionId, skipFlag)
   const spawnGroupId =
     activeTab.value === 'manual'
-      ? ''
+      ? (runGroups.value[0]?.id ?? '')
       : runGroups.value.some((g) => g.id === activeTab.value)
         ? activeTab.value
-        : currentRunGroupId.value || ''
+        : currentRunGroupId.value || (runGroups.value[0]?.id ?? '')
   const paneId = await spawnPane({
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
@@ -1731,6 +1704,10 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
           role: snap.roleKey || '',
           run_group_id: snap.runGroupId || '',
         })
+      }
+      const pane = panes.value.find((p) => p.id === newId)
+      if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
+        void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
       }
       if (origIndex >= 0) {
         const from = panes.value.findIndex((p) => p.id === newId)
@@ -2040,6 +2017,12 @@ interface ProjectPayload {
     updated_at?: string
     layout_mode?: string
     pipeline_id?: string
+    tab_order?: string[]  // run-group tab order (ids); empty/absent = insertion order
+    // Run-group tab records in display order; null/absent = never persisted
+    // (legacy localStorage migration / default group applies), [] = user
+    // deleted all groups.
+    ui_run_groups?: RunGroup[] | null
+    ui_active_tab?: string  // last active run-group tab id ('' = frontend default)
     run_count?: number
     theme?: string
     theme_custom?: Record<string, string>
@@ -2179,17 +2162,18 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   }
   if (pipeline.state !== 'running') pipeline.workspacePath = path
   // Keep currentWorkspace in sync with the workspace being inspected so that
-  // run-group localStorage keys match: _saveRunGroups() keys off currentWorkspace
+  // run-group workspace paths match: _saveRunGroups() keys off currentWorkspace
   // while _loadRunGroups() keys off `path`. If they diverge, a pipeline tab saved
-  // under one key is unreadable under the other and silently vanishes on reload.
+  // under one workspace is unreadable under the other and silently vanishes on
+  // reload.
   currentWorkspace.value = path
   existingProject.value = resp ? buildExistingProjectInfo(resp) : null
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
-    // Adopt the backend theme backup only if localStorage held nothing
-    // (load order: localStorage → backend → default). loadTheme() is a no-op
-    // for theme when localStorage already wins, so this is safe to call here.
+    // Adopt the backend theme backup only if the settings store held nothing
+    // (load order: settings store → backend → default). loadTheme() is a no-op
+    // for theme when the store already wins, so this is safe to call here.
     themeApi.loadTheme({ theme: resp.project.theme, theme_custom: resp.project.theme_custom })
     settingsApi.loadLanguage({ language: (resp.project as { language?: string }).language })
     const savedMode = resp.project.layout_mode
@@ -2206,7 +2190,15 @@ async function onWorkspaceCheck(path: string): Promise<void> {
         await stagesApi.refresh()
       }
     }
-    _loadRunGroups(path)
+    _loadRunGroups(path, resp.project)
+    // Apply the persisted tab order from project.json. Groups not listed (or
+    // an absent field) keep their stored order.
+    const savedTabOrder = resp.project.tab_order
+    if (Array.isArray(savedTabOrder) && savedTabOrder.length > 0) {
+      if (sortByIdOrder(runGroups.value, savedTabOrder.filter((t) => typeof t === 'string'))) {
+        currentRunGroupId.value = runGroups.value[runGroups.value.length - 1]?.id ?? ''
+      }
+    }
     // Set the active tab BEFORE restoring panes. Without it, tab filtering is
     // inactive (tabFilteredPaneIds falls back to "all panes"), so every tab's
     // panes share one grid (e.g. 7 panes → 3 cols → ~282px). Each agent then
@@ -2214,13 +2206,29 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     // stuck in scrollback even after the later resize — visible as a pane whose
     // text is much narrower than the cell. Filtering first makes each pane spawn
     // into its final-width grid cell.
-    try {
-      const key = `agentTeam.activeTab.${path}`
-      const saved = localStorage.getItem(key)
-      activeTab.value = (saved && stageTabs.value.some((t) => t.key === saved))
-        ? saved
-        : (stageTabs.value[0]?.key ?? '')
-    } catch { activeTab.value = stageTabs.value[0]?.key ?? '' }
+    // The backend field wins; the legacy per-workspace localStorage key is
+    // migrated once (legacy copy deleted only after the backend ack).
+    const legacyTabKey = `agentTeam.activeTab.${path}`
+    let savedTab = typeof resp.project.ui_active_tab === 'string' ? resp.project.ui_active_tab : ''
+    let legacyTab: string | null = null
+    try { legacyTab = localStorage.getItem(legacyTabKey) } catch { legacyTab = null }
+    if (savedTab) {
+      // Backend already owns the value — clear any leftover legacy copy.
+      if (legacyTab !== null) { try { localStorage.removeItem(legacyTabKey) } catch { /* ignore */ } }
+    } else if (legacyTab) {
+      savedTab = legacyTab
+      if (!isDetachedWindow) {
+        void sendQuiet<{ ok: boolean }>('project.set_ui_state', {
+          workspace_path: path,
+          active_tab: legacyTab,
+        }).then((ack) => {
+          if (ack?.ok) { try { localStorage.removeItem(legacyTabKey) } catch { /* ignore */ } }
+        })
+      }
+    }
+    activeTab.value = (savedTab && stageTabs.value.some((t) => t.key === savedTab))
+      ? savedTab
+      : (stageTabs.value[0]?.key ?? '')
     if (suppressPaneRestoreOnce) {
       // First load of a duplicated window: open the same workspace as a clean
       // view without re-resuming the source window's live agent sessions.
@@ -2334,7 +2342,11 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     return _restoreGroupId
   }
 
-  await Promise.all(toRestore.map(async (saved) => {
+  // New pane ids per toRestore slot — spawnPane assigns fresh ids, so the
+  // post-restore re-sort below maps the saved order onto the new ids.
+  const restoredPaneIds: (string | undefined)[] = new Array(toRestore.length)
+
+  await Promise.all(toRestore.map(async (saved, restoreIdx) => {
     const sessionId = (saved.session_id ?? '').trim()
     const sessionHomeId = saved.agent === 'codex'
       ? ((saved.session_home_id ?? '').trim() || saved.pane_id)
@@ -2347,7 +2359,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     const groupStillExists = !!savedGid && runGroups.value.some((g) => g.id === savedGid)
     const runGroupId = groupStillExists
       ? savedGid
-      : (saved.origin === 'pipeline' ? ensureRestoreGroup() : '')
+      : (saved.origin === 'pipeline' ? ensureRestoreGroup() : (runGroups.value[0]?.id ?? ''))
 
     // Unified session-resume logic for all pane types
     const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
@@ -2375,6 +2387,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     })
 
     if (!paneId) return
+    restoredPaneIds[restoreIdx] = paneId
 
     // Re-apply the user's persisted display name to the restored pane.
     if (saved.custom_name) {
@@ -2425,6 +2438,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       }
     }
   }))
+
+  // The parallel spawns above push into panes.value in completion order, which
+  // is nondeterministic — re-sort the restored panes back to the saved
+  // project.panes order (toRestore mirrors it). Panes outside this restore
+  // (e.g. already-live ones on a group reattach) keep their positions.
+  sortByIdOrder(panes.value, restoredPaneIds.filter((id): id is string => !!id))
 
   // Backfill removed manual panes into spawnHistory so Agent History shows past sessions.
   const removedManual = allProjectPanes.filter(
@@ -4737,46 +4756,43 @@ const currentRunGroupId = ref<string>('')  // ID assigned to newly spawned pipel
 const activeTab = ref<string>('')
 
 // True while applying a runGroups change received from another window via the
-// `storage` event. Guards _saveRunGroups so a remote-applied value is not
-// written straight back, which would ping-pong between the two windows.
+// `project.ui_state_changed` broadcast. Guards _saveRunGroups so a
+// remote-applied value is not written straight back, which would ping-pong
+// between the two windows.
 const applyingRemote = ref(false)
-
-function _runGroupsKey(): string {
-  return currentWorkspace.value ? `agentTeam.runGroups.${currentWorkspace.value}` : ''
-}
 
 function _saveRunGroups(): void {
   if (applyingRemote.value || isDetachedWindow) return
-  try {
-    const key = _runGroupsKey()
-    if (key) localStorage.setItem(key, JSON.stringify(runGroups.value))
-  } catch { /* ignore */ }
-}
-
-/** Cross-window sync: when another window writes this workspace's runGroups to
- *  localStorage, adopt it here so both windows stay consistent (fixes the
- *  last-write-wins race where one window silently overwrote the other). Only the
- *  runGroups key is synced — activeTab and layout are per-window view state and
- *  are intentionally left independent. The `storage` event never fires in the
- *  window that made the write, so this only runs on peer windows; applyingRemote
- *  prevents the adopted value from being written straight back. */
-function onRunGroupsStorageSync(e: StorageEvent): void {
   const ws = currentWorkspace.value
   if (!ws) return
-  if (e.key !== `agentTeam.runGroups.${ws}`) return
-  if (e.newValue == null) return
-  let parsed: RunGroup[]
-  try { parsed = JSON.parse(e.newValue) as RunGroup[] } catch { return }
-  if (!Array.isArray(parsed)) return
+  void sendQuiet('project.set_ui_state', {
+    workspace_path: ws,
+    run_groups: runGroups.value,
+  })
+}
+
+/** Cross-window sync: when another window persists this workspace's runGroups
+ *  (project.set_ui_state), the backend broadcasts project.ui_state_changed to
+ *  the peer windows (the sender is excluded), so both stay consistent (fixes
+ *  the last-write-wins race where one window silently overwrote the other).
+ *  Only run_groups is synced — activeTab and layout are per-window view state
+ *  and are intentionally left independent. applyingRemote prevents the adopted
+ *  value from being written straight back. */
+function onRunGroupsRemoteSync(raw: unknown): void {
+  const d = raw as { workspace_path?: string; run_groups?: RunGroup[] } | null
+  const ws = currentWorkspace.value
+  if (!ws || !d || d.workspace_path !== ws) return
+  if (!Array.isArray(d.run_groups)) return
   applyingRemote.value = true
-  runGroups.value = parsed
-  activeTab.value = resolveActiveTab(parsed, activeTab.value)
-  currentRunGroupId.value = parsed[parsed.length - 1]?.id ?? ''
+  runGroups.value = d.run_groups
+  activeTab.value = resolveActiveTab(d.run_groups, activeTab.value)
+  currentRunGroupId.value = d.run_groups[d.run_groups.length - 1]?.id ?? ''
   void nextTick(() => { applyingRemote.value = false })
 }
 
-onMounted(() => { window.addEventListener('storage', onRunGroupsStorageSync) })
-onUnmounted(() => { window.removeEventListener('storage', onRunGroupsStorageSync) })
+let _offUiStateChanged: (() => void) | null = null
+onMounted(() => { _offUiStateChanged = backend.on('project.ui_state_changed', onRunGroupsRemoteSync) })
+onUnmounted(() => { _offUiStateChanged?.(); _offUiStateChanged = null })
 
 // ── Detached run-group windows (main-window side) ────────────────────────────
 /** Drag-out gesture from the tab bar → ask main to open the group in its own
@@ -4838,21 +4854,37 @@ onMounted(() => {
  *  so reloads/re-checks never spawn a duplicate. */
 const DEFAULT_RUN_GROUP_ID = 'rg-default'
 
-function _loadRunGroups(path: string): void {
-  let hadStoredRunGroups = false
-  try {
-    const raw = localStorage.getItem(`agentTeam.runGroups.${path}`)
-    hadStoredRunGroups = raw !== null
-    runGroups.value = raw ? (JSON.parse(raw) as RunGroup[]) : []
-  } catch { runGroups.value = [] }
-  // Open with exactly one default tab. Only created when no group exists at all,
-  // and with a fixed id → never duplicated. Each pipeline run still adds its own
-  // tab via createRunGroup; the default acts as the catch-all / landing tab. If
-  // localStorage explicitly contains [], the user deleted the default RunGroup,
-  // so do not recreate it on reload.
-  if (!hadStoredRunGroups && runGroups.value.length === 0) {
-    runGroups.value = [{ id: DEFAULT_RUN_GROUP_ID, name: '預設', createdAt: Date.now() }]
-    try { localStorage.setItem(`agentTeam.runGroups.${path}`, JSON.stringify(runGroups.value)) } catch { /* ignore */ }
+function _loadRunGroups(path: string, project: NonNullable<ProjectPayload['project']>): void {
+  const legacyKey = `agentTeam.runGroups.${path}`
+  const stored = project.ui_run_groups
+  if (Array.isArray(stored)) {
+    // project.json owns the records ([] = the user deleted every group — do
+    // not recreate the default). A leftover legacy localStorage copy is stale
+    // (its ack-gated migration already completed) — clear it.
+    runGroups.value = stored
+    try { localStorage.removeItem(legacyKey) } catch { /* ignore */ }
+  } else {
+    // Never persisted → one-time migration from the legacy localStorage key.
+    // Open with exactly one default tab when nothing was stored at all, with a
+    // fixed id → never duplicated. Each pipeline run still adds its own tab via
+    // createRunGroup; the default acts as the catch-all / landing tab. If the
+    // legacy key explicitly contains [], the user deleted the default RunGroup,
+    // so do not recreate it.
+    let legacyRaw: string | null = null
+    try { legacyRaw = localStorage.getItem(legacyKey) } catch { legacyRaw = null }
+    const parsed = parseLegacyRunGroups(legacyRaw)
+    runGroups.value = parsed ?? [{ id: DEFAULT_RUN_GROUP_ID, name: '預設', createdAt: Date.now() }]
+    if (!isDetachedWindow) {
+      void sendQuiet<{ ok: boolean }>('project.set_ui_state', {
+        workspace_path: path,
+        run_groups: runGroups.value,
+      }).then((ack) => {
+        // Ack-gated delete: keep the legacy copy (retried next load) on failure.
+        if (ack?.ok && legacyRaw !== null) {
+          try { localStorage.removeItem(legacyKey) } catch { /* ignore */ }
+        }
+      })
+    }
   }
   currentRunGroupId.value = runGroups.value[runGroups.value.length - 1]?.id ?? ''
 }
@@ -4892,6 +4924,35 @@ async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promis
     pane_id: pane.id,
     run_group_id: runGroupId,
   })
+}
+
+/** Persist the current pane order to project.json (survives restart). */
+async function persistPaneOrder(): Promise<void> {
+  const ws = currentWorkspace.value
+  if (!ws) return
+  await sendQuiet('project.set_pane_order', {
+    workspace_path: ws,
+    pane_ids: panes.value.map((p) => p.id),
+  })
+}
+
+/** Persist the run-group tab order to project.json (survives restart). */
+async function persistTabOrder(): Promise<void> {
+  const ws = currentWorkspace.value
+  if (!ws) return
+  await sendQuiet('project.set_tab_order', {
+    workspace_path: ws,
+    tab_order: runGroups.value.map((g) => g.id),
+  })
+}
+
+/** Reorder run-group tabs (tab dragged onto another tab in the StageTabBar).
+ *  The synthetic "manual" tab is not a RunGroup, so drops involving it are
+ *  no-ops (reorderByIds finds no matching id). */
+function reorderRunGroupTab(fromKey: string, toKey: string): void {
+  if (!reorderByIds(runGroups.value, fromKey, toKey)) return
+  _saveRunGroups()
+  void persistTabOrder()
 }
 
 /** Move one pane into another tab (drag-and-drop target). The "manual" tab maps
@@ -5013,15 +5074,16 @@ const tabVisiblePanes = computed(() =>
   panes.value.filter((p) => tabFilteredPaneIds.value.has(p.id) && !minimizedPanes.value.has(p.id))
 )
 
-// Persist activeTab to localStorage keyed by workspace path
-const activeTabStorageKey = computed(() =>
-  currentWorkspace.value ? `agentTeam.activeTab.${currentWorkspace.value}` : ''
-)
+// Persist activeTab to project.json keyed by workspace path
 watch(activeTab, (v) => {
-  try {
-    // Detached child windows never own the shared activeTab key.
-    if (!isDetachedWindow && activeTabStorageKey.value) localStorage.setItem(activeTabStorageKey.value, v)
-  } catch { /* ignore */ }
+  // Detached child windows never own the shared activeTab state; a
+  // remote-applied runGroups change must not echo its tab fallback back.
+  if (!isDetachedWindow && !applyingRemote.value && v && currentWorkspace.value) {
+    void sendQuiet('project.set_ui_state', {
+      workspace_path: currentWorkspace.value,
+      active_tab: v,
+    })
+  }
   // Keep currentRunGroupId in sync with the active tab so that "+ Add to grid"
   // always spawns into whichever tab the user is currently viewing.
   if (v && v !== 'manual' && runGroups.value.some((g) => g.id === v)) {
@@ -5045,6 +5107,16 @@ function restorePane(id: string): void {
   if (layoutMode.value !== 'grid') focusPaneId.value = id
   persistPaneMinimized(id, false)
   syncViews()
+}
+
+/** Drag-reorder: move the pane `fromId` to the slot currently occupied by
+ *  `toId`. `panes.value` is the single source of truth for pane order, so the
+ *  Grid and the Active Agents list both update from this one splice. No-op for
+ *  identical or unknown ids; the new order is persisted only when it changed. */
+function reorderPane(fromId: string, toId: string): void {
+  if (!reorderByIds(panes.value, fromId, toId)) return
+  syncViews() // reflect the new order in the Active Agents list immediately
+  void persistPaneOrder()
 }
 
 // Persist the pane's collapsed-to-sidebar state to project.json so it survives
@@ -5185,7 +5257,8 @@ watch(effectiveLayoutMode, () => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         for (const ref of Object.values(paneRefs)) {
-          (ref as unknown as { fitTerminal?: () => void })?.fitTerminal?.()
+          (ref as unknown as { fitTerminal?: (opts?: { redrawAfterSettle?: boolean }) => void })
+            ?.fitTerminal?.({ redrawAfterSettle: true })
         }
       })
     })
@@ -5209,13 +5282,13 @@ function floatPaneStyle(paneId: string): Record<string, string> {
 // ── Fullscreen PiP floating list ──────────────────────────────────────────────
 const floatPipExpanded = ref(true)
 const floatPipPos = ref<{ top: number; left: number }>(
-  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.floatPipPos') ?? ''); if (typeof v?.top === 'number') return v as { top: number; left: number } } catch {} return { top: 0, left: 0 } })()
+  (() => { try { const v = JSON.parse(settingsGet('agentTeam.floatPipPos', '')); if (typeof v?.top === 'number') return v as { top: number; left: number } } catch {} return { top: 0, left: 0 } })()
 )
 const floatPipWidth = ref<number>(
-  (() => { try { return parseInt(localStorage.getItem('agentTeam.floatPipWidth') ?? '220') || 220 } catch { return 220 } })()
+  parseInt(settingsGet('agentTeam.floatPipWidth', '220')) || 220
 )
-watch(floatPipPos, (v) => { try { localStorage.setItem('agentTeam.floatPipPos', JSON.stringify(v)) } catch {} }, { deep: true })
-watch(floatPipWidth, (v) => { try { localStorage.setItem('agentTeam.floatPipWidth', String(v)) } catch {} })
+watch(floatPipPos, (v) => { settingsSet('agentTeam.floatPipPos', JSON.stringify(v)) }, { deep: true })
+watch(floatPipWidth, (v) => { settingsSet('agentTeam.floatPipWidth', String(v)) })
 const floatPipListMaxHeight = ref(320)
 
 function _pipStageSize(): { sw: number; sh: number } {
@@ -5314,22 +5387,22 @@ const sidebarRowCount = computed(() => {
 // ── Grid pane splitters ───────────────────────────────────────────────────────
 const gridRef = ref<HTMLElement | null>(null)
 const colWidths = ref<number[]>(
-  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.colWidths') ?? ''); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
+  (() => { try { const v = JSON.parse(settingsGet('agentTeam.colWidths', '')); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
 )
 const rowHeights = ref<number[]>(
-  (() => { try { const v = JSON.parse(localStorage.getItem('agentTeam.rowHeights') ?? ''); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
+  (() => { try { const v = JSON.parse(settingsGet('agentTeam.rowHeights', '')); if (Array.isArray(v)) return v as number[] } catch {} return [1] })()
 )
 // Sidebar left column width in pixels (0 = default: fill remaining space)
 const sidebarLeftPx = ref<number>(
-  (() => { try { return parseInt(localStorage.getItem('agentTeam.sidebarLeftPx') ?? '0') || 0 } catch { return 0 } })()
+  parseInt(settingsGet('agentTeam.sidebarLeftPx', '0')) || 0
 )
 const dualFocusSplitPx = ref<number>(
-  (() => { try { return parseInt(localStorage.getItem('agentTeam.dualFocusSplitPx') ?? '0') || 0 } catch { return 0 } })()
+  parseInt(settingsGet('agentTeam.dualFocusSplitPx', '0')) || 0
 )
-watch(colWidths, (v) => { try { localStorage.setItem('agentTeam.colWidths', JSON.stringify(v)) } catch {} }, { deep: true })
-watch(rowHeights, (v) => { try { localStorage.setItem('agentTeam.rowHeights', JSON.stringify(v)) } catch {} }, { deep: true })
-watch(sidebarLeftPx, (v) => { try { localStorage.setItem('agentTeam.sidebarLeftPx', String(v)) } catch {} })
-watch(dualFocusSplitPx, (v) => { try { localStorage.setItem('agentTeam.dualFocusSplitPx', String(v)) } catch {} })
+watch(colWidths, (v) => { settingsSet('agentTeam.colWidths', JSON.stringify(v)) }, { deep: true })
+watch(rowHeights, (v) => { settingsSet('agentTeam.rowHeights', JSON.stringify(v)) }, { deep: true })
+watch(sidebarLeftPx, (v) => { settingsSet('agentTeam.sidebarLeftPx', String(v)) })
+watch(dualFocusSplitPx, (v) => { settingsSet('agentTeam.dualFocusSplitPx', String(v)) })
 
 const numCols = computed(() => {
   const n = tabVisiblePanes.value.length
@@ -5742,6 +5815,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @pipeline-restart="onPipelineRestart"
       @refresh-analyzer="onRefreshAnalyzer"
       @focus-pane="onFocusPane"
+      @reorder-pane="reorderPane"
       @open-settings="showSettings = true"
       @open-git-accounts="openSettingsAccounts"
       @open-history="showHistory = true"
@@ -5913,6 +5987,7 @@ function paneIsCommander(p: ActivePane): boolean {
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"
         @move-pane="(paneId, targetKey) => movePaneToGroup(paneId, targetKey)"
+        @reorder-tab="(fromKey, toKey) => reorderRunGroupTab(fromKey, toKey)"
         @detach="(key, x, y) => onDetachGroup(key, x, y)"
       />
       <div v-if="panes.length === 0" class="empty">
@@ -5994,6 +6069,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @rebuild-clean="rebuildPaneClean(p.id)"
           @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
+          @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
