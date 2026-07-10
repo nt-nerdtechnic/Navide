@@ -223,31 +223,43 @@ Disambiguation: this is NOT xAI's official "Grok Build" CLI
 | Model | `grok models` to list; `GROK_MODEL` env or settings; defaults like `grok-4.3` |
 | MCP | Supported (`/mcps` in TUI or `mcpServers` in settings) |
 
-Suggested spec entry when integrating (pending open question 1):
+Spec entry (verified — no permission flag needed):
 
 ```ts
 {
   agentKey: 'grok',
   label: 'Grok CLI',
   defaultCommand: 'grok',
-  skipPermissionFlag: '???', // no documented auto-approve flag yet
+  // no skipPermissionFlag: grok-cli has no tool-confirmation gate at all
   hint: 'generalist'
 }
 ```
 
-Open questions to verify on a real install before writing the log reader:
-1. Whether a skip-confirmation/auto-approve mode exists (flag or
-   `user-settings.json` field) — required for YOLO mode parity; without it the
-   agent will block on tool confirmations inside the pane.
-2. Exact session file location/format under `.grok/` or `~/.grok/`
-   (JSONL? JSON per session?) and how fast a new session appears on disk.
-3. Whether token usage is recorded in session files (needed for TokenStats).
-4. Whether an injected `at-pane:` marker is persisted verbatim into the
-   session file (required for marker-based `session.detected` binding).
-5. Session-id discovery: how ids are listed (a `grok sessions` command?) for
-   the resume history datalist.
-6. Concurrency: whether multiple `grok` instances in the same project share
-   `.grok/` state safely (decides if a `codex_home.py`-style isolation layer
-   is needed). Note sessions being project-level (`.grok/` in repo) differs
-   from Claude/Codex's user-home storage — the log reader's `project_dirs()`
-   must scan workspace dirs, not the home dir.
+Open questions — ALL RESOLVED 2026-07-10 by reading the source
+(github.com/superagent-ai/grok-cli, v1.1.7):
+
+1. **YOLO/auto-approve**: no tool-execution confirmation gate exists — bash /
+   file / edit tools run automatically in TUI and headless modes. The only
+   approval flow is for x402 *payments* (`autoApprove` in user-settings is
+   payment-only). → omit `skipPermissionFlag`.
+2. **Session storage**: single shared SQLite DB `~/.grok/grok.db` (WAL,
+   busy_timeout 5s), NOT per-project files. Tables: `workspaces` (id =
+   sha1(git root), 16-hex), `sessions` (id = 12-hex uuid slice), `messages`
+   (`message_json` = full ModelMessage JSON, seq-ordered), `usage_events`,
+   `tool_calls/results`. Written synchronously per turn — live reads work.
+3. **Token usage**: `usage_events` rows carry `input_tokens`, `output_tokens`,
+   `total_tokens`, `cost_micros`, `model`, `session_id` per turn.
+4. **Marker persistence**: user message text is stored verbatim in
+   `messages.message_json` → `at-pane:<id>` marker binding works; reader
+   queries the messages table (open the DB read-only; WAL-aware).
+5. **Session listing**: no `grok sessions` command; `--session latest` =
+   most-recently-updated session in the current workspace. Reader can
+   enumerate ids straight from the `sessions` table.
+6. **Concurrency**: safe for distinct sessions (WAL + transactions); no
+   per-pane home isolation needed. Sessions are keyed by workspace hash, so
+   the log reader filters by `workspaces.root_path` matching the pane's cwd.
+
+Env vars: `GROK_API_KEY` (auth), `GROK_BASE_URL`, `GROK_MODEL`,
+`GROK_MAX_TOKENS`, `GROK_TRUST_WORKSPACE` (skips sandbox trust prompt —
+useful for spawn env). Runtime note: built on Bun (`bun:sqlite`); the
+official install.sh handles runtime setup.

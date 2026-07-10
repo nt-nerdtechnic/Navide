@@ -2136,7 +2136,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div v-if="commitDetailData.files.length">
                   <div class="cd-key">Files ({{ commitDetailData.files.length }})</div>
                   <template v-for="f in commitDetailData.files" :key="f">
-                    <div class="cd-file cd-file-clickable" @click="toggleCommitFileDiff(c.hash, f)">
+                    <div class="cd-file cd-file-clickable" :title="f" @click="toggleCommitFileDiff(c.hash, f)">
                       <span class="expand-caret">{{ commitDiffFile === f ? '▾' : '▸' }}</span> {{ f }}
                     </div>
                     <div v-if="commitDiffFile === f" class="subpanel green-border diffblame-inline">
@@ -3160,7 +3160,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .cd-row { display: flex; gap: 8px; margin-bottom: 3px; color: var(--text-primary); }
 .cd-key { color: var(--text-muted); min-width: 46px; flex-shrink: 0; }
 .cd-body { color: var(--text-secondary); margin: 4px 0; white-space: pre-wrap; font-size: 10px; }
-.cd-file { color: var(--text-primary); font-family: monospace; font-size: 10px; padding: 1px 0; }
+.cd-file { color: var(--text-primary); font-family: monospace; font-size: 10px; padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cd-file-clickable { cursor: pointer; }
 .cd-file-clickable:hover { color: var(--accent, #4a9eff); }
 
