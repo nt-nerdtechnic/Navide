@@ -16,6 +16,7 @@ const emit = defineEmits<{
   (e: 'delete', key: string): void
   (e: 'close-group', key: string): void
   (e: 'move-pane', paneId: string, targetKey: string): void
+  (e: 'reorder-tab', fromKey: string, toKey: string): void
   (e: 'detach', key: string, x: number, y: number): void
 }>()
 
@@ -43,11 +44,24 @@ function chooseClose(): void {
 // live in App.vue because "手動" is a synthetic tab, not a persisted RunGroup.
 
 // Drag-to-move: a pane dropped onto a tab reassigns it to that tab's run group.
+// Drag-to-reorder: a tab dropped onto another tab swaps positions in the bar.
+// The two flows are distinguished by dataTransfer type ('application/x-pane-id'
+// vs 'application/x-tab-key'), so they never collide.
 const dragOverKey = ref<string | null>(null)
+const draggingTabKey = ref<string | null>(null)
 function onTabDrop(e: DragEvent, key: string): void {
   dragOverKey.value = null
+  const tabKey = e.dataTransfer?.getData('application/x-tab-key') || ''
+  if (tabKey) {
+    if (tabKey !== key) emit('reorder-tab', tabKey, key)
+    return
+  }
   const paneId = e.dataTransfer?.getData('application/x-pane-id') || ''
   if (paneId) emit('move-pane', paneId, key)
+}
+function onTabDragEnter(key: string): void {
+  // No highlight on the tab being dragged itself — self-drops are no-ops.
+  if (key !== draggingTabKey.value) dragOverKey.value = key
 }
 
 // Drag-out: dragging a stage tab and releasing OUTSIDE this window's viewport
@@ -57,8 +71,10 @@ function onTabDragStart(e: DragEvent, tab: TabItem): void {
   if (tab.type !== 'stage') { e.preventDefault(); return }
   e.dataTransfer?.setData('application/x-tab-key', tab.key)
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+  draggingTabKey.value = tab.key
 }
 function onTabDragEnd(e: DragEvent, tab: TabItem): void {
+  draggingTabKey.value = null
   if (tab.type !== 'stage') return
   const outside =
     e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
@@ -105,7 +121,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
         @dragstart="onTabDragStart($event, tab)"
         @dragend="onTabDragEnd($event, tab)"
         @dragover.prevent
-        @dragenter.prevent="dragOverKey = tab.key"
+        @dragenter.prevent="onTabDragEnter(tab.key)"
         @dragleave="dragOverKey = (dragOverKey === tab.key ? null : dragOverKey)"
         @drop.prevent="onTabDrop($event, tab.key)"
       >

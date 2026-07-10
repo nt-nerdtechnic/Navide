@@ -129,6 +129,7 @@ class Project:
     theme: str = "dark-github"  # backup of the user-level theme (source of truth is the renderer's localStorage)
     theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
     language: str = "zh-TW"  # backup of the user-level language (source of truth is the renderer's localStorage)
+    tab_order: list[str] = field(default_factory=list)  # run-group tab order (ids); empty = frontend insertion order
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -631,6 +632,52 @@ class ProjectStore:
         if pane is None:
             return project
         pane.run_group_id = run_group_id
+        self.save(project)
+        return project
+
+    def set_pane_order(
+        self,
+        workspace_path: str,
+        *,
+        pane_ids: list[str],
+    ) -> Project | None:
+        """Reorder project.panes to match the given pane_ids order.
+
+        Panes whose id is not in pane_ids keep their relative order and are
+        appended after the listed ones (no data loss); ids without a matching
+        pane are ignored. Returns None when no project exists for the
+        workspace (peek semantics — never creates one).
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        rank = {pid: i for i, pid in enumerate(pane_ids)}
+        listed = sorted(
+            (p for p in project.panes if p.pane_id in rank),
+            key=lambda p: rank[p.pane_id],
+        )
+        rest = [p for p in project.panes if p.pane_id not in rank]
+        project.panes = listed + rest
+        self.save(project)
+        return project
+
+    def set_tab_order(
+        self,
+        workspace_path: str,
+        *,
+        tab_order: list[str],
+    ) -> Project | None:
+        """Persist the run-group tab order (list of run-group ids).
+
+        The run groups themselves live in the renderer; this list is an
+        ordering hint applied on restore, so unknown/stale ids are harmless
+        (the frontend skips ids with no matching group). Returns None when no
+        project exists for the workspace (peek semantics — never creates one).
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        project.tab_order = list(tab_order)
         self.save(project)
         return project
 

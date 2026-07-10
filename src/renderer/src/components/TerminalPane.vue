@@ -29,6 +29,7 @@ const emit = defineEmits<{
   (e: 'rebuild-clean'): void
   (e: 'rename', name: string): void
   (e: 'context-menu', ev: MouseEvent): void
+  (e: 'reorder-drop', draggedPaneId: string): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -98,11 +99,43 @@ function onTerminalDrop(e: DragEvent): void {
   terminal.pasteText(paths.map(shellEscape).join(' '))
 }
 
-// Drag the pane (by its header) onto a tab to move it into that run group.
+// Drag the pane (by its header) onto a tab to move it into that run group,
+// or onto another pane's header to reorder (see the drop handlers below).
 function onHeaderDragStart(e: DragEvent): void {
   if (!e.dataTransfer) return
   e.dataTransfer.setData('application/x-pane-id', props.paneId)
   e.dataTransfer.effectAllowed = 'move'
+  draggingSelf = true
+}
+
+// Drop target for pane reordering: another pane's header dropped onto this
+// header emits 'reorder-drop' with the dragged pane's id; App.vue moves that
+// pane into this pane's slot. During dragover the payload is unreadable
+// (dataTransfer protected mode), so hovering is gated on the data TYPE plus a
+// local "this pane is the drag source" flag — the id check happens on drop.
+const isReorderDragOver = ref(false)
+let draggingSelf = false
+
+function onHeaderDragEnd(): void {
+  draggingSelf = false
+  isReorderDragOver.value = false
+}
+
+function onHeaderDragOver(e: DragEvent): void {
+  if (draggingSelf || !e.dataTransfer?.types.includes('application/x-pane-id')) return
+  e.preventDefault()
+  isReorderDragOver.value = true
+}
+
+function onHeaderDragLeave(): void {
+  isReorderDragOver.value = false
+}
+
+function onHeaderDrop(e: DragEvent): void {
+  isReorderDragOver.value = false
+  const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
+  if (!draggedId || draggedId === props.paneId) return
+  emit('reorder-drop', draggedId)
 }
 
 onMounted(() => {
@@ -120,11 +153,16 @@ onMounted(() => {
     >↻</button>
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
-      class="pane-header"
+      :class="['pane-header', { 'drag-over': isReorderDragOver }]"
       :draggable="!editingTitle"
       :title="$t('pane.terminal.drag-to-tab-tooltip')"
       @click="emit('set-focus')"
       @dragstart="onHeaderDragStart"
+      @dragend="onHeaderDragEnd"
+      @dragover="onHeaderDragOver"
+      @dragenter="onHeaderDragOver"
+      @dragleave="onHeaderDragLeave"
+      @drop.prevent="onHeaderDrop"
       @contextmenu.prevent="emit('context-menu', $event)"
     >
       <div class="header-main">
@@ -247,6 +285,11 @@ onMounted(() => {
   border-bottom: 1px solid var(--border-muted);
   font-size: 12px;
   color: var(--text-primary);
+}
+/* Reorder drop target feedback, matching .tab-btn.drag-over in StageTabBar.vue. */
+.pane-header.drag-over {
+  background: var(--accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .header-main {
   display: flex;
