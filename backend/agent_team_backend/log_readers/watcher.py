@@ -51,12 +51,12 @@ class _Handler(FileSystemEventHandler):
         if event.is_directory:
             return
         s = str(event.src_path)
-        # Antigravity conversations are SQLite: live writes land in the -wal
+        # Antigravity/Grok stores are SQLite: live writes land in the -wal
         # journal first, so accept it but enqueue the canonical .db path.
         if s.endswith(".db-wal"):
             self._on_path(Path(s[: -len("-wal")]))
             return
-        # .db = Antigravity.
+        # .db = Antigravity conversations / Grok's shared grok.db.
         if not s.endswith((".jsonl", ".json", ".db")):
             return
         self._on_path(Path(s))
@@ -372,7 +372,7 @@ class LogWatcher:
         # independent of token parsing so it works even for session-file formats
         # the token reader doesn't (yet) understand — it only needs the file to
         # exist + contain the pane marker.
-        if self._session_sink is not None and reader.vendor in ("codex", "antigravity"):
+        if self._session_sink is not None and reader.vendor in ("codex", "antigravity", "grok"):
             try:
                 await self._session_sink(reader.vendor, path)
             except Exception as err:  # noqa: BLE001

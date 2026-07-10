@@ -314,7 +314,11 @@ class Attribution:
         Antigravity has no identity path at launch (`agy --conversation` can't
         create a chosen id), so it relies on marker matching exclusively; its
         resume id is the conversation .db filename stem (= usage.session_id).
+        Grok also relies on markers exclusively, but stores every session in
+        one shared SQLite db — its binding queries the db via the reader.
         """
+        if usage.vendor == "grok":
+            return self._bind_grok_by_marker(usage)
         if usage.vendor not in ("codex", "antigravity"):
             return None
 
@@ -418,6 +422,56 @@ class Attribution:
             self._unbound_markers.pop(reg.session_marker, None)
         log.info("bound session=%s → pane=%s via marker (resume_id=%s)", sid, matched_pane, resume_id)
         return matched_pane, resume_id
+
+    def _bind_grok_by_marker(self, usage: TokenUsage) -> SessionBinding | None:
+        """Grok keeps ALL sessions in one shared SQLite db (~/.grok/grok.db),
+        so marker binding asks the reader to resolve markers → session ids in
+        the db instead of scanning a per-session file. Binds at most one
+        session per call; the watcher fires again on every db write, so any
+        remaining markers resolve on subsequent events. Resume id is the
+        sessions.id (12-hex) that `grok -s <id>` accepts."""
+        reader = self._readers.get("grok")
+        if reader is None:
+            return None
+        with self._lock:
+            markers = [
+                marker for marker, pid in self._unbound_markers.items()
+                if (reg := self._panes.get(pid)) is not None and reg.vendor == "grok"
+            ]
+        if not markers:
+            return None
+        # DB read outside the lock (short read-only connection; {} on failure).
+        found = reader.find_sessions_by_marker(markers)
+        for marker, (session_id, ws_root) in found.items():
+            if not session_id:
+                continue
+            with self._lock:
+                pane_id = self._unbound_markers.get(marker)
+                if pane_id is None or session_id in self._session_owner:
+                    continue  # bound meanwhile / pane killed
+                reg = self._panes.get(pane_id)
+                if reg is None or reg.vendor != "grok":
+                    continue
+                # Workspace gate: grok scopes sessions by git root / canonical
+                # cwd (workspaces.scope_key); require it to match the pane so a
+                # marker echoed in another project can't cross-bind.
+                if ws_root and ws_root not in (reg.cwd, reg.workspace_path):
+                    continue
+                self._session_owner[session_id] = pane_id
+                reg.claimed_session_ids.add(session_id)
+                self._unbound_markers.pop(marker, None)
+                binding = SessionBinding(
+                    pane_id=pane_id,
+                    resume_id=session_id,
+                    workspace_path=reg.workspace_path,
+                    stage_id=reg.stage_id,
+                    session_file=usage.file_path,
+                )
+            log.info(
+                "bound grok session=%s → pane=%s via marker", session_id, pane_id
+            )
+            return binding
+        return None
 
     def _bind_antigravity_new_conversation(self, usage: TokenUsage) -> SessionBinding | None:
         """Fallback Antigravity resume capture when the marker is not yet visible.
@@ -546,6 +600,11 @@ class Attribution:
                 # Antigravity cwd is extracted from trajectory_metadata_blob.
                 if usage.cwd and usage.cwd == ws_path:
                     return ws_path
+            elif usage.vendor == "grok":
+                # Grok reader emits cwd = workspaces.scope_key (git root /
+                # canonical cwd of the session's workspace).
+                if usage.cwd and usage.cwd == ws_path:
+                    return ws_path
         return None
 
     def _lookup_pane_for(self, usage: TokenUsage) -> tuple[str | None, str | None, str | None]:
@@ -594,7 +653,7 @@ class Attribution:
         if usage.vendor == "claude":
             expected_dir = _encode_claude_cwd(pane_cwd)
             return f"/{expected_dir}/" in file_path
-        if usage.vendor in ("codex", "antigravity"):
+        if usage.vendor in ("codex", "antigravity", "grok"):
             return usage.cwd == pane_cwd
         return False
 

@@ -9,6 +9,7 @@ from .antigravity import AntigravityLogReader
 from .base import ActivityEvent, LogReader, TokenUsage
 from .claude import ClaudeLogReader
 from .codex import CodexLogReader
+from .grok import GrokLogReader
 from .watcher import LogWatcher
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "AntigravityLogReader",
     "ClaudeLogReader",
     "CodexLogReader",
+    "GrokLogReader",
     "LogWatcher",
 ]

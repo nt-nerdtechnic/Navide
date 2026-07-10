@@ -42,6 +42,7 @@ from .log_readers import (
     AntigravityLogReader,
     ClaudeLogReader,
     CodexLogReader,
+    GrokLogReader,
     LogWatcher,
     TokenUsage,
 )
@@ -258,7 +259,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
     return await _llama_benchmark(progress_cb=progress_cb)
 
 # Log readers: one per vendor. Attribution maps log session files to panes.
-_readers = [ClaudeLogReader(), CodexLogReader(), AntigravityLogReader()]
+_readers = [ClaudeLogReader(), CodexLogReader(), AntigravityLogReader(), GrokLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
@@ -433,8 +434,8 @@ def _claim_ptys(session: "Session", terminal_session_ids: list[str]) -> None:
 
 
 async def _maybe_announce_session(usage: TokenUsage) -> None:
-    """Codex/Antigravity: when a session file is first matched to its pane, tell
-    the frontend so it can persist the id/path for resume-on-restart."""
+    """Codex/Antigravity/Grok: when a session file is first matched to its pane,
+    tell the frontend so it can persist the id/path for resume-on-restart."""
     bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
     if not bound:
         return
@@ -448,9 +449,9 @@ async def _maybe_announce_session(usage: TokenUsage) -> None:
 
 
 async def _on_session_file(vendor: str, path: Path) -> None:
-    """Watcher session sink: a Codex/Antigravity session file changed. Attempt marker
-    binding directly off the file (decoupled from token parsing, so it works for
-    session-file formats the token reader doesn't understand)."""
+    """Watcher session sink: a Codex/Antigravity/Grok session file changed. Attempt
+    marker binding directly off the file (decoupled from token parsing, so it works
+    for session-file formats the token reader doesn't understand)."""
     reader = next((r for r in _readers if r.vendor == vendor), None)
     usage = TokenUsage(
         vendor=vendor, input_tokens=0, output_tokens=0,
