@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { i18n } from '../i18n'
+import { settingsGet, settingsSet } from '../lib/settings'
 
 const LANGUAGE_KEY = 'agent-team:language'
 const SUPPORTED = new Set(['zh-TW', 'en-US'])
@@ -11,20 +12,12 @@ function normalizeLocale(raw: string): string {
 }
 
 function readLocal(): string | null {
-  try {
-    const v = localStorage.getItem(LANGUAGE_KEY)
-    return v && SUPPORTED.has(v) ? v : null
-  } catch {
-    return null
-  }
+  const v = settingsGet<string | null>(LANGUAGE_KEY, null)
+  return v && SUPPORTED.has(v) ? v : null
 }
 
 function writeLocal(value: string): void {
-  try {
-    localStorage.setItem(LANGUAGE_KEY, value)
-  } catch {
-    // storage unavailable — non-fatal
-  }
+  settingsSet(LANGUAGE_KEY, value)
 }
 
 // Module-level singleton — shared across every component that calls useSettings().

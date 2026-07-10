@@ -56,14 +56,60 @@ watch(singleChangesCount, (n) => {
 })
 
 // --- Multi-repo mode ---
-const STORAGE_PREFIX = 'agentTeam.gitTabRepo.'
-
-function storageKey(): string {
-  return STORAGE_PREFIX + props.workspacePath
-}
+// The selected repo tab persists per workspace on the backend project
+// (project.json ui_git_tab_repo, via project.set_ui_state). The legacy
+// per-workspace localStorage key is migrated once (legacy copy deleted only
+// after the backend ack, so a failed push retries on the next load).
+const LEGACY_STORAGE_PREFIX = 'agentTeam.gitTabRepo.'
 
 // Active tab: abs_path of the selected repo.
 const activeRepo = ref<string>('')
+
+// Saved selection restored from the backend (or the legacy localStorage copy).
+const savedRepo = ref<string>('')
+// Once the user picks a tab, a late-arriving restore must not override it.
+let userSelected = false
+
+async function restoreSavedRepo(ws: string): Promise<void> {
+  if (!ws) return
+  const legacyKey = LEGACY_STORAGE_PREFIX + ws
+  let legacy: string | null = null
+  try { legacy = localStorage.getItem(legacyKey) } catch { legacy = null }
+  let backendSaved = ''
+  try {
+    const resp = await props.backend.send<{ project?: { ui_git_tab_repo?: string } | null }>(
+      'project.peek', { workspace_path: ws },
+    )
+    const v = resp.payload?.project?.ui_git_tab_repo
+    if (typeof v === 'string') backendSaved = v
+  } catch { /* backend unavailable — fall back to the legacy copy below */ }
+  if (ws !== props.workspacePath) return // workspace switched mid-flight
+  if (backendSaved) {
+    // Backend already owns the value — clear any leftover legacy copy.
+    if (legacy !== null) { try { localStorage.removeItem(legacyKey) } catch { /* ignore */ } }
+    savedRepo.value = backendSaved
+  } else if (legacy) {
+    savedRepo.value = legacy
+    void props.backend.send<{ ok: boolean }>('project.set_ui_state', {
+      workspace_path: ws,
+      git_tab_repo: legacy,
+    }).then((resp) => {
+      if (resp.ok && resp.payload?.ok) {
+        try { localStorage.removeItem(legacyKey) } catch { /* ignore */ }
+      }
+    }).catch(() => { /* keep the legacy copy — retried next load */ })
+  }
+}
+
+watch(
+  () => props.workspacePath,
+  (ws) => {
+    userSelected = false
+    savedRepo.value = ''
+    void restoreSavedRepo(ws)
+  },
+  { immediate: true },
+)
 
 // Track which tabs have been mounted at least once (lazy-mount).
 const mounted = ref<Set<string>>(new Set())
@@ -79,19 +125,15 @@ watch(totalChangesCount, (n) => {
   if (isMulti.value) emit('changes-count', n)
 })
 
-// When tab list changes, ensure activeRepo is valid.
+// When the tab list or the restored selection changes, ensure activeRepo is valid.
 watch(
-  allTabs,
-  (tabs) => {
+  [allTabs, savedRepo],
+  ([tabs, saved]) => {
     if (tabs.length === 0) return
 
-    // Try to restore from localStorage.
-    let saved: string | null = null
-    try { saved = localStorage.getItem(storageKey()) } catch { /* ignore */ }
-
-    const validSaved = saved && tabs.some((r) => r.abs_path === saved)
+    const validSaved = !userSelected && saved && tabs.some((r) => r.abs_path === saved)
     if (validSaved) {
-      activeRepo.value = saved!
+      activeRepo.value = saved
     } else if (!tabs.some((r) => r.abs_path === activeRepo.value)) {
       activeRepo.value = tabs[0].abs_path
     }
@@ -103,9 +145,14 @@ watch(
 )
 
 function selectTab(absPath: string): void {
+  userSelected = true
   activeRepo.value = absPath
   mounted.value.add(absPath)
-  try { localStorage.setItem(storageKey(), absPath) } catch { /* ignore */ }
+  if (!props.workspacePath) return
+  void props.backend.send('project.set_ui_state', {
+    workspace_path: props.workspacePath,
+    git_tab_repo: absPath,
+  }).catch(() => { /* best-effort persistence */ })
 }
 
 function repoLabel(relPath: string): string {

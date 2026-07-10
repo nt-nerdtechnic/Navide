@@ -10,6 +10,7 @@ import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-re
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { BackendBroadcastTracker } from './backend-broadcast'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
+import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -861,6 +862,23 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
       win.webContents.send('settings:language-changed', locale)
     }
   }
+})
+
+// Zero-flash startup settings: synchronously hand the backend-owned
+// ui_settings.json to the renderer before first paint. This is the app's only
+// sendSync IPC; the file is a few KB so the block is microseconds. Any error
+// yields '{}' — the renderer falls back to defaults and reconciles over ws
+// (see ui-settings-bootstrap.ts for the path-resolution contract).
+ipcMain.on('settings:bootstrap', (event) => {
+  const dataDir = resolveBackendDataDir({
+    envOverride: process.env.AGENT_TEAM_DATA_DIR,
+    isPackaged: app.isPackaged,
+    appDataPath: app.getPath('appData'),
+    platform: process.platform,
+    homeDir: app.getPath('home'),
+    xdgDataHome: process.env.XDG_DATA_HOME
+  })
+  event.returnValue = readUiSettingsText(join(dataDir, UI_SETTINGS_FILE))
 })
 
 ipcMain.handle('settings:health-timeout-read', () => {

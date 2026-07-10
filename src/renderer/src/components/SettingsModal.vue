@@ -307,7 +307,7 @@ async function loadSettingsPaths(): Promise<void> {
 
 function pathForTab(tab: Tab): string {
   const storage = settingsScopeNotes[tab].storage
-  if (storage === 'localStorage') return 'Browser localStorage + workspace backup'
+  if (storage === 'localStorage') return 'ui_settings.json (app data) + workspace backup'
   if (storage === 'mainProcess') return 'Electron main process userData'
   if (storage === 'safeStorage') return 'Encrypted local safeStorage registry'
   return settingsPaths.value[storage] ?? ''

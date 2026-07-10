@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch, type Ref } from 'vue'
+import { settingsGet, settingsSet } from '../lib/settings'
 import { useHistory, type HistoryEvent } from '../composables/useHistory'
 import type { useBackend } from '../composables/useBackend'
 import type { PipelineStatusView } from './ControlPane.vue'
@@ -165,9 +166,9 @@ async function openFile(): Promise<void> {
 // Log region stays visible at all times; drag the divider to resize its height.
 // Height is persisted so it survives reloads. Bounds are static (clamped px).
 const logHeight = ref<number>(
-  (() => { try { return parseFloat(localStorage.getItem('agentTeam.history.logHeight') ?? '') || 160 } catch { return 160 } })()
+  parseFloat(settingsGet('agentTeam.history.logHeight', '')) || 160
 )
-watch(logHeight, (v) => { try { localStorage.setItem('agentTeam.history.logHeight', String(v)) } catch { /* ignore */ } })
+watch(logHeight, (v) => { settingsSet('agentTeam.history.logHeight', String(v)) })
 
 let _logDragStartY = 0
 let _logDragStartH = 0

@@ -1,5 +1,6 @@
 import { onScopeDispose, ref, shallowRef, watch } from 'vue'
 import type { useBackend } from './useBackend'
+import { settingsGet, settingsSet } from '../lib/settings'
 
 const BENCHMARK_STORAGE_KEY = 'agent-team.benchmark-results'
 
@@ -147,8 +148,8 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
     }
   }
 
-  // ── Benchmark state (persisted to localStorage) ──────────────────────────
-  const _stored = localStorage.getItem(BENCHMARK_STORAGE_KEY)
+  // ── Benchmark state (persisted to the settings store) ────────────────────
+  const _stored = settingsGet<string | null>(BENCHMARK_STORAGE_KEY, null)
   const benchmarkResults = ref<BenchmarkModelResult[]>(
     (() => { try { return _stored ? JSON.parse(_stored) : [] } catch { return [] } })()
   )
@@ -292,7 +293,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   const _offBenchmarkDone = backend.on('analyzer.benchmark_done', (payload) => {
     const p = payload as { results: BenchmarkModelResult[] }
     benchmarkResults.value = p.results ?? []
-    localStorage.setItem(BENCHMARK_STORAGE_KEY, JSON.stringify(benchmarkResults.value))
+    settingsSet(BENCHMARK_STORAGE_KEY, JSON.stringify(benchmarkResults.value))
     benchmarking.value = false
     benchmarkProgress.value = null
   })

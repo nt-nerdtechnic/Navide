@@ -48,6 +48,22 @@ def _project_id_for(workspace_path: str) -> str:
     return f"proj_{h}"
 
 
+def ensure_workspace_data_dir(workspace_path: str) -> Path:
+    """Create <workspace>/.agent-team/ and make it self-ignoring for git.
+
+    `.gitignore` with `*` ignores the whole directory (including itself), so
+    git never tracks it regardless of the workspace's own .gitignore or
+    staging order — same pattern as pytest's .pytest_cache/.gitignore.
+    Shared by ProjectStore and ChatStore.
+    """
+    d = Path(workspace_path) / PROJECT_DIR_NAME
+    d.mkdir(parents=True, exist_ok=True)
+    gi = d / ".gitignore"
+    if not gi.exists():
+        gi.write_text("*\n", encoding="utf-8")
+    return d
+
+
 @dataclass
 class SlotRecord:
     label: str
@@ -130,6 +146,12 @@ class Project:
     theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
     language: str = "zh-TW"  # backup of the user-level language (source of truth is the renderer's localStorage)
     tab_order: list[str] = field(default_factory=list)  # run-group tab order (ids); empty = frontend insertion order
+    # Renderer-owned run-group tab records ({id, name, createdAt} dicts), stored
+    # in display order. None = never persisted (frontend falls back to legacy
+    # localStorage migration / default group); [] = the user deleted all groups.
+    ui_run_groups: list[dict[str, Any]] | None = None
+    ui_active_tab: str = ""  # last active run-group tab id ("" = frontend default)
+    ui_git_tab_repo: str = ""  # abs path of the selected repo tab in the multi-repo git view ("" = frontend default)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -213,16 +235,7 @@ class ProjectStore:
         return self.project_dir(workspace_path) / name
 
     def _ensure_dir(self, workspace_path: str) -> Path:
-        d = self.project_dir(workspace_path)
-        d.mkdir(parents=True, exist_ok=True)
-        # Make the runtime dir self-ignoring so git never tracks it, regardless
-        # of the workspace's own .gitignore or staging order. `.gitignore` with
-        # `*` ignores the whole directory (including itself) — same pattern as
-        # pytest's .pytest_cache/.gitignore.
-        gi = d / ".gitignore"
-        if not gi.exists():
-            gi.write_text("*\n", encoding="utf-8")
-        return d
+        return ensure_workspace_data_dir(workspace_path)
 
     def peek(self, workspace_path: str) -> Project | None:
         """Return the existing project for this workspace WITHOUT creating one.
@@ -678,6 +691,33 @@ class ProjectStore:
         if project is None:
             return None
         project.tab_order = list(tab_order)
+        self.save(project)
+        return project
+
+    def set_ui_state(
+        self,
+        workspace_path: str,
+        *,
+        run_groups: list[dict[str, Any]] | None = None,
+        active_tab: str | None = None,
+        git_tab_repo: str | None = None,
+    ) -> Project | None:
+        """Persist renderer-owned per-workspace UI state (partial update).
+
+        Only the arguments that are not None are applied. Returns None when no
+        project exists for the workspace (peek semantics — never creates one).
+        """
+        if run_groups is None and active_tab is None and git_tab_repo is None:
+            return None
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        if run_groups is not None:
+            project.ui_run_groups = list(run_groups)
+        if active_tab is not None:
+            project.ui_active_tab = active_tab
+        if git_tab_repo is not None:
+            project.ui_git_tab_repo = git_tab_repo
         self.save(project)
         return project
 

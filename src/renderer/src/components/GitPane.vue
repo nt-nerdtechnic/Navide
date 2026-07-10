@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { settingsGet, settingsSet } from '../lib/settings'
 import { useGit } from '../composables/useGit'
 import type { IgnoreTarget } from '../composables/useGit'
 import { useIssues } from '../composables/useIssues'
@@ -610,7 +611,7 @@ async function doGenerate(): Promise<void> {
 // Replicates the manual flow: Stage All → AI Generate → Commit (local only).
 // Never pushes to remote.
 const AC_STORAGE_KEY = 'agentTeam.git.autoCommit'
-const autoCommit = ref(localStorage.getItem(AC_STORAGE_KEY) === 'true')
+const autoCommit = ref(settingsGet<string | null>(AC_STORAGE_KEY, null) === 'true')
 const autoCommitPending = ref(false)
 // '' = idle, 'staging' | 'checking' | 'generating' | 'committing' = active step
 const autoCommitStep = ref<'' | 'staging' | 'checking' | 'generating' | 'committing'>('')
@@ -694,7 +695,7 @@ watch(
 )
 
 watch(autoCommit, (val) => {
-  try { localStorage.setItem(AC_STORAGE_KEY, String(val)) } catch {}
+  settingsSet(AC_STORAGE_KEY, String(val))
   if (!val) {
     _clearAutoTimer()
     // Only clear step if not mid-run; running flow clears in finally
@@ -1374,9 +1375,9 @@ const selectedChangesPaths = computed(() =>
 // ── draggable split between top (changes) and bottom (history/cards) ────────────
 const partTopEl = ref<HTMLElement | null>(null)
 const gitTopRatio = ref<number>(
-  (() => { try { return parseFloat(localStorage.getItem('agentTeam.gitTopRatio') ?? '') || 0.5 } catch { return 0.5 } })()
+  parseFloat(settingsGet('agentTeam.gitTopRatio', '')) || 0.5
 )
-watch(gitTopRatio, (v) => { try { localStorage.setItem('agentTeam.gitTopRatio', String(v)) } catch {} })
+watch(gitTopRatio, (v) => { settingsSet('agentTeam.gitTopRatio', String(v)) })
 
 let _gitDragStartY = 0, _gitDragStartTopPx = 0, _gitDragContainerPx = 0
 function onGitDividerStart(e: MouseEvent): void {

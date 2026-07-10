@@ -7,3 +7,20 @@ export function resolveActiveTab(groups: { id: string }[], current: string): str
   if (groups.some((g) => g.id === current)) return current
   return groups[groups.length - 1]?.id ?? 'manual'
 }
+
+/** Parse the legacy per-workspace `agentTeam.runGroups.<ws>` localStorage blob
+ *  (one-time migration into project.json's ui_run_groups). Returns null when
+ *  nothing was stored; corrupt / non-array data yields [] — matching the old
+ *  loader, where stored-but-unreadable was NOT "never stored" and therefore
+ *  must not resurrect the default group the user may have deleted. */
+export function parseLegacyRunGroups(
+  raw: string | null
+): { id: string; name: string; createdAt: number }[] | null {
+  if (raw === null) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}

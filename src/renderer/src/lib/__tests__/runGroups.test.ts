@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveActiveTab } from '../runGroups'
+import { parseLegacyRunGroups, resolveActiveTab } from '../runGroups'
 
 describe('resolveActiveTab', () => {
   const groups = [{ id: 'rg-default' }, { id: 'rg-1' }, { id: 'rg-2' }]
@@ -25,5 +25,25 @@ describe('resolveActiveTab', () => {
   it("treats an empty current id as invalid and falls back", () => {
     expect(resolveActiveTab(groups, '')).toBe('rg-2')
     expect(resolveActiveTab([], '')).toBe('manual')
+  })
+})
+
+describe('parseLegacyRunGroups', () => {
+  it('returns the stored groups verbatim', () => {
+    const groups = [{ id: 'rg-default', name: '預設', createdAt: 1 }]
+    expect(parseLegacyRunGroups(JSON.stringify(groups))).toEqual(groups)
+  })
+
+  it('returns null when nothing was stored (default group may be created)', () => {
+    expect(parseLegacyRunGroups(null)).toBeNull()
+  })
+
+  it('keeps an explicitly stored empty list (user deleted the default group)', () => {
+    expect(parseLegacyRunGroups('[]')).toEqual([])
+  })
+
+  it('yields [] (not null) for corrupt or non-array data', () => {
+    expect(parseLegacyRunGroups('{not json')).toEqual([])
+    expect(parseLegacyRunGroups('{"id":"rg-1"}')).toEqual([])
   })
 })

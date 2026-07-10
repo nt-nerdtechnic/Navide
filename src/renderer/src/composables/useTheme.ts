@@ -1,14 +1,17 @@
 import { ref } from 'vue'
+import { settingsGet, settingsSet } from '../lib/settings'
 
 /**
  * useTheme — theme selection + custom color overrides.
  *
- * Design (resolved 2026-06-04):
- * - localStorage is the SOURCE OF TRUTH. Theme is a user-level preference,
- *   consistent across all workspaces; switching workspace does NOT change it.
- * - The backend workspace JSON `theme` / `theme_custom` fields are backup /
- *   cross-device sync only. On startup the load order is:
- *   localStorage → backend fallback → 'dark-github'.
+ * Design (resolved 2026-06-04, storage moved to the settings module 2026-07):
+ * - The user-level settings store (lib/settings → ui_settings.json) is the
+ *   SOURCE OF TRUTH. Theme is a user-level preference, consistent across all
+ *   workspaces; switching workspace does NOT change it.
+ * - The backend workspace JSON `theme` / `theme_custom` fields are dormant
+ *   legacy backups: no longer written by the renderer, only read as a one-time
+ *   fallback (then promoted into the settings store). On startup the load
+ *   order is: settings store → backend fallback → 'dark-github'.
  * - Custom overrides are a key→value map of CSS variables layered ON TOP of the
  *   currently selected built-in theme. Switching built-in theme KEEPS overrides;
  *   only resetCustom() clears them.
@@ -54,9 +57,11 @@ function docEl(): HTMLElement | null {
   return typeof document !== 'undefined' ? document.documentElement : null
 }
 
+// Values stay JSON-encoded strings in the settings store — the exact encoding
+// the legacy localStorage entries used, so migrated values read back verbatim.
 function readLocal<T>(key: string): T | null {
   try {
-    const raw = localStorage.getItem(key)
+    const raw = settingsGet<string | null>(key, null)
     return raw == null ? null : (JSON.parse(raw) as T)
   } catch {
     return null
@@ -64,11 +69,7 @@ function readLocal<T>(key: string): T | null {
 }
 
 function writeLocal(key: string, value: unknown): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // storage unavailable / quota — non-fatal, in-memory state still applies
-  }
+  settingsSet(key, JSON.stringify(value))
 }
 
 /** Apply the `data-theme` attribute so theme token files take effect. */
@@ -92,9 +93,9 @@ function applyOverrides(overrides: Record<string, string>): void {
 
 export function useTheme() {
   /**
-   * Load theme from localStorage, falling back to the backend-provided value,
-   * then the default. Applies immediately. Returns whether localStorage already
-   * held a value (so callers know if the backend fallback was used).
+   * Load theme from the settings store, falling back to the backend-provided
+   * value, then the default. Applies immediately. Returns whether the store
+   * already held a value (so callers know if the backend fallback was used).
    */
   function loadTheme(backendFallback?: { theme?: string; theme_custom?: Record<string, string> }): {
     fromLocal: boolean
@@ -153,26 +154,6 @@ export function useTheme() {
     writeLocal(CUSTOM_KEY, {})
   }
 
-  /**
-   * Best-effort backend backup. Never throws; a failed sync must not block the UI.
-   * `sender` is typically backend.send.
-   */
-  async function syncToBackend(
-    sender: (type: string, payload: Record<string, unknown>) => Promise<unknown>,
-    workspacePath: string,
-  ): Promise<void> {
-    if (!workspacePath) return
-    try {
-      await sender('project.set_theme', {
-        workspace_path: workspacePath,
-        theme: theme.value,
-        theme_custom: customOverrides.value,
-      })
-    } catch {
-      // backup only — ignore failures
-    }
-  }
-
   return {
     theme,
     customOverrides,
@@ -183,6 +164,5 @@ export function useTheme() {
     setCustomOverride,
     setCustomOverrides,
     resetCustom,
-    syncToBackend,
   }
 }

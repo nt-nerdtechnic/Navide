@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { shallowMount } from '@vue/test-utils'
+import { shallowMount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import MultiRepoGit from '../MultiRepoGit.vue'
 
@@ -20,7 +20,17 @@ function makeRepo(relPath: string, absPath: string, branch = 'main', dirtyCount 
   return { rel_path: relPath, abs_path: absPath, branch, badge: { branch, dirtyCount } }
 }
 
-const stubBackend = {} as never
+/** Backend stub: project.peek returns the given project snapshot (null = no
+ *  project.json yet); everything else acks with { ok: true }. */
+function makeBackend(project: { ui_git_tab_repo?: string } | null = null) {
+  const send = vi.fn(async (type: string) => {
+    if (type === 'project.peek') return { ok: true, payload: { project } }
+    return { ok: true, payload: { ok: true } }
+  })
+  return { backend: { send } as never, send }
+}
+
+const stubBackend = makeBackend().backend
 
 beforeEach(() => {
   mockRepositories.value = []
@@ -116,5 +126,83 @@ describe('MultiRepoGit – multi-repo tab bar', () => {
     const firstTabName = wrapper.findAll('.repo-tab-name')[0].text()
     // Our stub t() returns the key itself.
     expect(firstTabName).toBe('label.git-repo-root')
+  })
+})
+
+describe('MultiRepoGit – persisted repo tab (project.json ui_git_tab_repo)', () => {
+  const TWO_REPOS = [
+    makeRepo('.', '/ws', 'main'),
+    makeRepo('sub', '/ws/sub', 'dev'),
+  ]
+
+  it('restores the backend-saved repo tab', async () => {
+    mockRepositories.value = TWO_REPOS
+    const { backend } = makeBackend({ ui_git_tab_repo: '/ws/sub' })
+    const wrapper = shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend },
+    })
+    await flushPromises()
+    const tabs = wrapper.findAll('.repo-tab')
+    expect(tabs[1].classes()).toContain('active')
+  })
+
+  it('clicking a tab persists the selection via project.set_ui_state', async () => {
+    mockRepositories.value = TWO_REPOS
+    const { backend, send } = makeBackend()
+    const wrapper = shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend },
+    })
+    await flushPromises()
+    await wrapper.findAll('.repo-tab')[1].trigger('click')
+    expect(send).toHaveBeenCalledWith('project.set_ui_state', {
+      workspace_path: '/ws',
+      git_tab_repo: '/ws/sub',
+    })
+  })
+
+  it('migrates the legacy localStorage key once (ack-gated delete)', async () => {
+    localStorage.setItem('agentTeam.gitTabRepo./ws', '/ws/sub')
+    mockRepositories.value = TWO_REPOS
+    const { backend, send } = makeBackend()
+    const wrapper = shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend },
+    })
+    await flushPromises()
+    // Legacy value restored and pushed to the backend, local copy deleted after ack.
+    expect(wrapper.findAll('.repo-tab')[1].classes()).toContain('active')
+    expect(send).toHaveBeenCalledWith('project.set_ui_state', {
+      workspace_path: '/ws',
+      git_tab_repo: '/ws/sub',
+    })
+    expect(localStorage.getItem('agentTeam.gitTabRepo./ws')).toBeNull()
+  })
+
+  it('clears the stale legacy copy when the backend already owns a value', async () => {
+    localStorage.setItem('agentTeam.gitTabRepo./ws', '/ws/stale')
+    mockRepositories.value = TWO_REPOS
+    const { backend, send } = makeBackend({ ui_git_tab_repo: '/ws/sub' })
+    shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend },
+    })
+    await flushPromises()
+    expect(localStorage.getItem('agentTeam.gitTabRepo./ws')).toBeNull()
+    expect(send).not.toHaveBeenCalledWith('project.set_ui_state', expect.anything())
+  })
+
+  it('a late restore does not override a user click', async () => {
+    mockRepositories.value = TWO_REPOS
+    let resolvePeek: (v: unknown) => void = () => {}
+    const send = vi.fn((type: string) => {
+      if (type === 'project.peek') return new Promise((r) => { resolvePeek = r })
+      return Promise.resolve({ ok: true, payload: { ok: true } })
+    })
+    const wrapper = shallowMount(MultiRepoGit, {
+      props: { workspacePath: '/ws', backend: { send } as never },
+    })
+    // User picks the root tab while the restore is still in flight.
+    await wrapper.findAll('.repo-tab')[0].trigger('click')
+    resolvePeek({ ok: true, payload: { project: { ui_git_tab_repo: '/ws/sub' } } })
+    await flushPromises()
+    expect(wrapper.findAll('.repo-tab')[0].classes()).toContain('active')
   })
 })
