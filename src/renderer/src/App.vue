@@ -300,6 +300,13 @@ const agentSpecs: AgentSpec[] = [
     hint: 'generalist'
   },
   {
+    agentKey: 'grok',
+    label: 'Grok CLI',
+    defaultCommand: 'grok',
+    // no skipPermissionFlag: grok-cli has no tool-confirmation gate at all
+    hint: 'generalist'
+  },
+  {
     agentKey: 'terminal',
     label: 'Terminal',
     defaultCommand: '',
@@ -1243,10 +1250,11 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     : (opts.agentKey === 'claude' ? explicitSessionId || undefined : undefined)
   // Codex keeps a marker fallback during rollout. Antigravity can't pin an id
   // at launch (`agy --conversation` only resumes existing ids), so the marker
-  // is its ONLY session-binding path.
+  // is its ONLY session-binding path. Grok likewise can't pin an id (`grok -s`
+  // only resumes existing ids) — marker-based binding via ~/.grok/grok.db.
   const sessionMarker =
     !opts.isResume &&
-    (opts.agentKey === 'codex' || opts.agentKey === 'antigravity')
+    (opts.agentKey === 'codex' || opts.agentKey === 'antigravity' || opts.agentKey === 'grok')
       ? `at-pane:${id}`
       : ''
   const pane: ActivePane = {
@@ -2040,6 +2048,7 @@ function looksLikeResumeCommand(agentKey: string, command: string): boolean {
   if (!cmd) return false
   if (agentKey === 'codex') return /^codex\s+resume\s+\S+/.test(cmd)
   if (agentKey === 'antigravity') return /^agy\s+--conversation\s+\S+/.test(cmd)
+  if (agentKey === 'grok') return /^grok\s+-s\s+\S+/.test(cmd)
   return new RegExp(`^${agentKey}\\s+--resume\\s+\\S+`).test(cmd)
 }
 
@@ -5706,7 +5715,7 @@ function panePreparationLabel(p: ActivePane): string {
 }
 
 function paneWaitingForSessionId(p: ActivePane): boolean {
-  return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity'].includes(p.agentKey)
+  return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity', 'grok'].includes(p.agentKey)
 }
 
 function paneShowsPrepOverlay(p: ActivePane): boolean {

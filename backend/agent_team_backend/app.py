@@ -899,7 +899,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             )
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
-            if agent_key in ("claude", "codex", "antigravity"):
+            if agent_key in ("claude", "codex", "antigravity", "grok"):
                 ws_for_pane = str(metadata.get("workspace_path") or payload["cwd"])
                 # Workspace registration via helper triggers a force-rescan
                 # if the workspace is newly known — so historic CLI sessions

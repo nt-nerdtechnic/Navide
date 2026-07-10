@@ -14,6 +14,14 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
   })
 
+  it('uses grok -s for grok', () => {
+    expect(buildResumeCommand('grok', '1f9e02aabb3c')).toBe('grok -s 1f9e02aabb3c')
+  })
+
+  it('grok resume with a blank id falls back to "" like other vendors', () => {
+    expect(buildResumeCommand('grok', '  ')).toBe('')
+  })
+
   it('appends the permission-bypass flag when given', () => {
     expect(buildResumeCommand('claude', 'abc', '--dangerously-skip-permissions')).toBe(
       'claude --resume abc --dangerously-skip-permissions'
