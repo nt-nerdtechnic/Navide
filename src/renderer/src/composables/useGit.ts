@@ -1,5 +1,6 @@
 import { ref, computed, watch, onScopeDispose } from 'vue'
 import type { useBackend } from './useBackend'
+import { settingsGet, settingsSet } from '../lib/settings'
 
 export interface GitFileEntry {
   path: string
@@ -153,13 +154,8 @@ export function useGit(
   // loadMoreLog() to page through history without breaking the graph.
   const LOG_PAGE = 50
   const LOG_SCOPE_KEY = 'agentTeam.git.logScope'
-  const loadLogScope = (): 'all' | 'current' => {
-    try {
-      return localStorage.getItem(LOG_SCOPE_KEY) === 'current' ? 'current' : 'all'
-    } catch {
-      return 'all'
-    }
-  }
+  const loadLogScope = (): 'all' | 'current' =>
+    settingsGet<string | null>(LOG_SCOPE_KEY, null) === 'current' ? 'current' : 'all'
   const logScope = ref<'all' | 'current'>(loadLogScope())
   const logLimit = ref(LOG_PAGE)
   const gitBranches = ref<GitBranch[]>([])
@@ -284,7 +280,7 @@ export function useGit(
     if (logScope.value === scope) return
     logScope.value = scope
     logLimit.value = LOG_PAGE
-    try { localStorage.setItem(LOG_SCOPE_KEY, scope) } catch { /* ignore */ }
+    settingsSet(LOG_SCOPE_KEY, scope)
     await loadLog()
   }
 

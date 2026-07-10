@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { useBackend } from '../composables/useBackend'
+import { settingsGet, settingsSet } from '../lib/settings'
 import { useNotify } from '../composables/useNotify'
 
 const props = defineProps<{
@@ -29,7 +30,7 @@ interface FsRead { ok: boolean; content?: string; error?: string }
 const OPTS_KEY = 'agentTeam.search.opts'
 function loadOpts(): { cs: boolean; ww: boolean; re: boolean } {
   try {
-    const o = JSON.parse(localStorage.getItem(OPTS_KEY) || '{}')
+    const o = JSON.parse(settingsGet(OPTS_KEY, '') || '{}')
     return { cs: !!o.cs, ww: !!o.ww, re: !!o.re }
   } catch { return { cs: false, ww: false, re: false } }
 }
@@ -55,7 +56,7 @@ const fileCount = computed(() => results.value.length)
 const queryInput = ref<HTMLInputElement | null>(null)
 
 watch([caseSensitive, wholeWord, isRegex], () => {
-  try { localStorage.setItem(OPTS_KEY, JSON.stringify({ cs: caseSensitive.value, ww: wholeWord.value, re: isRegex.value })) } catch { /* ignore */ }
+  settingsSet(OPTS_KEY, JSON.stringify({ cs: caseSensitive.value, ww: wholeWord.value, re: isRegex.value }))
 })
 
 // ── Search (debounced, race-guarded) ─────────────────────────────────────────

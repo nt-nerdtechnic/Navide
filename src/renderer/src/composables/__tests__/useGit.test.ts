@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest'
 import { useGit } from '../useGit'
+import { __resetSettingsForTest } from '../../lib/settings'
 import { createMockBackend, withScope, flush } from './mockBackend'
 
 const WS = '/tmp/test-workspace'
@@ -384,7 +385,7 @@ describe('useGit', () => {
   })
 
   it('loadLog defaults to all-branches scope with the page limit', async () => {
-    localStorage.clear()
+    __resetSettingsForTest()
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)
     mock.setResponse('git.log', { commits: [] })
@@ -400,7 +401,7 @@ describe('useGit', () => {
   })
 
   it('setLogScope("current") reloads with all:false and resets the limit', async () => {
-    localStorage.clear()
+    __resetSettingsForTest()
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)
     mock.setResponse('git.log', { commits: [] })
@@ -418,8 +419,8 @@ describe('useGit', () => {
     scope.stop()
   })
 
-  it('persists log scope to localStorage and restores it on init', async () => {
-    localStorage.clear()
+  it('persists log scope to the settings store and restores it on init', async () => {
+    __resetSettingsForTest()
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)
     mock.setResponse('git.log', { commits: [] })
@@ -442,11 +443,11 @@ describe('useGit', () => {
     const logSend = mock2.sent.find(s => s.type === 'git.log')
     expect(logSend?.payload.all).toBe(false)
     second.scope.stop()
-    localStorage.clear()
+    __resetSettingsForTest()
   })
 
   it('loadMoreLog grows the limit by a page and refetches', async () => {
-    localStorage.clear()
+    __resetSettingsForTest()
     const mock = createMockBackend('connected')
     mock.setResponse('git.status', mockStatus)
     mock.setResponse('git.log', { commits: [] })

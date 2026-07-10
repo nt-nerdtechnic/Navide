@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { useTheme, DEFAULT_THEME } from '../useTheme'
+import { settingsGet, settingsSet, __resetSettingsForTest } from '../../lib/settings'
 
 const THEME_KEY = 'agent-team:theme'
 const CUSTOM_KEY = 'agent-team:theme-custom'
@@ -9,17 +10,23 @@ function html(): HTMLElement {
   return document.documentElement
 }
 
+/** Values live JSON-encoded in the settings store (legacy localStorage encoding). */
+function storedJson(key: string): unknown {
+  const raw = settingsGet<string | null>(key, null)
+  return raw == null ? null : JSON.parse(raw)
+}
+
 describe('useTheme', () => {
   beforeEach(() => {
     // Reset persisted + DOM state. The composable is a module-level singleton,
     // so each test starts from a clean, explicit baseline.
-    localStorage.clear()
+    __resetSettingsForTest()
     html().removeAttribute('data-theme')
     html().removeAttribute('style')
     const { resetCustom, setTheme } = useTheme()
     resetCustom()
     setTheme(DEFAULT_THEME)
-    localStorage.clear()
+    __resetSettingsForTest()
   })
 
   it('defaults to dark-github when nothing is stored', () => {
@@ -30,8 +37,8 @@ describe('useTheme', () => {
     expect(html().getAttribute('data-theme')).toBe('dark-github')
   })
 
-  it('loads the theme from localStorage', () => {
-    localStorage.setItem(THEME_KEY, JSON.stringify('dark-forest'))
+  it('loads the theme from the settings store', () => {
+    settingsSet(THEME_KEY, JSON.stringify('dark-forest'))
     const { loadTheme, theme } = useTheme()
     const res = loadTheme()
     expect(res.fromLocal).toBe(true)
@@ -39,39 +46,39 @@ describe('useTheme', () => {
     expect(html().getAttribute('data-theme')).toBe('dark-forest')
   })
 
-  it('adopts the backend fallback when localStorage is empty and promotes it', () => {
+  it('adopts the backend fallback when the store is empty and promotes it', () => {
     const { loadTheme, theme } = useTheme()
     const res = loadTheme({ theme: 'light', theme_custom: { '--accent-fg': '#abcdef' } })
     expect(res.fromLocal).toBe(false)
     expect(theme.value).toBe('light')
     // Promoted to the source of truth so later loads are stable.
-    expect(JSON.parse(localStorage.getItem(THEME_KEY) as string)).toBe('light')
-    expect(JSON.parse(localStorage.getItem(CUSTOM_KEY) as string)).toEqual({
+    expect(storedJson(THEME_KEY)).toBe('light')
+    expect(storedJson(CUSTOM_KEY)).toEqual({
       '--accent-fg': '#abcdef',
     })
   })
 
-  it('localStorage wins over the backend fallback', () => {
-    localStorage.setItem(THEME_KEY, JSON.stringify('high-contrast'))
+  it('the stored value wins over the backend fallback', () => {
+    settingsSet(THEME_KEY, JSON.stringify('high-contrast'))
     const { loadTheme, theme } = useTheme()
     loadTheme({ theme: 'light' })
     expect(theme.value).toBe('high-contrast')
   })
 
   it('falls back to default for an unknown stored theme', () => {
-    localStorage.setItem(THEME_KEY, JSON.stringify('nonsense'))
+    settingsSet(THEME_KEY, JSON.stringify('nonsense'))
     const { loadTheme, theme } = useTheme()
     loadTheme()
     expect(theme.value).toBe(DEFAULT_THEME)
   })
 
-  it('setTheme updates the attribute + localStorage and keeps overrides', () => {
+  it('setTheme updates the attribute + store and keeps overrides', () => {
     const { setCustomOverride, setTheme, theme, customOverrides } = useTheme()
     setCustomOverride('--accent-fg', '#112233')
     setTheme('dark-midnight')
     expect(theme.value).toBe('dark-midnight')
     expect(html().getAttribute('data-theme')).toBe('dark-midnight')
-    expect(JSON.parse(localStorage.getItem(THEME_KEY) as string)).toBe('dark-midnight')
+    expect(storedJson(THEME_KEY)).toBe('dark-midnight')
     // Custom override survives the built-in theme switch.
     expect(customOverrides.value['--accent-fg']).toBe('#112233')
     expect(html().style.getPropertyValue('--accent-fg')).toBe('#112233')
@@ -88,7 +95,7 @@ describe('useTheme', () => {
     const { setCustomOverride, customOverrides } = useTheme()
     setCustomOverride('--danger-fg', '#ff0000')
     expect(html().style.getPropertyValue('--danger-fg')).toBe('#ff0000')
-    expect(JSON.parse(localStorage.getItem(CUSTOM_KEY) as string)).toEqual({
+    expect(storedJson(CUSTOM_KEY)).toEqual({
       '--danger-fg': '#ff0000',
     })
     setCustomOverride('--danger-fg', null)
@@ -104,27 +111,6 @@ describe('useTheme', () => {
     expect(customOverrides.value).toEqual({})
     expect(html().style.getPropertyValue('--accent-fg')).toBe('')
     expect(html().style.getPropertyValue('--success-fg')).toBe('')
-    expect(JSON.parse(localStorage.getItem(CUSTOM_KEY) as string)).toEqual({})
-  })
-
-  it('syncToBackend sends the right payload and swallows errors', async () => {
-    const { setTheme, syncToBackend } = useTheme()
-    setTheme('light')
-    const ok = vi.fn().mockResolvedValue({ ok: true })
-    await syncToBackend(ok, '/ws')
-    expect(ok).toHaveBeenCalledWith('project.set_theme', {
-      workspace_path: '/ws',
-      theme: 'light',
-      theme_custom: {},
-    })
-
-    // A rejecting sender must not throw (backup is best-effort).
-    const bad = vi.fn().mockRejectedValue(new Error('offline'))
-    await expect(syncToBackend(bad, '/ws')).resolves.toBeUndefined()
-
-    // Empty workspace → no call.
-    const noop = vi.fn()
-    await syncToBackend(noop, '')
-    expect(noop).not.toHaveBeenCalled()
+    expect(storedJson(CUSTOM_KEY)).toEqual({})
   })
 })

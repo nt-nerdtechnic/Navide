@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
+import { settingsGet, settingsSet } from '../lib/settings'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
 import { useNotify } from '../composables/useNotify'
 import type { useBackend } from '../composables/useBackend'
@@ -38,15 +39,11 @@ const { snapshot, loading, reset } = useTokens(props.backend, workspacePathRef)
 // ─────────────────────── Sticky panel state ───────────────────────────────
 
 function loadBool(key: string, fallback: boolean): boolean {
-  try {
-    const v = localStorage.getItem(key)
-    return v === null ? fallback : v === '1'
-  } catch {
-    return fallback
-  }
+  const v = settingsGet<string | null>(key, null)
+  return v === null ? fallback : v === '1'
 }
 function saveBool(key: string, v: boolean): void {
-  try { localStorage.setItem(key, v ? '1' : '0') } catch { /* ignore */ }
+  settingsSet(key, v ? '1' : '0')
 }
 
 const expanded = ref<boolean>(loadBool('agentTeam.tokenPanel.expanded', false))
@@ -57,12 +54,12 @@ watch(expanded, (v) => {
 
 // Active right-panel tab — Tokens (default) or the pipeline History timeline.
 const tab = ref<'history' | 'tokens'>('history')
-try {
-  const t = localStorage.getItem('agentTeam.rightPanel.tab')
+{
+  const t = settingsGet<string | null>('agentTeam.rightPanel.tab', null)
   if (t === 'history' || t === 'tokens') tab.value = t
-} catch { /* ignore */ }
+}
 watch(tab, (v) => {
-  try { localStorage.setItem('agentTeam.rightPanel.tab', v) } catch { /* ignore */ }
+  settingsSet('agentTeam.rightPanel.tab', v)
 })
 
 // ─────────────────────── Derived view models ──────────────────────────────

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
 import { extractDropPaths } from '../lib/drop'
+import { settingsGet, settingsSet } from '../lib/settings'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
 import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
@@ -249,10 +250,8 @@ watch(
 // previous localStorage-based approach made stale text linger forever even
 // after the pipeline finished and the app was relaunched.
 const TASK_DESC_KEY = 'agentTeam.pipelineTaskDescription'
-// One-time migration: nuke the old localStorage entry left over from when
-// this field used to persist forever. Without this, users who upgrade will
-// still see their old task text on first launch after the fix.
-try { localStorage.removeItem(TASK_DESC_KEY) } catch { /* ignore */ }
+// The one-time cleanup of the old persist-forever localStorage entry moved to
+// lib/settings PURGED_LOCALSTORAGE_KEYS (runs with the storage migration).
 const taskDescription = ref<string>(
   (() => { try { return sessionStorage.getItem(TASK_DESC_KEY) ?? '' } catch { return '' } })()
 )
@@ -735,9 +734,9 @@ function onTaskDrop(e: DragEvent): void {
 // ── pipeline pane: draggable split (top = controls, bottom = agents) ─────────
 const pipelineTopEl = ref<HTMLElement | null>(null)
 const pipelineTopRatio = ref<number>(
-  (() => { try { return parseFloat(localStorage.getItem('agentTeam.pipelineTopRatio') ?? '') || 0.55 } catch { return 0.55 } })()
+  parseFloat(settingsGet('agentTeam.pipelineTopRatio', '')) || 0.55
 )
-watch(pipelineTopRatio, (v) => { try { localStorage.setItem('agentTeam.pipelineTopRatio', String(v)) } catch {} })
+watch(pipelineTopRatio, (v) => { settingsSet('agentTeam.pipelineTopRatio', String(v)) })
 
 let _plDragStartY = 0, _plDragStartTopPx = 0, _plDragContainerPx = 0
 function onPipelineDividerStart(e: MouseEvent): void {

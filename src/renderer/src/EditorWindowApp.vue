@@ -20,6 +20,7 @@ import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
+import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from './lib/settings'
 import { useNotify } from './composables/useNotify'
 import { allDiagnosticsSorted, setDiagnostics } from './editor/diagnostics'
 
@@ -39,11 +40,15 @@ const initialBranchDiffBase = params.get('branch_diff_base') ?? ''
 const initialBranchDiffCompare = params.get('branch_diff_compare') ?? ''
 
 const backend = useBackend()
+// Hook the settings cache to this window's own ws connection: flushes writes
+// (sidebar/panel widths) and receives ui.settings_changed broadcasts from the
+// main window (theme changes — see the onSettingsChanged subscription below).
+initSettingsBackend(backend)
 const { confirm, toast } = useNotify()
 
 // ── Sidebar resize ────────────────────────────────────────────────────────────
 const SIDEBAR_W_KEY = 'ide-sidebar-width'
-const sidebarWidth = ref(Math.max(120, Math.min(500, parseInt(localStorage.getItem(SIDEBAR_W_KEY) ?? '260', 10))))
+const sidebarWidth = ref(Math.max(120, Math.min(500, parseInt(settingsGet(SIDEBAR_W_KEY, '260'), 10))))
 let resizing = false
 function onResizeStart(): void {
   resizing = true
@@ -57,7 +62,7 @@ function onResizeMove(e: MouseEvent): void {
 function onResizeEnd(): void {
   if (!resizing) return
   resizing = false
-  localStorage.setItem(SIDEBAR_W_KEY, String(sidebarWidth.value))
+  settingsSet(SIDEBAR_W_KEY, String(sidebarWidth.value))
   document.removeEventListener('mousemove', onResizeMove)
   document.removeEventListener('mouseup', onResizeEnd)
 }
@@ -66,7 +71,7 @@ function onResizeEnd(): void {
 const AI_PANEL_W_KEY = 'ide-ai-panel-width'
 const aiChatRef = ref<InstanceType<typeof AIChatPaneType> | null>(null)
 const aiPanelOpen = ref(false)
-const aiPanelWidth = ref(Math.max(280, Math.min(600, parseInt(localStorage.getItem(AI_PANEL_W_KEY) ?? '320', 10))))
+const aiPanelWidth = ref(Math.max(280, Math.min(600, parseInt(settingsGet(AI_PANEL_W_KEY, '320'), 10))))
 let aiResizing = false
 function onAiResizeStart(): void {
   aiResizing = true
@@ -81,7 +86,7 @@ function onAiResizeMove(e: MouseEvent): void {
 function onAiResizeEnd(): void {
   if (!aiResizing) return
   aiResizing = false
-  localStorage.setItem(AI_PANEL_W_KEY, String(aiPanelWidth.value))
+  settingsSet(AI_PANEL_W_KEY, String(aiPanelWidth.value))
   document.removeEventListener('mousemove', onAiResizeMove)
   document.removeEventListener('mouseup', onAiResizeEnd)
 }
@@ -1564,15 +1569,18 @@ function onAppKeydown(e: KeyboardEvent): void {
   }
 }
 
-function onThemeStorageChange(e: StorageEvent) {
-  if (e.key === 'agent-team:theme' || e.key === 'agent-team:theme-custom') {
-    loadTheme()
-  }
-}
+// Theme changes made in the main window arrive as ui.settings_changed
+// broadcasts over this window's ws connection (they used to be cross-window
+// localStorage `storage` events); re-apply on any theme key change.
+let offThemeSettingsChange: (() => void) | null = null
 
 onMounted(() => {
   loadTheme()
-  window.addEventListener('storage', onThemeStorageChange)
+  offThemeSettingsChange = onSettingsChanged((keys) => {
+    if (keys.includes('agent-team:theme') || keys.includes('agent-team:theme-custom')) {
+      loadTheme()
+    }
+  })
   window.addEventListener('keydown', onAppKeydown)
   window.addEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.addEventListener('click', closeBcDropdown)
@@ -1602,7 +1610,8 @@ onMounted(() => {
   if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
 })
 onUnmounted(() => {
-  window.removeEventListener('storage', onThemeStorageChange)
+  offThemeSettingsChange?.()
+  offThemeSettingsChange = null
   window.removeEventListener('keydown', onAppKeydown)
   window.removeEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.removeEventListener('click', closeBcDropdown)

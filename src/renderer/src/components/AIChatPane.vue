@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from 'vue'
 import { i18n } from '../i18n'
+import { settingsGet, settingsSet } from '../lib/settings'
+import { parseLegacyThreads } from '../lib/chatLegacy'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
@@ -239,13 +241,13 @@ const threadScrollPositions = new Map<string, number>()
 // Thread unread tracking: threadId → timestamp of last visit (reactive so badge updates on switch)
 const threadLastVisited = reactive<Record<string, number>>((() => {
   try {
-    const raw = localStorage.getItem('ai-thread-last-visited')
+    const raw = settingsGet<string | null>('ai-thread-last-visited', null)
     if (!raw) return {}
     return Object.fromEntries(JSON.parse(raw) as [string, number][])
   } catch { return {} }
 })())
 function _saveLastVisited(): void {
-  try { localStorage.setItem('ai-thread-last-visited', JSON.stringify(Object.entries(threadLastVisited))) } catch { /* noop */ }
+  settingsSet('ai-thread-last-visited', JSON.stringify(Object.entries(threadLastVisited)))
 }
 function threadUnreadCount(thread: ChatThread): number {
   const lastSeen = threadLastVisited[thread.id] ?? 0
@@ -268,7 +270,7 @@ const pendingCompactAllMessages = ref<ChatMessage[]>([])
 interface PromptTemplate { id: string; name: string; text: string }
 const showPromptTemplates = ref(false)
 const promptTemplates = ref<PromptTemplate[]>(
-  (() => { try { return JSON.parse(localStorage.getItem('ai-chat-prompt-templates') ?? '[]') } catch { return [] } })()
+  (() => { try { return JSON.parse(settingsGet('ai-chat-prompt-templates', '[]')) } catch { return [] } })()
 )
 
 // Built-in starter templates shown when library is empty
@@ -283,7 +285,7 @@ const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [
 ]
 
 function savePromptTemplates(): void {
-  localStorage.setItem('ai-chat-prompt-templates', JSON.stringify(promptTemplates.value))
+  settingsSet('ai-chat-prompt-templates', JSON.stringify(promptTemplates.value))
 }
 
 function addPromptTemplate(): void {
@@ -319,9 +321,9 @@ const displayedTemplates = computed(() =>
 // ── Memories (Cursor-style persistent facts, injected into every system prompt) ─
 const MEMORIES_KEY = 'ai-chat-memories'
 const memories = ref<string[]>(
-  (() => { try { return JSON.parse(localStorage.getItem(MEMORIES_KEY) ?? '[]') } catch { return [] } })()
+  (() => { try { return JSON.parse(settingsGet(MEMORIES_KEY, '[]')) } catch { return [] } })()
 )
-watch(memories, (v) => { try { localStorage.setItem(MEMORIES_KEY, JSON.stringify(v)) } catch { /* quota */ } }, { deep: true })
+watch(memories, (v) => { settingsSet(MEMORIES_KEY, JSON.stringify(v)) }, { deep: true })
 function addMemory(fact: string): void { const f = fact.trim(); if (f && !memories.value.includes(f)) { memories.value.push(f) } }
 function removeMemory(idx: number): void { memories.value.splice(idx, 1) }
 
@@ -329,11 +331,11 @@ function removeMemory(idx: number): void { memories.value.splice(idx, 1) }
 interface GlobalContextPin { id: string; label: string; relPath: string }
 const GLOBAL_CTX_KEY = 'ai-chat-global-context-pins'
 const globalContextPins = ref<GlobalContextPin[]>((() => {
-  try { return JSON.parse(localStorage.getItem(GLOBAL_CTX_KEY) ?? '[]') as GlobalContextPin[] }
+  try { return JSON.parse(settingsGet(GLOBAL_CTX_KEY, '[]')) as GlobalContextPin[] }
   catch { return [] }
 })())
 watch(globalContextPins, (v) => {
-  try { localStorage.setItem(GLOBAL_CTX_KEY, JSON.stringify(v)) } catch { /* quota */ }
+  settingsSet(GLOBAL_CTX_KEY, JSON.stringify(v))
 }, { deep: true })
 function addGlobalPin(relPath: string): void {
   const label = `@${relPath.split('/').pop()}`
@@ -348,29 +350,80 @@ function removeGlobalPin(id: string): void {
 // ── Notepads (persistent context notes, always injected into system prompt) ───
 interface Notepad { id: string; name: string; content: string; updatedAt: number; pinned?: boolean }
 const showNotes = ref(false)
+// Legacy localStorage keys — read only by the one-time per-workspace migration.
 const notesKey = computed(() => `ai-chat-notes:${props.workspacePath}`)
 const notepadKey = computed(() => `ai-chat-notepads:${props.workspacePath}`)
 const notesContent = ref('')
 const namedNotepads = ref<Notepad[]>([])
 const activeNotepadId = ref<string | null>(null)
+// Guards persistNotes until the backend chat-notes.json document has been
+// loaded — an early save would overwrite real data with the empty placeholder.
+let notesHydrated = false
+let notesLoadSeq = 0
 
-watch(notesKey, (k) => { notesContent.value = localStorage.getItem(k) ?? '' }, { immediate: true })
-watch(notepadKey, (k) => {
-  try { namedNotepads.value = JSON.parse(localStorage.getItem(k) ?? '[]') as Notepad[] }
-  catch { namedNotepads.value = [] }
-}, { immediate: true })
+async function loadNotes(): Promise<void> {
+  const seq = ++notesLoadSeq
+  notesHydrated = false
+  notesContent.value = ''
+  namedNotepads.value = []
+  const ws = props.workspacePath
+  if (!ws) return
+  const legacyNotesKey = notesKey.value
+  const legacyPadsKey = notepadKey.value
+  try {
+    const resp = await props.backend.send<{ notes?: string; notepads?: Notepad[] }>(
+      'ai.chat.notes.get', { workspace_path: ws }
+    )
+    if (seq !== notesLoadSeq || !resp.ok) return
+    const notes = typeof resp.payload?.notes === 'string' ? resp.payload.notes : ''
+    const pads = Array.isArray(resp.payload?.notepads) ? resp.payload.notepads : []
+    notesHydrated = true
+    if (notes || pads.length > 0) {
+      notesContent.value = notes
+      namedNotepads.value = pads
+      // Backend already owns the data — clear any leftover legacy copies.
+      try { localStorage.removeItem(legacyNotesKey); localStorage.removeItem(legacyPadsKey) } catch { /* ignore */ }
+      return
+    }
+    // Backend document empty → one-time per-workspace localStorage migration.
+    let legacyNotes: string | null = null
+    let legacyPadsRaw: string | null = null
+    try {
+      legacyNotes = localStorage.getItem(legacyNotesKey)
+      legacyPadsRaw = localStorage.getItem(legacyPadsKey)
+    } catch { return }
+    if (legacyNotes === null && legacyPadsRaw === null) return
+    let legacyPads: Notepad[] = []
+    try {
+      const parsed = JSON.parse(legacyPadsRaw ?? '[]') as Notepad[]
+      if (Array.isArray(parsed)) legacyPads = parsed
+    } catch { legacyPads = [] }
+    notesContent.value = legacyNotes ?? ''
+    namedNotepads.value = legacyPads
+    const ack = await props.backend.send<{ ok?: boolean }>('ai.chat.notes.set', {
+      workspace_path: ws,
+      notes: legacyNotes ?? '',
+      notepads: legacyPads,
+    })
+    // Ack-gated delete: keep the localStorage copies (retried next load) on failure.
+    if (ack.ok && ack.payload?.ok === true) {
+      try { localStorage.removeItem(legacyNotesKey); localStorage.removeItem(legacyPadsKey) } catch { /* ignore */ }
+    }
+  } catch { /* backend unavailable — stay unhydrated so saves can't clobber */ }
+}
+watch(() => props.workspacePath, () => { void loadNotes() }, { immediate: true })
 
-function saveNotes(): void {
-  if (notesContent.value.trim()) {
-    localStorage.setItem(notesKey.value, notesContent.value)
-  } else {
-    localStorage.removeItem(notesKey.value)
-  }
+function persistNotes(): void {
+  const ws = props.workspacePath
+  if (!ws || !notesHydrated) return
+  props.backend.send('ai.chat.notes.set', {
+    workspace_path: ws,
+    notes: notesContent.value,
+    notepads: namedNotepads.value,
+  }).catch(() => { /* transient; the next save retries */ })
 }
-function saveNamedNotepads(): void {
-  try { localStorage.setItem(notepadKey.value, JSON.stringify(namedNotepads.value)) }
-  catch { /* quota */ }
-}
+function saveNotes(): void { persistNotes() }
+function saveNamedNotepads(): void { persistNotes() }
 function createNotepad(name: string): Notepad {
   const np: Notepad = { id: crypto.randomUUID(), name: name.trim() || 'Note', content: '', updatedAt: Date.now() }
   namedNotepads.value = [...namedNotepads.value, np]
@@ -565,6 +618,7 @@ async function applyAllEdits(msg: ChatMessage): Promise<void> {
 interface ChatThread { id: string; title: string; messages: ChatMessage[]; updatedAt: number; pinned?: boolean; archived?: boolean; model?: string; checkpoints?: ChatCheckpoint[]; systemPrompt?: string; label?: string; color?: string; pinnedChips?: ContextChip[]; forkedFrom?: string }
 const MAX_THREADS = 20
 const MAX_MESSAGES = 500
+// Legacy localStorage keys — read only by the one-time per-workspace migration.
 const threadsKey = computed(() => `ai-chat-threads:${props.workspacePath}`)
 const historyKey = computed(() => `ai-chat-history:${props.workspacePath}`)
 const THREAD_LABELS = ['🐛 Bug', '✨ Feature', '❓ Question', '📝 Docs', '🔧 Refactor', '⚡ Perf', '🔒 Security', '🧪 Tests'] as const
@@ -644,11 +698,11 @@ function cancelThreadBulkMode(): void {
   resetThreadBulkSelection()
 }
 const threadSortMode = ref<'date' | 'name' | 'model'>(
-  (localStorage.getItem('ai-chat-thread-sort') ?? 'date') as 'date' | 'name' | 'model'
+  settingsGet('ai-chat-thread-sort', 'date') as 'date' | 'name' | 'model'
 )
-watch(threadSortMode, (v) => localStorage.setItem('ai-chat-thread-sort', v))
+watch(threadSortMode, (v) => settingsSet('ai-chat-thread-sort', v))
 const threadPanelHeight = ref<number | null>(
-  (() => { const v = localStorage.getItem('ai-thread-panel-h'); return v ? parseInt(v, 10) : null })()
+  (() => { const v = settingsGet<string | null>('ai-thread-panel-h', null); return v ? parseInt(v, 10) : null })()
 )
 let _panelDragStartY = 0
 let _panelDragStartH = 0
@@ -665,7 +719,7 @@ function onPanelResizeMousedown(e: MouseEvent): void {
   const onUp = () => {
     document.removeEventListener('mousemove', onMove)
     document.removeEventListener('mouseup', onUp)
-    if (threadPanelHeight.value) localStorage.setItem('ai-thread-panel-h', String(threadPanelHeight.value))
+    if (threadPanelHeight.value) settingsSet('ai-thread-panel-h', String(threadPanelHeight.value))
   }
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
@@ -812,30 +866,63 @@ const currentThread = computed(() => allThreads.value.find((t) => t.id === curre
 
 function newThreadId(): string { return crypto.randomUUID() }
 
-function loadThreads(): void {
-  try {
-    const raw = localStorage.getItem(threadsKey.value)
-    if (raw) {
-      allThreads.value = (JSON.parse(raw) as ChatThread[]).slice(0, MAX_THREADS)
-    } else {
-      // Migrate from old single-key format
-      const legacyRaw = localStorage.getItem(historyKey.value)
-      if (legacyRaw) {
-        const legacyMsgs = (JSON.parse(legacyRaw) as ChatMessage[]).filter((m) => !m.streaming)
-        if (legacyMsgs.length) {
-          const firstUser = legacyMsgs.find((m) => m.role === 'user')
-          const thread: ChatThread = {
-            id: newThreadId(),
-            title: firstUser ? firstUser.content.slice(0, 40) : 'Chat history',
-            messages: legacyMsgs,
-            updatedAt: Date.now(),
+// Guards persistThreads until the backend chat-threads.json document has been
+// loaded — an early save would overwrite real data with the empty placeholder.
+let threadsHydrated = false
+let threadsLoadSeq = 0
+
+function persistThreads(threads: ChatThread[]): void {
+  const ws = props.workspacePath
+  if (!ws || !threadsHydrated) return
+  props.backend.send('ai.chat.threads.set', { workspace_path: ws, threads })
+    .catch(() => { /* transient; the next save retries */ })
+}
+
+async function loadThreads(): Promise<void> {
+  const seq = ++threadsLoadSeq
+  threadsHydrated = false
+  const ws = props.workspacePath
+  const legacyThreadsKey = threadsKey.value
+  const legacyHistoryKey = historyKey.value
+  if (ws) {
+    try {
+      const resp = await props.backend.send<{ threads?: ChatThread[] }>(
+        'ai.chat.threads.get', { workspace_path: ws }
+      )
+      if (seq !== threadsLoadSeq) return
+      if (resp.ok) {
+        threadsHydrated = true
+        const stored = Array.isArray(resp.payload?.threads) ? resp.payload.threads : []
+        if (stored.length > 0) {
+          allThreads.value = stored.slice(0, MAX_THREADS)
+          // Backend already owns the data — clear any leftover legacy copies.
+          try { localStorage.removeItem(legacyThreadsKey); localStorage.removeItem(legacyHistoryKey) } catch { /* ignore */ }
+        } else {
+          // Backend document empty → one-time per-workspace localStorage
+          // migration (covers the old ai-chat-history single-key format too).
+          let threadsRaw: string | null = null
+          let historyRaw: string | null = null
+          try {
+            threadsRaw = localStorage.getItem(legacyThreadsKey)
+            historyRaw = localStorage.getItem(legacyHistoryKey)
+          } catch { /* storage unavailable */ }
+          const migrated = parseLegacyThreads(threadsRaw, historyRaw, MAX_THREADS) as ChatThread[] | null
+          if (migrated && migrated.length > 0) {
+            allThreads.value = migrated
+            const ack = await props.backend.send<{ ok?: boolean }>('ai.chat.threads.set', {
+              workspace_path: ws,
+              threads: migrated,
+            })
+            // Ack-gated delete: keep the copies (retried next launch) on failure.
+            if (ack.ok && ack.payload?.ok === true) {
+              try { localStorage.removeItem(legacyThreadsKey); localStorage.removeItem(legacyHistoryKey) } catch { /* ignore */ }
+            }
           }
-          allThreads.value = [thread]
-          localStorage.removeItem(historyKey.value)
         }
       }
-    }
-  } catch { /* ignore */ }
+    } catch { /* backend unavailable — stay unhydrated so saves can't clobber */ }
+    if (seq !== threadsLoadSeq) return
+  }
 
   if (allThreads.value.length === 0) {
     const id = newThreadId()
@@ -852,6 +939,9 @@ function loadThreads(): void {
       settingsModel.value = latest.model
     }
   }
+  // Loading is async now — re-render any mermaid diagrams persisted in the
+  // thread history (the mount-time render pass may have run before this).
+  void nextTick(renderMermaidBlocks)
 }
 
 function _doSave(): void {
@@ -868,8 +958,7 @@ function _doSave(): void {
     const cut = raw.length <= 40 ? raw : (raw.slice(0, 40).replace(/\s\S*$/, '') || raw.slice(0, 40))
     allThreads.value[idx].title = cut
   }
-  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value.slice(0, MAX_THREADS))) }
-  catch { /* quota */ }
+  persistThreads(allThreads.value.slice(0, MAX_THREADS))
 }
 
 function saveCurrentThread(): void {
@@ -965,8 +1054,7 @@ function deleteThread(id: string): void {
     if (allThreads.value.length === 0) newThread()
     else switchThread(allThreads.value[0].id)
   }
-  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
-  catch { /* quota */ }
+  persistThreads(allThreads.value)
 }
 
 function duplicateThread(id: string): void {
@@ -983,8 +1071,7 @@ function duplicateThread(id: string): void {
   }
   const idx = allThreads.value.findIndex((t) => t.id === id)
   allThreads.value.splice(idx + 1, 0, copy)
-  try { localStorage.setItem(threadsKey.value, JSON.stringify(allThreads.value)) }
-  catch { /* quota */ }
+  persistThreads(allThreads.value)
   switchThread(copy.id)
   showToast('Thread duplicated')
 }
@@ -1020,19 +1107,21 @@ watch(messages, saveCurrentThread)
 type ProviderName = 'anthropic' | 'ollama' | 'openai' | 'groq' | 'deepseek' | 'google' | 'mistral' | 'xai' | 'openai_compatible'
 const settingsProvider = ref<ProviderName>('anthropic')
 const settingsApiKey = ref('')
-const settingsOpenAiKey = ref(localStorage.getItem('ai-chat-openai-key') ?? '')
-const settingsGroqKey = ref(localStorage.getItem('ai-chat-groq-key') ?? '')
-const settingsDeepSeekKey = ref(localStorage.getItem('ai-chat-deepseek-key') ?? '')
-const settingsGoogleKey = ref(localStorage.getItem('ai-chat-google-key') ?? '')
-const settingsMistralKey = ref(localStorage.getItem('ai-chat-mistral-key') ?? '')
-const settingsXaiKey = ref(localStorage.getItem('ai-chat-xai-key') ?? '')
-const settingsOaiCompatUrl = ref(localStorage.getItem('ai-chat-oai-compat-url') ?? '')
-const settingsOaiCompatKey = ref(localStorage.getItem('ai-chat-oai-compat-key') ?? '')
-const settingsOaiCompatModel = ref(localStorage.getItem('ai-chat-oai-compat-model') ?? 'gpt-4o')
+// Provider credentials live only in the backend ai_chat_settings.json (0o600);
+// the form hydrates from `ai.chat.settings.get` (see fetchSettings).
+const settingsOpenAiKey = ref('')
+const settingsGroqKey = ref('')
+const settingsDeepSeekKey = ref('')
+const settingsGoogleKey = ref('')
+const settingsMistralKey = ref('')
+const settingsXaiKey = ref('')
+const settingsOaiCompatUrl = ref('')
+const settingsOaiCompatKey = ref('')
+const settingsOaiCompatModel = ref('gpt-4o')
 const settingsModel = ref('claude-sonnet-4-6')
 const settingsOllamaUrl = ref('http://localhost:11434')
 const settingsSendMode = ref<'enter' | 'ctrl-enter'>(
-  (localStorage.getItem('ai-chat-send-mode') ?? 'enter') as 'enter' | 'ctrl-enter'
+  settingsGet('ai-chat-send-mode', 'enter') as 'enter' | 'ctrl-enter'
 )
 const settingsSystemPrompt = ref('You are a helpful AI coding assistant.')
 const testConnStatus = ref<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
@@ -1076,14 +1165,14 @@ function applySystemPromptProfile(profile: string): void {
   if (text) { settingsSystemPrompt.value = text; showToast(`Profile: ${profile}`) }
 }
 
-const settingsAutoAccept = ref(localStorage.getItem('ai-chat-auto-accept') === 'true')
-const settingsSmartContext = ref(localStorage.getItem('ai-chat-smart-context') !== 'false')
-const settingsUserRules = ref(localStorage.getItem('ai-chat-user-rules') ?? '')
+const settingsAutoAccept = ref(settingsGet<string | null>('ai-chat-auto-accept', null) === 'true')
+const settingsSmartContext = ref(settingsGet<string | null>('ai-chat-smart-context', null) !== 'false')
+const settingsUserRules = ref(settingsGet('ai-chat-user-rules', ''))
 
 // ── Custom @docs entries (user-defined documentation URLs) ───────────────────
 interface CustomDocEntry { key: string; label: string; url: string }
 const customDocs = ref<CustomDocEntry[]>((() => {
-  try { return JSON.parse(localStorage.getItem('ai-chat-custom-docs') ?? '[]') as CustomDocEntry[] }
+  try { return JSON.parse(settingsGet('ai-chat-custom-docs', '[]')) as CustomDocEntry[] }
   catch { return [] }
 })())
 const newDocKey   = ref('')
@@ -1111,7 +1200,7 @@ function removeCustomDoc(key: string): void {
 const chatMode = ref<'ask' | 'edit' | 'agent'>(settingsAutoAccept.value ? 'agent' : 'ask')
 watch(chatMode, (mode) => {
   settingsAutoAccept.value = mode === 'agent'
-  localStorage.setItem('ai-chat-auto-accept', mode === 'agent' ? 'true' : 'false')
+  settingsSet('ai-chat-auto-accept', mode === 'agent' ? 'true' : 'false')
 })
 // Edit mode working set — files targeted for batch edits (VS Code Copilot Edit parity)
 const editWorkingSet = ref<string[]>([])
@@ -1122,7 +1211,7 @@ function removeFromWorkingSet(idx: number): void {
   editWorkingSet.value.splice(idx, 1)
 }
 const settingsMaxTokens = ref(4096)
-const settingsMaxAgentIter = ref(parseInt(localStorage.getItem('ai-chat-max-agent-iter') ?? '10', 10) || 10)
+const settingsMaxAgentIter = ref(parseInt(settingsGet('ai-chat-max-agent-iter', '10'), 10) || 10)
 const settingsTemperature = ref<number | null>(null)  // null = use model default
 const settingsThinkingBudget = ref<number | null>(null) // null = disabled; token budget for extended thinking
 const settingsReasoningEffort = ref<'low' | 'medium' | 'high' | null>(null)
@@ -1693,12 +1782,12 @@ const AT_OPTIONS_STATIC: AtOption[] = [
 ]
 const atDirItems = ref<AtOption[]>([])
 const recentAtFiles = ref<string[]>([])
-// Recently used static @ options — persisted in localStorage for cross-session memory
+// Recently used static @ options — persisted in the settings store for cross-session memory
 const recentAtIds = ref<string[]>(
-  (() => { try { return JSON.parse(localStorage.getItem('ai-recent-at') ?? '[]') as string[] } catch { return [] } })(),
+  (() => { try { return JSON.parse(settingsGet('ai-recent-at', '[]')) as string[] } catch { return [] } })(),
 )
 watch(recentAtIds, (v) => {
-  try { localStorage.setItem('ai-recent-at', JSON.stringify(v.slice(0, 8))) } catch { /* ignore */ }
+  settingsSet('ai-recent-at', JSON.stringify(v.slice(0, 8)))
 })
 function trackRecentAt(id: string): void {
   if (!id || id.startsWith('@file') || id.startsWith('@recent-')) return
@@ -1901,11 +1990,11 @@ const slashMenuEl = ref<HTMLElement | null>(null)
 const slashOptions = ref<SlashCommand[]>([...SLASH_COMMANDS])
 // Recently used commands — shown at top of slash menu (VS Code parity)
 const recentCmds = ref<string[]>(
-  (() => { try { return JSON.parse(localStorage.getItem('ai-recent-cmds') ?? '[]'  ) as string[] } catch { return [] } })(),
+  (() => { try { return JSON.parse(settingsGet('ai-recent-cmds', '[]')) as string[] } catch { return [] } })(),
 )
 function trackRecentCmd(id: string): void {
   recentCmds.value = [id, ...recentCmds.value.filter((c) => c !== id)].slice(0, 6)
-  try { localStorage.setItem('ai-recent-cmds', JSON.stringify(recentCmds.value)) } catch { /* ignore */ }
+  settingsSet('ai-recent-cmds', JSON.stringify(recentCmds.value))
 }
 
 // ── Code-block copy via event delegation ─────────────────────────────────────
@@ -2674,8 +2763,86 @@ function showToast(msg: string): void {
 }
 
 // ── Settings fetch/save ────────────────────────────────────────────────────────
+function applyBackendSettings(payload: unknown): void {
+  const p = payload as {
+    provider?: string; anthropic_api_key?: string; model?: string
+    ollama_base_url?: string; system_prompt?: string; max_tokens?: number; temperature?: number
+    openai_api_key?: string; groq_api_key?: string; deepseek_api_key?: string
+    google_api_key?: string; mistral_api_key?: string; xai_api_key?: string
+    openai_compatible_base_url?: string; openai_compatible_api_key?: string; openai_compatible_model?: string
+    reasoning_effort?: 'low' | 'medium' | 'high' | null
+  }
+  const validProviders: ProviderName[] = ['anthropic', 'ollama', 'openai', 'groq', 'deepseek', 'google', 'mistral', 'xai', 'openai_compatible']
+  if (p.provider && validProviders.includes(p.provider as ProviderName)) settingsProvider.value = p.provider as ProviderName
+  if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
+  if (p.openai_api_key) settingsOpenAiKey.value = p.openai_api_key
+  if (p.groq_api_key) settingsGroqKey.value = p.groq_api_key
+  if (p.deepseek_api_key) settingsDeepSeekKey.value = p.deepseek_api_key
+  if (p.google_api_key) settingsGoogleKey.value = p.google_api_key
+  if (p.mistral_api_key) settingsMistralKey.value = p.mistral_api_key
+  if (p.xai_api_key) settingsXaiKey.value = p.xai_api_key
+  if (p.openai_compatible_base_url) settingsOaiCompatUrl.value = p.openai_compatible_base_url
+  if (p.openai_compatible_api_key) settingsOaiCompatKey.value = p.openai_compatible_api_key
+  if (p.openai_compatible_model !== undefined) settingsOaiCompatModel.value = p.openai_compatible_model
+  if (p.model) settingsModel.value = p.model
+  if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
+  // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
+  if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
+  if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
+  if (p.temperature !== undefined) settingsTemperature.value = p.temperature
+  if (p.reasoning_effort !== undefined) settingsReasoningEffort.value = p.reasoning_effort ?? null
+  // Re-apply per-conversation model override after backend settings load
+  const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
+  if (ct?.model) {
+    const entry = MODEL_CATALOG.find((m) => m.id === ct.model)
+    if (entry) {
+      if (entry.provider !== 'auto') settingsProvider.value = entry.provider
+      settingsModel.value = ct.model
+    }
+  }
+}
+
 function fetchSettings(): void {
-  props.backend.send('ai.chat.settings.get', {}).catch(() => {/* ignore */})
+  props.backend.send('ai.chat.settings.get', {})
+    .then((r) => { if (r?.ok && r.payload) applyBackendSettings(r.payload) })
+    .catch(() => {/* ignore */})
+}
+
+// One-time migration of the legacy plaintext localStorage API-key mirrors into
+// the backend ai_chat_settings.json (0o600). The localStorage copies are only
+// removed after the backend acks the write; on failure they stay in place and
+// the next launch retries (idempotent — re-uploading identical values is safe).
+const LEGACY_KEY_MIRRORS: ReadonlyArray<readonly [string, string]> = [
+  ['ai-chat-openai-key', 'openai_api_key'],
+  ['ai-chat-groq-key', 'groq_api_key'],
+  ['ai-chat-deepseek-key', 'deepseek_api_key'],
+  ['ai-chat-google-key', 'google_api_key'],
+  ['ai-chat-mistral-key', 'mistral_api_key'],
+  ['ai-chat-xai-key', 'xai_api_key'],
+  ['ai-chat-oai-compat-url', 'openai_compatible_base_url'],
+  ['ai-chat-oai-compat-key', 'openai_compatible_api_key'],
+  ['ai-chat-oai-compat-model', 'openai_compatible_model'],
+]
+
+async function migrateLegacyKeyMirrors(): Promise<void> {
+  const updates: Record<string, string> = {}
+  const present: string[] = []
+  for (const [lsKey, field] of LEGACY_KEY_MIRRORS) {
+    const v = localStorage.getItem(lsKey)
+    if (v === null) continue
+    present.push(lsKey)
+    // Empty mirrors carry no information — remove them without pushing so a
+    // stale blank can never clobber a real key already stored backend-side.
+    if (v !== '') updates[field] = v
+  }
+  if (present.length === 0) return
+  try {
+    if (Object.keys(updates).length > 0) {
+      const r = await props.backend.send('ai.chat.settings.set', updates)
+      if (!r?.ok) return
+    }
+    for (const k of present) localStorage.removeItem(k)
+  } catch { /* backend unreachable — keep mirrors, retry next launch */ }
 }
 
 // Resolve "auto" model to a real backend model+provider pair
@@ -2733,20 +2900,11 @@ function _pushSettingsToBackend(): void {
 
 function saveSettings(): void {
   _pushSettingsToBackend()
-  localStorage.setItem('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
-  localStorage.setItem('ai-chat-openai-key', settingsOpenAiKey.value)
-  localStorage.setItem('ai-chat-groq-key', settingsGroqKey.value)
-  localStorage.setItem('ai-chat-deepseek-key', settingsDeepSeekKey.value)
-  localStorage.setItem('ai-chat-google-key', settingsGoogleKey.value)
-  localStorage.setItem('ai-chat-mistral-key', settingsMistralKey.value)
-  localStorage.setItem('ai-chat-xai-key', settingsXaiKey.value)
-  localStorage.setItem('ai-chat-oai-compat-url', settingsOaiCompatUrl.value)
-  localStorage.setItem('ai-chat-oai-compat-key', settingsOaiCompatKey.value)
-  localStorage.setItem('ai-chat-oai-compat-model', settingsOaiCompatModel.value)
-  localStorage.setItem('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
-  localStorage.setItem('ai-chat-send-mode', settingsSendMode.value)
-  localStorage.setItem('ai-chat-user-rules', settingsUserRules.value)
-  localStorage.setItem('ai-chat-custom-docs', JSON.stringify(customDocs.value))
+  settingsSet('ai-chat-auto-accept', settingsAutoAccept.value ? 'true' : 'false')
+  settingsSet('ai-chat-max-agent-iter', String(settingsMaxAgentIter.value))
+  settingsSet('ai-chat-send-mode', settingsSendMode.value)
+  settingsSet('ai-chat-user-rules', settingsUserRules.value)
+  settingsSet('ai-chat-custom-docs', JSON.stringify(customDocs.value))
   showSettings.value = false
   showToast('Settings saved')
 }
@@ -3435,7 +3593,7 @@ async function sendMessage(): Promise<void> {
       }
       if (pinParts.length) globalPinsSuffix = `\n\n${pinParts.join('\n\n')}`
     }
-    localStorage.setItem('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
+    settingsSet('ai-chat-smart-context', settingsSmartContext.value ? 'true' : 'false')
     await props.backend.send('ai.chat.start', {
       session_id: sessionId,
       messages: history,
@@ -3825,9 +3983,9 @@ function ctxMenuCreateSnippet(): void {
   if (!name.trim()) { showToast('Snippet creation cancelled'); return }
   const SAVED_SNIPPETS_KEY = 'ai-chat-snippets'
   interface Snippet { id: string; name: string; content: string; lang: string; createdAt: number }
-  const existing: Snippet[] = (() => { try { return JSON.parse(localStorage.getItem(SAVED_SNIPPETS_KEY) ?? '[]') as Snippet[] } catch { return [] } })()
+  const existing: Snippet[] = (() => { try { return JSON.parse(settingsGet(SAVED_SNIPPETS_KEY, '[]')) as Snippet[] } catch { return [] } })()
   existing.unshift({ id: crypto.randomUUID(), name: name.trim(), content: code, lang, createdAt: Date.now() })
-  localStorage.setItem(SAVED_SNIPPETS_KEY, JSON.stringify(existing.slice(0, 200)))
+  settingsSet(SAVED_SNIPPETS_KEY, JSON.stringify(existing.slice(0, 200)))
   showToast(`Snippet saved: "${name.trim()}"`)
 }
 
@@ -4281,7 +4439,6 @@ let unsubToolResult: (() => void) | null = null
 let unsubCommandProposal: (() => void) | null = null
 let unsubDone: (() => void) | null = null
 let unsubError: (() => void) | null = null
-let unsubSettingsGet: (() => void) | null = null
 
 function setupListeners(): void {
   document.addEventListener('keydown', _onGlobalKeydown)
@@ -4527,40 +4684,6 @@ function setupListeners(): void {
     }
   })
 
-  unsubSettingsGet = props.backend.on('ai.chat.settings', (payload) => {
-    const p = payload as {
-      provider?: string; anthropic_api_key?: string; model?: string
-      ollama_base_url?: string; system_prompt?: string; max_tokens?: number; temperature?: number
-      openai_api_key?: string; groq_api_key?: string; deepseek_api_key?: string
-      openai_compatible_base_url?: string; openai_compatible_api_key?: string; openai_compatible_model?: string
-      reasoning_effort?: 'low' | 'medium' | 'high' | null
-    }
-    const validProviders: ProviderName[] = ['anthropic', 'ollama', 'openai', 'groq', 'deepseek', 'google', 'mistral', 'xai', 'openai_compatible']
-    if (p.provider && validProviders.includes(p.provider as ProviderName)) settingsProvider.value = p.provider as ProviderName
-    if (p.anthropic_api_key) settingsApiKey.value = p.anthropic_api_key
-    if (p.openai_api_key) settingsOpenAiKey.value = p.openai_api_key
-    if (p.groq_api_key) settingsGroqKey.value = p.groq_api_key
-    if (p.deepseek_api_key) settingsDeepSeekKey.value = p.deepseek_api_key
-    if (p.openai_compatible_base_url) settingsOaiCompatUrl.value = p.openai_compatible_base_url
-    if (p.openai_compatible_api_key) settingsOaiCompatKey.value = p.openai_compatible_api_key
-    if (p.openai_compatible_model !== undefined) settingsOaiCompatModel.value = p.openai_compatible_model
-    if (p.model) settingsModel.value = p.model
-    if (p.ollama_base_url) settingsOllamaUrl.value = p.ollama_base_url
-    // Use !== undefined so clearing system_prompt to "" is properly reflected in UI
-    if (p.system_prompt !== undefined) settingsSystemPrompt.value = p.system_prompt
-    if (p.max_tokens) settingsMaxTokens.value = p.max_tokens
-    if (p.temperature !== undefined) settingsTemperature.value = p.temperature
-    if (p.reasoning_effort !== undefined) settingsReasoningEffort.value = p.reasoning_effort ?? null
-    // Re-apply per-conversation model override after backend settings load
-    const ct = allThreads.value.find((t) => t.id === currentThreadId.value)
-    if (ct?.model) {
-      const entry = MODEL_CATALOG.find((m) => m.id === ct.model)
-      if (entry) {
-        if (entry.provider !== 'auto') settingsProvider.value = entry.provider
-        settingsModel.value = ct.model
-      }
-    }
-  })
 }
 
 function teardownListeners(): void {
@@ -4572,7 +4695,6 @@ function teardownListeners(): void {
   unsubCommandProposal?.()
   unsubDone?.()
   unsubError?.()
-  unsubSettingsGet?.()
 }
 
 const workspaceRulesFile = ref<string | null>(null)
@@ -4776,8 +4898,8 @@ function relativeTime(ts: number): string {
 
 onMounted(() => {
   setupListeners()
-  fetchSettings()
-  loadThreads()
+  void migrateLegacyKeyMirrors().then(fetchSettings)
+  void loadThreads()
   void detectWorkspaceRules()
   // Render any mermaid diagrams that were persisted in thread history
   void nextTick(renderMermaidBlocks)
@@ -4786,6 +4908,12 @@ onMounted(() => {
 watch(() => props.workspacePath, () => { void detectWorkspaceRules() })
 watch(() => props.backend.status.value, (s) => {
   if ((s === 'disconnected' || s === 'error') && sending.value) stopStreaming()
+  if (s === 'connected') {
+    // Late hydration after a mount-time backend outage — only when nothing
+    // local would be clobbered by the reload.
+    if (!threadsHydrated && messages.value.length === 0) void loadThreads()
+    if (!notesHydrated && !notesContent.value && namedNotepads.value.length === 0) void loadNotes()
+  }
 })
 
 onUnmounted(() => {
@@ -6771,10 +6899,10 @@ ${log || '(no commits)'}`
     if (!name.trim()) { showToast('/snippet:save: cancelled'); return }
     const SAVED_SNIPPETS_KEY = 'ai-chat-snippets'
     interface Snippet { id: string; name: string; content: string; lang: string; createdAt: number }
-    const existing: Snippet[] = (() => { try { return JSON.parse(localStorage.getItem(SAVED_SNIPPETS_KEY) ?? '[]') as Snippet[] } catch { return [] } })()
+    const existing: Snippet[] = (() => { try { return JSON.parse(settingsGet(SAVED_SNIPPETS_KEY, '[]')) as Snippet[] } catch { return [] } })()
     const ext = relPath.split('.').pop() ?? ''
     existing.unshift({ id: crypto.randomUUID(), name: name.trim(), content: sel.trim(), lang: ext, createdAt: Date.now() })
-    localStorage.setItem(SAVED_SNIPPETS_KEY, JSON.stringify(existing.slice(0, 200)))
+    settingsSet(SAVED_SNIPPETS_KEY, JSON.stringify(existing.slice(0, 200)))
     showToast(`Snippet saved: "${name.trim()}"`)
     return
   }
@@ -6784,7 +6912,7 @@ ${log || '(no commits)'}`
     inputText.value = ''
     const SAVED_SNIPPETS_KEY = 'ai-chat-snippets'
     interface Snippet { id: string; name: string; content: string; lang: string; createdAt: number }
-    const existing: Snippet[] = (() => { try { return JSON.parse(localStorage.getItem(SAVED_SNIPPETS_KEY) ?? '[]') as Snippet[] } catch { return [] } })()
+    const existing: Snippet[] = (() => { try { return JSON.parse(settingsGet(SAVED_SNIPPETS_KEY, '[]')) as Snippet[] } catch { return [] } })()
     if (!existing.length) { showToast('/snippet:list: no saved snippets yet — use /snippet:save to save one'); return }
     const list = existing.slice(0, 20).map((s, i) => `${i + 1}. ${s.name} (${s.lang || 'text'}) — ${s.content.slice(0, 50).replace(/\n/g, ' ')}…`)
     contextChips.value.push({ id: crypto.randomUUID(), label: '@snippets', content: `// Saved snippets:\n${list.join('\n')}` })
@@ -7613,7 +7741,7 @@ ${selText.slice(0, 8000)}
   // /debug:console — paste console output for AI interpretation
   if (cmd.id === '/debug:console') {
     inputText.value = ''
-    const termBuf = (() => { try { return localStorage.getItem('ai-chat-terminal-buffer') || '' } catch { return '' } })()
+    const termBuf = settingsGet<string>('ai-chat-terminal-buffer', '') || ''
     const preview = termBuf ? termBuf.slice(-4000) : ''
     if (preview) {
       addMsg({ role: 'user', content: `Here is recent console/terminal output. Please interpret the errors and suggest fixes:
@@ -9506,9 +9634,9 @@ ${out}`
     }
   } else if (option.id === '@terminal') {
     chipLabel = '@terminal'
-    // Try localStorage buffer first (written by PTY terminal component if available)
+    // Try the stored buffer first (written by PTY terminal component if available)
     const TERMINAL_BUF_KEY = 'ai-chat-terminal-buffer'
-    const stored = localStorage.getItem(TERMINAL_BUF_KEY)
+    const stored = settingsGet<string | null>(TERMINAL_BUF_KEY, null)
     if (stored && stored.trim()) {
       chipContent = `// Terminal output (last session):\n\`\`\`\n${stored.slice(-5000)}\n\`\`\``
     } else if (props.workspacePath) {
@@ -9564,7 +9692,7 @@ Up arrow — Edit last user message (inline)
     chipLabel = '@snippets'
     const SAVED_SNIPPETS_KEY = 'ai-chat-snippets'
     interface SnippetItem { id: string; name: string; content: string; lang: string; createdAt: number }
-    const savedSnippets: SnippetItem[] = (() => { try { return JSON.parse(localStorage.getItem(SAVED_SNIPPETS_KEY) ?? '[]') as SnippetItem[] } catch { return [] } })()
+    const savedSnippets: SnippetItem[] = (() => { try { return JSON.parse(settingsGet(SAVED_SNIPPETS_KEY, '[]')) as SnippetItem[] } catch { return [] } })()
     if (!savedSnippets.length) {
       chipContent = '// @snippets: no saved snippets yet — use /snippet:save to save one'
     } else {
