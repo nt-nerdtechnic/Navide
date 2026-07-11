@@ -598,11 +598,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // ── Shift+Enter: newline without submitting ────────────────────────────
       // Plain Enter and Shift+Enter both produce the same '\r' byte in xterm's
       // default key handling, so a CLI reading raw PTY input can't tell them
-      // apart. Paste a literal newline with bracketed-paste markers; the agent
-      // TUIs already use bracketed paste for multi-line prompts, so this follows
-      // the same path instead of relying on vendor-specific CSI-u support.
+      // apart. Send ESC+CR — the sequence Claude Code's /terminal-setup installs
+      // for VS Code's xterm.js terminal, which agent
+      // TUIs interpret as "insert newline"; plain shells treat it as Enter.
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Enter') {
-        pasteText('\x1b[200~\n\x1b[201~')
+        pasteText('\x1b\r')
         return false
       }
 
