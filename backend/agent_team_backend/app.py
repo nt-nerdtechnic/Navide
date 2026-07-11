@@ -409,6 +409,14 @@ _PTY_OWNERS: "dict[str, Session]" = {}
 async def _active_emit(event: dict[str, Any]) -> None:
     """Output sink: route each PTY's output to its owning Session."""
     payload = event.get("payload", {})
+    # An autonomous PTY death (exit/EOF) must release the attribution
+    # registration just like terminal.kill does — otherwise the pane's
+    # session marker leaks in _unbound_markers forever. Runs before the
+    # owner check: cleanup applies even when the pane is detached.
+    if event.get("type") == "terminal.exit" and isinstance(payload, dict):
+        exit_pane_id = payload.get("pane_id")
+        if exit_pane_id:
+            attribution.unregister_pane(exit_pane_id)
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
     sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:

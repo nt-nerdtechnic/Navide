@@ -3529,6 +3529,57 @@ backend.on('session.detected', (raw) => {
   void persistPaneSession(pane, ev.session_id)
 })
 
+// A dead PTY can never produce a session id — drop the marker so the pane's
+// "detecting session ID" spinner stops instead of spinning forever (the exit
+// event otherwise dead-ends inside useTerminal and never reaches pane state).
+// exit=127 means the shell could not find the agent command: the CLI is not
+// installed, so offer guided install via the onboarding dep registry (dep ids
+// match agentKeys).
+backend.on('terminal.exit', (raw) => {
+  const ev = raw as { pane_id?: string; exit_code?: number | null }
+  if (!ev?.pane_id) return
+  const pane = panes.value.find((p) => p.id === ev.pane_id)
+  if (!pane) return
+  if (pane.sessionMarker && !pane.pinnedSessionId) {
+    pane.sessionMarker = undefined
+    if (pane.preparationStatus !== 'ready') pane.preparationStatus = 'failed'
+    syncViews()
+  }
+  if (ev.exit_code === 127 && pane.agentKey !== 'terminal') {
+    void promptCliInstall(pane.agentKey, pane.agentLabel)
+  }
+})
+
+// One prompt per agent at a time: several panes of the same CLI exiting 127
+// together (e.g. a pipeline stage) must not stack identical dialogs.
+const cliInstallPromptOpen = new Set<string>()
+async function promptCliInstall(agentKey: string, agentLabel: string): Promise<void> {
+  if (cliInstallPromptOpen.has(agentKey)) return
+  cliInstallPromptOpen.add(agentKey)
+  try {
+    const ok = await notifyRestore.confirm(
+      i18n.global.t('pane.cli-missing.message', { label: agentLabel }),
+      {
+        title: i18n.global.t('pane.cli-missing.title'),
+        confirmText: i18n.global.t('pane.cli-missing.install')
+      }
+    )
+    if (!ok) return
+    const resp = await backend.send<{ ok?: boolean; needs_terminal?: boolean; command?: string; error?: string }>(
+      'onboarding.install',
+      { dep_id: agentKey }
+    )
+    const r = resp.payload
+    if (r?.ok && r.needs_terminal && r.command) {
+      await window.agentTeam?.openTerminal(r.command)
+    } else if (!r?.ok) {
+      pipelineLog(`❌ ${agentLabel} install failed: ${r?.error || resp.error?.message || 'unknown'}`)
+    }
+  } finally {
+    cliInstallPromptOpen.delete(agentKey)
+  }
+}
+
 // ── Exception tracking → supervision log ────────────────────────────────────
 // Surface uncaught frontend errors into the pipeline log so a silent exception
 // during stage supervision is visible HERE (rendered red), not just buried in

@@ -45,6 +45,11 @@
       "detecting-session": "取得 Session ID 中",
       "ready": "就緒",
       "failed": "設定失敗"
+    },
+    "cli-missing": {
+      "title": "CLI 尚未安裝",
+      "message": "{label} 以「command not found」退出 — 尚未安裝此 CLI。要現在安裝嗎?安裝指令會在外部終端機執行,完成後請重新開啟 pane。",
+      "install": "在終端機安裝"
     }
   },
   "action": {

@@ -45,6 +45,11 @@
       "detecting-session": "detecting session ID",
       "ready": "ready",
       "failed": "setup failed"
+    },
+    "cli-missing": {
+      "title": "CLI not installed",
+      "message": "{label} exited with \"command not found\" — the CLI is not installed. Install it now? The install command runs in an external terminal; respawn the pane once it finishes.",
+      "install": "Install in terminal"
     }
   },
   "action": {
