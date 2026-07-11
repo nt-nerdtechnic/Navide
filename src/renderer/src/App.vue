@@ -3565,15 +3565,19 @@ async function promptCliInstall(agentKey: string, agentLabel: string): Promise<v
       }
     )
     if (!ok) return
-    const resp = await backend.send<{ ok?: boolean; needs_terminal?: boolean; command?: string; error?: string }>(
-      'onboarding.install',
-      { dep_id: agentKey }
-    )
-    const r = resp.payload
-    if (r?.ok && r.needs_terminal && r.command) {
-      await window.agentTeam?.openTerminal(r.command)
-    } else if (!r?.ok) {
-      pipelineLog(`❌ ${agentLabel} install failed: ${r?.error || resp.error?.message || 'unknown'}`)
+    try {
+      const resp = await backend.send<{ ok?: boolean; needs_terminal?: boolean; command?: string; error?: string }>(
+        'onboarding.install',
+        { dep_id: agentKey }
+      )
+      const r = resp.payload
+      if (r?.ok && r.needs_terminal && r.command) {
+        await window.agentTeam?.openTerminal(r.command)
+      } else if (!r?.ok) {
+        pipelineLog(`❌ ${agentLabel} install failed: ${r?.error || resp.error?.message || 'unknown'}`)
+      }
+    } catch (e) {
+      pipelineLog(`❌ ${agentLabel} install failed: ${e instanceof Error ? e.message : String(e)}`)
     }
   } finally {
     cliInstallPromptOpen.delete(agentKey)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -25,20 +26,53 @@ def _exit_event(pane_id: str = "p1", exit_code: int | None = 127) -> dict[str, A
     })
 
 
+@pytest.fixture(autouse=True)
+def _clean_pending() -> Any:
+    yield
+    for handle in app._PENDING_UNREGISTERS.values():
+        handle.cancel()
+    app._PENDING_UNREGISTERS.clear()
+
+
 @pytest.mark.asyncio
-async def test_active_emit_terminal_exit_unregisters_attribution_pane(
+async def test_active_emit_terminal_exit_unregisters_after_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An autonomous PTY exit must release the attribution registration
     (regression: only terminal.kill unregistered, so a CLI that died on its
-    own leaked its session marker in _unbound_markers forever)."""
+    own leaked its session marker in _unbound_markers forever). The release
+    is delayed so the CLI's final log flush / late marker binding is still
+    attributed to the pane."""
     fake_attr = FakeAttribution()
     monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_UNREGISTER_GRACE_SEC", 0.0)
 
     # No entry in _PTY_OWNERS: cleanup must run even for a detached pane.
     await app._active_emit(_exit_event())
 
+    # Not yet — the grace timer must elapse first.
+    assert fake_attr.unregistered == []
+    await asyncio.sleep(0.05)
     assert fake_attr.unregistered == ["p1"]
+    assert "p1" not in app._PENDING_UNREGISTERS
+
+
+@pytest.mark.asyncio
+async def test_pane_recreate_cancels_pending_unregister(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pane re-created during the grace period (renderer reload respawns
+    keep their pane id) must keep its fresh registration."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_UNREGISTER_GRACE_SEC", 0.0)
+
+    await app._active_emit(_exit_event())
+    app._cancel_pane_unregister("p1")
+
+    await asyncio.sleep(0.05)
+    assert fake_attr.unregistered == []
+    assert "p1" not in app._PENDING_UNREGISTERS
 
 
 @pytest.mark.asyncio
@@ -47,6 +81,7 @@ async def test_active_emit_non_exit_event_does_not_unregister(
 ) -> None:
     fake_attr = FakeAttribution()
     monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_UNREGISTER_GRACE_SEC", 0.0)
 
     await app._active_emit(make_event("terminal.output", {
         "terminal_session_id": "t1",
@@ -55,6 +90,7 @@ async def test_active_emit_non_exit_event_does_not_unregister(
         "stream": "stdout",
     }))
 
+    await asyncio.sleep(0.05)
     assert fake_attr.unregistered == []
 
 
@@ -64,9 +100,11 @@ async def test_active_emit_terminal_exit_without_pane_id_is_safe(
 ) -> None:
     fake_attr = FakeAttribution()
     monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_UNREGISTER_GRACE_SEC", 0.0)
 
     event = _exit_event()
     event["payload"].pop("pane_id")
     await app._active_emit(event)
 
+    await asyncio.sleep(0.05)
     assert fake_attr.unregistered == []

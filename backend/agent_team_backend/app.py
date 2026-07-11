@@ -406,17 +406,44 @@ _TERMINALS: TerminalService | None = None
 _PTY_OWNERS: "dict[str, Session]" = {}
 
 
+# An autonomous PTY death (exit/EOF) must release the attribution registration
+# — otherwise the pane's session marker leaks in _unbound_markers forever. But
+# the release is DELAYED: the CLI's final log flush reaches attribution through
+# the watcher's queue drain / 30s rescan AFTER the exit event, and a marker
+# session may still bind late (short-lived run). Immediate unregister would
+# drop that usage tail and the pane's resume id. terminal.create for the same
+# pane cancels the pending cleanup (a renderer-reload respawn keeps its pane id).
+_UNREGISTER_GRACE_SEC = 90.0
+_PENDING_UNREGISTERS: dict[str, asyncio.TimerHandle] = {}
+
+
+def _schedule_pane_unregister(pane_id: str) -> None:
+    _cancel_pane_unregister(pane_id)
+
+    def _fire() -> None:
+        _PENDING_UNREGISTERS.pop(pane_id, None)
+        attribution.unregister_pane(pane_id)
+
+    _PENDING_UNREGISTERS[pane_id] = asyncio.get_running_loop().call_later(
+        _UNREGISTER_GRACE_SEC, _fire
+    )
+
+
+def _cancel_pane_unregister(pane_id: str) -> None:
+    handle = _PENDING_UNREGISTERS.pop(pane_id, None)
+    if handle:
+        handle.cancel()
+
+
 async def _active_emit(event: dict[str, Any]) -> None:
     """Output sink: route each PTY's output to its owning Session."""
     payload = event.get("payload", {})
-    # An autonomous PTY death (exit/EOF) must release the attribution
-    # registration just like terminal.kill does — otherwise the pane's
-    # session marker leaks in _unbound_markers forever. Runs before the
-    # owner check: cleanup applies even when the pane is detached.
+    # Runs before the owner check: cleanup applies even when the pane is
+    # detached.
     if event.get("type") == "terminal.exit" and isinstance(payload, dict):
         exit_pane_id = payload.get("pane_id")
         if exit_pane_id:
-            attribution.unregister_pane(exit_pane_id)
+            _schedule_pane_unregister(exit_pane_id)
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
     sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:
@@ -937,6 +964,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     # can hand this pane's session to a sibling in the same cwd —
                     # which then overwrites that sibling's persisted resume id.
                     explicit_session_id = _claude_resume_id(payload.get("command"))
+                # A re-created pane (renderer reload respawn keeps its pane id)
+                # must not lose its fresh registration to a pending grace-period
+                # cleanup from the previous PTY's exit.
+                _cancel_pane_unregister(term.pane_id)
                 attribution.register_pane(
                     term.pane_id,
                     vendor=agent_key,
