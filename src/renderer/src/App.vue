@@ -5880,6 +5880,7 @@ function paneIsCommander(p: ActivePane): boolean {
     v-if="onboardingComplete === false"
     :backend="backend"
     @complete="onboardingComplete = true"
+    @close="onboardingComplete = true"
   />
   <!-- First-boot loading overlay: covers the shell until the backend settles,
        then fades out. Brand-only text so no i18n keys are needed. -->

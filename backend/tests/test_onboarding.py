@@ -64,9 +64,11 @@ def test_gate_blocks_without_cli() -> None:
     assert g["has_any_cli"] is False and g["all_required_ready"] is False
 
 
-def test_gate_blocks_without_model() -> None:
+def test_gate_analyzer_is_optional() -> None:
+    """No model installed → analyzer not ready, but the gate must still open:
+    forcing a multi-GB model download to use agent CLIs is not acceptable."""
     g = ob.compute_gate(_deps(True, True, True), models=[])
-    assert g["analyzer_ready"] is False and g["all_required_ready"] is False
+    assert g["analyzer_ready"] is False and g["all_required_ready"] is True
 
 
 def test_gate_blocks_without_foundation() -> None:

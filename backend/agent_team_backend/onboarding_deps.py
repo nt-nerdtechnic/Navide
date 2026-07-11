@@ -227,7 +227,10 @@ def compute_gate(dep_statuses: list[dict[str, Any]], models: list[str]) -> dict[
     ollama_ok = any(s["id"] == "ollama" and s["status"] == "ok" for s in by_group["analyzer"])
     analyzer_ready = ollama_ok and len(models) > 0
 
-    all_required_ready = foundation_ready and has_any_cli and analyzer_ready
+    # Analyzer (ollama + a multi-GB local model) is optional — it must not
+    # hard-block first use. analyzer_ready is still reported so the wizard
+    # can surface it as a recommended extra.
+    all_required_ready = foundation_ready and has_any_cli
     return {
         "foundation_ready": foundation_ready,
         "has_any_cli": has_any_cli,

@@ -56,7 +56,16 @@ async function installMissing(deps: OnboardDep[]): Promise<void> {
 }
 
 const step1Done = computed(() => ob.foundationReady.value)
-const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
+// Analyzer is optional (see compute_gate) — a CLI alone completes step 2.
+const step2Done = computed(() => ob.hasAnyCli.value)
+
+// Escape hatch: the wizard must never be a dead end. Skipping persists the
+// complete flag so it doesn't re-block every launch — later gaps are covered
+// in-app (missing-CLI badges in the spawn dropdown, the exit=127 install
+// prompt), and Settings → Appearance re-opens this wizard on demand.
+function skipForNow(): void {
+  void ob.markComplete().catch(() => {}).finally(() => emit('close'))
+}
 </script>
 
 <template>
@@ -179,7 +188,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
           <ul class="ob-gate">
             <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> {{ $t('label.foundation-ready') }}</li>
             <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> {{ $t('label.at-least-one-cli') }}</li>
-            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> {{ $t('label.ollama-model-ready') }}</li>
+            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> {{ $t('label.ollama-model-ready') }} · {{ $t('label.optional') }}</li>
           </ul>
           <div class="ob-row-actions">
             <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
@@ -193,6 +202,7 @@ const step2Done = computed(() => ob.hasAnyCli.value && ob.analyzerReady.value)
       </div>
 
       <footer class="ob-footer">
+        <button class="ob-btn ghost" @click="skipForNow">{{ $t('action.skip-for-now') }}</button>
         <button v-if="step > 1" class="ob-btn ghost" @click="step--">{{ $t('action.back') }}</button>
         <span class="ob-spacer" />
         <button v-if="step < 3" class="ob-btn primary" :disabled="!!ob.installing.value" @click="step++">{{ $t('action.next') }}</button>
