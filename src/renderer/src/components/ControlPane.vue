@@ -342,6 +342,37 @@ const availableAgents = computed(() =>
 const pickedAgent = ref<string>(manualAgentSpecs.value[0]?.agentKey ?? 'claude')
 const pickedRole = ref<RoleKey>('')
 
+// CLI availability for the spawn dropdown — onboarding dep ids match agentKeys.
+// Refreshed on backend connect and on dropdown focus (throttled: the status
+// call shells out per dep) so a just-installed CLI sheds its badge without a
+// reload.
+const missingClis = ref<Set<string>>(new Set())
+let cliStatusFetchedAt = 0
+async function refreshCliStatus(): Promise<void> {
+  if (!props.backend || props.backendStatus !== 'connected') return
+  if (Date.now() - cliStatusFetchedAt < 10_000) return
+  cliStatusFetchedAt = Date.now()
+  try {
+    const resp = await props.backend.send<{ deps?: { id: string; group: string; status: string }[] }>(
+      'onboarding.status',
+      {}
+    )
+    const deps = resp.payload?.deps ?? []
+    missingClis.value = new Set(
+      deps.filter((d) => d.group === 'agent_cli' && d.status === 'missing').map((d) => d.id)
+    )
+  } catch {
+    // keep last known state; the exit=127 install dialog still covers misses
+  }
+}
+watch(
+  () => props.backendStatus,
+  (s) => {
+    if (s === 'connected') void refreshCliStatus()
+  },
+  { immediate: true }
+)
+
 watch(
   manualAgentSpecs,
   (specs) => {
@@ -1018,9 +1049,9 @@ function onPipelineDividerEnd(): void {
         </div>
         <div v-if="manualSpawnOpen" class="spawn-card-body">
           <div class="row two-col">
-            <select v-model="pickedAgent">
+            <select v-model="pickedAgent" @focus="refreshCliStatus">
               <option v-for="spec in manualAgentSpecs" :key="spec.agentKey" :value="spec.agentKey">
-                {{ spec.label }}
+                {{ missingClis.has(spec.agentKey) ? $t('label.agent-not-installed', { label: spec.label }) : spec.label }}
               </option>
             </select>
             <select v-model="pickedRole">

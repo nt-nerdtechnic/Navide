@@ -381,6 +381,7 @@
     "active-agents": "執行中 ({running}/{total})",
     "no-agents-running": "沒有執行中的 Agent。",
     "manual-spawn": "啟動Agent",
+    "agent-not-installed": "{label}（未安裝）",
     "select-role": "選擇角色…",
     "waiting-backend": "等待後端…",
     "set-workspace-first": "請先設定工作區路徑",

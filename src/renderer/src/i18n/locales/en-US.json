@@ -381,6 +381,7 @@
     "active-agents": "Active agents ({running}/{total})",
     "no-agents-running": "No agents running.",
     "manual-spawn": "Manual spawn",
+    "agent-not-installed": "{label} — not installed",
     "select-role": "Select role…",
     "waiting-backend": "Waiting for backend…",
     "set-workspace-first": "Set workspace path first",
