@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -99,6 +100,27 @@ def test_reap_leaves_live_sibling_entries_untouched(monkeypatch) -> None:
         proc.wait()
 
 
+def test_concurrent_register_unregister_keeps_registry_consistent(monkeypatch) -> None:
+    # register/unregister run on executor threads in the real app (terminals.py
+    # keeps their ps + file I/O off the event loop) — interleaved
+    # load-modify-save must not lose entries or raise.
+    monkeypatch.setattr(pty_registry, "_ps", lambda pid, fields: "stub lstart")
+    pids = list(range(900_000, 900_032))
+
+    def churn(pid: int) -> None:
+        for _ in range(5):
+            pty_registry.register(pid, ["sleep"])
+            pty_registry.unregister(pid)
+        pty_registry.register(pid, ["sleep"])
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(churn, pids))  # re-raises any worker exception
+
+    # Each pid is churned by exactly one thread and ends registered — a lost
+    # update from an unlocked read-modify-write would drop some of them.
+    assert set(_registry()) == {str(p) for p in pids}
+
+
 async def _noop_emit(event: dict[str, Any]) -> None:
     return None
 
@@ -115,11 +137,25 @@ async def _wait_registry_empty(timeout: float = 5.0) -> None:
     assert _registry() == {}
 
 
+async def _wait_registry_has(pid: int, timeout: float = 5.0) -> None:
+    """create() registers via the default executor (off the event loop), so
+    the entry appears shortly after create() returns, not synchronously."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            if str(pid) in _registry():
+                return
+        except FileNotFoundError:
+            pass  # registry file not written yet
+        await asyncio.sleep(0.05)
+    assert str(pid) in _registry()
+
+
 @pytest.mark.asyncio
 async def test_terminal_service_registers_and_unregisters() -> None:
     svc = TerminalService(emit=_noop_emit)
     session = svc.create(pane_id="p1", agent_key=None, command=["sleep", "30"], cwd="/")
-    assert str(session.proc.pid) in _registry()
+    await _wait_registry_has(session.proc.pid)
 
     svc.kill(session.id)
     session.proc.wait(timeout=5)
@@ -137,7 +173,7 @@ async def test_kill_escalates_term_trapping_child_and_unregisters() -> None:
         command=["sh", "-c", 'trap "" TERM; sleep 300'],
         cwd="/",
     )
-    assert str(session.proc.pid) in _registry()
+    await _wait_registry_has(session.proc.pid)
     # Give the shell a moment to install the TERM trap before signalling.
     await asyncio.sleep(0.3)
     svc.kill(session.id)

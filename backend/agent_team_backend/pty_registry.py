@@ -20,6 +20,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -30,6 +31,10 @@ log = logging.getLogger(__name__)
 # Force a fixed locale so the lstart string captured at register time compares
 # equal to the one read back at reap time.
 _PS_ENV = {**os.environ, "LC_ALL": "C"}
+
+# register/unregister run on executor threads (terminals.py keeps their ps +
+# file I/O off the event loop), so every load-modify-save must be atomic.
+_lock = threading.Lock()
 
 
 def _registry_path() -> Path:
@@ -76,19 +81,22 @@ def _ps(pid: int, fields: str) -> str | None:
 
 
 def register(pid: int, argv: list[str]) -> None:
-    entries = _load()
-    entries[str(pid)] = {
-        "argv0": argv[0],  # diagnostic only; identity is lstart
-        "lstart": _ps(pid, "lstart=") or "",
-        "owner": os.getpid(),
-    }
-    _save(entries)
+    lstart = _ps(pid, "lstart=") or ""  # probe outside the lock (up to 5s)
+    with _lock:
+        entries = _load()
+        entries[str(pid)] = {
+            "argv0": argv[0],  # diagnostic only; identity is lstart
+            "lstart": lstart,
+            "owner": os.getpid(),
+        }
+        _save(entries)
 
 
 def unregister(pid: int) -> None:
-    entries = _load()
-    if entries.pop(str(pid), None) is not None:
-        _save(entries)
+    with _lock:
+        entries = _load()
+        if entries.pop(str(pid), None) is not None:
+            _save(entries)
 
 
 def _backend_alive(pid: int) -> bool:
@@ -125,36 +133,41 @@ def reap_stale(grace: float = 1.0) -> list[int]:
     a live sibling backend are left untouched; entries whose ps probe failed
     are kept for the next startup; everything else is killed or confirmed
     gone and dropped. Returns the pids that were signalled.
+
+    Holds the registry lock for its whole run: _save(keep) rewrites the file
+    from the entries loaded at the top, so an interleaved register would be
+    lost if the load→save window were left open.
     """
-    entries = _load()
-    if not entries:
-        return []
-    me = os.getpid()
-    kill: list[int] = []
-    keep: dict[str, dict] = {}
-    for pid_s, info in entries.items():
-        owner = info.get("owner")
-        if isinstance(owner, int) and owner != me and _backend_alive(owner):
-            keep[pid_s] = info
-            continue
-        verdict = _classify(int(pid_s), info)
-        if verdict == _MATCH:
-            kill.append(int(pid_s))
-        elif verdict == _ERROR:
-            keep[pid_s] = info
-        # _GONE → drop
-    for pid in kill:
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-    if kill:
-        time.sleep(grace)
+    with _lock:
+        entries = _load()
+        if not entries:
+            return []
+        me = os.getpid()
+        kill: list[int] = []
+        keep: dict[str, dict] = {}
+        for pid_s, info in entries.items():
+            owner = info.get("owner")
+            if isinstance(owner, int) and owner != me and _backend_alive(owner):
+                keep[pid_s] = info
+                continue
+            verdict = _classify(int(pid_s), info)
+            if verdict == _MATCH:
+                kill.append(int(pid_s))
+            elif verdict == _ERROR:
+                keep[pid_s] = info
+            # _GONE → drop
         for pid in kill:
             try:
-                os.killpg(pid, signal.SIGKILL)
+                os.killpg(pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
-        log.info("reaped %d orphaned PTY process group(s): %s", len(kill), kill)
-    _save(keep)
-    return kill
+        if kill:
+            time.sleep(grace)
+            for pid in kill:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            log.info("reaped %d orphaned PTY process group(s): %s", len(kill), kill)
+        _save(keep)
+        return kill

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import re
 import time
@@ -990,16 +991,25 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 # must not lose its fresh registration to a pending grace-period
                 # cleanup from the previous PTY's exit.
                 _cancel_pane_unregister(term.pane_id)
-                attribution.register_pane(
-                    term.pane_id,
-                    vendor=agent_key,
-                    cwd=payload["cwd"],
-                    workspace_path=ws_for_pane,
-                    stage_id=metadata.get("stage_id") or metadata.get("stageId"),
-                    slot_key=_stable_pane_key(metadata, ""),
-                    explicit_session_id=explicit_session_id,
-                    session_marker=str(metadata.get("session_marker") or ""),
-                    session_home_id=str(metadata.get("session_home_id") or ""),
+                # register_pane's baseline scan enumerates the vendor's whole
+                # session-file tree — run it off-loop (register_pane is
+                # thread-safe via attribution._lock) so the create ack below
+                # isn't delayed past the frontend's timeout. Awaited so the
+                # pane is registered before the ack, as before.
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    functools.partial(
+                        attribution.register_pane,
+                        term.pane_id,
+                        vendor=agent_key,
+                        cwd=payload["cwd"],
+                        workspace_path=ws_for_pane,
+                        stage_id=metadata.get("stage_id") or metadata.get("stageId"),
+                        slot_key=_stable_pane_key(metadata, ""),
+                        explicit_session_id=explicit_session_id,
+                        session_marker=str(metadata.get("session_marker") or ""),
+                        session_home_id=str(metadata.get("session_home_id") or ""),
+                    ),
                 )
             # The creating window owns this PTY's output stream.
             _PTY_OWNERS[term.id] = session

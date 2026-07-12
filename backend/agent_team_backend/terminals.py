@@ -184,8 +184,16 @@ class TerminalService:
             raise
         os.close(slave)
         # Record the child so a future backend start can reap it if this
-        # process dies without running its shutdown sweep.
-        pty_registry.register(proc.pid, argv)
+        # process dies without running its shutdown sweep. register runs a ps
+        # probe + registry-file I/O — keep it off the event loop so the
+        # terminal.create ack isn't delayed behind it.
+        try:
+            asyncio.get_running_loop().run_in_executor(
+                None, pty_registry.register, proc.pid, argv
+            )
+        except RuntimeError:
+            # No running loop (non-async caller) — fall back to inline.
+            pty_registry.register(proc.pid, argv)
 
         # Open output log file if requested (pipeline panes pass a path).
         log_fp: IO[str] | None = None
@@ -399,7 +407,7 @@ class TerminalService:
             except Exception:  # noqa: BLE001
                 pass
         if session.proc.poll() is not None:
-            pty_registry.unregister(session.proc.pid)
+            await asyncio.to_thread(pty_registry.unregister, session.proc.pid)
 
     async def kill_all(self, grace: float = 1.0) -> None:
         """Terminate every live PTY child. Children run with
@@ -625,4 +633,4 @@ class TerminalService:
         # visible to the next start's reap_stale. kill()'s escalation task
         # and kill_all() unregister the survivors they put down.
         if session.proc.poll() is not None:
-            pty_registry.unregister(session.proc.pid)
+            self._loop.run_in_executor(None, pty_registry.unregister, session.proc.pid)
