@@ -209,6 +209,14 @@ onMounted(() => {
         <div class="prep-text">{{ preparingLabel || 'Preparing CLI' }}</div>
       </div>
     </div>
+    <!-- Exited CLIs (crash, command-not-found, user quit) get an in-place
+         restart: same clean kill+respawn path as onClear. Scrollback with the
+         exit message stays readable behind the floating button. -->
+    <button
+      v-if="displayStatus === 'exited' && !isPreparing"
+      class="respawn-btn"
+      @click.stop="emit('rebuild-clean')"
+    >↻ {{ $t('pane.terminal.respawn') }}</button>
   </div>
 </template>
 
@@ -425,6 +433,25 @@ onMounted(() => {
 }
 @keyframes prep-spin {
   to { transform: rotate(360deg); }
+}
+.respawn-btn {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 8;
+  padding: 6px 16px;
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 6px;
+  background: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-emphasis) 30%, transparent);
+}
+.respawn-btn:hover {
+  filter: brightness(1.1);
 }
 
 /* xterm.js Monaco scrollbar: show track vs thumb contrast in main buffer.

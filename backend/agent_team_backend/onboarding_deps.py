@@ -111,6 +111,21 @@ MODEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _path_probe_command() -> list[str]:
+    """The shell invocation used to read the user's real PATH.
+
+    Uses $SHELL, not bash: installers write PATH exports into the user's own
+    shell config. For zsh that file is ~/.zshrc, which zsh only reads in
+    INTERACTIVE mode — a plain login shell (-lc) misses it (real case: grok's
+    installer writes to ~/.zshrc; `zsh -lc` couldn't see it, so both detection
+    and spawn kept failing with command-not-found after install).
+    """
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    if os.path.basename(shell) == "zsh":
+        return [shell, "-ilc", "echo $PATH"]
+    return [shell, "-lc", "echo $PATH"]
+
+
 def _refresh_path_from_login_shell() -> None:
     """Merge PATH from a login shell into os.environ so newly-installed CLIs are visible.
 
@@ -120,7 +135,7 @@ def _refresh_path_from_login_shell() -> None:
         return
     try:
         proc = subprocess.run(
-            ["bash", "-lc", "echo $PATH"],
+            _path_probe_command(),
             capture_output=True,
             text=True,
             timeout=3,

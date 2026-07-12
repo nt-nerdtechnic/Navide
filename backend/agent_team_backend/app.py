@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -905,6 +906,26 @@ def _record_analyzer_tokens(result: dict[str, Any], payload: dict[str, Any]) -> 
     )
 
 
+# Agent-CLI spawns inherit the backend's PATH (terminals.py copies os.environ),
+# but the backend was launched with the GUI's restricted PATH. Refresh from the
+# user's shell — throttled, it shells out — before spawning, so a CLI the user
+# just installed is found without first passing through an onboarding.status
+# call (real case: install grok → click Respawn → still exit 127).
+_PATH_REFRESH_INTERVAL_SEC = 30.0
+_last_path_refresh = 0.0
+
+
+async def _ensure_fresh_path_for_spawn(agent_key: str) -> None:
+    global _last_path_refresh
+    if agent_key in ("", "terminal"):
+        return
+    now = time.monotonic()
+    if now - _last_path_refresh < _PATH_REFRESH_INTERVAL_SEC:
+        return
+    _last_path_refresh = now
+    await asyncio.to_thread(onboarding_deps._refresh_path_from_login_shell)
+
+
 async def handle_message(session: Session, msg: dict[str, Any]) -> None:
     msg_id: str = msg.get("id", "")
     msg_type: str = msg.get("type", "")
@@ -920,6 +941,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             metadata = payload.get("metadata") or {}
             agent_key = payload.get("agent_key") or ""
             env = dict(payload.get("env") or {})
+            await _ensure_fresh_path_for_spawn(agent_key)
             if agent_key == "codex":
                 # Compatibility: `codex resume <id>` only works inside the home
                 # that recorded the session. Resume in whichever home owns it;

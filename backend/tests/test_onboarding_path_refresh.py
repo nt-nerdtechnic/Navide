@@ -12,6 +12,7 @@ import pytest
 
 # Import the private function directly for unit testing
 from agent_team_backend.onboarding_deps import (
+    _path_probe_command,
     _refresh_path_from_login_shell,
     get_status,
 )
@@ -115,6 +116,26 @@ def test_last_line_used_when_banner_present(monkeypatch):
     with patch("subprocess.run", return_value=_make_run_result(banner_then_path)):
         _refresh_path_from_login_shell()
     assert "/opt/homebrew/bin" in os.environ["PATH"].split(":")
+
+
+# ── probe command shape ───────────────────────────────────────────────────────
+
+
+def test_probe_uses_interactive_zsh(monkeypatch):
+    """zsh reads ~/.zshrc only in interactive mode; installers (e.g. grok)
+    write PATH exports there, so the probe must run zsh with -i."""
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert _path_probe_command() == ["/bin/zsh", "-ilc", "echo $PATH"]
+
+
+def test_probe_uses_login_shell_for_non_zsh(monkeypatch):
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    assert _path_probe_command() == ["/bin/bash", "-lc", "echo $PATH"]
+
+
+def test_probe_falls_back_to_bash_without_shell_env(monkeypatch):
+    monkeypatch.delenv("SHELL", raising=False)
+    assert _path_probe_command() == ["/bin/bash", "-lc", "echo $PATH"]
 
 
 # ── non-POSIX no-op ───────────────────────────────────────────────────────────

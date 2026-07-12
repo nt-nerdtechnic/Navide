@@ -306,6 +306,37 @@ async def test_terminal_create_claude_metadata_session_id_wins_over_command(
 
 
 @pytest.mark.asyncio
+async def test_spawn_path_refresh_throttles(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Agent-CLI spawns refresh the backend PATH (so a just-installed CLI is
+    found), but at most once per interval — the probe shells out."""
+    calls: list[int] = []
+    monkeypatch.setattr(
+        app.onboarding_deps, "_refresh_path_from_login_shell", lambda: calls.append(1)
+    )
+    monkeypatch.setattr(app, "_last_path_refresh", 0.0)
+
+    await app._ensure_fresh_path_for_spawn("grok")
+    await app._ensure_fresh_path_for_spawn("claude")  # inside throttle window
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_spawn_path_refresh_skips_plain_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr(
+        app.onboarding_deps, "_refresh_path_from_login_shell", lambda: calls.append(1)
+    )
+    monkeypatch.setattr(app, "_last_path_refresh", 0.0)
+
+    await app._ensure_fresh_path_for_spawn("terminal")
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
 async def test_terminal_create_antigravity_registers_session_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
