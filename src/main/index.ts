@@ -9,6 +9,11 @@ import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { BackendBroadcastTracker } from './backend-broadcast'
+import {
+  CliBufferRelay,
+  CLI_BUFFER_REPLY_CHANNEL,
+  type CliPaneBufferResult
+} from './cli-buffer-relay'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import {
@@ -593,6 +598,20 @@ function openEditorWindow(params: Record<string, string>): void {
 ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
   openEditorWindow(args ?? {})
   return { ok: true }
+})
+
+// Editor-window AI Chat fetches a CLI pane's cleaned scrollback. Panes live in
+// the main window(s), so relay the request there and await the matching reply
+// (correlation id + timeout; see cli-buffer-relay.ts).
+const cliBufferRelay = new CliBufferRelay()
+
+ipcMain.on(CLI_BUFFER_REPLY_CHANNEL, (_event, requestId: string, result: CliPaneBufferResult) => {
+  cliBufferRelay.handleReply(requestId, result)
+})
+
+ipcMain.handle('cli:get-pane-buffer', (_event, paneId: string): Promise<CliPaneBufferResult> => {
+  const targets = [...mainWindows].filter((w) => !w.isDestroyed()).map((w) => w.webContents)
+  return cliBufferRelay.request(targets, String(paneId ?? ''))
 })
 
 // Native OS notification for CLI state changes (turn done / needs input). The

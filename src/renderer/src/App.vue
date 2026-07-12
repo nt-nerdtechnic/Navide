@@ -46,6 +46,7 @@ import {
 } from './data/stages'
 import { i18n } from './i18n'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
+import { buildCliPaneBufferReply } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { quickClassify } from './lib/quick-classify'
@@ -82,6 +83,20 @@ onMounted(() => {
   })
   // Clicking a system notification focuses the window on the originating pane.
   window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
+  // Editor-window AI Chat fetches a CLI pane's scrollback through the main
+  // process (cli:get-pane-buffer); answer from this window's paneRefs.
+  window.agentTeam?.onCliPaneBufferRequest?.((paneId) => {
+    const ref = paneRefs[paneId]
+    return buildCliPaneBufferReply(
+      panes.value.find((p) => p.id === paneId),
+      ref
+        ? {
+            sessionId: (ref.sessionId as unknown as string) || undefined,
+            cleanBuffer: (ref.cleanBuffer as unknown as string) ?? ''
+          }
+        : null
+    )
+  })
   window.addEventListener('resize', onWindowResize)
   // Warm the heaviest deferred panel (Settings) during idle: it stays lazy to
   // keep off first paint, but it's commonly opened, so pre-fetching once the
@@ -6240,6 +6255,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :data-pane-id="p.id"
           :pane-id="p.id"
           :title="p.customName || p.agentLabel"
+          :agent-key="p.agentKey"
           :subtitle="paneSubtitle(p)"
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"

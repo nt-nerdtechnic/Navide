@@ -101,6 +101,14 @@ declare global {
       writeHealthCheckTimeout: (timeoutSec: number) => Promise<{ ok: boolean; error?: string }>
       notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
+      getCliPaneBuffer: (
+        paneId: string
+      ) => Promise<{ label?: string; sessionId?: string | null; buffer?: string; error?: string }>
+      onCliPaneBufferRequest: (
+        handler: (
+          paneId: string
+        ) => { label: string; sessionId: string | null; buffer: string } | { error: string }
+      ) => void
       setBadgeCount: (count: number) => void
       reportWorkspace: (workspacePath: string) => void
       restore?: {

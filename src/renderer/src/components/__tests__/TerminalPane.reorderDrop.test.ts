@@ -18,6 +18,7 @@ vi.mock('../../composables/useTerminal', async () => {
       updateXtermTheme: vi.fn(),
       setDisableStdin: vi.fn(),
       displayStatus: ref('idle'),
+      sessionId: ref(''),
       isAltBuffer: ref(false)
     })
   }

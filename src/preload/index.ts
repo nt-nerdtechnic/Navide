@@ -165,6 +165,22 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onFocusPane: (cb: (paneId: string) => void): void => {
     ipcRenderer.on('notify:focusPane', (_event, paneId: string) => cb(paneId))
   },
+  // Cross-window CLI-context bridge: the editor window's AI Chat invokes
+  // getCliPaneBuffer; the main process relays it to the main window(s), where
+  // onCliPaneBufferRequest answers from the pane's cleanBuffer.
+  getCliPaneBuffer: (
+    paneId: string
+  ): Promise<{ label?: string; sessionId?: string | null; buffer?: string; error?: string }> =>
+    ipcRenderer.invoke('cli:get-pane-buffer', paneId),
+  onCliPaneBufferRequest: (
+    handler: (
+      paneId: string
+    ) => { label: string; sessionId: string | null; buffer: string } | { error: string }
+  ): void => {
+    ipcRenderer.on('cli:get-pane-buffer:request', (_event, requestId: string, paneId: string) => {
+      ipcRenderer.send('cli:get-pane-buffer:reply', requestId, handler(paneId))
+    })
+  },
   setBadgeCount: (count: number): void => {
     ipcRenderer.send('window:setBadgeCount', count)
   },

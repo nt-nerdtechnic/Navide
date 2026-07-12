@@ -9,6 +9,8 @@ interface Props {
   paneId: string
   title: string
   subtitle?: string
+  /** CLI vendor key (e.g. 'claude', 'codex') carried in the cli-context drag payload. */
+  agentKey?: string
   pipeTag?: string
   isCommander?: boolean
   isFocus?: boolean
@@ -105,6 +107,17 @@ function onTerminalDrop(e: DragEvent): void {
 function onHeaderDragStart(e: DragEvent): void {
   if (!e.dataTransfer) return
   e.dataTransfer.setData('application/x-pane-id', props.paneId)
+  // AI Chat drop target (editor window): identifiers only — the chat fetches
+  // the pane's buffer on drop via the cli:get-pane-buffer IPC relay.
+  e.dataTransfer.setData(
+    'application/x-cli-context',
+    JSON.stringify({
+      paneId: props.paneId,
+      agentKey: props.agentKey ?? '',
+      label: props.title,
+      sessionId: terminal.sessionId.value || null
+    })
+  )
   e.dataTransfer.effectAllowed = 'move'
   draggingSelf = true
 }

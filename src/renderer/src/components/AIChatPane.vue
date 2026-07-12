@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from
 import { i18n } from '../i18n'
 import { settingsGet, settingsSet } from '../lib/settings'
 import { parseLegacyThreads } from '../lib/chatLegacy'
+import { CLI_CONTEXT_MIME, CLI_SOURCE_PREFIX, parseCliContextPayload, buildCliContextChip, type CliContextPayload } from '../lib/cliContext'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
@@ -9857,7 +9858,15 @@ async function refreshChip(id: string): Promise<void> {
   if (!chip?.sourceId || chip.imageData) return
   refreshingChipId.value = id
   try {
-    await selectAtOption({ id: chip.sourceId, label: chip.label }, id)
+    if (chip.sourceId.startsWith(CLI_SOURCE_PREFIX)) {
+      // CLI pane chip: re-fetch the pane buffer (selectAtOption would treat
+      // the sourceId as a file path). agentKey isn't stored on the chip, so
+      // the refreshed header falls back to the label.
+      const paneId = chip.sourceId.slice(CLI_SOURCE_PREFIX.length)
+      await applyCliPaneChip({ paneId, label: chip.label.replace(/^@cli:/, '') }, id)
+    } else {
+      await selectAtOption({ id: chip.sourceId, label: chip.label }, id)
+    }
   } finally {
     refreshingChipId.value = null
   }
@@ -9928,7 +9937,7 @@ function onChipDrop(e: DragEvent, targetId: string): void {
 const isDraggingOver = ref(false)
 
 function onDragover(e: DragEvent): void {
-  if (e.dataTransfer?.types.includes('Files')) {
+  if (e.dataTransfer?.types.includes('Files') || e.dataTransfer?.types.includes(CLI_CONTEXT_MIME)) {
     e.preventDefault()
     isDraggingOver.value = true
   }
@@ -9938,6 +9947,7 @@ function onDragleave(): void { isDraggingOver.value = false }
 async function onDrop(e: DragEvent): Promise<void> {
   e.preventDefault()
   isDraggingOver.value = false
+  if (await handleCliContextDrop(e)) return
   type AgentApi = Record<string, (...a: unknown[]) => unknown>
   const api = (window as Window & { agentTeam?: AgentApi }).agentTeam
   const files = Array.from(e.dataTransfer?.files ?? [])
@@ -10047,9 +10057,62 @@ async function onTextareaPaste(e: ClipboardEvent): Promise<void> {
 
 const dragOverChat = ref(false)
 function onChatDragOver(e: DragEvent): void {
+  // CLI pane header drag: payload is unreadable during dragover (browser
+  // protected mode) — gate on dataTransfer.types only.
+  const hasCli = (e.dataTransfer?.types ?? []).includes(CLI_CONTEXT_MIME)
   const hasFile = Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === 'file')
   const hasPath = !_chipDragId && (e.dataTransfer?.types ?? []).includes('text/plain')
-  if (hasFile || hasPath) { e.preventDefault(); dragOverChat.value = true }
+  if (hasCli || hasFile || hasPath) { e.preventDefault(); dragOverChat.value = true }
+}
+
+// ── CLI pane drag → context chip ─────────────────────────────────────────────
+// Fetch the dragged pane's clean buffer over the cross-window IPC bridge and
+// attach it as a chip. With refreshTargetId set, update that chip in place
+// (↻ button on an existing @cli: chip) instead of creating a new one.
+async function applyCliPaneChip(payload: CliContextPayload, refreshTargetId?: string): Promise<void> {
+  const getBuf = window.agentTeam?.getCliPaneBuffer
+  let reply: { label?: string; sessionId?: string | null; buffer?: string; error?: string }
+  try {
+    reply = getBuf ? await getBuf(payload.paneId) : { error: 'unavailable' }
+  } catch {
+    reply = { error: 'unavailable' }
+  }
+  const result = buildCliContextChip(payload, reply)
+  if (result.kind === 'error') {
+    showToast(result.error === 'not-found' ? 'CLI pane is no longer open' : 'Could not fetch CLI pane output')
+    return
+  }
+  if (result.kind === 'empty') {
+    showToast('CLI pane has no output yet')
+    return
+  }
+  if (refreshTargetId) {
+    const chip = contextChips.value.find((c) => c.id === refreshTargetId)
+    if (chip) { chip.content = result.content; showToast(`↻ ${chip.label}`) }
+    return
+  }
+  // Re-dropping the same pane replaces the snapshot (matches file-drop behavior)
+  contextChips.value = contextChips.value.filter((c) => c.label !== result.label)
+  contextChips.value.push({
+    id: crypto.randomUUID(),
+    label: result.label,
+    content: result.content,
+    sourceId: result.sourceId,
+  })
+}
+
+/** Handle a drop carrying CLI_CONTEXT_MIME. Returns true if it was one (drop handled). */
+async function handleCliContextDrop(e: DragEvent): Promise<boolean> {
+  const raw = e.dataTransfer?.getData(CLI_CONTEXT_MIME) ?? ''
+  if (!raw) return false
+  const payload = parseCliContextPayload(raw)
+  if (!payload) {
+    console.warn('[cli-context] malformed drag payload:', raw)
+    showToast('Could not fetch CLI pane output')
+    return true
+  }
+  await applyCliPaneChip(payload)
+  return true
 }
 function onChatDragLeave(e: DragEvent): void {
   if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
@@ -10059,6 +10122,7 @@ function onChatDragLeave(e: DragEvent): void {
 async function onChatDrop(e: DragEvent): Promise<void> {
   dragOverChat.value = false
   e.preventDefault()
+  if (await handleCliContextDrop(e)) return
   const getPath = window.agentTeam?.getPathForFile
   const files = Array.from(e.dataTransfer?.files ?? [])
   for (const file of files) {
