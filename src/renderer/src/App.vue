@@ -491,6 +491,11 @@ interface ActivePane {
    *  backend can match the right session file to this pane when several
    *  same-vendor panes share a workspace. */
   sessionMarker?: string
+  /** True once the session-detect overlay's grace window has elapsed. Session
+   *  detection itself keeps running (subtitle still says "detecting"); only the
+   *  BLOCKING overlay is dropped — detection has preconditions the user may
+   *  need the terminal for (e.g. a first-run API-key prompt). */
+  sessionOverlayExpired?: boolean
 }
 
 interface SpawnHistoryEntry {
@@ -820,6 +825,12 @@ const NO_DIALOG_QUIET_MS = 1500
 // Patterns surfacing on first launch of Codex / Claude / Antigravity when the CLI
 // asks the user to trust the workspace. Matching one means we should send a
 // single \r to accept the default option (which is always "yes" / "continue").
+// How long the "detecting session ID" overlay may BLOCK a marker-bound pane
+// (codex/antigravity/grok) after spawn. Long enough for the normal
+// prep → marker bootstrap → first-write round trip; short enough that a CLI
+// stuck on its own onboarding never bricks the pane.
+const SESSION_OVERLAY_GRACE_MS = 30_000
+
 const TRUST_DIALOG_PATTERNS: RegExp[] = [
   /Press enter to continue/i,
   /Do you trust the contents/i,
@@ -1337,6 +1348,17 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     pane.kickoffPrompt += sessionMarkerLine(sessionMarker)
   }
   panes.value.push(pane)
+  // Session detection can legitimately take forever (a fresh CLI sits at its
+  // own setup dialog until the user acts), so the blocking overlay gets a hard
+  // grace window; after it the pane is usable while detection continues.
+  if (sessionMarker) {
+    window.setTimeout(() => {
+      if (pane.sessionMarker && !pane.pinnedSessionId) {
+        pane.sessionOverlayExpired = true
+        syncViews()
+      }
+    }, SESSION_OVERLAY_GRACE_MS)
+  }
   spawnHistory.value.push({
     paneId: id,
     agentKey: pane.agentKey,
@@ -5849,10 +5871,21 @@ function paneWaitingForSessionId(p: ActivePane): boolean {
   return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity', 'grok'].includes(p.agentKey)
 }
 
+// Session detection has PRECONDITIONS the user may have to satisfy in the
+// terminal itself: a fresh CLI sits at its own setup dialog (API key entry,
+// trust prompt, login) and writes no session until the user acts. Blocking the
+// pane while waiting for a session would deadlock exactly that flow — so the
+// overlay yields when the visible buffer tail looks like a setup dialog.
+const SETUP_DIALOG_RE = /(api key|paste your|enter .{0,20}key|log ?in|sign in|authenticate|press enter to continue|do you trust|trust th(e|is))/i
+function paneAwaitsUserSetup(p: ActivePane): boolean {
+  const buf = (paneRefs[p.id]?.cleanBuffer as unknown as string) ?? ''
+  return SETUP_DIALOG_RE.test(buf.slice(-2000))
+}
+
 function paneShowsPrepOverlay(p: ActivePane): boolean {
   return (
     (p.preparationStatus !== 'ready' && p.preparationStatus !== 'failed') ||
-    paneWaitingForSessionId(p)
+    (paneWaitingForSessionId(p) && !p.sessionOverlayExpired && !paneAwaitsUserSetup(p))
   )
 }
 
