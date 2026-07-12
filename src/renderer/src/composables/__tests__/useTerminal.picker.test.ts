@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergePreferredPath, type PickerItem } from '../useTerminal'
+import { mergePreferredPath, expandHomePath, collapseHomePath, type PickerItem } from '../useTerminal'
 
 const item = (abs: string): PickerItem => {
   const parts = abs.split('/')
@@ -46,5 +46,51 @@ describe('mergePreferredPath', () => {
   it('returns results unchanged when there is no preferred path', () => {
     const results = [item('/ws/a.ts')]
     expect(mergePreferredPath(results, undefined, true)).toBe(results)
+  })
+})
+
+// The bug-report path: a '~/'-prefixed link in terminal output was glued to
+// the workspace root instead of the home directory, so stat failed and the
+// picker showed "No files found" for an existing file.
+describe('expandHomePath', () => {
+  it('expands ~/ against the home directory', () => {
+    expect(expandHomePath('~/.cloudflared/ida_cert.pem', '/Users/u'))
+      .toBe('/Users/u/.cloudflared/ida_cert.pem')
+  })
+
+  it('expands bare ~', () => {
+    expect(expandHomePath('~', '/Users/u')).toBe('/Users/u')
+  })
+
+  it('tolerates a trailing slash on home', () => {
+    expect(expandHomePath('~/x', '/Users/u/')).toBe('/Users/u/x')
+  })
+
+  it('leaves relative, absolute, and ~user paths alone', () => {
+    expect(expandHomePath('src/a.ts', '/Users/u')).toBe('src/a.ts')
+    expect(expandHomePath('/etc/hosts', '/Users/u')).toBe('/etc/hosts')
+    expect(expandHomePath('~other/x', '/Users/u')).toBe('~other/x')
+  })
+
+  it('is a no-op when home is unknown', () => {
+    expect(expandHomePath('~/x', '')).toBe('~/x')
+  })
+})
+
+describe('collapseHomePath', () => {
+  it('collapses the home prefix back to ~ for display', () => {
+    expect(collapseHomePath('/Users/u/.cloudflared', '/Users/u')).toBe('~/.cloudflared')
+  })
+
+  it('collapses home itself to ~', () => {
+    expect(collapseHomePath('/Users/u', '/Users/u')).toBe('~')
+  })
+
+  it('does not collapse a sibling directory sharing the prefix string', () => {
+    expect(collapseHomePath('/Users/u2/x', '/Users/u')).toBe('/Users/u2/x')
+  })
+
+  it('is a no-op when home is unknown', () => {
+    expect(collapseHomePath('/Users/u/x', '')).toBe('/Users/u/x')
   })
 })

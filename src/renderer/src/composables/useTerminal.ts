@@ -136,6 +136,31 @@ function openInEditor(absPath: string, line: number | undefined): void {
   void api.openEditorWindow({ workspace_path: wsPath, filepath, ...(line !== undefined ? { line } : {}) })
 }
 
+// '~/'-prefixed links (shell output loves them) resolve against the user's
+// home directory: the expanded absolute form is used for stat/open, while the
+// picker keeps displaying the '~' form. Home is fetched once over IPC and
+// cached for the sync display path.
+let _homeDir = ''
+async function fetchHomeDir(): Promise<string> {
+  if (_homeDir) return _homeDir
+  try {
+    const api = (window as Window & { agentTeam?: { getHomeDir?: () => Promise<string> } }).agentTeam
+    _homeDir = (await api?.getHomeDir?.()) || ''
+  } catch { /* ignore — '~' links just fall back to fuzzy search */ }
+  return _homeDir
+}
+
+export function expandHomePath(fp: string, home: string): string {
+  if (!home || (fp !== '~' && !fp.startsWith('~/'))) return fp
+  return home.replace(/\/+$/, '') + fp.slice(1)
+}
+
+export function collapseHomePath(p: string, home: string): string {
+  if (!home) return p
+  const h = home.replace(/\/+$/, '')
+  return p === h || p.startsWith(`${h}/`) ? `~${p.slice(h.length)}` : p
+}
+
 export interface PickerItem {
   abs: string
   name: string
@@ -777,7 +802,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
           nameSpan.textContent = item.name
           Object.assign(nameSpan.style, { color: '#e6edf3', fontSize: '13px' })
           const dirSpan = document.createElement('span')
-          dirSpan.textContent = item.dir || '/'
+          dirSpan.textContent = collapseHomePath(item.dir, _homeDir) || '/'
           Object.assign(dirSpan.style, { color: '#8b949e', fontSize: '11px' })
           row.appendChild(nameSpan)
           row.appendChild(dirSpan)
@@ -874,8 +899,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const rowText = term.buffer.active.getLine(bufferRow)?.translateToString(true) ?? ''
       const singleRaw = findFileLinkAt(rowText, col)
       const wsPath = opts?.workspacePath
-      const resolveAbs = (fp: string): string | undefined =>
-        fp.startsWith('/') ? fp : wsPath ? `${wsPath}/${fp.replace(/^\.\//, '')}` : undefined
       const statOk = async (abs: string | undefined): Promise<boolean> => {
         if (!abs) return false
         try {
@@ -886,6 +909,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         } catch { return false }
       }
       void (async () => {
+        const home = await fetchHomeDir()
+        const resolveAbs = (fp: string): string | undefined => {
+          const expanded = expandHomePath(fp, home)
+          return expanded.startsWith('/')
+            ? expanded
+            : wsPath ? `${wsPath}/${expanded.replace(/^\.\//, '')}` : undefined
+        }
         const cands = [pieceRaw, match.text, singleRaw].filter(
           (c, i, arr): c is string => !!c && arr.indexOf(c) === i
         )

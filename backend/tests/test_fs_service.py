@@ -175,3 +175,11 @@ def test_read_image_missing_file(tmp_path: Path) -> None:
 
 def test_read_image_rejects_escape(tmp_path: Path) -> None:
     assert fs_service.read_image(_ws(tmp_path), "../../etc/secret.png")["ok"] is False
+
+
+def test_stat_path_expands_home(tmp_path: Path, monkeypatch) -> None:
+    """Terminal output prints '~/...' paths verbatim; stat must expand them."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "cert.pem").write_text("x", encoding="utf-8")
+    assert fs_service.stat_path("~/cert.pem") == {"ok": True, "exists": True}
+    assert fs_service.stat_path("~/missing.pem") == {"ok": True, "exists": False}

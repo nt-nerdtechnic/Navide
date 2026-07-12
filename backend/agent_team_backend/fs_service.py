@@ -482,7 +482,8 @@ def stat_path(abs_path: str) -> dict[str, Any]:
     Read-only: no content is returned, only existence.
     """
     try:
-        p = Path(abs_path).resolve()
+        # expanduser: terminal output often prints '~/...' paths verbatim.
+        p = Path(abs_path).expanduser().resolve()
         return {"ok": True, "exists": p.is_file()}
     except Exception:
         return {"ok": True, "exists": False}
