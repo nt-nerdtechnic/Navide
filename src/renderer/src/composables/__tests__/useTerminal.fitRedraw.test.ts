@@ -26,6 +26,7 @@ vi.mock('@xterm/xterm', () => {
     cols = 80
     rows = 24
     options: Record<string, unknown> = {}
+    unicode = { activeVersion: '6' }
     buffer = {
       active: { type: 'normal', viewportY: 0, baseY: 0, cursorX: 0, cursorY: 0, getLine: () => undefined },
     }

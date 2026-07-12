@@ -1,6 +1,7 @@
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
@@ -402,6 +403,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
+  // Unicode 11 width tables (VS Code parity: unicodeVersion defaults to "11").
+  // xterm's built-in tables are Unicode 6; agent CLIs measure display width
+  // with newer Unicode (string-width), so emoji/symbol widths disagree and
+  // mid-line input repaints land at the wrong column (overlapping text).
+  term.loadAddon(new Unicode11Addon())
+  term.unicode.activeVersion = '11'
 
   const containerRef = shallowRef<HTMLElement | null>(null)
   const status = ref<TerminalStatus>('idle')
@@ -593,11 +600,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     let scrollRemainder = 0
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
       // Alternate buffer = TUI app (Claude Code, Codex, etc.) is active.
-      // The app has mouse tracking enabled and handles scroll internally —
-      // returning true lets xterm forward the event to the PTY natively,
-      // exactly as Cursor IDE does. Intercepting here would swallow the
-      // event with no visible effect (scrollLines is a no-op in alt buffer).
-      if (term.buffer.active.type === 'alternate') return true
+      // Only forward wheel events to the PTY when the app actually enabled
+      // mouse tracking (vim, htop, ...). Without mouse tracking, xterm's
+      // alternateScroll fallback converts each wheel notch into an ↑/↓ arrow
+      // escape sequence, which agent CLIs interpret as readline history
+      // recall — scrolling up would pull the previous submitted prompt into
+      // the input line. Swallow the event instead (scrollLines is a no-op in
+      // alt buffer, so there is nothing else useful to do with it).
+      if (term.buffer.active.type === 'alternate') {
+        return term.modes.mouseTrackingMode !== 'none'
+      }
       // Main buffer: accumulate pixel-delta for smooth trackpad scrollback.
       // deltaY units depend on deltaMode: LINE → lines, PAGE → pages, PIXEL →
       // pixels. PAGE mode (some mice / accessibility settings) reports ~1 per
