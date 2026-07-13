@@ -706,11 +706,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         term.clearSelection()
       }
 
-      // ── ⌘= / ⌘- / ⌘0: per-pane terminal font zoom ──────────────────────────
-      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey &&
-          (e.key === '=' || e.key === '-' || e.key === '0')) {
+      // ── ⌘+ / ⌘- / ⌘=: per-pane terminal font zoom (grow / shrink / reset) ──
+      if (e.metaKey && !e.altKey && !e.ctrlKey &&
+          ((e.shiftKey && e.key === '+') ||
+           (!e.shiftKey && (e.key === '-' || e.key === '=')))) {
         const cur = term.options.fontSize ?? DEFAULT_FONT_SIZE
-        const next = e.key === '=' ? Math.min(cur + 1, MAX_FONT_SIZE)
+        const next = e.key === '+' ? Math.min(cur + 1, MAX_FONT_SIZE)
           : e.key === '-' ? Math.max(cur - 1, MIN_FONT_SIZE)
           : DEFAULT_FONT_SIZE
         if (next !== cur) {

@@ -2,9 +2,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createMockBackend, withScope } from './mockBackend'
 
-// ⌘= / ⌘- / ⌘0 adjust the focused pane's terminal font size (VS Code
-// integrated-terminal parity). The editor window binds the same keys to
-// Monaco font zoom; the CLI pane handles them in xterm's custom key handler.
+// ⌘+ (shift+=) grows, ⌘- shrinks, ⌘= resets the focused pane's terminal font
+// size. The editor window binds its own font-zoom keys to Monaco; the CLI
+// pane handles these in xterm's custom key handler.
 // xterm won't boot in happy-dom, so the mock captures the custom key event
 // handler and the test drives it directly.
 
@@ -88,7 +88,7 @@ function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   } as KeyboardEvent
 }
 
-describe('useTerminal — ⌘=/⌘-/⌘0 font zoom', () => {
+describe('useTerminal — ⌘+/⌘-/⌘= font zoom', () => {
   afterEach(() => {
     vi.clearAllMocks()
     captured.keyHandler = undefined
@@ -105,9 +105,9 @@ describe('useTerminal — ⌘=/⌘-/⌘0 font zoom', () => {
     return { term: { options: captured.options as { fontSize: number } }, scope }
   }
 
-  it('⌘= grows the font and refits', async () => {
+  it('⌘+ grows the font and refits', async () => {
     const { term, scope } = await spawnedTerminal()
-    const handled = captured.keyHandler!(keyEvent({ key: '=', metaKey: true }))
+    const handled = captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
     expect(handled).toBe(false)
     expect(term.options.fontSize).toBe(13)
     expect(ctrl.applyFit).toHaveBeenCalledTimes(1)
@@ -124,30 +124,32 @@ describe('useTerminal — ⌘=/⌘-/⌘0 font zoom', () => {
     scope.stop()
   })
 
-  it('⌘= clamps at the maximum', async () => {
+  it('⌘+ clamps at the maximum', async () => {
     const { term, scope } = await spawnedTerminal()
-    for (let i = 0; i < 30; i++) captured.keyHandler!(keyEvent({ key: '=', metaKey: true }))
+    for (let i = 0; i < 30; i++) captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
     expect(term.options.fontSize).toBe(32)
     scope.stop()
   })
 
-  it('⌘0 resets to the default size', async () => {
+  it('⌘= resets to the default size', async () => {
     const { term, scope } = await spawnedTerminal()
-    for (let i = 0; i < 5; i++) captured.keyHandler!(keyEvent({ key: '=', metaKey: true }))
+    for (let i = 0; i < 5; i++) captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
     expect(term.options.fontSize).toBe(17)
-    const handled = captured.keyHandler!(keyEvent({ key: '0', metaKey: true }))
+    const handled = captured.keyHandler!(keyEvent({ key: '=', metaKey: true }))
     expect(handled).toBe(false)
     expect(term.options.fontSize).toBe(12)
     scope.stop()
   })
 
-  it('leaves plain and shift/alt/ctrl-modified keys to xterm', async () => {
+  it('leaves plain and other modified keys to xterm', async () => {
     const { term, scope } = await spawnedTerminal()
     for (const ev of [
       keyEvent({ key: '=' }),
-      keyEvent({ key: '-', metaKey: true, shiftKey: true }),
+      keyEvent({ key: '+', shiftKey: true }),
+      keyEvent({ key: '=', metaKey: true, shiftKey: true }),
       keyEvent({ key: '=', metaKey: true, altKey: true }),
-      keyEvent({ key: '0', metaKey: true, ctrlKey: true }),
+      keyEvent({ key: '-', metaKey: true, ctrlKey: true }),
+      keyEvent({ key: '0', metaKey: true }),
     ]) {
       expect(captured.keyHandler!(ev)).toBe(true)
     }
