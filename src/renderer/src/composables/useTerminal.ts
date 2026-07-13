@@ -387,10 +387,14 @@ function buildFileLinkProvider(
   }
 }
 
+const DEFAULT_FONT_SIZE = 12
+const MIN_FONT_SIZE = 6
+const MAX_FONT_SIZE = 32
+
 export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: { workspacePath?: string; onClear?: () => void }) {
   const term = new Terminal({
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-    fontSize: 12,
+    fontSize: DEFAULT_FONT_SIZE,
     cursorBlink: true,
     convertEol: false,
     scrollback: 10000,
@@ -700,6 +704,20 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         selAnchorX = -1
         selAnchorY = -1
         term.clearSelection()
+      }
+
+      // ── ⌘= / ⌘- / ⌘0: per-pane terminal font zoom ──────────────────────────
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey &&
+          (e.key === '=' || e.key === '-' || e.key === '0')) {
+        const cur = term.options.fontSize ?? DEFAULT_FONT_SIZE
+        const next = e.key === '=' ? Math.min(cur + 1, MAX_FONT_SIZE)
+          : e.key === '-' ? Math.max(cur - 1, MIN_FONT_SIZE)
+          : DEFAULT_FONT_SIZE
+        if (next !== cur) {
+          term.options.fontSize = next
+          resizeCtrl.applyFit()  // cell size changed → recompute cols/rows, resync PTY
+        }
+        return false
       }
 
       // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
