@@ -14,6 +14,12 @@ import {
   CLI_BUFFER_REPLY_CHANNEL,
   type CliPaneBufferResult
 } from './cli-buffer-relay'
+import {
+  hitTestWindows,
+  PANE_DRAG_END_CHANNEL,
+  EXTERNAL_PANE_DROP_CHANNEL,
+  type DropCandidate
+} from './cross-window-drag'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
 import {
   getPermissionStatuses,
@@ -619,6 +625,36 @@ ipcMain.handle('cli:get-pane-buffer', (_event, paneId: string): Promise<CliPaneB
   const targets = [...mainWindows].filter((w) => !w.isDestroyed()).map((w) => w.webContents)
   return cliBufferRelay.request(targets, String(paneId ?? ''))
 })
+
+// Cross-window pane drop: a drag started in a main window never reaches the
+// editor window (HTML5 DnD does not cross BrowserWindow boundaries), so the
+// source reports the release point from its dragend — already filtered to drags
+// that were NOT dropped in-window — and we hand it to the window under it.
+ipcMain.on(
+  PANE_DRAG_END_CHANNEL,
+  (_event, args: { paneId?: string; screenX?: number; screenY?: number }) => {
+    const paneId = String(args?.paneId ?? '')
+    if (!paneId) return
+    const point = { x: Number(args?.screenX ?? 0), y: Number(args?.screenY ?? 0) }
+    const candidates: DropCandidate<BrowserWindow>[] =
+      editorWindow && !editorWindow.isDestroyed()
+        ? [
+            {
+              bounds: editorWindow.getBounds(),
+              visible: editorWindow.isVisible(),
+              minimized: editorWindow.isMinimized(),
+              window: editorWindow
+            }
+          ]
+        : []
+    const win = hitTestWindows(point, candidates)
+    win?.webContents.send(EXTERNAL_PANE_DROP_CHANNEL, {
+      paneId,
+      screenX: point.x,
+      screenY: point.y
+    })
+  }
+)
 
 // Native OS notification for CLI state changes (turn done / needs input). The
 // renderer decides WHEN to call this (background-only, deduped) and supplies the

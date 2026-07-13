@@ -4,6 +4,7 @@ import { useTerminal } from '../composables/useTerminal'
 import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
 import { extractDropPaths, shellEscape } from '../lib/drop'
+import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource } from '../lib/cliContext'
 
 interface Props {
   paneId: string
@@ -32,9 +33,14 @@ const emit = defineEmits<{
   (e: 'rename', name: string): void
   (e: 'context-menu', ev: MouseEvent): void
   (e: 'reorder-drop', draggedPaneId: string): void
+  /** Another CLI pane was dropped onto this pane's terminal area — App.vue
+   *  pastes that pane's recent output into this pane's input prompt. */
+  (e: 'cli-context-drop', sourcePaneId: string): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
+/** Hovering a CLI pane over this terminal (context share), not files (path insert). */
+const isCliDragOver = ref(false)
 
 // Inline title rename — double-click the header title to edit, Enter/blur to
 // commit, Escape to cancel. The committed name bubbles up as a 'rename' event.
@@ -95,8 +101,42 @@ defineExpose({
   fitTerminal: terminal.fitTerminal
 })
 
+/** True when the drag carries a CLI pane's identity (pane→pane context share)
+ *  rather than files/text (path insert). Readable during dragover: the TYPES
+ *  are visible in protected mode even though the data is not. */
+function isCliPaneDrag(e: DragEvent): boolean {
+  const types = e.dataTransfer?.types
+  return !!types && (types.includes(CLI_CONTEXT_MIME) || types.includes(PANE_ID_MIME))
+}
+
+function onTerminalDragOver(e: DragEvent): void {
+  e.preventDefault()
+  const cli = isCliPaneDrag(e)
+  // Dragging this pane's own header over its own terminal is a no-op — don't
+  // advertise a drop target for it.
+  isCliDragOver.value = cli && !draggingSelf
+  isDragOver.value = !cli
+}
+
+function onTerminalDragLeave(): void {
+  isDragOver.value = false
+  isCliDragOver.value = false
+}
+
 function onTerminalDrop(e: DragEvent): void {
   isDragOver.value = false
+  isCliDragOver.value = false
+  // CLI pane dropped onto this terminal: share its recent output with this pane.
+  // App.vue owns pane state, so it resolves the buffer and does the paste.
+  if (isCliPaneDrag(e)) {
+    const sourcePaneId = resolveCliDropSource(
+      e.dataTransfer?.getData(CLI_CONTEXT_MIME) || '',
+      e.dataTransfer?.getData(PANE_ID_MIME) || '',
+      props.paneId
+    )
+    if (sourcePaneId) emit('cli-context-drop', sourcePaneId)
+    return
+  }
   const paths = extractDropPaths(e)
   if (!paths.length) return
   terminal.pasteText(paths.map(shellEscape).join(' '))
@@ -130,9 +170,17 @@ function onHeaderDragStart(e: DragEvent): void {
 const isReorderDragOver = ref(false)
 let draggingSelf = false
 
-function onHeaderDragEnd(): void {
+function onHeaderDragEnd(e: DragEvent): void {
   draggingSelf = false
   isReorderDragOver.value = false
+  // Cross-window handoff: a drag released over ANOTHER window produces no drop
+  // event there (HTML5 DnD is per-BrowserWindow), but dragend still fires here
+  // with the release point in screen coords. dropEffect === 'none' means no
+  // in-window drop consumed the drag (an in-window pane reorder sets 'move'),
+  // so only then ask main to route the pane to the window under the pointer.
+  console.warn('[cli-dragend]', { dropEffect: e.dataTransfer?.dropEffect, screenX: e.screenX, screenY: e.screenY })
+  if (e.dataTransfer?.dropEffect !== 'none') return
+  window.agentTeam?.cliPaneDragEnd?.(props.paneId, e.screenX, e.screenY)
 }
 
 function onHeaderDragOver(e: DragEvent): void {
@@ -209,11 +257,11 @@ onMounted(() => {
     <div
       ref="containerRef"
       class="xterm-host"
-      :class="{ 'drag-over': isDragOver, 'alt-buffer': terminal.isAltBuffer.value }"
+      :class="{ 'drag-over': isDragOver, 'cli-drag-over': isCliDragOver, 'alt-buffer': terminal.isAltBuffer.value }"
       @mousedown="emit('set-focus')"
-      @dragover.prevent
-      @dragenter.prevent="isDragOver = true"
-      @dragleave="isDragOver = false"
+      @dragover.prevent="onTerminalDragOver"
+      @dragenter.prevent="onTerminalDragOver"
+      @dragleave="onTerminalDragLeave"
       @drop.prevent="onTerminalDrop"
     ></div>
     <div v-if="isPreparing" class="prep-overlay" aria-live="polite">
@@ -387,10 +435,12 @@ onMounted(() => {
   position: relative;
   transition: box-shadow 0.1s;
 }
-.xterm-host.drag-over {
+.xterm-host.drag-over,
+.xterm-host.cli-drag-over {
   box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
-.xterm-host.drag-over::after {
+.xterm-host.drag-over::after,
+.xterm-host.cli-drag-over::after {
   content: 'Drop to insert path';
   position: absolute;
   inset: 0;
@@ -402,6 +452,9 @@ onMounted(() => {
   font-size: 13px;
   font-family: inherit;
   pointer-events: none;
+}
+.xterm-host.cli-drag-over::after {
+  content: 'Drop to paste this pane context';
 }
 .prep-overlay {
   position: absolute;

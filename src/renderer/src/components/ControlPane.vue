@@ -723,9 +723,15 @@ function onAgentDragStart(e: DragEvent, paneId: string): void {
   draggingPaneId = paneId
 }
 
-function onAgentDragEnd(): void {
+function onAgentDragEnd(e: DragEvent): void {
+  const paneId = draggingPaneId
   draggingPaneId = ''
   reorderDragOverId.value = ''
+  // Cross-window handoff, same contract as TerminalPane's header dragend:
+  // dropEffect 'none' ⇒ nothing in this window consumed the drag, so let main
+  // route the pane to whatever window sits under the release point.
+  if (!paneId || e.dataTransfer?.dropEffect !== 'none') return
+  window.agentTeam?.cliPaneDragEnd?.(paneId, e.screenX, e.screenY)
 }
 
 function onAgentDragOver(e: DragEvent, paneId: string): void {

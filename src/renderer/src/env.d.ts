@@ -112,6 +112,10 @@ declare global {
           paneId: string
         ) => { label: string; sessionId: string | null; buffer: string } | { error: string }
       ) => void
+      cliPaneDragEnd: (paneId: string, screenX: number, screenY: number) => void
+      onExternalPaneDrop: (
+        handler: (args: { paneId: string; screenX: number; screenY: number }) => void
+      ) => () => void
       setBadgeCount: (count: number) => void
       reportWorkspace: (workspacePath: string) => void
       restore?: {

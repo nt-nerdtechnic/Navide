@@ -184,6 +184,23 @@ contextBridge.exposeInMainWorld('agentTeam', {
       ipcRenderer.send('cli:get-pane-buffer:reply', requestId, handler(paneId))
     })
   },
+  // Cross-window pane drop handoff: HTML5 DnD events never reach another
+  // BrowserWindow, so the drag source reports the release point (screen coords
+  // from dragend) and main forwards it to the window under that point.
+  cliPaneDragEnd: (paneId: string, screenX: number, screenY: number): void => {
+    ipcRenderer.send('cli:pane-drag-end', { paneId, screenX, screenY })
+  },
+  // Returns a disposer — the AI Chat mounts/unmounts with the panel toggle.
+  onExternalPaneDrop: (
+    handler: (args: { paneId: string; screenX: number; screenY: number }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      args: { paneId: string; screenX: number; screenY: number }
+    ): void => handler(args)
+    ipcRenderer.on('cli:external-pane-drop', listener)
+    return () => ipcRenderer.removeListener('cli:external-pane-drop', listener)
+  },
   setBadgeCount: (count: number): void => {
     ipcRenderer.send('window:setBadgeCount', count)
   },

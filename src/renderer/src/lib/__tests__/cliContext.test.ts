@@ -4,8 +4,35 @@ import {
   parseCliContextPayload,
   resolveCliDropPayload,
   buildCliContextChip,
-  CLI_CHIP_BUFFER_CAP
+  screenToClientPoint,
+  resolveCliDropSource,
+  buildPaneContextPaste,
+  chunkForPty,
+  CLI_CHIP_BUFFER_CAP,
+  CLI_PASTE_BUFFER_CAP
 } from '../cliContext'
+
+describe('screenToClientPoint', () => {
+  it('offsets the screen point by the viewport origin', () => {
+    expect(screenToClientPoint({ screenX: 900, screenY: 500 }, { screenX: 700, screenY: 300 }))
+      .toEqual({ x: 200, y: 200 })
+  })
+
+  it('is identity when the viewport sits at the screen origin', () => {
+    expect(screenToClientPoint({ screenX: 40, screenY: 60 }, { screenX: 0, screenY: 0 }))
+      .toEqual({ x: 40, y: 60 })
+  })
+
+  it('yields negative coordinates for a point above/left of the viewport', () => {
+    expect(screenToClientPoint({ screenX: 10, screenY: 20 }, { screenX: 100, screenY: 50 }))
+      .toEqual({ x: -90, y: -30 })
+  })
+
+  it('handles a viewport on a monitor at negative screen coordinates', () => {
+    expect(screenToClientPoint({ screenX: -900, screenY: -100 }, { screenX: -1200, screenY: -300 }))
+      .toEqual({ x: 300, y: 200 })
+  })
+})
 
 describe('buildCliPaneBufferReply', () => {
   it('returns not-found when the pane ref is gone (pane closed before drop)', () => {
@@ -182,5 +209,95 @@ describe('buildCliContextChip', () => {
     expect(buildCliContextChip(payload, { error: 'not-found' })).toEqual({ kind: 'error', error: 'not-found' })
     expect(buildCliContextChip(payload, { error: 'timeout', buffer: 'stale' })).toEqual({ kind: 'error', error: 'timeout' })
     expect(buildCliContextChip(payload, { error: 'unavailable' })).toEqual({ kind: 'error', error: 'unavailable' })
+  })
+})
+
+describe('resolveCliDropSource', () => {
+  const payload = (paneId: string): string => JSON.stringify({ paneId, agentKey: 'claude' })
+
+  it('resolves the source pane id from the CLI-context payload', () => {
+    expect(resolveCliDropSource(payload('pane-a'), 'pane-a', 'pane-b')).toBe('pane-a')
+  })
+
+  it('resolves the source pane id from the bare pane-id fallback', () => {
+    expect(resolveCliDropSource('', 'pane-a', 'pane-b')).toBe('pane-a')
+  })
+
+  it('returns null for a self-drop (pane dropped onto its own terminal)', () => {
+    expect(resolveCliDropSource(payload('pane-a'), 'pane-a', 'pane-a')).toBeNull()
+    expect(resolveCliDropSource('', 'pane-a', 'pane-a')).toBeNull()
+  })
+
+  it('returns null for a malformed payload or a drag with no pane identity', () => {
+    expect(resolveCliDropSource('{not json', '', 'pane-b')).toBeNull()
+    expect(resolveCliDropSource('', '', 'pane-b')).toBeNull()
+  })
+})
+
+describe('buildPaneContextPaste', () => {
+  it('builds a header naming the source pane and agent, wrapping the buffer', () => {
+    const text = buildPaneContextPaste('Backend', 'claude', 'line one\nline two')
+    expect(text).toBe(
+      '--- context from CLI pane: Backend (claude) ---\nline one\nline two\n--- end of context ---'
+    )
+  })
+
+  it('omits the agent key from the header when the pane has none', () => {
+    const text = buildPaneContextPaste('Backend', undefined, 'out')
+    expect(text?.split('\n')[0]).toBe('--- context from CLI pane: Backend ---')
+  })
+
+  it("falls back to 'pane' when the source has no display name", () => {
+    expect(buildPaneContextPaste('', '', 'out')?.split('\n')[0])
+      .toBe('--- context from CLI pane: pane ---')
+  })
+
+  it('tail-truncates an oversized buffer and says so in the header', () => {
+    const buffer = 'x'.repeat(CLI_PASTE_BUFFER_CAP + 500)
+    const text = buildPaneContextPaste('Backend', 'codex', buffer) as string
+    const [header, body] = text.split('\n')
+    expect(header).toBe(
+      `--- context from CLI pane: Backend (codex) — last ${CLI_PASTE_BUFFER_CAP} chars ---`
+    )
+    expect(body).toHaveLength(CLI_PASTE_BUFFER_CAP)
+  })
+
+  it('does not claim truncation when the whole buffer fits under the cap', () => {
+    const text = buildPaneContextPaste('Backend', 'codex', 'short output') as string
+    expect(text).not.toContain('last')
+  })
+
+  it('does not end with a newline (the paste must not submit itself)', () => {
+    expect(buildPaneContextPaste('Backend', 'claude', 'out')?.endsWith('\n')).toBe(false)
+  })
+
+  it('returns null for an empty or whitespace-only buffer (nothing to share)', () => {
+    expect(buildPaneContextPaste('Backend', 'claude', '')).toBeNull()
+    expect(buildPaneContextPaste('Backend', 'claude', '  \n\t\n ')).toBeNull()
+  })
+})
+
+describe('chunkForPty', () => {
+  it('splits text into chunks of at most the given size', () => {
+    expect(chunkForPty('abcdefg', 3)).toEqual(['abc', 'def', 'g'])
+  })
+
+  it('returns a single chunk when the text fits', () => {
+    expect(chunkForPty('abc', 8)).toEqual(['abc'])
+    expect(chunkForPty('', 8)).toEqual([])
+  })
+
+  it('never splits a surrogate pair across chunks (non-BMP chars survive)', () => {
+    // '😀' is two UTF-16 code units — a naive slice(0, 3) would cut it in half.
+    const text = 'ab😀cd'
+    const chunks = chunkForPty(text, 3)
+    expect(chunks.join('')).toBe(text)
+    for (const chunk of chunks) expect(chunk).not.toMatch(/[\uD800-\uDBFF]$/)
+    expect(chunks).toEqual(['ab', '😀c', 'd'])
+  })
+
+  it('preserves the original text when re-joined', () => {
+    const text = '🚀 done — 完成\nnext'
+    expect(chunkForPty(text, 4).join('')).toBe(text)
   })
 })

@@ -46,7 +46,7 @@ import {
 } from './data/stages'
 import { i18n } from './i18n'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
-import { buildCliPaneBufferReply } from './lib/cliContext'
+import { buildCliPaneBufferReply, buildPaneContextPaste, chunkForPty } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { quickClassify } from './lib/quick-classify'
@@ -755,6 +755,36 @@ async function injectPane(paneId: string, text: string, logLabel?: string, prese
   const ref = paneRefs[paneId]
   if (!ref?.sessionId) return false
   return injectText(ref.sessionId, text, logLabel, preserveNewlines)
+}
+
+// Cross-pane context share: pane A dragged onto pane B's terminal area pastes a
+// tail excerpt of A's cleaned buffer into B's input prompt (TerminalPane's
+// 'cli-context-drop'). Deliberately NOT injectText: no Enter is sent — the text
+// waits in B's prompt for the user to add their question and submit. Bracketed
+// paste keeps the excerpt's newlines literal instead of submitting each line.
+async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
+  const sourcePane = panes.value.find((p) => p.id === sourcePaneId)
+  const sourceRef = paneRefs[sourcePaneId]
+  const targetSessionId = paneRefs[targetPaneId]?.sessionId as string | undefined
+  // Source pane closed mid-drag, or target has no live PTY → nothing to do.
+  if (!sourcePane || !sourceRef || !targetSessionId) return
+
+  const text = buildPaneContextPaste(
+    sourcePane.customName || sourcePane.agentLabel,
+    sourcePane.agentKey,
+    (sourceRef.cleanBuffer as unknown as string) ?? ''
+  )
+  if (!text) return // empty buffer — nothing worth pasting
+
+  const payload = BRACKETED_PASTE_START + text + BRACKETED_PASTE_END
+  for (const chunk of chunkForPty(payload, 512)) {
+    try {
+      await backend.send('terminal.input', { terminal_session_id: targetSessionId, data: chunk })
+    } catch (err) {
+      console.error(`[injectPaneContext] send failed for pane ${targetPaneId}:`, err)
+      return
+    }
+  }
 }
 
 // Dispatch a cloud issue into a running agent pane as a task (one-way: no
@@ -6272,6 +6302,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
           @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"
+          @cli-context-drop="(sourceId) => injectPaneContext(sourceId, p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">

@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from
 import { i18n } from '../i18n'
 import { settingsGet, settingsSet } from '../lib/settings'
 import { parseLegacyThreads } from '../lib/chatLegacy'
-import { CLI_CONTEXT_MIME, PANE_ID_MIME, CLI_SOURCE_PREFIX, resolveCliDropPayload, buildCliContextChip, type CliContextPayload } from '../lib/cliContext'
+import { CLI_CONTEXT_MIME, PANE_ID_MIME, CLI_SOURCE_PREFIX, resolveCliDropPayload, buildCliContextChip, screenToClientPoint, type CliContextPayload } from '../lib/cliContext'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
@@ -10130,6 +10130,36 @@ async function handleCliContextDrop(e: DragEvent): Promise<boolean> {
   await applyCliPaneChip(payload)
   return true
 }
+
+// Cross-window CLI pane drop. A pane dragged from a MAIN window never produces
+// a drop event here (HTML5 DnD does not cross BrowserWindow boundaries), so it
+// arrives as an IPC message carrying the screen coords where the pointer was
+// released. Replay it as a chip only when that point actually lands on this
+// chat; anywhere else in the editor window is a silent no-op. The pane id alone
+// is enough — applyCliPaneChip's IPC reply fills in label/sessionId.
+const chatRootEl = ref<HTMLElement | null>(null)
+let disposeExternalPaneDrop: (() => void) | null = null
+
+onMounted(() => {
+  const register = window.agentTeam?.onExternalPaneDrop
+  if (!register) return
+  disposeExternalPaneDrop = register(({ paneId, screenX, screenY }) => {
+    const root = chatRootEl.value
+    if (!paneId || !root) return
+    const { x, y } = screenToClientPoint(
+      { screenX, screenY },
+      { screenX: window.screenX, screenY: window.screenY }
+    )
+    const el = document.elementFromPoint(x, y)
+    if (!el || !root.contains(el)) return
+    void applyCliPaneChip({ paneId, agentKey: '', label: '', sessionId: null })
+  })
+})
+onUnmounted(() => {
+  disposeExternalPaneDrop?.()
+  disposeExternalPaneDrop = null
+})
+
 function onChatDragLeave(e: DragEvent): void {
   if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
     dragOverChat.value = false
@@ -10604,6 +10634,7 @@ function showModelChange(mi: number): string | null {
 
 <template>
   <div
+    ref="chatRootEl"
     class="ai-chat"
     :class="{ 'ai-drag-over': dragOverChat }"
     @dragover.prevent="onChatDragOver"
