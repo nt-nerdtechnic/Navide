@@ -534,6 +534,33 @@ async def _on_log_activity(event: ActivityEvent) -> None:
         log.warning("activity sink failed: %s", err)
 
 
+# A startup rescan of historical CLI logs emits thousands of token events in a
+# burst; broadcasting a full workspace snapshot per event saturated the event
+# loop and starved concurrent requests past the frontend's 10s timeout (real
+# case: terminal.create timeouts during session restore, 2026-07-14). Coalesce
+# to at most one broadcast per workspace per window; the trailing snapshot
+# includes every record accumulated during the wait.
+_TOKENS_BROADCAST_DEBOUNCE_SEC = 0.3
+_pending_tokens_broadcast: set[str] = set()
+
+
+def _schedule_tokens_broadcast(workspace_path: str) -> None:
+    if workspace_path in _pending_tokens_broadcast:
+        return
+    _pending_tokens_broadcast.add(workspace_path)
+
+    async def _fire() -> None:
+        try:
+            await asyncio.sleep(_TOKENS_BROADCAST_DEBOUNCE_SEC)
+        finally:
+            _pending_tokens_broadcast.discard(workspace_path)
+        await broadcast(
+            make_event("tokens.changed", tokens_store.snapshot(workspace_path))
+        )
+
+    asyncio.create_task(_fire())
+
+
 async def _on_log_token_usage(usage: TokenUsage) -> None:
     """Sink for token events from CLI log files.
 
@@ -563,9 +590,7 @@ async def _on_log_token_usage(usage: TokenUsage) -> None:
             output_tokens=usage.output_tokens,
             dedup_key=composite_key,
         )
-        await broadcast(
-            make_event("tokens.changed", tokens_store.snapshot(attributed.workspace_path))
-        )
+        _schedule_tokens_broadcast(attributed.workspace_path)
     except Exception as err:  # noqa: BLE001
         log.warning("log token sink failed: %s", err)
 

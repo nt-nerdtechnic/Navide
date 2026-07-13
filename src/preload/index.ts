@@ -31,6 +31,9 @@ export interface GitCredential {
   token: string
 }
 
+export type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
+export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-applicable'
+
 contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
   version: __APP_VERSION__,
@@ -230,5 +233,15 @@ contextBridge.exposeInMainWorld('agentTeam', {
       workspacePath: string
     ): Promise<{ ok: boolean; credential?: GitCredential | null; error?: string }> =>
       ipcRenderer.invoke('git-accounts:getCredential', workspacePath),
+  },
+  permissions: {
+    status: (): Promise<Record<PermissionKey, PermissionStatus>> =>
+      ipcRenderer.invoke('permissions:status'),
+    request: (
+      key: PermissionKey,
+      payload?: { title?: string; body?: string }
+    ): Promise<PermissionStatus> => ipcRenderer.invoke('permissions:request', key, payload),
+    openSettings: (key: PermissionKey): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('permissions:open-settings', key),
   },
 })

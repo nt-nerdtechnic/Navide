@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick, reactive } from
 import { i18n } from '../i18n'
 import { settingsGet, settingsSet } from '../lib/settings'
 import { parseLegacyThreads } from '../lib/chatLegacy'
-import { CLI_CONTEXT_MIME, CLI_SOURCE_PREFIX, parseCliContextPayload, buildCliContextChip, type CliContextPayload } from '../lib/cliContext'
+import { CLI_CONTEXT_MIME, PANE_ID_MIME, CLI_SOURCE_PREFIX, resolveCliDropPayload, buildCliContextChip, type CliContextPayload } from '../lib/cliContext'
 import type { useBackend } from '../composables/useBackend'
 import { allDiagnosticsSorted } from '../editor/diagnostics'
 import mermaid from 'mermaid'
@@ -9937,7 +9937,8 @@ function onChipDrop(e: DragEvent, targetId: string): void {
 const isDraggingOver = ref(false)
 
 function onDragover(e: DragEvent): void {
-  if (e.dataTransfer?.types.includes('Files') || e.dataTransfer?.types.includes(CLI_CONTEXT_MIME)) {
+  const types = e.dataTransfer?.types ?? []
+  if (types.includes('Files') || types.includes(CLI_CONTEXT_MIME) || types.includes(PANE_ID_MIME)) {
     e.preventDefault()
     isDraggingOver.value = true
   }
@@ -9947,6 +9948,11 @@ function onDragleave(): void { isDraggingOver.value = false }
 async function onDrop(e: DragEvent): Promise<void> {
   e.preventDefault()
   isDraggingOver.value = false
+  // CLI-pane drops are fully handled here — stop the event from bubbling to
+  // the outer onChatDrop, which would process the same payload a second time.
+  // Must be synchronous: propagation does not wait for async handlers.
+  const types = e.dataTransfer?.types ?? []
+  if (types.includes(CLI_CONTEXT_MIME) || types.includes(PANE_ID_MIME)) e.stopPropagation()
   if (await handleCliContextDrop(e)) return
   type AgentApi = Record<string, (...a: unknown[]) => unknown>
   const api = (window as Window & { agentTeam?: AgentApi }).agentTeam
@@ -10059,9 +10065,10 @@ const dragOverChat = ref(false)
 function onChatDragOver(e: DragEvent): void {
   // CLI pane header drag: payload is unreadable during dragover (browser
   // protected mode) — gate on dataTransfer.types only.
-  const hasCli = (e.dataTransfer?.types ?? []).includes(CLI_CONTEXT_MIME)
+  const types = e.dataTransfer?.types ?? []
+  const hasCli = types.includes(CLI_CONTEXT_MIME) || types.includes(PANE_ID_MIME)
   const hasFile = Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === 'file')
-  const hasPath = !_chipDragId && (e.dataTransfer?.types ?? []).includes('text/plain')
+  const hasPath = !_chipDragId && types.includes('text/plain')
   if (hasCli || hasFile || hasPath) { e.preventDefault(); dragOverChat.value = true }
 }
 
@@ -10101,13 +10108,22 @@ async function applyCliPaneChip(payload: CliContextPayload, refreshTargetId?: st
   })
 }
 
-/** Handle a drop carrying CLI_CONTEXT_MIME. Returns true if it was one (drop handled). */
+/** Handle a drop carrying CLI_CONTEXT_MIME, or a bare PANE_ID_MIME from other
+ *  pane drag sources (e.g. ControlPane's agent list). Returns true if it was
+ *  one (drop handled). */
 async function handleCliContextDrop(e: DragEvent): Promise<boolean> {
-  const raw = e.dataTransfer?.getData(CLI_CONTEXT_MIME) ?? ''
-  if (!raw) return false
-  const payload = parseCliContextPayload(raw)
-  if (!payload) {
-    console.warn('[cli-context] malformed drag payload:', raw)
+  const cliRaw = e.dataTransfer?.getData(CLI_CONTEXT_MIME) ?? ''
+  const paneIdRaw = e.dataTransfer?.getData(PANE_ID_MIME) ?? ''
+  const payload = resolveCliDropPayload(cliRaw, paneIdRaw)
+  if (payload === null) {
+    // Diagnostic for "MIME didn't survive the window boundary": in-app pane
+    // drags always carry one of the MIMEs above — log what actually arrived.
+    const types = Array.from(e.dataTransfer?.types ?? [])
+    if (types.length && !types.includes('Files')) console.warn('[cli-drop] types=', types)
+    return false
+  }
+  if (payload === 'malformed') {
+    console.warn('[cli-context] malformed drag payload:', cliRaw)
     showToast('Could not fetch CLI pane output')
     return true
   }

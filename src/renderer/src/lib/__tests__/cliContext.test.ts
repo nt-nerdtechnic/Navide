@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildCliPaneBufferReply,
   parseCliContextPayload,
+  resolveCliDropPayload,
   buildCliContextChip,
   CLI_CHIP_BUFFER_CAP
 } from '../cliContext'
@@ -83,6 +84,36 @@ describe('parseCliContextPayload', () => {
   })
 })
 
+describe('resolveCliDropPayload', () => {
+  it('prefers a valid CLI-context payload over the pane-id fallback', () => {
+    const raw = JSON.stringify({ paneId: 'p-1', agentKey: 'claude', label: 'Claude', sessionId: 's-1' })
+    expect(resolveCliDropPayload(raw, 'p-other')).toEqual({
+      paneId: 'p-1',
+      agentKey: 'claude',
+      label: 'Claude',
+      sessionId: 's-1'
+    })
+  })
+
+  it("returns 'malformed' when the CLI-context payload is present but unparseable", () => {
+    expect(resolveCliDropPayload('not json', '')).toBe('malformed')
+    expect(resolveCliDropPayload(JSON.stringify({ paneId: '' }), 'p-9')).toBe('malformed')
+  })
+
+  it('synthesizes a minimal payload from a bare pane id (pane-id fallback)', () => {
+    expect(resolveCliDropPayload('', 'p-9')).toEqual({
+      paneId: 'p-9',
+      agentKey: '',
+      label: '',
+      sessionId: null
+    })
+  })
+
+  it('returns null when neither MIME string is present (not a CLI drop)', () => {
+    expect(resolveCliDropPayload('', '')).toBeNull()
+  })
+})
+
 describe('buildCliContextChip', () => {
   const payload = { paneId: 'p-1', agentKey: 'claude', label: 'My Pane', sessionId: 's-drag' }
   const capturedAt = Date.UTC(2026, 6, 12, 10, 30, 0)
@@ -104,6 +135,26 @@ describe('buildCliContextChip', () => {
     expect(fromPayload.kind === 'chip' && fromPayload.label).toBe('@cli:My Pane')
     const fromAgent = buildCliContextChip({ paneId: 'p-1', agentKey: 'codex' }, { buffer: 'x' }, capturedAt)
     expect(fromAgent.kind === 'chip' && fromAgent.label).toBe('@cli:codex')
+  })
+
+  it('builds a chip from a pane-id fallback payload, labeled from the IPC reply', () => {
+    const fallback = { paneId: 'p-9', agentKey: '', label: '', sessionId: null }
+    const result = buildCliContextChip(fallback, { label: 'Codex 2', sessionId: 's-9', buffer: 'out' }, capturedAt)
+    expect(result).toEqual({
+      kind: 'chip',
+      label: '@cli:Codex 2',
+      content:
+        '// CLI pane: Codex 2 — session: s-9 — captured: 2026-07-12T10:30:00.000Z\n' +
+        '```\nout\n```',
+      sourceId: 'cli-pane:p-9'
+    })
+  })
+
+  it("resolves an all-empty label chain to 'pane' / 'unknown agent'", () => {
+    const fallback = { paneId: 'p-9', agentKey: '', label: '', sessionId: null }
+    const result = buildCliContextChip(fallback, { buffer: 'out' }, capturedAt)
+    expect(result.kind === 'chip' && result.label).toBe('@cli:pane')
+    expect(result.kind === 'chip' && result.content).toContain('// CLI pane: unknown agent')
   })
 
   it("shows 'no session' when neither reply nor payload carries a session id", () => {

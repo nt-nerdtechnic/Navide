@@ -40,6 +40,8 @@ interface GitCredential {
 declare global {
   // Build tag injected by electron.vite.config.ts (git short-hash + dirty + time).
   const __APP_BUILD__: string
+  type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
+  type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-applicable'
   interface Window {
     agentTeam?: {
       appName: string
@@ -138,6 +140,14 @@ declare global {
         getCredential: (
           workspacePath: string
         ) => Promise<{ ok: boolean; credential?: GitCredential | null; error?: string }>
+      }
+      permissions?: {
+        status: () => Promise<Record<PermissionKey, PermissionStatus>>
+        request: (
+          key: PermissionKey,
+          payload?: { title?: string; body?: string }
+        ) => Promise<PermissionStatus>
+        openSettings: (key: PermissionKey) => Promise<{ ok: boolean; error?: string }>
       }
     }
   }

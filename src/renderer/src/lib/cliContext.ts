@@ -6,6 +6,9 @@ import { bufferTail } from './buffer'
 
 /** MIME type set by TerminalPane's header dragstart (drag source). */
 export const CLI_CONTEXT_MIME = 'application/x-cli-context'
+/** MIME type carrying a bare pane id. Set (as an inline literal) by pane
+ *  reorder drag sources: TerminalPane's header and ControlPane's agent list. */
+export const PANE_ID_MIME = 'application/x-pane-id'
 /** sourceId prefix marking a chip as a CLI-pane snapshot (enables refresh). */
 export const CLI_SOURCE_PREFIX = 'cli-pane:'
 /** Tail cap applied to the pane buffer before wrapping it into a chip. */
@@ -39,6 +42,20 @@ export function parseCliContextPayload(raw: string): CliContextPayload | null {
   }
 }
 
+/** Decide the CLI drop payload from the two drag-MIME strings.
+ *  - cliRaw present → parse it; malformed → 'malformed' (caller surfaces it)
+ *  - cliRaw absent but paneIdRaw present → minimal synthesized payload (the
+ *    pane-buffer IPC reply fills in label/sessionId)
+ *  - neither → null (not a CLI-pane drop) */
+export function resolveCliDropPayload(
+  cliRaw: string,
+  paneIdRaw: string
+): CliContextPayload | 'malformed' | null {
+  if (cliRaw) return parseCliContextPayload(cliRaw) ?? 'malformed'
+  if (paneIdRaw) return { paneId: paneIdRaw, agentKey: '', label: '', sessionId: null }
+  return null
+}
+
 export type CliContextChipResult =
   | { kind: 'chip'; label: string; content: string; sourceId: string }
   | { kind: 'empty' }
@@ -60,7 +77,7 @@ export function buildCliContextChip(
   const name = reply.label || payload.label || payload.agentKey || 'pane'
   const session = reply.sessionId || payload.sessionId || null
   const header =
-    `// CLI pane: ${payload.agentKey || payload.label || 'unknown agent'}` +
+    `// CLI pane: ${payload.agentKey || payload.label || reply.label || 'unknown agent'}` +
     ` — session: ${session ?? 'no session'}` +
     ` — captured: ${new Date(capturedAt).toISOString()}`
   const tail = bufferTail(buffer, CLI_CHIP_BUFFER_CAP)

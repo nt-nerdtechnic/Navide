@@ -15,6 +15,12 @@ import {
   type CliPaneBufferResult
 } from './cli-buffer-relay'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
+import {
+  getPermissionStatuses,
+  requestPermission,
+  openPermissionSettings,
+  type PermissionKey,
+} from './permissions'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import {
   GitAccountsStore,
@@ -778,6 +784,25 @@ ipcMain.handle('shell:openTerminal', async (_event, command: string) => {
     proc.on('error', (err) => resolve({ ok: false, error: String(err) }))
     proc.on('close', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `osascript exited ${code}` }))
   })
+})
+
+// macOS TCC permissions (onboarding wizard). Requests are user-initiated only —
+// a request may raise a system prompt, status never does.
+ipcMain.handle('permissions:status', async () => await getPermissionStatuses())
+
+ipcMain.handle(
+  'permissions:request',
+  async (_event, key: PermissionKey, payload?: { title?: string; body?: string }) =>
+    await requestPermission(key, payload)
+)
+
+ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) => {
+  try {
+    await openPermissionSettings(key)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
 })
 
 ipcMain.handle('shell:openPath', async (_event, target: string) => {
