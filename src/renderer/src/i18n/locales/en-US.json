@@ -571,5 +571,66 @@
     "dialog-message": "The app didn't close properly last time. Reopen {count} workspace(s)?",
     "apply": "Restore",
     "dismiss": "Dismiss"
+  },
+  "onboard": {
+    "step": {
+      "environment": "Environment",
+      "agents": "Agents",
+      "permissions": "Permissions",
+      "ready": "Ready"
+    },
+    "head": {
+      "environment": "Set up your development environment",
+      "agents": "Bring in your agent CLIs",
+      "permissions": "Set up Navide on your computer",
+      "ready": "You're ready to go"
+    },
+    "aside": {
+      "environment": "Navide drives real CLIs in real terminals — these tools are what it runs on.",
+      "agents": "Every pane you open runs one of these agents. One is enough to start.",
+      "permissions": "Grant the access Navide needs to drive your machine.",
+      "ready": "Everything checks out. Open the app and pick a workspace."
+    },
+    "install": "Install",
+    "installing": "Installing…",
+    "install-guide": "Installation guide",
+    "outdated": "Requires version {min} or newer.",
+    "allow": "Allow",
+    "requesting": "Waiting for your approval…",
+    "open-settings": "Open System Settings",
+    "why": "Why is this needed?",
+    "perm-gate": "System permissions granted",
+    "notif-test-title": "Navide",
+    "notif-test-body": "Notifications are on — you'll hear from your agents here.",
+    "perm": {
+      "automation": {
+        "title": "Allow Navide to run install commands in Terminal",
+        "desc": "Some CLIs must be installed in a real terminal. This lets Navide open Terminal and type the command for you.",
+        "why": "macOS calls this Automation. Navide only ever sends the install command you clicked — it never reads what is in your terminal windows.",
+        "denied": "Terminal control was denied. Turn it on in System Settings, then re-detect.",
+        "pane-hint": "Enable Terminal under Navide in Privacy & Security → Automation."
+      },
+      "notifications": {
+        "title": "Allow Navide to notify you",
+        "desc": "Get told when an agent finishes, asks a question, or a long task ends — without watching the pane.",
+        "why": "Notifications are only sent for your own agents' state changes. Nothing is sent anywhere else.",
+        "denied": "Notifications are turned off. Enable them in System Settings, then re-detect.",
+        "pane-hint": "Allow notifications for Navide in Notifications."
+      },
+      "folders": {
+        "title": "Allow Navide to open your project folders",
+        "desc": "Workspaces on your Desktop, in Documents or Downloads are protected by macOS. Grant access so they can be opened.",
+        "why": "macOS asks once per folder. Navide only reads the workspace you pick — no other folder is touched.",
+        "denied": "Folder access was denied. Enable it in System Settings, then re-detect.",
+        "pane-hint": "Enable Navide in Privacy & Security → Files and Folders."
+      },
+      "fullDisk": {
+        "title": "Allow Navide full disk access",
+        "desc": "Only needed for workspaces outside your home folder. Optional — you can turn it on later, in System Settings.",
+        "why": "macOS gives no in-app way to ask for this: it can only be toggled in System Settings. Navide re-checks automatically once you flip it.",
+        "denied": "Full disk access is off. Toggle Navide on in System Settings — this screen updates by itself.",
+        "pane-hint": "Toggle Navide on in Privacy & Security → Full Disk Access."
+      }
+    }
   }
 }

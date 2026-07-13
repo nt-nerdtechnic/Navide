@@ -1,22 +1,91 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { useOnboarding, type OnboardDep } from '../composables/useOnboarding'
-import OnboardingDepRow from './OnboardingDepRow.vue'
+import { usePermissions, PERMISSION_KEYS } from '../composables/usePermissions'
+import OnboardingStepCard from './OnboardingStepCard.vue'
+import OnboardingPreview from './OnboardingPreview.vue'
 import { useSettings } from '../composables/useSettings'
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 const emit = defineEmits<{ (e: 'complete'): void; (e: 'close'): void }>()
 
+const { t } = useI18n()
 const settings = useSettings()
 function toggleLanguage(): void {
   settings.setLanguage(settings.language.value === 'zh-TW' ? 'en-US' : 'zh-TW')
 }
 
 const ob = useOnboarding(props.backend)
-const step = ref(1)
+const perms = usePermissions()
 
-onMounted(() => void ob.refresh())
+onMounted(() => {
+  void ob.refresh()
+  void perms.refresh()
+})
+
+// ── Steps ─────────────────────────────────────────────────────────────────────
+type StepId = 'environment' | 'agents' | 'permissions' | 'ready'
+
+// The permission step only exists where the OS has permissions to grant.
+const steps = computed<StepId[]>(() =>
+  perms.supported.value
+    ? ['environment', 'agents', 'permissions', 'ready']
+    : ['environment', 'agents', 'ready'],
+)
+const stepIndex = ref(0)
+const current = computed<StepId>(() => steps.value[Math.min(stepIndex.value, steps.value.length - 1)])
+const isLast = computed(() => stepIndex.value >= steps.value.length - 1)
+const progress = computed(() => (stepIndex.value / Math.max(1, steps.value.length - 1)) * 100)
+
+function stepDone(id: StepId): boolean {
+  if (id === 'environment') return ob.foundationReady.value
+  // Analyzer is optional (see compute_gate) — a CLI alone completes this step.
+  if (id === 'agents') return ob.hasAnyCli.value
+  if (id === 'permissions') return perms.allGranted.value
+  return ob.allRequiredReady.value
+}
+
+// ── Accordion ─────────────────────────────────────────────────────────────────
+interface Card {
+  key: string
+  done: boolean
+}
+
+const cards = computed<Card[]>(() => {
+  if (current.value === 'environment') {
+    return ob.foundationDeps.value.map((d) => ({ key: d.id, done: d.status === 'ok' }))
+  }
+  if (current.value === 'agents') {
+    return [
+      ...ob.cliDeps.value.map((d) => ({ key: d.id, done: d.status === 'ok' })),
+      ...ob.analyzerDeps.value.map((d) => ({ key: d.id, done: d.status === 'ok' })),
+      { key: 'model', done: ob.models.value.length > 0 },
+    ]
+  }
+  if (current.value === 'permissions') {
+    return PERMISSION_KEYS.map((k) => ({ key: k, done: perms.isSettled(k) }))
+  }
+  return []
+})
+
+const picked = ref('')
+watch(current, () => {
+  picked.value = ''
+  infoKey.value = ''
+})
+
+// Without an explicit pick, the first unfinished card is the open one.
+const activeKey = computed(() => {
+  if (picked.value && cards.value.some((c) => c.key === picked.value)) return picked.value
+  return (cards.value.find((c) => !c.done) ?? cards.value[cards.value.length - 1])?.key ?? ''
+})
+
+const infoKey = ref('')
+function toggleInfo(key: string): void {
+  infoKey.value = infoKey.value === key ? '' : key
+}
 
 // ── Model picker ──────────────────────────────────────────────────────────────
 const selectedModel = ref('')
@@ -43,249 +112,533 @@ watch(
   { immediate: true },
 )
 
-const STEPS = [
-  { n: 1, label: 'Foundation' },
-  { n: 2, label: 'Agent & Analyzer' },
-  { n: 3, label: 'Ready check' },
-]
+// ── Permissions ───────────────────────────────────────────────────────────────
+// Full Disk Access cannot be requested in-app; the user flips it in System
+// Settings, so poll while the step is on screen to pick the change up.
+watch(
+  current,
+  (id) => (id === 'permissions' ? perms.startPolling() : perms.stopPolling()),
+  { immediate: true },
+)
 
+const PERM_PANES: Record<TccPermissionKey, string> = {
+  automation: 'Privacy & Security › Automation',
+  notifications: 'Notifications',
+  folders: 'Privacy & Security › Files and Folders',
+  fullDisk: 'Privacy & Security › Full Disk Access',
+}
+// Full Disk Access has no in-app request path — only System Settings.
+const SETTINGS_ONLY: TccPermissionKey[] = ['fullDisk']
+
+function requestPermission(key: TccPermissionKey): void {
+  const payload =
+    key === 'notifications'
+      ? { title: t('onboard.notif-test-title'), body: t('onboard.notif-test-body') }
+      : undefined
+  void perms.request(key, payload)
+}
+
+const activePermission = computed<TccPermissionKey | null>(() =>
+  current.value === 'permissions' ? ((activeKey.value || null) as TccPermissionKey | null) : null,
+)
+
+// ── Footer ────────────────────────────────────────────────────────────────────
 async function installMissing(deps: OnboardDep[]): Promise<void> {
   for (const d of deps) {
     if (d.status !== 'ok' && d.can_install) await ob.install(d)
   }
 }
 
-const step1Done = computed(() => ob.foundationReady.value)
-// Analyzer is optional (see compute_gate) — a CLI alone completes step 2.
-const step2Done = computed(() => ob.hasAnyCli.value)
-
 // Escape hatch: the wizard must never be a dead end. Skipping persists the
 // complete flag so it doesn't re-block every launch — later gaps are covered
 // in-app (missing-CLI badges in the spawn dropdown, the exit=127 install
 // prompt), and Settings → Appearance re-opens this wizard on demand.
 function skipForNow(): void {
-  void ob.markComplete().catch(() => {}).finally(() => emit('close'))
+  void ob
+    .markComplete()
+    .catch(() => {})
+    .finally(() => emit('close'))
+}
+
+function finish(): void {
+  void ob
+    .markComplete()
+    .catch(() => {})
+    .finally(() => emit('complete'))
 }
 </script>
 
 <template>
-  <div class="ob-overlay">
-    <div class="ob-modal">
-      <header class="ob-header">
-        <div class="ob-header-top">
-          <div class="ob-title">Navide (Agent-Team) · {{ $t('label.environment-setup') }}</div>
-          <button class="ob-lang-btn" @click="toggleLanguage">
-            <span :class="{ active: settings.language.value === 'zh-TW' }">繁中</span>
-            <span class="ob-lang-sep">/</span>
-            <span :class="{ active: settings.language.value === 'en-US' }">EN</span>
-          </button>
-        </div>
-        <ol class="ob-steps">
-          <li
-            v-for="s in STEPS"
-            :key="s.n"
-            :class="{ active: step === s.n, done: (s.n === 1 && step1Done) || (s.n === 2 && step2Done) }"
-          >
-            <span class="ob-step-num">{{ s.n }}</span>{{ s.n === 1 ? $t('label.step-foundation') : s.n === 2 ? $t('label.step-agent-analyzer') : $t('label.step-ready-check') }}
-          </li>
-        </ol>
-      </header>
+  <div class="ob-page">
+    <header class="ob-top">
+      <ol class="ob-steps">
+        <li v-for="(s, i) in steps" :key="s" :class="{ active: current === s, done: stepDone(s) }">
+          <button type="button" @click="stepIndex = i">{{ $t(`onboard.step.${s}`) }}</button>
+          <span v-if="i < steps.length - 1" class="ob-chev" aria-hidden="true">›</span>
+        </li>
+      </ol>
+      <button class="ob-lang-btn" @click="toggleLanguage">
+        <span :class="{ active: settings.language.value === 'zh-TW' }">繁中</span>
+        <span class="ob-lang-sep">/</span>
+        <span :class="{ active: settings.language.value === 'en-US' }">EN</span>
+      </button>
+      <div class="ob-progress"><span :style="{ width: `${progress}%` }" /></div>
+    </header>
 
-      <div class="ob-body">
-        <!-- Step 1 -->
-        <section v-if="step === 1">
-          <p class="ob-hint">{{ $t('hint.install-foundation-tools') }}</p>
-          <OnboardingDepRow
+    <div class="ob-split">
+      <!-- ── Left: guided cards ───────────────────────────────────────────── -->
+      <main class="ob-main">
+        <h1 class="ob-head">{{ $t(`onboard.head.${current}`) }}</h1>
+
+        <!-- Environment -->
+        <template v-if="current === 'environment'">
+          <OnboardingStepCard
             v-for="d in ob.foundationDeps.value"
             :key="d.id"
-            :dep="d"
-            :installing="ob.installing.value"
-            @install="ob.install(d)"
-          />
-          <div class="ob-row-actions">
-            <button class="ob-btn" :disabled="!!ob.installing.value" @click="installMissing(ob.foundationDeps.value)">{{ $t('action.install-missing') }}</button>
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
-          </div>
-        </section>
-
-        <!-- Step 2 -->
-        <section v-else-if="step === 2">
-          <p class="ob-hint">{{ $t('hint.agent-cli-required') }}</p>
-          <OnboardingDepRow
-            v-for="d in ob.cliDeps.value"
-            :key="d.id"
-            :dep="d"
-            :installing="ob.installing.value"
-            @install="ob.install(d)"
-          />
-          <p class="ob-hint" style="margin-top:14px">{{ $t('hint.analyzer-requires-ollama') }}</p>
-          <OnboardingDepRow
-            v-for="d in ob.analyzerDeps.value"
-            :key="d.id"
-            :dep="d"
-            :installing="ob.installing.value"
-            @install="ob.install(d)"
-          />
-
-          <!-- Model picker -->
-          <div class="ob-models">
-            <div class="ob-models-head">
-              <span class="ob-models-title">{{ $t('label.analysis-model') }}</span>
-              <span class="ob-models-sub">{{ $t('hint.download-model') }}</span>
-            </div>
-
-            <div class="ob-installed">
-              <template v-if="ob.models.value.length">
-                <span v-for="m in ob.models.value" :key="m" class="ob-chip ok">✓ {{ m }}</span>
-              </template>
-              <span v-else class="ob-chip empty">{{ $t('label.no-models-installed') }}</span>
-            </div>
-
-            <div class="ob-model-grid">
+            :title="d.label"
+            :description="d.description"
+            :meta="d.version"
+            :done="d.status === 'ok'"
+            :expanded="activeKey === d.id"
+            :warning="d.status === 'outdated' ? $t('onboard.outdated', { min: d.min_version }) : ''"
+            @toggle="picked = d.id"
+          >
+            <template #actions>
               <button
-                v-for="m in ob.modelCatalog.value"
-                :key="m.name"
-                type="button"
-                class="ob-model-card"
-                :class="{ selected: selectedModel === m.name, installed: isInstalled(m.name) }"
-                @click="pickModel(m.name)"
+                v-if="d.can_install"
+                class="ob-btn primary"
+                :disabled="!!ob.installing.value"
+                @click="ob.install(d)"
               >
-                <span class="ob-model-radio" />
-                <span class="ob-model-info">
-                  <span class="ob-model-name">
-                    {{ m.name }}
-                    <span v-if="m.recommended" class="ob-tag rec">{{ $t('label.recommended') }}</span>
-                    <span v-if="isInstalled(m.name)" class="ob-tag inst">{{ $t('label.installed') }}</span>
-                  </span>
-                  <span class="ob-model-desc">{{ m.desc }}</span>
-                </span>
-                <span class="ob-model-size">{{ m.size }}</span>
+                {{ ob.installing.value === d.id ? $t('onboard.installing') : $t('onboard.install') }}
               </button>
-            </div>
+              <a v-else-if="d.docs_url" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
+                {{ $t('onboard.install-guide') }}
+              </a>
+              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">
+                {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
+              </button>
+            </template>
+          </OnboardingStepCard>
 
-            <label class="ob-model-custom">
-              <span class="ob-model-custom-label">{{ $t('label.other-model') }}</span>
-              <input
-                v-model="customModel"
-                class="ob-input"
-                placeholder="e.g. codellama:7b, gemma3:4b"
-                spellcheck="false"
-              />
-            </label>
+          <button
+            class="ob-linkbtn"
+            :disabled="!!ob.installing.value"
+            @click="installMissing(ob.foundationDeps.value)"
+          >
+            {{ $t('action.install-missing') }}
+          </button>
+        </template>
 
-            <div class="ob-row-actions">
-              <button class="ob-btn primary small" :disabled="!pullTarget" @click="ob.pullModel(pullTarget)">
+        <!-- Agents -->
+        <template v-else-if="current === 'agents'">
+          <OnboardingStepCard
+            v-for="d in [...ob.cliDeps.value, ...ob.analyzerDeps.value]"
+            :key="d.id"
+            :title="d.label"
+            :description="d.description"
+            :meta="d.version"
+            :optional="d.optional"
+            :done="d.status === 'ok'"
+            :expanded="activeKey === d.id"
+            @toggle="picked = d.id"
+          >
+            <template #actions>
+              <button
+                v-if="d.can_install"
+                class="ob-btn primary"
+                :disabled="!!ob.installing.value"
+                @click="ob.install(d)"
+              >
+                {{ ob.installing.value === d.id ? $t('onboard.installing') : $t('onboard.install') }}
+              </button>
+              <a v-else-if="d.docs_url" class="ob-btn primary" :href="d.docs_url" target="_blank" rel="noreferrer">
+                {{ $t('onboard.install-guide') }}
+              </a>
+              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">
+                {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
+              </button>
+            </template>
+          </OnboardingStepCard>
+
+          <!-- Analysis model -->
+          <OnboardingStepCard
+            :title="$t('label.analysis-model')"
+            :description="$t('hint.download-model')"
+            optional
+            :done="ob.models.value.length > 0"
+            :expanded="activeKey === 'model'"
+            @toggle="picked = 'model'"
+          >
+            <template #actions>
+              <div class="ob-models">
+                <div class="ob-installed">
+                  <template v-if="ob.models.value.length">
+                    <span v-for="m in ob.models.value" :key="m" class="ob-chip ok">✓ {{ m }}</span>
+                  </template>
+                  <span v-else class="ob-chip empty">{{ $t('label.no-models-installed') }}</span>
+                </div>
+
+                <div class="ob-model-grid">
+                  <button
+                    v-for="m in ob.modelCatalog.value"
+                    :key="m.name"
+                    type="button"
+                    class="ob-model-card"
+                    :class="{ selected: selectedModel === m.name }"
+                    @click="pickModel(m.name)"
+                  >
+                    <span class="ob-model-radio" />
+                    <span class="ob-model-info">
+                      <span class="ob-model-name">
+                        {{ m.name }}
+                        <span v-if="m.recommended" class="ob-tag rec">{{ $t('label.recommended') }}</span>
+                        <span v-if="isInstalled(m.name)" class="ob-tag inst">{{ $t('label.installed') }}</span>
+                      </span>
+                      <span class="ob-model-desc">{{ m.desc }}</span>
+                    </span>
+                    <span class="ob-model-size">{{ m.size }}</span>
+                  </button>
+                </div>
+
+                <label class="ob-model-custom">
+                  <span class="ob-model-custom-label">{{ $t('label.other-model') }}</span>
+                  <input
+                    v-model="customModel"
+                    class="ob-input"
+                    placeholder="e.g. codellama:7b, gemma3:4b"
+                    spellcheck="false"
+                  />
+                </label>
+              </div>
+
+              <button class="ob-btn primary" :disabled="!pullTarget" @click="ob.pullModel(pullTarget)">
                 {{ $t('action.download-model', { name: pullTarget || $t('label.model') }) }}
               </button>
-              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
-            </div>
-          </div>
-        </section>
+              <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">
+                {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
+              </button>
+            </template>
+          </OnboardingStepCard>
+        </template>
 
-        <!-- Step 3 -->
-        <section v-else>
+        <!-- Permissions -->
+        <template v-else-if="current === 'permissions'">
+          <OnboardingStepCard
+            v-for="k in PERMISSION_KEYS"
+            :key="k"
+            :title="$t(`onboard.perm.${k}.title`)"
+            :description="$t(`onboard.perm.${k}.desc`)"
+            :optional="SETTINGS_ONLY.includes(k)"
+            :done="perms.statuses.value[k] === 'granted'"
+            :expanded="activeKey === k"
+            :warning="perms.statuses.value[k] === 'denied' ? $t(`onboard.perm.${k}.denied`) : ''"
+            @toggle="picked = k"
+          >
+            <template #actions>
+              <button
+                v-if="!SETTINGS_ONLY.includes(k) && perms.statuses.value[k] !== 'denied'"
+                class="ob-btn primary"
+                :disabled="!!perms.requesting.value"
+                @click="requestPermission(k)"
+              >
+                {{ perms.requesting.value === k ? $t('onboard.requesting') : $t('onboard.allow') }}
+              </button>
+              <button
+                v-else
+                class="ob-btn primary"
+                @click="perms.openSettings(k)"
+              >
+                {{ $t('onboard.open-settings') }}
+              </button>
+              <button class="ob-btn ghost" @click="perms.refresh()">{{ $t('action.re-detect') }}</button>
+              <button
+                class="ob-info"
+                type="button"
+                :aria-label="$t('onboard.why')"
+                @click="toggleInfo(k)"
+              >
+                ⓘ
+              </button>
+              <p v-if="infoKey === k" class="ob-note">{{ $t(`onboard.perm.${k}.why`) }}</p>
+            </template>
+          </OnboardingStepCard>
+        </template>
+
+        <!-- Ready -->
+        <template v-else>
           <p class="ob-hint">{{ $t('hint.ready-check') }}</p>
           <ul class="ob-gate">
-            <li :class="{ ok: ob.foundationReady.value }"><span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> {{ $t('label.foundation-ready') }}</li>
-            <li :class="{ ok: ob.hasAnyCli.value }"><span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> {{ $t('label.at-least-one-cli') }}</li>
-            <li :class="{ ok: ob.analyzerReady.value }"><span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> {{ $t('label.ollama-model-ready') }} · {{ $t('label.optional') }}</li>
+            <li :class="{ ok: ob.foundationReady.value }">
+              <span>{{ ob.foundationReady.value ? '✓' : '○' }}</span> {{ $t('label.foundation-ready') }}
+            </li>
+            <li :class="{ ok: ob.hasAnyCli.value }">
+              <span>{{ ob.hasAnyCli.value ? '✓' : '○' }}</span> {{ $t('label.at-least-one-cli') }}
+            </li>
+            <li :class="{ ok: ob.analyzerReady.value }">
+              <span>{{ ob.analyzerReady.value ? '✓' : '○' }}</span> {{ $t('label.ollama-model-ready') }} ·
+              {{ $t('label.optional') }}
+            </li>
+            <li v-if="perms.supported.value" :class="{ ok: perms.allGranted.value }">
+              <span>{{ perms.allGranted.value ? '✓' : '○' }}</span> {{ $t('onboard.perm-gate') }} ·
+              {{ $t('label.optional') }}
+            </li>
           </ul>
-          <div class="ob-row-actions">
-            <button class="ob-btn ghost" :disabled="ob.loading.value" @click="ob.refresh()">{{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}</button>
-          </div>
-        </section>
+          <button class="ob-linkbtn" :disabled="ob.loading.value" @click="ob.refresh()">
+            {{ ob.loading.value ? $t('label.detecting') : $t('action.re-detect') }}
+          </button>
+        </template>
 
         <!-- Install log -->
         <div v-if="ob.logLines.value.length" class="ob-log">
           <div v-for="(l, i) in ob.logLines.value" :key="i" class="ob-log-line">{{ l }}</div>
         </div>
-      </div>
+      </main>
 
-      <footer class="ob-footer">
-        <button class="ob-btn ghost" @click="skipForNow">{{ $t('action.skip-for-now') }}</button>
-        <button v-if="step > 1" class="ob-btn ghost" @click="step--">{{ $t('action.back') }}</button>
-        <span class="ob-spacer" />
-        <button v-if="step < 3" class="ob-btn primary" :disabled="!!ob.installing.value" @click="step++">{{ $t('action.next') }}</button>
-        <button
-          v-else
-          class="ob-btn primary"
-          :disabled="!ob.allRequiredReady.value"
-          :title="ob.allRequiredReady.value ? '' : $t('hint.not-ready')"
-          @click="ob.markComplete().then(() => emit('complete')).catch(() => emit('complete'))"
-        >{{ $t('action.open-app') }}</button>
-      </footer>
+      <!-- ── Right: illustration ──────────────────────────────────────────── -->
+      <aside class="ob-aside">
+        <OnboardingPreview
+          v-if="activePermission"
+          variant="settings"
+          :pane="PERM_PANES[activePermission]"
+          :caption="$t(`onboard.perm.${activePermission}.pane-hint`)"
+          :granted="perms.statuses.value[activePermission] === 'granted'"
+        />
+        <OnboardingPreview v-else variant="app" :caption="$t(`onboard.aside.${current}`)" />
+      </aside>
     </div>
+
+    <footer class="ob-footer">
+      <button class="ob-btn ghost" @click="skipForNow">{{ $t('action.skip-for-now') }}</button>
+      <button v-if="stepIndex > 0" class="ob-btn ghost" @click="stepIndex--">{{ $t('action.back') }}</button>
+      <span class="ob-spacer" />
+      <button
+        v-if="!isLast"
+        class="ob-btn primary"
+        :disabled="!!ob.installing.value"
+        @click="stepIndex++"
+      >
+        {{ $t('action.next') }}
+      </button>
+      <button
+        v-else
+        class="ob-btn primary"
+        :disabled="!ob.allRequiredReady.value"
+        :title="ob.allRequiredReady.value ? '' : $t('hint.not-ready')"
+        @click="finish"
+      >
+        {{ $t('action.open-app') }}
+      </button>
+    </footer>
   </div>
 </template>
 
 <style scoped>
-.ob-overlay {
+.ob-page {
   position: fixed;
   inset: 0;
   z-index: 9500;
-  background: var(--bg-inset);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  -webkit-app-region: no-drag;
-}
-.ob-modal {
-  width: 680px;
-  max-width: 92vw;
-  max-height: 88vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-base);
-  border: 1px solid var(--border-default);
-  border-radius: 12px;
-  overflow: hidden;
+  -webkit-app-region: no-drag;
 }
-.ob-header { padding: 18px 22px 12px; border-bottom: 1px solid var(--border-muted); }
-.ob-header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.ob-title { font-size: 15px; font-weight: 700; color: var(--text-bright); }
-.ob-lang-btn {
-  display: flex; align-items: center; gap: 2px;
-  background: none; border: 1px solid var(--border-default);
-  border-radius: 6px; padding: 3px 8px; cursor: pointer;
-  font-size: 11px; color: var(--text-muted);
-}
-.ob-lang-btn span.active { color: var(--text-bright); font-weight: 600; }
-.ob-lang-sep { color: var(--text-muted); margin: 0 2px; }
-.ob-steps { display: flex; gap: 8px; list-style: none; margin: 0; padding: 0; }
-.ob-steps li {
-  flex: 1;
+
+/* ── Top stepper ────────────────────────────────────────────────────────────── */
+.ob-top {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
+  justify-content: center;
+  padding: 18px 22px 16px;
+}
+.ob-steps {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ob-steps li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ob-steps button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
   color: var(--text-muted);
-  padding: 6px 8px;
+  transition: color 0.15s;
+}
+.ob-steps li.done button {
+  color: var(--text-secondary);
+}
+.ob-steps li.active button {
+  color: var(--text-bright);
+}
+.ob-chev {
+  font-size: 15px;
+  color: var(--text-disabled);
+}
+.ob-lang-btn {
+  position: absolute;
+  right: 22px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: 1px solid var(--border-default);
   border-radius: 6px;
-  border: 1px solid var(--border-muted);
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-.ob-steps li.active { color: var(--text-bright); border-color: var(--accent-emphasis); }
-.ob-steps li.done { color: var(--success-fg); }
-.ob-step-num {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; border-radius: 50%;
-  background: var(--bg-muted); font-size: 10px; font-weight: 700;
+.ob-lang-btn span.active {
+  color: var(--text-bright);
+  font-weight: 600;
 }
-.ob-body { padding: 18px 22px; overflow-y: auto; flex: 1; }
-.ob-hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 12px; line-height: 1.5; }
+.ob-lang-sep {
+  color: var(--text-muted);
+  margin: 0 2px;
+}
+.ob-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--border-muted);
+}
+.ob-progress span {
+  display: block;
+  height: 100%;
+  background: var(--text-bright);
+  transition: width 0.25s ease;
+}
 
-/* ── Model picker ──────────────────────────────────────────────────────────── */
-.ob-models {
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--border-muted);
-  border-radius: 10px;
+/* ── Split layout ───────────────────────────────────────────────────────────── */
+.ob-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+}
+.ob-main {
+  overflow-y: auto;
+  padding: 48px 56px 32px;
+}
+.ob-aside {
+  overflow: hidden;
+  border-left: 1px solid var(--border-muted);
   background: var(--bg-inset);
 }
-.ob-models-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
-.ob-models-title { font-size: 12.5px; font-weight: 700; color: var(--text-bright); }
-.ob-models-sub { font-size: 11px; color: var(--text-muted); }
+@media (max-width: 1000px) {
+  .ob-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ob-aside {
+    display: none;
+  }
+  .ob-main {
+    padding: 32px 28px;
+  }
+}
 
-.ob-installed { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.ob-head {
+  margin: 0 0 32px;
+  font-size: 34px;
+  line-height: 1.2;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: var(--text-bright);
+}
+.ob-hint {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0 0 16px;
+  line-height: 1.55;
+}
+
+/* ── Card actions ───────────────────────────────────────────────────────────── */
+.ob-btn {
+  font-size: 13px;
+  padding: 9px 18px;
+  border: 1px solid var(--border-default);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.3;
+}
+.ob-btn:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-bright);
+}
+.ob-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ob-btn.primary {
+  background: var(--accent-emphasis);
+  border-color: var(--accent-emphasis);
+  color: var(--text-on-emphasis);
+  font-weight: 600;
+}
+.ob-btn.primary:hover:not(:disabled) {
+  background: var(--accent-focus);
+  color: var(--text-on-emphasis);
+}
+.ob-info {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.ob-info:hover {
+  color: var(--text-bright);
+}
+.ob-note {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.ob-linkbtn {
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  font-size: 12.5px;
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+.ob-linkbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Model picker ───────────────────────────────────────────────────────────── */
+.ob-models {
+  flex-basis: 100%;
+  margin-bottom: 4px;
+}
+.ob-installed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
 .ob-chip {
   font: 11px/1 ui-monospace, Menlo, monospace;
   padding: 4px 8px;
@@ -294,10 +647,19 @@ function skipForNow(): void {
   background: var(--bg-base);
   color: var(--text-secondary);
 }
-.ob-chip.ok { color: var(--success-fg); border-color: color-mix(in srgb, var(--success-fg) 35%, transparent); }
-.ob-chip.empty { color: var(--text-muted); font-family: inherit; }
-
-.ob-model-grid { display: flex; flex-direction: column; gap: 6px; }
+.ob-chip.ok {
+  color: var(--success-fg);
+  border-color: color-mix(in srgb, var(--success-fg) 35%, transparent);
+}
+.ob-chip.empty {
+  color: var(--text-muted);
+  font-family: inherit;
+}
+.ob-model-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .ob-model-card {
   display: flex;
   align-items: center;
@@ -309,31 +671,55 @@ function skipForNow(): void {
   border-radius: 8px;
   background: var(--bg-base);
   cursor: pointer;
-  transition: border-color 0.12s, background 0.12s;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
 }
-.ob-model-card:hover { border-color: var(--border-default); background: var(--bg-muted); }
-.ob-model-card.selected { border-color: var(--accent-emphasis); background: color-mix(in srgb, var(--accent-emphasis) 8%, var(--bg-base)); }
+.ob-model-card:hover {
+  border-color: var(--border-default);
+  background: var(--bg-muted);
+}
+.ob-model-card.selected {
+  border-color: var(--accent-emphasis);
+  background: color-mix(in srgb, var(--accent-emphasis) 8%, var(--bg-base));
+}
 .ob-model-radio {
   flex: none;
-  width: 15px; height: 15px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   border: 2px solid var(--border-default);
   position: relative;
 }
-.ob-model-card.selected .ob-model-radio { border-color: var(--accent-emphasis); }
+.ob-model-card.selected .ob-model-radio {
+  border-color: var(--accent-emphasis);
+}
 .ob-model-card.selected .ob-model-radio::after {
   content: '';
-  position: absolute; inset: 2px;
+  position: absolute;
+  inset: 2px;
   border-radius: 50%;
   background: var(--accent-emphasis);
 }
-.ob-model-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ob-model-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .ob-model-name {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   font: 12px/1.3 ui-monospace, Menlo, monospace;
   color: var(--text-bright);
 }
-.ob-model-desc { font-size: 11px; color: var(--text-muted); }
+.ob-model-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
 .ob-model-size {
   flex: none;
   font: 11px/1 ui-monospace, Menlo, monospace;
@@ -345,17 +731,30 @@ function skipForNow(): void {
 .ob-tag {
   font-size: 9.5px;
   font-weight: 700;
-  font-family: var(--font-sans, system-ui);
   letter-spacing: 0.02em;
   padding: 1px 6px;
   border-radius: 999px;
   line-height: 1.5;
 }
-.ob-tag.rec { color: var(--accent-fg); background: color-mix(in srgb, var(--accent-fg) 14%, transparent); }
-.ob-tag.inst { color: var(--success-fg); background: color-mix(in srgb, var(--success-fg) 14%, transparent); }
-
-.ob-model-custom { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-.ob-model-custom-label { flex: none; font-size: 11px; color: var(--text-secondary); }
+.ob-tag.rec {
+  color: var(--accent-fg);
+  background: color-mix(in srgb, var(--accent-fg) 14%, transparent);
+}
+.ob-tag.inst {
+  color: var(--success-fg);
+  background: color-mix(in srgb, var(--success-fg) 14%, transparent);
+}
+.ob-model-custom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ob-model-custom-label {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 .ob-input {
   flex: 1;
   min-width: 0;
@@ -366,42 +765,61 @@ function skipForNow(): void {
   background: var(--bg-base);
   color: var(--text-bright);
 }
-.ob-input:focus { outline: none; border-color: var(--accent-emphasis); }
-.ob-input::placeholder { color: var(--text-muted); }
+.ob-input:focus {
+  outline: none;
+  border-color: var(--accent-emphasis);
+}
+.ob-input::placeholder {
+  color: var(--text-muted);
+}
 
-.ob-gate { list-style: none; margin: 0; padding: 0; }
-.ob-gate li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; font-size: 13px; color: var(--text-muted); border-bottom: 1px solid var(--border-muted); }
-.ob-gate li.ok { color: var(--success-fg); }
-.ob-gate li span { font-weight: 700; }
+/* ── Ready gate ─────────────────────────────────────────────────────────────── */
+.ob-gate {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.ob-gate li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 4px;
+  font-size: 14px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.ob-gate li.ok {
+  color: var(--success-fg);
+}
+.ob-gate li span {
+  font-weight: 700;
+}
 
-.ob-row-actions { display: flex; gap: 8px; margin-top: 12px; }
 .ob-log {
-  margin-top: 14px;
+  margin-top: 20px;
   max-height: 140px;
   overflow-y: auto;
   background: var(--bg-inset);
   border: 1px solid var(--border-muted);
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 10px;
   font: 11px/1.5 ui-monospace, Menlo, monospace;
   color: var(--text-secondary);
 }
-.ob-log-line { white-space: pre-wrap; word-break: break-word; }
-
-.ob-footer { display: flex; align-items: center; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--border-muted); }
-.ob-spacer { flex: 1; }
-.ob-btn {
-  font-size: 12px;
-  padding: 7px 14px;
-  border: 1px solid var(--border-default);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
+.ob-log-line {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
-.ob-btn:hover:not(:disabled) { background: var(--bg-muted); color: var(--text-bright); }
-.ob-btn:disabled { opacity: 0.5; cursor: default; }
-.ob-btn.primary { background: var(--accent-emphasis); border-color: var(--accent-emphasis); color: var(--text-on-emphasis); }
-.ob-btn.ghost { background: transparent; }
-.ob-btn.small { font-size: 11px; padding: 4px 10px; }
+
+/* ── Footer ─────────────────────────────────────────────────────────────────── */
+.ob-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--border-muted);
+}
+.ob-spacer {
+  flex: 1;
+}
 </style>

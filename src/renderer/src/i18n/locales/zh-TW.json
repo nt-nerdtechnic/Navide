@@ -571,5 +571,66 @@
     "dialog-message": "偵測到上次未正常關閉。要重新開啟 {count} 個 workspace 嗎？",
     "apply": "恢復",
     "dismiss": "忽略"
+  },
+  "onboard": {
+    "step": {
+      "environment": "開發環境",
+      "agents": "Agent CLI",
+      "permissions": "系統權限",
+      "ready": "完成"
+    },
+    "head": {
+      "environment": "設定你的開發環境",
+      "agents": "接上你的 Agent CLI",
+      "permissions": "在這台電腦上設定 Navide",
+      "ready": "一切就緒"
+    },
+    "aside": {
+      "environment": "Navide 會在真實終端機裡驅動真實的 CLI，這些工具就是它的基礎。",
+      "agents": "你開的每個面板都會跑其中一個 agent，先裝一個就能開始。",
+      "permissions": "授予 Navide 操作這台電腦所需要的權限。",
+      "ready": "檢查都通過了，進入主畫面挑一個工作區吧。"
+    },
+    "install": "安裝",
+    "installing": "安裝中…",
+    "install-guide": "安裝說明",
+    "outdated": "需要 {min} 或更新的版本。",
+    "allow": "允許",
+    "requesting": "等待你的授權…",
+    "open-settings": "開啟系統設定",
+    "why": "為什麼需要這個權限？",
+    "perm-gate": "系統權限已授予",
+    "notif-test-title": "Navide",
+    "notif-test-body": "通知已開啟，agent 有動靜就會通知你。",
+    "perm": {
+      "automation": {
+        "title": "允許 Navide 在終端機執行安裝指令",
+        "desc": "有些 CLI 必須在真正的終端機裡安裝。開啟後，Navide 能替你打開終端機並輸入指令。",
+        "why": "macOS 稱之為「自動化」。Navide 只會送出你按下安裝的那道指令，不會讀取終端機視窗裡的內容。",
+        "denied": "終端機控制被拒絕。請到系統設定開啟後重新偵測。",
+        "pane-hint": "在「隱私權與安全性 → 自動化」的 Navide 下開啟 Terminal。"
+      },
+      "notifications": {
+        "title": "允許 Navide 傳送通知",
+        "desc": "agent 完成工作、提出問題或長任務結束時主動通知你，不必一直盯著面板。",
+        "why": "通知只會來自你自己的 agent 狀態變化，不會送到任何外部服務。",
+        "denied": "通知目前關閉。請到系統設定開啟後重新偵測。",
+        "pane-hint": "在「通知」中允許 Navide 傳送通知。"
+      },
+      "folders": {
+        "title": "允許 Navide 開啟你的專案資料夾",
+        "desc": "桌面、文件與下載項目受 macOS 保護。授權後才能把這些位置的專案開成工作區。",
+        "why": "macOS 每個資料夾只會問一次。Navide 只讀取你選定的工作區，不會碰其他資料夾。",
+        "denied": "資料夾存取被拒絕。請到系統設定開啟後重新偵測。",
+        "pane-hint": "在「隱私權與安全性 → 檔案與資料夾」中開啟 Navide。"
+      },
+      "fullDisk": {
+        "title": "允許 Navide 取得完全取用磁碟權限",
+        "desc": "只有當工作區位於家目錄之外時才需要。選用項目，之後隨時可在系統設定開啟。",
+        "why": "macOS 不提供 app 內請求此權限的方式，只能在系統設定切換。你打開後，這個畫面會自動重新偵測。",
+        "denied": "完全取用磁碟權限未開啟。請到系統設定把 Navide 打開，此畫面會自動更新。",
+        "pane-hint": "在「隱私權與安全性 → 完全取用磁碟」中開啟 Navide。"
+      }
+    }
   }
 }

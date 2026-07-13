@@ -1,15 +1,14 @@
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, getCurrentInstance, onUnmounted, ref } from 'vue'
 
-export type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
-export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-applicable'
-
-export const PERMISSION_KEYS: PermissionKey[] = ['automation', 'notifications', 'folders', 'fullDisk']
+// TccPermissionKey / TccPermissionStatus are ambient globals declared in env.d.ts,
+// alongside the `agentTeam.permissions` bridge signature they belong to.
+export const PERMISSION_KEYS: TccPermissionKey[] = ['automation', 'notifications', 'folders', 'fullDisk']
 
 // Full Disk Access cannot be requested from inside the app — the user flips it
 // in System Settings — so it never gates the wizard.
-export const OPTIONAL_PERMISSIONS: PermissionKey[] = ['fullDisk']
+export const OPTIONAL_PERMISSIONS: TccPermissionKey[] = ['fullDisk']
 
-const UNKNOWN: Record<PermissionKey, PermissionStatus> = {
+const UNKNOWN: Record<TccPermissionKey, TccPermissionStatus> = {
   automation: 'unknown',
   notifications: 'unknown',
   folders: 'unknown',
@@ -25,15 +24,23 @@ const UNKNOWN: Record<PermissionKey, PermissionStatus> = {
  * one-shot per app signature, so `refresh()` must stay side-effect free.
  */
 export function usePermissions() {
-  const statuses = ref<Record<PermissionKey, PermissionStatus>>({ ...UNKNOWN })
-  const requesting = ref<PermissionKey | ''>('')
+  const statuses = ref<Record<TccPermissionKey, TccPermissionStatus>>({ ...UNKNOWN })
+  const requesting = ref<TccPermissionKey | ''>('')
 
-  const bridge = (): NonNullable<Window['agentTeam']>['permissions'] | undefined =>
-    window.agentTeam?.permissions
+  const bridge = () => window.agentTeam?.permissions
 
   async function refresh(): Promise<void> {
     const api = bridge()
-    if (!api) return
+    if (!api) {
+      // No bridge (non-Electron host / older preload) — nothing to grant here.
+      statuses.value = {
+        automation: 'not-applicable',
+        notifications: 'not-applicable',
+        folders: 'not-applicable',
+        fullDisk: 'not-applicable',
+      }
+      return
+    }
     try {
       statuses.value = { ...statuses.value, ...(await api.status()) }
     } catch {
@@ -41,7 +48,7 @@ export function usePermissions() {
     }
   }
 
-  async function request(key: PermissionKey, payload?: { title: string; body: string }): Promise<void> {
+  async function request(key: TccPermissionKey, payload?: { title?: string; body?: string }): Promise<void> {
     const api = bridge()
     if (!api || requesting.value) return
     requesting.value = key
@@ -54,7 +61,7 @@ export function usePermissions() {
     }
   }
 
-  async function openSettings(key: PermissionKey): Promise<void> {
+  async function openSettings(key: TccPermissionKey): Promise<void> {
     await bridge()?.openSettings(key)
   }
 
@@ -72,12 +79,12 @@ export function usePermissions() {
     pollTimer = null
   }
 
-  onUnmounted(stopPolling)
+  if (getCurrentInstance()) onUnmounted(stopPolling)
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const supported = computed(() => PERMISSION_KEYS.some((k) => statuses.value[k] !== 'not-applicable'))
 
-  function isSettled(key: PermissionKey): boolean {
+  function isSettled(key: TccPermissionKey): boolean {
     const s = statuses.value[key]
     return s === 'granted' || s === 'not-applicable'
   }
