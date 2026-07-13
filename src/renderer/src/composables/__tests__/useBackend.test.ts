@@ -1,0 +1,159 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { effectScope, type EffectScope } from 'vue'
+import { useBackend } from '../useBackend'
+
+// Minimal WebSocket stand-in: records instances, lets tests flip readyState
+// and fire events. Installed on globalThis so useBackend's `new WebSocket()`
+// and readyState constants resolve to it.
+class FakeWebSocket {
+  static CONNECTING = 0
+  static OPEN = 1
+  static CLOSING = 2
+  static CLOSED = 3
+  static instances: FakeWebSocket[] = []
+
+  url: string
+  readyState = FakeWebSocket.CONNECTING
+  sent: string[] = []
+  closed = false
+  private listeners = new Map<string, Set<(ev: unknown) => void>>()
+
+  constructor(url: string) {
+    this.url = url
+    FakeWebSocket.instances.push(this)
+  }
+
+  addEventListener(type: string, cb: (ev: unknown) => void): void {
+    let set = this.listeners.get(type)
+    if (!set) {
+      set = new Set()
+      this.listeners.set(type, set)
+    }
+    set.add(cb)
+  }
+
+  send(data: string): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.closed = true
+    this.readyState = FakeWebSocket.CLOSED
+    this.fire('close', {})
+  }
+
+  fire(type: string, ev: unknown): void {
+    this.listeners.get(type)?.forEach((cb) => cb(ev))
+  }
+
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN
+    this.fire('open', {})
+  }
+}
+
+const READY_INFO = {
+  status: 'ready' as const,
+  wsUrl: 'ws://127.0.0.1:8765/ws',
+  httpUrl: 'http://127.0.0.1:8765',
+  shell: '/bin/zsh',
+  port: 8765,
+  pid: 4242
+}
+
+describe('useBackend applyBackendChanged', () => {
+  let scope: EffectScope
+  let backendChangedCb: ((info: unknown) => void) | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    FakeWebSocket.instances = []
+    backendChangedCb = undefined
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+    vi.stubGlobal('agentTeam', {
+      getBackendInfo: vi.fn().mockResolvedValue(READY_INFO),
+      onBackendChanged: (cb: (info: unknown) => void) => {
+        backendChangedCb = cb
+      }
+    })
+  })
+
+  afterEach(() => {
+    scope?.stop()
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  async function setupConnected() {
+    let backend!: ReturnType<typeof useBackend>
+    scope = effectScope()
+    scope.run(() => {
+      backend = useBackend()
+    })
+    // Let init()'s getBackendInfo poll resolve and connect().
+    await vi.advanceTimersByTimeAsync(0)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    const socket = FakeWebSocket.instances[0]
+    socket.open()
+    return { backend, socket }
+  }
+
+  it('keeps the healthy socket and in-flight requests on a same-backend ready snapshot', async () => {
+    const { backend, socket } = await setupConnected()
+
+    // In-flight request (the CLI pane's terminal.create at launch).
+    const inflight = backend.send('terminal.create', { pane_id: 'p1' })
+    const settled = vi.fn()
+    inflight.then(settled, settled)
+    expect(socket.sent.length).toBeGreaterThan(0)
+
+    // The queued startup broadcast flushed on window focus: same backend.
+    backendChangedCb!(READY_INFO)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(socket.closed).toBe(false)
+    expect(FakeWebSocket.instances).toHaveLength(1) // no reconnect
+    expect(settled).not.toHaveBeenCalled() // not rejected with 'backend changed'
+    expect(backend.status.value).toBe('connected')
+
+    // The snapshot's metadata still lands (init() doesn't set port/pid).
+    expect(backend.port.value).toBe(8765)
+    expect(backend.pid.value).toBe(4242)
+
+    // Resolve the in-flight request normally to confirm it stayed alive.
+    const req = JSON.parse(socket.sent[socket.sent.length - 1]) as { id: string }
+    socket.fire('message', {
+      data: JSON.stringify({ id: req.id, type: 'terminal.create', ok: true, payload: {}, error: null, timestamp: '' })
+    })
+    await expect(inflight).resolves.toMatchObject({ ok: true })
+  })
+
+  it('still tears down and reconnects when the backend actually changed (new wsUrl)', async () => {
+    const { backend, socket } = await setupConnected()
+
+    // Catch immediately: the rejection fires synchronously inside the
+    // backend:changed handler, before an `expect(...).rejects` could attach.
+    const inflight = backend.send('terminal.create', { pane_id: 'p1' }).catch((err: Error) => err)
+
+    backendChangedCb!({ ...READY_INFO, wsUrl: 'ws://127.0.0.1:9999/ws', port: 9999 })
+    await vi.advanceTimersByTimeAsync(0)
+
+    await expect(inflight).resolves.toMatchObject({ message: 'backend changed' })
+    expect(socket.closed).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(FakeWebSocket.instances[1].url).toBe('ws://127.0.0.1:9999/ws')
+  })
+
+  it('reconnects when the snapshot matches but the socket is already dead', async () => {
+    const { socket } = await setupConnected()
+
+    socket.readyState = FakeWebSocket.CLOSED
+
+    backendChangedCb!(READY_INFO)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(FakeWebSocket.instances).toHaveLength(2) // tore down and reconnected
+  })
+})

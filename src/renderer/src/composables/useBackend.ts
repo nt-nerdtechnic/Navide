@@ -229,6 +229,23 @@ export function useBackend() {
   // on restart, so tear down the old socket and reconnect to the new wsUrl (or
   // settle on 'disconnected' when the backend was stopped).
   function applyBackendChanged(info: BackendInfo): void {
+    // Same backend we're already talking to (e.g. the startup broadcast was
+    // queued for this then-unfocused window and flushed on its next focus,
+    // after init()'s poll had already connected): keep the healthy socket.
+    // Tearing it down here rejects every in-flight request with 'backend
+    // changed' — the packaged-launch CLI spawn failure.
+    if (
+      info.status === 'ready' &&
+      info.wsUrl === wsUrl.value &&
+      ws.value !== null &&
+      (ws.value.readyState === WebSocket.OPEN || ws.value.readyState === WebSocket.CONNECTING)
+    ) {
+      httpUrl.value = info.httpUrl ?? httpUrl.value
+      shell.value = info.shell ?? shell.value
+      port.value = info.port ?? port.value
+      pid.value = info.pid ?? pid.value
+      return
+    }
     if (reconnectTimer !== null) { window.clearTimeout(reconnectTimer); reconnectTimer = null }
     if (pingTimer !== null) { window.clearInterval(pingTimer); pingTimer = null }
     reconnectAttempts = 0
