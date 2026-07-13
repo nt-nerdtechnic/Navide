@@ -399,7 +399,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // recolor a CLI's alt-buffer output directly, but this WCAG-AAA ratio forces
     // xterm to nudge unreadable fg/bg pairs into legibility across all panes.
     minimumContrastRatio: 7,
-    theme: readXtermTheme()
+    theme: readXtermTheme(),
+    // Required for `term.unicode` below — the unicode API is still a proposed
+    // API in xterm 6; without this flag its getter throws at setup time and
+    // the whole pane renders blank.
+    allowProposedApi: true
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
