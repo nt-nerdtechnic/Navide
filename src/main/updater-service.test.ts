@@ -45,7 +45,9 @@ describe('createUpdaterService', () => {
   it('serializes checks and preserves the available version through download', async () => {
     const { client, raw, emit } = fakeClient()
     let resolveCheck!: (value: { isUpdateAvailable: boolean; updateInfo: { version: string } }) => void
+    let resolveDownload!: (value: string[]) => void
     raw.checkForUpdates.mockReturnValue(new Promise((resolve) => { resolveCheck = resolve }))
+    raw.downloadUpdate.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve }))
     const service = createUpdaterService(client, '1.0.0', true, vi.fn())
 
     const first = service.check()
@@ -55,12 +57,15 @@ describe('createUpdaterService', () => {
     resolveCheck({ isUpdateAvailable: true, updateInfo: { version: '1.1.0' } })
     await Promise.all([first, second])
 
+    const download = service.download()
+    expect(raw.downloadUpdate).toHaveBeenCalledOnce()
     emit('download-progress', { percent: 42.4 })
     expect(service.getState()).toMatchObject({
       status: 'downloading', availableVersion: '1.1.0', percent: 42,
     })
     emit('update-downloaded', { version: '1.1.0' })
-    expect((await service.download()).ok).toBe(true)
+    resolveDownload([])
+    expect((await download).ok).toBe(true)
     expect(service.getState().status).toBe('downloaded')
   })
 

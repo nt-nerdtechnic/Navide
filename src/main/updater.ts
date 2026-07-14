@@ -17,7 +17,7 @@ function publishState(state: UpdateState): void {
 }
 
 export function initUpdater(options: {
-  isPackaged: boolean
+  enabled: boolean
   currentVersion: string
   checkDelayMs?: number
 }): void {
@@ -26,7 +26,7 @@ export function initUpdater(options: {
   service = createUpdaterService(
     autoUpdater,
     options.currentVersion,
-    options.isPackaged,
+    options.enabled,
     publishState,
   )
 
@@ -35,7 +35,7 @@ export function initUpdater(options: {
   ipcMain.handle('updater:download', () => service!.download())
   ipcMain.handle('updater:install', () => service!.install())
 
-  if (options.isPackaged) {
+  if (options.enabled) {
     setTimeout(() => { void service?.check() }, options.checkDelayMs ?? 5000)
   }
 }

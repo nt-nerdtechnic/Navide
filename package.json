@@ -3,6 +3,10 @@
   "version": "0.1.38",
   "private": true,
   "description": "Navide (Agent-Team): macOS desktop terminal manager for Claude Code, Codex, and Antigravity CLI",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nt-nerdtechnic/Navide.git"
+  },
   "main": "out/main/index.js",
   "packageManager": "pnpm@10.0.0",
   "engines": {
@@ -19,7 +23,8 @@
     "test:run": "vitest run",
     "test:e2e": "playwright test",
     "backend:dev": "uv --project backend run python -m agent_team_backend",
-    "dist": "pnpm build && electron-builder"
+    "dist": "pnpm build && electron-builder",
+    "release:check": "node scripts/verify-release-version.mjs"
   },
   "build": {
     "appId": "com.nerdtechnic.agent-team",
@@ -41,9 +46,24 @@
         "to": "bin/agent_team_backend"
       }
     ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "nt-nerdtechnic",
+        "repo": "Navide",
+        "releaseType": "release"
+      }
+    ],
+    "artifactName": "Navide-${version}-${arch}.${ext}",
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "resources/icon.icns",
+      "minimumSystemVersion": "13.0",
+      "hardenedRuntime": true,
+      "notarize": true,
       "extendInfo": {
         "CFBundleDocumentTypes": [
           {

@@ -43,7 +43,7 @@ export function createUpdaterService(
     : {
         status: 'unsupported',
         currentVersion,
-        message: 'Updates are available in packaged builds only.',
+        message: 'Updates are not available for this build.',
       }
   let checkPromise: Promise<UpdateActionResult> | null = null
   let downloadPromise: Promise<UpdateActionResult> | null = null

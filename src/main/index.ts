@@ -1198,7 +1198,10 @@ app.whenReady().then(async () => {
   installApplicationMenu()
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
-  initUpdater({ isPackaged: app.isPackaged, currentVersion: app.getVersion() })
+  initUpdater({
+    enabled: app.isPackaged && process.platform === 'darwin',
+    currentVersion: app.getVersion(),
+  })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER
   // restore in packaged builds: dev restarts (electron-vite) always look like
