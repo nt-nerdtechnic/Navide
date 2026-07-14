@@ -366,6 +366,65 @@ def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatc
     assert attr.attribute(usage).pane_id == "live-pane"
 
 
+def test_codex_home_path_waits_for_session_meta(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A newly-created rollout must not publish its filename as a resume id."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / ".codex-panes" / "home-old" / "sessions"
+    root.mkdir(parents=True)
+    f = root / "rollout-2026-07-14T23-53-50-real-resume-id.jsonl"
+    f.write_text("", encoding="utf-8")
+    attr = Attribution(
+        [FakeReader("codex", tmp_path / ".codex")],
+        workspaces_path=tmp_path / "ws.json",
+    )
+    attr.register_pane(
+        "live-pane", vendor="codex", cwd="/ws", workspace_path="/ws",
+        session_home_id="home-old",
+    )
+    usage = _make_usage("codex", session_id=f.stem, file_path=str(f), cwd="/ws")
+
+    assert attr.maybe_announce_session(usage) is None
+
+    f.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "real-resume-id", "cwd": "/ws"}}) + "\n",
+        encoding="utf-8",
+    )
+    binding = attr.maybe_announce_session(usage)
+    assert binding is not None
+    assert binding.resume_id == "real-resume-id"
+
+
+def test_codex_marker_waits_for_session_meta(codex_attr: tuple[Attribution, Path]) -> None:
+    attr, root = codex_attr
+    attr.register_pane(
+        "p1", vendor="codex", cwd="/ws", workspace_path="/ws",
+        session_marker="at-pane:p1",
+    )
+    f = root / "rollout-2026-07-14T23-53-50-real-id.jsonl"
+    marker_record = json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "<!-- agent-team-session: at-pane:p1 -->"}],
+        },
+    })
+    f.write_text(marker_record + "\n", encoding="utf-8")
+    usage = _make_usage("codex", session_id=f.stem, file_path=str(f), cwd="/ws")
+
+    assert attr.maybe_bind_by_marker(usage) is None
+
+    f.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": "real-id", "cwd": "/ws"}})
+        + "\n" + marker_record + "\n",
+        encoding="utf-8",
+    )
+    assert attr.maybe_bind_by_marker(usage) == ("p1", "real-id")
+
+
 def test_codex_home_path_prevents_same_cwd_first_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     root = tmp_path / ".codex-panes"

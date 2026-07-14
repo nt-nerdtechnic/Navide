@@ -1,5 +1,51 @@
 import { describe, expect, it } from 'vitest'
-import { buildResumeCommand } from '../resume-command'
+import {
+  buildResumeCommand,
+  normalizeResumeSessionId,
+  shouldPreserveMissingSessionOnRestore,
+} from '../resume-command'
+
+describe('normalizeResumeSessionId', () => {
+  const uuid = '019f6155-a2ae-72a2-a455-bf454b8f9f90'
+
+  it('keeps an existing Codex UUID unchanged', () => {
+    expect(normalizeResumeSessionId('codex', uuid)).toBe(uuid)
+  })
+
+  it('repairs a legacy Codex rollout filename', () => {
+    expect(normalizeResumeSessionId(
+      'codex',
+      `rollout-2026-07-14T23-53-50-${uuid}`
+    )).toBe(uuid)
+  })
+
+  it('repairs a full Codex rollout path with a jsonl suffix', () => {
+    expect(normalizeResumeSessionId(
+      'codex',
+      `/tmp/sessions/rollout-2026-07-14T23-53-50-${uuid}.jsonl`
+    )).toBe(uuid)
+  })
+
+  it('does not rewrite arbitrary Codex strings or another vendor id', () => {
+    expect(normalizeResumeSessionId('codex', 'test-session')).toBe('test-session')
+    expect(normalizeResumeSessionId('claude', `rollout-prefix-${uuid}`)).toBe(`rollout-prefix-${uuid}`)
+  })
+})
+
+describe('shouldPreserveMissingSessionOnRestore', () => {
+  it('protects a saved Codex session that fails preflight', () => {
+    expect(shouldPreserveMissingSessionOnRestore('codex', 'missing-id', false)).toBe(true)
+  })
+
+  it('does not block valid Codex resumes or ordinary fresh launches', () => {
+    expect(shouldPreserveMissingSessionOnRestore('codex', 'valid-id', true)).toBe(false)
+    expect(shouldPreserveMissingSessionOnRestore('codex', '', false)).toBe(false)
+  })
+
+  it('does not change the existing restore policy for other agents', () => {
+    expect(shouldPreserveMissingSessionOnRestore('claude', 'missing-id', false)).toBe(false)
+  })
+})
 
 describe('buildResumeCommand', () => {
   it('uses --resume for claude', () => {

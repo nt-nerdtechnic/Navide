@@ -62,7 +62,11 @@ import {
   type WidthRebuildScheduleState,
 } from './lib/paneWidthRebuild'
 import { quickClassify } from './lib/quick-classify'
-import { buildResumeCommand } from './lib/resume-command'
+import {
+  buildResumeCommand,
+  normalizeResumeSessionId,
+  shouldPreserveMissingSessionOnRestore,
+} from './lib/resume-command'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
@@ -555,7 +559,17 @@ function loadSpawnHistory(): SpawnHistoryEntry[] {
   try {
     const raw = settingsGet<string | null>(SPAWN_HISTORY_KEY, null)
     if (!raw) return []
-    return (JSON.parse(raw) as SpawnHistoryEntry[]).slice(-MAX_SPAWN_HISTORY)
+    const parsed = (JSON.parse(raw) as SpawnHistoryEntry[])
+      .slice(-MAX_SPAWN_HISTORY)
+      .map((entry) => ({
+        ...entry,
+        sessionId: entry.sessionId
+          ? normalizeResumeSessionId(entry.agentKey, entry.sessionId)
+          : entry.sessionId,
+      }))
+    const repaired = JSON.stringify(parsed)
+    if (repaired !== raw) settingsSet(SPAWN_HISTORY_KEY, repaired)
+    return parsed
   } catch {
     return []
   }
@@ -1082,7 +1096,7 @@ function releaseInjectionSlot(): void {
 }
 
 async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<void> {
-  const id = sessionId.trim()
+  const id = normalizeResumeSessionId(pane.agentKey, sessionId)
   if (!id) return
   const key = `${pane.id}:${id}`
   if (persistedPaneSessions.has(key)) return
@@ -1567,7 +1581,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
 // carries its own context).
 async function onManualResume(payload: ResumePayload): Promise<boolean> {
   const { agentKey, workspacePath } = payload
-  const sessionId = payload.sessionId.trim()
+  const sessionId = normalizeResumeSessionId(agentKey, payload.sessionId)
   if (!sessionId) return false
   // Authoritative existence check: the datalist may list a since-deleted id, or
   // the user may have pasted a bad one. Never fall through to a fresh spawn —
@@ -1765,7 +1779,7 @@ async function rebuildPaneViaResume(
   if (rebuildingPanes.has(paneId)) return 'skipped'
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return 'skipped'
-  const sessionId = (pane.pinnedSessionId ?? '').trim()
+  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
   if (!sessionId) return 'skipped'
   if (opts.requireIdle && !paneIsSafeForWidthRebuild(paneId)) return 'busy'
   const ws = pane.workspacePath
@@ -2439,11 +2453,12 @@ async function canResumeSession(
   workspacePath: string,
   sessionId: string
 ): Promise<boolean> {
-  if (!sessionId.trim()) return false
+  const normalizedId = normalizeResumeSessionId(agentKey, sessionId)
+  if (!normalizedId) return false
   const resp = await sendQuiet<SessionExistsPayload>('agent.session_exists', {
     agent: agentKey,
     workspace_path: workspacePath,
-    session_id: sessionId,
+    session_id: normalizedId,
   })
   return resp?.exists === true
 }
@@ -2750,7 +2765,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   const restoredPaneIds: (string | undefined)[] = new Array(toRestore.length)
 
   await Promise.all(toRestore.map(async (saved, restoreIdx) => {
-    const sessionId = (saved.session_id ?? '').trim()
+    const rawSessionId = (saved.session_id ?? '').trim()
+    const sessionId = normalizeResumeSessionId(saved.agent, rawSessionId)
     const sessionHomeId = saved.agent === 'codex'
       ? ((saved.session_home_id ?? '').trim() || saved.pane_id)
       : ''
@@ -2766,6 +2782,14 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
 
     // Unified session-resume logic for all pane types
     const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
+    if (shouldPreserveMissingSessionOnRestore(saved.agent, rawSessionId, canResume)) {
+      // Never turn a saved Codex conversation into a replacement conversation
+      // merely because its rollout is temporarily unavailable. In particular,
+      // do not reach manual_pane.spawn/session below, which would overwrite the
+      // persisted id with an empty fresh-session value.
+      pipelineLog(`⚠ ${saved.agent} session ${sessionId} is unavailable; preserving saved pane`)
+      return
+    }
     const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
     const fallbackCommand = saved.command && !looksLikeResumeCommand(saved.agent, saved.command)
       ? saved.command : ''
@@ -3842,20 +3866,22 @@ backend.on('session.detected', (raw) => {
   if (!ev?.pane_id || !ev.session_id) return
   const pane = panes.value.find((p) => p.id === ev.pane_id)
   if (!pane) return
-  pane.pinnedSessionId = ev.session_id
+  const sessionId = normalizeResumeSessionId(pane.agentKey, ev.session_id)
+  if (!sessionId) return
+  pane.pinnedSessionId = sessionId
   syncViews()
   const histSd = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
-  if (histSd) histSd.sessionId = ev.session_id
+  if (histSd) histSd.sessionId = sessionId
   if (pane.origin === 'manual') {
     pipelineLog(`Manual ${pane.agentKey} 🔖 session 已綁定`)
-    void persistPaneSession(pane, ev.session_id)
+    void persistPaneSession(pane, sessionId)
     return
   }
   if (!pane.slotLabel || pane.origin !== 'pipeline') return
   const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
   if (stageIndex < 0) return
   pipelineLog(`Stage ${pane.stageId}/${pane.slotLabel} 🔖 session 已綁定 (${pane.agentKey})`)
-  void persistPaneSession(pane, ev.session_id)
+  void persistPaneSession(pane, sessionId)
 })
 
 // A dead PTY can never produce a session id — drop the marker so the pane's

@@ -330,7 +330,13 @@ class Attribution:
         if usage.vendor == "codex":
             pane_id = self._pane_id_from_codex_home_path(usage.file_path)
             if pane_id:
-                resume_id = _extract_resume_id("codex", text) or usage.session_id
+                # Codex creates the rollout file before session_meta is always
+                # readable. The filename stem includes a timestamp prefix and
+                # is NOT accepted by `codex resume`, so wait for a later file
+                # modification instead of announcing a malformed fallback id.
+                resume_id = _extract_resume_id("codex", text)
+                if not resume_id:
+                    return None
                 binding = self._bind_and_announce_path_session(
                     usage=usage,
                     pane_id=pane_id,
@@ -409,7 +415,12 @@ class Attribution:
         if matched_pane is None:
             return None
 
-        resume_id = _extract_resume_id(usage.vendor, text) or sid
+        resume_id = _extract_resume_id(usage.vendor, text)
+        if usage.vendor == "codex" and not resume_id:
+            # Do not consume the marker or claim the rollout until its real
+            # resume id appears in session_meta. Watcher updates will retry.
+            return None
+        resume_id = resume_id or sid
         with self._lock:
             # Re-check under lock: another event may have bound it meanwhile.
             if sid in self._session_owner:

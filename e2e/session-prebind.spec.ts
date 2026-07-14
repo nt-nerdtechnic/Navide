@@ -98,9 +98,9 @@ async function connectBackend(wsUrl: string): Promise<BackendClient> {
   }
 }
 
-function writeFakeCli(binDir: string): { codex: string; gemini: string } {
+function writeFakeCli(binDir: string): { codex: string; antigravity: string } {
   const codex = join(binDir, 'fake-codex')
-  const gemini = join(binDir, 'fake-gemini')
+  const antigravity = join(binDir, 'fake-antigravity')
   writeFileSync(codex, `#!/usr/bin/env node
 const fs = require('fs')
 const path = require('path')
@@ -117,42 +117,57 @@ fs.writeFileSync(file,
 console.log('fake codex wrote ' + file)
 setInterval(() => {}, 1000)
 `, 'utf-8')
-  writeFileSync(gemini, `#!/usr/bin/env node
-const fs = require('fs')
-const os = require('os')
-const path = require('path')
-const sidIdx = process.argv.indexOf('--session-id')
-const sessionId = sidIdx >= 0 ? process.argv[sidIdx + 1] : 'gemini-e2e'
-const cwd = process.env.AGENT_TEAM_E2E_WORKSPACE || process.cwd()
-const project = 'agent-team-e2e-' + process.pid
-const geminiHome = path.join(os.homedir(), '.gemini')
-fs.mkdirSync(geminiHome, { recursive: true })
-fs.writeFileSync(path.join(geminiHome, 'projects.json'), JSON.stringify({ [project]: { path: cwd } }))
-const dir = path.join(geminiHome, 'tmp', project, 'chats')
-fs.mkdirSync(dir, { recursive: true })
-const file = path.join(dir, 'session-' + sessionId + '.json')
-fs.writeFileSync(file, JSON.stringify({ sessionId, messages: [] }))
-console.log('fake gemini wrote ' + file)
-setInterval(() => {}, 1000)
+  writeFileSync(antigravity, `#!/usr/bin/env python3
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+sid_idx = sys.argv.index('--session-id') if '--session-id' in sys.argv else -1
+session_id = sys.argv[sid_idx + 1] if sid_idx >= 0 else 'antigravity-e2e'
+cwd = os.environ.get('AGENT_TEAM_E2E_WORKSPACE', os.getcwd())
+marker = os.environ.get('AGENT_TEAM_E2E_SESSION_MARKER', '')
+directory = Path.home() / '.gemini' / 'antigravity-cli' / 'conversations'
+directory.mkdir(parents=True, exist_ok=True)
+file = directory / f'{session_id}.db'
+connection = sqlite3.connect(file)
+connection.execute(
+    'CREATE TABLE trajectory_metadata_blob '
+    '(id text DEFAULT "main", data blob, PRIMARY KEY (id))'
+)
+uri = f'file://{cwd}'.encode()
+blob = b'\\x12\\x30' + uri + b'\\x00' + marker.encode()
+connection.execute('INSERT INTO trajectory_metadata_blob VALUES (?, ?)', ('main', blob))
+connection.commit()
+connection.close()
+print(f'fake antigravity wrote {file}', flush=True)
+while True:
+    time.sleep(1)
 `, 'utf-8')
   chmodSync(codex, 0o755)
-  chmodSync(gemini, 0o755)
-  return { codex, gemini }
+  chmodSync(antigravity, 0o755)
+  return { codex, antigravity }
 }
 
-test('prebind detects and persists two Codex panes plus one Gemini pane through Electron backend', async () => {
+test('prebind detects and persists two Codex panes plus one Antigravity pane through Electron backend', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-team-prebind-e2e-'))
   const home = join(root, 'home')
   const workspace = join(root, 'workspace')
   const binDir = join(root, 'bin')
+  const backendData = join(root, 'backend-data')
   mkdirSync(home, { recursive: true })
   mkdirSync(workspace, { recursive: true })
   mkdirSync(binDir, { recursive: true })
+  mkdirSync(backendData, { recursive: true })
   mkdirSync(join(home, '.codex'), { recursive: true })
   mkdirSync(join(home, '.codex-panes'), { recursive: true })
-  mkdirSync(join(home, '.gemini', 'tmp'), { recursive: true })
+  mkdirSync(join(home, '.gemini', 'antigravity-cli', 'conversations'), { recursive: true })
   writeFileSync(join(home, '.codex', 'auth.json'), '{}')
   writeFileSync(join(home, '.codex', 'config.toml'), 'model = "e2e"\\n')
+  // This scenario exercises session attribution, not MCP startup. Keeping the
+  // isolated config empty avoids an unrelated npx download and teardown race.
+  writeFileSync(join(backendData, 'mcp_servers.json'), '[]\n')
   const fake = writeFakeCli(binDir)
 
   let app: ElectronApplication | null = null
@@ -166,6 +181,7 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
         ...process.env,
         HOME: home,
         NODE_ENV: 'production',
+        AGENT_TEAM_DATA_DIR: backendData,
       },
     })
     const page: Page = await app.firstWindow()
@@ -193,7 +209,7 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
         slots: [
           { label: 'Codex A', agent: 'codex', role: 'backend' },
           { label: 'Codex B', agent: 'codex', role: 'backend' },
-          { label: 'Gemini', agent: 'gemini', role: 'pm' },
+          { label: 'Antigravity', agent: 'antigravity', role: 'pm' },
         ],
       }],
       pipeline_id: 'e2e-prebind',
@@ -201,7 +217,7 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
 
     await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Codex A', pane_id: 'pane-codex-a', agent: 'codex', role: 'backend', session_home_id: 'home-codex-a' })
     await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Codex B', pane_id: 'pane-codex-b', agent: 'codex', role: 'backend', session_home_id: 'home-codex-b' })
-    await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Gemini', pane_id: 'pane-gemini', agent: 'gemini', role: 'pm' })
+    await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Antigravity', pane_id: 'pane-antigravity', agent: 'antigravity', role: 'pm' })
 
     const waitForPaneSession = (paneId: string) =>
       client!.waitForEvent<{ pane_id: string; session_id: string; session_file: string }>(
@@ -213,7 +229,7 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
     const seen: Record<string, Promise<{ pane_id: string; session_id: string; session_file: string }>> = {
       'pane-codex-a': waitForPaneSession('pane-codex-a'),
       'pane-codex-b': waitForPaneSession('pane-codex-b'),
-      'pane-gemini': waitForPaneSession('pane-gemini'),
+      'pane-antigravity': waitForPaneSession('pane-antigravity'),
     }
 
     const createA = await client.send<{ terminal_session_id: string }>('terminal.create', {
@@ -232,24 +248,32 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
       env: { AGENT_TEAM_E2E_WORKSPACE: workspace, AGENT_TEAM_E2E_RESUME_ID: 'resume-codex-b' },
       metadata: { workspace_path: workspace, stage_id: '01', slot_label: 'Codex B', session_home_id: 'home-codex-b' },
     })
-    const createG = await client.send<{ terminal_session_id: string }>('terminal.create', {
-      pane_id: 'pane-gemini',
-      agent_key: 'gemini',
-      command: `${fake.gemini} --session-id gemini-e2e-session`,
+    const createAntigravity = await client.send<{ terminal_session_id: string }>('terminal.create', {
+      pane_id: 'pane-antigravity',
+      agent_key: 'antigravity',
+      command: `${fake.antigravity} --session-id antigravity-e2e-session`,
       cwd: workspace,
-      env: { AGENT_TEAM_E2E_WORKSPACE: workspace },
-      metadata: { workspace_path: workspace, stage_id: '01', slot_label: 'Gemini', explicit_session_id: 'gemini-e2e-session' },
+      env: {
+        AGENT_TEAM_E2E_WORKSPACE: workspace,
+        AGENT_TEAM_E2E_SESSION_MARKER: 'at-pane:pane-antigravity',
+      },
+      metadata: {
+        workspace_path: workspace,
+        stage_id: '01',
+        slot_label: 'Antigravity',
+        session_marker: 'at-pane:pane-antigravity',
+      },
     })
 
-    const [codexA, codexB, geminiEvent] = await Promise.all([seen['pane-codex-a'], seen['pane-codex-b'], seen['pane-gemini']])
+    const [codexA, codexB, antigravityEvent] = await Promise.all([seen['pane-codex-a'], seen['pane-codex-b'], seen['pane-antigravity']])
     expect(codexA.session_id).toBe('resume-codex-a')
     expect(codexB.session_id).toBe('resume-codex-b')
-    expect(geminiEvent.session_id).toContain('/.gemini/tmp/')
-    expect(geminiEvent.session_id).toContain('/chats/session-gemini-e2e-session.json')
+    expect(antigravityEvent.session_id).toBe('antigravity-e2e-session')
+    expect(antigravityEvent.session_file).toContain('/.gemini/antigravity-cli/conversations/antigravity-e2e-session.db')
 
     await client.send('pipeline.slot_session', { workspace_path: workspace, stage_index: 0, slot_label: 'Codex A', session_id: codexA.session_id })
     await client.send('pipeline.slot_session', { workspace_path: workspace, stage_index: 0, slot_label: 'Codex B', session_id: codexB.session_id })
-    await client.send('pipeline.slot_session', { workspace_path: workspace, stage_index: 0, slot_label: 'Gemini', session_id: geminiEvent.session_id })
+    await client.send('pipeline.slot_session', { workspace_path: workspace, stage_index: 0, slot_label: 'Antigravity', session_id: antigravityEvent.session_id })
 
     const projectPath = join(workspace, '.agent-team', 'project.json')
     await expect.poll(() => {
@@ -258,17 +282,17 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
     }).toEqual({
       'Codex A': 'resume-codex-a',
       'Codex B': 'resume-codex-b',
-      Gemini: geminiEvent.session_id,
+      Antigravity: antigravityEvent.session_id,
     })
 
     const codexSession = await client.send<{ exists: boolean }>('agent.session_exists', { agent: 'codex', workspace_path: workspace, session_id: 'resume-codex-a' })
-    const geminiSession = await client.send<{ exists: boolean }>('agent.session_exists', { agent: 'gemini', workspace_path: workspace, session_id: geminiEvent.session_id })
+    const antigravitySession = await client.send<{ exists: boolean }>('agent.session_exists', { agent: 'antigravity', workspace_path: workspace, session_id: antigravityEvent.session_id })
     expect(codexSession.payload?.exists).toBe(true)
-    expect(geminiSession.payload?.exists).toBe(true)
+    expect(antigravitySession.payload?.exists).toBe(true)
 
     await client.send('terminal.kill', { terminal_session_id: createA.payload!.terminal_session_id })
     await client.send('terminal.kill', { terminal_session_id: createB.payload!.terminal_session_id })
-    await client.send('terminal.kill', { terminal_session_id: createG.payload!.terminal_session_id })
+    await client.send('terminal.kill', { terminal_session_id: createAntigravity.payload!.terminal_session_id })
     await client.send('codex_home.cleanup', { session_home_id: 'home-codex-a' })
     await client.send('codex_home.cleanup', { session_home_id: 'home-codex-b' })
 
@@ -279,6 +303,6 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
   } finally {
     client?.close()
     await app?.close()
-    rmSync(root, { recursive: true, force: true })
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 })
