@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 import { createResizeController, type ResizeController } from './useTerminalResize'
+import { installTerminalZoomShortcuts, terminalFontSize } from './useTerminalFontSize'
 
 import type { ITheme } from '@xterm/xterm'
 
@@ -414,14 +415,13 @@ function buildFileLinkProvider(
   }
 }
 
-const DEFAULT_FONT_SIZE = 12
-const MIN_FONT_SIZE = 6
-const MAX_FONT_SIZE = 32
-
 export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: { workspacePath?: string; onClear?: () => void }) {
+  installTerminalZoomShortcuts()
+
   const term = new Terminal({
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-    fontSize: DEFAULT_FONT_SIZE,
+    // Seeded from the shared size so a pane spawned after a zoom matches the rest.
+    fontSize: terminalFontSize.value,
     cursorBlink: true,
     convertEol: false,
     scrollback: 10000,
@@ -740,20 +740,9 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         term.clearSelection()
       }
 
-      // ── ⌘+ / ⌘- / ⌘=: per-pane terminal font zoom (grow / shrink / reset) ──
-      if (e.metaKey && !e.altKey && !e.ctrlKey &&
-          ((e.shiftKey && e.key === '+') ||
-           (!e.shiftKey && (e.key === '-' || e.key === '=')))) {
-        const cur = term.options.fontSize ?? DEFAULT_FONT_SIZE
-        const next = e.key === '+' ? Math.min(cur + 1, MAX_FONT_SIZE)
-          : e.key === '-' ? Math.max(cur - 1, MIN_FONT_SIZE)
-          : DEFAULT_FONT_SIZE
-        if (next !== cur) {
-          term.options.fontSize = next
-          resizeCtrl.applyFit()  // cell size changed → recompute cols/rows, resync PTY
-        }
-        return false
-      }
+      // Font zoom (⌘+ / ⌘- / ⌘= / ⌘0) is NOT handled here: it applies to every
+      // pane at once and must work regardless of which terminal holds focus, so
+      // it lives on a window-level listener (see useTerminalFontSize).
 
       // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
       if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { pasteText('\x15'); return false }
@@ -1439,6 +1428,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     () => !!pendingSpawn.value,
     () => { void createWhenMeasurable() },
   )
+
+  // Shared zoom → this pane. Changing fontSize changes the cell size, so refit
+  // to recompute cols/rows and resync the PTY.
+  watch(terminalFontSize, (size) => {
+    term.options.fontSize = size
+    resizeCtrl.applyFit()
+  })
 
   async function spawn(opts: SpawnOptions): Promise<void> {
     if (status.value === 'starting' || status.value === 'running') {

@@ -2,11 +2,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createMockBackend, withScope } from './mockBackend'
 
-// ⌘+ (shift+=) grows, ⌘- shrinks, ⌘= resets the focused pane's terminal font
-// size. The editor window binds its own font-zoom keys to Monaco; the CLI
-// pane handles these in xterm's custom key handler.
-// xterm won't boot in happy-dom, so the mock captures the custom key event
-// handler and the test drives it directly.
+// Font zoom is app-wide: ⌘+ grows, ⌘- shrinks, ⌘= / ⌘0 reset, and EVERY terminal
+// pane changes together. It is bound at the window level (useTerminalFontSize),
+// not on xterm's custom key handler — that one only fires while a terminal's
+// helper textarea has focus, and could only ever resize that one pane.
+// xterm won't boot in happy-dom, so the mock exposes each instance's options.
 
 const ctrl = vi.hoisted(() => ({
   applyFit: vi.fn(),
@@ -23,15 +23,14 @@ vi.mock('../useTerminalResize', () => ({
 }))
 
 const captured = vi.hoisted(() => ({
-  keyHandler: undefined as ((e: KeyboardEvent) => boolean) | undefined,
-  options: {} as Record<string, unknown>,
+  instances: [] as Array<{ fontSize: number }>,
 }))
 
 vi.mock('@xterm/xterm', () => {
   class Terminal {
     constructor(opts: Record<string, unknown>) {
       this.options = { ...opts }
-      captured.options = this.options
+      captured.instances.push(this.options as { fontSize: number })
     }
     cols = 80
     rows = 24
@@ -43,9 +42,7 @@ vi.mock('@xterm/xterm', () => {
     loadAddon(): void {}
     open(): void {}
     attachCustomWheelEventHandler(): void {}
-    attachCustomKeyEventHandler(handler: (e: KeyboardEvent) => boolean): void {
-      captured.keyHandler = handler
-    }
+    attachCustomKeyEventHandler(): void {}
     registerLinkProvider(): { dispose(): void } {
       return { dispose(): void {} }
     }
@@ -75,86 +72,123 @@ vi.mock('@xterm/addon-fit', () => ({
 }))
 
 import { useTerminal } from '../useTerminal'
+import { DEFAULT_FONT_SIZE, terminalFontSize, zoomReset } from '../useTerminalFontSize'
+import { nextTick } from 'vue'
 
-function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
-  return {
-    type: 'keydown',
-    key: '',
-    shiftKey: false,
-    metaKey: false,
-    altKey: false,
-    ctrlKey: false,
-    ...overrides,
-  } as KeyboardEvent
+/** Dispatch a real window keydown, as the browser would. */
+async function press(key: string, mods: Partial<KeyboardEventInit> = {}): Promise<KeyboardEvent> {
+  const e = new KeyboardEvent('keydown', { key, metaKey: true, cancelable: true, ...mods })
+  window.dispatchEvent(e)
+  await nextTick() // let the watchers in useTerminal run
+  return e
 }
 
-describe('useTerminal — ⌘+/⌘-/⌘= font zoom', () => {
+/** Mount a terminal pane and return its live xterm options. */
+async function spawnPane(paneId: string): Promise<{ opts: { fontSize: number }; scope: { stop(): void } }> {
+  const mock = createMockBackend()
+  mock.setResponse('terminal.create', { terminal_session_id: `sess-${paneId}`, pid: 42 })
+  const { result, scope } = withScope(() => useTerminal(paneId, mock.backend))
+  result.mount(document.createElement('div'))
+  await result.spawn({ command: 'bash', cwd: '/tmp' })
+  return { opts: captured.instances.at(-1)!, scope }
+}
+
+describe('terminal font zoom — app-wide', () => {
   afterEach(() => {
+    zoomReset()
     vi.clearAllMocks()
-    captured.keyHandler = undefined
-    localStorage.clear() // drop the persisted PTY id so the next spawn is fresh
+    captured.instances.length = 0
+    localStorage.clear()
   })
 
-  async function spawnedTerminal() {
-    const mock = createMockBackend()
-    mock.setResponse('terminal.create', { terminal_session_id: 'sess-1', pid: 42 })
-    const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend))
-    result.mount(document.createElement('div'))
-    await result.spawn({ command: 'bash', cwd: '/tmp' })
-    ctrl.applyFit.mockClear() // mount/spawn call applyFit; count only zoom-driven calls
-    return { term: { options: captured.options as { fontSize: number } }, scope }
-  }
+  it('⌘- shrinks every open pane at once and refits each', async () => {
+    const a = await spawnPane('pane-a')
+    const b = await spawnPane('pane-b')
+    ctrl.applyFit.mockClear() // mount/spawn already refit; count only zoom-driven calls
 
-  it('⌘+ grows the font and refits', async () => {
-    const { term, scope } = await spawnedTerminal()
-    const handled = captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
-    expect(handled).toBe(false)
-    expect(term.options.fontSize).toBe(13)
-    expect(ctrl.applyFit).toHaveBeenCalledTimes(1)
-    scope.stop()
+    const e = await press('-')
+
+    expect(terminalFontSize.value).toBe(11)
+    expect(a.opts.fontSize).toBe(11)
+    expect(b.opts.fontSize).toBe(11) // both panes, not just a focused one
+    expect(ctrl.applyFit).toHaveBeenCalledTimes(2) // one refit per pane
+    expect(e.defaultPrevented).toBe(true)
+
+    a.scope.stop()
+    b.scope.stop()
   })
 
-  it('⌘- shrinks the font and clamps at the minimum', async () => {
-    const { term, scope } = await spawnedTerminal()
-    for (let i = 0; i < 10; i++) captured.keyHandler!(keyEvent({ key: '-', metaKey: true }))
-    expect(term.options.fontSize).toBe(6)
-    for (let i = 0; i < 3; i++) captured.keyHandler!(keyEvent({ key: '-', metaKey: true }))
-    expect(term.options.fontSize).toBe(6) // clamped — no further shrink
-    expect(ctrl.applyFit).toHaveBeenCalledTimes(6) // 12→6, clamped presses don't refit
-    scope.stop()
+  it('⌘+ grows and clamps at the maximum', async () => {
+    const a = await spawnPane('pane-a')
+
+    for (let i = 0; i < 30; i++) await press('+', { shiftKey: true })
+
+    expect(a.opts.fontSize).toBe(32)
+    a.scope.stop()
   })
 
-  it('⌘+ clamps at the maximum', async () => {
-    const { term, scope } = await spawnedTerminal()
-    for (let i = 0; i < 30; i++) captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
-    expect(term.options.fontSize).toBe(32)
-    scope.stop()
+  it('⌘- clamps at the minimum and stops refitting once clamped', async () => {
+    const a = await spawnPane('pane-a')
+    ctrl.applyFit.mockClear()
+
+    for (let i = 0; i < 10; i++) await press('-')
+    expect(a.opts.fontSize).toBe(6)
+
+    ctrl.applyFit.mockClear()
+    for (let i = 0; i < 3; i++) await press('-')
+    expect(a.opts.fontSize).toBe(6)
+    expect(ctrl.applyFit).not.toHaveBeenCalled() // clamped presses are a no-op
+
+    a.scope.stop()
   })
 
-  it('⌘= resets to the default size', async () => {
-    const { term, scope } = await spawnedTerminal()
-    for (let i = 0; i < 5; i++) captured.keyHandler!(keyEvent({ key: '+', metaKey: true, shiftKey: true }))
-    expect(term.options.fontSize).toBe(17)
-    const handled = captured.keyHandler!(keyEvent({ key: '=', metaKey: true }))
-    expect(handled).toBe(false)
-    expect(term.options.fontSize).toBe(12)
-    scope.stop()
+  it('⌘= and ⌘0 both reset to the default size', async () => {
+    const a = await spawnPane('pane-a')
+
+    for (let i = 0; i < 5; i++) await press('+', { shiftKey: true })
+    expect(a.opts.fontSize).toBe(17)
+    await press('=')
+    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
+
+    for (let i = 0; i < 5; i++) await press('+', { shiftKey: true })
+    await press('0')
+    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
+
+    a.scope.stop()
   })
 
-  it('leaves plain and other modified keys to xterm', async () => {
-    const { term, scope } = await spawnedTerminal()
-    for (const ev of [
-      keyEvent({ key: '=' }),
-      keyEvent({ key: '+', shiftKey: true }),
-      keyEvent({ key: '=', metaKey: true, shiftKey: true }),
-      keyEvent({ key: '=', metaKey: true, altKey: true }),
-      keyEvent({ key: '-', metaKey: true, ctrlKey: true }),
-      keyEvent({ key: '0', metaKey: true }),
-    ]) {
-      expect(captured.keyHandler!(ev)).toBe(true)
-    }
-    expect(term.options.fontSize).toBe(12)
+  it('a pane opened after a zoom starts at the current size', async () => {
+    const a = await spawnPane('pane-a')
+    await press('+', { shiftKey: true })
+    await press('+', { shiftKey: true })
+    expect(a.opts.fontSize).toBe(14)
+
+    const b = await spawnPane('pane-b') // spawned while zoomed
+    expect(b.opts.fontSize).toBe(14)
+
+    a.scope.stop()
+    b.scope.stop()
+  })
+
+  it('persists the size so it survives a restart', async () => {
+    const a = await spawnPane('pane-a')
+    await press('+', { shiftKey: true })
+
+    expect(localStorage.getItem('terminal.fontSize')).toBe('13')
+    a.scope.stop()
+  })
+
+  it('ignores plain and wrongly-modified keys', async () => {
+    const a = await spawnPane('pane-a')
+    ctrl.applyFit.mockClear()
+
+    await press('-', { metaKey: false })
+    await press('=', { metaKey: false })
+    await press('-', { altKey: true })
+    await press('-', { ctrlKey: true })
+
+    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
     expect(ctrl.applyFit).not.toHaveBeenCalled()
-    scope.stop()
+    a.scope.stop()
   })
 })

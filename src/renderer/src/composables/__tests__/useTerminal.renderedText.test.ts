@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import type { Terminal } from '@xterm/xterm'
 import { serializeRenderedBuffer } from '../useTerminal'
