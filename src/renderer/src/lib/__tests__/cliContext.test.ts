@@ -46,7 +46,7 @@ describe('buildCliPaneBufferReply', () => {
     expect(
       buildCliPaneBufferReply(
         { customName: 'My Pane', agentLabel: 'Claude' },
-        { sessionId: 's-1', cleanBuffer: 'output' }
+        { sessionId: 's-1', buffer: 'output' }
       )
     ).toEqual({ label: 'My Pane', sessionId: 's-1', buffer: 'output' })
   })
@@ -55,7 +55,7 @@ describe('buildCliPaneBufferReply', () => {
     expect(
       buildCliPaneBufferReply(
         { customName: '', agentLabel: 'Claude' },
-        { sessionId: 's-1', cleanBuffer: 'output' }
+        { sessionId: 's-1', buffer: 'output' }
       )
     ).toEqual({ label: 'Claude', sessionId: 's-1', buffer: 'output' })
   })
@@ -69,7 +69,7 @@ describe('buildCliPaneBufferReply', () => {
   })
 
   it('labels an unknown pane record with an empty string rather than failing', () => {
-    expect(buildCliPaneBufferReply(undefined, { sessionId: 's-1', cleanBuffer: 'x' })).toEqual({
+    expect(buildCliPaneBufferReply(undefined, { sessionId: 's-1', buffer: 'x' })).toEqual({
       label: '',
       sessionId: 's-1',
       buffer: 'x'

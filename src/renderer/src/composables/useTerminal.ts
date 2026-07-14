@@ -231,6 +231,33 @@ export interface WrappedLineGroup {
   fullText: string // concatenated text of every row in the group
 }
 
+// A line made of nothing but box-drawing glyphs and spaces — the frame of a
+// CLI's bottom input widget (╭──╮ / ╰──╯). At least one box char is required so
+// a plain blank line isn't matched here (blanks are handled separately).
+const BOX_ONLY_LINE_RE = /^[\s─-╿]*[─-╿][\s─-╿]*$/
+
+/** Serialize the RENDERED scrollback (what the user actually sees) as text.
+ *  Unlike the raw-stream cleanBuffer, TUI repaints overwrite buffer lines in
+ *  place, so a status footer that repaints 1000 times appears once here.
+ *  Walks backwards from the cursor row, drops the trailing blank / box-only
+ *  frame lines, takes at most `maxLines` rows and returns them oldest→newest.
+ *  READ-ONLY: never mutates the terminal. */
+export function serializeRenderedBuffer(term: import('@xterm/xterm').Terminal, maxLines: number): string {
+  const buffer = term.buffer.active
+  const lines: string[] = []
+  let inTrailingTail = true
+  for (let i = buffer.baseY + buffer.cursorY; i >= 0 && lines.length < maxLines; i--) {
+    const text = buffer.getLine(i)?.translateToString(true) ?? ''
+    if (inTrailingTail) {
+      if (!text.trim() || BOX_ONLY_LINE_RE.test(text)) continue
+      inTrailingTail = false
+    }
+    lines.push(text)
+  }
+  lines.reverse()
+  return lines.join('\n')
+}
+
 export function getWrappedLineGroup(term: import('@xterm/xterm').Terminal, bufferRow: number): WrappedLineGroup {
   const buffer = term.buffer.active
   const lineTextAt = (r: number): string | null => {
@@ -514,6 +541,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
    *  the noise-filter rules change (HMR) or a watcher arms on an old pane. */
   function recleanBuffer(): void {
     cleanBuffer.value = dropTuiNoise(cleanBuffer.value)
+  }
+
+  /** Tail of the RENDERED scrollback — the text the user sees on screen. The
+   *  right source for sharing a pane's content (context paste / AI-Chat chip):
+   *  cleanBuffer's tail is dominated by TUI status-footer repaints. */
+  function readRenderedText(maxLines: number): string {
+    return serializeRenderedBuffer(term, maxLines)
   }
 
   let inputDisposer: { dispose(): void } | null = null
@@ -1545,6 +1579,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     lastRawActivityAt,
     markBufferPosition,
     recleanBuffer,
+    readRenderedText,
     updateXtermTheme,
     isAltBuffer,
     setDisableStdin: (disabled: boolean) => { term.options.disableStdin = disabled },

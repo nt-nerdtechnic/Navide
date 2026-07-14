@@ -98,6 +98,7 @@ defineExpose({
   lastRawActivityAt: terminal.lastRawActivityAt,
   markBufferPosition: terminal.markBufferPosition,
   recleanBuffer: terminal.recleanBuffer,
+  readRenderedText: terminal.readRenderedText,
   fitTerminal: terminal.fitTerminal
 })
 

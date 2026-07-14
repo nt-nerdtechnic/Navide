@@ -17,6 +17,11 @@ export const CLI_CHIP_BUFFER_CAP = 32 * 1024
  *  input prompt. Much smaller than the chip cap: a 128KB blob is unusable as
  *  CLI prompt input. */
 export const CLI_PASTE_BUFFER_CAP = 8000
+/** Line caps applied when reading a pane's RENDERED scrollback (the source for
+ *  both shares — see TerminalPane's readRenderedText). Applied first; the char
+ *  caps above then bound the result. */
+export const CLI_PASTE_LINE_CAP = 300
+export const CLI_CHIP_LINE_CAP = 1000
 
 /** Drag payload carried under CLI_CONTEXT_MIME (set in TerminalPane.vue). */
 export interface CliContextPayload {
@@ -168,12 +173,12 @@ export interface CliPaneBufferReply {
  *  A missing ref means the pane is gone (closed between drag and drop). */
 export function buildCliPaneBufferReply(
   pane: { customName?: string; agentLabel: string } | undefined,
-  paneRef: { sessionId?: string; cleanBuffer?: string } | null | undefined
+  paneRef: { sessionId?: string; buffer?: string } | null | undefined
 ): CliPaneBufferReply | { error: 'not-found' } {
   if (!paneRef) return { error: 'not-found' }
   return {
     label: pane ? pane.customName || pane.agentLabel : '',
     sessionId: paneRef.sessionId || null,
-    buffer: paneRef.cleanBuffer ?? ''
+    buffer: paneRef.buffer ?? ''
   }
 }

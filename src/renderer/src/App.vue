@@ -46,7 +46,13 @@ import {
 } from './data/stages'
 import { i18n } from './i18n'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
-import { buildCliPaneBufferReply, buildPaneContextPaste, chunkForPty } from './lib/cliContext'
+import {
+  buildCliPaneBufferReply,
+  buildPaneContextPaste,
+  chunkForPty,
+  CLI_CHIP_LINE_CAP,
+  CLI_PASTE_LINE_CAP
+} from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { quickClassify } from './lib/quick-classify'
@@ -92,7 +98,7 @@ onMounted(() => {
       ref
         ? {
             sessionId: (ref.sessionId as unknown as string) || undefined,
-            cleanBuffer: (ref.cleanBuffer as unknown as string) ?? ''
+            buffer: readPaneShareText(ref, CLI_CHIP_LINE_CAP)
           }
         : null
     )
@@ -757,8 +763,19 @@ async function injectPane(paneId: string, text: string, logLabel?: string, prese
   return injectText(ref.sessionId, text, logLabel, preserveNewlines)
 }
 
+// Text of a pane worth SHARING with another pane / the AI Chat: the rendered
+// xterm scrollback, not cleanBuffer. cleanBuffer accumulates the raw PTY stream,
+// so for a repainting TUI (Claude/Codex status footer) its tail is fragments of
+// the last repainted frames rather than the conversation. Falls back to
+// cleanBuffer if the ref predates readRenderedText (defensive: refs can be null).
+function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines: number): string {
+  const read = ref.readRenderedText as ((n: number) => string) | undefined
+  const rendered = read ? read(maxLines) : ''
+  return rendered.trim() ? rendered : ((ref.cleanBuffer as unknown as string) ?? '')
+}
+
 // Cross-pane context share: pane A dragged onto pane B's terminal area pastes a
-// tail excerpt of A's cleaned buffer into B's input prompt (TerminalPane's
+// tail excerpt of A's rendered scrollback into B's input prompt (TerminalPane's
 // 'cli-context-drop'). Deliberately NOT injectText: no Enter is sent — the text
 // waits in B's prompt for the user to add their question and submit. Bracketed
 // paste keeps the excerpt's newlines literal instead of submitting each line.
@@ -772,7 +789,7 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
   const text = buildPaneContextPaste(
     sourcePane.customName || sourcePane.agentLabel,
     sourcePane.agentKey,
-    (sourceRef.cleanBuffer as unknown as string) ?? ''
+    readPaneShareText(sourceRef, CLI_PASTE_LINE_CAP)
   )
   if (!text) return // empty buffer — nothing worth pasting
 
