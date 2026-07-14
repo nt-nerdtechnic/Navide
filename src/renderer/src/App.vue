@@ -556,11 +556,10 @@ const issueHandoffs = ref<Map<string, { paneId: string; mode: string; state: 'ha
 const SPAWN_HISTORY_KEY = 'agentTeam.spawnHistory'
 const MAX_SPAWN_HISTORY = 100
 
-function loadSpawnHistory(): SpawnHistoryEntry[] {
+function parseSpawnHistory(raw: string, workspacePath: string): SpawnHistoryEntry[] {
   try {
-    const raw = settingsGet<string | null>(SPAWN_HISTORY_KEY, null)
-    if (!raw) return []
-    const parsed = (JSON.parse(raw) as SpawnHistoryEntry[])
+    return (JSON.parse(raw) as SpawnHistoryEntry[])
+      .filter((entry) => entry?.workspacePath === workspacePath)
       .slice(-MAX_SPAWN_HISTORY)
       .map((entry) => ({
         ...entry,
@@ -568,18 +567,70 @@ function loadSpawnHistory(): SpawnHistoryEntry[] {
           ? normalizeResumeSessionId(entry.agentKey, entry.sessionId)
           : entry.sessionId,
       }))
-    const repaired = JSON.stringify(parsed)
-    if (repaired !== raw) settingsSet(SPAWN_HISTORY_KEY, repaired)
-    return parsed
   } catch {
     return []
   }
 }
 
-const spawnHistory = ref<SpawnHistoryEntry[]>(loadSpawnHistory())
+/** One-time source for projects created before history moved into project.json. */
+function loadLegacySpawnHistory(workspacePath: string): SpawnHistoryEntry[] {
+  const raw = settingsGet<string | null>(SPAWN_HISTORY_KEY, null)
+  return raw ? parseSpawnHistory(raw, workspacePath) : []
+}
+
+const spawnHistory = ref<SpawnHistoryEntry[]>([])
+let spawnHistoryWorkspace = ''
+let spawnHistoryHydrated = false
+let spawnHistoryPersistTimer: number | undefined
+
+function hydrateSpawnHistory(
+  workspacePath: string,
+  persisted: SpawnHistoryEntry[] | null | undefined,
+): void {
+  if (spawnHistoryPersistTimer !== undefined) {
+    window.clearTimeout(spawnHistoryPersistTimer)
+    spawnHistoryPersistTimer = undefined
+  }
+  spawnHistoryHydrated = false
+  spawnHistoryWorkspace = workspacePath
+  const source = Array.isArray(persisted)
+    ? persisted
+    : loadLegacySpawnHistory(workspacePath)
+  // Reuse the parser for normalization and workspace filtering.
+  spawnHistory.value = parseSpawnHistory(JSON.stringify(source), workspacePath)
+  spawnHistoryHydrated = true
+
+  // Missing (not empty) means an old project: migrate its matching slice once.
+  if (persisted == null && spawnHistory.value.length > 0 && !isDetachedWindow) {
+    void sendQuiet('project.set_ui_state', {
+      workspace_path: workspacePath,
+      spawn_history: spawnHistory.value,
+    })
+  }
+}
+
+watch(currentWorkspace, (workspacePath) => {
+  if (workspacePath === spawnHistoryWorkspace) return
+  if (spawnHistoryPersistTimer !== undefined) {
+    window.clearTimeout(spawnHistoryPersistTimer)
+    spawnHistoryPersistTimer = undefined
+  }
+  spawnHistoryHydrated = false
+  spawnHistoryWorkspace = workspacePath
+  spawnHistory.value = []
+})
 
 watch(spawnHistory, (v) => {
-  settingsSet(SPAWN_HISTORY_KEY, JSON.stringify(v.slice(-MAX_SPAWN_HISTORY)))
+  if (!spawnHistoryHydrated || !spawnHistoryWorkspace || isDetachedWindow) return
+  if (spawnHistoryPersistTimer !== undefined) window.clearTimeout(spawnHistoryPersistTimer)
+  const workspacePath = spawnHistoryWorkspace
+  const snapshot = v.slice(-MAX_SPAWN_HISTORY)
+  spawnHistoryPersistTimer = window.setTimeout(() => {
+    void sendQuiet('project.set_ui_state', {
+      workspace_path: workspacePath,
+      spawn_history: snapshot,
+    })
+  }, 200)
 }, { deep: true })
 
 function setPaneRef(id: string, el: unknown): void {
@@ -2447,6 +2498,7 @@ interface ProjectPayload {
     // deleted all groups.
     ui_run_groups?: RunGroup[] | null
     ui_active_tab?: string  // last active run-group tab id ('' = frontend default)
+    ui_spawn_history?: SpawnHistoryEntry[] | null
     run_count?: number
     theme?: string
     theme_custom?: Record<string, string>
@@ -2597,6 +2649,9 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
+    // Agent History is owned by this workspace. Old projects have no field and
+    // migrate only the matching entries from the former global settings key.
+    hydrateSpawnHistory(path, resp.project.ui_spawn_history)
     // Adopt the backend theme backup only if the settings store held nothing
     // (load order: settings store → backend → default). loadTheme() is a no-op
     // for theme when the store already wins, so this is safe to call here.
@@ -2757,9 +2812,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   if (isDetachedWindow) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === detachedGroupId)
   // Main-window reattach after a child closes: restore just the returning group.
   else if (onlyGroupId !== undefined) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === onlyGroupId)
-  if (toRestore.length === 0) return
-
-  pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
+  if (toRestore.length > 0) pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
   pipeline.workspacePath = workspacePath
 
   // Lazily create one group to house restored pipeline panes whose saved
@@ -5287,9 +5340,21 @@ function _saveRunGroups(): void {
  *  and are intentionally left independent. applyingRemote prevents the adopted
  *  value from being written straight back. */
 function onRunGroupsRemoteSync(raw: unknown): void {
-  const d = raw as { workspace_path?: string; run_groups?: RunGroup[] } | null
+  const d = raw as {
+    workspace_path?: string
+    run_groups?: RunGroup[]
+    spawn_history?: SpawnHistoryEntry[]
+  } | null
   const ws = currentWorkspace.value
   if (!ws || !d || d.workspace_path !== ws) return
+  if (Array.isArray(d.spawn_history)) {
+    // Apply the peer window's persisted workspace history without echoing it
+    // straight back through our deep watcher.
+    spawnHistoryHydrated = false
+    spawnHistoryWorkspace = ws
+    spawnHistory.value = parseSpawnHistory(JSON.stringify(d.spawn_history), ws)
+    void nextTick(() => { spawnHistoryHydrated = true })
+  }
   if (!Array.isArray(d.run_groups)) return
   // Union merge instead of wholesale adoption: keep local groups that live
   // panes still reference but the remote list lacks (e.g. a tab recreated

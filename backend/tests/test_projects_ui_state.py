@@ -63,6 +63,29 @@ def test_git_tab_repo_round_trip_through_disk(tmp_path: Path) -> None:
     assert fresh.ui_git_tab_repo == "/ws/sub/repo"
 
 
+def test_spawn_history_round_trip_through_disk(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace-a"
+    other_workspace = tmp_path / "workspace-b"
+    workspace.mkdir()
+    other_workspace.mkdir()
+    store = _store_with_project(workspace)
+    _store_with_project(other_workspace)
+    history = [{
+        "paneId": "pane-1",
+        "agentKey": "codex",
+        "agentLabel": "Codex",
+        "customName": "Workspace title",
+        "workspacePath": str(workspace),
+    }]
+    store.set_ui_state(str(workspace), spawn_history=history)
+    fresh = ProjectStore().peek(str(workspace))
+    assert fresh is not None
+    assert fresh.ui_spawn_history == history
+    other = ProjectStore().peek(str(other_workspace))
+    assert other is not None
+    assert other.ui_spawn_history is None
+
+
 def test_git_tab_repo_partial_update_leaves_other_fields_untouched(tmp_path: Path) -> None:
     store = _store_with_project(tmp_path)
     store.set_ui_state(str(tmp_path), run_groups=GROUPS, active_tab="rg-2")
@@ -106,9 +129,11 @@ def test_project_json_without_fields_defaults(tmp_path: Path) -> None:
     data.pop("ui_run_groups", None)
     data.pop("ui_active_tab", None)
     data.pop("ui_git_tab_repo", None)
+    data.pop("ui_spawn_history", None)
     project_file.write_text(json.dumps(data), encoding="utf-8")
     fresh = ProjectStore().peek(str(tmp_path))
     assert fresh is not None
     assert fresh.ui_run_groups is None
     assert fresh.ui_active_tab == ""
     assert fresh.ui_git_tab_repo == ""
+    assert fresh.ui_spawn_history is None

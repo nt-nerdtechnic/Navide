@@ -1382,11 +1382,18 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             active_tab = raw_tab if isinstance(raw_tab, str) else None
             raw_repo = payload.get("git_tab_repo")
             git_tab_repo = raw_repo if isinstance(raw_repo, str) else None
+            raw_history = payload.get("spawn_history")
+            spawn_history = (
+                [entry for entry in raw_history if isinstance(entry, dict)][-100:]
+                if isinstance(raw_history, list)
+                else None
+            )
             project = project_store.set_ui_state(
                 ws_raw,
                 run_groups=run_groups,
                 active_tab=active_tab,
                 git_tab_repo=git_tab_repo,
+                spawn_history=spawn_history,
             )
             if project is not None:
                 # Peer windows on the same workspace adopt the change live
@@ -1398,6 +1405,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     delta["active_tab"] = active_tab
                 if git_tab_repo is not None:
                     delta["git_tab_repo"] = git_tab_repo
+                if spawn_history is not None:
+                    delta["spawn_history"] = spawn_history
                 await broadcast(
                     make_event("project.ui_state_changed", delta), exclude=session
                 )

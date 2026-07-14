@@ -152,6 +152,10 @@ class Project:
     ui_run_groups: list[dict[str, Any]] | None = None
     ui_active_tab: str = ""  # last active run-group tab id ("" = frontend default)
     ui_git_tab_repo: str = ""  # abs path of the selected repo tab in the multi-repo git view ("" = frontend default)
+    # Renderer-owned Agent History. It belongs to the workspace: the previous
+    # user-level settings entry mixed projects and could lose custom titles
+    # when that global cache was rebuilt.
+    ui_spawn_history: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -701,13 +705,14 @@ class ProjectStore:
         run_groups: list[dict[str, Any]] | None = None,
         active_tab: str | None = None,
         git_tab_repo: str | None = None,
+        spawn_history: list[dict[str, Any]] | None = None,
     ) -> Project | None:
         """Persist renderer-owned per-workspace UI state (partial update).
 
         Only the arguments that are not None are applied. Returns None when no
         project exists for the workspace (peek semantics — never creates one).
         """
-        if run_groups is None and active_tab is None and git_tab_repo is None:
+        if run_groups is None and active_tab is None and git_tab_repo is None and spawn_history is None:
             return None
         project = self.peek(workspace_path)
         if project is None:
@@ -718,6 +723,8 @@ class ProjectStore:
             project.ui_active_tab = active_tab
         if git_tab_repo is not None:
             project.ui_git_tab_repo = git_tab_repo
+        if spawn_history is not None:
+            project.ui_spawn_history = list(spawn_history)
         self.save(project)
         return project
 
