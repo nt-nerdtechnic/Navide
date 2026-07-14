@@ -1,5 +1,9 @@
 import { autoUpdater } from 'electron-updater'
 import { ipcMain, BrowserWindow } from 'electron'
+import { createUpdaterService, type UpdaterService } from './updater-service'
+import type { UpdateState } from '../shared/updater'
+
+let service: UpdaterService | null = null
 
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -7,25 +11,31 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-export function initUpdater(): void {
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = false
+function publishState(state: UpdateState): void {
+  broadcast('updater:state-changed', state)
+  if (state.status === 'error') console.error('[updater]', state.message)
+}
 
-  autoUpdater.on('update-available', (info) => {
-    broadcast('updater:update-available', { version: info.version })
-  })
-  autoUpdater.on('download-progress', (p) => {
-    broadcast('updater:download-progress', { percent: Math.round(p.percent) })
-  })
-  autoUpdater.on('update-downloaded', (info) => {
-    broadcast('updater:update-downloaded', { version: info.version })
-  })
-  autoUpdater.on('error', (err) => {
-    // Silent — update failures should not crash the app
-    console.error('[updater]', err.message)
-  })
+export function initUpdater(options: {
+  isPackaged: boolean
+  currentVersion: string
+  checkDelayMs?: number
+}): void {
+  if (service) return
 
-  ipcMain.handle('updater:check', () => autoUpdater.checkForUpdates())
-  ipcMain.handle('updater:download', () => autoUpdater.downloadUpdate())
-  ipcMain.handle('updater:install', () => autoUpdater.quitAndInstall())
+  service = createUpdaterService(
+    autoUpdater,
+    options.currentVersion,
+    options.isPackaged,
+    publishState,
+  )
+
+  ipcMain.handle('updater:get-state', () => service!.getState())
+  ipcMain.handle('updater:check', () => service!.check())
+  ipcMain.handle('updater:download', () => service!.download())
+  ipcMain.handle('updater:install', () => service!.install())
+
+  if (options.isPackaged) {
+    setTimeout(() => { void service?.check() }, options.checkDelayMs ?? 5000)
+  }
 }

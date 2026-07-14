@@ -50,6 +50,9 @@ export interface ActivePaneView {
   slotLabel?: string
   /** True when the pane is minimized to the sidebar (hidden in grid, PTY alive). */
   isMinimized?: boolean
+  /** Uses App's canonical resume eligibility check. The sidebar only renders a
+   *  rebuild control; App remains the sole owner of the rebuild operation. */
+  canRebuild?: boolean
 }
 
 export interface SpawnPayload {
@@ -164,6 +167,10 @@ interface Props {
   spawnHistory?: ResumeHistoryEntry[]
   /** The currently focused pane id — highlights the matching agent-item. */
   focusPaneId?: string
+  /** Mirrors StageTabBar's global rebuild state so both controls invoke the
+   *  same App-owned operation and present the same availability. */
+  canRebuildAll?: boolean
+  rebuildingAll?: boolean
   /** Issue dispatch/handle status — forwarded to GitPane for badges. */
   issueHandoffs?: Record<string, { paneId: string; mode: string; state: string }>
 }
@@ -175,7 +182,7 @@ const props = defineProps<Props>()
 // is live when juggling worktrees / uncommitted changes.
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
-const { updateAvailable, downloadProgress, updateReady, startDownload, installUpdate } = useUpdater()
+const { state: updateState, isBusy: updateBusy, checkForUpdates, startDownload, installUpdate } = useUpdater()
 
 const emit = defineEmits<{
   (e: 'spawn', payload: SpawnPayload): void
@@ -184,6 +191,8 @@ const emit = defineEmits<{
   (e: 'kill-all'): void
   (e: 'interrupt', paneId: string): void
   (e: 'reinject', paneId: string): void
+  (e: 'rebuild', paneId: string): void
+  (e: 'rebuild-all'): void
   (e: 'restore', paneId: string): void
   (e: 'context-menu', paneId: string, ev: MouseEvent): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; pipelineId?: string }): void
@@ -817,19 +826,36 @@ function onPipelineDividerEnd(): void {
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
       </button>
 
-      <!-- Update badge: shown when a new version is available, downloading, or ready -->
-      <div v-if="updateReady || downloadProgress !== null || updateAvailable" class="update-badge" :class="{ ready: !!updateReady, downloading: downloadProgress !== null }">
-        <template v-if="updateReady">
+      <button
+        class="tab-btn update-check-btn"
+        :class="{ spinning: updateState.status === 'checking', failed: updateState.status === 'error' }"
+        :disabled="updateBusy"
+        :title="updateState.status === 'error' ? `Update check failed: ${updateState.message ?? 'Unknown error'}. Click to retry.` : 'Check for updates'"
+        aria-label="Check for updates"
+        @click="checkForUpdates"
+      >
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 2.4A7 7 0 0 0 2.05 5H.75a.75.75 0 0 0 0 1.5h3.1a.75.75 0 0 0 .75-.75v-3.1a.75.75 0 0 0-1.5 0v1.02A5.5 5.5 0 0 1 12.54 3.46a.75.75 0 1 0 1.06-1.06ZM15.25 9.5h-3.1a.75.75 0 0 0-.75.75v3.1a.75.75 0 0 0 1.5 0v-1.02A5.5 5.5 0 0 1 3.46 12.54.75.75 0 1 0 2.4 13.6 7 7 0 0 0 13.95 11h1.3a.75.75 0 0 0 0-1.5Z"/></svg>
+      </button>
+
+      <div
+        v-if="['available', 'downloading', 'downloaded', 'installing'].includes(updateState.status)"
+        class="update-badge"
+        :class="{ ready: updateState.status === 'downloaded', downloading: updateState.status === 'downloading' }"
+      >
+        <template v-if="updateState.status === 'downloaded'">
           <span class="update-dot"></span>
-          <span class="update-label">v{{ updateReady }} ready</span>
+          <span class="update-label">v{{ updateState.availableVersion }} ready</span>
           <button class="update-action" @click="installUpdate">Restart</button>
         </template>
-        <template v-else-if="downloadProgress !== null">
-          <span class="update-label">{{ downloadProgress }}%</span>
+        <template v-else-if="updateState.status === 'installing'">
+          <span class="update-label">Restarting…</span>
         </template>
-        <template v-else-if="updateAvailable">
+        <template v-else-if="updateState.status === 'downloading'">
+          <span class="update-label">{{ updateState.percent ?? 0 }}%</span>
+        </template>
+        <template v-else>
           <span class="update-dot"></span>
-          <span class="update-label">v{{ updateAvailable }}</span>
+          <span class="update-label">v{{ updateState.availableVersion }}</span>
           <button class="update-action" @click="startDownload">Update</button>
         </template>
       </div>
@@ -995,6 +1021,18 @@ function onPipelineDividerEnd(): void {
             :model-value="layoutMode ?? 'auto'"
             @update:model-value="emit('update:layoutMode', $event)"
           />
+          <button
+            class="agent-rebuild-all-btn"
+            :class="{ busy: rebuildingAll }"
+            :disabled="!canRebuildAll || rebuildingAll"
+            :title="$t('action.rebuild-all-cli-panes')"
+            :aria-label="$t('action.rebuild-all-cli-panes')"
+            @click="emit('rebuild-all')"
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
+            </svg>
+          </button>
           <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
         </div>
       </div>
@@ -1016,6 +1054,17 @@ function onPipelineDividerEnd(): void {
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
+            <button
+              v-if="p.canRebuild && !p.isMinimized"
+              class="icon-btn agent-rebuild-btn"
+              :title="$t('pane.terminal.rebuild-tooltip')"
+              :aria-label="$t('pane.terminal.rebuild-tooltip')"
+              @click.stop="emit('rebuild', p.id)"
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
+              </svg>
+            </button>
             <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
           </div>
           <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
@@ -1639,6 +1688,41 @@ button.history-btn {
   align-items: center;
   justify-content: center;
 }
+button.agent-rebuild-all-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-default);
+}
+button.agent-rebuild-all-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+button.agent-rebuild-all-btn:hover:not(:disabled) {
+  color: var(--text-bright);
+  border-color: var(--accent-fg);
+  background: var(--bg-subtle);
+}
+button.agent-rebuild-all-btn:disabled {
+  opacity: 0.4;
+}
+button.agent-rebuild-all-btn.busy svg {
+  animation: agent-rebuild-spin 0.8s linear infinite;
+}
+@keyframes agent-rebuild-spin {
+  to { transform: rotate(360deg); }
+}
 button.history-btn:hover {
   color: var(--text-bright);
   border-color: var(--accent-fg);
@@ -2119,6 +2203,29 @@ button.icon-btn.muted:hover {
   height: 18px;
   width: 18px;
 }
+.agent-rebuild-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.agent-rebuild-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.agent-rebuild-btn:hover {
+  color: var(--accent-fg);
+  background: var(--accent-subtle);
+}
 .agent-close-btn:hover {
   color: var(--danger-fg);
   background: var(--danger-deep);
@@ -2433,5 +2540,14 @@ button.icon-btn.muted:hover {
 }
 .update-action:hover {
   opacity: 0.85;
+}
+.update-check-btn.failed {
+  color: var(--danger-fg);
+}
+.update-check-btn.spinning svg {
+  animation: update-spin 0.8s linear infinite;
+}
+@keyframes update-spin {
+  to { transform: rotate(360deg); }
 }
 </style>

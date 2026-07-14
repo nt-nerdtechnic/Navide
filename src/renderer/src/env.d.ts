@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+import type { UpdateActionResult, UpdateState } from '../../shared/updater'
+
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
   const component: DefineComponent<Record<string, unknown>, Record<string, unknown>, unknown>
@@ -126,12 +128,11 @@ declare global {
         setAutoRestore: (value: boolean) => Promise<{ ok: boolean }>
       }
       updater?: {
-        check: () => Promise<unknown>
-        download: () => Promise<unknown>
-        install: () => void
-        onUpdateAvailable: (cb: (info: { version: string }) => void) => void
-        onDownloadProgress: (cb: (info: { percent: number }) => void) => void
-        onUpdateDownloaded: (cb: (info: { version: string }) => void) => void
+        getState: () => Promise<UpdateState>
+        check: () => Promise<UpdateActionResult>
+        download: () => Promise<UpdateActionResult>
+        install: () => Promise<UpdateActionResult>
+        onStateChanged: (cb: (state: UpdateState) => void) => () => void
       }
       gitAccounts?: {
         isAvailable: () => Promise<{ ok: boolean; available?: boolean; error?: string }>

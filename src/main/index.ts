@@ -1196,6 +1196,9 @@ app.on('web-contents-created', (_e, contents) => {
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
   installApplicationMenu()
+  // Register updater IPC before any renderer can request its state. Packaged
+  // builds automatically check GitHub Releases after a short delay.
+  initUpdater({ isPackaged: app.isPackaged, currentVersion: app.getVersion() })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER
   // restore in packaged builds: dev restarts (electron-vite) always look like
@@ -1272,11 +1275,6 @@ app.whenReady().then(async () => {
     }
   }
   if (!openedAny) await createWindow()
-
-  // Auto-updater: only run in packaged builds — dev mode has no GitHub Release to check.
-  if (app.isPackaged) {
-    setTimeout(() => initUpdater(), 5000)
-  }
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow()

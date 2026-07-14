@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { UpdateActionResult, UpdateState } from '../shared/updater'
 
 export interface BackendInfo {
   status: 'starting' | 'ready' | 'error'
@@ -216,17 +217,14 @@ contextBridge.exposeInMainWorld('agentTeam', {
       ipcRenderer.invoke('restore:setAutoRestore', value),
   },
   updater: {
-    check: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
-    download: (): Promise<unknown> => ipcRenderer.invoke('updater:download'),
-    install: (): void => { void ipcRenderer.invoke('updater:install') },
-    onUpdateAvailable: (cb: (info: { version: string }) => void): void => {
-      ipcRenderer.on('updater:update-available', (_e, info) => cb(info))
-    },
-    onDownloadProgress: (cb: (info: { percent: number }) => void): void => {
-      ipcRenderer.on('updater:download-progress', (_e, info) => cb(info))
-    },
-    onUpdateDownloaded: (cb: (info: { version: string }) => void): void => {
-      ipcRenderer.on('updater:update-downloaded', (_e, info) => cb(info))
+    getState: (): Promise<UpdateState> => ipcRenderer.invoke('updater:get-state'),
+    check: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:check'),
+    download: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:download'),
+    install: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:install'),
+    onStateChanged: (cb: (state: UpdateState) => void): (() => void) => {
+      const listener = (_event: unknown, state: UpdateState): void => cb(state)
+      ipcRenderer.on('updater:state-changed', listener)
+      return () => ipcRenderer.removeListener('updater:state-changed', listener)
     },
   },
   gitAccounts: {

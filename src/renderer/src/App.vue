@@ -589,7 +589,8 @@ function syncViews(): void {
       isCommander: paneIsCommander(p),
       sessionId: p.pinnedSessionId,
       slotLabel: p.slotLabel,
-      isMinimized: minimizedPanes.value.has(p.id)
+      isMinimized: minimizedPanes.value.has(p.id),
+      canRebuild: paneCanRebuild(p)
     }
   })
 }
@@ -6114,12 +6115,16 @@ function paneIsCommander(p: ActivePane): boolean {
       v-model:auto-answer-enabled="autoAnswerEnabled"
       :spawn-history="spawnHistory"
       :focus-pane-id="effectiveFocusPaneId ?? undefined"
+      :can-rebuild-all="rebuildablePaneCount > 0"
+      :rebuilding-all="rebuildingAllPanes"
       @spawn="onManualSpawn"
       @spawn-resume="onManualResume"
       @kill="onKill"
       @interrupt="onInterrupt"
       @kill-all="onKillAll"
       @reinject="onReinject"
+      @rebuild="rebuildPaneViaResume"
+      @rebuild-all="rebuildAllPanesViaResume"
       @restore="restorePane"
       @context-menu="(id, ev) => openPaneCtxMenu(ev, id)"
       @update:layout-mode="layoutMode = $event"
