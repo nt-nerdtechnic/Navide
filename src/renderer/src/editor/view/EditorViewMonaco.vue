@@ -320,6 +320,19 @@ onMounted(() => {
   // overridden so it stays the macOS "Hide application" shortcut.)
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => {})
 
+  // Keep comment shortcuts inside Monaco as a layout-independent fallback.
+  // The workbench keybinding layer handles these first when it can, but IMEs
+  // may expose the slash key as `Process`/a localized character and focus
+  // transitions can briefly leave its editorTextFocus context unset.
+  editor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash,
+    () => editor?.trigger('keyboard', 'editor.action.commentLine', null),
+  )
+  editor.addCommand(
+    monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Slash,
+    () => editor?.trigger('keyboard', 'editor.action.blockComment', null),
+  )
+
   // Apply initial diagnostics
   if (props.diagnostics?.length) applyDiagnostics(props.diagnostics)
 })

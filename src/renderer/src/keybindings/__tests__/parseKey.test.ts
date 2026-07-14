@@ -4,7 +4,7 @@ import { parseKey, parseKeySpec, matchesEvent, parsedKeyEquals, eventToParsedKey
 
 function mkEvent(
   key: string,
-  opts: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
+  opts: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; code: string }> = {},
 ): KeyboardEvent {
   return new KeyboardEvent('keydown', { key, bubbles: true, ...opts })
 }
@@ -81,6 +81,24 @@ describe('matchesEvent', () => {
     const parsed = parseKey('escape')
     const e = mkEvent('Escape')
     expect(matchesEvent(parsed, e)).toBe(true)
+  })
+
+  it('matches slash by physical key when an IME reports Process', () => {
+    const parsed = parseKey('cmd+/')
+    const e = mkEvent('Process', { metaKey: true, code: 'Slash' })
+    expect(matchesEvent(parsed, e)).toBe(true)
+  })
+
+  it('matches slash by physical key when a layout reports a localized character', () => {
+    const parsed = parseKey('cmd+alt+/')
+    const e = mkEvent('、', { metaKey: true, altKey: true, code: 'Slash' })
+    expect(matchesEvent(parsed, e)).toBe(true)
+  })
+
+  it('does not treat another physical key as slash', () => {
+    const parsed = parseKey('cmd+/')
+    const e = mkEvent('Process', { metaKey: true, code: 'KeyP' })
+    expect(matchesEvent(parsed, e)).toBe(false)
   })
 })
 

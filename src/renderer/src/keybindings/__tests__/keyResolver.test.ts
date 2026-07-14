@@ -6,7 +6,7 @@ import { defaults } from '../defaults'
 
 function mkEvent(
   key: string,
-  opts: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {},
+  opts: Partial<{ metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; code: string }> = {},
 ): KeyboardEvent {
   return new KeyboardEvent('keydown', { key, bubbles: true, ...opts })
 }
@@ -54,6 +54,15 @@ describe('KeyResolver – single key', () => {
     expect(resolver.resolve(mkEvent('Meta'), {})).toBeNull()
     expect(resolver.resolve(mkEvent('Control'), {})).toBeNull()
     expect(resolver.resolve(mkEvent('Shift'), {})).toBeNull()
+  })
+
+  it('resolves default cmd+/ from the physical slash key under an IME', () => {
+    const defaultResolver = new KeyResolver(defaults)
+    const rule = defaultResolver.resolve(
+      mkEvent('Process', { metaKey: true, code: 'Slash' }),
+      { editorTextFocus: true },
+    )
+    expect(rule?.command).toBe('editor.action.toggleComment')
   })
 })
 

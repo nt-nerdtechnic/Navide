@@ -49,10 +49,25 @@ export function parsedKeyEquals(a: ParsedKey, b: ParsedKey): boolean {
     a.alt === b.alt && a.key === b.key
 }
 
+function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
+  if (e.key.toLowerCase() === expectedKey) return true
+
+  // `KeyboardEvent.key` is layout/IME-dependent. With Chinese input methods
+  // the physical slash key may be reported as `Process`, `Unidentified`, or a
+  // localized character, which made Cmd+/ silently miss its binding. Use the
+  // physical key as a fallback for slash shortcuts while retaining `key` as
+  // the primary match for user-facing keybinding semantics.
+  if (expectedKey === '/') {
+    return e.code === 'Slash' || e.code === 'NumpadDivide'
+  }
+
+  return false
+}
+
 export function matchesEvent(parsed: ParsedKey, e: KeyboardEvent): boolean {
   if (parsed.meta !== e.metaKey) return false
   if (parsed.ctrl !== e.ctrlKey) return false
   if (parsed.shift !== e.shiftKey) return false
   if (parsed.alt !== e.altKey) return false
-  return e.key.toLowerCase() === parsed.key
+  return eventKeyMatches(parsed.key, e)
 }
