@@ -128,6 +128,32 @@ def test_read_file(tmp_path: Path) -> None:
     assert res["ok"] is True and res["content"] == "hi"
 
 
+def test_read_file_has_no_size_limit(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    content = "x" * (10 * 1024 * 1024 + 1)
+    (Path(ws) / "large.txt").write_text(content)
+
+    res = fs_service.read_file(ws, "large.txt")
+
+    assert res["ok"] is True
+    assert res["content"] == content
+
+
+def test_read_large_pdf_is_classified_as_binary(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    size = 10 * 1024 * 1024 + 1
+    pdf = Path(ws) / "large.pdf"
+    with pdf.open("wb") as fh:
+        fh.truncate(size)
+
+    res = fs_service.read_file(ws, "large.pdf")
+
+    assert res["ok"] is False
+    assert res["error"] == "binary file"
+    assert res["is_binary"] is True
+    assert res["size"] == size
+
+
 def test_read_file_rejects_escape(tmp_path: Path) -> None:
     assert fs_service.read_file(_ws(tmp_path), "../../etc/hosts")["ok"] is False
 
@@ -159,6 +185,18 @@ def test_read_image_returns_data_url(tmp_path: Path) -> None:
     assert res["mime"] == "image/png"
     assert res["data_url"].startswith("data:image/png;base64,")
     assert res["size"] == len(_PNG_1X1)
+
+
+def test_read_image_has_no_size_limit(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    image = _PNG_1X1 + b"\0" * (10 * 1024 * 1024)
+    (Path(ws) / "large.png").write_bytes(image)
+
+    res = fs_service.read_image(ws, "large.png")
+
+    assert res["ok"] is True
+    assert res["size"] == len(image)
+    assert res["data_url"].startswith("data:image/png;base64,")
 
 
 def test_read_image_rejects_non_image(tmp_path: Path) -> None:

@@ -250,9 +250,6 @@ def rename(workspace_path: str, src_rel: str, dst_rel: str) -> dict[str, Any]:
     return {"ok": True}
 
 
-_READ_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB
-
-
 _BINARY_EXTENSIONS = {
     # Images
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tiff", ".tif", ".svg",
@@ -338,9 +335,6 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
         if not target.is_file():
             raise FsError("not a file")
         size = target.stat().st_size
-        if size > _READ_SIZE_LIMIT:
-            return {"ok": False, "error": "file too large (> 10 MB)", "is_binary": False, "size": size, "ext": target.suffix.lower()}
-
         ext = target.suffix.lower()
 
         # Fast-path: known binary extension
@@ -425,8 +419,8 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
         ok=True  → {"ok": True, "data_url": str, "mime": str, "size": int}
         ok=False → {"ok": False, "error": str}
 
-    Rejects non-image extensions and files over the 10 MB read limit (base64
-    inflates ~33%, so the caller should fall back to a placeholder above it).
+    Rejects non-image extensions. Image files are returned without an
+    application-level size limit.
     """
     try:
         target = _resolve_safe(workspace_path, rel_path)
@@ -437,8 +431,6 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
         if mime is None:
             return {"ok": False, "error": "not an image"}
         size = target.stat().st_size
-        if size > _READ_SIZE_LIMIT:
-            return {"ok": False, "error": "file too large (> 10 MB)"}
         b64 = base64.b64encode(target.read_bytes()).decode("ascii")
         return {"ok": True, "data_url": f"data:{mime};base64,{b64}", "mime": mime, "size": size}
     except (FsError, OSError) as exc:
