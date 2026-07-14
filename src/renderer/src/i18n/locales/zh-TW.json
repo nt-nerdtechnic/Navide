@@ -88,6 +88,7 @@
     "switch-to-list-view": "切換為清單檢視",
     "switch-to-tree-view": "切換為樹狀檢視",
     "more-options": "更多選項",
+    "rebuild-all-cli-panes": "重新整理所有 tab 中可 resume 的 CLI pane。這會中斷進行中的回合並重新載入每段對話。",
     "discard-all": "捨棄所有變更",
     "dismiss": "關閉",
     "save-draft-title": "儲存為草稿（標籤可選）",

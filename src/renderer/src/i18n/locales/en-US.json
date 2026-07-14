@@ -88,6 +88,7 @@
     "switch-to-list-view": "Switch to List View",
     "switch-to-tree-view": "Switch to Tree View",
     "more-options": "More options",
+    "rebuild-all-cli-panes": "Rebuild all resumable CLI panes across every tab. This interrupts in-progress turns and reprints each conversation.",
     "discard-all": "Discard All Changes",
     "dismiss": "Dismiss",
     "save-draft-title": "Save as Draft (label optional)",

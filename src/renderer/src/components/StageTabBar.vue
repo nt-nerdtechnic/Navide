@@ -8,7 +8,17 @@ export interface TabItem {
   type: 'stage' | 'manual'
 }
 
-const props = defineProps<{ tabs: TabItem[]; modelValue: string }>()
+const props = withDefaults(defineProps<{
+  tabs: TabItem[]
+  modelValue: string
+  canRebuildAll?: boolean
+  rebuildingAll?: boolean
+  rebuildAllTitle?: string
+}>(), {
+  canRebuildAll: false,
+  rebuildingAll: false,
+  rebuildAllTitle: 'Rebuild all CLI panes'
+})
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
   (e: 'add'): void
@@ -18,6 +28,7 @@ const emit = defineEmits<{
   (e: 'move-pane', paneId: string, targetKey: string): void
   (e: 'reorder-tab', fromKey: string, toKey: string): void
   (e: 'detach', key: string, x: number, y: number): void
+  (e: 'rebuild-all'): void
 }>()
 
 const actionMenu = ref<{ show: boolean; key: string; x: number; y: number }>({ show: false, key: '', x: 0, y: 0 })
@@ -148,6 +159,18 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
       </button>
     </template>
     <button class="tab-add-btn" title="新增 Pipeline 區塊" @click="emit('add')">+</button>
+    <button
+      class="tab-rebuild-all-btn"
+      :class="{ busy: rebuildingAll }"
+      :disabled="!canRebuildAll || rebuildingAll"
+      :title="rebuildAllTitle"
+      :aria-label="rebuildAllTitle"
+      @click="emit('rebuild-all')"
+    >
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
+      </svg>
+    </button>
   </div>
 
   <Teleport to="body">
@@ -257,7 +280,8 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   outline: none;
 }
 
-.tab-add-btn {
+.tab-add-btn,
+.tab-rebuild-all-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -274,10 +298,34 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   flex-shrink: 0;
   transition: color 0.12s, border-color 0.12s, background 0.12s;
 }
-.tab-add-btn:hover {
+.tab-add-btn:hover,
+.tab-rebuild-all-btn:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--accent-focus);
   background: var(--bg-hover);
+}
+
+.tab-rebuild-all-btn {
+  margin-left: 2px;
+}
+.tab-rebuild-all-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tab-rebuild-all-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.tab-rebuild-all-btn.busy svg {
+  animation: tab-rebuild-spin 0.8s linear infinite;
+}
+@keyframes tab-rebuild-spin {
+  to { transform: rotate(360deg); }
 }
 
 .tab-action-backdrop {

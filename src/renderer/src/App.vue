@@ -1737,6 +1737,14 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
 // Guards against double-click re-entrancy: the kill→respawn window is async, so
 // a second click on the same pane would otherwise spawn a duplicate resumed CLI.
 const rebuildingPanes = new Set<string>()
+const rebuildingAllPanes = ref(false)
+
+function paneCanRebuild(pane: ActivePane): boolean {
+  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity'].includes(pane.agentKey)
+}
+
+const rebuildablePaneCount = computed(() => panes.value.filter(paneCanRebuild).length)
+
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
   if (rebuildingPanes.has(paneId)) return
   const pane = panes.value.find((p) => p.id === paneId)
@@ -1809,6 +1817,28 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     }
   } finally {
     rebuildingPanes.delete(paneId)
+  }
+}
+
+async function rebuildAllPanesViaResume(): Promise<void> {
+  if (rebuildingAllPanes.value) return
+  // Rebuild replaces pane ids, so capture the full cross-tab batch up front.
+  const ids = panes.value.filter(paneCanRebuild).map((pane) => pane.id)
+  if (!ids.length) return
+
+  rebuildingAllPanes.value = true
+  pipelineLog(`↻ rebuilding ${ids.length} CLI pane(s) across all tabs`)
+  try {
+    for (const id of ids) {
+      try {
+        await rebuildPaneViaResume(id)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        pipelineLog(`⚠ rebuild pane ${id.slice(0, 8)} failed: ${message}`)
+      }
+    }
+  } finally {
+    rebuildingAllPanes.value = false
   }
 }
 
@@ -6269,7 +6299,11 @@ function paneIsCommander(p: ActivePane): boolean {
         v-if="stageTabs.length > 0"
         :tabs="stageTabs"
         v-model="activeTab"
+        :can-rebuild-all="rebuildablePaneCount > 0"
+        :rebuilding-all="rebuildingAllPanes"
+        :rebuild-all-title="$t('action.rebuild-all-cli-panes')"
         @add="createRunGroup()"
+        @rebuild-all="rebuildAllPanesViaResume()"
         @rename="(key, name) => renameRunGroup(key, name)"
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"
@@ -6346,7 +6380,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
-          :can-rebuild="!!p.pinnedSessionId && ['claude', 'codex', 'antigravity'].includes(p.agentKey)"
+          :can-rebuild="paneCanRebuild(p)"
           :is-preparing="paneShowsPrepOverlay(p)"
           :preparing-label="panePreparationLabel(p)"
           :backend="backend"

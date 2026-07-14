@@ -104,3 +104,30 @@ describe('StageTabBar – tab drag-reorder', () => {
     expect(wrapper.findAll('.tab-btn')[0].classes()).toContain('drag-over')
   })
 })
+
+describe('StageTabBar – rebuild all', () => {
+  it('emits rebuild-all from the refresh control', async () => {
+    const wrapper = mount(StageTabBar, {
+      props: { tabs, modelValue: 'rg-1', canRebuildAll: true }
+    })
+
+    await wrapper.get('.tab-rebuild-all-btn').trigger('click')
+
+    expect(wrapper.emitted('rebuild-all')).toEqual([[]])
+    wrapper.unmount()
+  })
+
+  it('disables the refresh control when no pane can rebuild or a batch is running', async () => {
+    const wrapper = mount(StageTabBar, {
+      props: { tabs, modelValue: 'rg-1', canRebuildAll: false }
+    })
+    const button = wrapper.get<HTMLButtonElement>('.tab-rebuild-all-btn')
+
+    expect(button.element.disabled).toBe(true)
+    await wrapper.setProps({ canRebuildAll: true, rebuildingAll: true })
+    expect(button.element.disabled).toBe(true)
+    expect(button.classes()).toContain('busy')
+
+    wrapper.unmount()
+  })
+})
