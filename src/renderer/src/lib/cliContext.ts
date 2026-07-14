@@ -114,7 +114,9 @@ export function buildCliSessionReference(context: CliSessionContext): string {
 
 export function buildPaneContextPaste(context: CliSessionContext, buffer: string): string | null {
   if (!buffer.trim() && !context.conversationLogPath && !context.sessionId) return null
-  const tail = bufferTail(buffer, CLI_PASTE_BUFFER_CAP).trim()
+  // A readable transcript path is the primary cross-vendor handoff. Inline
+  // terminal output only when that durable reference is unavailable.
+  const tail = context.conversationLogPath ? '' : bufferTail(buffer, CLI_PASTE_BUFFER_CAP).trim()
   const who = context.agentKey
     ? `${context.label || 'pane'} (${context.agentKey})`
     : context.label || 'pane'
@@ -203,7 +205,7 @@ export function buildCliContextChip(
   const name = reply.label || payload.label || payload.agentKey || 'pane'
   const reference = buildCliSessionReference(context)
   const header = `// CLI session context — captured: ${new Date(capturedAt).toISOString()}`
-  const tail = bufferTail(buffer, CLI_CHIP_BUFFER_CAP)
+  const tail = context.conversationLogPath ? '' : bufferTail(buffer, CLI_CHIP_BUFFER_CAP)
   const excerpt = tail ? `\n// Recent terminal excerpt\n\`\`\`\n${tail}\n\`\`\`` : ''
   return {
     kind: 'chip',

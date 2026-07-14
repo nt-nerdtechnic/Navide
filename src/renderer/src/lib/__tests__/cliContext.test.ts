@@ -174,7 +174,7 @@ describe('buildCliContextChip', () => {
   const payload = { paneId: 'p-1', agentKey: 'claude', label: 'My Pane', sessionId: 's-drag' }
   const capturedAt = Date.UTC(2026, 6, 12, 10, 30, 0)
 
-  it('builds a chip with @cli: label, header line, fenced buffer, and cli-pane sourceId', () => {
+  it('builds a metadata-only chip when the conversation log is available', () => {
     const result = buildCliContextChip(payload, {
       label: 'Reply Pane',
       agentKey: 'claude',
@@ -193,8 +193,7 @@ describe('buildCliContextChip', () => {
         'source_agent: "claude"\n' +
         'source_workspace: "/workspace"\n' +
         'source_session_id: "s-1"\n' +
-        'conversation_log: "/workspace/.agent-team/manual/claude.log"\n' +
-        '// Recent terminal excerpt\n```\nhello output\n```',
+        'conversation_log: "/workspace/.agent-team/manual/claude.log"',
       sourceId: 'cli-pane:p-1'
     })
   })
@@ -298,13 +297,14 @@ describe('buildPaneContextPaste', () => {
     conversationLogPath: '/workspace/.agent-team/manual/claude-pane-a.log'
   }
 
-  it('builds a shared session reference and wraps the recent buffer', () => {
+  it('builds a compact session reference without duplicating the logged buffer', () => {
     const text = buildPaneContextPaste(context, 'line one\nline two') as string
     expect(text).toContain('--- CLI session context: Backend (claude) ---')
     expect(text).toContain('source_pane_id: "pane-a"')
     expect(text).toContain('source_session_id: "session-a"')
     expect(text).toContain('conversation_log: "/workspace/.agent-team/manual/claude-pane-a.log"')
-    expect(text).toContain('--- recent terminal excerpt ---\nline one\nline two')
+    expect(text).not.toContain('line one')
+    expect(text).not.toContain('recent terminal excerpt')
   })
 
   it('omits the agent key from the header when the pane has none', () => {
@@ -319,7 +319,8 @@ describe('buildPaneContextPaste', () => {
 
   it('tail-truncates an oversized buffer and says so in the header', () => {
     const buffer = 'x'.repeat(CLI_PASTE_BUFFER_CAP + 500)
-    const text = buildPaneContextPaste({ ...context, agentKey: 'codex' }, buffer) as string
+    const { conversationLogPath: _log, ...withoutLog } = context
+    const text = buildPaneContextPaste({ ...withoutLog, agentKey: 'codex' }, buffer) as string
     expect(text).toContain(`--- recent terminal excerpt — last ${CLI_PASTE_BUFFER_CAP} chars ---`)
     const body = text.split(`--- recent terminal excerpt — last ${CLI_PASTE_BUFFER_CAP} chars ---\n`)[1]
       .split('\n--- end recent terminal excerpt ---')[0]
@@ -327,7 +328,8 @@ describe('buildPaneContextPaste', () => {
   })
 
   it('does not claim truncation when the whole buffer fits under the cap', () => {
-    const text = buildPaneContextPaste({ ...context, agentKey: 'codex' }, 'short output') as string
+    const { conversationLogPath: _log, ...withoutLog } = context
+    const text = buildPaneContextPaste({ ...withoutLog, agentKey: 'codex' }, 'short output') as string
     expect(text).not.toContain('last')
   })
 
