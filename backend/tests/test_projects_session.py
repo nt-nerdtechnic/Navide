@@ -346,6 +346,29 @@ def test_rename_pane_survives_respawn_with_new_id(
     assert pane.custom_name == "Architect"
 
 
+def test_manual_rename_survives_rebuild_with_new_id(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """Rebuild relinks a manual pane through previous_pane_id without losing
+    the custom title stored on the existing record."""
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="old-id", agent="codex")
+    store.rename_pane(ws, pane_id="old-id", custom_name="Research Lead")
+
+    store.record_manual_pane_spawn(
+        ws,
+        pane_id="new-id",
+        previous_pane_id="old-id",
+        agent="codex",
+        session_id="session-1",
+    )
+
+    panes = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    assert len(panes) == 1
+    assert panes[0].pane_id == "new-id"
+    assert panes[0].custom_name == "Research Lead"
+
+
 def test_rename_pane_unknown_workspace_returns_none(tmp_path: Path) -> None:
     store = ProjectStore()
     assert store.rename_pane(str(tmp_path), pane_id="x", custom_name="Y") is None

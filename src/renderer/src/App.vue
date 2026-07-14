@@ -1285,6 +1285,9 @@ interface SpawnInternal {
   agentKey: string
   roleKey: RoleKey
   stageId: StageId
+  /** User-set pane title. Runtime replacements such as rebuild must carry it
+   *  forward because they receive a new pane id. */
+  customName?: string
   /** Human-readable slot label — set for parallel-stage slots so the context
    *  header for downstream stages can identify which agent produced which output. */
   slotLabel?: string
@@ -1389,6 +1392,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     id,
     agentKey: opts.agentKey,
     agentLabel: spec.label,
+    customName: opts.customName,
     roleKey: opts.roleKey,
     stageId: opts.stageId,
     slotLabel: opts.slotLabel ?? '',
@@ -1764,8 +1768,10 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   // Snapshot identity before onKill removes the pane from the list.
   const snap = {
     agentKey: pane.agentKey,
+    customName: pane.customName,
     roleKey: pane.roleKey,
     stageId: pane.stageId,
+    stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
     slotLabel: pane.slotLabel,
     workspacePath: ws,
     origin: pane.origin,
@@ -1781,6 +1787,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     await onKill(paneId, { markRemoved: false })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
+      customName: snap.customName,
       roleKey: snap.roleKey,
       stageId: snap.stageId,
       slotLabel: snap.slotLabel,
@@ -1803,6 +1810,22 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
           agent: snap.agentKey,
           role: snap.roleKey || '',
           command: resumeCmd,
+          session_id: sessionId,
+          session_home_id: snap.sessionHomeId || '',
+          run_group_id: snap.runGroupId || '',
+        })
+      } else if (snap.stageIndex >= 0 && snap.slotLabel) {
+        // Rebuild replaces the runtime pane id. Keep the stable pipeline slot
+        // record pointed at the replacement so later renames update the
+        // existing record (and its custom_name) instead of creating a manual
+        // pending stub for an unknown id.
+        await sendQuiet<ProjectPayload>('pipeline.slot_spawn', {
+          workspace_path: snap.workspacePath,
+          stage_index: snap.stageIndex,
+          slot_label: snap.slotLabel,
+          pane_id: newId,
+          agent: snap.agentKey,
+          role: snap.roleKey,
           session_id: sessionId,
           session_home_id: snap.sessionHomeId || '',
           run_group_id: snap.runGroupId || '',
@@ -1849,8 +1872,10 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   if (!pane) return
   const snap = {
     agentKey: pane.agentKey,
+    customName: pane.customName,
     roleKey: pane.roleKey,
     stageId: pane.stageId,
+    stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
     slotLabel: pane.slotLabel,
     workspacePath: pane.workspacePath,
     origin: pane.origin,
@@ -1862,6 +1887,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     await onKill(paneId, { markRemoved: false })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
+      customName: snap.customName,
       roleKey: snap.roleKey,
       stageId: snap.stageId,
       slotLabel: snap.slotLabel,
@@ -1879,6 +1905,19 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
           previous_pane_id: paneId,
           agent: snap.agentKey,
           role: snap.roleKey || '',
+          run_group_id: snap.runGroupId || '',
+        })
+      } else if (snap.stageIndex >= 0 && snap.slotLabel) {
+        const replacement = panes.value.find((p) => p.id === newId)
+        await sendQuiet<ProjectPayload>('pipeline.slot_spawn', {
+          workspace_path: snap.workspacePath,
+          stage_index: snap.stageIndex,
+          slot_label: snap.slotLabel,
+          pane_id: newId,
+          agent: snap.agentKey,
+          role: snap.roleKey,
+          session_id: replacement?.pinnedSessionId ?? '',
+          session_home_id: replacement?.sessionHomeId ?? '',
           run_group_id: snap.runGroupId || '',
         })
       }
