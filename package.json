@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.1.38",
+  "version": "0.1.39",
   "private": true,
   "author": "Navide Team",
   "description": "Navide (Agent-Team): macOS desktop terminal manager for Claude Code, Codex, and Antigravity CLI",
