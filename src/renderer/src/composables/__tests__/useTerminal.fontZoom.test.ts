@@ -116,20 +116,14 @@ describe('terminal font zoom — app-wide', () => {
     b.scope.stop()
   })
 
-  // The whole point of the feature: cols must not change, or xterm truncates the
-  // history that the CLI hard-wrapped at the old width. Never refit on zoom.
-  it('never refits — zooming must not resize the PTY', async () => {
+  it('refits every pane so the content keeps filling it', async () => {
     const a = await spawnPane('pane-a')
     const b = await spawnPane('pane-b')
-    ctrl.applyFit.mockClear() // mount/spawn legitimately refit; count only zoom-driven calls
+    ctrl.applyFit.mockClear() // mount/spawn already refit; count only zoom-driven calls
 
-    for (let i = 0; i < 3; i++) await press('+', { shiftKey: true })
-    for (let i = 0; i < 3; i++) await press('-')
-    await press('0')
+    await press('-')
 
-    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE) // the zooms did land
-    expect(ctrl.applyFit).not.toHaveBeenCalled() // ...without a single refit
-    expect(ctrl.sendResizeNow).not.toHaveBeenCalled()
+    expect(ctrl.applyFit).toHaveBeenCalledTimes(2) // one refit per pane
 
     a.scope.stop()
     b.scope.stop()
