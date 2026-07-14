@@ -142,15 +142,21 @@ describe('terminal font zoom — app-wide', () => {
     a.scope.stop()
   })
 
-  it('⌘= and ⌘0 both reset to the default size', async () => {
+  it('⌘= grows too — it is the key people actually press for zoom in', async () => {
+    const a = await spawnPane('pane-a')
+
+    await press('=') // no Shift: the bare key on the keycap
+    expect(a.opts.fontSize).toBe(13)
+
+    a.scope.stop()
+  })
+
+  it('⌘0 resets to the default size', async () => {
     const a = await spawnPane('pane-a')
 
     for (let i = 0; i < 5; i++) await press('+', { shiftKey: true })
     expect(a.opts.fontSize).toBe(17)
-    await press('=')
-    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
 
-    for (let i = 0; i < 5; i++) await press('+', { shiftKey: true })
     await press('0')
     expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
 
