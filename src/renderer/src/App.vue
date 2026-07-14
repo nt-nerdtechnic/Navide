@@ -1565,17 +1565,17 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
 // the same resume path as boot-restore: validate → buildResumeCommand → spawnPane
 // with isResume/skipRoleInjection. No role is injected (the session already
 // carries its own context).
-async function onManualResume(payload: ResumePayload): Promise<void> {
+async function onManualResume(payload: ResumePayload): Promise<boolean> {
   const { agentKey, workspacePath } = payload
   const sessionId = payload.sessionId.trim()
-  if (!sessionId) return
+  if (!sessionId) return false
   // Authoritative existence check: the datalist may list a since-deleted id, or
   // the user may have pasted a bad one. Never fall through to a fresh spawn —
   // that would silently start a brand-new agent and confuse the user.
   const exists = await canResumeSession(agentKey, workspacePath, sessionId)
   if (!exists) {
     controlPaneRef.value?.showResumeError(i18n.global.t('label.resume-session-not-found'))
-    return
+    return false
   }
   const spec = agentSpecs.find((s) => s.agentKey === agentKey)
   const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
@@ -1610,7 +1610,9 @@ async function onManualResume(payload: ResumePayload): Promise<void> {
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: spawnGroupId,
     })
+    return true
   }
+  return false
 }
 
 
@@ -2152,6 +2154,8 @@ const showKbPanel = ref(false)
 const kbQueryMain = ref('')
 const showHistory = ref(false)
 const confirmKillAll = ref(false)
+const revivingHistoryPaneId = ref('')
+const unavailableHistoryPaneIds = ref<Set<string>>(new Set())
 
 // ── Keyboard Shortcuts Panel ──────────────────────────────────────────────────
 const MAIN_SHORTCUTS = [
@@ -2275,23 +2279,44 @@ function onFocusPane(paneId: string): void {
   })
 }
 
-function onReviveAgent(entry: SpawnHistoryEntry): void {
+async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
+  if (revivingHistoryPaneId.value) return
   const sessionId = entry.sessionId?.trim()
-  if (sessionId) {
-    void onManualResume({
+  if (!sessionId) return
+  revivingHistoryPaneId.value = entry.paneId
+  try {
+    const resumed = await onManualResume({
       agentKey: entry.agentKey,
       workspacePath: entry.workspacePath || currentWorkspace.value,
       sessionId,
     })
-  } else {
-    void onManualSpawn({
+    if (resumed) {
+      showHistory.value = false
+      return
+    }
+    unavailableHistoryPaneIds.value = new Set([
+      ...unavailableHistoryPaneIds.value,
+      entry.paneId,
+    ])
+  } finally {
+    revivingHistoryPaneId.value = ''
+  }
+}
+
+async function onFreshSpawnHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
+  if (revivingHistoryPaneId.value) return
+  revivingHistoryPaneId.value = entry.paneId
+  try {
+    await onManualSpawn({
       agentKey: entry.agentKey,
       roleKey: entry.roleKey,
       stageId: '',
       workspacePath: entry.workspacePath || currentWorkspace.value,
     })
+    showHistory.value = false
+  } finally {
+    revivingHistoryPaneId.value = ''
   }
-  showHistory.value = false
 }
 watch(() => pipeline.state, (newState, oldState) => {
   if (newState === 'completed' && oldState === 'running') {
@@ -6421,7 +6446,21 @@ function paneIsCommander(p: ActivePane): boolean {
                 </span>
               </div>
               <div v-if="entry.removedAt" class="agent-history-actions">
-                <button class="ah-revive" @click="onReviveAgent(entry)">↺ Re-spawn</button>
+                <span
+                  v-if="unavailableHistoryPaneIds.has(entry.paneId)"
+                  class="ah-session-unavailable"
+                >{{ $t('label.history-session-unavailable') }}</span>
+                <button
+                  v-if="entry.sessionId && !unavailableHistoryPaneIds.has(entry.paneId)"
+                  class="ah-revive"
+                  :disabled="!!revivingHistoryPaneId"
+                  @click="onResumeHistoryAgent(entry)"
+                >{{ revivingHistoryPaneId === entry.paneId ? '…' : $t('action.resume-session') }}</button>
+                <button
+                  class="ah-revive ah-fresh"
+                  :disabled="!!revivingHistoryPaneId"
+                  @click="onFreshSpawnHistoryAgent(entry)"
+                >{{ $t('action.fresh-spawn') }}</button>
               </div>
             </div>
           </div>
@@ -7755,8 +7794,15 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .agent-history-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 2px;
+}
+.ah-session-unavailable {
+  width: 100%;
+  color: var(--warning-fg);
+  font-size: 11px;
 }
 .ah-revive {
   display: inline-flex;
@@ -7776,6 +7822,15 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--bg-selected);
   border-color: var(--accent-bright);
   color: var(--accent-bright);
+}
+.ah-revive.ah-fresh {
+  border-color: var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+.ah-revive:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 .stall-overlay {
   position: fixed;
