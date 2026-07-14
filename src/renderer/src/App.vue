@@ -1880,16 +1880,30 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
 // rebuildPaneViaResume itself.
 const FONT_ZOOM_REBUILD_DELAY_MS = 600
 let fontZoomRebuildTimer: ReturnType<typeof setTimeout> | null = null
+// The size the panes were last (re)built at. Panes spawn at the current size, so the
+// initial value is already in sync — nothing to rebuild until it actually changes.
+let rebuiltAtFontSize = terminalFontSize.value
+
 watch(terminalFontSize, () => {
   if (fontZoomRebuildTimer) clearTimeout(fontZoomRebuildTimer)
   fontZoomRebuildTimer = setTimeout(() => {
     fontZoomRebuildTimer = null
+    const size = terminalFontSize.value
+    // Zooming out and back in nets to nothing — don't kill every CLI for a no-op.
+    if (size === rebuiltAtFontSize) return
+    rebuiltAtFontSize = size
     // Snapshot the ids: rebuilding mutates panes (kill removes, spawn appends).
     const ids = panes.value.map((p) => p.id)
+    if (!ids.length) return
+    pipelineLog(`↻ font size ${size}px — rebuilding ${ids.length} pane(s) to reprint history at the new width`)
     void (async () => {
       for (const id of ids) await rebuildPaneViaResume(id)
     })()
   }, FONT_ZOOM_REBUILD_DELAY_MS)
+})
+
+onUnmounted(() => {
+  if (fontZoomRebuildTimer) clearTimeout(fontZoomRebuildTimer)
 })
 
 async function onInterrupt(paneId: string): Promise<void> {
