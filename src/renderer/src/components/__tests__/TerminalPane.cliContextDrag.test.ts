@@ -5,7 +5,7 @@ import TerminalPane from '../TerminalPane.vue'
 
 // Coverage for the header dragstart payload: alongside the pane-reorder id
 // ('application/x-pane-id'), the drag must carry 'application/x-cli-context'
-// with { paneId, agentKey, label, sessionId } so the editor window's AI Chat
+// with the vendor session reference so the editor window's AI Chat
 // can fetch the pane's buffer on drop. useTerminal is mocked out — no xterm
 // instance, no backend traffic (same setup as TerminalPane.reorderDrop.test.ts).
 
@@ -58,9 +58,15 @@ describe('TerminalPane – cli-context drag payload on header dragstart', () => 
     mockSessionId.value = ''
   })
 
-  it('sets the cli-context payload with pane id, agent key, label, and session id', () => {
-    mockSessionId.value = 'sess-42'
-    wrapper = mountPane({ agentKey: 'claude', title: 'My Claude' })
+  it('sets the cli-context payload with the real CLI session metadata, not the PTY id', () => {
+    mockSessionId.value = 'pty-session-must-not-leak'
+    wrapper = mountPane({
+      agentKey: 'claude',
+      title: 'My Claude',
+      cliSessionId: 'claude-session-42',
+      workspacePath: '/workspace',
+      conversationLogPath: '/workspace/.agent-team/manual/claude-pane-1.log'
+    })
     const ev = dragStartEvent()
     wrapper.find('.pane-header').element.dispatchEvent(ev)
 
@@ -68,7 +74,10 @@ describe('TerminalPane – cli-context drag payload on header dragstart', () => 
       paneId: 'pane-1',
       agentKey: 'claude',
       label: 'My Claude',
-      sessionId: 'sess-42'
+      sessionId: 'claude-session-42',
+      sessionHomeId: '',
+      workspacePath: '/workspace',
+      conversationLogPath: '/workspace/.agent-team/manual/claude-pane-1.log'
     })
   })
 
@@ -81,7 +90,10 @@ describe('TerminalPane – cli-context drag payload on header dragstart', () => 
       paneId: 'pane-1',
       agentKey: 'codex',
       label: 'Claude',
-      sessionId: null
+      sessionId: null,
+      sessionHomeId: '',
+      workspacePath: '',
+      conversationLogPath: ''
     })
   })
 

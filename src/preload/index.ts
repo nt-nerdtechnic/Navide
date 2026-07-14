@@ -171,15 +171,32 @@ contextBridge.exposeInMainWorld('agentTeam', {
   },
   // Cross-window CLI-context bridge: the editor window's AI Chat invokes
   // getCliPaneBuffer; the main process relays it to the main window(s), where
-  // onCliPaneBufferRequest answers from the pane's cleanBuffer.
+  // onCliPaneBufferRequest answers from the pane's live metadata and rendered scrollback.
   getCliPaneBuffer: (
     paneId: string
-  ): Promise<{ label?: string; sessionId?: string | null; buffer?: string; error?: string }> =>
+  ): Promise<{
+    label?: string
+    agentKey?: string
+    sessionId?: string | null
+    sessionHomeId?: string
+    workspacePath?: string
+    conversationLogPath?: string
+    buffer?: string
+    error?: string
+  }> =>
     ipcRenderer.invoke('cli:get-pane-buffer', paneId),
   onCliPaneBufferRequest: (
     handler: (
       paneId: string
-    ) => { label: string; sessionId: string | null; buffer: string } | { error: string }
+    ) => {
+      label: string
+      agentKey: string
+      sessionId: string | null
+      sessionHomeId: string
+      workspacePath: string
+      conversationLogPath: string
+      buffer: string
+    } | { error: string }
   ): void => {
     ipcRenderer.on('cli:get-pane-buffer:request', (_event, requestId: string, paneId: string) => {
       ipcRenderer.send('cli:get-pane-buffer:reply', requestId, handler(paneId))

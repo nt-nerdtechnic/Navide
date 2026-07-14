@@ -20,7 +20,6 @@ import Welcome from './components/Welcome.vue'
 import { useNotify } from './composables/useNotify'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
-import { terminalFontSize } from './composables/useTerminalFontSize'
 import { useTheme } from './composables/useTheme'
 import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
@@ -56,6 +55,12 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
+import {
+  advanceWidthRebuild,
+  coalesceWidthRebuild,
+  isWidthRebuildReady,
+  type WidthRebuildScheduleState,
+} from './lib/paneWidthRebuild'
 import { quickClassify } from './lib/quick-classify'
 import { buildResumeCommand } from './lib/resume-command'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
@@ -98,7 +103,6 @@ onMounted(() => {
       panes.value.find((p) => p.id === paneId),
       ref
         ? {
-            sessionId: (ref.sessionId as unknown as string) || undefined,
             buffer: readPaneShareText(ref, CLI_CHIP_LINE_CAP)
           }
         : null
@@ -788,12 +792,16 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
   // Source pane closed mid-drag, or target has no live PTY → nothing to do.
   if (!sourcePane || !sourceRef || !targetSessionId) return
 
-  const text = buildPaneContextPaste(
-    sourcePane.customName || sourcePane.agentLabel,
-    sourcePane.agentKey,
-    readPaneShareText(sourceRef, CLI_PASTE_LINE_CAP)
-  )
-  if (!text) return // empty buffer — nothing worth pasting
+  const text = buildPaneContextPaste({
+    paneId: sourcePane.id,
+    label: sourcePane.customName || sourcePane.agentLabel,
+    agentKey: sourcePane.agentKey,
+    sessionId: sourcePane.pinnedSessionId || null,
+    sessionHomeId: sourcePane.sessionHomeId,
+    workspacePath: sourcePane.workspacePath,
+    conversationLogPath: sourcePane.outputLogFile
+  }, readPaneShareText(sourceRef, CLI_PASTE_LINE_CAP))
+  if (!text) return // no session reference or buffer worth sharing
 
   const payload = BRACKETED_PASTE_START + text + BRACKETED_PASTE_END
   for (const chunk of chunkForPty(payload, 512)) {
@@ -1678,6 +1686,7 @@ async function onReinject(paneId: string): Promise<void> {
 }
 
 async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRemoved: true }): Promise<void> {
+  clearPaneWidthRebuild(paneId)
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
     window.clearTimeout(pane.injectionTimer)
@@ -1745,26 +1754,40 @@ const rebuildingPanes = new Set<string>()
 const rebuildingAllPanes = ref(false)
 
 function paneCanRebuild(pane: ActivePane): boolean {
-  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity'].includes(pane.agentKey)
+  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok'].includes(pane.agentKey)
 }
 
 const rebuildablePaneCount = computed(() => panes.value.filter(paneCanRebuild).length)
 
-async function rebuildPaneViaResume(paneId: string): Promise<void> {
-  if (rebuildingPanes.has(paneId)) return
+type PaneRebuildResult = 'rebuilt' | 'busy' | 'skipped'
+
+async function rebuildPaneViaResume(
+  paneId: string,
+  opts: { requireIdle?: boolean } = {}
+): Promise<PaneRebuildResult> {
+  if (rebuildingPanes.has(paneId)) return 'skipped'
   const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane) return
+  if (!pane) return 'skipped'
   const sessionId = (pane.pinnedSessionId ?? '').trim()
-  if (!sessionId) return
+  if (!sessionId) return 'skipped'
+  if (opts.requireIdle && !paneIsSafeForWidthRebuild(paneId)) return 'busy'
   const ws = pane.workspacePath
   if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
     pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
-    return
+    return 'skipped'
   }
   const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
   const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
   const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag)
-  if (!resumeCmd) return
+  if (!resumeCmd) return 'skipped'
+  // Session validation above is asynchronous. An agent may have started a turn
+  // while it was in flight, so automated rebuilds must recheck immediately
+  // before entering the kill/respawn section. Manual rebuilds remain explicit
+  // user actions and retain their existing interrupting behavior.
+  if (opts.requireIdle) {
+    if (panes.value.find((p) => p.id === paneId) !== pane) return 'skipped'
+    if (!paneIsSafeForWidthRebuild(paneId)) return 'busy'
+  }
   // Snapshot identity before onKill removes the pane from the list.
   const snap = {
     agentKey: pane.agentKey,
@@ -1842,6 +1865,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   } finally {
     rebuildingPanes.delete(paneId)
   }
+  return 'rebuilt'
 }
 
 async function rebuildAllPanesViaResume(): Promise<void> {
@@ -1938,42 +1962,134 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   }
 }
 
-// Font zoom changes every terminal's cols. xterm cannot re-flow the history the CLIs
-// already emitted (they hard-wrap their own output, so those lines aren't marked
-// wrapped) — it just drops whatever no longer fits, and the CLI never re-emits
-// scrollback. Rebuilding via --resume makes each CLI reprint the conversation at the
-// new width, which is the only way to get the history back in shape.
-//
-// Debounced: a zoom is a burst of keypresses, and each rebuild kills and re-spawns a
-// CLI (interrupting whatever turn is in flight). Wait for the size to settle, then
-// rebuild each pane once. Panes without a resumable session are skipped by
-// rebuildPaneViaResume itself.
-const FONT_ZOOM_REBUILD_DELAY_MS = 600
-let fontZoomRebuildTimer: ReturnType<typeof setTimeout> | null = null
-// The size the panes were last (re)built at. Panes spawn at the current size, so the
-// initial value is already in sync — nothing to rebuild until it actually changes.
-let rebuiltAtFontSize = terminalFontSize.value
+// Real terminal-width changes (splitter drag, window resize, font zoom) share one
+// resume-rebuild path. Each pane waits until its latest lifecycle signal says the
+// turn is complete, the renderer reports idle, and raw PTY output has been quiet.
+// The extra idle grace filters brief gaps between tool/output bursts.
+const WIDTH_REBUILD_RETRY_MS = 500
+const WIDTH_REBUILD_IDLE_GRACE_MS = 750
+const WIDTH_REBUILD_RAW_QUIET_MS = 2_500
 
-watch(terminalFontSize, () => {
-  if (fontZoomRebuildTimer) clearTimeout(fontZoomRebuildTimer)
-  fontZoomRebuildTimer = setTimeout(() => {
-    fontZoomRebuildTimer = null
-    const size = terminalFontSize.value
-    // Zooming out and back in nets to nothing — don't kill every CLI for a no-op.
-    if (size === rebuiltAtFontSize) return
-    rebuiltAtFontSize = size
-    // Snapshot the ids: rebuilding mutates panes (kill removes, spawn appends).
-    const ids = panes.value.map((p) => p.id)
-    if (!ids.length) return
-    pipelineLog(`↻ font size ${size}px — rebuilding ${ids.length} pane(s) to reprint history at the new width`)
-    void (async () => {
-      for (const id of ids) await rebuildPaneViaResume(id)
-    })()
-  }, FONT_ZOOM_REBUILD_DELAY_MS)
+interface PendingWidthRebuild extends WidthRebuildScheduleState {
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+const paneSettledWidths = new Map<string, number>()
+const pendingWidthRebuilds = new Map<string, PendingWidthRebuild>()
+
+function paneIsSafeForWidthRebuild(paneId: string, now = Date.now()): boolean {
+  const paneRef = paneRefs[paneId]
+  if (!paneRef) return false
+
+  // displayStatus intentionally reports the first short output burst as idle.
+  // Treat a recent agent_active or any recent PTY byte as authoritative activity.
+  const lastActiveAt = paneLastActiveAt.get(paneId) ?? 0
+  const turnCompleteAt = paneTurnCompleteAt.get(paneId) ?? 0
+  const lastRawAt = Number((paneRef.lastRawActivityAt as unknown as number | undefined) ?? 0)
+  return isWidthRebuildReady({
+    displayStatus: paneRef.displayStatus as unknown as string,
+    lastActiveAt,
+    turnCompleteAt,
+    lastRawActivityAt: lastRawAt,
+    now,
+    rawQuietMs: WIDTH_REBUILD_RAW_QUIET_MS,
+  })
+}
+
+function clearPaneWidthRebuild(paneId: string): void {
+  const pending = pendingWidthRebuilds.get(paneId)
+  if (pending?.timer) clearTimeout(pending.timer)
+  pendingWidthRebuilds.delete(paneId)
+  paneSettledWidths.delete(paneId)
+}
+
+function armPaneWidthRebuild(paneId: string, pending: PendingWidthRebuild, delayMs: number): void {
+  if (pending.timer) clearTimeout(pending.timer)
+  const generation = pending.generation
+  pending.timer = setTimeout(() => {
+    pending.timer = null
+    void tryPaneWidthRebuild(paneId, generation)
+  }, delayMs)
+}
+
+async function tryPaneWidthRebuild(paneId: string, generation: number): Promise<void> {
+  const pending = pendingWidthRebuilds.get(paneId)
+  if (!pending || pending.generation !== generation) return
+
+  const pane = panes.value.find((candidate) => candidate.id === paneId)
+  if (!pane || !paneCanRebuild(pane)) {
+    clearPaneWidthRebuild(paneId)
+    return
+  }
+
+  const now = Date.now()
+  const advance = advanceWidthRebuild(
+    pending.idleSince,
+    paneIsSafeForWidthRebuild(paneId, now),
+    now,
+    WIDTH_REBUILD_IDLE_GRACE_MS,
+    WIDTH_REBUILD_RETRY_MS
+  )
+  pending.idleSince = advance.idleSince
+  if (advance.action !== 'rebuild') {
+    armPaneWidthRebuild(paneId, pending, advance.delayMs)
+    return
+  }
+
+  // Recheck synchronously here and again inside rebuildPaneViaResume after its
+  // async session validation. Keep the pending request only if activity raced us.
+  if (!paneIsSafeForWidthRebuild(paneId)) {
+    pending.idleSince = null
+    armPaneWidthRebuild(paneId, pending, WIDTH_REBUILD_RETRY_MS)
+    return
+  }
+
+  const result = await rebuildPaneViaResume(paneId, { requireIdle: true })
+  const current = pendingWidthRebuilds.get(paneId)
+  if (!current || current !== pending) return
+  if (result === 'busy') {
+    current.idleSince = null
+    armPaneWidthRebuild(paneId, current, WIDTH_REBUILD_RETRY_MS)
+  } else {
+    // `skipped` is authoritative too (for example, the persisted session does
+    // not exist); retrying forever cannot make that pane resumable.
+    pendingWidthRebuilds.delete(paneId)
+  }
+}
+
+function onPaneWidthSettled(paneId: string, cols: number): void {
+  if (!Number.isFinite(cols) || cols <= 0) return
+  if (paneSettledWidths.get(paneId) === cols) return
+  paneSettledWidths.set(paneId, cols)
+
+  const pane = panes.value.find((candidate) => candidate.id === paneId)
+  if (!pane || !paneCanRebuild(pane)) {
+    const old = pendingWidthRebuilds.get(paneId)
+    if (old?.timer) clearTimeout(old.timer)
+    pendingWidthRebuilds.delete(paneId)
+    return
+  }
+
+  const existing = pendingWidthRebuilds.get(paneId) ?? null
+  const state = coalesceWidthRebuild(existing, cols)
+  const pending: PendingWidthRebuild = state === existing
+    ? existing
+    : { ...state, timer: existing?.timer ?? null }
+  pendingWidthRebuilds.set(paneId, pending)
+  armPaneWidthRebuild(paneId, pending, WIDTH_REBUILD_RETRY_MS)
+}
+
+// Some pane-removal paths intentionally detach without killing the backend PTY.
+// Reconcile by id so those paths cannot leave retry timers behind.
+watch(() => panes.value.map((pane) => pane.id), (ids) => {
+  const liveIds = new Set(ids)
+  for (const paneId of pendingWidthRebuilds.keys()) {
+    if (!liveIds.has(paneId)) clearPaneWidthRebuild(paneId)
+  }
 })
 
 onUnmounted(() => {
-  if (fontZoomRebuildTimer) clearTimeout(fontZoomRebuildTimer)
+  for (const paneId of [...pendingWidthRebuilds.keys()]) clearPaneWidthRebuild(paneId)
 })
 
 async function onInterrupt(paneId: string): Promise<void> {
@@ -6420,6 +6536,9 @@ function paneIsCommander(p: ActivePane): boolean {
           :pane-id="p.id"
           :title="p.customName || p.agentLabel"
           :agent-key="p.agentKey"
+          :cli-session-id="p.pinnedSessionId"
+          :session-home-id="p.sessionHomeId"
+          :conversation-log-path="p.outputLogFile"
           :subtitle="paneSubtitle(p)"
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
@@ -6433,6 +6552,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
           @rebuild-clean="rebuildPaneClean(p.id)"
+          @width-settled="onPaneWidthSettled(p.id, $event)"
           @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
           @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"

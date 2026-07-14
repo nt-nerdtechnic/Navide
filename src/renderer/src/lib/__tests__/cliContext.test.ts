@@ -7,6 +7,7 @@ import {
   screenToClientPoint,
   resolveCliDropSource,
   buildPaneContextPaste,
+  buildCliSessionReference,
   chunkForPty,
   CLI_CHIP_BUFFER_CAP,
   CLI_PASTE_BUFFER_CAP
@@ -35,9 +36,19 @@ describe('screenToClientPoint', () => {
 })
 
 describe('buildCliPaneBufferReply', () => {
+  const pane = {
+    id: 'p-1',
+    agentLabel: 'Claude',
+    agentKey: 'claude',
+    pinnedSessionId: 'cli-session-1',
+    sessionHomeId: 'home-1',
+    workspacePath: '/workspace',
+    outputLogFile: '/workspace/.agent-team/manual/claude-p-1.log'
+  }
+
   it('returns not-found when the pane ref is gone (pane closed before drop)', () => {
     expect(buildCliPaneBufferReply(undefined, null)).toEqual({ error: 'not-found' })
-    expect(buildCliPaneBufferReply({ agentLabel: 'Claude' }, undefined)).toEqual({
+    expect(buildCliPaneBufferReply(pane, undefined)).toEqual({
       error: 'not-found'
     })
   })
@@ -45,33 +56,51 @@ describe('buildCliPaneBufferReply', () => {
   it('builds the reply from the pane ref, preferring customName over agentLabel', () => {
     expect(
       buildCliPaneBufferReply(
-        { customName: 'My Pane', agentLabel: 'Claude' },
-        { sessionId: 's-1', buffer: 'output' }
+        { ...pane, customName: 'My Pane' },
+        { buffer: 'output' }
       )
-    ).toEqual({ label: 'My Pane', sessionId: 's-1', buffer: 'output' })
+    ).toEqual({
+      label: 'My Pane',
+      agentKey: 'claude',
+      sessionId: 'cli-session-1',
+      sessionHomeId: 'home-1',
+      workspacePath: '/workspace',
+      conversationLogPath: '/workspace/.agent-team/manual/claude-p-1.log',
+      buffer: 'output'
+    })
   })
 
   it('falls back to agentLabel when customName is empty', () => {
     expect(
       buildCliPaneBufferReply(
-        { customName: '', agentLabel: 'Claude' },
-        { sessionId: 's-1', buffer: 'output' }
+        { ...pane, customName: '' },
+        { buffer: 'output' }
       )
-    ).toEqual({ label: 'Claude', sessionId: 's-1', buffer: 'output' })
+    ).toMatchObject({ label: 'Claude', sessionId: 'cli-session-1', buffer: 'output' })
   })
 
   it('normalizes a missing/empty session id to null and a missing buffer to empty', () => {
-    expect(buildCliPaneBufferReply({ agentLabel: 'Codex' }, { sessionId: '' })).toEqual({
+    expect(buildCliPaneBufferReply({
+      id: 'p-2', agentLabel: 'Codex', agentKey: 'codex', workspacePath: '/ws'
+    }, {})).toEqual({
       label: 'Codex',
+      agentKey: 'codex',
       sessionId: null,
+      sessionHomeId: '',
+      workspacePath: '/ws',
+      conversationLogPath: '',
       buffer: ''
     })
   })
 
   it('labels an unknown pane record with an empty string rather than failing', () => {
-    expect(buildCliPaneBufferReply(undefined, { sessionId: 's-1', buffer: 'x' })).toEqual({
+    expect(buildCliPaneBufferReply(undefined, { buffer: 'x' })).toEqual({
       label: '',
-      sessionId: 's-1',
+      agentKey: '',
+      sessionId: null,
+      sessionHomeId: '',
+      workspacePath: '',
+      conversationLogPath: '',
       buffer: 'x'
     })
   })
@@ -146,13 +175,26 @@ describe('buildCliContextChip', () => {
   const capturedAt = Date.UTC(2026, 6, 12, 10, 30, 0)
 
   it('builds a chip with @cli: label, header line, fenced buffer, and cli-pane sourceId', () => {
-    const result = buildCliContextChip(payload, { label: 'Reply Pane', sessionId: 's-1', buffer: 'hello output' }, capturedAt)
+    const result = buildCliContextChip(payload, {
+      label: 'Reply Pane',
+      agentKey: 'claude',
+      sessionId: 's-1',
+      workspacePath: '/workspace',
+      conversationLogPath: '/workspace/.agent-team/manual/claude.log',
+      buffer: 'hello output'
+    }, capturedAt)
     expect(result).toEqual({
       kind: 'chip',
       label: '@cli:Reply Pane',
       content:
-        '// CLI pane: claude — session: s-1 — captured: 2026-07-12T10:30:00.000Z\n' +
-        '```\nhello output\n```',
+        '// CLI session context — captured: 2026-07-12T10:30:00.000Z\n' +
+        'source_pane_id: "p-1"\n' +
+        'source_name: "Reply Pane"\n' +
+        'source_agent: "claude"\n' +
+        'source_workspace: "/workspace"\n' +
+        'source_session_id: "s-1"\n' +
+        'conversation_log: "/workspace/.agent-team/manual/claude.log"\n' +
+        '// Recent terminal excerpt\n```\nhello output\n```',
       sourceId: 'cli-pane:p-1'
     })
   })
@@ -171,8 +213,9 @@ describe('buildCliContextChip', () => {
       kind: 'chip',
       label: '@cli:Codex 2',
       content:
-        '// CLI pane: Codex 2 — session: s-9 — captured: 2026-07-12T10:30:00.000Z\n' +
-        '```\nout\n```',
+        '// CLI session context — captured: 2026-07-12T10:30:00.000Z\n' +
+        'source_pane_id: "p-9"\nsource_name: "Codex 2"\nsource_session_id: "s-9"\n' +
+        '// Recent terminal excerpt\n```\nout\n```',
       sourceId: 'cli-pane:p-9'
     })
   })
@@ -181,12 +224,12 @@ describe('buildCliContextChip', () => {
     const fallback = { paneId: 'p-9', agentKey: '', label: '', sessionId: null }
     const result = buildCliContextChip(fallback, { buffer: 'out' }, capturedAt)
     expect(result.kind === 'chip' && result.label).toBe('@cli:pane')
-    expect(result.kind === 'chip' && result.content).toContain('// CLI pane: unknown agent')
+    expect(result.kind === 'chip' && result.content).toContain('source_pane_id: "p-9"')
   })
 
   it("shows 'no session' when neither reply nor payload carries a session id", () => {
     const result = buildCliContextChip({ paneId: 'p-1' }, { buffer: 'x' }, capturedAt)
-    expect(result.kind === 'chip' && result.content).toContain('— session: no session —')
+    expect(result.kind === 'chip' && result.content).not.toContain('source_session_id:')
   })
 
   it('tail-truncates an oversized buffer to the cap (keeps the end, drops the head)', () => {
@@ -200,9 +243,20 @@ describe('buildCliContextChip', () => {
   })
 
   it('signals empty for an empty or whitespace-only buffer (no chip)', () => {
-    expect(buildCliContextChip(payload, { buffer: '' })).toEqual({ kind: 'empty' })
-    expect(buildCliContextChip(payload, { buffer: '  \n ' })).toEqual({ kind: 'empty' })
-    expect(buildCliContextChip(payload, {})).toEqual({ kind: 'empty' })
+    const unidentified = { paneId: 'p-empty' }
+    expect(buildCliContextChip(unidentified, { buffer: '' })).toEqual({ kind: 'empty' })
+    expect(buildCliContextChip(unidentified, { buffer: '  \n ' })).toEqual({ kind: 'empty' })
+    expect(buildCliContextChip(unidentified, {})).toEqual({ kind: 'empty' })
+  })
+
+  it('builds a metadata-only chip when the full conversation log is available', () => {
+    const result = buildCliContextChip(payload, {
+      conversationLogPath: '/workspace/.agent-team/manual/claude.log',
+      buffer: ''
+    }, capturedAt)
+    expect(result.kind).toBe('chip')
+    expect(result.kind === 'chip' && result.content)
+      .toContain('conversation_log: "/workspace/.agent-team/manual/claude.log"')
   })
 
   it('passes an error reply through untouched (caller surfaces it, no chip)', () => {
@@ -235,45 +289,75 @@ describe('resolveCliDropSource', () => {
 })
 
 describe('buildPaneContextPaste', () => {
-  it('builds a header naming the source pane and agent, wrapping the buffer', () => {
-    const text = buildPaneContextPaste('Backend', 'claude', 'line one\nline two')
-    expect(text).toBe(
-      '--- context from CLI pane: Backend (claude) ---\nline one\nline two\n--- end of context ---'
-    )
+  const context = {
+    paneId: 'pane-a',
+    label: 'Backend',
+    agentKey: 'claude',
+    sessionId: 'session-a',
+    workspacePath: '/workspace',
+    conversationLogPath: '/workspace/.agent-team/manual/claude-pane-a.log'
+  }
+
+  it('builds a shared session reference and wraps the recent buffer', () => {
+    const text = buildPaneContextPaste(context, 'line one\nline two') as string
+    expect(text).toContain('--- CLI session context: Backend (claude) ---')
+    expect(text).toContain('source_pane_id: "pane-a"')
+    expect(text).toContain('source_session_id: "session-a"')
+    expect(text).toContain('conversation_log: "/workspace/.agent-team/manual/claude-pane-a.log"')
+    expect(text).toContain('--- recent terminal excerpt ---\nline one\nline two')
   })
 
   it('omits the agent key from the header when the pane has none', () => {
-    const text = buildPaneContextPaste('Backend', undefined, 'out')
-    expect(text?.split('\n')[0]).toBe('--- context from CLI pane: Backend ---')
+    const text = buildPaneContextPaste({ paneId: 'p', label: 'Backend' }, 'out')
+    expect(text?.split('\n')[0]).toBe('--- CLI session context: Backend ---')
   })
 
   it("falls back to 'pane' when the source has no display name", () => {
-    expect(buildPaneContextPaste('', '', 'out')?.split('\n')[0])
-      .toBe('--- context from CLI pane: pane ---')
+    expect(buildPaneContextPaste({ paneId: 'p' }, 'out')?.split('\n')[0])
+      .toBe('--- CLI session context: pane ---')
   })
 
   it('tail-truncates an oversized buffer and says so in the header', () => {
     const buffer = 'x'.repeat(CLI_PASTE_BUFFER_CAP + 500)
-    const text = buildPaneContextPaste('Backend', 'codex', buffer) as string
-    const [header, body] = text.split('\n')
-    expect(header).toBe(
-      `--- context from CLI pane: Backend (codex) — last ${CLI_PASTE_BUFFER_CAP} chars ---`
-    )
+    const text = buildPaneContextPaste({ ...context, agentKey: 'codex' }, buffer) as string
+    expect(text).toContain(`--- recent terminal excerpt — last ${CLI_PASTE_BUFFER_CAP} chars ---`)
+    const body = text.split(`--- recent terminal excerpt — last ${CLI_PASTE_BUFFER_CAP} chars ---\n`)[1]
+      .split('\n--- end recent terminal excerpt ---')[0]
     expect(body).toHaveLength(CLI_PASTE_BUFFER_CAP)
   })
 
   it('does not claim truncation when the whole buffer fits under the cap', () => {
-    const text = buildPaneContextPaste('Backend', 'codex', 'short output') as string
+    const text = buildPaneContextPaste({ ...context, agentKey: 'codex' }, 'short output') as string
     expect(text).not.toContain('last')
   })
 
   it('does not end with a newline (the paste must not submit itself)', () => {
-    expect(buildPaneContextPaste('Backend', 'claude', 'out')?.endsWith('\n')).toBe(false)
+    expect(buildPaneContextPaste(context, 'out')?.endsWith('\n')).toBe(false)
   })
 
   it('returns null for an empty or whitespace-only buffer (nothing to share)', () => {
-    expect(buildPaneContextPaste('Backend', 'claude', '')).toBeNull()
-    expect(buildPaneContextPaste('Backend', 'claude', '  \n\t\n ')).toBeNull()
+    expect(buildPaneContextPaste({ paneId: 'p', label: 'Backend', agentKey: 'claude' }, '')).toBeNull()
+    expect(buildPaneContextPaste({ paneId: 'p', label: 'Backend', agentKey: 'claude' }, '  \n\t\n ')).toBeNull()
+  })
+
+  it('shares the transcript location even before the terminal has rendered output', () => {
+    const text = buildPaneContextPaste(context, '') as string
+    expect(text).toContain('conversation_log:')
+    expect(text).not.toContain('recent terminal excerpt')
+  })
+})
+
+describe('buildCliSessionReference', () => {
+  it('uses one vendor-neutral schema and omits unavailable optional fields', () => {
+    expect(buildCliSessionReference({ paneId: 'p', agentKey: 'grok', sessionId: null })).toBe(
+      'source_pane_id: "p"\nsource_agent: "grok"'
+    )
+  })
+
+  it.each(['claude', 'codex', 'antigravity', 'grok'])('uses the same schema for %s', (agentKey) => {
+    const text = buildCliSessionReference({ paneId: 'p', agentKey, sessionId: 'session-1' })
+    expect(text).toContain(`source_agent: "${agentKey}"`)
+    expect(text).toContain('source_session_id: "session-1"')
   })
 })
 

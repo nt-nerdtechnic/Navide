@@ -29,7 +29,15 @@ export interface CliContextPayload {
   agentKey?: string
   label?: string
   sessionId?: string | null
+  sessionHomeId?: string
+  workspacePath?: string
+  conversationLogPath?: string
 }
+
+/** Vendor-neutral reference to a live CLI conversation. The append-only
+ *  `.agent-team` log is the cross-vendor transcript contract; session fields
+ *  additionally identify the vendor-native record when one is available. */
+export interface CliSessionContext extends CliContextPayload {}
 
 /** Parse the CLI-context drag payload. Returns null for malformed JSON or a
  *  payload without a usable paneId. */
@@ -47,7 +55,12 @@ export function parseCliContextPayload(raw: string): CliContextPayload | null {
     paneId: rec.paneId,
     agentKey: typeof rec.agentKey === 'string' && rec.agentKey ? rec.agentKey : undefined,
     label: typeof rec.label === 'string' && rec.label ? rec.label : undefined,
-    sessionId: typeof rec.sessionId === 'string' && rec.sessionId ? rec.sessionId : null
+    sessionId: typeof rec.sessionId === 'string' && rec.sessionId ? rec.sessionId : null,
+    sessionHomeId: typeof rec.sessionHomeId === 'string' && rec.sessionHomeId ? rec.sessionHomeId : undefined,
+    workspacePath: typeof rec.workspacePath === 'string' && rec.workspacePath ? rec.workspacePath : undefined,
+    conversationLogPath: typeof rec.conversationLogPath === 'string' && rec.conversationLogPath
+      ? rec.conversationLogPath
+      : undefined
   }
 }
 
@@ -82,18 +95,39 @@ export function resolveCliDropSource(
  *  dropped onto it: a header line identifying the source pane, then a tail
  *  excerpt of its cleaned buffer. Returns null when there is nothing to share.
  *  Pure so it is unit-testable without mounting App.vue. */
-export function buildPaneContextPaste(
-  sourceName: string,
-  agentKey: string | undefined,
-  buffer: string
-): string | null {
-  if (!buffer.trim()) return null
+function referenceLine(key: string, value: string | null | undefined): string | null {
+  return value ? `${key}: ${JSON.stringify(value)}` : null
+}
+
+/** Machine-readable session reference shared by CLI prompts and AI Chat chips. */
+export function buildCliSessionReference(context: CliSessionContext): string {
+  return [
+    referenceLine('source_pane_id', context.paneId),
+    referenceLine('source_name', context.label),
+    referenceLine('source_agent', context.agentKey),
+    referenceLine('source_workspace', context.workspacePath),
+    referenceLine('source_session_id', context.sessionId),
+    referenceLine('source_session_home_id', context.sessionHomeId),
+    referenceLine('conversation_log', context.conversationLogPath)
+  ].filter((line): line is string => !!line).join('\n')
+}
+
+export function buildPaneContextPaste(context: CliSessionContext, buffer: string): string | null {
+  if (!buffer.trim() && !context.conversationLogPath && !context.sessionId) return null
   const tail = bufferTail(buffer, CLI_PASTE_BUFFER_CAP).trim()
-  if (!tail) return null
-  const who = agentKey ? `${sourceName || 'pane'} (${agentKey})` : sourceName || 'pane'
+  const who = context.agentKey
+    ? `${context.label || 'pane'} (${context.agentKey})`
+    : context.label || 'pane'
   const truncated = tail.length < buffer.trim().length
   const scope = truncated ? ` — last ${CLI_PASTE_BUFFER_CAP} chars` : ''
-  return `--- context from CLI pane: ${who}${scope} ---\n${tail}\n--- end of context ---`
+  const reference = buildCliSessionReference(context)
+  const logHint = context.conversationLogPath
+    ? 'For the complete conversation, read conversation_log with a read-only file command.'
+    : 'The excerpt below is the available conversation context.'
+  const excerpt = tail
+    ? `\n--- recent terminal excerpt${scope} ---\n${tail}\n--- end recent terminal excerpt ---`
+    : ''
+  return `--- CLI session context: ${who} ---\n${reference}\n${logHint}${excerpt}\n--- end CLI session context ---`
 }
 
 /** Split text into chunks of at most `size` UTF-16 code units WITHOUT cutting a
@@ -142,43 +176,76 @@ export type CliContextChipResult =
  *  - otherwise → chip with a header line + tail-truncated fenced buffer */
 export function buildCliContextChip(
   payload: CliContextPayload,
-  reply: { label?: string; sessionId?: string | null; buffer?: string; error?: string },
+  reply: {
+    label?: string
+    agentKey?: string
+    sessionId?: string | null
+    sessionHomeId?: string
+    workspacePath?: string
+    conversationLogPath?: string
+    buffer?: string
+    error?: string
+  },
   capturedAt: number = Date.now()
 ): CliContextChipResult {
   if (reply.error) return { kind: 'error', error: reply.error }
   const buffer = reply.buffer ?? ''
-  if (!buffer.trim()) return { kind: 'empty' }
+  const context: CliSessionContext = {
+    paneId: payload.paneId,
+    agentKey: reply.agentKey || payload.agentKey,
+    label: reply.label || payload.label,
+    sessionId: reply.sessionId || payload.sessionId || null,
+    sessionHomeId: reply.sessionHomeId || payload.sessionHomeId,
+    workspacePath: reply.workspacePath || payload.workspacePath,
+    conversationLogPath: reply.conversationLogPath || payload.conversationLogPath
+  }
+  if (!buffer.trim() && !context.conversationLogPath && !context.sessionId) return { kind: 'empty' }
   const name = reply.label || payload.label || payload.agentKey || 'pane'
-  const session = reply.sessionId || payload.sessionId || null
-  const header =
-    `// CLI pane: ${payload.agentKey || payload.label || reply.label || 'unknown agent'}` +
-    ` — session: ${session ?? 'no session'}` +
-    ` — captured: ${new Date(capturedAt).toISOString()}`
+  const reference = buildCliSessionReference(context)
+  const header = `// CLI session context — captured: ${new Date(capturedAt).toISOString()}`
   const tail = bufferTail(buffer, CLI_CHIP_BUFFER_CAP)
+  const excerpt = tail ? `\n// Recent terminal excerpt\n\`\`\`\n${tail}\n\`\`\`` : ''
   return {
     kind: 'chip',
     label: `@cli:${name}`,
-    content: `${header}\n\`\`\`\n${tail}\n\`\`\``,
+    content: `${header}\n${reference}${excerpt}`,
     sourceId: `${CLI_SOURCE_PREFIX}${payload.paneId}`
   }
 }
 
 export interface CliPaneBufferReply {
   label: string
+  agentKey: string
   sessionId: string | null
+  sessionHomeId: string
+  workspacePath: string
+  conversationLogPath: string
   buffer: string
 }
 
 /** Shape a responder reply from the pane record and its TerminalPane ref.
  *  A missing ref means the pane is gone (closed between drag and drop). */
 export function buildCliPaneBufferReply(
-  pane: { customName?: string; agentLabel: string } | undefined,
-  paneRef: { sessionId?: string; buffer?: string } | null | undefined
+  pane: {
+    id: string
+    customName?: string
+    agentLabel: string
+    agentKey: string
+    pinnedSessionId?: string
+    sessionHomeId?: string
+    workspacePath: string
+    outputLogFile?: string
+  } | undefined,
+  paneRef: { buffer?: string } | null | undefined
 ): CliPaneBufferReply | { error: 'not-found' } {
   if (!paneRef) return { error: 'not-found' }
   return {
     label: pane ? pane.customName || pane.agentLabel : '',
-    sessionId: paneRef.sessionId || null,
+    agentKey: pane?.agentKey ?? '',
+    sessionId: pane?.pinnedSessionId || null,
+    sessionHomeId: pane?.sessionHomeId ?? '',
+    workspacePath: pane?.workspacePath ?? '',
+    conversationLogPath: pane?.outputLogFile ?? '',
     buffer: paneRef.buffer ?? ''
   }
 }

@@ -5,6 +5,7 @@ import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
 import { extractDropPaths, shellEscape } from '../lib/drop'
 import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource } from '../lib/cliContext'
+import RebuildIcon from './RebuildIcon.vue'
 
 interface Props {
   paneId: string
@@ -12,6 +13,10 @@ interface Props {
   subtitle?: string
   /** CLI vendor key (e.g. 'claude', 'codex') carried in the cli-context drag payload. */
   agentKey?: string
+  /** Vendor conversation id, distinct from useTerminal's backend PTY id. */
+  cliSessionId?: string
+  sessionHomeId?: string
+  conversationLogPath?: string
   pipeTag?: string
   isCommander?: boolean
   isFocus?: boolean
@@ -153,15 +158,18 @@ function onTerminalDrop(e: DragEvent): void {
 function onHeaderDragStart(e: DragEvent): void {
   if (!e.dataTransfer) return
   e.dataTransfer.setData('application/x-pane-id', props.paneId)
-  // AI Chat drop target (editor window): identifiers only — the chat fetches
-  // the pane's buffer on drop via the cli:get-pane-buffer IPC relay.
+  // Carry a fast local snapshot; AI Chat still fetches authoritative live
+  // metadata and rendered output on drop through the pane-buffer IPC relay.
   e.dataTransfer.setData(
     'application/x-cli-context',
     JSON.stringify({
       paneId: props.paneId,
       agentKey: props.agentKey ?? '',
       label: props.title,
-      sessionId: terminal.sessionId.value || null
+      sessionId: props.cliSessionId || null,
+      sessionHomeId: props.sessionHomeId ?? '',
+      workspacePath: props.workspacePath ?? '',
+      conversationLogPath: props.conversationLogPath ?? ''
     })
   )
   e.dataTransfer.effectAllowed = 'move'
@@ -218,7 +226,8 @@ onMounted(() => {
       class="rebuild-btn"
       @click.stop="emit('rebuild')"
       :title="$t('pane.terminal.rebuild-tooltip')"
-    >↻</button>
+      :aria-label="$t('pane.terminal.rebuild-tooltip')"
+    ><RebuildIcon /></button>
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
       :class="['pane-header', { 'drag-over': isReorderDragOver }]"
@@ -340,6 +349,10 @@ onMounted(() => {
 }
 .rebuild-btn {
   right: 26px;
+}
+.rebuild-btn svg {
+  width: 14px;
+  height: 14px;
 }
 .pane:hover .minimize-btn,
 .pane:hover .rebuild-btn {

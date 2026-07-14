@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick } from 'vue'
+import RebuildIcon from './RebuildIcon.vue'
 
 export interface TabItem {
   key: string
@@ -167,9 +168,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
       :aria-label="rebuildAllTitle"
       @click="emit('rebuild-all')"
     >
-      <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
-      </svg>
+      <RebuildIcon />
     </button>
   </div>
 
@@ -311,11 +310,6 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
 .tab-rebuild-all-btn svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .tab-rebuild-all-btn:disabled {
   cursor: default;

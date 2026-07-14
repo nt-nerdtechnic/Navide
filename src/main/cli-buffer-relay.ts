@@ -10,7 +10,11 @@ export const CLI_BUFFER_REPLY_CHANNEL = 'cli:get-pane-buffer:reply'
 
 export interface CliPaneBufferResult {
   label?: string
+  agentKey?: string
   sessionId?: string | null
+  sessionHomeId?: string
+  workspacePath?: string
+  conversationLogPath?: string
   buffer?: string
   error?: 'unavailable' | 'timeout' | 'not-found'
 }

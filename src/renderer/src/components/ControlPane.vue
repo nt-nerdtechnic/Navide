@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch, defineAsyncComp
 import { extractDropPaths } from '../lib/drop'
 import { settingsGet, settingsSet } from '../lib/settings'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
+import RebuildIcon from './RebuildIcon.vue'
 import ExplorerPane from './ExplorerPane.vue'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { Role, RoleKey } from '../data/roles'
@@ -1035,9 +1036,7 @@ function onPipelineDividerEnd(): void {
             :aria-label="$t('action.rebuild-all-cli-panes')"
             @click="emit('rebuild-all')"
           >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
-            </svg>
+            <RebuildIcon />
           </button>
           <button class="history-btn" :title="$t('label.history')" @click="emit('open-history')">📋</button>
         </div>
@@ -1067,9 +1066,7 @@ function onPipelineDividerEnd(): void {
               :aria-label="$t('pane.terminal.rebuild-tooltip')"
               @click.stop="emit('rebuild', p.id)"
             >
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5" />
-              </svg>
+              <RebuildIcon />
             </button>
             <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
           </div>
@@ -1709,11 +1706,6 @@ button.agent-rebuild-all-btn {
 button.agent-rebuild-all-btn svg {
   width: 15px;
   height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 button.agent-rebuild-all-btn:hover:not(:disabled) {
   color: var(--text-bright);
@@ -2222,11 +2214,6 @@ button.icon-btn.muted:hover {
 .agent-rebuild-btn svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 .agent-rebuild-btn:hover {
   color: var(--accent-fg);

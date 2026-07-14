@@ -10073,12 +10073,21 @@ function onChatDragOver(e: DragEvent): void {
 }
 
 // ── CLI pane drag → context chip ─────────────────────────────────────────────
-// Fetch the dragged pane's clean buffer over the cross-window IPC bridge and
-// attach it as a chip. With refreshTargetId set, update that chip in place
+// Fetch the dragged pane's live session reference and rendered scrollback over
+// the cross-window IPC bridge and attach them as a chip. With refreshTargetId set, update that chip in place
 // (↻ button on an existing @cli: chip) instead of creating a new one.
 async function applyCliPaneChip(payload: CliContextPayload, refreshTargetId?: string): Promise<void> {
   const getBuf = window.agentTeam?.getCliPaneBuffer
-  let reply: { label?: string; sessionId?: string | null; buffer?: string; error?: string }
+  let reply: {
+    label?: string
+    agentKey?: string
+    sessionId?: string | null
+    sessionHomeId?: string
+    workspacePath?: string
+    conversationLogPath?: string
+    buffer?: string
+    error?: string
+  }
   try {
     reply = getBuf ? await getBuf(payload.paneId) : { error: 'unavailable' }
   } catch {
@@ -10136,7 +10145,8 @@ async function handleCliContextDrop(e: DragEvent): Promise<boolean> {
 // arrives as an IPC message carrying the screen coords where the pointer was
 // released. Replay it as a chip only when that point actually lands on this
 // chat; anywhere else in the editor window is a silent no-op. The pane id alone
-// is enough — applyCliPaneChip's IPC reply fills in label/sessionId.
+// is enough — applyCliPaneChip's IPC reply fills in the authoritative live
+// session reference and rendered excerpt.
 const chatRootEl = ref<HTMLElement | null>(null)
 let disposeExternalPaneDrop: (() => void) | null = null
 

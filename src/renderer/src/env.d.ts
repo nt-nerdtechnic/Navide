@@ -108,11 +108,28 @@ declare global {
       onFocusPane: (cb: (paneId: string) => void) => void
       getCliPaneBuffer: (
         paneId: string
-      ) => Promise<{ label?: string; sessionId?: string | null; buffer?: string; error?: string }>
+      ) => Promise<{
+        label?: string
+        agentKey?: string
+        sessionId?: string | null
+        sessionHomeId?: string
+        workspacePath?: string
+        conversationLogPath?: string
+        buffer?: string
+        error?: string
+      }>
       onCliPaneBufferRequest: (
         handler: (
           paneId: string
-        ) => { label: string; sessionId: string | null; buffer: string } | { error: string }
+        ) => {
+          label: string
+          agentKey: string
+          sessionId: string | null
+          sessionHomeId: string
+          workspacePath: string
+          conversationLogPath: string
+          buffer: string
+        } | { error: string }
       ) => void
       cliPaneDragEnd: (paneId: string, screenX: number, screenY: number) => void
       onExternalPaneDrop: (
