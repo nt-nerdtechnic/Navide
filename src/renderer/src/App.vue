@@ -1722,11 +1722,6 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
       session_id: pane.pinnedSessionId ?? '',
     })
   }
-  if (opts.markRemoved !== false && pane?.agentKey === 'codex' && pane.sessionHomeId) {
-    await sendQuiet('codex_home.cleanup', {
-      session_home_id: pane.sessionHomeId,
-    })
-  }
   const histEntry = spawnHistory.value.find((e) => e.paneId === paneId)
   if (histEntry && !histEntry.removedAt) {
     histEntry.sessionId = pane?.pinnedSessionId ?? histEntry.sessionId

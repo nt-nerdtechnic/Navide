@@ -901,8 +901,11 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
             Path.home() / ".gemini" / "antigravity-cli" / "conversations"
             / f"{session_id}.db"
         ).is_file()
-    # Codex ids are detected from their session files. Keep trusting
-    # persisted ids until vendor-specific preflight checks are added.
+    if agent == "codex":
+        # Agent History stores only a pointer to the vendor-owned rollout. A
+        # stale pointer must not pass preflight and launch a doomed
+        # `codex resume`; search both the real and isolated per-pane homes.
+        return codex_home_manager.find_session_home(session_id) is not None
     return True
 
 

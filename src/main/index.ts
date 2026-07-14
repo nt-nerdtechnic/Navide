@@ -35,10 +35,6 @@ import {
   type GitAccountInput
 } from './gitAccountsStore'
 
-// Give the Electron process a distinct name so it can be targeted precisely
-// with `pkill -f agent-team-electron` without affecting other Electron apps.
-process.title = 'agent-team-electron'
-
 // TEMP diagnostics for the Dock-tile badge: file-based so the trail is
 // readable regardless of how the app was launched. Remove once verified.
 function logDockThumb(msg: string): void {
@@ -189,6 +185,29 @@ async function createWindow(
 
   loadWindow(win, { window: 'main', ...params })
   return win
+}
+
+function revealMainWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  if (!win.isVisible()) win.show()
+  app.focus({ steal: true })
+  win.focus()
+}
+
+function focusOrCreateMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    revealMainWindow(mainWindow)
+    return
+  }
+
+  void createWindow().then((win) => {
+    // createWindow intentionally stays hidden until its first painted frame.
+    // Focus it after that initial show so reopening from the Dock never appears
+    // to do nothing and does not reintroduce the startup white flash.
+    if (win.isVisible()) revealMainWindow(win)
+    else win.once('show', () => revealMainWindow(win))
+  })
 }
 
 function openRolesWindow(): void {
@@ -1155,12 +1174,7 @@ if (!gotSingleInstanceLock) {
     }
     // Plain relaunch with no path: focus the existing window (or create one) and
     // reuse the running backend instead of booting another.
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    } else {
-      void createWindow()
-    }
+    focusOrCreateMainWindow()
   })
 }
 
@@ -1279,9 +1293,7 @@ app.whenReady().then(async () => {
   }
   if (!openedAny) await createWindow()
 
-  app.on('activate', async () => {
-    if (BrowserWindow.getAllWindows().length === 0) await createWindow()
-  })
+  app.on('activate', focusOrCreateMainWindow)
 })
 
 app.on('window-all-closed', () => {
