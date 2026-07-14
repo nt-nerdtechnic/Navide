@@ -108,6 +108,18 @@ export interface SpawnOptions {
   isResume?: boolean
 }
 
+/**
+ * Encode the shared Shift+Enter UX for the active CLI's terminal protocol.
+ *
+ * There is no vendor-neutral byte sequence for a modified Enter key in a
+ * traditional PTY. Codex understands the CSI-u representation, while Claude
+ * Code's xterm.js terminal setup uses ESC+CR. Keep the user-facing shortcut
+ * uniform and contain the protocol difference here.
+ */
+export function encodeShiftEnter(agentKey?: string): string {
+  return agentKey?.toLowerCase() === 'codex' ? '\x1b[13;2u' : '\x1b\r'
+}
+
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
 
 // VS Code-style unix path regex (no extension whitelist).
@@ -458,6 +470,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const lastCommand = ref<string>('')
   const isAltBuffer = ref(false)
   let isDisposed = false
+  let activeAgentKey: string | undefined
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -681,13 +694,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const curY = buf.baseY + buf.cursorY
 
       // ── Shift+Enter: newline without submitting ────────────────────────────
-      // Plain Enter and Shift+Enter both produce the same '\r' byte in xterm's
-      // default key handling, so a CLI reading raw PTY input can't tell them
-      // apart. Send ESC+CR — the sequence Claude Code's /terminal-setup installs
-      // for VS Code's xterm.js terminal, which agent
-      // TUIs interpret as "insert newline"; plain shells treat it as Enter.
+      // Traditional PTYs do not preserve the Shift modifier on Enter. Present
+      // one shortcut to the user, then encode it for the active agent's input
+      // protocol (CSI-u for Codex, Claude-compatible ESC+CR otherwise).
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Enter') {
-        pasteText('\x1b\r')
+        pasteText(encodeShiftEnter(activeAgentKey))
         return false
       }
 
@@ -1459,6 +1470,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     }
     error.value = ''
     status.value = 'starting'
+    activeAgentKey = opts.agentKey
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
     // Use the stable CLI session id as the reattach key when provided, so the
     // lookup below survives a reload (paneId does not).

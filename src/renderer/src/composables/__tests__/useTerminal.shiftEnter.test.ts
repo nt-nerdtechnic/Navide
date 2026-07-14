@@ -2,12 +2,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createMockBackend, withScope } from './mockBackend'
 
-// Shift+Enter must reach the CLI as ESC+CR (\x1b\r) — the sequence Claude
-// Code's /terminal-setup installs for xterm.js terminals — so agent TUIs
-// insert a newline instead of submitting. This regression-locks the third
-// iteration of the feature (CSI-u and bracketed-paste LF both failed).
-// xterm won't boot in happy-dom, so the mock captures the custom key event
-// handler and the test drives it directly.
+// Shift+Enter is one user-facing shortcut with CLI-specific wire encodings:
+// Codex understands CSI-u, while Claude Code's xterm.js terminal setup uses
+// ESC+CR. xterm won't boot in happy-dom, so the mock captures the custom key
+// event handler and the tests drive it directly.
 
 const ctrl = vi.hoisted(() => ({
   applyFit: vi.fn(),
@@ -91,12 +89,12 @@ describe('useTerminal — Shift+Enter key handling', () => {
     localStorage.clear() // drop the persisted PTY id so the next spawn is fresh
   })
 
-  async function spawnedTerminal() {
+  async function spawnedTerminal(agentKey?: string) {
     const mock = createMockBackend()
     mock.setResponse('terminal.create', { terminal_session_id: 'sess-1', pid: 42 })
     const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend))
     result.mount(document.createElement('div'))
-    await result.spawn({ command: 'bash', cwd: '/tmp' })
+    await result.spawn({ command: 'bash', cwd: '/tmp', agentKey })
     return { mock, scope }
   }
 
@@ -104,8 +102,18 @@ describe('useTerminal — Shift+Enter key handling', () => {
     return mock.sent.filter((s) => s.type === 'terminal.input')
   }
 
-  it('sends ESC+CR to the PTY and swallows the key', async () => {
-    const { mock, scope } = await spawnedTerminal()
+  it('sends CSI-u to Codex and swallows the key', async () => {
+    const { mock, scope } = await spawnedTerminal('codex')
+    const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
+    expect(handled).toBe(false)
+    expect(inputsSent(mock)).toEqual([
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[13;2u' } },
+    ])
+    scope.stop()
+  })
+
+  it.each([['claude'], [undefined]])('sends ESC+CR to %s and swallows the key', async (agentKey) => {
+    const { mock, scope } = await spawnedTerminal(agentKey)
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
