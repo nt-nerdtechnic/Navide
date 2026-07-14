@@ -20,6 +20,7 @@ import Welcome from './components/Welcome.vue'
 import { useNotify } from './composables/useNotify'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
+import { terminalFontSize } from './composables/useTerminalFontSize'
 import { useTheme } from './composables/useTheme'
 import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
@@ -1866,6 +1867,30 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     rebuildingPanes.delete(paneId)
   }
 }
+
+// Font zoom changes every terminal's cols. xterm cannot re-flow the history the CLIs
+// already emitted (they hard-wrap their own output, so those lines aren't marked
+// wrapped) — it just drops whatever no longer fits, and the CLI never re-emits
+// scrollback. Rebuilding via --resume makes each CLI reprint the conversation at the
+// new width, which is the only way to get the history back in shape.
+//
+// Debounced: a zoom is a burst of keypresses, and each rebuild kills and re-spawns a
+// CLI (interrupting whatever turn is in flight). Wait for the size to settle, then
+// rebuild each pane once. Panes without a resumable session are skipped by
+// rebuildPaneViaResume itself.
+const FONT_ZOOM_REBUILD_DELAY_MS = 600
+let fontZoomRebuildTimer: ReturnType<typeof setTimeout> | null = null
+watch(terminalFontSize, () => {
+  if (fontZoomRebuildTimer) clearTimeout(fontZoomRebuildTimer)
+  fontZoomRebuildTimer = setTimeout(() => {
+    fontZoomRebuildTimer = null
+    // Snapshot the ids: rebuilding mutates panes (kill removes, spawn appends).
+    const ids = panes.value.map((p) => p.id)
+    void (async () => {
+      for (const id of ids) await rebuildPaneViaResume(id)
+    })()
+  }, FONT_ZOOM_REBUILD_DELAY_MS)
+})
 
 async function onInterrupt(paneId: string): Promise<void> {
   const ref = paneRefs[paneId]

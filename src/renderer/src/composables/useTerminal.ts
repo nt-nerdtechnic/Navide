@@ -1429,8 +1429,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     () => { void createWhenMeasurable() },
   )
 
-  // Shared zoom → this pane. Changing fontSize changes the cell size, so refit
-  // to recompute cols/rows and resync the PTY.
+  // Shared zoom → this pane. A new font size means a new cell size, so refit to
+  // recompute cols/rows and resync the PTY — that keeps the content filling the pane.
+  //
+  // Scrollback written before the zoom is NOT re-flowed: agent CLIs hard-wrap their own
+  // output (standalone short lines, isWrapped=false), so xterm cannot re-wrap them into
+  // the new grid and simply drops whatever no longer fits. The CLI only repaints its
+  // current screen on SIGWINCH and never re-emits history. Rebuild (resume) is the fix:
+  // it re-spawns at the current size and reprints the conversation at the new width.
   watch(terminalFontSize, (size) => {
     term.options.fontSize = size
     resizeCtrl.applyFit()

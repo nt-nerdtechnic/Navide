@@ -101,18 +101,35 @@ describe('terminal font zoom — app-wide', () => {
     localStorage.clear()
   })
 
-  it('⌘- shrinks every open pane at once and refits each', async () => {
+  it('⌘- shrinks every open pane at once', async () => {
     const a = await spawnPane('pane-a')
     const b = await spawnPane('pane-b')
-    ctrl.applyFit.mockClear() // mount/spawn already refit; count only zoom-driven calls
 
     const e = await press('-')
 
     expect(terminalFontSize.value).toBe(11)
     expect(a.opts.fontSize).toBe(11)
     expect(b.opts.fontSize).toBe(11) // both panes, not just a focused one
-    expect(ctrl.applyFit).toHaveBeenCalledTimes(2) // one refit per pane
     expect(e.defaultPrevented).toBe(true)
+
+    a.scope.stop()
+    b.scope.stop()
+  })
+
+  // The whole point of the feature: cols must not change, or xterm truncates the
+  // history that the CLI hard-wrapped at the old width. Never refit on zoom.
+  it('never refits — zooming must not resize the PTY', async () => {
+    const a = await spawnPane('pane-a')
+    const b = await spawnPane('pane-b')
+    ctrl.applyFit.mockClear() // mount/spawn legitimately refit; count only zoom-driven calls
+
+    for (let i = 0; i < 3; i++) await press('+', { shiftKey: true })
+    for (let i = 0; i < 3; i++) await press('-')
+    await press('0')
+
+    expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE) // the zooms did land
+    expect(ctrl.applyFit).not.toHaveBeenCalled() // ...without a single refit
+    expect(ctrl.sendResizeNow).not.toHaveBeenCalled()
 
     a.scope.stop()
     b.scope.stop()
@@ -127,17 +144,14 @@ describe('terminal font zoom — app-wide', () => {
     a.scope.stop()
   })
 
-  it('⌘- clamps at the minimum and stops refitting once clamped', async () => {
+  it('⌘- clamps at the minimum', async () => {
     const a = await spawnPane('pane-a')
-    ctrl.applyFit.mockClear()
 
     for (let i = 0; i < 10; i++) await press('-')
     expect(a.opts.fontSize).toBe(6)
 
-    ctrl.applyFit.mockClear()
     for (let i = 0; i < 3; i++) await press('-')
     expect(a.opts.fontSize).toBe(6)
-    expect(ctrl.applyFit).not.toHaveBeenCalled() // clamped presses are a no-op
 
     a.scope.stop()
   })
