@@ -1,6 +1,6 @@
 # CLI Extension Guide
 
-How to add a new CLI agent (e.g. `aider`, `amp`, Grok CLI) to the Agent-Team
+How to add a new CLI agent (for example `aider` or `amp`) to the Navide
 pipeline — the impact map (which layers a new CLI touches), the process to
 follow, and a record of past integrations and candidate research.
 
@@ -8,7 +8,12 @@ The codebase uses a consistent key — `agentKey` in the frontend, `agent_key` i
 the backend — to identify which CLI is running in a pane. Adding a new CLI
 means registering that key in each of the following layers.
 
-Last verified against the codebase: 2026-07-10.
+Current built-in agent keys are `claude`, `codex`, `antigravity`, and `grok`.
+The current integration surface is distributed across the application; a
+declarative, capability-based adapter contract is planned in the
+[Product Roadmap](roadmap.md).
+
+Last verified against the codebase: 2026-07-15.
 
 ---
 
@@ -21,7 +26,7 @@ Last verified against the codebase: 2026-07-10.
 Add the new key to the `AgentKey` union type:
 
 ```ts
-export type AgentKey = 'claude' | 'codex' | 'antigravity' | 'your-cli'
+export type AgentKey = 'claude' | 'codex' | 'antigravity' | 'grok' | 'your-cli'
 ```
 
 ### 2. Agent spec
@@ -52,7 +57,7 @@ text marker (`at-pane:<paneId>`) that the log reader later matches to bind the
 session.
 
 If the new CLI **does not** support pinning a session id at launch, add its
-key to the `sessionMarker` condition (currently codex + antigravity). If it
+key to the `sessionMarker` condition (currently Codex, Antigravity, and Grok). If it
 **does**, add a branch analogous to the Claude block.
 
 Consequence of marker-based binding: until the marker is detected, the pane
@@ -69,6 +74,7 @@ Each CLI has its own resume syntax; add a branch. Current shapes:
 // claude --resume <id>       ← flag
 // codex resume <id>          ← subcommand, NOT a --flag
 // agy --conversation <id>    ← different flag name
+// grok -s <id>               ← short flag
 ```
 
 Also check `canResumeSession` gating in the same module.
@@ -81,7 +87,7 @@ The backend validates `agent_key` before registering a pane with the
 attribution layer:
 
 ```python
-if agent_key in ("claude", "codex", "antigravity", "your-cli"):
+if agent_key in ("claude", "codex", "antigravity", "grok", "your-cli"):
 ```
 
 ### 6. Log reader (new file — the big one)
@@ -96,7 +102,7 @@ parsing for the token stats panel.
 
 Reference implementations, by storage format:
 - JSONL: `claude.py`, `codex.py`
-- SQLite + multi-tier detection: `antigravity.py`
+- SQLite: `antigravity.py`, `grok.py`
 
 This is the effort-dominant step — it requires understanding the CLI's session
 file format, directory layout, and how quickly a new session appears on disk.
@@ -201,7 +207,16 @@ the spawn env — see the per-pane env pattern in layer 8.
 - Do not re-add. Historical implementation retrievable from git history if a
   similar JSONL-based CLI ever needs a reference.
 
-### Grok CLI — researched 2026-07-10 (candidate, not yet integrated)
+### Grok CLI (`grok`) — added 2026-07-10
+
+- Full integration: agent specification, onboarding detection, marker-based
+  session binding, `grok -s <id>` resume, SQLite usage reader, token display,
+  and workspace attribution.
+- No Navide YOLO flag is added because the integrated CLI has no general
+  tool-execution confirmation gate.
+- The integration reads the shared `~/.grok/grok.db` in a WAL-aware manner.
+
+The following notes preserve the research that informed the integration.
 
 Source: https://grokcli.io/ → https://github.com/superagent-ai/grok-cli
 (open-source coding agent for the Grok API by superagent-ai).
@@ -210,7 +225,7 @@ Disambiguation: this is NOT xAI's official "Grok Build" CLI
 (`curl https://x.ai/cli/install.sh`, subscription-gated) — both install a
 `grok` command, so confirm which one is on the user's PATH before integrating.
 
-| Question | Finding |
+| Question | Initial research finding (superseded by the resolved notes below) |
 |---|---|
 | Install | `curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh \| bash` or `bun add -g grok-dev` → binary **`grok`** |
 | Launch | `grok` (interactive TUI), `grok -d <dir>`; headless `grok --prompt "..."` with `--format json` |

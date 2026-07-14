@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 
-from .base import ActivityEvent, LogReader, TokenUsage
+from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
 
 log = logging.getLogger("agent_team_backend.log_readers.codex")
 
@@ -220,6 +220,77 @@ class CodexLogReader(LogReader):
                 model=model,
             )
         ]
+
+    def parse_incremental(
+        self,
+        path: Path,
+        checkpoint: dict,
+    ) -> IncrementalParseResult:
+        """Read only the rollout tail while persisting cumulative baselines."""
+        records, next_checkpoint, _rotated = read_jsonl_tail(path, checkpoint)
+        prev_in = max(0, int(checkpoint.get("input_total") or 0))
+        prev_out = max(0, int(checkpoint.get("output_total") or 0))
+        latest_in, latest_out = prev_in, prev_out
+        cwd = str(checkpoint.get("cwd") or "")
+        model = str(checkpoint.get("model") or "")
+        session_id = str(checkpoint.get("session_id") or path.stem)
+        latest_event: dict | None = None
+        latest_end = int(next_checkpoint.get("offset") or 0)
+
+        for end, rec in records:
+            if rec is None:
+                continue
+            if rec.get("type") == "session_meta":
+                payload = rec.get("payload") or {}
+                if isinstance(payload, dict):
+                    cwd = str(payload.get("cwd") or cwd)
+                    session_id = str(payload.get("id") or session_id)
+                    model = str(payload.get("model_provider") or payload.get("model") or model)
+                continue
+            if rec.get("type") != "event_msg":
+                continue
+            payload = rec.get("payload") or {}
+            if not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            info = payload.get("info")
+            totals = info.get("total_token_usage") if isinstance(info, dict) else None
+            if not isinstance(totals, dict):
+                continue
+            latest_in = _int(totals.get("input_tokens")) + _int(totals.get("cached_input_tokens"))
+            latest_out = _int(totals.get("output_tokens")) + _int(totals.get("reasoning_output_tokens"))
+            latest_event = rec
+            latest_end = end
+
+        next_checkpoint.update({
+            "input_total": latest_in,
+            "output_total": latest_out,
+            "cwd": cwd,
+            "model": model,
+            "session_id": session_id,
+        })
+        if latest_event is None:
+            return IncrementalParseResult([], next_checkpoint)
+
+        delta_in = latest_in - prev_in
+        delta_out = latest_out - prev_out
+        if delta_in < 0 or delta_out < 0 or (delta_in == 0 and delta_out == 0):
+            return IncrementalParseResult([], next_checkpoint)
+
+        event_checkpoint = dict(next_checkpoint)
+        event_checkpoint["offset"] = latest_end
+        event = TokenUsage(
+            vendor="codex",
+            input_tokens=delta_in,
+            output_tokens=delta_out,
+            cwd=cwd,
+            session_id=session_id,
+            file_path=str(path),
+            dedup_key=f"codex_cumulative::{session_id}::{latest_in}::{latest_out}",
+            timestamp=str(latest_event.get("timestamp") or ""),
+            model=model,
+            checkpoint=event_checkpoint,
+        )
+        return IncrementalParseResult([event], next_checkpoint)
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]

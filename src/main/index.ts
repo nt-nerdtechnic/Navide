@@ -29,6 +29,7 @@ import {
   type PermissionKey,
 } from './permissions'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
+import { routeEditorWindowOpen } from './editor-window-routing'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -112,6 +113,14 @@ let pendingRestoreClaimed = false
 let rolesWindow: BrowserWindow | null = null
 let stagesWindow: BrowserWindow | null = null
 let editorWindow: BrowserWindow | null = null
+let editorWindowWorkspacePath = ''
+let editorWindowReady = false
+let pendingEditorOpenFiles: Record<string, string>[] = []
+
+function sendEditorOpenFile(win: BrowserWindow, params: Record<string, string>): void {
+  if (editorWindowReady) win.webContents.send('editor:openFile', params)
+  else pendingEditorOpenFiles.push(params)
+}
 
 function loadWindow(win: BrowserWindow, params: Record<string, string>): void {
   const qs = new URLSearchParams(params).toString()
@@ -595,14 +604,20 @@ ipcMain.handle('git:diff-head', async (_event, args: { workspace_path: string; b
 function openEditorWindow(params: Record<string, string>): void {
   const search = { window: 'editor', ...params }
   if (editorWindow && !editorWindow.isDestroyed()) {
-    // If only switching sidebar (no new file), avoid reload — just focus + notify sidebar.
-    if (!params.filepath && params.sidebar) {
-      editorWindow.webContents.send('editor:switchSidebar', params.sidebar)
-      if (editorWindow.isMinimized()) editorWindow.restore()
-      editorWindow.focus()
-      return
+    const route = routeEditorWindowOpen(editorWindowWorkspacePath, params)
+    if (route.kind === 'reload') {
+      editorWindowWorkspacePath = route.workspacePath
+      editorWindowReady = false
+      pendingEditorOpenFiles = []
+      loadWindow(editorWindow, search)
+    } else {
+      if (route.openFileParams) {
+        sendEditorOpenFile(editorWindow, route.openFileParams)
+      }
+      if (route.sidebar) {
+        editorWindow.webContents.send('editor:switchSidebar', route.sidebar)
+      }
     }
-    loadWindow(editorWindow, search)
     if (editorWindow.isMinimized()) editorWindow.restore()
     editorWindow.focus()
     return
@@ -621,8 +636,23 @@ function openEditorWindow(params: Record<string, string>): void {
     }
   })
   editorWindow = win
+  editorWindowWorkspacePath = params.workspace_path ?? ''
+  editorWindowReady = false
+  pendingEditorOpenFiles = []
+  win.webContents.on('did-finish-load', () => {
+    if (editorWindow !== win) return
+    editorWindowReady = true
+    for (const queued of pendingEditorOpenFiles.splice(0)) {
+      win.webContents.send('editor:openFile', queued)
+    }
+  })
   win.on('closed', () => {
-    if (editorWindow === win) editorWindow = null
+    if (editorWindow === win) {
+      editorWindow = null
+      editorWindowWorkspacePath = ''
+      editorWindowReady = false
+      pendingEditorOpenFiles = []
+    }
   })
   loadWindow(win, search)
 }

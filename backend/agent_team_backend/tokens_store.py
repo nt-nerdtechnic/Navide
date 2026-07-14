@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import threading
+from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -32,7 +34,12 @@ log = logging.getLogger("agent_team_backend.tokens")
 
 TOKENS_FILE = "tokens.json"
 RECORDED_KEYS_FILE = "recorded-event-keys.json"
+LEGACY_READER_KEYS_FILE = "log-readers-seen.json"
+INGESTION_STATE_FILE = "token-ingestion-state.json"
+PERSISTENCE_JOURNAL_FILE = "token-persistence-journal.json"
 WORKSPACES_SUBDIR = "workspaces"
+INGESTION_STATE_VERSION = 2
+RECENT_EVENT_KEYS_LIMIT = 512
 
 
 def _ws_dir_name(workspace_path: str) -> str:
@@ -83,6 +90,15 @@ def _empty_global_doc() -> dict[str, Any]:
     }
 
 
+def _empty_ingestion_state() -> dict[str, Any]:
+    return {
+        "version": INGESTION_STATE_VERSION,
+        "files": {},
+        "legacy_event_keys": [],
+        "recent_event_keys": [],
+    }
+
+
 def _new_run(run_id: str, task: str, run_dir: str) -> dict[str, Any]:
     return {
         "run_id": run_id,
@@ -112,22 +128,36 @@ class TokensStore:
         global_path: Path | None = None,
         recorded_keys_path: Path | None = None,
         workspace_base_dir: Path | None = None,
+        ingestion_state_path: Path | None = None,
+        legacy_reader_keys_path: Path | None = None,
     ) -> None:
-        self._global_path = global_path or (app_data_dir() / TOKENS_FILE)
-        self._recorded_keys_path = recorded_keys_path or (app_data_dir() / RECORDED_KEYS_FILE)
-        self._workspace_base_dir = workspace_base_dir or (app_data_dir() / WORKSPACES_SUBDIR)
+        data_root = global_path.parent if global_path is not None else app_data_dir()
+        self._global_path = global_path or (data_root / TOKENS_FILE)
+        self._recorded_keys_path = recorded_keys_path or (data_root / RECORDED_KEYS_FILE)
+        self._legacy_reader_keys_path = (
+            legacy_reader_keys_path or (data_root / LEGACY_READER_KEYS_FILE)
+        )
+        self._ingestion_state_path = (
+            ingestion_state_path or (data_root / INGESTION_STATE_FILE)
+        )
+        self._persistence_journal_path = data_root / PERSISTENCE_JOURNAL_FILE
+        self._workspace_base_dir = workspace_base_dir or (data_root / WORKSPACES_SUBDIR)
+        self._recover_persistence_journal()
         # RLock because reset() calls snapshot() while holding the lock.
         self._lock = RLock()
         self._workspace_cache: dict[str, dict[str, Any]] = {}
         self._global_data: dict[str, Any] = self._load_global()
-        # Event-level dedup: dedup_keys that have already contributed to the
-        # accumulator. Survives backend restarts so re-parsing log files
-        # (after a workspace registration triggers a force-rescan) can't
-        # double-count. Cleared by reset(scope="global").
-        self._recorded_keys: set[str] = self._load_recorded_keys()
+        self._legacy_paths_to_remove: set[Path] = set()
+        self._ingestion_state = self._load_ingestion_state()
+        self._legacy_event_keys: set[str] = set(
+            str(k) for k in self._ingestion_state.get("legacy_event_keys", [])
+        )
+        recent = [str(k) for k in self._ingestion_state.get("recent_event_keys", [])]
+        self._recent_event_keys = deque(recent[-RECENT_EVENT_KEYS_LIMIT:])
+        self._recent_event_key_set = set(self._recent_event_keys)
 
         # Dirty flags (set inside _lock, consumed by save loop outside _lock)
-        self._dirty_recorded_keys: bool = False
+        self._dirty_ingestion_state: bool = bool(self._legacy_paths_to_remove)
         self._dirty_workspaces: set[str] = set()
         self._dirty_global: bool = False
 
@@ -149,6 +179,28 @@ class TokensStore:
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
+
+    def _recover_persistence_journal(self) -> None:
+        """Finish a previously interrupted batched commit before loading state."""
+        if not self._persistence_journal_path.exists():
+            return
+        try:
+            journal = json.loads(
+                self._persistence_journal_path.read_text(encoding="utf-8")
+            )
+            writes = journal.get("writes", []) if isinstance(journal, dict) else []
+            for item in writes:
+                if (
+                    not isinstance(item, dict)
+                    or not item.get("path")
+                    or not isinstance(item.get("data"), dict)
+                ):
+                    continue
+                self._atomic_write(Path(str(item.get("path") or "")), item["data"])
+            self._persistence_journal_path.unlink(missing_ok=True)
+            log.info("recovered interrupted token persistence batch")
+        except (OSError, ValueError, json.JSONDecodeError) as err:
+            log.warning("token persistence journal recovery failed: %s", err)
 
     def _workspace_path(self, workspace_path: str) -> Path:
         return self._workspace_base_dir / _ws_dir_name(workspace_path) / TOKENS_FILE
@@ -232,25 +284,47 @@ class TokensStore:
     def _flush_dirty(self) -> None:
         """Write any dirty state to disk (called from save loop or flush())."""
         with self._lock:
-            dirty_keys = self._dirty_recorded_keys
+            dirty_ingestion = self._dirty_ingestion_state
             dirty_workspaces = set(self._dirty_workspaces)
             dirty_global = self._dirty_global
-            self._dirty_recorded_keys = False
+            self._dirty_ingestion_state = False
             self._dirty_workspaces.clear()
             self._dirty_global = False
-        if dirty_keys:
-            self._save_recorded_keys()
-        for ws in dirty_workspaces:
-            self._save_workspace(ws)
-        if dirty_global:
-            self._save_global()
+            writes: list[dict[str, Any]] = []
+            for ws in dirty_workspaces:
+                doc = self._workspace_cache.get(ws)
+                if doc is not None:
+                    writes.append({"path": str(self._workspace_path(ws)), "data": deepcopy(doc)})
+            if dirty_global:
+                writes.append({"path": str(self._global_path), "data": deepcopy(self._global_data)})
+            if dirty_ingestion:
+                writes.append({
+                    "path": str(self._ingestion_state_path),
+                    "data": self._state_snapshot_locked(),
+                })
+        if not writes:
+            return
+        try:
+            # Write-ahead snapshot makes totals + checkpoints recoverable as a
+            # unit when the process dies between individual JSON replacements.
+            self._atomic_write(
+                self._persistence_journal_path,
+                {"version": 1, "writes": writes},
+            )
+            for item in writes:
+                self._atomic_write(Path(item["path"]), item["data"])
+            self._persistence_journal_path.unlink(missing_ok=True)
+            if dirty_ingestion:
+                self._remove_legacy_paths()
+        except (OSError, ValueError) as err:
+            log.warning("failed to commit token persistence batch: %s", err)
 
     def flush(self) -> None:
         """Flush all pending dirty state synchronously. Call before shutdown."""
         self._stop_event.set()
         self._flush_dirty()
 
-    def _load_recorded_keys(self) -> set[str]:
+    def _load_legacy_recorded_keys(self) -> set[str]:
         if not self._recorded_keys_path.exists():
             return set()
         try:
@@ -261,21 +335,132 @@ class TokensStore:
             log.warning("recorded-keys file unreadable (%s); starting empty", err)
         return set()
 
-    def _save_recorded_keys(self) -> None:
-        try:
-            self._recorded_keys_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._recorded_keys_path.with_suffix(self._recorded_keys_path.suffix + ".tmp")
+    def _load_ingestion_state(self) -> dict[str, Any]:
+        if self._ingestion_state_path.exists():
             try:
-                tmp.write_text(
-                    json.dumps(sorted(self._recorded_keys), separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                os.replace(tmp, self._recorded_keys_path)
-            except Exception:
-                tmp.unlink(missing_ok=True)
-                raise
-        except OSError as err:
-            log.warning("failed to write recorded-keys: %s", err)
+                data = json.loads(self._ingestion_state_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("version") == INGESTION_STATE_VERSION:
+                    doc = _empty_ingestion_state()
+                    doc.update(data)
+                    if not isinstance(doc.get("files"), dict):
+                        doc["files"] = {}
+                    for path in (self._recorded_keys_path, self._legacy_reader_keys_path):
+                        if path.exists():
+                            self._legacy_paths_to_remove.add(path)
+                    return doc
+            except (OSError, json.JSONDecodeError) as err:
+                log.warning("token ingestion state unreadable (%s); rebuilding", err)
+
+        legacy = self._load_legacy_recorded_keys()
+        if self._recorded_keys_path.exists():
+            self._legacy_paths_to_remove.add(self._recorded_keys_path)
+        if self._legacy_reader_keys_path.exists():
+            # This was only a parser performance cache. It can contain events
+            # the accounting sink rejected as external, so its bare keys must
+            # never suppress a migration replay.
+            self._legacy_paths_to_remove.add(self._legacy_reader_keys_path)
+        doc = _empty_ingestion_state()
+        doc["legacy_event_keys"] = sorted(legacy)
+        return doc
+
+    def _state_snapshot_locked(self) -> dict[str, Any]:
+        self._ingestion_state["legacy_event_keys"] = sorted(self._legacy_event_keys)
+        self._ingestion_state["recent_event_keys"] = list(self._recent_event_keys)
+        return deepcopy(self._ingestion_state)
+
+    def _save_ingestion_state(self) -> None:
+        try:
+            with self._lock:
+                snapshot = self._state_snapshot_locked()
+            self._atomic_write(self._ingestion_state_path, snapshot)
+            self._remove_legacy_paths()
+        except (OSError, ValueError) as err:
+            log.warning("failed to write token ingestion state: %s", err)
+
+    def _remove_legacy_paths(self) -> None:
+        for path in list(self._legacy_paths_to_remove):
+            path.unlink(missing_ok=True)
+            self._legacy_paths_to_remove.discard(path)
+
+    def get_ingestion_checkpoint(
+        self,
+        file_path: str,
+        workspace_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a copy of the compact cursor for Global or one workspace."""
+        with self._lock:
+            entry = self._ingestion_state["files"].get(file_path, {})
+            if workspace_path:
+                value = entry.get("workspaces", {}).get(workspace_path, {})
+            else:
+                value = entry.get("global", {})
+            return deepcopy(value) if isinstance(value, dict) else {}
+
+    def _advance_ingestion_checkpoint_locked(
+        self,
+        file_path: str,
+        checkpoint: dict[str, Any],
+        workspace_path: str | None = None,
+    ) -> None:
+        if not file_path or not checkpoint:
+            return
+        files = self._ingestion_state["files"]
+        entry = files.setdefault(file_path, {"global": {}, "workspaces": {}})
+        if workspace_path:
+            target = entry.setdefault("workspaces", {})
+            current = target.get(workspace_path, {})
+            if not self._checkpoint_is_newer(current, checkpoint):
+                return
+            target[workspace_path] = deepcopy(checkpoint)
+        else:
+            if not self._checkpoint_is_newer(entry.get("global", {}), checkpoint):
+                return
+            entry["global"] = deepcopy(checkpoint)
+        self._dirty_ingestion_state = True
+
+    @staticmethod
+    def _checkpoint_is_newer(current: dict[str, Any], candidate: dict[str, Any]) -> bool:
+        if not current:
+            return True
+        if candidate.get("kind") == "sqlite" and current.get("kind") == "sqlite":
+            return int(candidate.get("row_id") or 0) >= int(current.get("row_id") or 0)
+        if candidate.get("kind") == "jsonl" and current.get("kind") == "jsonl":
+            if candidate.get("identity") != current.get("identity"):
+                return True
+            return int(candidate.get("offset") or 0) >= int(current.get("offset") or 0)
+        return True
+
+    @staticmethod
+    def _checkpoint_is_ahead(current: dict[str, Any], candidate: dict[str, Any]) -> bool:
+        """Strict position comparison used to decide whether Global needs replay."""
+        if not current:
+            return True
+        if candidate.get("kind") == "sqlite" and current.get("kind") == "sqlite":
+            return int(candidate.get("row_id") or 0) > int(current.get("row_id") or 0)
+        if candidate.get("kind") == "jsonl" and current.get("kind") == "jsonl":
+            if candidate.get("identity") != current.get("identity"):
+                return True
+            return int(candidate.get("offset") or 0) > int(current.get("offset") or 0)
+        return True
+
+    def advance_ingestion_checkpoint(
+        self,
+        file_path: str,
+        checkpoint: dict[str, Any],
+        workspace_path: str | None = None,
+    ) -> None:
+        with self._lock:
+            self._advance_ingestion_checkpoint_locked(file_path, checkpoint, workspace_path)
+
+    def _remember_event_key_locked(self, scoped_key: str) -> None:
+        if not scoped_key or scoped_key in self._recent_event_key_set:
+            return
+        self._recent_event_keys.append(scoped_key)
+        self._recent_event_key_set.add(scoped_key)
+        while len(self._recent_event_keys) > RECENT_EVENT_KEYS_LIMIT:
+            old = self._recent_event_keys.popleft()
+            self._recent_event_key_set.discard(old)
+        self._dirty_ingestion_state = True
 
     # ───────────────────────── Run lifecycle ────────────────────────
 
@@ -321,23 +506,26 @@ class TokensStore:
         input_tokens: int = 0,
         output_tokens: int = 0,
         dedup_key: str = "",
-    ) -> None:
+        ingestion_file: str = "",
+        ingestion_checkpoint: dict[str, Any] | None = None,
+        replay_workspace: str = "",
+        legacy_dedup_key: str = "",
+    ) -> bool:
         """Add a single token event. All numeric inputs are >= 0; zeros allowed.
 
         workspace_path may be None (e.g. for an analyzer call made before any
         workspace was selected) — those still hit the global tally.
 
-        dedup_key (optional): a stable per-event identifier; if it has already
-        contributed to the accumulator, this call is a no-op. Used by log
-        readers so re-parsing the same JSONL after a workspace registration
-        doesn't double-count.
+        dedup_key is a bounded crash/retry guard. Durable replay progress comes
+        from ingestion checkpoints; legacy_dedup_key is consumed only while
+        converting the retired event-key files.
         """
         # Defensive normalisation: no negative tokens, no NaN.
         input_tokens = max(0, int(input_tokens))
         output_tokens = max(0, int(output_tokens))
         if input_tokens == 0 and output_tokens == 0:
             # Don't bump `calls` either — zero-zero events are no-ops.
-            return
+            return False
         delta = {
             "input": input_tokens,
             "output": output_tokens,
@@ -345,12 +533,44 @@ class TokensStore:
         }
 
         with self._lock:
-            # Event-level dedup — short-circuit if we've already counted this event.
-            if dedup_key and dedup_key in self._recorded_keys:
-                return
-            if dedup_key:
-                self._recorded_keys.add(dedup_key)
-                self._save_recorded_keys()
+            scope = f"workspace:{replay_workspace}" if replay_workspace else "global"
+            scoped_key = f"{scope}::{dedup_key}" if dedup_key else ""
+            legacy_matches = {
+                key for key in (dedup_key, legacy_dedup_key)
+                if key and key in self._legacy_event_keys
+            }
+            legacy_duplicate = bool(legacy_matches)
+            recent_duplicate = bool(scoped_key and scoped_key in self._recent_event_key_set)
+            global_checkpoint = self._ingestion_state["files"].get(
+                ingestion_file, {}
+            ).get("global", {})
+            credit_global_on_replay = bool(
+                replay_workspace
+                and not legacy_duplicate
+                and ingestion_checkpoint
+                and self._checkpoint_is_ahead(global_checkpoint, ingestion_checkpoint)
+            )
+
+            if legacy_duplicate:
+                self._legacy_event_keys.difference_update(legacy_matches)
+                self._dirty_ingestion_state = True
+            if recent_duplicate or (legacy_duplicate and not replay_workspace):
+                if ingestion_checkpoint:
+                    if replay_workspace:
+                        self._advance_ingestion_checkpoint_locked(
+                            ingestion_file, ingestion_checkpoint, replay_workspace
+                        )
+                    else:
+                        self._advance_ingestion_checkpoint_locked(
+                            ingestion_file, ingestion_checkpoint
+                        )
+                        if workspace_path:
+                            self._advance_ingestion_checkpoint_locked(
+                                ingestion_file, ingestion_checkpoint, workspace_path
+                            )
+                return True
+            self._remember_event_key_locked(scoped_key)
+
             # --- workspace state ---
             if workspace_path:
                 doc = self._load_workspace(workspace_path)
@@ -369,20 +589,40 @@ class TokensStore:
                 _add(cum["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
                 if stage_id:
                     _add(cum["by_stage"].setdefault(stage_id, _empty_bucket()), delta)
-                self._save_workspace(workspace_path)
+                self._dirty_workspaces.add(workspace_path)
 
             # --- global state ---
-            g = self._global_data
-            _add(g["all_time"], delta)
-            _add(g["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
-            day = _today()
-            _add(g["by_day"].setdefault(day, _empty_bucket()), delta)
-            self._save_global()
+            if not replay_workspace or credit_global_on_replay:
+                g = self._global_data
+                _add(g["all_time"], delta)
+                _add(g["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
+                day = _today()
+                _add(g["by_day"].setdefault(day, _empty_bucket()), delta)
+                self._dirty_global = True
+
+            if ingestion_checkpoint:
+                if replay_workspace:
+                    self._advance_ingestion_checkpoint_locked(
+                        ingestion_file, ingestion_checkpoint, replay_workspace
+                    )
+                    if credit_global_on_replay:
+                        self._advance_ingestion_checkpoint_locked(
+                            ingestion_file, ingestion_checkpoint
+                        )
+                else:
+                    self._advance_ingestion_checkpoint_locked(
+                        ingestion_file, ingestion_checkpoint
+                    )
+                    if workspace_path:
+                        self._advance_ingestion_checkpoint_locked(
+                            ingestion_file, ingestion_checkpoint, workspace_path
+                        )
 
         log.debug(
             "tokens recorded source=%s vendor=%s pane=%s stage=%s in=%d out=%d",
             source, vendor, pane_id, stage_id, input_tokens, output_tokens,
         )
+        return True
 
     # ───────────────────────── Snapshot ─────────────────────────────
 
@@ -420,14 +660,20 @@ class TokensStore:
             elif scope == "workspace" and workspace_path:
                 self._workspace_cache[workspace_path] = _empty_workspace_doc()
                 self._save_workspace(workspace_path)
+                for entry in self._ingestion_state["files"].values():
+                    if isinstance(entry, dict):
+                        entry.get("workspaces", {}).pop(workspace_path, None)
+                self._dirty_ingestion_state = True
+                self._save_ingestion_state()
             elif scope == "global":
                 self._global_data = _empty_global_doc()
                 self._save_global()
-                # Also clear event dedup so previously-recorded events can be
-                # re-counted (e.g. after reset, the user expects backfill to
-                # repopulate the tally from scratch).
-                self._recorded_keys.clear()
-                self._save_recorded_keys()
+                self._ingestion_state = _empty_ingestion_state()
+                self._legacy_event_keys.clear()
+                self._recent_event_keys.clear()
+                self._recent_event_key_set.clear()
+                self._dirty_ingestion_state = True
+                self._save_ingestion_state()
             else:
                 raise ValueError(f"unknown reset scope: {scope!r}")
             return self.snapshot(workspace_path)

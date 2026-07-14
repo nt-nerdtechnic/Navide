@@ -6,7 +6,13 @@ for the three formats this module supports.
 """
 
 from .antigravity import AntigravityLogReader
-from .base import ActivityEvent, LogReader, TokenUsage
+from .base import (
+    ActivityEvent,
+    IncrementalParseResult,
+    LogReader,
+    TokenSinkResult,
+    TokenUsage,
+)
 from .claude import ClaudeLogReader
 from .codex import CodexLogReader
 from .grok import GrokLogReader
@@ -14,8 +20,10 @@ from .watcher import LogWatcher
 
 __all__ = [
     "ActivityEvent",
+    "IncrementalParseResult",
     "LogReader",
     "TokenUsage",
+    "TokenSinkResult",
     "AntigravityLogReader",
     "ClaudeLogReader",
     "CodexLogReader",

@@ -61,18 +61,21 @@ export interface SpawnPayload {
   roleKey: RoleKey
   stageId: StageId
   workspacePath: string
+  customName?: string
 }
 
 export interface ResumePayload {
   agentKey: string
   sessionId: string
   workspacePath: string
+  customName?: string
 }
 
 /** Slim view of App's SpawnHistoryEntry — just what the resume datalist needs. */
 export interface ResumeHistoryEntry {
   agentKey: string
   agentLabel: string
+  customName?: string
   roleLabel: string
   sessionId?: string
   workspacePath: string
@@ -547,7 +550,7 @@ const resumeOptions = computed<{ sessionId: string; label: string; workspacePath
     const ws = entry.workspacePath.split('/').filter(Boolean).pop() ?? entry.workspacePath
     out.push({
       sessionId: sid,
-      label: `${entry.agentLabel} · ${entry.roleLabel || '—'} · ${ws} · ${when}`,
+      label: `${entry.customName || entry.agentLabel} · ${entry.roleLabel || '—'} · ${ws} · ${when}`,
       workspacePath: entry.workspacePath
     })
   }

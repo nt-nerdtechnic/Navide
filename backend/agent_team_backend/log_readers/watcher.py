@@ -2,16 +2,15 @@
 
 Uses `watchdog` for change notifications, with a periodic full-rescan
 fallback (default 30s) to recover from missed events (network mounts,
-edge-case file ops). On each change, the watcher calls the matching
-reader's parse_session_file(), passing in the per-file `seen_keys` so
-streaming chunks aren't double-counted.
+edge-case file ops). Token readers resume from compact per-file checkpoints
+owned by TokensStore; the watcher itself persists no token dedup state.
 
 Architecture:
 
     LogWatcher.start()
         ├─ observer (watchdog Observer) — async file events → enqueue(path)
         ├─ rescan loop (asyncio) — every N s → enqueue all session files
-        └─ drain loop (asyncio) — pop queue → reader.parse_session_file()
+        └─ drain loop (asyncio) — pop queue → reader.parse_incremental()
                                             → emit each TokenUsage to sink
 
 The sink callback runs on the asyncio loop. It MUST be fast (just enqueue
@@ -21,23 +20,23 @@ to tokens_store + broadcast); long work blocks the drain.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from ..applog import app_data_dir
-from .base import ActivityEvent, LogReader, TokenUsage
+from .base import ActivityEvent, LogReader, TokenSinkResult, TokenUsage
 
 log = logging.getLogger("agent_team_backend.log_readers.watcher")
 
-TokenSink = Callable[[TokenUsage], Awaitable[None]]
+TokenSink = Callable[[TokenUsage], Awaitable[TokenSinkResult | None]]
 ActivitySink = Callable[[ActivityEvent], Awaitable[None]]
 SessionSink = Callable[[str, Path], Awaitable[None]]  # (vendor, file_path)
+CheckpointProvider = Callable[[str, str | None], dict]
+CheckpointSink = Callable[[str, dict, str | None], None]
 
 
 class _Handler(FileSystemEventHandler):
@@ -83,6 +82,8 @@ class LogWatcher:
         seen_path: Path | None = None,
         save_interval_s: float = 10.0,
         workspace_provider: Callable[[], list[str]] | None = None,
+        checkpoint_provider: CheckpointProvider | None = None,
+        checkpoint_sink: CheckpointSink | None = None,
     ) -> None:
         self._sink = sink
         # Returns the workspaces the user has actually opened. Periodic/startup
@@ -92,26 +93,25 @@ class LogWatcher:
         self._activity_sink = activity_sink
         self._session_sink = session_sink
         self._rescan_interval_s = rescan_interval_s
-        self._save_interval_s = save_interval_s
-        # Persistent dedup state: file path -> set of dedup keys we've already
-        # emitted to tokens_store. Survives backend restarts so we don't
-        # re-credit historic events every time `pnpm dev` runs.
-        self._seen_path = seen_path or (app_data_dir() / "log-readers-seen.json")
+        # seen_path/save_interval_s remain accepted for compatibility with
+        # third-party callers; token persistence now belongs to the unified
+        # checkpoint store supplied below.
+        _ = (seen_path, save_interval_s)
+        self._local_checkpoints: dict[tuple[str, str], dict] = {}
+        self._checkpoint_provider = checkpoint_provider or self._local_checkpoint
+        self._checkpoint_sink = checkpoint_sink or self._advance_local_checkpoint
         self._readers: list[LogReader] = []
-        self._seen_keys: dict[str, set[str]] = {}
         # Activity dedup is in-memory only (lifetime-bound). On restart, we
         # only emit *new* activity since the last seen line, but we don't try
         # to "replay" history — old events have no semantic value to a
         # newly-started watcher anyway.
         self._activity_seen: dict[str, set[str]] = {}
         self._scan_mtimes: dict[str, float] = {}
-        self._save_pending = False
-        self._queue: asyncio.Queue[Path] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[Path, str]] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observer: Observer | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._rescan_task: asyncio.Task[None] | None = None
-        self._save_task: asyncio.Task[None] | None = None
         self._watched_dirs: set[Path] = set()
         self._started = False
 
@@ -120,41 +120,18 @@ class LogWatcher:
 
     # ───────────────────────── lifecycle ──────────────────────────────────
 
-    # ───────────────────────── seen-keys persistence ───────────────────────
+    def _local_checkpoint(self, file_path: str, workspace_path: str | None) -> dict:
+        return dict(self._local_checkpoints.get((file_path, workspace_path or ""), {}))
 
-    def _load_seen(self) -> None:
-        try:
-            data = json.loads(self._seen_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return
-        except (OSError, json.JSONDecodeError) as err:
-            log.warning("seen-keys file unreadable (%s); starting empty", err)
-            return
-        if not isinstance(data, dict):
-            return
-        for path_str, keys in data.items():
-            if isinstance(keys, list):
-                self._seen_keys[path_str] = set(str(k) for k in keys)
-        total = sum(len(v) for v in self._seen_keys.values())
-        log.info(
-            "loaded seen_keys: %d files, %d total keys", len(self._seen_keys), total
-        )
-
-    def _save_seen(self) -> None:
-        try:
-            self._seen_path.parent.mkdir(parents=True, exist_ok=True)
-            data = {p: sorted(keys) for p, keys in self._seen_keys.items()}
-            tmp = self._seen_path.with_suffix(self._seen_path.suffix + ".tmp")
-            tmp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-            os.replace(tmp, self._seen_path)
-        except OSError as err:
-            log.warning("seen-keys save failed: %s", err)
+    def _advance_local_checkpoint(
+        self, file_path: str, checkpoint: dict, workspace_path: str | None
+    ) -> None:
+        self._local_checkpoints[(file_path, workspace_path or "")] = dict(checkpoint)
 
     def start(self) -> None:
         if self._started:
             return
         self._started = True
-        self._load_seen()
         self._loop = asyncio.get_event_loop()
         self._observer = Observer()
 
@@ -164,7 +141,7 @@ class LogWatcher:
             if loop is None or loop.is_closed():
                 return
             try:
-                loop.call_soon_threadsafe(self._queue.put_nowait, p)
+                loop.call_soon_threadsafe(self._queue.put_nowait, (p, ""))
             except RuntimeError:
                 # loop closed mid-flight
                 pass
@@ -189,7 +166,6 @@ class LogWatcher:
         self._observer.start()
         self._drain_task = asyncio.create_task(self._drain_loop(), name="logwatcher.drain")
         self._rescan_task = asyncio.create_task(self._rescan_loop(), name="logwatcher.rescan")
-        self._save_task = asyncio.create_task(self._save_loop(), name="logwatcher.save")
         log.info(
             "LogWatcher started · %d reader(s) · %d dir(s) · rescan %.0fs",
             len(self._readers), len(self._watched_dirs), self._rescan_interval_s,
@@ -199,7 +175,7 @@ class LogWatcher:
         if not self._started:
             return
         self._started = False
-        for t in (self._drain_task, self._rescan_task, self._save_task):
+        for t in (self._drain_task, self._rescan_task):
             if t:
                 t.cancel()
         if self._observer:
@@ -208,8 +184,6 @@ class LogWatcher:
                 self._observer.join(timeout=2.0)
             except Exception:  # noqa: BLE001
                 pass
-        # Final flush so newest seen_keys make it to disk before exit.
-        self._save_seen()
         log.info("LogWatcher stopped")
 
     # ───────────────────────── workers ────────────────────────────────────
@@ -218,45 +192,21 @@ class LogWatcher:
         """Pop file paths, route to the right reader, emit events."""
         while True:
             try:
-                path = await self._queue.get()
+                path, replay_workspace = await self._queue.get()
             except asyncio.CancelledError:
                 return
             try:
-                await self._process_path(path)
+                await self._process_path(path, replay_workspace)
             except Exception as err:  # noqa: BLE001
                 log.warning("processing %s failed: %s", path, err)
 
-    async def _save_loop(self) -> None:
-        """Persist seen_keys to disk whenever a parse marked the state dirty."""
-        while True:
-            try:
-                await asyncio.sleep(self._save_interval_s)
-            except asyncio.CancelledError:
-                return
-            if self._save_pending:
-                # Take a snapshot on the event loop thread (no concurrent
-                # mutation here — asyncio is single-threaded at this point)
-                # before handing off to a worker thread for the actual I/O.
-                snapshot = {p: sorted(keys) for p, keys in self._seen_keys.items()}
-                self._save_pending = False
-                await asyncio.to_thread(self._write_snapshot, snapshot)
-
-    def _write_snapshot(self, snapshot: dict[str, list[str]]) -> None:
-        try:
-            self._seen_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._seen_path.with_suffix(self._seen_path.suffix + ".tmp")
-            tmp.write_text(json.dumps(snapshot, separators=(",", ":")), encoding="utf-8")
-            os.replace(tmp, self._seen_path)
-        except OSError as err:
-            log.warning("seen-keys save failed: %s", err)
-
     def force_rescan(self, workspace_path: str | None = None) -> None:
-        """Re-enqueue session files for re-parse, ignoring in-memory dedup.
+        """Re-enqueue session files using a workspace-specific checkpoint.
 
         Used when a new workspace registration means previously-parsed
         session files may now belong to that workspace and need re-counting.
-        Event-level dedup at tokens_store level prevents double-counting of
-        already-recorded events.
+        Global and workspace checkpoints advance independently, so a replay
+        can fill missing workspace totals without incrementing Global twice.
 
         When `workspace_path` is given, only that workspace's files are
         re-enqueued: readers that map a workspace to a specific folder (Claude)
@@ -279,15 +229,11 @@ class LogWatcher:
                 else None
             )
             files.extend(scoped if scoped is not None else reader.session_files())
-        # Clear in-memory dedup only for the files we're about to re-parse, so
-        # other workspaces' caches survive (avoids needlessly re-emitting them
-        # later). Persisted seen.json is left alone (it's a perf cache; the
-        # tokens_store dedup is the correctness gate).
-        for f in files:
-            self._seen_keys.pop(str(f.resolve()), None)
         for p in files:
             try:
-                self._loop.call_soon_threadsafe(self._queue.put_nowait, p)
+                self._loop.call_soon_threadsafe(
+                    self._queue.put_nowait, (p, workspace_path or "")
+                )
             except RuntimeError:
                 return
         log.info(
@@ -361,10 +307,10 @@ class LogWatcher:
             except asyncio.CancelledError:
                 return
             for p in self._files_to_scan():
-                self._queue.put_nowait(p)
+                self._queue.put_nowait((p, ""))
             delay = self._rescan_interval_s
 
-    async def _process_path(self, path: Path) -> None:
+    async def _process_path(self, path: Path, replay_workspace: str = "") -> None:
         reader = self._reader_for(path)
         if reader is None:
             return
@@ -378,25 +324,35 @@ class LogWatcher:
             except Exception as err:  # noqa: BLE001
                 log.warning("session sink raised: %s", err)
         key = str(path.resolve())
-        seen = self._seen_keys.setdefault(key, set())
-        # parse_session_file is sync; run it in a thread to avoid blocking
-        # the event loop on large files.
+        checkpoint = self._checkpoint_provider(key, replay_workspace or None)
         try:
-            events = await asyncio.to_thread(reader.parse_session_file, path, seen)
+            parsed = await asyncio.to_thread(reader.parse_incremental, path, checkpoint)
         except FileNotFoundError:
             return
         except Exception as err:  # noqa: BLE001
             log.warning("parse %s (%s) failed: %s", path, reader.vendor, err)
             return
-        for ev in events:
+        handled_workspaces: set[str] = set()
+        for ev in parsed.events:
             try:
-                await self._sink(ev)
+                result = await self._sink(
+                    replace(ev, replay_workspace=replay_workspace) if replay_workspace else ev
+                )
             except Exception as err:  # noqa: BLE001
                 log.warning("token sink raised: %s", err)
-        if events:
-            # Mark for next periodic save; immediate save would thrash on
-            # startup backfill where 200+ files emit events back-to-back.
-            self._save_pending = True
+                return
+            if isinstance(result, TokenSinkResult):
+                if not result.handled:
+                    return
+                if result.workspace_path:
+                    handled_workspaces.add(result.workspace_path)
+
+        if replay_workspace:
+            self._checkpoint_sink(key, parsed.checkpoint, replay_workspace)
+        else:
+            self._checkpoint_sink(key, parsed.checkpoint, None)
+            for workspace_path in handled_workspaces:
+                self._checkpoint_sink(key, parsed.checkpoint, workspace_path)
 
         # Activity parsing runs on the same file but with its own dedup set.
         if self._activity_sink is not None:

@@ -3,6 +3,7 @@ import {
   buildCliPaneBufferReply,
   parseCliContextPayload,
   resolveCliDropPayload,
+  writeCliPaneDragPayload,
   buildCliContextChip,
   screenToClientPoint,
   resolveCliDropSource,
@@ -103,6 +104,24 @@ describe('buildCliPaneBufferReply', () => {
       conversationLogPath: '',
       buffer: 'x'
     })
+  })
+})
+
+describe('writeCliPaneDragPayload', () => {
+  it('writes both the pane id and rich CLI context for every drag surface', () => {
+    const written = new Map<string, string>()
+    const payload = {
+      paneId: 'p-aux',
+      agentKey: 'codex',
+      label: 'Review',
+      sessionId: 'session-1',
+      workspacePath: '/workspace'
+    }
+
+    writeCliPaneDragPayload({ setData: (type, value) => written.set(type, value) }, payload)
+
+    expect(written.get('application/x-pane-id')).toBe('p-aux')
+    expect(JSON.parse(written.get('application/x-cli-context') ?? '')).toEqual(payload)
   })
 })
 

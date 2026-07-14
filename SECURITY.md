@@ -1,58 +1,67 @@
 # Security Policy
 
-<!-- 安全政策 -->
+## Supported versions
 
-## Supported Versions / 支援版本
+Navide is currently pre-1.0. Security fixes target the latest code on `main` and the newest published release when releases are available.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | ✅ |
+| Latest `0.1.x` release | Yes |
+| Older snapshots | No guaranteed fixes |
 
----
+## Reporting a vulnerability
 
-## Reporting a Vulnerability / 回報漏洞
+Do not open a public GitHub Issue for a suspected vulnerability.
 
-**Please do not open a public GitHub Issue for security vulnerabilities.**
+Email **nt.nerdtechnic@gmail.com** with the subject:
 
-> **請勿在 GitHub Issue 公開回報安全漏洞。**
-
-Email **nt.nerdtechnic@gmail.com** with the subject line:
-
-```
-[Navide (Agent-Team)] Security Vulnerability
+```text
+[Navide] Security Vulnerability
 ```
 
-Please include:
+Include a description, reproduction steps, potential impact, affected versions or commits, and a suggested fix if available. Remove credentials, private source code, and unrelated personal data from the report.
 
-- A description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Any suggested fix (optional)
+The project aims to acknowledge reports within 48 hours and provide a status update within 7 days. These are response targets, not a guarantee of resolution within that period.
 
-You will receive an acknowledgement within **48 hours** and a status update within **7 days**.
+## Security model
 
-> 請以郵件聯絡 **nt.nerdtechnic@gmail.com**，主旨：`[Navide (Agent-Team)] Security Vulnerability`。  
-> 請附上漏洞描述、重現步驟、潛在影響，以及建議修法（選填）。  
-> 我們會在 **48 小時**內確認收信，**7 天**內告知處理進度。
+Navide's Electron application, Python backend, PTYs, orchestration state, and workspace data run on the user's machine. The backend listens on loopback and is not designed to be exposed as a remote service.
 
----
+Navide is local-first, not universally offline. External coding CLIs, cloud AI providers, Context7, search, Git hosts, MCP servers, and update checks can communicate with third parties when used. See [Privacy and Data Flows](docs/privacy.md).
 
-## Security Design / 安全設計說明
+### Credentials
 
-Navide (Agent-Team) runs entirely on your local machine:
+- Coding-agent credentials remain in each external CLI's own configuration.
+- Cloud AI keys entered in Navide are stored locally in the application data directory with restrictive file permissions (`0600` on supported systems).
+- Exported settings redact API keys and tokens.
+- Local file permissions are not protection against malware, a compromised account, unrestricted agents, backups, or another process running with equivalent authority.
 
-- **No external server** — no data is transmitted to any remote service
-- **No telemetry** — no usage data is collected
-- **No API key storage** — all CLI credentials stay in each tool's own config (`~/.claude/`, `~/.codex/`, etc.)
-- **Claude Code hooks** are installed into `~/.claude/settings.json` in a merge-safe way; the original file is backed up as `.pre-agent-team.bak`
-- **YOLO Mode** grants agents unrestricted filesystem access — only use it in workspaces you trust
+### Agent authority
 
-> Navide (Agent-Team) 完全在本機執行，不傳送任何遙測資料，不需要帳號，不儲存 API key。  
-> YOLO Mode 下 agent 擁有完整檔案系統讀寫權，僅在信任的 workspace 下使用。
+- Agents normally execute with the current user's operating-system permissions.
+- Navide does not currently provide a complete workspace sandbox.
+- YOLO mode may pass flags that bypass an external CLI's confirmations or sandbox. Some CLIs may execute tools without a confirmation gate even when Navide does not pass such a flag.
+- Full Auto can answer agent questions without another user response.
+- Use automation only in trusted, version-controlled workspaces and review resulting commands and diffs.
 
-### Known Limitations / 已知限制
+### Handoffs and logs
 
-- Secret scrubbing before cross-agent context handoff is **not yet implemented** (planned)
-- Workspace sandboxing is **not yet implemented** — agents run with full user-level permissions
+- Cross-agent and cross-stage handoffs can propagate task text, prior output, and accidental secrets.
+- Complete secret scrubbing is not yet an enforceable security boundary.
+- Run history, terminal logs, CLI logs, token metadata, Git history, and exported diagnostics may retain sensitive content.
+- Never place credentials directly in prompts, plans, screenshots, issue reports, or files intended for handoff.
 
-> 跨 agent 傳遞前的 secret 自動抹除與 workspace 沙盒隔離功能尚未實作（規劃中）。
+### External integrations
+
+MCP servers and provider integrations execute according to their own configuration and trust model. Review commands, environment variables, endpoint URLs, and provider policies before enabling them.
+
+## Known security limitations
+
+- No complete cross-platform workspace sandbox
+- No complete secret-redaction guarantee for handoffs and diagnostics
+- External CLI permission semantics differ and may change between versions
+- Locally persisted API keys are not stored in an operating-system secret vault
+- Provider log readers depend on files or databases owned by external tools
+- Automatic update security depends on signed, notarized release artifacts and GitHub Release metadata
+
+The [Product Roadmap](docs/roadmap.md) defines policy, isolation, and secret handling as a dedicated long-term horizon. Documentation must not claim those controls have shipped before they are implemented and verified.

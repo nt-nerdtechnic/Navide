@@ -35,6 +35,13 @@ export interface GitCredential {
 export type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
 export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-applicable'
 
+const pendingEditorOpenFiles: Record<string, string>[] = []
+let editorOpenFileCallback: ((params: Record<string, string>) => void) | null = null
+ipcRenderer.on('editor:openFile', (_event, params: Record<string, string>) => {
+  if (editorOpenFileCallback) editorOpenFileCallback(params)
+  else pendingEditorOpenFiles.push(params)
+})
+
 contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
   version: __APP_VERSION__,
@@ -96,6 +103,10 @@ contextBridge.exposeInMainWorld('agentTeam', {
     }),
   onSwitchEditorSidebar: (cb: (sidebar: string) => void): void => {
     ipcRenderer.on('editor:switchSidebar', (_event, sidebar: string) => cb(sidebar))
+  },
+  onOpenEditorFile: (cb: (params: Record<string, string>) => void): void => {
+    editorOpenFileCallback = cb
+    for (const params of pendingEditorOpenFiles.splice(0)) cb(params)
   },
   onOpenEditorDiff: (cb: (params: Record<string, string>) => void): void => {
     ipcRenderer.on('editor:openDiff', (_event, params: Record<string, string>) => cb(params))

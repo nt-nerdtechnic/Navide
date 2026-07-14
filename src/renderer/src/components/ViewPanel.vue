@@ -5,10 +5,10 @@ defineProps<{ modelValue: LayoutMode }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: LayoutMode): void }>()
 
 const modes: [LayoutMode, string, string][] = [
-  ['grid',       '⊞', 'Grid'],
-  ['auto',       '✦', 'Auto (dynamic)'],
-  ['spotlight',  '◎', 'Spotlight'],
-  ['fullscreen', '⧉', 'Fullscreen + floating panel'],
+  ['grid',       '⊞', 'Grid — show all panes'],
+  ['auto',       '◧', 'Sidebar — show the selected pane with the Active agents list'],
+  ['spotlight',  '◎', 'Spotlight — show the selected pane with thumbnails'],
+  ['fullscreen', '⧉', 'Fullscreen — fill the workspace with the selected pane'],
 ]
 </script>
 

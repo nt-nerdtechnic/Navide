@@ -172,3 +172,37 @@ def test_missing_payload_info_skipped(fake_codex_session: Path) -> None:
     ])
     events = reader.parse_session_file(fake_codex_session, set())
     assert events == []
+
+
+def test_incremental_parse_persists_offset_and_cumulative_baseline(
+    fake_codex_session: Path,
+) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x", "id": "session-1"}},
+        _token_count_event(100, 0, 50, 0),
+    ])
+    parsed1 = reader.parse_incremental(fake_codex_session, {})
+    assert [(e.input_tokens, e.output_tokens) for e in parsed1.events] == [(100, 50)]
+    first_offset = parsed1.checkpoint["offset"]
+
+    with fake_codex_session.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_token_count_event(140, 0, 65, 0)) + "\n")
+    parsed2 = reader.parse_incremental(fake_codex_session, parsed1.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in parsed2.events] == [(40, 15)]
+    assert parsed2.checkpoint["offset"] > first_offset
+    assert parsed2.checkpoint["input_total"] == 140
+    assert parsed2.checkpoint["output_total"] == 65
+
+
+def test_incremental_parse_handles_truncation_without_negative_delta(
+    fake_codex_session: Path,
+) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [_token_count_event(500, 0, 200, 0)])
+    first = reader.parse_incremental(fake_codex_session, {})
+    _write_jsonl(fake_codex_session, [_token_count_event(50, 0, 30, 0)])
+    rotated = reader.parse_incremental(fake_codex_session, first.checkpoint)
+    assert rotated.events == []
+    assert rotated.checkpoint["input_total"] == 50
+    assert rotated.checkpoint["output_total"] == 30

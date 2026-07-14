@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ class TokenUsage:
     dedup_key: str             # stable key per logical event; readers compose this
     timestamp: str = ""        # ISO 8601 if the log records one
     model: str = ""            # e.g. "claude-opus-4-7"
+    checkpoint: dict[str, Any] = field(default_factory=dict, repr=False)
+    replay_workspace: str = ""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -56,6 +59,63 @@ class ActivityEvent:
     timestamp: str = ""        # ISO 8601 if available
     detail: str = ""           # e.g. tool name, stop_reason, etc. (UI hint only)
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+
+@dataclass
+class IncrementalParseResult:
+    """Token events plus the compact cursor after the last complete source item."""
+
+    events: list[TokenUsage]
+    checkpoint: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class TokenSinkResult:
+    """Explicit sink acknowledgement used before a watcher advances a cursor."""
+
+    handled: bool
+    workspace_path: str = ""
+
+
+def read_jsonl_tail(
+    path: Path,
+    checkpoint: dict[str, Any],
+) -> tuple[list[tuple[int, dict[str, Any] | None]], dict[str, Any], bool]:
+    """Read complete JSONL records after a byte offset.
+
+    Returns ``(records, next_checkpoint, rotated)``. A partial trailing line is
+    intentionally left unread so a later append can complete it. File identity
+    and shrink checks prevent seeking into a replaced/truncated generation.
+    """
+    stat = path.stat()
+    identity = f"{stat.st_dev}:{stat.st_ino}"
+    prior_identity = str(checkpoint.get("identity") or "")
+    offset = max(0, int(checkpoint.get("offset") or 0))
+    rotated = bool(offset and (prior_identity != identity or stat.st_size < offset))
+    if rotated:
+        offset = 0
+
+    records: list[tuple[int, dict[str, Any] | None]] = []
+    committed = offset
+    with path.open("rb") as fh:
+        fh.seek(offset)
+        while True:
+            raw = fh.readline()
+            if not raw:
+                break
+            end = fh.tell()
+            if not raw.endswith(b"\n"):
+                break
+            committed = end
+            try:
+                value = json.loads(raw.decode("utf-8"))
+                records.append((end, value if isinstance(value, dict) else None))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                records.append((end, None))
+
+    next_checkpoint = dict(checkpoint)
+    next_checkpoint.update({"kind": "jsonl", "offset": committed, "identity": identity})
+    return records, next_checkpoint, rotated
 
 
 class LogReader(ABC):
@@ -92,6 +152,21 @@ class LogReader(ABC):
           - Skip lines whose dedup_key is already in seen_keys
           - Add new dedup_keys to seen_keys (mutating in place is fine)
         """
+
+    def parse_incremental(
+        self,
+        path: Path,
+        checkpoint: dict[str, Any],
+    ) -> IncrementalParseResult:
+        """Parse from a compact cursor.
+
+        Real token readers override this with byte/row watermarks. The fallback
+        keeps compatibility for third-party/test readers using the legacy set
+        contract; production readers never persist this unbounded form.
+        """
+        seen = set(str(k) for k in checkpoint.get("legacy_seen", []))
+        events = self.parse_session_file(path, seen)
+        return IncrementalParseResult(events, {"kind": "legacy", "legacy_seen": sorted(seen)})
 
     def cwd_from_file(self, path: Path) -> str:
         """Best-effort: derive the spawning cwd from the session file location.

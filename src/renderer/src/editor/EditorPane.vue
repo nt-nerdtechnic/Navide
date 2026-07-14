@@ -173,9 +173,12 @@ async function load(): Promise<void> {
     fileEncoding.value = p.encoding ?? 'UTF-8'
     fileBom.value = p.bom ?? false
     loaded.value = true
-    if (props.initialLine && props.initialLine > 0) {
+    const targetLine = props.revealAt && props.revealAt > 0
+      ? props.revealAt
+      : props.initialLine
+    if (targetLine && targetLine > 0) {
       await nextTick()
-      editorRef.value?.revealLine(props.initialLine)
+      editorRef.value?.revealLine(targetLine)
     }
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : 'Failed to read file'

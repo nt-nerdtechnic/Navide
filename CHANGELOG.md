@@ -1,33 +1,37 @@
 # Changelog
 
-All notable changes to Navide (Agent-Team) will be documented in this file.
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-
-<!-- 所有重要的版本變更都會記錄在這裡，格式遵循 Keep a Changelog。 -->
-
----
+All notable released changes to Navide will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow Semantic Versioning where practical during the pre-1.0 period.
 
 ## [Unreleased]
 
----
+### Documentation
 
-## [0.1.8] — 2026-06-01
+- Reposition Navide as a local-first multi-agent development control plane.
+- Align supported agents with the current registry: Claude Code, Codex, Antigravity CLI, and Grok CLI.
+- Replace fixed-stage claims with the configurable pipeline model and included workflow.
+- Add documentation index, getting-started guide, user guide, architecture, privacy and data flows, troubleshooting, and a phased long-term roadmap.
+- Correct repository clone commands, contribution checks, privacy claims, credential-storage statements, and release expectations.
+
+## Development version history
+
+The source tree reached package version `0.1.39` before the public release history was established. GitHub currently has no published Navide release, so versions in that range must not be represented as downloadable releases retroactively.
+
+Future release entries should be added when a signed GitHub Release is published. Do not invent missing release notes from package-version bumps alone; reconstruct notable changes from commits and verification evidence as part of the first release preparation.
+
+## [0.1.8] — 2026-06-01 — historical development snapshot
 
 ### Added
 
-- **4-Stage SDLC Pipeline** — fully automated Requirements → Design → Implementation → QA pipeline
-- **Multi-agent parallel execution** — multiple agents run concurrently within a Stage
-- **Manager coordination mode** — one agent acts as Manager; workers communicate via `---ASK-START---` / `---DISPATCH-START---` / `---STAGE-DONE---` protocol
-- **Local LLM Analyzer** — Ollama (qwen2.5-coder) classifies agent intent in real time (`question` / `completion` / `in_progress`)
-- **Live token usage tracking** — parses Claude / Codex / Gemini CLI log files directly; no API keys required
-- **Context7 doc injection** — auto-detects tech stack in the task and prefixes kickoff prompts with up-to-date framework docs
-- **Pipeline Resume** — per-Stage state persisted to `.agent-team/project.json`; resume from any incomplete Stage
-- **Workspace-First entry screen** — Recent list with ★ pinning and stale-folder detection (VS Code "Open Folder"-style)
-- **History Timeline panel** — all run events persisted to `.agent-team/runs/{run-id}/history.jsonl`; supports filtering, search, and export
-- **YOLO / Continuous / Strict / Full Auto / Local Analyzer** mode toggles
-- **Claude Code lifecycle hooks** — merge-safe installer for `~/.claude/settings.json` (`PreToolUse` / `Stop` / `Notification`)
-- **Role Manager** — edit or create custom Role system prompts
-- **Stage Editor** — customize slot configuration, kickoff body, and sentinel strings per Stage
-- Initial open-source release under MIT license
+- Configurable SDLC pipeline with parallel agent slots
+- Manager coordination protocol
+- Local LLM analyzer and optional automatic answers
+- Token usage tracking from supported CLI logs
+- Context7 document injection
+- Pipeline resume and workspace-scoped state
+- Recent-workspace entry screen
+- History timeline
+- Role and stage management
+- Claude Code lifecycle hooks
+- Initial MIT-licensed open-source repository
 
-[0.1.8]: https://github.com/nt-nerdtechnic/Navide (Agent-Team)/releases/tag/v0.1.8
+`0.1.8` records a development milestone and was not a published GitHub Release.

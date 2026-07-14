@@ -1587,6 +1587,7 @@ onMounted(() => {
   const api = (window as Window & {
     agentTeam?: {
       onSwitchEditorSidebar?: (cb: (s: string) => void) => void
+      onOpenEditorFile?: (cb: (params: Record<string, string>) => void) => void
       onOpenEditorDiff?: (cb: (params: Record<string, string>) => void) => void
       onOpenEditorBranchDiff?: (cb: (params: Record<string, string>) => void) => void
     }
@@ -1596,6 +1597,14 @@ onMounted(() => {
       sidebarView.value = sidebar
       sidebarHidden.value = false
     }
+  })
+  api?.onOpenEditorFile?.((params) => {
+    const line = Number(params.line)
+    openFile({
+      filepath: params.filepath ?? '',
+      name: params.name,
+      line: Number.isFinite(line) && line > 0 ? line : undefined,
+    })
   })
   api?.onOpenEditorDiff?.((params) => {
     openDiff({

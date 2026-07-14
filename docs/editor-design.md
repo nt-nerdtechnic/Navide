@@ -1,41 +1,43 @@
-# AI Native Editor — Design Notes
+# Editor Architecture
 
-A minimalist code editor built from scratch (no Monaco / CodeMirror), tuned for
-AI-native workflows: agent-proposed edits as inline diffs, ghost-text
-completions, and Cmd+K selection rewriting. Strictly isolated under
-`src/renderer/src/editor/`.
+Navide's editor is a Monaco-based workspace surface for inspecting and accepting agent work. Earlier versions used a custom DOM editor; those notes are historical and no longer describe the current implementation.
 
-## Core concepts (borrowed from Monaco, simplified)
+## Responsibilities
 
-- **TextModel** — the document is a `lines[]` array. Edits are expressed as
-  `EditOperation { range, text }` (replace a range with text). `applyEdit`
-  returns the *inverse* edit so undo is just "apply the inverse".
-- **UndoStack** — push inverse edits; group rapid edits (typing) into one undo
-  unit by time/coalescing. Redo replays the forward edits.
-- **Rendering** — DOM-based with **virtual scrolling**: only the visible line
-  window is in the DOM. A monospace metric gives constant line height.
-- **Input** — a single hidden `<textarea>` positioned at the caret captures
-  keyboard, IME composition, and clipboard. We never rely on `contenteditable`.
-- **Tokenizer** — a stateful, regex-based "Monarch-lite" tokenizer. Each line is
-  tokenized given the previous line's end state (so block comments / template
-  strings survive line breaks). Tokens map to `--syntax-*` CSS variables from
-  the theme system.
-- **Decorations** — overlay ranges (AI diff add/del, ghost text, highlights)
-  rendered on top of the text layer without mutating the model.
+- Open workspace files in the main application or a dedicated editor window
+- Provide Monaco text editing, language services, diagnostics, and worker setup
+- Render Markdown and plan files with plan-aware presentation
+- Show working-tree, branch, and proposed diffs
+- Surface merge conflicts and support review-oriented resolution
+- Integrate AI rewrite, completion, and chat workflows through backend services
+- Preserve window and pane routing when editor views move between application windows
 
-## AI integration
+## Major components
 
-- **Propose edits** (`AiHunk[]`): rendered as inline red/green diff with per-hunk
-  accept/reject. Accept applies the hunk via `applyEdit`.
-- **Ghost text**: a `ghost` decoration after the caret; Tab accepts.
-- **Cmd+K**: rewrite the current selection via an instruction; the result comes
-  back as an `AiHunk` over the selection.
-- Transport reuses the existing `useBackend` WebSocket (`editor.*` messages),
-  which proxy to the configured local LLM (analyzer Ollama / llama.cpp).
+| Component | Responsibility |
+|---|---|
+| `EditorPane.vue` | File lifecycle, editor state, saves, and editor-level actions |
+| `EditorViewMonaco.vue` | Monaco instance, model binding, language setup, and view behavior |
+| `monacoWorkers.ts` | Monaco worker configuration |
+| `diagnostics.ts` | Problem and diagnostic normalization |
+| `PlanFileView.vue` | Plan-oriented Markdown rendering |
+| `DiffPane.vue` | Working-tree and file diff presentation |
+| `BranchDiffPane.vue` | Branch-level comparison |
+| `ConflictPane.vue` | Merge-conflict inspection and resolution workflow |
+| `PlansPane.vue` | Plan discovery and navigation |
+| `EditorWindowApp.vue` | Standalone editor-window shell and routing |
 
-## Isolation & limits
+## Backend boundary
 
-- All new code under `editor/`; host touches are additive (an `EditorPane`
-  window + a GitPane entry point + an `fs.write_file` save path).
-- `lines[]` is O(n) for some ops — fine for typical source files; very large
-  files are out of scope (documented limit).
+File reads and writes, workspace checks, AI editing requests, and related operations cross Navide's backend or preload boundaries. The renderer must not gain unrestricted filesystem access merely because Monaco runs in the renderer.
+
+## Product boundary
+
+The editor exists to improve agent observation, intervention, diff review, plan execution, and acceptance. General-purpose parity with established IDEs is not the primary product goal. New editor work should demonstrate how it improves the multi-agent control-plane workflow.
+
+## Known limits
+
+- Very large files and very large diffs require explicit performance testing.
+- Language intelligence depends on Monaco's available services and project configuration.
+- Agent-proposed edits remain untrusted until reviewed and verified.
+- Moving editor panes across windows must preserve file identity, unsaved-state behavior, and routing ownership.

@@ -237,6 +237,25 @@ def test_zero_token_rows_are_skipped_but_marked_seen(
     assert len(seen) == 1  # row consumed, not re-visited next cycle
 
 
+def test_incremental_parse_uses_row_id_watermark(tmp_path: Path, monkeypatch) -> None:
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    ws = tmp_path / "proj"
+    db = tmp_path / ".grok" / "grok.db"
+    con = _create_db(db)
+    _add_workspace(con, "w" * 16, str(ws))
+    _add_session(con, "abc123def456", "w" * 16, str(ws))
+    _add_usage(con, "abc123def456", 10, 2)
+    first = reader.parse_incremental(db, {})
+    assert len(first.events) == 1
+    assert first.checkpoint["row_id"] == 1
+
+    _add_usage(con, "abc123def456", 30, 7)
+    con.close()
+    second = reader.parse_incremental(db, first.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
+    assert second.checkpoint["row_id"] == 2
+
+
 # ── marker detection / session binding ──────────────────────────────────────
 
 def test_marker_binding_announces_grok_session(tmp_path: Path, monkeypatch) -> None:

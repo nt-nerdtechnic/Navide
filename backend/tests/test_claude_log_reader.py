@@ -186,3 +186,34 @@ def test_session_files_enumerates_all(fake_claude: tuple[ClaudeLogReader, Path])
     files = reader.session_files()
     assert len(files) == 3
     assert {f.name for f in files} == {"s1.jsonl", "s2.jsonl", "s3.jsonl"}
+
+
+def test_incremental_parse_reads_only_appended_complete_lines(
+    fake_claude: tuple[ClaudeLogReader, Path]
+) -> None:
+    reader, root = fake_claude
+    session = root / "-x" / "s1.jsonl"
+    first = {
+        "type": "assistant", "requestId": "r1",
+        "message": {"id": "m1", "usage": {"input_tokens": 10, "output_tokens": 5}},
+    }
+    second = {
+        "type": "assistant", "requestId": "r2",
+        "message": {"id": "m2", "usage": {"input_tokens": 20, "output_tokens": 7}},
+    }
+    _write_jsonl(session, [first])
+    parsed1 = reader.parse_incremental(session, {})
+    assert len(parsed1.events) == 1
+    first_offset = parsed1.checkpoint["offset"]
+
+    with session.open("ab") as fh:
+        fh.write(json.dumps(second).encode())  # partial: no newline yet
+    partial = reader.parse_incremental(session, parsed1.checkpoint)
+    assert partial.events == []
+    assert partial.checkpoint["offset"] == first_offset
+
+    with session.open("ab") as fh:
+        fh.write(b"\n")
+    parsed2 = reader.parse_incremental(session, partial.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in parsed2.events] == [(20, 7)]
+    assert len(parsed2.checkpoint["recent_keys"]) <= 64

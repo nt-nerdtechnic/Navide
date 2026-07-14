@@ -4,7 +4,7 @@ import { useTerminal } from '../composables/useTerminal'
 import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
 import { extractDropPaths, shellEscape } from '../lib/drop'
-import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource } from '../lib/cliContext'
+import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource, writeCliPaneDragPayload } from '../lib/cliContext'
 import RebuildIcon from './RebuildIcon.vue'
 
 interface Props {
@@ -157,21 +157,17 @@ function onTerminalDrop(e: DragEvent): void {
 // or onto another pane's header to reorder (see the drop handlers below).
 function onHeaderDragStart(e: DragEvent): void {
   if (!e.dataTransfer) return
-  e.dataTransfer.setData('application/x-pane-id', props.paneId)
   // Carry a fast local snapshot; AI Chat still fetches authoritative live
   // metadata and rendered output on drop through the pane-buffer IPC relay.
-  e.dataTransfer.setData(
-    'application/x-cli-context',
-    JSON.stringify({
-      paneId: props.paneId,
-      agentKey: props.agentKey ?? '',
-      label: props.title,
-      sessionId: props.cliSessionId || null,
-      sessionHomeId: props.sessionHomeId ?? '',
-      workspacePath: props.workspacePath ?? '',
-      conversationLogPath: props.conversationLogPath ?? ''
-    })
-  )
+  writeCliPaneDragPayload(e.dataTransfer, {
+    paneId: props.paneId,
+    agentKey: props.agentKey ?? '',
+    label: props.title,
+    sessionId: props.cliSessionId || null,
+    sessionHomeId: props.sessionHomeId ?? '',
+    workspacePath: props.workspacePath ?? '',
+    conversationLogPath: props.conversationLogPath ?? ''
+  })
   e.dataTransfer.effectAllowed = 'move'
   draggingSelf = true
 }

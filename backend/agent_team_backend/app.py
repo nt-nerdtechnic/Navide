@@ -46,6 +46,7 @@ from .log_readers import (
     CodexLogReader,
     GrokLogReader,
     LogWatcher,
+    TokenSinkResult,
     TokenUsage,
 )
 from .log_readers.attribution import Attribution
@@ -561,7 +562,7 @@ def _schedule_tokens_broadcast(workspace_path: str) -> None:
     asyncio.create_task(_fire())
 
 
-async def _on_log_token_usage(usage: TokenUsage) -> None:
+async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
     """Sink for token events from CLI log files.
 
     Drops events not associated with any registered Agent-Team workspace so
@@ -571,14 +572,23 @@ async def _on_log_token_usage(usage: TokenUsage) -> None:
     """
     try:
         attributed = attribution.attribute(usage)
-        if attributed.workspace_path is None:
+        if usage.replay_workspace:
+            if (
+                attributed.workspace_path is not None
+                and attributed.workspace_path != usage.replay_workspace
+            ):
+                return TokenSinkResult(False)
+            workspace_path = usage.replay_workspace
+        else:
+            workspace_path = attributed.workspace_path
+        if workspace_path is None:
             # External session — outside any registered workspace. Skip silently.
-            return
+            return TokenSinkResult(False)
         # Namespace the dedup key by vendor + file_path so collisions across
         # vendors (unlikely but possible) can't masquerade as the same event.
         composite_key = f"{usage.vendor}::{usage.file_path}::{usage.dedup_key}"
-        tokens_store.record(
-            attributed.workspace_path,
+        handled = tokens_store.record(
+            workspace_path,
             source="cli",
             vendor=usage.vendor,
             agent_key=usage.vendor,
@@ -589,10 +599,16 @@ async def _on_log_token_usage(usage: TokenUsage) -> None:
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             dedup_key=composite_key,
+            ingestion_file=usage.file_path,
+            ingestion_checkpoint=usage.checkpoint,
+            replay_workspace=usage.replay_workspace,
+            legacy_dedup_key=usage.dedup_key,
         )
-        _schedule_tokens_broadcast(attributed.workspace_path)
+        _schedule_tokens_broadcast(workspace_path)
+        return TokenSinkResult(handled, workspace_path)
     except Exception as err:  # noqa: BLE001
         log.warning("log token sink failed: %s", err)
+        return TokenSinkResult(False)
 
 
 def _stable_pane_key(metadata: dict, fallback: str) -> str:
@@ -657,6 +673,8 @@ async def _start_log_watcher() -> None:
         # Scope periodic/startup backfill to opened workspaces so the drain task
         # never re-stats the entire multi-GB CLI history (which stalled the loop).
         workspace_provider=attribution.known_workspaces,
+        checkpoint_provider=tokens_store.get_ingestion_checkpoint,
+        checkpoint_sink=tokens_store.advance_ingestion_checkpoint,
     )
     for r in _readers:
         _log_watcher.add_reader(r)
@@ -697,6 +715,10 @@ async def _stop_log_watcher() -> None:
             log.warning("pty shutdown sweep failed: %s", err)
     if _log_watcher is not None:
         _log_watcher.stop()
+    try:
+        tokens_store.flush()
+    except Exception as err:  # noqa: BLE001
+        log.warning("token store shutdown flush failed: %s", err)
     if _git_watcher is not None:
         _git_watcher.stop()
     await mcp_manager.shutdown()

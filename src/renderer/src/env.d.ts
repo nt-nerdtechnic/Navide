@@ -79,6 +79,7 @@ declare global {
         line?: number
         sidebar?: 'explorer' | 'search' | 'git'
       }) => Promise<{ ok: boolean }>
+      onOpenEditorFile: (cb: (params: Record<string, string>) => void) => void
       saveJson: (args: {
         defaultName?: string
         content: string

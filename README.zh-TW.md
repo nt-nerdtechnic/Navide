@@ -1,9 +1,10 @@
-# 🌌 Navide (Agent-Team)
+# Navide
 
-> **停止與 Agent 對話，開始領導一支團隊。**
-> 同時運行 Claude Code, Codex, 與 Gemini CLI — 透過 SDLC 流水線自動化協作與上下文傳遞。
+> 不要只和一個 Agent 對話，開始帶領一支團隊。
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+Navide 是一套本地優先的 macOS 多 Agent 開發控制平台。它把 Agent 終端、可自訂交付流程、Manager／Worker 路由、執行歷程、Token 統計、Git 工作流、程式碼審查與 AI 輔助編輯器整合在同一個工作區。
+
+[English](README.md) | [繁體中文](README.zh-TW.md) | [文件中心](docs/README.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -11,115 +12,106 @@
 [![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
----
+## 為什麼需要 Navide？
 
-## ⚡ 為什麼選擇 Navide (Agent-Team)？
+AI Coding Agent 很強大，但複雜工作仍需要使用者協調提示、等待連續任務、搬運上下文、審查修改並處理卡住的 Agent。Navide 將這些彼此孤立的工具轉變成可觀察、可控制的工程工作流。
 
-單一 AI 代理有其極限 —— 複雜任務需要不斷等待、上下文有限，且單一模型很難在 PM、後端與 QA 的思維間頻繁切換。
+| 挑戰 | Navide 的能力 |
+|---|---|
+| 線性等待 | 在同一階段平行執行多個 Agent slot |
+| 上下文中斷 | 建立並注入跨階段交接內容 |
+| 協調成本 | 指定 Manager Agent 分派任務並處理 Worker 問題 |
+| Agent 狀態不明 | 結合終端活動、CLI 日誌、Hook 與選用的本地分析 |
+| 執行難以稽核 | 保存工作區歷程、Session、中繼資料、Diff 與 Token 用量 |
+| 供應商綁定 | 使用多種 Agent CLI，並持續擴充 Adapter 能力 |
 
-**Navide 將你的 AI 工具從孤立的聊天框轉變為一支協調有度的工程團隊。**
+## 現有能力
 
-| 痛點 | Navide 的解法 |
-| :--- | :--- |
-| **線性等待** | **並行執行**：在一個階段中同時運行多個 Agent（如前端與後端）。 |
-| **上下文斷層** | **自動銜接**：在 4 個 SDLC 階段間自動提取並注入上下文。 |
-| **Agent 卡住** | **本地 LLM 判讀**：專屬本地模型即時解析 Agent 意圖，保持流水線運作。 |
-| **手動輸入** | **全自動回答**：AI 根據任務背景自動回答 Agent 的提問。 |
+### 多 Agent 工作區
 
----
+可在獨立 pane 中執行 Claude Code、Codex、Antigravity CLI、Grok CLI 或一般終端。你可以切換版面、將仍在執行的 pane 最小化，並在偵測到 Session 後恢復支援的 Agent 工作階段。
 
-## 🚀 核心功能
+### 可自訂 SDLC Pipeline
 
-### 🛠️ 4 階段 SDLC 流水線
-將簡單的任務描述，透過全自動流水線轉化為成品：
-**需求分析 → 系統設計 → 程式實作 → 測試驗收**。Navide 為每個步驟配置最適合的角色。
+內建流程涵蓋需求、規劃、設計、實作、安全審查與測試。每個階段都能自訂平行 slot、Agent、角色、kickoff prompt、提問規則、文件查詢與完成 sentinel。
 
-### 🤝 管理員協調模式 (Manager Mode)
-指定一個 **Manager Agent** (如 Claude) 來指揮 Worker Agents。
-- Manager 透過 `---DISPATCH---` 分配任務。
-- Worker 透過 `---ASK---` 提問或匯報進度。
-- Manager 決定何時完成當前階段。
+### Manager／Worker 協調
 
-### 🧠 本地 LLM 感知器 (Analyzer)
-不只是簡單的文字匹配，Navide 使用 **Ollama** 或 **llama.cpp** 即時解讀 CLI 的意圖。
-- **意圖偵測**：識別 Agent 是否在提問或陷入僵局。
-- **全自動模式**：自動回答技術問題，實現 100% 無人值守。
+可指定一個 slot 作為全域 Manager。Navide 會路由結構化任務派發與 Worker 提問、帶入前置階段上下文，並由 Manager 協調階段完成。
 
-### ✍️ AI 原生編輯器與瀏覽器
-專為 AI 工作流設計的內建編輯器：
-- **AI Hunks**：以 Inline Diff 審閱 AI 的修改，支援逐項接受。
-- **虛影文字**：輸入時的即時 AI 代碼補全。
-- **Cmd+K 重寫**：選取代碼並下指令，立即進行 AI 重構。
+### 本地感知與自動化
 
-### 📊 即時 Token 追蹤
-直接從廠商日誌解析用量，提供精確的成本統計。無需 API key 即可追蹤，並按階段與執行次數分類。
+可使用 Ollama 或相容的本地 GGUF 模型判斷 Agent 意圖、識別問題或停滯狀態，並選擇是否根據任務背景自動回答。Manual、Strict、Continuous、Full Auto 與 YOLO 控制讓使用者自行決定自動化程度。
 
----
+### 開發控制介面
 
-## 🏁 快速開始
+Navide 包含工作區與檔案瀏覽、Monaco 編輯器、Plan／Diff、診斷、Git 與多 Repository 工作流、Issue 處理、程式碼審查、AI Chat、執行歷程，以及從相容 CLI 日誌解析的 Token 統計。
 
-### 1. 前置需求
-Navide 是一個本地優先的工具，請確保具備：
-- **Node.js 22+** & **pnpm 10+**
-- **Python 3.12+** & **uv 0.11+**
-- **macOS 13+**
-- (建議) [Ollama](https://ollama.com/) 用於本地分析。
+## 快速開始
 
-### 2. 安裝
+Navide 目前支援 macOS 13 以上版本，並以原始碼方式安裝；尚未發布正式簽章下載版本。
+
+### 前置需求
+
+- Node.js 22+ 與 pnpm 10+
+- Python 3.12+ 與 uv 0.11+
+- 至少一個受支援的 Coding CLI
+- 選用：Ollama 或本地 GGUF 分析模型
+
+### 安裝與啟動
+
 ```bash
-# 複製倉庫
-git clone https://github.com/nt-nerdtechnic/Agent-Team
-cd Agent-Team
-
-# 安裝依賴
+git clone https://github.com/nt-nerdtechnic/Navide.git
+cd Navide
 pnpm install
 uv --project backend sync
-```
-
-### 3. 執行
-```bash
 pnpm dev
 ```
-*啟動後，**引導精靈 (Onboarding Wizard)** 將引導您完成工具檢測與配置。*
 
----
+Onboarding Wizard 會檢查 runtime、偵測 Agent CLI，並說明相關 macOS 權限。接著可閱讀英文版 [Getting Started](docs/getting-started.md)。
 
-## 🏗️ 技術架構
+## 技術架構
 
-Navide 採用「雙引擎」設計：
+Navide 由三個本機應用層構成：
 
-- **編排引擎 (Electron + Vue 3)**：管理 UI、狀態機與終端視窗。
-- **感知引擎 (Python FastAPI)**：處理 PTY 管理、日誌解析與本地 LLM 推論。
-
-```
-┌───────────────────────────┐      ┌───────────────────────────┐
-│     Electron/Vue UI       │      │   Python FastAPI 後端      │
-│ (編排管理與終端顯示)        │ <──> │ (PTY、日誌、LLM 分析器)    │
-└─────────────┬─────────────┘      └─────────────┬─────────────┘
-              │                                  │
-              ▼                                  ▼
-      ┌──────────────────────────────────────────────────┐
-      │  外部 Agent CLIs (Claude, Codex, Gemini)          │
-      └──────────────────────────────────────────────────┘
+```text
+Electron main process
+  └─ 視窗生命週期、Backend process、更新與原生整合
+       ↕ IPC
+Vue renderer
+  └─ 工作區、Pane、Pipeline、Editor、Git、History 與 Settings
+       ↕ Loopback WebSocket / HTTP
+Python FastAPI backend
+  └─ PTY、持久化、CLI 日誌、Git、Analyzer、MCP 與 AI services
+       ↕
+外部 Agent CLI，以及選用的本地或雲端服務
 ```
 
----
+詳細責任邊界與資料流請見 [Architecture](docs/architecture.md)。
 
-## 🔒 安全與隱私
+## 隱私與安全
 
-- **100% 本地**：所有運算與編排資料都留在你的機器上。
-- **無遙測**：我們不追蹤你的任務或代碼。
-- **YOLO 模式**：略過確認對話框需自負風險，此模式下 Agent 具備完整檔案存取權。
+Navide 的編排程序與工作區狀態在本機執行，不營運專案遙測服務，也不要求建立 Navide 帳號。但 Navide 並非所有情況都完全離線：使用外部 Agent CLI、雲端 AI Provider、Context7、搜尋、Git Hosting、MCP Server 或更新檢查時，可能會與第三方服務通訊。
 
----
+使用者輸入的 Cloud AI Key 會以受限檔案權限保存在本機。Agent 一般會繼承目前使用者的作業系統權限，而 Navide 尚未提供完整的 Workspace Sandbox。YOLO 與 Full Auto 僅應在可信任且有版本控制的工作區中使用。
 
-## 🗺️ 開發規劃 (Roadmap)
-- [ ] Git Preflight 與自動化任務分支
-- [ ] 跨代理路由引擎 (Enhanced Bus)
-- [ ] Windows 與 Linux 支援
-- [ ] 支援更多 Agent CLIs (如 Aider 等)
+處理敏感程式碼或憑證前，請閱讀 [Privacy and Data Flows](docs/privacy.md) 與 [Security Policy](SECURITY.md)。
 
----
+## 文件
 
-## 📄 授權
+- [文件中心](docs/README.md)
+- [使用指南](docs/user-guide.md)
+- [疑難排解](docs/troubleshooting.md)
+- [技術架構](docs/architecture.md)
+- [產品 Roadmap](docs/roadmap.md)
+- [貢獻指南](CONTRIBUTING.md)
+
+## 長期方向
+
+Navide 的長期方向是成為本地優先的多 Agent 開發控制平台：強化編排可靠性、建立能力導向的 Agent Adapter、改善隔離與 Secret Handling、提供可重現的 Run Artifact、支援依賴圖工作流、GitHub 交付自動化、可重用 Pipeline Template，以及跨平台支援。
+
+Roadmap 代表方向，不是交付承諾。各階段目標、邊界與退出條件請見 [Product Roadmap](docs/roadmap.md)。
+
+## 授權
+
 MIT © Navide Team

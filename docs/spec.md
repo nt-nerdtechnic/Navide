@@ -1,19 +1,18 @@
-# Navide (Agent-Team) — Master Spec & Progress
+# Navide — Historical Master Spec and Milestone Record
 
-> **單一真實來源**（Single Source of Truth）of project status, milestones, and feature roadmap. Detail design docs and per-feature plans are linked from each section — they are reference material, not the source of truth.
+> This file preserves historical implementation milestones. It is no longer the single source of truth for current capabilities or future plans. Use the [documentation index](README.md), [architecture](architecture.md), [user guide](user-guide.md), and [product roadmap](roadmap.md). Active implementation work is tracked by `.cursor/plans/*.plan.md`.
 
-**Last updated**: 2026-05-30
+**Historical record reviewed**: 2026-07-15
 
 ---
 
 ## 1 · TL;DR
 
-macOS desktop terminal manager for **Claude Code / Codex / Gemini CLI**, driven by a **multi-stage SDLC pipeline** with shared roles, parallel agent slots, and real token tracking.
+Local-first macOS control plane for **Claude Code, Codex, Antigravity CLI, and Grok CLI**, driven by a configurable multi-stage pipeline with shared roles, parallel agent slots, history, and token tracking.
 
 ```
-Tech stack:  Electron 33 + Vue 3 + TypeScript + FastAPI + Python 3.12 + xterm.js
-Repo size:   ~16,500 LOC · 136 pytest + 63 vitest + 2 playwright passing
-Plans:       none active · all detail plans retired · 2 future ideas F4-F5 — see §6
+Tech stack: Electron 33 + Vue 3 + TypeScript + FastAPI + Python 3.12 + xterm.js + Monaco
+Status: historical milestones below; current plans and test counts change continuously
 ```
 
 ---
@@ -37,7 +36,7 @@ Plans:       none active · all detail plans retired · 2 future ideas F4-F5 —
 | Manager pattern + pre-spawn team | ✅ Stable | default execution model: pre-spawn all slots (role only) → activate per stage · `isManager` slot + dispatch/ask/stage-done router (M13) |
 | Frontend tests | ✅ Stable | Vitest 63 (buffer/stages pure fns + 3 composables w/ mock backend) + Playwright 2 (Electron launch + Welcome→workspace smoke) (M14) |
 | Git panel (source control tab) | ✅ Stable | `git_service.py` + `useGit.ts` + `GitPane.vue`; Pipeline/Git top tabs in ControlPane |
-| Cross-agent route engine | 📋 Planned | See [[route-engine.md]] |
+| Cross-agent route engine | 📋 Directional | See [Product Roadmap](roadmap.md) |
 
 Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · 📋 planned, detail plan exists · ❌ identified gap, no plan yet
 
@@ -60,7 +59,7 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 - Stages with parallel **slots** (1 stage = N agents); all slots emit sentinel → advance
 - Per-run log directory `.agent-team/runs/{run-id}/`
 - Workspace + `project.json` per-workspace state
-- 5-stage SDLC (Requirements / Planning / Design / Build / Testing) + Security stage
+- Configurable SDLC pipeline; included stages cover Requirements / Planning / Design / Build / Security Review / Testing
 - `pipeline.{start,resume,abort,complete,stage_spawn}` WS handlers
 
 ### M3 · Dynamic registries + Settings — `commits 12-19`
@@ -72,12 +71,12 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 - Live broadcast: any change → `roles.changed` / `stages.changed` events to all open windows
 
 ### M4 · Token tracking — `commits 15-18`
-**Status**: ✅ Done · detail: [[token-stats-panel]] · [[token-log-readers]]
+**Status**: ✅ Done
 
 - Right collapsible panel `TokenStatsPanel.vue`
 - **Two data sources** evolved over time:
   - V1: PTY regex scrape (`vendor_parsers.py`) — deleted
-  - V2 (current): direct read of CLI JSONL logs (`log_readers/` — Claude/Codex/Gemini)
+  - V2: direct read of provider-owned logs or databases through `log_readers/`
 - **Attribution**: workspace ↔ CLI folder association, persistent (`workspace-associations.json`)
 - **Persistence**: per-workspace `.agent-team/tokens.json` + global · event-level dedup (`recorded-event-keys.json`)
 - Real numbers from CLI billing logs — same data Anthropic/OpenAI/Google use to bill
@@ -166,7 +165,7 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 ### M15 · Pane Layout Modes + Minimize + Maintenance Mode
 **Status**: ✅ Done · plan: `.cursor/plans/maintenance-mode_f9a3c2d1.plan.md`
 
-- **Layout Modes** (`ViewPanel.vue`): 4 modes (Auto✦ / Grid⊞ / Spotlight◎ / Sidebar▣), floating top-right of terminal area. Auto mode polls `lastRawActivityAt` every 500ms, always focuses most-active pane. Spotlight = 1fr+180px, Sidebar = 2fr+240px, both use `grid-row: 1/-1` for focus pane.
+- **Layout Modes** (`ViewPanel.vue`): 4 manually selected layouts (Grid⊞ / Sidebar◧ / Spotlight◎ / Fullscreen⧉). Grid shows all panes; Sidebar shows the selected pane alongside the Active agents list; Spotlight shows the selected pane with a thumbnail strip; Fullscreen fills the workspace with the selected pane and keeps agents available in a floating panel. The persisted internal value for Sidebar remains `auto` for backward compatibility; it does not imply automatic pane switching.
 - **Minimize to Sidebar**: every TerminalPane has `↓` button → hides pane with `v-show` (PTY session stays alive), shows compact "▪ sidebar" card + "↑ 還原" in ControlPane agent list.
 - **Maintenance Mode** (`WorkspaceMode = 'maintenance'`): pipeline `completed` → auto-switches to maintenance. New ControlPane section with task textarea + agent/role picker + "▶ 派出去". `onMaintenanceSpawn` spawns pane, waits for role injection, then injects task text as kickoff.
 
@@ -174,7 +173,7 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 
 ## 4 · Currently in-flight (working tree)
 
-**None** — working tree clean after M15.
+This historical section is retired. Use `git status` for the current working tree and `.cursor/plans/*.plan.md` for active plan-driven work.
 
 ---
 
@@ -223,7 +222,7 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 │  ├─ claude_hooks.py     hook installer (auto on startup)    │
 │  ├─ history_store.py    append-only run timeline (M10)      │
 │  ├─ recent_workspaces.py recent + pin store (M11)           │
-│  └─ log_readers/        Claude/Codex/Gemini JSONL           │
+│  └─ log_readers/        provider log and database readers   │
 │       ├─ base.py        LogReader + TokenUsage + ActivityEvent│
 │       ├─ claude.py      ~/.claude/projects/                 │
 │       ├─ codex.py       ~/.codex/sessions/                  │
@@ -240,59 +239,35 @@ Legend: ✅ shipped & stable · 🟡 in working tree but not yet released · �
 
 ---
 
-## 6 · Future work — planned
+## 6 · Future direction
 
-> **F1-F3 shipped** — team pre-spawn + Manager (M13), History timeline (M10), Workspace-first entry (M11). Their plans are retired (§7). The team-preconfig plan's optional per-workspace `team-config.json` overlay was dropped as out-of-scope (global Stages registry covers team setup).
+Future work moved to the [Product Roadmap](roadmap.md). In summary, Navide is evolving toward reliable orchestration and observability, capability-based agent adapters, stronger policy and isolation, reproducible run artifacts, dependency-graph workflows, delivery integrations, reusable templates, and cross-platform support.
 
-### F4 · Git preflight + task branch
-- Pipeline 開跑前自動 git status check + 建 task branch + pre-task snapshot
-
-### F5 · Cross-agent route engine
-- Agent 對 agent 的 routed message bus（取代 manager 模式 OR 與其互補）
+The roadmap is directional. A roadmap item becomes active implementation work only when it has an approved `.cursor/plans/*.plan.md` artifact.
 
 ---
 
-## 7 · Detail document index
+## 7 · Documentation and plans
 
-### Plans (`.cursor/plans/`) — only in-flight / planned
+- [Documentation index](README.md)
+- [Architecture](architecture.md)
+- [User guide](user-guide.md)
+- [Privacy and data flows](privacy.md)
+- [Product roadmap](roadmap.md)
+- `.cursor/plans/*.plan.md` for active or retained plan-driven implementation artifacts
 
-**None** — `.cursor/plans/` is empty; all work is either shipped (records in §3) or a future idea (§6 F4-F6, no plan drafted yet).
-
-**Note**: Completed plan files are deleted once their work is done — the milestone in §3 carries the canonical record. Recently retired:
-- `agent-team-development-planning_d42781f9` (original master, superseded by this spec)
-- `token-stats-panel_a7b3c1d2` (rolled into M4)
-- `token-log-readers_b8c4d2e3` (rolled into M4)
-- `right-panel-history-tab_f2a8c6d1` (shipped as M10)
-- `workspace-first-entry_a3b9d7e2` (shipped as M11)
-- `reliable-injection_c4d2f1a9` (shipped as M12)
-- `team-preconfig-and-pre-spawn_e7d4a3b8` (core shipped as M13; per-workspace overlay dropped as out-of-scope)
-- `frontend-tests_9c4ad7e2` (shipped as M14)
-
-### Design docs (`docs/`)
-
-`spec.md` is the only doc file. All v1 draft docs were deleted after their content was absorbed into §3–§6.
+Historical plan names and implementation notes remain in the milestone and progress-log sections below. Their status should not be used to infer current working-tree state.
 
 ---
 
-## 8 · How to update this file
+## 8 · How to maintain this record
 
-**Lifecycle of a feature**:
-```
-idea → write .cursor/plans/{feature}_{hex}.plan.md (Phase 0 Clarify)
-     → entry in §6 Future, link to the plan
-     → start work (Phase 1+)
-     → entry in §4 In-flight (paths to files being touched)
-     → feature ships
-     → entry in §3 Completed milestone (canonical record)
-     → DELETE the plan file (spec.md owns the history now)
-```
-
-Rules:
-- **Each new feature ships** → add a milestone entry in §3, then **delete the plan file**
-- **Each new in-flight work** → entry in §4 with file paths
-- **Each new plan file** → entry in §6 Future, link to plan
-- Plan files are **scratch**; their frontmatter `status:` may go stale — **this spec wins**
-- Completed plan files MUST be deleted to avoid drift between spec and detail
+- Add stable released behavior to `CHANGELOG.md`.
+- Update current user behavior in `user-guide.md` and architecture boundaries in `architecture.md`.
+- Update future direction in `roadmap.md` without presenting it as shipped.
+- Use `.cursor/plans/*.plan.md` for complex implementation work and maintain todo status there.
+- Add an entry here only when a historical milestone is worth preserving.
+- Do not record volatile working-tree cleanliness, exact test counts, or active-branch claims as durable project truth.
 
 ---
 

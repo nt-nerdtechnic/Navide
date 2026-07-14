@@ -94,6 +94,7 @@ def test_persistence_roundtrip(tmp_path: Path) -> None:
     s1.start_run(str(workspace), run_id="r1", task="t", run_dir="runs/r1")
     s1.record(str(workspace), source="analyzer", vendor="analyzer",
               input_tokens=10, output_tokens=20)
+    s1.flush()
 
     # Both files exist on disk at their new global locations
     assert global_path.exists()
@@ -117,6 +118,7 @@ def test_atomic_write_uses_tmp_then_replace(tmp_path: Path) -> None:
     s.start_run(str(workspace), run_id="r1", task="t", run_dir="runs/r1")
     s.record(str(workspace), source="cli", vendor="codex",
              input_tokens=5, output_tokens=5)
+    s.flush()
 
     sha = hashlib.sha256(str(workspace).encode()).hexdigest()[:8]
     files = list((workspace_base_dir / sha).iterdir())

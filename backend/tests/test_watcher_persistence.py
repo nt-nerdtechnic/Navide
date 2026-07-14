@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend.log_readers.base import LogReader, TokenUsage
+from agent_team_backend.log_readers.base import LogReader, TokenSinkResult, TokenUsage
 from agent_team_backend.log_readers.watcher import LogWatcher
+from agent_team_backend.tokens_store import TokensStore
 
 
 class _StaticReader(LogReader):
@@ -64,6 +65,23 @@ async def _drain_briefly(watcher: LogWatcher, ms: int = 1500) -> None:
     await asyncio.sleep(ms / 1000)
 
 
+def _checkpoint_store(tmp_path: Path) -> TokensStore:
+    return TokensStore(
+        global_path=tmp_path / "tokens.json",
+        workspace_base_dir=tmp_path / "workspaces",
+        ingestion_state_path=tmp_path / "token-ingestion-state.json",
+    )
+
+
+def _watcher(store: TokensStore, sink, **kwargs) -> LogWatcher:
+    return LogWatcher(
+        sink=sink,
+        checkpoint_provider=store.get_ingestion_checkpoint,
+        checkpoint_sink=store.advance_ingestion_checkpoint,
+        **kwargs,
+    )
+
+
 @pytest.mark.asyncio
 async def test_seen_keys_persist_between_watcher_starts(tmp_path: Path) -> None:
     root = tmp_path / "logs"
@@ -72,39 +90,41 @@ async def test_seen_keys_persist_between_watcher_starts(tmp_path: Path) -> None:
 
     received: list[TokenUsage] = []
 
-    async def sink(u: TokenUsage) -> None:
+    async def sink(u: TokenUsage) -> TokenSinkResult:
         received.append(u)
+        return TokenSinkResult(True, "/x")
 
-    seen_path = tmp_path / "seen.json"
+    state_path = tmp_path / "token-ingestion-state.json"
 
     # ── First watcher run: should emit 1 event ────────────────────────────
     reader1 = _StaticReader(root)
-    w1 = LogWatcher(
-        sink=sink, seen_path=seen_path,
-        rescan_interval_s=0.1, save_interval_s=0.05,
-    )
+    store1 = _checkpoint_store(tmp_path)
+    w1 = _watcher(store1, sink, rescan_interval_s=0.1)
     w1.add_reader(reader1)
     w1.start()
     await _drain_briefly(w1, 1500)
     w1.stop()
+    store1.flush()
     assert len(received) == 1, f"expected 1 event from initial backfill, got {len(received)}"
 
-    # seen_path should exist with the event's key persisted
-    assert seen_path.exists(), "watcher should have written seen_keys to disk"
-    data = json.loads(seen_path.read_text(encoding="utf-8"))
-    assert any("event-for-a.jsonl" in keys for keys in data.values())
+    assert state_path.exists(), "TokensStore should persist the unified checkpoint"
+    data = json.loads(state_path.read_text(encoding="utf-8"))
+    assert data["version"] == 2
+    assert any(
+        "event-for-a.jsonl" in entry["global"].get("legacy_seen", [])
+        for entry in data["files"].values()
+    )
 
     # ── Second watcher run with same files: should emit 0 events ──────────
     received.clear()
     reader2 = _StaticReader(root)
-    w2 = LogWatcher(
-        sink=sink, seen_path=seen_path,
-        rescan_interval_s=0.1, save_interval_s=0.05,
-    )
+    store2 = _checkpoint_store(tmp_path)
+    w2 = _watcher(store2, sink, rescan_interval_s=0.1)
     w2.add_reader(reader2)
     w2.start()
     await _drain_briefly(w2, 1500)
     w2.stop()
+    store2.flush()
     assert received == [], (
         f"after restart, watcher must NOT re-emit historic events. "
         f"got {len(received)} (this is the 'Global keeps jumping' bug)"
@@ -119,25 +139,24 @@ async def test_new_file_after_restart_still_fires(tmp_path: Path) -> None:
 
     received: list[TokenUsage] = []
 
-    async def sink(u: TokenUsage) -> None:
+    async def sink(u: TokenUsage) -> TokenSinkResult:
         received.append(u)
-
-    seen_path = tmp_path / "seen.json"
+        return TokenSinkResult(True, "/x")
 
     # Run 1: process the existing file
-    w1 = LogWatcher(sink=sink, seen_path=seen_path,
-                    rescan_interval_s=0.1, save_interval_s=0.05)
+    store1 = _checkpoint_store(tmp_path)
+    w1 = _watcher(store1, sink, rescan_interval_s=0.1)
     w1.add_reader(_StaticReader(root))
-    w1.start(); await _drain_briefly(w1, 1500); w1.stop()
+    w1.start(); await _drain_briefly(w1, 1500); w1.stop(); store1.flush()
     assert len(received) == 1
 
     # Run 2: new file appears between runs
     (root / "b.jsonl").write_text("")
     received.clear()
-    w2 = LogWatcher(sink=sink, seen_path=seen_path,
-                    rescan_interval_s=0.1, save_interval_s=0.05)
+    store2 = _checkpoint_store(tmp_path)
+    w2 = _watcher(store2, sink, rescan_interval_s=0.1)
     w2.add_reader(_StaticReader(root))
-    w2.start(); await _drain_briefly(w2, 1500); w2.stop()
+    w2.start(); await _drain_briefly(w2, 1500); w2.stop(); store2.flush()
     # Old file: no re-emit. New file: 1 event.
     assert len(received) == 1
     assert received[0].file_path.endswith("b.jsonl")
@@ -148,15 +167,16 @@ async def test_corrupt_seen_file_starts_empty(tmp_path: Path) -> None:
     """Garbage in seen.json shouldn't crash startup."""
     root = tmp_path / "logs"; root.mkdir()
     (root / "x.jsonl").write_text("")
-    seen_path = tmp_path / "seen.json"
-    seen_path.write_text("{ not json", encoding="utf-8")
+    state_path = tmp_path / "token-ingestion-state.json"
+    state_path.write_text("{ not json", encoding="utf-8")
 
     received: list[TokenUsage] = []
-    async def sink(u: TokenUsage) -> None:
+    async def sink(u: TokenUsage) -> TokenSinkResult:
         received.append(u)
+        return TokenSinkResult(True, "/x")
 
-    w = LogWatcher(sink=sink, seen_path=seen_path,
-                   rescan_interval_s=0.1, save_interval_s=0.05)
+    store = _checkpoint_store(tmp_path)
+    w = _watcher(store, sink, rescan_interval_s=0.1)
     w.add_reader(_StaticReader(root))
     w.start(); await _drain_briefly(w, 1500); w.stop()
     # Fallback: start empty → emit once.

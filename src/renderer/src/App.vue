@@ -51,7 +51,9 @@ import {
   buildPaneContextPaste,
   chunkForPty,
   CLI_CHIP_LINE_CAP,
-  CLI_PASTE_LINE_CAP
+  CLI_PASTE_LINE_CAP,
+  PANE_ID_MIME,
+  writeCliPaneDragPayload
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
@@ -69,6 +71,7 @@ import {
 } from './lib/resume-command'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
+import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -528,10 +531,8 @@ interface ActivePane {
   sessionOverlayExpired?: boolean
 }
 
-interface SpawnHistoryEntry {
-  paneId: string
+interface SpawnHistoryEntry extends HistoryTitleEntry {
   agentKey: string
-  agentLabel: string
   roleKey: RoleKey
   roleLabel: string
   command: string
@@ -1453,6 +1454,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     paneId: id,
     agentKey: pane.agentKey,
     agentLabel: pane.agentLabel,
+    customName: pane.customName,
     roleKey: pane.roleKey,
     roleLabel: roleLabel(pane.roleKey),
     command: pane.command,
@@ -1549,6 +1551,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     agentKey: payload.agentKey,
     roleKey: payload.roleKey,
     stageId: payload.stageId,
+    customName: payload.customName,
     commandOverride: '',
     workspacePath: payload.workspacePath,
     origin: 'manual',
@@ -1568,6 +1571,13 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: spawnGroupId,
     })
+    if (payload.customName) {
+      await sendQuiet('project.rename_pane', {
+        workspace_path: payload.workspacePath,
+        pane_id: paneId,
+        custom_name: payload.customName,
+      })
+    }
     const pane = panes.value.find((p) => p.id === paneId)
     if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
       void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
@@ -1604,6 +1614,7 @@ async function onManualResume(payload: ResumePayload): Promise<boolean> {
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
     stageId: '' as StageId,
+    customName: payload.customName,
     commandOverride,
     workspacePath,
     origin: 'manual',
@@ -1624,6 +1635,13 @@ async function onManualResume(payload: ResumePayload): Promise<boolean> {
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: spawnGroupId,
     })
+    if (payload.customName) {
+      await sendQuiet('project.rename_pane', {
+        workspace_path: workspacePath,
+        pane_id: paneId,
+        custom_name: payload.customName,
+      })
+    }
     return true
   }
   return false
@@ -2303,6 +2321,7 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       agentKey: entry.agentKey,
       workspacePath: entry.workspacePath || currentWorkspace.value,
       sessionId,
+      customName: entry.customName,
     })
     if (resumed) {
       showHistory.value = false
@@ -2326,6 +2345,7 @@ async function onFreshSpawnHistoryAgent(entry: SpawnHistoryEntry): Promise<void>
       roleKey: entry.roleKey,
       stageId: '',
       workspacePath: entry.workspacePath || currentWorkspace.value,
+      customName: entry.customName,
     })
     showHistory.value = false
   } finally {
@@ -2723,6 +2743,14 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     allProjectPanes = [...fromSlots, ...fromManual]
   }
 
+  // Enrich legacy local History entries created before custom titles were
+  // stored there. project.json is authoritative when it still has the pane.
+  for (const saved of allProjectPanes) {
+    if (saved.custom_name) {
+      updateHistoryCustomName(spawnHistory.value, saved.pane_id, saved.custom_name)
+    }
+  }
+
   let toRestore = allProjectPanes.filter((p) => p.spawn_status === 'spawned')
   // Detached child window restores only the panes of its scoped run group; the
   // live PTYs are kept alive by the main window's hand-off, so these reattach.
@@ -2801,6 +2829,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       roleKey: saved.role,
       stageId: (saved.stage_id ?? '') as StageId,
       slotLabel: saved.slot_label,
+      customName: saved.custom_name || undefined,
       commandOverride,
       workspacePath,
       origin: saved.origin,
@@ -2815,12 +2844,6 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
 
     if (!paneId) return
     restoredPaneIds[restoreIdx] = paneId
-
-    // Re-apply the user's persisted display name to the restored pane.
-    if (saved.custom_name) {
-      const restored = panes.value.find((p) => p.id === paneId)
-      if (restored) restored.customName = saved.custom_name
-    }
 
     // Re-apply the persisted collapsed-to-sidebar state to the new pane id.
     if (saved.is_minimized) {
@@ -2886,6 +2909,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       paneId: saved.pane_id,
       agentKey: saved.agent,
       agentLabel: spec?.label ?? saved.agent,
+      customName: saved.custom_name || undefined,
       roleKey: saved.role as RoleKey,
       roleLabel: roleLabel(saved.role),
       command: saved.command ?? '',
@@ -5626,6 +5650,59 @@ function reorderPane(fromId: string, toId: string): void {
   void persistPaneOrder()
 }
 
+// The non-grid layouts render lightweight representations of panes outside
+// TerminalPane (Auto meeting cards, Spotlight thumbnails, Fullscreen PiP rows).
+// Give all three the same drag contract as a TerminalPane header so they can
+// reorder each other and still be dropped onto tabs, terminals, or AI Chat.
+const auxiliaryDragOverPaneId = ref('')
+const auxiliaryDraggingPaneId = ref('')
+
+function onAuxiliaryPaneDragStart(e: DragEvent, paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || !e.dataTransfer) return
+  writeCliPaneDragPayload(e.dataTransfer, {
+    paneId: pane.id,
+    agentKey: pane.agentKey,
+    label: pane.customName || pane.agentLabel,
+    sessionId: pane.pinnedSessionId || null,
+    sessionHomeId: pane.sessionHomeId,
+    workspacePath: pane.workspacePath,
+    conversationLogPath: pane.outputLogFile
+  })
+  e.dataTransfer.effectAllowed = 'move'
+  auxiliaryDraggingPaneId.value = paneId
+}
+
+function onAuxiliaryPaneDragEnd(e: DragEvent): void {
+  const paneId = auxiliaryDraggingPaneId.value
+  auxiliaryDraggingPaneId.value = ''
+  auxiliaryDragOverPaneId.value = ''
+  if (!paneId || e.dataTransfer?.dropEffect !== 'none') return
+  window.agentTeam?.cliPaneDragEnd?.(paneId, e.screenX, e.screenY)
+}
+
+function onAuxiliaryPaneDragOver(e: DragEvent, targetPaneId: string): void {
+  if (
+    auxiliaryDraggingPaneId.value === targetPaneId
+    || !e.dataTransfer?.types.includes(PANE_ID_MIME)
+  ) return
+  e.preventDefault()
+  auxiliaryDragOverPaneId.value = targetPaneId
+}
+
+function onAuxiliaryPaneDragLeave(e: DragEvent, targetPaneId: string): void {
+  const target = e.currentTarget as HTMLElement | null
+  if (target?.contains(e.relatedTarget as Node | null)) return
+  if (auxiliaryDragOverPaneId.value === targetPaneId) auxiliaryDragOverPaneId.value = ''
+}
+
+function onAuxiliaryPaneDrop(e: DragEvent, targetPaneId: string): void {
+  auxiliaryDragOverPaneId.value = ''
+  const draggedPaneId = e.dataTransfer?.getData(PANE_ID_MIME) || ''
+  if (!draggedPaneId || draggedPaneId === targetPaneId) return
+  reorderPane(draggedPaneId, targetPaneId)
+}
+
 // Persist the pane's collapsed-to-sidebar state to project.json so it survives
 // a restart (mirrors project.rename_pane / custom_name).
 function persistPaneMinimized(id: string, isMinimized: boolean): void {
@@ -5722,6 +5799,7 @@ function setPaneCustomName(paneId: string, rawName: string): void {
   const name = rawName.trim()
   // Empty name resets to the default label.
   pane.customName = name && name !== pane.agentLabel ? name : undefined
+  updateHistoryCustomName(spawnHistory.value, paneId, pane.customName)
   syncViews()
   backend.send('project.rename_pane', {
     workspace_path: pane.workspacePath,
@@ -6453,7 +6531,7 @@ function paneIsCommander(p: ActivePane): boolean {
               :class="{ active: !entry.removedAt }"
             >
               <div class="agent-history-main">
-                <span class="ah-badge">{{ entry.agentLabel }}</span>
+                <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
                 <span class="ah-badge ah-role">{{ entry.roleLabel }}</span>
                 <span class="ah-origin">{{ entry.origin }}</span>
                 <span
@@ -6624,7 +6702,15 @@ function paneIsCommander(p: ActivePane): boolean {
             v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
             :key="p.id"
             class="meeting-item"
-            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
+            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId, 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingPaneId === p.id }"
+            draggable="true"
+            title="Drag to reorder or click to focus"
+            @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+            @dragend="onAuxiliaryPaneDragEnd"
+            @dragover="onAuxiliaryPaneDragOver($event, p.id)"
+            @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
+            @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
+            @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
             @click="onSetFocus(p.id)"
             @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
@@ -6649,7 +6735,15 @@ function paneIsCommander(p: ActivePane): boolean {
           v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
           :key="p.id"
           class="spotlight-thumb"
-          :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId }"
+          :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId, 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingPaneId === p.id }"
+          draggable="true"
+          title="Drag to reorder or click to focus"
+          @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+          @dragend="onAuxiliaryPaneDragEnd"
+          @dragover="onAuxiliaryPaneDragOver($event, p.id)"
+          @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
+          @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
+          @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
           @click="onSetFocus(p.id)"
           @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
         >
@@ -6685,7 +6779,15 @@ function paneIsCommander(p: ActivePane): boolean {
             v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
             :key="p.id"
             class="meeting-item"
-            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId }"
+            :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId, 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingPaneId === p.id }"
+            draggable="true"
+            title="Drag to reorder or click to focus"
+            @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+            @dragend="onAuxiliaryPaneDragEnd"
+            @dragover="onAuxiliaryPaneDragOver($event, p.id)"
+            @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
+            @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
+            @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
             @click="onSetFocus(p.id)"
             @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
@@ -7479,6 +7581,16 @@ function paneIsCommander(p: ActivePane): boolean {
   border-color: var(--accent-focus);
   background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-elevated));
   box-shadow: 0 0 0 2px var(--accent-focus);
+}
+.meeting-item.pane-drag-over,
+.spotlight-thumb.pane-drag-over {
+  border-color: var(--accent-focus);
+  background: color-mix(in srgb, var(--accent-focus) 13%, var(--bg-elevated));
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
+}
+.meeting-item.pane-dragging,
+.spotlight-thumb.pane-dragging {
+  opacity: 0.55;
 }
 .meeting-avatar {
   width: 28px;

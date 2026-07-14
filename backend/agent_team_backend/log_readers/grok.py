@@ -29,7 +29,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from .base import LogReader, TokenUsage
+from .base import IncrementalParseResult, LogReader, TokenUsage
 
 log = logging.getLogger("agent_team_backend.log_readers.grok")
 
@@ -125,6 +125,43 @@ class GrokLogReader(LogReader):
                 model=str(model or ""),
             ))
         return out
+
+    def parse_incremental(
+        self,
+        path: Path,
+        checkpoint: dict,
+    ) -> IncrementalParseResult:
+        if path.name != _DB_NAME:
+            return IncrementalParseResult([], dict(checkpoint))
+        last_row_id = max(0, int(checkpoint.get("row_id") or 0))
+        rows = self._query(
+            path,
+            _USAGE_SQL.replace("ORDER BY u.id", f"WHERE u.id > {last_row_id} ORDER BY u.id"),
+        )
+        if rows is None:
+            return IncrementalParseResult([], dict(checkpoint))
+        out: list[TokenUsage] = []
+        next_row_id = last_row_id
+        for row_id, session_id, model, inp, outp, created_at, ws_root in rows:
+            next_row_id = max(next_row_id, int(row_id))
+            cursor = {"kind": "sqlite", "row_id": next_row_id}
+            input_tokens = _int(inp)
+            output_tokens = _int(outp)
+            if input_tokens == 0 and output_tokens == 0:
+                continue
+            out.append(TokenUsage(
+                vendor="grok",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cwd=str(ws_root or ""),
+                session_id=str(session_id or ""),
+                file_path=str(path),
+                dedup_key=f"usage:{row_id}",
+                timestamp=str(created_at or ""),
+                model=str(model or ""),
+                checkpoint=cursor,
+            ))
+        return IncrementalParseResult(out, {"kind": "sqlite", "row_id": next_row_id})
 
     def find_sessions_by_marker(
         self, markers: Iterable[str]

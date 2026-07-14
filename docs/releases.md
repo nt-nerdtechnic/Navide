@@ -1,5 +1,7 @@
 # Versioning and In-App Releases
 
+> **Current distribution status:** Navide does not yet have a published GitHub Release. Until the first signed release completes this process, public documentation must describe source installation rather than offering a downloadable build.
+
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
 script synchronizes these four files when a version changes:
@@ -67,6 +69,8 @@ committed.
 7. Install the release DMG on a test Mac. Publish a newer patch release and use
    the in-app flow to verify check, download, restart, and the resulting app
    version.
+
+For the first public release, also verify the documented clean-machine install path, onboarding flow, privacy statements, and supported-agent matrix. Add the actual release entry to `CHANGELOG.md` only after the GitHub Release and assets exist.
 
 Never move an existing version tag or replace assets on an existing release.
 Clients and caches may already trust its metadata. Fix a bad release with a new

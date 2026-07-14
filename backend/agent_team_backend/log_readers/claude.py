@@ -19,7 +19,7 @@ import logging
 import os
 from pathlib import Path
 
-from .base import ActivityEvent, LogReader, TokenUsage
+from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
 
 log = logging.getLogger("agent_team_backend.log_readers.claude")
 
@@ -164,6 +164,61 @@ class ClaudeLogReader(LogReader):
                     )
                 )
         return out
+
+    def parse_incremental(
+        self,
+        path: Path,
+        checkpoint: dict,
+    ) -> IncrementalParseResult:
+        """Parse only complete JSONL records after the persisted byte offset."""
+        records, final_checkpoint, rotated = read_jsonl_tail(path, checkpoint)
+        recent = [] if rotated else [str(k) for k in checkpoint.get("recent_keys", [])][-64:]
+        recent_set = set(recent)
+        out: list[TokenUsage] = []
+        cwd = self.cwd_from_file(path)
+        session_id = path.stem
+
+        for end, rec in records:
+            if rec is None or rec.get("type") != "assistant":
+                continue
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            usage = msg.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            dedup_key = f"{msg.get('id') or ''}::{rec.get('requestId') or ''}"
+            if dedup_key == "::" or dedup_key in recent_set:
+                continue
+            input_tokens = (
+                _int(usage.get("input_tokens"))
+                + _int(usage.get("cache_read_input_tokens"))
+                + _int(usage.get("cache_creation_input_tokens"))
+            )
+            output_tokens = _int(usage.get("output_tokens"))
+            if input_tokens == 0 and output_tokens == 0:
+                continue
+            recent.append(dedup_key)
+            recent = recent[-64:]
+            recent_set = set(recent)
+            event_checkpoint = dict(final_checkpoint)
+            event_checkpoint["offset"] = end
+            event_checkpoint["recent_keys"] = list(recent)
+            out.append(TokenUsage(
+                vendor="claude",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cwd=cwd,
+                session_id=session_id,
+                file_path=str(path),
+                dedup_key=dedup_key,
+                timestamp=str(rec.get("timestamp") or ""),
+                model=str(msg.get("model") or ""),
+                checkpoint=event_checkpoint,
+            ))
+
+        final_checkpoint["recent_keys"] = recent
+        return IncrementalParseResult(out, final_checkpoint)
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]

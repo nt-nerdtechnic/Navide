@@ -34,6 +34,17 @@ export interface CliContextPayload {
   conversationLogPath?: string
 }
 
+/** Write the canonical payload shared by every CLI-pane drag source. Keeping
+ *  this in one place prevents auxiliary layout cards from silently losing the
+ *  rich context carried by TerminalPane headers. */
+export function writeCliPaneDragPayload(
+  dataTransfer: Pick<DataTransfer, 'setData'>,
+  payload: CliContextPayload
+): void {
+  dataTransfer.setData(PANE_ID_MIME, payload.paneId)
+  dataTransfer.setData(CLI_CONTEXT_MIME, JSON.stringify(payload))
+}
+
 /** Vendor-neutral reference to a live CLI conversation. The append-only
  *  `.agent-team` log is the cross-vendor transcript contract; session fields
  *  additionally identify the vendor-native record when one is available. */
