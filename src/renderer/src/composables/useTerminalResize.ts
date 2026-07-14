@@ -28,6 +28,7 @@ export function createResizeController(
   dbgLog: (line: string) => void,
   getPendingSpawn: () => boolean,
   onCreateWhenMeasurable: () => void,
+  onStableWidthChange?: (cols: number) => void,
 ): ResizeController {
   // How long the container must be quiet before we fit + send resize.
   // Also the quiet-gap gate in armResizeRedraw.
@@ -174,7 +175,8 @@ export function createResizeController(
       // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
       const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
-      const shrank = lastRedrawCols > 0 && term.cols < lastRedrawCols
+      const previousRedrawCols = lastRedrawCols
+      const shrank = previousRedrawCols > 0 && term.cols < previousRedrawCols
       lastRedrawCols = term.cols
       // NOTE: we deliberately do NOT term.clear() on a width shrink. Wiping the
       // scrollback drops the user's conversation history (and, on a rebuild/
@@ -188,6 +190,9 @@ export function createResizeController(
         cols: term.cols,
         rows: term.rows,
       })
+      // The first settled size establishes a baseline. Only later changes are
+      // actionable; emitting on first paint would rebuild a resumed pane again.
+      if (previousRedrawCols > 0) onStableWidthChange?.(term.cols)
     }, RESIZE_REDRAW_SETTLE_MS)
   }
 

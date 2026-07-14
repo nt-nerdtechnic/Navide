@@ -129,6 +129,18 @@ describe('terminal font zoom — app-wide', () => {
     b.scope.stop()
   })
 
+  it('arms stable-width settlement so zoom uses the shared rebuild path', async () => {
+    const a = await spawnPane('pane-a')
+    const b = await spawnPane('pane-b')
+    ctrl.requestResizeRedraw.mockClear()
+
+    await press('-')
+
+    expect(ctrl.requestResizeRedraw).toHaveBeenCalledTimes(2)
+    a.scope.stop()
+    b.scope.stop()
+  })
+
   it('⌘+ grows beyond the former maximum', async () => {
     const a = await spawnPane('pane-a')
 

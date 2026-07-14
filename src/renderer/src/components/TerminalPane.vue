@@ -30,6 +30,7 @@ const emit = defineEmits<{
   (e: 'minimize'): void
   (e: 'rebuild'): void
   (e: 'rebuild-clean'): void
+  (e: 'width-settled', cols: number): void
   (e: 'rename', name: string): void
   (e: 'context-menu', ev: MouseEvent): void
   (e: 'reorder-drop', draggedPaneId: string): void
@@ -68,7 +69,11 @@ function onTitleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') { e.preventDefault(); _cancelledTitle = true; editingTitle.value = false }
 }
 
-const terminal = useTerminal(props.paneId, props.backend, { workspacePath: props.workspacePath, onClear: () => emit('rebuild-clean') })
+const terminal = useTerminal(props.paneId, props.backend, {
+  workspacePath: props.workspacePath,
+  onClear: () => emit('rebuild-clean'),
+  onStableWidthChange: (cols) => emit('width-settled', cols),
+})
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
