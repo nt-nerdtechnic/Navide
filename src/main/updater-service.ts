@@ -124,6 +124,7 @@ export function createUpdaterService(
             setState({ status: 'not-available', currentVersion, checkedAt: new Date().toISOString() })
           }
         }
+        if (state.status === 'error') return failure(state.message ?? 'Update check failed.')
         return success()
       } catch (error) {
         const message = errorMessage(error)
@@ -152,6 +153,10 @@ export function createUpdaterService(
       setState({ status: 'downloading', currentVersion, availableVersion, percent: 0 })
       try {
         await client.downloadUpdate()
+        if (state.status === 'error') return failure(state.message ?? 'Update download failed.')
+        if (state.status === 'downloading') {
+          setState({ status: 'downloaded', currentVersion, availableVersion, percent: 100 })
+        }
         return success()
       } catch (error) {
         const message = errorMessage(error)

@@ -828,9 +828,15 @@ function onPipelineDividerEnd(): void {
 
       <button
         class="tab-btn update-check-btn"
-        :class="{ spinning: updateState.status === 'checking', failed: updateState.status === 'error' }"
-        :disabled="updateBusy"
-        :title="updateState.status === 'error' ? `Update check failed: ${updateState.message ?? 'Unknown error'}. Click to retry.` : 'Check for updates'"
+        :class="{ spinning: updateState.status === 'checking', failed: updateState.status === 'error', current: updateState.status === 'not-available' }"
+        :disabled="updateBusy || updateState.status === 'unsupported'"
+        :title="updateState.status === 'unsupported'
+          ? 'Updates are available in packaged macOS builds.'
+          : updateState.status === 'error'
+            ? `Update check failed: ${updateState.message ?? 'Unknown error'}. Click to retry.`
+            : updateState.status === 'not-available'
+              ? `Navide v${updateState.currentVersion} is up to date. Click to check again.`
+              : 'Check for updates'"
         aria-label="Check for updates"
         @click="checkForUpdates"
       >
@@ -2543,6 +2549,9 @@ button.icon-btn.muted:hover {
 }
 .update-check-btn.failed {
   color: var(--danger-fg);
+}
+.update-check-btn.current {
+  color: var(--success-fg);
 }
 .update-check-btn.spinning svg {
   animation: update-spin 0.8s linear infinite;

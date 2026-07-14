@@ -1,18 +1,16 @@
 import { ref } from 'vue'
 
 export const DEFAULT_FONT_SIZE = 12
-export const MIN_FONT_SIZE = 6
-export const MAX_FONT_SIZE = 32
 
 const STORAGE_KEY = 'terminal.fontSize'
 
 function loadPersisted(): number {
   const stored = localStorage.getItem(STORAGE_KEY)
-  // Guard the missing key explicitly: Number(null) is 0, which is finite and
-  // would silently clamp a first run to MIN_FONT_SIZE.
+  // Guard the missing key explicitly: Number(null) is 0, which is finite.
   const raw = stored === null ? NaN : Number(stored)
   if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_FONT_SIZE
-  return Math.min(Math.max(Math.round(raw), MIN_FONT_SIZE), MAX_FONT_SIZE)
+  const size = Math.round(raw)
+  return size > 0 ? size : DEFAULT_FONT_SIZE
 }
 
 /**
@@ -29,10 +27,9 @@ function loadPersisted(): number {
 export const terminalFontSize = ref(loadPersisted())
 
 function setFontSize(next: number): void {
-  const clamped = Math.min(Math.max(next, MIN_FONT_SIZE), MAX_FONT_SIZE)
-  if (clamped === terminalFontSize.value) return
-  terminalFontSize.value = clamped
-  localStorage.setItem(STORAGE_KEY, String(clamped))
+  if (!Number.isFinite(next) || next <= 0 || next === terminalFontSize.value) return
+  terminalFontSize.value = next
+  localStorage.setItem(STORAGE_KEY, String(next))
 }
 
 export function zoomIn(): void { setFontSize(terminalFontSize.value + 1) }

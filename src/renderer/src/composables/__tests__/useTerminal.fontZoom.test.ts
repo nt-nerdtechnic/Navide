@@ -129,23 +129,20 @@ describe('terminal font zoom — app-wide', () => {
     b.scope.stop()
   })
 
-  it('⌘+ grows and clamps at the maximum', async () => {
+  it('⌘+ grows beyond the former maximum', async () => {
     const a = await spawnPane('pane-a')
 
     for (let i = 0; i < 30; i++) await press('+', { shiftKey: true })
 
-    expect(a.opts.fontSize).toBe(32)
+    expect(a.opts.fontSize).toBe(42)
     a.scope.stop()
   })
 
-  it('⌘- clamps at the minimum', async () => {
+  it('⌘- shrinks below the former minimum', async () => {
     const a = await spawnPane('pane-a')
 
     for (let i = 0; i < 10; i++) await press('-')
-    expect(a.opts.fontSize).toBe(6)
-
-    for (let i = 0; i < 3; i++) await press('-')
-    expect(a.opts.fontSize).toBe(6)
+    expect(a.opts.fontSize).toBe(2)
 
     a.scope.stop()
   })

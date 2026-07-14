@@ -28,7 +28,7 @@ GitHub Releases must contain all of these assets from the same signed build:
 
 - `Navide-<version>-arm64.dmg`
 - `Navide-<version>-arm64.zip`
-- one or more `.blockmap` files
+- DMG and ZIP `.blockmap` files
 - `latest-mac.yml`
 
 The ZIP and `latest-mac.yml` are required for the macOS updater. Do not publish

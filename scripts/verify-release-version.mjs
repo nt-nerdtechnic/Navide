@@ -24,12 +24,12 @@ if (invalid.length) {
   throw new Error(`Version sources are out of sync:\n${details}`)
 }
 
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageVersion)) {
+if (!/^\d+\.\d+\.\d+$/.test(packageVersion)) {
   throw new Error(`Invalid semantic version in package.json: ${packageVersion}`)
 }
 
 if (expectedTag) {
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(expectedTag)) {
+  if (!/^v\d+\.\d+\.\d+$/.test(expectedTag)) {
     throw new Error(`Release tag must use vX.Y.Z syntax: ${expectedTag}`)
   }
   if (expectedTag !== `v${packageVersion}`) {

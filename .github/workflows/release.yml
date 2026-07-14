@@ -83,7 +83,7 @@ jobs:
           test -f dist-release/latest-mac.yml
           test "$(find dist-release -maxdepth 1 -name 'Navide-*.dmg' | wc -l | tr -d ' ')" -eq 1
           test "$(find dist-release -maxdepth 1 -name 'Navide-*.zip' | wc -l | tr -d ' ')" -eq 1
-          test "$(find dist-release -maxdepth 1 -name '*.blockmap' | wc -l | tr -d ' ')" -ge 1
+          test "$(find dist-release -maxdepth 1 -name '*.blockmap' | wc -l | tr -d ' ')" -ge 2
           app_path="$(find dist-release -maxdepth 2 -name '*.app' -type d -print -quit)"
           test -n "${app_path}"
           codesign --verify --deep --strict --verbose=2 "${app_path}"

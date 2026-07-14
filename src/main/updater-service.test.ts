@@ -89,4 +89,24 @@ describe('createUpdaterService', () => {
     expect(result).toMatchObject({ ok: false, error: 'feed unavailable' })
     expect(service.getState()).toMatchObject({ status: 'error', message: 'feed unavailable' })
   })
+
+  it('returns failure when the provider emits an error but resolves the operation', async () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    const check = service.check()
+    emit('error', new Error('bad metadata'))
+    await expect(check).resolves.toMatchObject({ ok: false, error: 'bad metadata' })
+  })
+
+  it('finishes downloading when a provider resolves without a downloaded event', async () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+    emit('update-available', { version: '1.1.0' })
+
+    await expect(service.download()).resolves.toMatchObject({ ok: true })
+    expect(service.getState()).toMatchObject({
+      status: 'downloaded', availableVersion: '1.1.0', percent: 100,
+    })
+  })
 })
