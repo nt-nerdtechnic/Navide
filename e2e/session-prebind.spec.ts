@@ -159,7 +159,9 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
   let client: BackendClient | null = null
   try {
     app = await electron.launch({
-      args: [join(__dirname, '..')],
+      // Keep this process independent from any developer-run Navide instance;
+      // requestSingleInstanceLock is scoped by Electron's user-data directory.
+      args: [join(__dirname, '..'), `--user-data-dir=${join(root, 'user-data')}`],
       env: {
         ...process.env,
         HOME: home,
@@ -201,10 +203,17 @@ test('prebind detects and persists two Codex panes plus one Gemini pane through 
     await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Codex B', pane_id: 'pane-codex-b', agent: 'codex', role: 'backend', session_home_id: 'home-codex-b' })
     await client.send('pipeline.slot_spawn', { workspace_path: workspace, stage_index: 0, slot_label: 'Gemini', pane_id: 'pane-gemini', agent: 'gemini', role: 'pm' })
 
+    const waitForPaneSession = (paneId: string) =>
+      client!.waitForEvent<{ pane_id: string; session_id: string; session_file: string }>(
+        'session.detected',
+        (payload) => payload.pane_id === paneId,
+      ).catch((error: unknown) => {
+        throw new Error(`${paneId}: ${error instanceof Error ? error.message : String(error)}`)
+      })
     const seen: Record<string, Promise<{ pane_id: string; session_id: string; session_file: string }>> = {
-      'pane-codex-a': client.waitForEvent('session.detected', (payload) => payload.pane_id === 'pane-codex-a'),
-      'pane-codex-b': client.waitForEvent('session.detected', (payload) => payload.pane_id === 'pane-codex-b'),
-      'pane-gemini': client.waitForEvent('session.detected', (payload) => payload.pane_id === 'pane-gemini'),
+      'pane-codex-a': waitForPaneSession('pane-codex-a'),
+      'pane-codex-b': waitForPaneSession('pane-codex-b'),
+      'pane-gemini': waitForPaneSession('pane-gemini'),
     }
 
     const createA = await client.send<{ terminal_session_id: string }>('terminal.create', {

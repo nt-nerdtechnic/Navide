@@ -11,10 +11,18 @@ import { tmpdir } from 'node:os'
 let app: ElectronApplication
 let page: Page
 let tmp: string | undefined
+let userDataDir: string | undefined
 
 test.beforeAll(async () => {
+  // Isolate Electron's single-instance lock and persisted renderer storage from
+  // a developer's running Navide process. Without this, Playwright can be
+  // redirected to the real app window and mutate its active workspace.
+  userDataDir = mkdtempSync(join(tmpdir(), 'agent-team-e2e-user-data-'))
   app = await electron.launch({
-    args: [join(__dirname, '..')], // project root → package.json main = out/main/index.js
+    args: [
+      join(__dirname, '..'), // project root → package.json main = out/main/index.js
+      `--user-data-dir=${userDataDir}`,
+    ],
     env: { ...process.env, NODE_ENV: 'production' }
   })
   page = await app.firstWindow()
@@ -24,6 +32,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await app?.close()
   if (tmp) rmSync(tmp, { recursive: true, force: true })
+  if (userDataDir) rmSync(userDataDir, { recursive: true, force: true })
 })
 
 test('launches and shows the Welcome entry screen', async () => {

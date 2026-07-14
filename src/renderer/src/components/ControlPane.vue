@@ -183,7 +183,7 @@ const props = defineProps<Props>()
 // is live when juggling worktrees / uncommitted changes.
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
-const { state: updateState, isBusy: updateBusy, checkForUpdates, startDownload, installUpdate } = useUpdater()
+const { state: updateState, startDownload, installUpdate } = useUpdater()
 
 const emit = defineEmits<{
   (e: 'spawn', payload: SpawnPayload): void
@@ -825,23 +825,6 @@ function onPipelineDividerEnd(): void {
       <button :class="['tab-btn', { active: sidebarTab === 'git' }]" title="Git (⌘3)" @click="selectSidebarTab('git')">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
-      </button>
-
-      <button
-        class="tab-btn update-check-btn"
-        :class="{ spinning: updateState.status === 'checking', failed: updateState.status === 'error', current: updateState.status === 'not-available' }"
-        :disabled="updateBusy || updateState.status === 'unsupported'"
-        :title="updateState.status === 'unsupported'
-          ? 'Updates are available in packaged macOS builds.'
-          : updateState.status === 'error'
-            ? `Update check failed: ${updateState.message ?? 'Unknown error'}. Click to retry.`
-            : updateState.status === 'not-available'
-              ? `Navide v${updateState.currentVersion} is up to date. Click to check again.`
-              : 'Check for updates'"
-        aria-label="Check for updates"
-        @click="checkForUpdates"
-      >
-        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor"><path d="M13.6 2.4A7 7 0 0 0 2.05 5H.75a.75.75 0 0 0 0 1.5h3.1a.75.75 0 0 0 .75-.75v-3.1a.75.75 0 0 0-1.5 0v1.02A5.5 5.5 0 0 1 12.54 3.46a.75.75 0 1 0 1.06-1.06ZM15.25 9.5h-3.1a.75.75 0 0 0-.75.75v3.1a.75.75 0 0 0 1.5 0v-1.02A5.5 5.5 0 0 1 3.46 12.54.75.75 0 1 0 2.4 13.6 7 7 0 0 0 13.95 11h1.3a.75.75 0 0 0 0-1.5Z"/></svg>
       </button>
 
       <div
@@ -2533,17 +2516,5 @@ button.icon-btn.muted:hover {
 }
 .update-action:hover {
   opacity: 0.85;
-}
-.update-check-btn.failed {
-  color: var(--danger-fg);
-}
-.update-check-btn.current {
-  color: var(--success-fg);
-}
-.update-check-btn.spinning svg {
-  animation: update-spin 0.8s linear infinite;
-}
-@keyframes update-spin {
-  to { transform: rotate(360deg); }
 }
 </style>
