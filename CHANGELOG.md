@@ -4,6 +4,23 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.44] — 2026-07-15 — unsigned preview
+
+### Added
+
+- Add log preview modal and improve terminal session handling.
+- Add force option to kill terminal sessions.
+- Add test scripts to simulate terminal input (`test_bp.exp`, `test_bp.js`, `test_pt.py`).
+
+### Changed
+
+- Improve PTY output handling with backpressure.
+- Remove session check in `_drain` method for terminal sessions.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.43] — 2026-07-15 — unsigned preview
 
 ### Added
