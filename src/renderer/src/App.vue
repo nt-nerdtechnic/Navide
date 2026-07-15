@@ -2439,7 +2439,6 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       customName: entry.customName,
     })
     if (resumed) {
-      showHistory.value = false
       return
     }
     unavailableHistoryPaneIds.value = new Set([
@@ -2462,7 +2461,6 @@ async function onFreshSpawnHistoryAgent(entry: SpawnHistoryEntry): Promise<void>
       workspacePath: entry.workspacePath || currentWorkspace.value,
       customName: entry.customName,
     })
-    showHistory.value = false
   } finally {
     revivingHistoryPaneId.value = ''
   }
