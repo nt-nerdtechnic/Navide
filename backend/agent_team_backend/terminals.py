@@ -533,8 +533,29 @@ class TerminalService:
         if not chunks:
             return
         combined = "".join(chunks)
-        for piece in self._split_chunks(combined):
-            self._send_chunk(session, piece)
+
+        # Suspend reading from the PTY while we drain the network buffer.
+        # This provides natural backpressure so the CLI blocks when writing
+        # instead of OOMing the Python backend or Electron WebSocket receiver.
+        try:
+            self._loop.remove_reader(session.master_fd)
+        except (ValueError, KeyError):
+            pass
+
+        async def _drain() -> None:
+            try:
+                for piece in self._split_chunks(combined):
+                    if session.closed:
+                        break
+                    await self._emit(self._build_output_event(session, piece))
+            finally:
+                if not session.closed:
+                    try:
+                        self._loop.add_reader(session.master_fd, self._on_readable, session)
+                    except Exception:
+                        pass
+
+        self._loop.create_task(_drain())
 
         # Persist cleaned output to the conversation log (if one was opened).
         if session.output_log_fp:
