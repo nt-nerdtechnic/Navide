@@ -43,6 +43,9 @@ vi.mock('@xterm/xterm', () => {
     registerLinkProvider(): { dispose(): void } {
       return { dispose(): void {} }
     }
+    onResize(): { dispose(): void } {
+      return { dispose(): void {} }
+    }
     onData(): { dispose(): void } {
       return { dispose(): void {} }
     }

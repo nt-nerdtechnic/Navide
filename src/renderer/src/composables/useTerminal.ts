@@ -130,6 +130,12 @@ export function encodeShiftEnter(agentKey?: string): string {
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
 
+// Cached dimensions from any visible terminal. Hidden resumed tabs use these
+// to start their PTY immediately at the correct layout size without waiting
+// for the user to switch to them.
+let _lastKnownCols = 0
+let _lastKnownRows = 0
+
 // VS Code-style unix path regex (no extension whitelist).
 const _EXCL_S = `[^\\x00<>?\\s!\`&*()[\\]'"\\\\;]`
 const _EXCL   = `[^\\x00<>?\\s!\`&*()'"\\\\;]`
@@ -470,6 +476,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // mid-line input repaints land at the wrong column (overlapping text).
   term.loadAddon(new Unicode11Addon())
   term.unicode.activeVersion = '11'
+
+  term.onResize(({ cols, rows }) => {
+    if (cols > 0 && rows > 0) {
+      _lastKnownCols = cols
+      _lastKnownRows = rows
+    }
+  })
 
   const containerRef = shallowRef<HTMLElement | null>(null)
   const status = ref<TerminalStatus>('idle')
@@ -1314,7 +1327,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // even while hidden (the reconciler corrects the width once the tab is shown).
     // Deferring a fresh spawn would stall e.g. a pipeline stage spawned into a
     // tab the user isn't currently viewing.
-    if (opts.isResume && !visible) return  // resume + hidden — retry when shown
+    if (opts.isResume && !visible) {
+      // Hidden resume: if we have a cached layout size from another visible tab,
+      // use it to start the PTY immediately. Otherwise wait until shown.
+      if (_lastKnownCols > 0 && _lastKnownRows > 0) {
+        try { term.resize(_lastKnownCols, _lastKnownRows) } catch { /* ignore */ }
+      } else {
+        return
+      }
+    }
     if (visible && cellWidth() === 0) {
       // xterm hasn't measured its character cell yet (just opened): poke once to
       // force measurement, then AWAIT it (bounded) so a fresh spawn resolves
