@@ -623,6 +623,21 @@ function loadLegacySpawnHistory(workspacePath: string): SpawnHistoryEntry[] {
 }
 
 const spawnHistory = ref<SpawnHistoryEntry[]>([])
+
+const sessionHistory = computed(() => {
+  const result: SpawnHistoryEntry[] = []
+  const seen = new Set<string>()
+  for (let i = spawnHistory.value.length - 1; i >= 0; i--) {
+    const entry = spawnHistory.value[i]
+    const key = entry.sessionId ? `session:${entry.sessionId}` : `pane:${entry.paneId}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(entry)
+    }
+  }
+  return result
+})
+
 let spawnHistoryWorkspace = ''
 let spawnHistoryHydrated = false
 let spawnHistoryPersistTimer: number | undefined
@@ -6662,9 +6677,9 @@ function paneIsCommander(p: ActivePane): boolean {
             <button class="history-close" @click="showHistory = false">✕</button>
           </div>
           <div class="agent-history-list">
-            <div v-if="spawnHistory.length === 0" class="agent-history-empty">尚無 agent 紀錄</div>
+            <div v-if="sessionHistory.length === 0" class="agent-history-empty">尚無 agent 紀錄</div>
             <div
-              v-for="entry in [...spawnHistory].reverse()"
+              v-for="entry in sessionHistory"
               :key="entry.paneId"
               class="agent-history-row"
               :class="{ active: !entry.removedAt }"
