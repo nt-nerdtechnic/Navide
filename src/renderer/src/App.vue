@@ -6684,7 +6684,9 @@ function paneIsCommander(p: ActivePane): boolean {
             >
               <div class="agent-history-main">
                 <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
-                <span class="ah-badge ah-role">{{ entry.roleLabel }}</span>
+                <span class="ah-badge ah-role">
+                  <template v-if="entry.agentKey">{{ agentSpecs.find(s => s.agentKey === entry.agentKey)?.label ?? entry.agentKey }}<template v-if="entry.roleLabel"> · </template></template>{{ entry.roleLabel }}
+                </span>
                 <span class="ah-origin">{{ entry.origin }}</span>
                 <span
                   v-if="entry.restoreMode === 'memory-resume'"
