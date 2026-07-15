@@ -27,6 +27,7 @@ import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
+import { cliHealthGuideForLaunch, type CliHealthStatus, type OnboardStatus } from './composables/useOnboarding'
 import { playDoneSound, playAttentionSound } from './composables/useSoundNotify'
 import { formatIssueForDispatch, buildIssueKickoff, type IssueDetail, type Issue, type IssueProvider, type IssueHandlerMode } from './composables/useIssues'
 import type { RoleKey } from './data/roles'
@@ -79,6 +80,7 @@ import { useKeybindings, registerCommand, setContext } from './keybindings/useKe
 const CompletionModal = defineAsyncComponent(() => import('./components/CompletionModal.vue'))
 const SettingsModal = defineAsyncComponent(() => import('./components/SettingsModal.vue'))
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
+const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
 
 const backend = useBackend()
 // Hook the settings cache to the ws: reconciles + flushes queued writes once
@@ -131,10 +133,12 @@ onMounted(() => {
 // `null` = not yet checked. When the backend connects we ask whether the
 // environment setup is complete; if not, OnboardingWizard hard-blocks the shell.
 const onboardingComplete = ref<boolean | null>(null)
+const cliHealthGuide = ref<CliHealthStatus | null>(null)
 async function checkOnboarding(): Promise<void> {
   try {
-    const resp = await backend.send<{ complete?: boolean; skip?: boolean }>('onboarding.status', {})
+    const resp = await backend.send<OnboardStatus>('onboarding.status', {})
     onboardingComplete.value = resp.payload?.complete ?? true
+    cliHealthGuide.value = cliHealthGuideForLaunch(resp.payload)
   } catch {
     // If the check fails, don't lock the user out — fail open.
     onboardingComplete.value = true
@@ -204,6 +208,10 @@ watch(
 )
 function reopenOnboarding(): void {
   onboardingComplete.value = false
+}
+function completeOnboarding(): void {
+  onboardingComplete.value = true
+  void checkOnboarding()
 }
 
 // --- Workspace-first entry gate (phase-4) ------------------------------------
@@ -6392,8 +6400,15 @@ function paneIsCommander(p: ActivePane): boolean {
   <OnboardingWizard
     v-if="onboardingComplete === false"
     :backend="backend"
-    @complete="onboardingComplete = true"
-    @close="onboardingComplete = true"
+    @complete="completeOnboarding"
+    @close="completeOnboarding"
+  />
+  <CliHealthGuide
+    v-if="onboardingComplete === true && cliHealthGuide"
+    :backend="backend"
+    :initial-health="cliHealthGuide"
+    @close="cliHealthGuide = null"
+    @resolved="cliHealthGuide = null"
   />
   <!-- First-boot loading overlay: covers the shell until the backend settles,
        then fades out. Brand-only text so no i18n keys are needed. -->

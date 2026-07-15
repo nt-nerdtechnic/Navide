@@ -34,13 +34,53 @@ export interface ModelOption {
   recommended: boolean
 }
 
+export interface CliHealthCandidate {
+  path: string
+  resolved_path: string
+  aliases: string[]
+  version: string
+  status: 'ok' | 'failed'
+  exit_code: number | null
+  signal: string
+  duration_ms: number | null
+  is_primary: boolean
+}
+
+export interface CliHealthEntry {
+  agent_key: string
+  label: string
+  diagnostic_command: string
+  candidates: CliHealthCandidate[]
+}
+
+export interface CliHealthFinding {
+  type: 'probe_failed' | 'duplicate_install'
+  agent_key: string
+  label: string
+  primary?: CliHealthCandidate
+  candidates?: CliHealthCandidate[]
+}
+
+export interface CliHealthStatus {
+  entries: CliHealthEntry[]
+  findings: CliHealthFinding[]
+  fingerprint: string
+  dismissed: boolean
+  needs_attention: boolean
+}
+
 export interface OnboardStatus {
   deps: OnboardDep[]
   models: string[]
   gate: OnboardGate
   model_catalog: ModelOption[]
+  cli_health: CliHealthStatus
   complete: boolean
   skip: boolean
+}
+
+export function cliHealthGuideForLaunch(status: OnboardStatus | null | undefined): CliHealthStatus | null {
+  return status?.complete && status.cli_health?.needs_attention ? status.cli_health : null
 }
 
 interface InstallResult {
@@ -138,11 +178,12 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
   const hasAnyCli = computed(() => gate.value?.has_any_cli ?? false)
   const analyzerReady = computed(() => gate.value?.analyzer_ready ?? false)
   const allRequiredReady = computed(() => gate.value?.all_required_ready ?? false)
+  const cliHealth = computed<CliHealthStatus | null>(() => status.value?.cli_health ?? null)
 
   return {
     status, loading, installing, logLines,
     refresh, install, pullModel, markComplete,
     deps, foundationDeps, cliDeps, analyzerDeps, models, modelCatalog, gate,
-    foundationReady, hasAnyCli, analyzerReady, allRequiredReady,
+    foundationReady, hasAnyCli, analyzerReady, allRequiredReady, cliHealth,
   }
 }

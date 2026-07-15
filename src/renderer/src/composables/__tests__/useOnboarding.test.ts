@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { useOnboarding, type OnboardStatus } from '../useOnboarding'
+import { cliHealthGuideForLaunch, useOnboarding, type OnboardStatus } from '../useOnboarding'
 import { createMockBackend, withScope, flush } from './mockBackend'
 
 function status(opts: { found?: boolean; cli?: boolean; ollama?: boolean; models?: string[] }): OnboardStatus {
@@ -19,6 +19,13 @@ function status(opts: { found?: boolean; cli?: boolean; ollama?: boolean; models
     model_catalog: [
       { name: 'qwen2.5-coder:7b', size: '~4.7 GB', desc: '', recommended: true },
     ],
+    cli_health: {
+      entries: [],
+      findings: [],
+      fingerprint: '',
+      dismissed: false,
+      needs_attention: false,
+    },
     gate: {
       foundation_ready: found,
       has_any_cli: cli,
@@ -93,5 +100,24 @@ describe('useOnboarding', () => {
     await result.markComplete()
     expect(mock.sent.some((s) => s.type === 'onboarding.complete')).toBe(true)
     scope.stop()
+  })
+
+  it('shows CLI health guide only for completed onboarding with an undismissed finding', () => {
+    const ready = status({})
+    ready.complete = true
+    ready.cli_health = {
+      entries: [],
+      findings: [{ type: 'duplicate_install', agent_key: 'claude', label: 'Claude' }],
+      fingerprint: '0123456789abcdef',
+      dismissed: false,
+      needs_attention: true,
+    }
+    expect(cliHealthGuideForLaunch(ready)?.fingerprint).toBe('0123456789abcdef')
+
+    ready.complete = false
+    expect(cliHealthGuideForLaunch(ready)).toBeNull()
+    ready.complete = true
+    ready.cli_health.needs_attention = false
+    expect(cliHealthGuideForLaunch(ready)).toBeNull()
   })
 })

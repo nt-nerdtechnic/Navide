@@ -1,6 +1,6 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import { join } from 'node:path'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 // Drives the built Electron app end-to-end:
@@ -75,4 +75,56 @@ test('picking a workspace via Browse enters the main UI', async () => {
 
   // Welcome gate is gone → main UI is now the active screen.
   await expect(welcome).toHaveCount(0)
+})
+
+test('reload restores only this workspace custom Agent History title', async () => {
+  if (!tmp) throw new Error('workspace was not initialized')
+  const projectDir = join(tmp, '.agent-team')
+  const projectPath = join(projectDir, 'project.json')
+  mkdirSync(projectDir, { recursive: true })
+  const baseEntry = {
+    agentKey: 'codex',
+    agentLabel: 'Codex',
+    roleKey: '',
+    roleLabel: 'No role',
+    command: '',
+    origin: 'manual',
+    stageId: '',
+    spawnedAt: '2026-07-15T00:00:00.000Z',
+    removedAt: '2026-07-15T00:01:00.000Z',
+  }
+  const project = {
+    id: 'project-e2e-history',
+    name: 'E2E History',
+    workspace_path: tmp,
+    created_at: '2026-07-15T00:00:00.000Z',
+    updated_at: '2026-07-15T00:01:00.000Z',
+    state: 'idle',
+    stages: [],
+    panes: [],
+    ui_spawn_history: [
+      {
+        ...baseEntry,
+        paneId: 'pane-current-workspace',
+        customName: 'Persisted workspace title',
+        workspacePath: tmp,
+      },
+      {
+        ...baseEntry,
+        paneId: 'pane-other-workspace',
+        customName: 'Foreign workspace title',
+        workspacePath: join(tmp, 'other-workspace'),
+      },
+    ],
+  }
+  writeFileSync(projectPath, JSON.stringify(project, null, 2))
+
+  await page.reload()
+  await page.waitForLoadState('domcontentloaded')
+  await expect(page.locator('.welcome-overlay')).toHaveCount(0, { timeout: 30_000 })
+  await page.locator('.history-btn').click()
+
+  const history = page.locator('.history-modal')
+  await expect(history).toContainText('Persisted workspace title')
+  await expect(history).not.toContainText('Foreign workspace title')
 })

@@ -86,6 +86,14 @@ def test_spawn_history_round_trip_through_disk(tmp_path: Path) -> None:
     assert other.ui_spawn_history is None
 
 
+def test_empty_spawn_history_is_distinct_from_legacy_missing_field(tmp_path: Path) -> None:
+    store = _store_with_project(tmp_path)
+    store.set_ui_state(str(tmp_path), spawn_history=[])
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert fresh.ui_spawn_history == []
+
+
 def test_git_tab_repo_partial_update_leaves_other_fields_untouched(tmp_path: Path) -> None:
     store = _store_with_project(tmp_path)
     store.set_ui_state(str(tmp_path), run_groups=GROUPS, active_tab="rg-2")

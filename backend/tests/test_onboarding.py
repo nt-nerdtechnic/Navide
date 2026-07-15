@@ -159,3 +159,98 @@ def test_set_complete_writes_new_path(tmp_path: Path, monkeypatch: pytest.Monkey
     ob.set_complete(True)
     assert flag.exists()
     assert not legacy.exists()
+
+
+def _make_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _claude_status(path: Path, *, ok: bool = True) -> dict:
+    return {
+        "id": "claude",
+        "status": "ok" if ok else "missing",
+        "version": "2.1.210" if ok else "",
+        "binary_path": str(path),
+        "resolved_path": str(path.resolve()),
+        "exit_code": 0 if ok else -9,
+        "signal": "" if ok else "SIGKILL",
+        "duration_ms": 42,
+    }
+
+
+def test_cli_health_reports_distinct_duplicate_installations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _make_executable(tmp_path / "nvm" / "claude")
+    second = _make_executable(tmp_path / "homebrew" / "claude")
+    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setattr(
+        ob,
+        "_probe_alternate",
+        lambda _dep, _path: {
+            "version": "2.1.168", "status": "ok", "exit_code": 0,
+            "signal": "", "duration_ms": 10,
+        },
+    )
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(first)])
+
+    duplicate = next(f for f in health["findings"] if f["type"] == "duplicate_install")
+    assert duplicate["agent_key"] == "claude"
+    assert [c["version"] for c in duplicate["candidates"]] == ["2.1.210", "2.1.168"]
+    assert health["needs_attention"] is True
+    assert len(health["fingerprint"]) == 16
+
+
+def test_cli_health_collapses_aliases_to_same_physical_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = _make_executable(tmp_path / "package" / "claude.exe")
+    first = tmp_path / "bin-a" / "claude"
+    second = tmp_path / "bin-b" / "claude"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.symlink_to(target)
+    second.symlink_to(target)
+    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(first)])
+
+    assert health["findings"] == []
+    claude = next(entry for entry in health["entries"] if entry["agent_key"] == "claude")
+    assert len(claude["candidates"]) == 1
+    assert claude["candidates"][0]["aliases"] == [str(first), str(second)]
+
+
+def test_cli_health_reports_failed_primary_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = _make_executable(tmp_path / "bin" / "claude")
+    monkeypatch.setenv("PATH", str(binary.parent))
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(binary, ok=False)])
+
+    failed = next(f for f in health["findings"] if f["type"] == "probe_failed")
+    assert failed["primary"]["signal"] == "SIGKILL"
+    assert health["needs_attention"] is True
+
+
+def test_cli_health_dismissal_is_fingerprint_scoped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_flag_paths(monkeypatch, tmp_path)
+    ob.set_complete(True)
+    fingerprint = "0123456789abcdef"
+    ob.dismiss_cli_health(fingerprint)
+
+    assert ob._dismissed_cli_health_fingerprint() == fingerprint
+    assert ob.is_complete() is True
+
+    ob.dismiss_cli_health("invalid")
+    assert ob._dismissed_cli_health_fingerprint() == fingerprint

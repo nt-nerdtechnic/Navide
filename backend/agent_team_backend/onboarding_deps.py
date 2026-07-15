@@ -12,10 +12,13 @@ macOS-only by design (matches the project's platform assumption).
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -179,14 +182,26 @@ def _meets_min(version: str, min_version: str) -> bool:
 
 def detect_dep(dep: Dep) -> dict[str, Any]:
     """Run the dep's check_cmd and classify ok | missing | outdated."""
-    if shutil.which(dep.check_cmd[0]) is None:
+    binary_path = shutil.which(dep.check_cmd[0]) or ""
+    exit_code: int | None = None
+    signal_name = ""
+    duration_ms: int | None = None
+    if not binary_path:
         status = "missing"
         version = ""
     else:
+        started = time.monotonic()
         try:
             proc = subprocess.run(
                 dep.check_cmd, capture_output=True, text=True, timeout=8
             )
+            duration_ms = max(0, round((time.monotonic() - started) * 1000))
+            exit_code = proc.returncode
+            if proc.returncode < 0:
+                try:
+                    signal_name = signal.Signals(-proc.returncode).name
+                except ValueError:
+                    signal_name = f"SIG{-proc.returncode}"
             out = (proc.stdout or "") + (proc.stderr or "")
             version = _parse_version(out, dep.version_regex)
             if version and not _meets_min(version, dep.min_version):
@@ -196,6 +211,7 @@ def detect_dep(dep: Dep) -> dict[str, Any]:
             else:
                 status = "missing"
         except (subprocess.SubprocessError, OSError):
+            duration_ms = max(0, round((time.monotonic() - started) * 1000))
             status = "missing"
             version = ""
     return {
@@ -210,6 +226,146 @@ def detect_dep(dep: Dep) -> dict[str, Any]:
         "needs_terminal": dep.needs_terminal,
         "can_install": bool(dep.install_cmd),
         "docs_url": dep.docs_url,
+        "binary_path": binary_path,
+        "resolved_path": os.path.realpath(binary_path) if binary_path else "",
+        "exit_code": exit_code,
+        "signal": signal_name,
+        "duration_ms": duration_ms,
+    }
+
+
+def _distinct_executables(command: str) -> list[dict[str, Any]]:
+    """Executable PATH entries collapsed by physical file identity."""
+    grouped: dict[tuple[int, int] | tuple[str, str], dict[str, Any]] = {}
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidate = Path(directory).expanduser() / command
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        try:
+            stat = candidate.stat()
+            identity: tuple[int, int] | tuple[str, str] = (stat.st_dev, stat.st_ino)
+            resolved = str(candidate.resolve())
+        except OSError:
+            identity = ("path", str(candidate))
+            resolved = os.path.realpath(candidate)
+        entry = grouped.setdefault(identity, {"path": str(candidate), "resolved_path": resolved, "aliases": []})
+        if str(candidate) not in entry["aliases"]:
+            entry["aliases"].append(str(candidate))
+    return list(grouped.values())
+
+
+def _probe_alternate(dep: Dep, executable: str) -> dict[str, Any]:
+    started = time.monotonic()
+    exit_code: int | None = None
+    signal_name = ""
+    version = ""
+    status = "failed"
+    try:
+        proc = subprocess.run(
+            [executable, *dep.check_cmd[1:]],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        exit_code = proc.returncode
+        output = (proc.stdout or "") + (proc.stderr or "")
+        version = _parse_version(output, dep.version_regex)
+        if proc.returncode < 0:
+            try:
+                signal_name = signal.Signals(-proc.returncode).name
+            except ValueError:
+                signal_name = f"SIG{-proc.returncode}"
+        status = "ok" if proc.returncode == 0 or version else "failed"
+    except (subprocess.SubprocessError, OSError):
+        pass
+    return {
+        "version": version,
+        "status": status,
+        "exit_code": exit_code,
+        "signal": signal_name,
+        "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
+    }
+
+
+def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build actionable health findings for installed agent CLIs."""
+    status_by_id = {status["id"]: status for status in dep_statuses}
+    cli_entries: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = []
+    for dep in DEPS:
+        if dep.group != "agent_cli":
+            continue
+        candidates = _distinct_executables(dep.check_cmd[0])
+        if not candidates:
+            continue  # Missing optional CLIs are handled by normal onboarding.
+        dep_status = status_by_id.get(dep.id, {})
+        primary_resolved = str(dep_status.get("resolved_path") or "")
+        detailed_candidates: list[dict[str, Any]] = []
+        for candidate in candidates:
+            is_primary = candidate["resolved_path"] == primary_resolved
+            probe = {
+                "version": dep_status.get("version", ""),
+                "status": "ok" if dep_status.get("status") == "ok" else "failed",
+                "exit_code": dep_status.get("exit_code"),
+                "signal": dep_status.get("signal", ""),
+                "duration_ms": dep_status.get("duration_ms"),
+            } if is_primary else _probe_alternate(dep, candidate["resolved_path"])
+            detailed_candidates.append({**candidate, **probe, "is_primary": is_primary})
+        entry = {
+            "agent_key": dep.id,
+            "label": dep.label,
+            "diagnostic_command": f"{dep.check_cmd[0]} doctor" if dep.id == "claude" else " ".join(dep.check_cmd),
+            "candidates": detailed_candidates,
+        }
+        cli_entries.append(entry)
+        primary = next((candidate for candidate in detailed_candidates if candidate["is_primary"]), detailed_candidates[0])
+        if primary["status"] != "ok":
+            findings.append({
+                "type": "probe_failed",
+                "agent_key": dep.id,
+                "label": dep.label,
+                "primary": primary,
+            })
+        if len(detailed_candidates) > 1:
+            findings.append({
+                "type": "duplicate_install",
+                "agent_key": dep.id,
+                "label": dep.label,
+                "candidates": detailed_candidates,
+            })
+
+    fingerprint_source = [
+        {
+            "type": finding["type"],
+            "agent_key": finding["agent_key"],
+            "candidates": [
+                {
+                    "resolved_path": candidate["resolved_path"],
+                    "version": candidate["version"],
+                    "status": candidate["status"],
+                    "exit_code": candidate["exit_code"],
+                    "signal": candidate["signal"],
+                }
+                for candidate in (
+                    finding.get("candidates")
+                    or ([finding["primary"]] if finding.get("primary") else [])
+                )
+            ],
+        }
+        for finding in findings
+    ]
+    fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_source, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16] if findings else ""
+    dismissed = fingerprint != "" and _dismissed_cli_health_fingerprint() == fingerprint
+    return {
+        "entries": cli_entries,
+        "findings": findings,
+        "fingerprint": fingerprint,
+        "dismissed": dismissed,
+        "needs_attention": bool(findings) and not dismissed,
     }
 
 
@@ -267,6 +423,7 @@ def get_status() -> dict[str, Any]:
         "models": models,
         "gate": compute_gate(deps, models),
         "model_catalog": MODEL_CATALOG,
+        "cli_health": build_cli_health(deps),
     }
 
 
@@ -356,7 +513,42 @@ def is_complete() -> bool:
 def set_complete(value: bool) -> None:
     path = _flag_path()
     try:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data["complete"] = value
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"complete": value}), encoding="utf-8")
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _dismissed_cli_health_fingerprint() -> str:
+    _migrate_legacy_flag()
+    try:
+        data = json.loads(_flag_path().read_text(encoding="utf-8"))
+        return str(data.get("dismissed_cli_health") or "") if isinstance(data, dict) else ""
+    except (OSError, ValueError):
+        return ""
+
+
+def dismiss_cli_health(fingerprint: str) -> None:
+    if not re.fullmatch(r"[0-9a-f]{16}", fingerprint or ""):
+        return
+    path = _flag_path()
+    _migrate_legacy_flag()
+    try:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data["dismissed_cli_health"] = fingerprint
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
     except OSError:
         pass

@@ -576,6 +576,36 @@
     "apply": "恢復",
     "dismiss": "忽略"
   },
+  "cli-health": {
+    "kicker": "CLI 健康檢查",
+    "title": "Navide 發現 Agent CLI 設定問題",
+    "step": {
+      "detect": "偵測",
+      "repair": "修復",
+      "verify": "驗證"
+    },
+    "detect-title": "確認 Navide 實際會執行哪一個版本",
+    "detect-desc": "重複安裝或啟動探針失敗，可能讓 Terminal 與 Navide 啟動不同的 binary。變更前請先確認目前作用中的路徑。",
+    "repair-title": "安全地修復 CLI 安裝",
+    "repair-desc": "只保留一套確認正常的安裝。使用原本的套件管理工具移除其他版本，再執行 CLI 自己的診斷。",
+    "verify-title": "驗證修復結果",
+    "verify-desc": "在終端機完成處理後重新偵測；問題消失時，這個導覽會自動關閉。",
+    "finding": {
+      "duplicate_install": "偵測到多套實體安裝",
+      "probe_failed": "啟動探針失敗"
+    },
+    "active": "目前作用中的 binary",
+    "alternate": "其他安裝",
+    "unknown-version": "無法取得版本",
+    "keep-primary": "若 Navide 顯示的作用中 binary 是你預期的版本，請保留它。",
+    "remove-alternate": "使用原本的套件管理工具移除其他安裝；不需要關閉 macOS 安全機制。",
+    "run-doctor": "執行 CLI 診斷後回到這裡重新偵測。",
+    "open-terminal": "開啟診斷終端機",
+    "terminal-opened": "已在終端機開啟診斷指令。",
+    "terminal-failed": "無法開啟終端機：{error}",
+    "still-detected": "仍偵測到問題，請確認上方路徑後再試一次。",
+    "close": "關閉導覽"
+  },
   "onboard": {
     "step": {
       "environment": "開發環境",

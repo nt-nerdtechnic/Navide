@@ -576,6 +576,36 @@
     "apply": "Restore",
     "dismiss": "Dismiss"
   },
+  "cli-health": {
+    "kicker": "CLI health check",
+    "title": "Navide found an agent CLI setup issue",
+    "step": {
+      "detect": "Detect",
+      "repair": "Repair",
+      "verify": "Verify"
+    },
+    "detect-title": "See exactly what Navide will run",
+    "detect-desc": "Multiple installations or a failed startup probe can make Terminal and Navide launch different binaries. Review the active path before changing anything.",
+    "repair-title": "Repair the CLI installation safely",
+    "repair-desc": "Keep one known-good installation. Remove alternates with the package manager that installed them, then run the CLI's own diagnostic.",
+    "verify-title": "Verify the repair",
+    "verify-desc": "After finishing in Terminal, run detection again. This guide closes automatically when the issue is gone.",
+    "finding": {
+      "duplicate_install": "Multiple physical installations",
+      "probe_failed": "Startup probe failed"
+    },
+    "active": "Active binary",
+    "alternate": "Alternate installation",
+    "unknown-version": "Version unavailable",
+    "keep-primary": "Keep the active binary shown by Navide if it is the version you expect.",
+    "remove-alternate": "Remove alternate installations using their original package manager; do not disable macOS security.",
+    "run-doctor": "Run the CLI diagnostic, then return here and re-detect.",
+    "open-terminal": "Open diagnostic terminal",
+    "terminal-opened": "Diagnostic command opened in Terminal.",
+    "terminal-failed": "Could not open Terminal: {error}",
+    "still-detected": "The issue is still detected. Check the paths above and try again.",
+    "close": "Close guide"
+  },
   "onboard": {
     "step": {
       "environment": "Environment",

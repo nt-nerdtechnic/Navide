@@ -3005,6 +3005,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             onboarding_deps.set_complete(bool(payload.get("complete", True)))
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
+        elif msg_type == "onboarding.cli_health.dismiss":
+            onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
+            await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
         # ── AI Chat ──────────────────────────────────────────────────────────────
         elif msg_type == "ai.chat.settings.get":
             await session.send_json(make_response(msg_id, msg_type, ai_chat_settings_store.get()))
