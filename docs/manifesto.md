@@ -30,6 +30,19 @@ Engineer → directs goals, agents, decisions, and evidence → software
 
 Navide does not aim to add another chat box to the old model. It aims to establish the working environment that comes after it.
 
+## Coordination is the new bottleneck
+
+When execution was scarce, the engineer's main constraint was how much code could be understood, written, and tested sequentially. When many agents can execute at once, a different set of constraints becomes dominant:
+
+- Who owns each outcome?
+- What context and boundaries does each session need?
+- Which tasks can proceed independently, and which must wait?
+- Where are decisions, changes, and assumptions in conflict?
+- When should human attention return?
+- What evidence makes a result trustworthy?
+
+More intelligence without coordination creates more motion, not necessarily better engineering. The Agent era therefore needs more than better models. It needs an operating environment for directing concurrent work without surrendering causality, quality, or human responsibility.
+
 ## The individual as an engineering organization
 
 Industrial organizations scaled by adding people, departments, management layers, meetings, and process. AI makes another form possible: a dynamic engineering organization assembled around one person's intent.
@@ -55,6 +68,14 @@ A project is more than its source files. It has intent, decisions, unfinished wo
 Navide keeps this personal engineering memory locally in `.agent-team/`. It belongs to the individual engineer, not to a hosted Navide account and not to the shared Git repository. It allows new sessions and different agents to inherit context without turning private prompts, token data, or terminal history into team-visible source artifacts.
 
 Source code remains the shared truth of the software project. `.agent-team/` is the private intelligence of the engineer directing it.
+
+## Proof before proclamation
+
+A revolutionary direction does not excuse vague claims. Navide must distinguish what works today from what remains a destination.
+
+The first proof is that Navide is used to build Navide. The next proof must come from other engineers directing real work on their own projects. Claims of replacement, autonomy, speed, safety, or adoption should grow only as product behavior and independent evidence justify them.
+
+The standard is simple: show the workflow, expose the boundary, and attach evidence to the result.
 
 ## Our direction
 

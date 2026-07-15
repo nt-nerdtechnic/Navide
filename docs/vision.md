@@ -8,6 +8,12 @@ Navide will become the primary engineering environment for the Agent era: a syst
 
 Give one engineer the execution capacity of an entire software team while preserving human intent, judgment, ownership, and final responsibility.
 
+## Category
+
+Navide is an AI-native software engineering environment: the engineering instrument for the Agent era.
+
+The category is broader than an AI editor, terminal multiplexer, or collection of chat sessions. Navide organizes engineering work around outcomes, agents, sessions, coordination, private project intelligence, human exceptions, and acceptance evidence. Files, editing, terminals, and Git remain first-class instruments inside that environment.
+
 ## Target user
 
 Navide is built first for a solo engineer who manages both the product and multiple AI agents. This includes independent developers, technical founders, and engineers who own an end-to-end product area.
@@ -27,6 +33,8 @@ The traditional IDE organizes work around files and direct code entry. An AI-nat
 - Private project intelligence that survives individual sessions
 
 The editor remains a first-class engineering tool, but it becomes one mode of intervention inside a larger system rather than the sole center of development.
+
+AI increases execution capacity. Coordination becomes the new bottleneck. Navide exists to make concurrent agent work owned, contextual, visible, interruptible, recoverable, and verifiable.
 
 ## The three engineering loops
 
@@ -116,3 +124,15 @@ Navide succeeds when:
 - The private Project Intelligence Layer makes each new session more effective than an isolated conversation.
 - Engineers spend more attention on direction, architecture, judgment, and acceptance than on repetitive execution.
 - A complete product can move from idea to continuous delivery without requiring a return to the traditional IDE workflow.
+
+## Evidence discipline
+
+Navide's ambition must remain larger than its current implementation without allowing the two to be confused.
+
+- README capability lists and the User Guide describe behavior available today.
+- The Roadmap describes directional outcomes and exit criteria, not delivery promises.
+- Founder use of Navide to develop Navide is valid dogfooding evidence, not customer validation.
+- Replacement, autonomy, productivity, safety, adoption, and performance claims require product or independent evidence appropriate to the claim.
+- Known security, privacy, distribution, and platform boundaries must remain visible in public communication.
+
+See [Product Positioning and Public Claims](product-positioning.md) for the canonical communication hierarchy and claim boundaries.

@@ -81,4 +81,22 @@ describe('CliHealthGuide', () => {
     })
     expect(wrapper.emitted('close')).toEqual([[]])
   })
+
+  it('offers a working alternate as an immediate Navide action', async () => {
+    const mock = createMockBackend('connected')
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: health },
+      global: { plugins: [i18n] },
+    })
+
+    await wrapper.get('.ch-use-binary').trigger('click')
+
+    expect(mock.sent).toContainEqual({
+      type: 'onboarding.cli_health.dismiss',
+      payload: { fingerprint: '0123456789abcdef' },
+    })
+    expect(wrapper.emitted('use-binary')).toEqual([[
+      { agentKey: 'claude', path: '/opt/homebrew/bin/claude', version: '2.1.168' },
+    ]])
+  })
 })

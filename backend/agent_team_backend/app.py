@@ -5,6 +5,7 @@ import functools
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -990,12 +991,20 @@ class AgentCliProbeError(RuntimeError):
         self.details = details
 
 
-def _probe_agent_cli_for_spawn(agent_key: str) -> dict[str, Any] | None:
+def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) -> dict[str, Any] | None:
     """Resolve and smoke-test an agent CLI before allocating its PTY."""
     dep = onboarding_deps.DEPS_BY_ID.get(agent_key)
     if dep is None or dep.group != "agent_cli":
         return None
-    executable = shutil.which(dep.check_cmd[0])
+    executable = None
+    try:
+        command_parts = shlex.split(_command_text(requested_command))
+    except ValueError:
+        command_parts = []
+    requested_executable = command_parts[0] if command_parts else ""
+    if requested_executable and Path(requested_executable).name == dep.check_cmd[0]:
+        executable = shutil.which(requested_executable)
+    executable = executable or shutil.which(dep.check_cmd[0])
     if not executable:
         raise AgentCliProbeError(
             f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
@@ -1084,7 +1093,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             agent_key = payload.get("agent_key") or ""
             env = dict(payload.get("env") or {})
             await _ensure_fresh_path_for_spawn(agent_key)
-            startup_probe = await asyncio.to_thread(_probe_agent_cli_for_spawn, agent_key)
+            startup_probe = await asyncio.to_thread(
+                _probe_agent_cli_for_spawn, agent_key, payload.get("command")
+            )
             if startup_probe:
                 metadata["startup_probe"] = startup_probe
             if agent_key == "codex":

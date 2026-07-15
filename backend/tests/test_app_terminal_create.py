@@ -65,7 +65,7 @@ def _stub_agent_cli_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         app,
         "_probe_agent_cli_for_spawn",
-        lambda agent_key: {
+        lambda agent_key, _command=None: {
             "agent_key": agent_key,
             "binary_path": f"/test/bin/{agent_key}",
             "version": "1.0.0",
@@ -354,7 +354,7 @@ async def test_spawn_path_refresh_skips_plain_terminal(
 async def test_terminal_create_probe_failure_returns_details_without_spawning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_probe(_agent_key: str) -> None:
+    def fail_probe(_agent_key: str, _command: object = None) -> None:
         raise app.AgentCliProbeError(
             "Claude Code startup probe was terminated by SIGKILL after 42ms (/opt/bin/claude)",
             {

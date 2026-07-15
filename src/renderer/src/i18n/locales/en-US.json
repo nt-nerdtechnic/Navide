@@ -601,6 +601,8 @@
     "remove-alternate": "Remove alternate installations using their original package manager; do not disable macOS security.",
     "run-doctor": "Run the CLI diagnostic, then return here and re-detect.",
     "open-terminal": "Open diagnostic terminal",
+    "use-version": "Use version {version} in Navide",
+    "use-version-note": "This is safe and reversible: it changes only the executable Navide launches. It does not uninstall anything or weaken macOS security.",
     "terminal-opened": "Diagnostic command opened in Terminal.",
     "terminal-failed": "Could not open Terminal: {error}",
     "still-detected": "The issue is still detected. Check the paths above and try again.",

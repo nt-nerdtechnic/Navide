@@ -8,6 +8,7 @@ Navide is the engineering instrument for the Agent era: an AI-native software en
 |---|---|---|
 | Everyone | [Manifesto](manifesto.md) | Understand the historical shift Navide is responding to and the beliefs guiding the product |
 | Everyone | [Product vision](vision.md) | Understand the target user, operating philosophy, product model, and definition of success |
+| Maintainers | [Product positioning](product-positioning.md) | Keep the category, message hierarchy, vocabulary, evidence, and public claims consistent |
 | New users | [Getting started](getting-started.md) | Install Navide from source, satisfy prerequisites, and complete the first launch |
 | Users | [User guide](user-guide.md) | Learn workspaces, panes, pipelines, manager coordination, Git, history, and editor workflows |
 | Users | [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
@@ -33,4 +34,6 @@ Navide is the engineering instrument for the Agent era: an AI-native software en
 - **Private project intelligence** under `.agent-team/` belongs to each user, stays local by default, and is excluded from Git; it is not a human-team synchronization layer.
 - Agent support and pipeline stages are described as configurable capabilities. Avoid fixed counts when users can change the registry.
 - Vision and roadmap documents may describe the intended future, while README capability lists and the user guide must describe shipped behavior accurately.
+- Founder use of Navide to develop Navide is first-party dogfooding evidence, not independent customer validation.
+- Public claims should follow [Product positioning](product-positioning.md) and distinguish shipped behavior, directional intent, and unsupported claims.
 - `roadmap.md` describes direction, not a delivery promise. Released behavior belongs in the changelog and current capabilities belong in the user guide.

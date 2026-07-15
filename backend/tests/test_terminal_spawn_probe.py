@@ -48,5 +48,35 @@ def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
     assert caught.value.details["exit_code"] == -9
 
 
+def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def which(name: str) -> str | None:
+        calls.append(name)
+        return name if name == "/opt/homebrew/bin/claude" else "/broken/bin/claude"
+
+    monkeypatch.setattr(app.shutil, "which", which)
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda command, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="2.1.168 (Claude Code)\n",
+            stderr="",
+        ) if command[0] == "/opt/homebrew/bin/claude" else None,
+    )
+
+    result = app._probe_agent_cli_for_spawn(
+        "claude", "'/opt/homebrew/bin/claude' --session-id test"
+    )
+
+    assert result is not None
+    assert result["binary_path"] == "/opt/homebrew/bin/claude"
+    assert result["version"] == "2.1.168"
+    assert calls == ["/opt/homebrew/bin/claude"]
+
+
 def test_plain_terminal_skips_agent_cli_probe() -> None:
     assert app._probe_agent_cli_for_spawn("terminal") is None

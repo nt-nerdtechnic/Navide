@@ -457,6 +457,24 @@ function makeStickyStr(key: string, fallback: string) {
   return r
 }
 const analyzerModel = makeStickyStr('agentTeam.analyzerModel', '')
+const CLI_BINARY_SETTING_PREFIX = 'agentTeam.cliBinary.'
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`
+}
+
+function commandWithSelectedBinary(agentKey: string, command: string): string {
+  const binary = settingsGet(`${CLI_BINARY_SETTING_PREFIX}${agentKey}`, '').trim()
+  const defaultCommand = agentSpecs.find((spec) => spec.agentKey === agentKey)?.defaultCommand ?? ''
+  if (!binary || !defaultCommand) return command
+  const escapedCommand = defaultCommand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return command.replace(new RegExp(`^${escapedCommand}(?=\\s|$)`), shellQuote(binary))
+}
+
+function selectCliBinary(payload: { agentKey: string; path: string; version: string }): void {
+  settingsSet(`${CLI_BINARY_SETTING_PREFIX}${payload.agentKey}`, payload.path)
+  cliHealthGuide.value = null
+}
 
 // When models first load (or after a refresh), if no model has been explicitly
 // chosen yet, pin the sticky to the backend's default so the selector is stable
@@ -475,12 +493,12 @@ function resolveCommand(agentKey: string, override: string): string {
   const spec = agentSpecs.find((s) => s.agentKey === agentKey)
   const trimmed = override.trim()
   // If user supplied an override, trust it verbatim.
-  if (trimmed) return trimmed
+  if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)
   const base = spec?.defaultCommand ?? agentKey
   if (yoloEnabled.value && spec?.skipPermissionFlag) {
-    return `${base} ${spec.skipPermissionFlag}`
+    return commandWithSelectedBinary(agentKey, `${base} ${spec.skipPermissionFlag}`)
   }
-  return base
+  return commandWithSelectedBinary(agentKey, base)
 }
 
 type InjectionStatus = 'pending' | 'scheduled' | 'sent' | 'failed' | 'skipped'
@@ -6409,6 +6427,7 @@ function paneIsCommander(p: ActivePane): boolean {
     :initial-health="cliHealthGuide"
     @close="cliHealthGuide = null"
     @resolved="cliHealthGuide = null"
+    @use-binary="selectCliBinary"
   />
   <!-- First-boot loading overlay: covers the shell until the backend settles,
        then fades out. Brand-only text so no i18n keys are needed. -->

@@ -2,13 +2,17 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
-import type { CliHealthEntry, CliHealthStatus, OnboardStatus } from '../composables/useOnboarding'
+import type { CliHealthCandidate, CliHealthEntry, CliHealthStatus, OnboardStatus } from '../composables/useOnboarding'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   initialHealth: CliHealthStatus
 }>()
-const emit = defineEmits<{ (e: 'close'): void; (e: 'resolved'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  (e: 'resolved'): void
+  (e: 'use-binary', payload: { agentKey: string; path: string; version: string }): void
+}>()
 const { t } = useI18n()
 
 type Step = 'detect' | 'repair' | 'verify'
@@ -31,6 +35,17 @@ async function openDiagnostics(entry: CliHealthEntry): Promise<void> {
   message.value = result?.ok
     ? t('cli-health.terminal-opened')
     : t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
+}
+
+async function useBinary(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
+  await props.backend.send('onboarding.cli_health.dismiss', {
+    fingerprint: health.value.fingerprint,
+  }).catch(() => {})
+  emit('use-binary', {
+    agentKey: entry.agent_key,
+    path: candidate.path,
+    version: candidate.version,
+  })
 }
 
 async function recheck(): Promise<void> {
@@ -90,7 +105,15 @@ async function dismiss(): Promise<void> {
                 <span v-if="candidate.signal" class="ch-signal">{{ candidate.signal }}</span>
               </div>
               <code class="ch-path">{{ candidate.path }}</code>
+              <button
+                v-if="candidate.status === 'ok' && !candidate.is_primary"
+                class="ch-btn primary ch-use-binary"
+                @click="useBinary(entry, candidate)"
+              >
+                {{ $t('cli-health.use-version', { version: candidate.version || $t('cli-health.unknown-version') }) }}
+              </button>
             </div>
+            <div class="ch-actions-note">{{ $t('cli-health.use-version-note') }}</div>
           </section>
         </template>
 
@@ -107,6 +130,16 @@ async function dismiss(): Promise<void> {
             <button class="ch-btn primary" @click="openDiagnostics(entry)">
               {{ $t('cli-health.open-terminal') }} · <code>{{ entry.diagnostic_command }}</code>
             </button>
+            <div class="ch-version-actions">
+              <button
+                v-for="candidate in entry.candidates.filter((item) => item.status === 'ok' && !item.is_primary)"
+                :key="candidate.resolved_path"
+                class="ch-btn primary"
+                @click="useBinary(entry, candidate)"
+              >
+                {{ $t('cli-health.use-version', { version: candidate.version || $t('cli-health.unknown-version') }) }}
+              </button>
+            </div>
           </section>
         </template>
 
@@ -189,6 +222,9 @@ h2 { margin: 0 0 8px; color: var(--text-bright); font-size: 22px; }
 .ch-candidate-top code { margin-left: auto; color: var(--text-bright); }
 .ch-signal { color: var(--danger-fg); font-weight: 700; }
 .ch-path { display: block; margin-top: 8px; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.ch-use-binary { margin-top: 12px; }
+.ch-actions-note { margin-top: 14px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.ch-version-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .repair ol { color: var(--text-secondary); line-height: 1.8; }
 .ch-verify { text-align: center; padding-top: 50px; }
 .ch-check { display: grid; place-items: center; width: 54px; height: 54px; margin: 0 auto 18px; border-radius: 50%; background: var(--success-emphasis); color: var(--text-on-emphasis); font-size: 25px; }
