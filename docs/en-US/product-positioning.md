@@ -1,6 +1,6 @@
 # Product Positioning and Public Claims
 
-English | [繁體中文](../zh-TW/product-positioning.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/product-positioning.md) | [日本語](../ja-JP/product-positioning.md) | [Documentation](README.md)
 
 This document keeps Navide's public story consistent across the README, website copy, demonstrations, release notes, presentations, and community posts. It is a communication reference, not a substitute for the user guide, roadmap, or release history.
 

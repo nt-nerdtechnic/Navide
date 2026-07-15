@@ -1,6 +1,6 @@
 # Product Roadmap
 
-English | [繁體中文](../zh-TW/roadmap.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/roadmap.md) | [日本語](../ja-JP/roadmap.md) | [Documentation](README.md)
 
 Navide's long-term direction is to become **the engineering instrument for the Agent era**: the primary environment in which one engineer directs an AI engineering force through the complete software lifecycle.
 

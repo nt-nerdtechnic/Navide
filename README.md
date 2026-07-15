@@ -8,7 +8,7 @@ Navide is an open-source, AI-native software engineering environment for one per
 
 It is not another chat panel inside the traditional IDE. Navide is being built as the environment that comes after it.
 
-English | [繁體中文](README.zh-TW.md)
+English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
 [Download v0.1.40 preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 

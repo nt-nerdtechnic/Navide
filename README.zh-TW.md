@@ -8,7 +8,7 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 
 它不是傳統 IDE 裡的另一個聊天面板。Navide 要成為傳統 IDE 之後的新工程環境。
 
-[English](README.md) | 繁體中文
+[English](README.md) | 繁體中文 | [日本語](README.ja-JP.md)
 
 [下載 v0.1.40 Preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
 

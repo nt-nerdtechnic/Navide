@@ -1,6 +1,6 @@
 # Troubleshooting
 
-English | [繁體中文](../zh-TW/troubleshooting.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/troubleshooting.md) | [日本語](../ja-JP/troubleshooting.md) | [Documentation](README.md)
 
 ## The app does not start
 

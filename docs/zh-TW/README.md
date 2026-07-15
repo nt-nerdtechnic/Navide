@@ -1,6 +1,6 @@
 # Navide 繁體中文文件
 
-[English](../en-US/README.md) | 繁體中文 | [語言入口](../README.md)
+[English](../en-US/README.md) | 繁體中文 | [日本語](../ja-JP/README.md) | [語言入口](../README.md)
 
 Navide 是 Agent 時代的工程利器：一套讓一個人透過建立、持續演進與精準介入，指揮多個 Coding Agent 的 AI-native 軟體工程環境。
 
@@ -50,9 +50,9 @@ Root [繁體中文 README](../../README.zh-TW.md) 負責介紹產品與目前發
 
 ## 文件模型
 
-- `README.md` 是公開英文產品與發布入口；`README.zh-TW.md` 是對應的繁體中文入口。
+- `README.md` 是公開英文產品與發布入口；`README.zh-TW.md` 與 `README.ja-JP.md` 分別是繁體中文與日文入口。
 - `docs/en-US/` 是英文文件原始基準。
-- `docs/zh-TW/` 鏡像已中文化的公開產品與核心使用者路徑；尚未翻譯的技術文件明確標示為 English。
+- `docs/zh-TW/` 與 `docs/ja-JP/` 分別鏡像已翻譯的公開產品與核心使用者路徑；尚未翻譯的技術文件明確標示為 English。
 - 英文文件是產品與技術事實的 Source of Truth。功能改變時先更新英文版，並在同一項變更中同步繁體中文版。
 - Vision 與 Roadmap 可以描述未來成果；README 能力清單與 User Guide 只描述目前行為。
 - 已發布行為記錄在 Changelog 與 GitHub Releases；Roadmap 描述方向，不承諾日期。

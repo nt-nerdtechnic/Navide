@@ -1,6 +1,6 @@
 # 產品 Roadmap
 
-[English](../en-US/roadmap.md) | 繁體中文 | [文件中心](README.md)
+[English](../en-US/roadmap.md) | 繁體中文 | [日本語](../ja-JP/roadmap.md) | [文件中心](README.md)
 
 Navide 的長期方向是成為 **Agent 時代的工程利器**：一套讓一位工程師在完整軟體生命週期中指揮 AI 工程力量的主要環境。
 

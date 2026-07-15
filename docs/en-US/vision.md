@@ -1,6 +1,6 @@
 # Product Vision
 
-English | [繁體中文](../zh-TW/vision.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/vision.md) | [日本語](../ja-JP/vision.md) | [Documentation](README.md)
 
 ## Vision
 

@@ -1,6 +1,6 @@
 # Navide Documentation
 
-English | [繁體中文](../zh-TW/README.md) | [Language gateway](../README.md)
+English | [繁體中文](../zh-TW/README.md) | [日本語](../ja-JP/README.md) | [Language gateway](../README.md)
 
 Navide is the engineering instrument for the Agent era: an AI-native software engineering environment in which one person directs multiple coding agents through creation, continuous evolution, and precise human intervention.
 
@@ -50,9 +50,9 @@ The root [README](../../README.md) introduces the product and current distributi
 
 ## Documentation model
 
-- `README.md` is the public English product and distribution entry point; `README.zh-TW.md` is its Traditional Chinese counterpart.
+- `README.md` is the public English product and distribution entry point; `README.zh-TW.md` and `README.ja-JP.md` are its Traditional Chinese and Japanese counterparts.
 - `docs/en-US/` is the canonical English documentation root.
-- `docs/zh-TW/` mirrors the localized public product and core user journey. Its index labels English-only fallbacks explicitly.
+- `docs/zh-TW/` and `docs/ja-JP/` mirror the localized public product and core user journey. Their indexes label English-only fallbacks explicitly.
 - English documents are the source of truth for product and technical facts. Update English first, then synchronize localized counterparts in the same change.
 - Vision and roadmap documents may describe intended future outcomes. README capability lists and the User Guide describe current behavior.
 - Released behavior belongs in the Changelog and GitHub Releases. The roadmap is directional and does not promise dates.

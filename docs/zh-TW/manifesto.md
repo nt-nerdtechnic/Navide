@@ -1,6 +1,6 @@
 # Navide 宣言
 
-[English](../en-US/manifesto.md) | 繁體中文 | [文件中心](README.md)
+[English](../en-US/manifesto.md) | 繁體中文 | [日本語](../ja-JP/manifesto.md) | [文件中心](README.md)
 
 ## 一種新的工程動力
 
