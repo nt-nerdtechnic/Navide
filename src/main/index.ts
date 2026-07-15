@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 import { installApplicationMenu } from './menu'
+import { lockPageZoom } from './web-contents-zoom'
 import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 import { setWindowDockTileBadge } from './dock-tile-badge'
@@ -1228,6 +1229,9 @@ function isAppNavigation(url: string): boolean {
   return false
 }
 app.on('web-contents-created', (_e, contents) => {
+  // Pane zoom changes terminal/editor font size only. Never let a retained
+  // Chromium/Electron page zoom scale the entire Navide interface.
+  lockPageZoom(contents)
   contents.on('will-navigate', (e, url) => {
     if (!isAppNavigation(url)) e.preventDefault()
   })
