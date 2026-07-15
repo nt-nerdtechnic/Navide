@@ -1829,7 +1829,9 @@ async function onReinject(paneId: string): Promise<void> {
   syncViews()
 }
 
-async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean } = { markRemoved: true }): Promise<void> {
+async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean } = {}): Promise<void> {
+  const markRemoved = opts.markRemoved ?? true
+  const force = opts.force ?? true
   clearPaneWidthRebuild(paneId)
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
@@ -1844,12 +1846,12 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   const ref = paneRefs[paneId]
   if (ref?.sessionId) {
     try {
-      await ref.kill({ force: opts.force })
+      await ref.kill({ force: force })
     } catch {
       /* ignore */
     }
   }
-  if (opts.markRemoved !== false && pane?.origin === 'pipeline' && pane.slotLabel && stageIndex >= 0) {
+  if (markRemoved && pane?.origin === 'pipeline' && pane.slotLabel && stageIndex >= 0) {
     await sendQuiet<ProjectPayload>('pipeline.slot_unspawn', {
       workspace_path: pane.workspacePath,
       stage_index: stageIndex,
@@ -2426,6 +2428,10 @@ function onFocusPane(paneId: string): void {
   })
 }
 
+const previewLogContent = ref<string>('')
+const previewLogTitle = ref<string>('')
+const previewLogOpen = ref<boolean>(false)
+
 async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   const ws = entry.workspacePath || currentWorkspace.value
   if (!ws) return
@@ -2438,9 +2444,20 @@ async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       logPath = `${ws}/.agent-team/manual/${ymd}/${entry.agentKey}-${entry.paneId.slice(0, 8)}.log`
     }
   }
-  const api = (window as Window & { agentTeam?: { openPath?: (target: string) => Promise<{ ok: boolean; error?: string }> } }).agentTeam
-  if (api?.openPath && logPath) {
-    await api.openPath(logPath)
+  const api = (window as Window & { agentTeam?: { readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string }> } }).agentTeam
+  if (api?.readFileFrom && logPath) {
+    try {
+      const res = await api.readFileFrom(logPath, 0)
+      if (res.ok) {
+        previewLogTitle.value = historyEntryLabel(entry)
+        previewLogContent.value = res.content
+        previewLogOpen.value = true
+      } else {
+        alert(`無法讀取紀錄檔：\n${logPath}\n${(res as any).error || ''}`)
+      }
+    } catch (e) {
+      alert(`讀取錯誤：\n${e}`)
+    }
   }
 }
 
@@ -7153,6 +7170,19 @@ function paneIsCommander(p: ActivePane): boolean {
         >Stop</button>
       </div>
     </div>
+
+    <!-- Log Preview Modal -->
+    <div v-if="previewLogOpen" class="log-preview-overlay" @click.self="previewLogOpen = false">
+      <div class="log-preview-modal">
+        <div class="log-preview-header">
+          <h3>{{ previewLogTitle }}</h3>
+          <button class="log-preview-close" @click="previewLogOpen = false">✕</button>
+        </div>
+        <div class="log-preview-body">
+          <pre>{{ previewLogContent }}</pre>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -8344,5 +8374,67 @@ body,
   margin: 0;
   height: 100%;
   background: var(--bg-inset);
+}
+
+/* Log Preview Modal */
+.log-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.log-preview-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  width: 80vw;
+  height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.log-preview-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bg-secondary);
+}
+.log-preview-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.log-preview-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px;
+}
+.log-preview-close:hover {
+  color: var(--text-primary);
+}
+.log-preview-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-default);
+}
+.log-preview-body pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 </style>
