@@ -588,6 +588,7 @@ interface SpawnHistoryEntry extends HistoryTitleEntry {
   removedAt?: string
   restoreMode?: 'memory-resume' | 'fresh'
   sessionHomeId?: string
+  runGroupId?: string
 }
 
 const panes = ref<ActivePane[]>([])
@@ -1576,6 +1577,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     spawnedAt: new Date().toISOString(),
     restoreMode: opts.restoreMode,
     sessionHomeId: pane.sessionHomeId,
+    runGroupId: pane.runGroupId,
   })
   await nextTick()
   const ref = paneRefs[id]
@@ -1700,8 +1702,8 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
 // the same resume path as boot-restore: validate → buildResumeCommand → spawnPane
 // with isResume/skipRoleInjection. No role is injected (the session already
 // carries its own context).
-async function onManualResume(payload: ResumePayload): Promise<boolean> {
-  const { agentKey, workspacePath } = payload
+async function onManualResume(payload: { agentKey: string, workspacePath: string, sessionId: string, customName?: string, runGroupId?: string }): Promise<boolean> {
+  const { agentKey, workspacePath, runGroupId } = payload
   const sessionId = normalizeResumeSessionId(agentKey, payload.sessionId)
   if (!sessionId) return false
   // Authoritative existence check: the datalist may list a since-deleted id, or
@@ -1729,7 +1731,7 @@ async function onManualResume(payload: ResumePayload): Promise<boolean> {
     commandOverride,
     workspacePath,
     origin: 'manual',
-    runGroupId: spawnGroupId || undefined,
+    runGroupId: runGroupId || spawnGroupId || undefined,
     isResume: true,
     skipRoleInjection: true,
     restoreMode: 'memory-resume',
@@ -1744,7 +1746,7 @@ async function onManualResume(payload: ResumePayload): Promise<boolean> {
       command: commandOverride,
       session_id: sessionId,
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
-      run_group_id: spawnGroupId,
+      run_group_id: runGroupId || spawnGroupId || undefined,
     })
     if (payload.customName) {
       await sendQuiet('project.rename_pane', {
@@ -2473,6 +2475,7 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       workspacePath: entry.workspacePath || currentWorkspace.value,
       sessionId,
       customName: entry.customName,
+      runGroupId: entry.runGroupId,
     })
     if (resumed) {
       return
@@ -5598,6 +5601,13 @@ async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promis
     pane_id: pane.id,
     run_group_id: runGroupId,
   })
+  if (resp !== null) {
+    const histEntry = spawnHistory.value.find((e) => e.paneId === pane.id)
+    if (histEntry) {
+      histEntry.runGroupId = runGroupId
+      appendSpawnHistory(ws, []) // trigger save
+    }
+  }
   return resp !== null
 }
 
