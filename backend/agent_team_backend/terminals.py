@@ -551,8 +551,6 @@ class TerminalService:
         async def _drain() -> None:
             try:
                 for piece in self._split_chunks(combined):
-                    if session.closed:
-                        break
                     await self._emit(self._build_output_event(session, piece))
             finally:
                 if not session.closed:
