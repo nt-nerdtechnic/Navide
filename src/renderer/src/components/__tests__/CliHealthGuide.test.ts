@@ -62,6 +62,8 @@ describe('CliHealthGuide', () => {
     expect(wrapper.text()).toContain('/Users/test/.nvm/bin/claude')
     expect(wrapper.text()).toContain('2.1.168')
     expect(wrapper.text()).toContain('/opt/homebrew/bin/claude')
+    expect(wrapper.get('.ch-dialog').attributes('role')).toBe('dialog')
+    expect(wrapper.get('.ch-dialog').attributes('aria-modal')).toBe('true')
   })
 
   it('persists the exact fingerprint when the user skips the guide', async () => {
