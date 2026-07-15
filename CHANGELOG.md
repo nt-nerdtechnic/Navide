@@ -4,6 +4,17 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.42] — 2026-07-15 — unsigned preview
+
+### Changed
+
+- Refactor terminal UI: update terminal methods, fit logic, and temporarily disable auto-rebuild on resize to prevent unexpected CLI resumes.
+- Update `spawnHistory` custom name logic to support session home normalization.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.41] — 2026-07-15 — unsigned preview
 
 ### Added

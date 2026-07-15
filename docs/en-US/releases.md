@@ -1,6 +1,6 @@
 # Versioning and In-App Releases
 
-> **Current distribution status:** v0.1.41 is the latest explicitly labeled unsigned macOS arm64 preview prerelease. It provides direct GitHub downloads but is not an official signed/notarized stable release and is not selected by the stable updater channel. A future signed release must use a higher version.
+> **Current distribution status:** v0.1.42 is the latest explicitly labeled unsigned macOS arm64 preview prerelease. It provides direct GitHub downloads but is not an official signed/notarized stable release and is not selected by the stable updater channel. A future signed release must use a higher version.
 
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
