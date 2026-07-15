@@ -145,6 +145,10 @@ class TokensStore:
         self._recover_persistence_journal()
         # RLock because reset() calls snapshot() while holding the lock.
         self._lock = RLock()
+        # Serialize complete disk commits. In-memory mutations only need
+        # _lock, but two writers must never share the fixed .tmp/journal paths
+        # or let an older snapshot land after a newer synchronous lifecycle save.
+        self._flush_lock = RLock()
         self._workspace_cache: dict[str, dict[str, Any]] = {}
         self._global_data: dict[str, Any] = self._load_global()
         self._legacy_paths_to_remove: set[Path] = set()
@@ -180,10 +184,10 @@ class TokensStore:
             tmp.unlink(missing_ok=True)
             raise
 
-    def _recover_persistence_journal(self) -> None:
+    def _recover_persistence_journal(self) -> bool:
         """Finish a previously interrupted batched commit before loading state."""
         if not self._persistence_journal_path.exists():
-            return
+            return True
         try:
             journal = json.loads(
                 self._persistence_journal_path.read_text(encoding="utf-8")
@@ -199,8 +203,10 @@ class TokensStore:
                 self._atomic_write(Path(str(item.get("path") or "")), item["data"])
             self._persistence_journal_path.unlink(missing_ok=True)
             log.info("recovered interrupted token persistence batch")
-        except (OSError, ValueError, json.JSONDecodeError) as err:
+            return True
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as err:
             log.warning("token persistence journal recovery failed: %s", err)
+            return False
 
     def _workspace_path(self, workspace_path: str) -> Path:
         return self._workspace_base_dir / _ws_dir_name(workspace_path) / TOKENS_FILE
@@ -268,12 +274,6 @@ class TokensStore:
             log.warning("global tokens.json corrupt (%s); starting fresh", err)
             return _empty_global_doc()
 
-    def _save_global(self) -> None:
-        try:
-            self._atomic_write(self._global_path, self._global_data)
-        except Exception as err:  # noqa: BLE001
-            log.warning("failed to write global tokens.json: %s", err)
-
     # ───────────────────────── Batch save loop ──────────────────────
 
     def _save_loop(self) -> None:
@@ -283,6 +283,16 @@ class TokensStore:
 
     def _flush_dirty(self) -> None:
         """Write any dirty state to disk (called from save loop or flush())."""
+        with self._flush_lock:
+            self._flush_dirty_serialized()
+
+    def _flush_dirty_serialized(self) -> None:
+        """Commit one dirty snapshot while the caller owns _flush_lock."""
+        # Never replace an unfinished journal with a newer batch. Apply it
+        # first; if the underlying I/O problem persists, keep it for retry or
+        # next-start recovery and leave newer mutations dirty in memory.
+        if not self._recover_persistence_journal():
+            return
         with self._lock:
             dirty_ingestion = self._dirty_ingestion_state
             dirty_workspaces = set(self._dirty_workspaces)
@@ -316,12 +326,14 @@ class TokensStore:
             self._persistence_journal_path.unlink(missing_ok=True)
             if dirty_ingestion:
                 self._remove_legacy_paths()
-        except (OSError, ValueError) as err:
+        except (OSError, TypeError, ValueError) as err:
             log.warning("failed to commit token persistence batch: %s", err)
 
     def flush(self) -> None:
         """Flush all pending dirty state synchronously. Call before shutdown."""
         self._stop_event.set()
+        if threading.current_thread() is not self._save_thread:
+            self._save_thread.join()
         self._flush_dirty()
 
     def _load_legacy_recorded_keys(self) -> set[str]:
@@ -367,15 +379,6 @@ class TokensStore:
         self._ingestion_state["legacy_event_keys"] = sorted(self._legacy_event_keys)
         self._ingestion_state["recent_event_keys"] = list(self._recent_event_keys)
         return deepcopy(self._ingestion_state)
-
-    def _save_ingestion_state(self) -> None:
-        try:
-            with self._lock:
-                snapshot = self._state_snapshot_locked()
-            self._atomic_write(self._ingestion_state_path, snapshot)
-            self._remove_legacy_paths()
-        except (OSError, ValueError) as err:
-            log.warning("failed to write token ingestion state: %s", err)
 
     def _remove_legacy_paths(self) -> None:
         for path in list(self._legacy_paths_to_remove):
@@ -423,6 +426,8 @@ class TokensStore:
         if not current:
             return True
         if candidate.get("kind") == "sqlite" and current.get("kind") == "sqlite":
+            if candidate.get("identity") != current.get("identity"):
+                return True
             return int(candidate.get("row_id") or 0) >= int(current.get("row_id") or 0)
         if candidate.get("kind") == "jsonl" and current.get("kind") == "jsonl":
             if candidate.get("identity") != current.get("identity"):
@@ -436,6 +441,8 @@ class TokensStore:
         if not current:
             return True
         if candidate.get("kind") == "sqlite" and current.get("kind") == "sqlite":
+            if candidate.get("identity") != current.get("identity"):
+                return True
             return int(candidate.get("row_id") or 0) > int(current.get("row_id") or 0)
         if candidate.get("kind") == "jsonl" and current.get("kind") == "jsonl":
             if candidate.get("identity") != current.get("identity"):
@@ -473,7 +480,7 @@ class TokensStore:
         run_dir: str,
     ) -> dict[str, Any]:
         """Archive any in-progress current_run, then start a fresh one."""
-        with self._lock:
+        with self._flush_lock, self._lock:
             doc = self._load_workspace(workspace_path)
             if doc["current_run"]:
                 prev = doc["current_run"]
@@ -484,7 +491,7 @@ class TokensStore:
             return doc["current_run"]
 
     def end_run(self, workspace_path: str) -> None:
-        with self._lock:
+        with self._flush_lock, self._lock:
             doc = self._load_workspace(workspace_path)
             if doc["current_run"]:
                 doc["current_run"]["ended_at"] = _now_iso()
@@ -534,7 +541,10 @@ class TokensStore:
 
         with self._lock:
             scope = f"workspace:{replay_workspace}" if replay_workspace else "global"
-            scoped_key = f"{scope}::{dedup_key}" if dedup_key else ""
+            generation = str((ingestion_checkpoint or {}).get("identity") or "")
+            scoped_key = (
+                f"{scope}::{generation}::{dedup_key}" if dedup_key else ""
+            )
             legacy_matches = {
                 key for key in (dedup_key, legacy_dedup_key)
                 if key and key in self._legacy_event_keys
@@ -645,7 +655,7 @@ class TokensStore:
 
     def reset(self, scope: str, workspace_path: str | None = None) -> dict[str, Any]:
         """Reset scope = 'run' | 'workspace' | 'global'."""
-        with self._lock:
+        with self._flush_lock, self._lock:
             if scope == "run" and workspace_path:
                 doc = self._load_workspace(workspace_path)
                 # Replace current_run with a fresh blank (preserve run_id/task)
@@ -656,24 +666,24 @@ class TokensStore:
                         task=cur["task"],
                         run_dir=cur.get("run_dir", ""),
                     )
-                self._save_workspace(workspace_path)
+                self._dirty_workspaces.add(workspace_path)
             elif scope == "workspace" and workspace_path:
                 self._workspace_cache[workspace_path] = _empty_workspace_doc()
-                self._save_workspace(workspace_path)
+                self._dirty_workspaces.add(workspace_path)
                 for entry in self._ingestion_state["files"].values():
                     if isinstance(entry, dict):
                         entry.get("workspaces", {}).pop(workspace_path, None)
                 self._dirty_ingestion_state = True
-                self._save_ingestion_state()
             elif scope == "global":
                 self._global_data = _empty_global_doc()
-                self._save_global()
+                self._dirty_global = True
                 self._ingestion_state = _empty_ingestion_state()
                 self._legacy_event_keys.clear()
                 self._recent_event_keys.clear()
                 self._recent_event_key_set.clear()
                 self._dirty_ingestion_state = True
-                self._save_ingestion_state()
             else:
                 raise ValueError(f"unknown reset scope: {scope!r}")
-            return self.snapshot(workspace_path)
+            result = self.snapshot(workspace_path)
+            self._flush_dirty()
+            return result

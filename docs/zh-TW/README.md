@@ -11,7 +11,7 @@ Navide 是 Agent 時代的工程利器：一套讓一個人透過建立、持續
 | 所有人 | [Navide 宣言](manifesto.md) | 理解 Navide 回應的時代變化，以及引導產品發展的信念 |
 | 所有人 | [產品願景](vision.md) | 理解目標使用者、運作哲學、產品模型與成功定義 |
 | 維護者 | [產品定位與公開主張](product-positioning.md) | 維持產品類別、訊息層次、用詞、證據與公開主張一致 |
-| 新使用者 | [開始使用](getting-started.md) | 從原始碼安裝 Navide、完成前置需求與首次啟動 |
+| 新使用者 | [開始使用](getting-started.md) | 下載未簽章 Preview 或從原始碼安裝 Navide，並完成首次啟動 |
 | 使用者 | [使用指南](user-guide.md) | 學習 Workspace、Pane、Pipeline、Manager 協調、Git、History 與 Editor 工作流 |
 | 使用者 | [疑難排解](troubleshooting.md) | 解決啟動、權限、Agent Session、Analyzer 與 Token Tracking 問題 |
 | 所有人 | [隱私與資料流](privacy.md) | 理解哪些資料留在本機、哪些功能可能連線第三方，以及憑證儲存位置 |

@@ -256,6 +256,30 @@ def test_incremental_parse_uses_row_id_watermark(tmp_path: Path, monkeypatch) ->
     assert second.checkpoint["row_id"] == 2
 
 
+def test_incremental_parse_resets_row_watermark_for_replaced_db(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    ws = tmp_path / "proj"
+    db = tmp_path / ".grok" / "grok.db"
+    con = _create_db(db)
+    _add_workspace(con, "w" * 16, str(ws))
+    _add_session(con, "abc123def456", "w" * 16, str(ws))
+    _add_usage(con, "abc123def456", 10, 2)
+    con.close()
+    first = reader.parse_incremental(db, {})
+
+    db.unlink()
+    replacement = _create_db(db)
+    _add_workspace(replacement, "w" * 16, str(ws))
+    _add_session(replacement, "abc123def456", "w" * 16, str(ws))
+    _add_usage(replacement, "abc123def456", 30, 7)
+    replacement.close()
+    second = reader.parse_incremental(db, first.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
+    assert second.checkpoint["identity"] != first.checkpoint["identity"]
+
+
 # ── marker detection / session binding ──────────────────────────────────────
 
 def test_marker_binding_announces_grok_session(tmp_path: Path, monkeypatch) -> None:

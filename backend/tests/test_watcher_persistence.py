@@ -13,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend.log_readers.base import LogReader, TokenSinkResult, TokenUsage
+from agent_team_backend.log_readers.base import (
+    IncrementalParseResult,
+    LogReader,
+    TokenSinkResult,
+    TokenUsage,
+)
 from agent_team_backend.log_readers.watcher import LogWatcher
 from agent_team_backend.tokens_store import TokensStore
 
@@ -53,6 +58,29 @@ class _StaticReader(LogReader):
                 dedup_key=key,
             )
         ]
+
+
+class _SharedReader(_StaticReader):
+    """One source file containing events for two different workspaces."""
+
+    def parse_incremental(self, path: Path, checkpoint: dict) -> IncrementalParseResult:
+        if checkpoint:
+            return IncrementalParseResult([], checkpoint)
+        events = [
+            TokenUsage(
+                vendor="grok", input_tokens=10, output_tokens=1, cwd="/ws/other",
+                session_id="s1", file_path=str(path), dedup_key="usage:1",
+                checkpoint={"kind": "sqlite", "row_id": 1, "identity": "1:1"},
+            ),
+            TokenUsage(
+                vendor="grok", input_tokens=20, output_tokens=2, cwd="/ws/target",
+                session_id="s2", file_path=str(path), dedup_key="usage:2",
+                checkpoint={"kind": "sqlite", "row_id": 2, "identity": "1:1"},
+            ),
+        ]
+        return IncrementalParseResult(
+            events, {"kind": "sqlite", "row_id": 2, "identity": "1:1"}
+        )
 
 
 async def _drain_briefly(watcher: LogWatcher, ms: int = 1500) -> None:
@@ -181,3 +209,28 @@ async def test_corrupt_seen_file_starts_empty(tmp_path: Path) -> None:
     w.start(); await _drain_briefly(w, 1500); w.stop()
     # Fallback: start empty → emit once.
     assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_replay_continues_past_foreign_shared_source_rows(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "logs"
+    root.mkdir()
+    source = root / "grok.db"
+    source.write_text("")
+    handled: list[str] = []
+
+    async def sink(usage: TokenUsage) -> TokenSinkResult:
+        handled.append(usage.cwd)
+        if usage.cwd != usage.replay_workspace:
+            return TokenSinkResult(True)  # safely skipped for this replay scope
+        return TokenSinkResult(True, usage.replay_workspace)
+
+    watcher = LogWatcher(sink=sink)
+    watcher.add_reader(_SharedReader(root))
+    await watcher._process_path(source, "/ws/target")
+
+    assert handled == ["/ws/other", "/ws/target"]
+    checkpoint = watcher._local_checkpoint(str(source.resolve()), "/ws/target")
+    assert checkpoint["row_id"] == 2

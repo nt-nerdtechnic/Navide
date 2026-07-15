@@ -9,11 +9,13 @@ _schedule_tokens_broadcast.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from agent_team_backend import app
+from agent_team_backend.log_readers import TokenUsage
 
 
 @pytest.fixture(autouse=True)
@@ -60,3 +62,47 @@ async def test_new_burst_after_window_broadcasts_again(monkeypatch: pytest.Monke
         app._schedule_tokens_broadcast("/ws/a")
         await asyncio.sleep(0.05)
         assert mock_broadcast.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_workspace_replay_safely_skips_rows_for_another_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app.attribution,
+        "attribute",
+        lambda _usage: SimpleNamespace(
+            workspace_path="/ws/other", slot_key=None, pane_id=None, stage_id=None
+        ),
+    )
+    record = AsyncMock()
+    monkeypatch.setattr(app.tokens_store, "record", record)
+    usage = TokenUsage(
+        vendor="grok", input_tokens=10, output_tokens=2, cwd="/ws/other",
+        session_id="s1", file_path="/logs/grok.db", dedup_key="usage:1",
+        replay_workspace="/ws/target",
+    )
+
+    result = await app._on_log_token_usage(usage)
+    assert result.handled is True
+    assert result.workspace_path == ""
+    record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_normal_external_event_remains_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app.attribution,
+        "attribute",
+        lambda _usage: SimpleNamespace(
+            workspace_path=None, slot_key=None, pane_id=None, stage_id=None
+        ),
+    )
+    usage = TokenUsage(
+        vendor="claude", input_tokens=10, output_tokens=2, cwd="/external",
+        session_id="s1", file_path="/logs/session.jsonl", dedup_key="m::r",
+    )
+    result = await app._on_log_token_usage(usage)
+    assert result.handled is False

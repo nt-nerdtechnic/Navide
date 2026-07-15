@@ -4,6 +4,26 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.40] — 2026-07-15 — unsigned preview
+
+### Added
+
+- Publish the first directly downloadable macOS arm64 preview through GitHub Releases.
+- Add a complete Traditional Chinese path for the public product and core user documentation.
+- Add regression coverage for token checkpoint rotation, persistence batching, shutdown ordering, and workspace replay.
+
+### Changed
+
+- Batch token metric persistence and serialize journal recovery so shutdown and lifecycle saves cannot be overwritten by older snapshots.
+- Reset Codex and Grok ingestion checkpoints when their underlying log generation changes.
+- Include recent rendered terminal context alongside durable CLI transcript references during handoff.
+- Refine terminal zoom shortcuts and pane drag affordances.
+- Update English and Traditional Chinese installation guidance with direct downloads and safe Gatekeeper instructions.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ### Documentation
 
 - Reposition Navide as the engineering instrument for the Agent era: an AI-native environment for one engineer directing an AI engineering force.

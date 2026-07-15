@@ -125,9 +125,10 @@ export function buildCliSessionReference(context: CliSessionContext): string {
 
 export function buildPaneContextPaste(context: CliSessionContext, buffer: string): string | null {
   if (!buffer.trim() && !context.conversationLogPath && !context.sessionId) return null
-  // A readable transcript path is the primary cross-vendor handoff. Inline
-  // terminal output only when that durable reference is unavailable.
-  const tail = context.conversationLogPath ? '' : bufferTail(buffer, CLI_PASTE_BUFFER_CAP).trim()
+  // Keep the durable transcript reference AND the rendered terminal excerpt.
+  // The path lets the receiving agent read the complete log, while the inline
+  // excerpt gives it useful context immediately without an extra tool call.
+  const tail = bufferTail(buffer, CLI_PASTE_BUFFER_CAP).trim()
   const who = context.agentKey
     ? `${context.label || 'pane'} (${context.agentKey})`
     : context.label || 'pane'
@@ -135,7 +136,7 @@ export function buildPaneContextPaste(context: CliSessionContext, buffer: string
   const scope = truncated ? ` — last ${CLI_PASTE_BUFFER_CAP} chars` : ''
   const reference = buildCliSessionReference(context)
   const logHint = context.conversationLogPath
-    ? 'For the complete conversation, read conversation_log with a read-only file command.'
+    ? 'The recent rendered context is included below. For the complete conversation, read conversation_log with a read-only file command.'
     : 'The excerpt below is the available conversation context.'
   const excerpt = tail
     ? `\n--- recent terminal excerpt${scope} ---\n${tail}\n--- end recent terminal excerpt ---`
@@ -216,7 +217,7 @@ export function buildCliContextChip(
   const name = reply.label || payload.label || payload.agentKey || 'pane'
   const reference = buildCliSessionReference(context)
   const header = `// CLI session context — captured: ${new Date(capturedAt).toISOString()}`
-  const tail = context.conversationLogPath ? '' : bufferTail(buffer, CLI_CHIP_BUFFER_CAP)
+  const tail = bufferTail(buffer, CLI_CHIP_BUFFER_CAP)
   const excerpt = tail ? `\n// Recent terminal excerpt\n\`\`\`\n${tail}\n\`\`\`` : ''
   return {
     kind: 'chip',

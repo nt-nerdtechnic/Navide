@@ -11,7 +11,7 @@ Navide is the engineering instrument for the Agent era: an AI-native software en
 | Everyone | [Manifesto](manifesto.md) | Understand the historical shift Navide is responding to and the beliefs guiding the product |
 | Everyone | [Product vision](vision.md) | Understand the target user, operating philosophy, product model, and definition of success |
 | Maintainers | [Product positioning](product-positioning.md) | Keep the category, message hierarchy, vocabulary, evidence, and public claims consistent |
-| New users | [Getting started](getting-started.md) | Install Navide from source, satisfy prerequisites, and complete the first launch |
+| New users | [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
 | Users | [User guide](user-guide.md) | Learn workspaces, panes, pipelines, manager coordination, Git, history, and editor workflows |
 | Users | [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
 | Everyone | [Privacy and data flows](privacy.md) | Understand what stays local, what can connect to third parties, and where credentials are stored |

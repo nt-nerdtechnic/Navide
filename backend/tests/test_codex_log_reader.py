@@ -206,3 +206,18 @@ def test_incremental_parse_handles_truncation_without_negative_delta(
     assert rotated.events == []
     assert rotated.checkpoint["input_total"] == 50
     assert rotated.checkpoint["output_total"] == 30
+
+
+def test_incremental_parse_counts_replaced_file_as_new_generation(
+    fake_codex_session: Path,
+) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [_token_count_event(500, 0, 200, 0)])
+    first = reader.parse_incremental(fake_codex_session, {})
+
+    replacement = fake_codex_session.with_suffix(".replacement")
+    _write_jsonl(replacement, [_token_count_event(700, 0, 300, 0)])
+    replacement.replace(fake_codex_session)
+    replaced = reader.parse_incremental(fake_codex_session, first.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in replaced.events] == [(700, 300)]
+    assert replaced.checkpoint["identity"] != first.checkpoint["identity"]

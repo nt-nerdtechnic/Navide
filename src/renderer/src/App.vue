@@ -7593,12 +7593,17 @@ function paneIsCommander(p: ActivePane): boolean {
   border: 1px solid var(--border-muted);
   border-radius: 6px;
   padding: 9px 12px;
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
   display: flex;
   flex-direction: column;
   gap: 3px;
   transition: border-color 0.12s, box-shadow 0.12s;
   overflow: hidden;
+}
+.spotlight-thumb:active,
+.spotlight-thumb.pane-dragging {
+  cursor: grabbing;
 }
 .spotlight-thumb:hover {
   border-color: var(--accent-muted);
@@ -7688,9 +7693,14 @@ function paneIsCommander(p: ActivePane): boolean {
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-muted);
-  cursor: pointer;
+  cursor: grab;
+  user-select: none;
   transition: background 0.12s, border-color 0.12s;
   min-width: 0;
+}
+.meeting-item:active,
+.meeting-item.pane-dragging {
+  cursor: grabbing;
 }
 .meeting-item:hover {
   background: var(--bg-subtle);

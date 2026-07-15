@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createMockBackend, withScope } from './mockBackend'
 
-// Font zoom is app-wide: ⌘+ grows, ⌘- shrinks, ⌘= / ⌘0 reset, and EVERY terminal
+// Font zoom is app-wide: ⌘+ grows, ⌘- shrinks, ⌘0 resets, and EVERY terminal
 // pane changes together. It is bound at the window level (useTerminalFontSize),
 // not on xterm's custom key handler — that one only fires while a terminal's
 // helper textarea has focus, and could only ever resize that one pane.
@@ -144,7 +144,7 @@ describe('terminal font zoom — app-wide', () => {
   it('⌘+ grows beyond the former maximum', async () => {
     const a = await spawnPane('pane-a')
 
-    for (let i = 0; i < 30; i++) await press('+', { shiftKey: true })
+    for (let i = 0; i < 30; i++) await press('+', { shiftKey: true, code: 'Equal' })
 
     expect(a.opts.fontSize).toBe(42)
     a.scope.stop()
@@ -159,10 +159,10 @@ describe('terminal font zoom — app-wide', () => {
     a.scope.stop()
   })
 
-  it('⌘= grows too — it is the key people actually press for zoom in', async () => {
+  it('⌘+ grows when + and = share the Equal key', async () => {
     const a = await spawnPane('pane-a')
 
-    await press('=') // no Shift: the bare key on the keycap
+    await press('=', { shiftKey: true, code: 'Equal' })
     expect(a.opts.fontSize).toBe(13)
 
     a.scope.stop()
@@ -171,10 +171,10 @@ describe('terminal font zoom — app-wide', () => {
   it('⌘0 resets to the default size', async () => {
     const a = await spawnPane('pane-a')
 
-    for (let i = 0; i < 5; i++) await press('+', { shiftKey: true })
+    for (let i = 0; i < 5; i++) await press('+', { shiftKey: true, code: 'Equal' })
     expect(a.opts.fontSize).toBe(17)
 
-    await press('0')
+    await press('0', { code: 'Digit0' })
     expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
 
     a.scope.stop()
@@ -182,8 +182,8 @@ describe('terminal font zoom — app-wide', () => {
 
   it('a pane opened after a zoom starts at the current size', async () => {
     const a = await spawnPane('pane-a')
-    await press('+', { shiftKey: true })
-    await press('+', { shiftKey: true })
+    await press('+', { shiftKey: true, code: 'Equal' })
+    await press('+', { shiftKey: true, code: 'Equal' })
     expect(a.opts.fontSize).toBe(14)
 
     const b = await spawnPane('pane-b') // spawned while zoomed
@@ -195,7 +195,7 @@ describe('terminal font zoom — app-wide', () => {
 
   it('persists the size so it survives a restart', async () => {
     const a = await spawnPane('pane-a')
-    await press('+', { shiftKey: true })
+    await press('+', { shiftKey: true, code: 'Equal' })
 
     expect(localStorage.getItem('terminal.fontSize')).toBe('13')
     a.scope.stop()
@@ -207,6 +207,7 @@ describe('terminal font zoom — app-wide', () => {
 
     await press('-', { metaKey: false })
     await press('=', { metaKey: false })
+    await press('=', { code: 'Equal' })
     await press('-', { altKey: true })
     await press('-', { ctrlKey: true })
 

@@ -2,9 +2,11 @@
 
 [English](getting-started.md) | [繁體中文](zh-TW/getting-started.md)
 
-Navide currently supports macOS 13 or newer and is installed from source. A signed downloadable release is planned but is not yet published.
+Navide supports macOS 13 or newer on Apple silicon. The [v0.1.40 GitHub prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) provides unsigned DMG and ZIP downloads. It is not signed or notarized by Apple.
 
-## What you need
+To install the preview, download the DMG, copy Navide to Applications, then Control-click the app in Finder and choose **Open**. If macOS still blocks it, use **System Settings → Privacy & Security → Open Anyway** for Navide. Do not disable Gatekeeper globally.
+
+## What you need to install from source
 
 - macOS 13+
 - Node.js 22+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from agent_team_backend.tokens_store import RECENT_EVENT_KEYS_LIMIT, TokensStore
@@ -243,3 +244,112 @@ def test_interrupted_batch_journal_recovers_before_load(tmp_path: Path) -> None:
     assert store.snapshot(None)["global"]["all_time"] == global_doc["all_time"]
     assert not (tmp_path / "token-persistence-journal.json").exists()
     store.flush()
+
+
+def test_lifecycle_save_cannot_be_overwritten_by_older_batch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    workspace = str(tmp_path / "workspace")
+    store.record(
+        workspace,
+        source="cli",
+        vendor="claude",
+        input_tokens=10,
+        dedup_key="event",
+        ingestion_file="/logs/session.jsonl",
+        ingestion_checkpoint={"kind": "jsonl", "offset": 10, "identity": "1:1"},
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    original = store._atomic_write
+    blocked_once = False
+
+    def blocking_write(path: Path, data: dict) -> None:
+        nonlocal blocked_once
+        if path.name == "token-persistence-journal.json" and not blocked_once:
+            blocked_once = True
+            entered.set()
+            assert release.wait(timeout=5)
+        original(path, data)
+
+    monkeypatch.setattr(store, "_atomic_write", blocking_write)
+    background = threading.Thread(target=store._flush_dirty)
+    background.start()
+    assert entered.wait(timeout=5)
+
+    lifecycle = threading.Thread(
+        target=lambda: store.start_run(
+            workspace, run_id="r1", task="task", run_dir="runs/r1"
+        )
+    )
+    lifecycle.start()
+    lifecycle.join(timeout=0.05)
+    assert lifecycle.is_alive(), "start_run must wait for the older batch commit"
+
+    release.set()
+    background.join(timeout=5)
+    lifecycle.join(timeout=5)
+    assert not background.is_alive()
+    assert not lifecycle.is_alive()
+
+    persisted = json.loads(store._workspace_path(workspace).read_text())
+    assert persisted["current_run"]["run_id"] == "r1"
+    assert persisted["cumulative"]["totals"]["calls"] == 1
+    store.flush()
+
+
+def test_interrupted_workspace_reset_recovers_totals_and_checkpoint_together(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    workspace = str(tmp_path / "workspace")
+    store.record(
+        workspace,
+        source="cli",
+        vendor="claude",
+        input_tokens=10,
+        dedup_key="event",
+        ingestion_file="/logs/session.jsonl",
+        ingestion_checkpoint={"kind": "jsonl", "offset": 10, "identity": "1:1"},
+    )
+    store.flush()
+
+    original = store._atomic_write
+    failed = False
+
+    def fail_after_journal(path: Path, data: dict) -> None:
+        nonlocal failed
+        if path == store._workspace_path(workspace) and not failed:
+            failed = True
+            raise OSError("simulated crash after journal")
+        original(path, data)
+
+    monkeypatch.setattr(store, "_atomic_write", fail_after_journal)
+    store.reset("workspace", workspace)
+    assert (tmp_path / "token-persistence-journal.json").exists()
+
+    # The same live process must recover the pending reset before committing a
+    # newer event; otherwise the next journal would overwrite the reset batch.
+    store.record(
+        workspace,
+        source="cli",
+        vendor="claude",
+        input_tokens=3,
+        dedup_key="event-after-reset",
+        ingestion_file="/logs/session.jsonl",
+        ingestion_checkpoint={"kind": "jsonl", "offset": 20, "identity": "1:1"},
+    )
+    store.flush()
+    assert not (tmp_path / "token-persistence-journal.json").exists()
+
+    recovered = _store(tmp_path)
+    snap = recovered.snapshot(workspace)
+    assert snap["workspace"]["cumulative"]["totals"] == {
+        "input": 3, "output": 0, "calls": 1,
+    }
+    assert recovered.get_ingestion_checkpoint(
+        "/logs/session.jsonl", workspace
+    )["offset"] == 20
+    recovered.flush()

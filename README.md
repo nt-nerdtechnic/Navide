@@ -111,16 +111,24 @@ Read [Privacy and Data Flows](docs/privacy.md) and the [Security Policy](SECURIT
 
 ## Try Navide
 
-Navide currently supports macOS 13+ and is installed from source. A signed public download has not yet been released.
+Navide supports macOS 13+ on Apple silicon. The v0.1.40 preview is available as an unsigned build:
 
-### Prerequisites
+- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.40/Navide-0.1.40-arm64.dmg)
+- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.40/Navide-0.1.40-arm64.zip)
+- [Verify SHA-256 checksums](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.40/SHA256SUMS.txt)
+
+This preview is not signed or notarized by Apple. After copying Navide to Applications, Control-click the app in Finder and choose **Open**. If macOS still blocks it, go to **System Settings → Privacy & Security** and choose **Open Anyway** for Navide. Do not bypass Gatekeeper globally.
+
+For a development checkout, install from source instead.
+
+### Source prerequisites
 
 - Node.js 22+ and pnpm 10+
 - Python 3.12+ and uv 0.11+
 - At least one supported coding CLI
 - Optional: Ollama or a local GGUF model for analysis
 
-### Install and run
+### Install from source
 
 ```bash
 git clone https://github.com/nt-nerdtechnic/Navide.git

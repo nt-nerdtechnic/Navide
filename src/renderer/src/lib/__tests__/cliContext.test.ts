@@ -193,7 +193,7 @@ describe('buildCliContextChip', () => {
   const payload = { paneId: 'p-1', agentKey: 'claude', label: 'My Pane', sessionId: 's-drag' }
   const capturedAt = Date.UTC(2026, 6, 12, 10, 30, 0)
 
-  it('builds a metadata-only chip when the conversation log is available', () => {
+  it('builds a chip with both the durable conversation reference and rendered content', () => {
     const result = buildCliContextChip(payload, {
       label: 'Reply Pane',
       agentKey: 'claude',
@@ -212,7 +212,8 @@ describe('buildCliContextChip', () => {
         'source_agent: "claude"\n' +
         'source_workspace: "/workspace"\n' +
         'source_session_id: "s-1"\n' +
-        'conversation_log: "/workspace/.agent-team/manual/claude.log"',
+        'conversation_log: "/workspace/.agent-team/manual/claude.log"\n' +
+        '// Recent terminal excerpt\n```\nhello output\n```',
       sourceId: 'cli-pane:p-1'
     })
   })
@@ -316,14 +317,14 @@ describe('buildPaneContextPaste', () => {
     conversationLogPath: '/workspace/.agent-team/manual/claude-pane-a.log'
   }
 
-  it('builds a compact session reference without duplicating the logged buffer', () => {
+  it('builds a session reference and includes rendered content even when a log is available', () => {
     const text = buildPaneContextPaste(context, 'line one\nline two') as string
     expect(text).toContain('--- CLI session context: Backend (claude) ---')
     expect(text).toContain('source_pane_id: "pane-a"')
     expect(text).toContain('source_session_id: "session-a"')
     expect(text).toContain('conversation_log: "/workspace/.agent-team/manual/claude-pane-a.log"')
-    expect(text).not.toContain('line one')
-    expect(text).not.toContain('recent terminal excerpt')
+    expect(text).toContain('For the complete conversation, read conversation_log')
+    expect(text).toContain('--- recent terminal excerpt ---\nline one\nline two')
   })
 
   it('omits the agent key from the header when the pane has none', () => {

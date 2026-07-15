@@ -581,11 +581,11 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
     try:
         attributed = attribution.attribute(usage)
         if usage.replay_workspace:
-            if (
-                attributed.workspace_path is not None
-                and attributed.workspace_path != usage.replay_workspace
-            ):
-                return TokenSinkResult(False)
+            if attributed.workspace_path != usage.replay_workspace:
+                # Shared sources (notably Grok's single SQLite DB) contain rows
+                # for many workspaces. This row is safely consumed for the
+                # target workspace, but must not be attributed or retried.
+                return TokenSinkResult(True)
             workspace_path = usage.replay_workspace
         else:
             workspace_path = attributed.workspace_path
@@ -644,9 +644,9 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
     is_new = workspace_path not in attribution.known_workspaces()
     attribution.register_workspace(workspace_path)
     if is_new and _log_watcher is not None:
-        # New association → previously-parsed files now have a workspace and
-        # need re-emit so cumulative populates. tokens_store dedup makes
-        # already-counted events safe. Scope to THIS workspace so we don't
+        # New association → parse from this workspace's independent checkpoint
+        # so cumulative populates without double-counting Global. Scope to THIS
+        # workspace so we don't
         # re-parse the entire (multi-GB) Claude history and stall the loop.
         #
         # force_rescan still enumerates session files synchronously (Codex

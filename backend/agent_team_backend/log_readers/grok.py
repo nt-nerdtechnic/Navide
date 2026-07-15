@@ -133,18 +133,32 @@ class GrokLogReader(LogReader):
     ) -> IncrementalParseResult:
         if path.name != _DB_NAME:
             return IncrementalParseResult([], dict(checkpoint))
-        last_row_id = max(0, int(checkpoint.get("row_id") or 0))
+        try:
+            stat = path.stat()
+        except OSError:
+            return IncrementalParseResult([], dict(checkpoint))
+        identity = f"{stat.st_dev}:{stat.st_ino}"
+        replaced = bool(checkpoint.get("identity") and checkpoint.get("identity") != identity)
+        last_row_id = 0 if replaced else max(0, int(checkpoint.get("row_id") or 0))
         rows = self._query(
             path,
             _USAGE_SQL.replace("ORDER BY u.id", f"WHERE u.id > {last_row_id} ORDER BY u.id"),
         )
         if rows is None:
             return IncrementalParseResult([], dict(checkpoint))
+        if not rows and last_row_id:
+            max_rows = self._query(path, "SELECT COALESCE(MAX(id), 0) FROM usage_events")
+            max_row_id = int(max_rows[0][0]) if max_rows else last_row_id
+            if max_row_id < last_row_id:
+                last_row_id = 0
+                rows = self._query(path, _USAGE_SQL)
+                if rows is None:
+                    return IncrementalParseResult([], dict(checkpoint))
         out: list[TokenUsage] = []
         next_row_id = last_row_id
         for row_id, session_id, model, inp, outp, created_at, ws_root in rows:
             next_row_id = max(next_row_id, int(row_id))
-            cursor = {"kind": "sqlite", "row_id": next_row_id}
+            cursor = {"kind": "sqlite", "row_id": next_row_id, "identity": identity}
             input_tokens = _int(inp)
             output_tokens = _int(outp)
             if input_tokens == 0 and output_tokens == 0:
@@ -161,7 +175,10 @@ class GrokLogReader(LogReader):
                 model=str(model or ""),
                 checkpoint=cursor,
             ))
-        return IncrementalParseResult(out, {"kind": "sqlite", "row_id": next_row_id})
+        return IncrementalParseResult(
+            out,
+            {"kind": "sqlite", "row_id": next_row_id, "identity": identity},
+        )
 
     def find_sessions_by_marker(
         self, markers: Iterable[str]

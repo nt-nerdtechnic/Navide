@@ -2,9 +2,11 @@
 
 [繁體中文](getting-started.md) | [English](../getting-started.md) | [文件中心](README.md)
 
-Navide 目前支援 macOS 13 以上版本，並由原始碼安裝。正式簽章下載版本已列入規劃，但尚未發布。
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。[v0.1.40 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) 提供未簽章的 DMG 與 ZIP 下載；這些檔案尚未經 Apple 簽章或 Notarization。
 
-## 前置需求
+若要安裝 Preview，請下載 DMG、將 Navide 複製到「應用程式」，然後在 Finder 中按住 Control 點擊 App 並選擇「打開」。若 macOS 仍阻擋執行，請前往「系統設定 → 隱私權與安全性」，針對 Navide 選擇「強制打開」。請勿停用整個系統的 Gatekeeper。
+
+## 從原始碼安裝的前置需求
 
 - macOS 13+
 - Node.js 22+

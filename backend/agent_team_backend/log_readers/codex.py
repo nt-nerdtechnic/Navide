@@ -227,13 +227,18 @@ class CodexLogReader(LogReader):
         checkpoint: dict,
     ) -> IncrementalParseResult:
         """Read only the rollout tail while persisting cumulative baselines."""
-        records, next_checkpoint, _rotated = read_jsonl_tail(path, checkpoint)
-        prev_in = max(0, int(checkpoint.get("input_total") or 0))
-        prev_out = max(0, int(checkpoint.get("output_total") or 0))
+        records, next_checkpoint, rotated = read_jsonl_tail(path, checkpoint)
+        replaced = bool(
+            rotated
+            and checkpoint.get("identity")
+            and checkpoint.get("identity") != next_checkpoint.get("identity")
+        )
+        prev_in = 0 if replaced else max(0, int(checkpoint.get("input_total") or 0))
+        prev_out = 0 if replaced else max(0, int(checkpoint.get("output_total") or 0))
         latest_in, latest_out = prev_in, prev_out
-        cwd = str(checkpoint.get("cwd") or "")
-        model = str(checkpoint.get("model") or "")
-        session_id = str(checkpoint.get("session_id") or path.stem)
+        cwd = "" if replaced else str(checkpoint.get("cwd") or "")
+        model = "" if replaced else str(checkpoint.get("model") or "")
+        session_id = path.stem if replaced else str(checkpoint.get("session_id") or path.stem)
         latest_event: dict | None = None
         latest_end = int(next_checkpoint.get("offset") or 0)
 
