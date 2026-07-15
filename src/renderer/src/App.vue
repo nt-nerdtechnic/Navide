@@ -6684,9 +6684,6 @@ function paneIsCommander(p: ActivePane): boolean {
             >
               <div class="agent-history-main">
                 <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
-                <span class="ah-badge ah-role">
-                  <template v-if="entry.agentKey">{{ agentSpecs.find(s => s.agentKey === entry.agentKey)?.label ?? entry.agentKey }}<template v-if="entry.roleLabel"> · </template></template>{{ entry.roleLabel }}
-                </span>
                 <span class="ah-origin">{{ entry.origin }}</span>
                 <span
                   v-if="entry.restoreMode === 'memory-resume'"
@@ -6698,6 +6695,9 @@ function paneIsCommander(p: ActivePane): boolean {
                 </span>
               </div>
               <div class="agent-history-meta">
+                <span class="ah-role">
+                  <template v-if="entry.agentKey">{{ agentSpecs.find(s => s.agentKey === entry.agentKey)?.label ?? entry.agentKey }}<template v-if="entry.roleLabel"> · </template></template>{{ entry.roleLabel }}
+                </span>
                 <span class="ah-time">{{ new Date(entry.spawnedAt).toLocaleTimeString() }}</span>
                 <span v-if="entry.sessionId" class="ah-session" :title="entry.sessionId">
                   🔖 {{ entry.sessionId.slice(0, 8) }}…
@@ -8107,9 +8107,11 @@ function paneIsCommander(p: ActivePane): boolean {
   font-size: 11px;
   color: var(--text-bright);
 }
-.ah-badge.ah-role {
-  color: var(--accent-bright);
-  border-color: var(--accent-muted);
+.ah-role {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ah-origin {
   font-size: 10px;
