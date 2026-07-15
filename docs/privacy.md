@@ -1,17 +1,25 @@
 # Privacy and Data Flows
 
-Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, workspace state, and orchestration logic run on your Mac. Data can leave the machine when you enable or use an external service.
+Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your Mac. Data can leave the machine when you enable or use an external service.
 
 ## Data kept locally by Navide
 
 Depending on enabled features, Navide stores:
 
-- Workspace state and run artifacts under `<workspace>/.agent-team/`
+- Private per-user project intelligence and run artifacts under `<workspace>/.agent-team/`
 - Roles, pipelines, recent workspaces, UI settings, analyzer settings, and AI Chat settings in the application data directory
 - Token-attribution and deduplication metadata derived from local CLI logs
 - Optional AI provider API keys in a local settings file protected with restrictive file permissions (`0600` on supported systems)
 
 Navide does not operate a project telemetry service and does not require a Navide account.
+
+## Private project intelligence
+
+`.agent-team/` belongs to the individual user of that local workspace. It is excluded from Git and is not intended to synchronize state between human team members. It can contain private prompts, task context, session identifiers, agent output, run events, handoffs, token summaries, and future coordination metadata.
+
+Do not remove `.agent-team/` from `.gitignore` or publish it as a substitute for intentionally authored project documentation. If an artifact must be shared, review and export only the specific specification, decision, report, patch, or evidence required.
+
+A future portability feature should use explicit local export/import with redaction and selection controls. Navide must not silently turn private project intelligence into cloud or repository state.
 
 ## Features that may communicate externally
 
@@ -45,6 +53,6 @@ Cross-agent handoffs can include task context and prior-stage output. Automatic 
 
 ## Removing local data
 
-Project run data can be removed from the workspace's `.agent-team/` directory after active sessions are stopped. Application-wide settings and histories live in the Navide application data directory. Back up any configuration you intend to preserve before deletion.
+Private project intelligence can be removed from the workspace's `.agent-team/` directory after active sessions are stopped. Deleting it can remove resumability, run history, attribution, and accumulated context without deleting the source repository. Application-wide settings and histories live in the Navide application data directory. Back up any configuration you intend to preserve before deletion.
 
 For vulnerability reporting, see the [Security Policy](../SECURITY.md).

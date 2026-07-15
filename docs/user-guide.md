@@ -1,6 +1,18 @@
 # User Guide
 
-## Mental model
+## Product model
+
+Navide is designed for one engineer directing multiple AI agents. The primary interaction is not always editing a file; it is setting an outcome, coordinating sessions, observing progress, handling meaningful exceptions, and accepting verified results.
+
+Daily work moves through three loops:
+
+1. **Genesis** uses a pipeline to turn an idea into a first working prototype.
+2. **Evolution** repeatedly develops, tests, fixes, and refines an existing project through one or more agent sessions.
+3. **Intervention** lets the engineer inspect or directly change the result through Diff, editor, terminal, diagnostics, Git, and review tools.
+
+The current Pipeline implements the Genesis loop. Manual panes and maintenance mode provide the early Evolution workflow. The editor and review surfaces provide Intervention.
+
+## Runtime mental model
 
 Navide has three levels of work:
 
@@ -12,11 +24,13 @@ Navide has three levels of work:
 
 The welcome screen lists recent workspaces, supports pinning, and marks missing folders. Opening a workspace restores its UI state and eligible sessions. Before switching or closing a workspace, finish or abort active work that must not be interrupted.
 
-Navide stores project-scoped data under `.agent-team/` inside the workspace. Do not commit generated run state unless your team has intentionally chosen to version it.
+Navide stores private, per-user project intelligence under `.agent-team/` inside the workspace. This directory is excluded from Git and must not be treated as shared team state. It can contain task context, session metadata, run history, handoffs, and token information that belong to the individual engineer's local workflow.
+
+Source code and explicitly shared documentation remain the repository's team-visible truth. If information from `.agent-team/` must be shared, turn it into an intentional artifact such as a specification, architecture decision, test report, issue, commit, or pull request.
 
 ## Manual agent panes
 
-Use manual spawn for exploration, maintenance, or one-off work that does not need a full pipeline.
+Use manual spawn for exploration, maintenance, or an Evolution task that does not need a full Genesis pipeline.
 
 - Choose an agent and role.
 - Review the launch command before spawning.
@@ -48,6 +62,21 @@ Use a manager when a task benefits from decomposition or parallel ownership. For
 
 Start conservatively. YOLO and Full Auto can cause agents to modify files or execute commands without another user confirmation.
 
+## Management by exception
+
+Navide's long-term operating philosophy is to let agents continue through reversible, observable work and return attention to the engineer only when human judgment adds value. Current automation modes are early controls, not a complete policy engine.
+
+Intervene when:
+
+- Requirements have materially different valid interpretations
+- Architecture or product choices have lasting consequences
+- Sessions conflict over ownership, files, or technical direction
+- Tests and stated acceptance criteria disagree
+- Credentials, payments, deployment, publication, destructive operations, or external systems are involved
+- The result requires subjective product or quality judgment
+
+Routine exploration, reversible edits, local tests, diagnostics, and repairs should eventually proceed without approval noise while remaining visible and interruptible.
+
 ## History and token tracking
 
 History is an append-only timeline for pipeline, stage, pane, question, analyzer, handoff, and warning events. Run history is stored under `.agent-team/runs/` and can be filtered or exported.
@@ -64,8 +93,10 @@ Review changes before committing, especially after automated or parallel runs. N
 
 The editor uses Monaco and provides file editing, diagnostics, plan rendering, diffs, conflicts, and AI-assisted workflows. AI Chat can use a local model or configured cloud providers. Provider-specific API keys and model settings are optional and are stored locally when entered.
 
-These tools support the orchestration workflow; Navide's primary role remains coordinating and observing agents rather than replacing every feature of a general-purpose IDE.
+These tools are the Intervention surface of the wider engineering environment. Navide's goal is eventually to provide the complete professional workflow without requiring a traditional IDE as the user's primary environment.
 
 ## Settings and portability
 
 Settings cover roles, pipelines, MCP servers, analyzer behavior, AI providers, appearance, and keyboard shortcuts. Exported settings redact API keys and tokens. Review MCP commands and environment variables before enabling third-party servers.
+
+`.agent-team/` is not currently a portability mechanism. Any future migration between machines should use an explicit local export/import flow with redaction and retention controls rather than Git synchronization.
