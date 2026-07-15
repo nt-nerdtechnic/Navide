@@ -125,7 +125,16 @@ export interface SpawnOptions {
  * uniform and contain the protocol difference here.
  */
 export function encodeShiftEnter(agentKey?: string): string {
-  return agentKey?.toLowerCase() === 'codex' ? '\x1b[13;2u' : '\x1b\r'
+  const key = agentKey?.toLowerCase()
+  if (key === 'codex') return '\x1b[13;2u'
+  // Claude, Grok, and Antigravity all support bracketed paste.
+  // Using bracketed paste LF guarantees a literal newline insertion without submitting.
+  if (key === 'claude' || key === 'claude-code' || key === 'agy' || key === 'antigravity' || key === 'grok') {
+    return '\x1b[200~\n\x1b[201~'
+  }
+  // Plain shells (bash/zsh) treat \x1b\r as Enter and do not always have bracketed paste enabled.
+  // Ctrl+V (\x16) + Ctrl+J (\x0a) is the standard way to insert a literal newline in readline/ZLE.
+  return '\x16\x0a'
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -721,8 +730,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // ── Shift+Enter: newline without submitting ────────────────────────────
       // Traditional PTYs do not preserve the Shift modifier on Enter. Present
       // one shortcut to the user, then encode it for the active agent's input
-      // protocol (CSI-u for Codex, Claude-compatible ESC+CR otherwise).
+      // protocol (CSI-u for Codex, bracketed paste for modern TUIs, Ctrl+V for bash).
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
         pasteText(encodeShiftEnter(activeAgentKey))
         return false
       }
