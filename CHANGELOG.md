@@ -4,6 +4,24 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.41] — 2026-07-15 — unsigned preview
+
+### Added
+
+- Add a complete Japanese path for the public product and core user documentation.
+- Add focused backend coverage for Claude hook installation and stop-hook payload forwarding.
+
+### Changed
+
+- Preserve Agent History custom titles when session-home paths require normalization.
+- Support Command–Equal as an additional terminal zoom-in shortcut.
+- Organize English, Traditional Chinese, and Japanese documentation under symmetric locale navigation.
+- Update all supported-language download guidance to the v0.1.41 preview.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.40] — 2026-07-15 — unsigned preview
 
 ### Added

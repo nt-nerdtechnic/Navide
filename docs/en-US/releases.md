@@ -1,6 +1,6 @@
 # Versioning and In-App Releases
 
-> **Current distribution status:** v0.1.40 is an explicitly labeled unsigned macOS arm64 preview prerelease. It provides direct GitHub downloads but is not an official signed/notarized stable release and is not selected by the stable updater channel. A future signed release must use a higher version.
+> **Current distribution status:** v0.1.41 is the latest explicitly labeled unsigned macOS arm64 preview prerelease. It provides direct GitHub downloads but is not an official signed/notarized stable release and is not selected by the stable updater channel. A future signed release must use a higher version.
 
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
@@ -123,8 +123,8 @@ without changing the version, creating a commit, or creating a tag. Add
 running app. Local output is written to `dist-local/`.
 
 `pnpm dist` creates the full unsigned DMG, ZIP, blockmaps, and updater metadata.
-Those formats are part of the production contract. The v0.1.40 prerelease is a
-one-time, clearly labeled unsigned preview; it must remain a prerelease and its
-assets must never be represented as signed or notarized. Formal stable versions
+Those formats are part of the production contract. Unsigned preview releases
+must remain prereleases, and their assets must never be represented as signed
+or notarized. Formal stable versions
 are prepared only with `./release.sh X.Y.Z`, and signed artifacts are produced
 only by GitHub Actions after `production` Environment approval.
