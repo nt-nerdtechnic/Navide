@@ -1,59 +1,16 @@
 # Navide Documentation
 
-English | [繁體中文](zh-TW/README.md)
+Choose a language for the complete documentation set.
 
-Navide is the engineering instrument for the Agent era: an AI-native software engineering environment in which one person directs multiple coding agents through creation, continuous evolution, and precise human intervention.
+選擇文件語言。
 
-The root [README](../README.md) introduces the product and current distribution. This index organizes the complete documentation set.
-
-## Product
-
-| Document | Purpose |
+| Language | Documentation |
 |---|---|
-| [Manifesto](manifesto.md) | The historical shift Navide responds to and the beliefs guiding the product |
-| [Product vision](vision.md) | Target user, product model, ownership, operating philosophy, and definition of success |
-| [Product positioning](product-positioning.md) | Category, message hierarchy, vocabulary, evidence, and public-claim boundaries |
-| [Product roadmap](roadmap.md) | Directional path from today's system to a complete AI-native engineering environment |
+| English (United States) | [docs/en-US/README.md](en-US/README.md) |
+| 繁體中文（台灣） | [docs/zh-TW/README.md](zh-TW/README.md) |
 
-## Use Navide
+English is the canonical source for product and technical facts. Traditional Chinese mirrors the public product and core user journey; its index identifies technical documents that currently remain English-only.
 
-| Document | Purpose |
-|---|---|
-| [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
-| [User guide](user-guide.md) | Learn workspaces, panes, pipelines, coordination, Git, history, and editor workflows |
-| [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
+英文是產品與技術事實的原始基準。繁體中文涵蓋公開產品與核心使用者路徑；尚未翻譯的技術文件會在繁中索引中明確標示。
 
-## Trust and safety
-
-| Document | Purpose |
-|---|---|
-| [Privacy and data flows](privacy.md) | Understand what stays local, what may reach third parties, and where credentials are stored |
-| [Security policy](../SECURITY.md) | Understand supported security boundaries and report vulnerabilities privately |
-
-## Development and maintenance
-
-| Document | Purpose |
-|---|---|
-| [Contributing](../CONTRIBUTING.md) | Set up a development environment and submit changes |
-| [Architecture](architecture.md) | Understand process boundaries, state ownership, and major services |
-| [CLI extension guide](cli-extension-guide.md) | Add or maintain an AI coding CLI integration |
-| [Release guide](releases.md) | Version, package, sign, notarize, publish, and recover a release |
-
-## Reference
-
-| Document | Purpose |
-|---|---|
-| [Keyboard shortcuts](keybindings.md) | Review default keyboard commands and interaction patterns |
-| [Editor design](editor-design.md) | Understand the current editor architecture and design direction |
-| [Historical milestone record](spec.md) | Review the original implementation milestone record |
-| [Changelog](../CHANGELOG.md) | Review shipped changes by version |
-
-## Documentation model
-
-- `README.md` is the public English product and distribution entry point; `README.zh-TW.md` is its Traditional Chinese counterpart.
-- `docs/` is the canonical English documentation root. Existing paths remain stable for public links.
-- `docs/zh-TW/` mirrors the localized public product and core user journey. Its index labels English-only fallbacks explicitly.
-- English documents are the source of truth for product and technical facts. Update English first, then synchronize localized counterparts in the same change.
-- Vision and roadmap documents may describe intended future outcomes. README capability lists and the User Guide describe current behavior.
-- Released behavior belongs in the Changelog and GitHub Releases. The roadmap is directional and does not promise dates.
-- Private Project Intelligence under `.agent-team/` belongs to each user, stays local by default, and is excluded from Git; it is not a human-team synchronization layer.
+[Repository README](../README.md) | [繁體中文 README](../README.zh-TW.md)

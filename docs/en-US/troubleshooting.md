@@ -1,6 +1,6 @@
 # Troubleshooting
 
-English | [繁體中文](zh-TW/troubleshooting.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/troubleshooting.md) | [Documentation](README.md)
 
 ## The app does not start
 
@@ -83,4 +83,4 @@ Include:
 - Expected and actual behavior
 - Redacted logs or screenshots
 
-Use the repository's [bug report template](https://github.com/nt-nerdtechnic/Navide/issues/new?template=bug_report.yml). Report vulnerabilities privately according to the [Security Policy](../SECURITY.md).
+Use the repository's [bug report template](https://github.com/nt-nerdtechnic/Navide/issues/new?template=bug_report.yml). Report vulnerabilities privately according to the [Security Policy](../../SECURITY.md).

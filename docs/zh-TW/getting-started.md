@@ -1,6 +1,6 @@
 # 開始使用
 
-[English](../getting-started.md) | 繁體中文 | [文件中心](README.md)
+[English](../en-US/getting-started.md) | 繁體中文 | [文件中心](README.md)
 
 Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。[v0.1.40 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) 提供未簽章的 DMG 與 ZIP 下載；這些檔案尚未經 Apple 簽章或 Notarization。
 

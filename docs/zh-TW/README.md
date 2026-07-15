@@ -1,6 +1,6 @@
 # Navide 繁體中文文件
 
-[English](../README.md) | 繁體中文
+[English](../en-US/README.md) | 繁體中文 | [語言入口](../README.md)
 
 Navide 是 Agent 時代的工程利器：一套讓一個人透過建立、持續演進與精準介入，指揮多個 Coding Agent 的 AI-native 軟體工程環境。
 
@@ -35,23 +35,23 @@ Root [繁體中文 README](../../README.zh-TW.md) 負責介紹產品與目前發
 | 文件 | 用途 |
 |---|---|
 | [Contributing — English](../../CONTRIBUTING.md) | 建立開發環境並提交變更 |
-| [Architecture — English](../architecture.md) | 理解 Process Boundary、State Ownership 與主要 Service |
-| [CLI Extension Guide — English](../cli-extension-guide.md) | 新增或維護 AI Coding CLI 整合 |
-| [Release Guide — English](../releases.md) | 版本、封裝、簽章、Notarization、發布與復原 Release |
+| [Architecture — English](../en-US/architecture.md) | 理解 Process Boundary、State Ownership 與主要 Service |
+| [CLI Extension Guide — English](../en-US/cli-extension-guide.md) | 新增或維護 AI Coding CLI 整合 |
+| [Release Guide — English](../en-US/releases.md) | 版本、封裝、簽章、Notarization、發布與復原 Release |
 
 ## 參考資料
 
 | 文件 | 用途 |
 |---|---|
-| [Keyboard Shortcuts — English](../keybindings.md) | 查閱預設鍵盤 Command 與互動方式 |
-| [Editor Design — English](../editor-design.md) | 理解目前 Editor Architecture 與設計方向 |
-| [Historical Milestone Record — English](../spec.md) | 查閱原始實作 Milestone 紀錄 |
+| [Keyboard Shortcuts — English](../en-US/keybindings.md) | 查閱預設鍵盤 Command 與互動方式 |
+| [Editor Design — English](../en-US/editor-design.md) | 理解目前 Editor Architecture 與設計方向 |
+| [Historical Milestone Record — English](../en-US/spec.md) | 查閱原始實作 Milestone 紀錄 |
 | [Changelog — English](../../CHANGELOG.md) | 依版本查閱已交付變更 |
 
 ## 文件模型
 
 - `README.md` 是公開英文產品與發布入口；`README.zh-TW.md` 是對應的繁體中文入口。
-- `docs/` 是英文文件原始基準。為維持公開連結穩定，現有路徑不搬動。
+- `docs/en-US/` 是英文文件原始基準。
 - `docs/zh-TW/` 鏡像已中文化的公開產品與核心使用者路徑；尚未翻譯的技術文件明確標示為 English。
 - 英文文件是產品與技術事實的 Source of Truth。功能改變時先更新英文版，並在同一項變更中同步繁體中文版。
 - Vision 與 Roadmap 可以描述未來成果；README 能力清單與 User Guide 只描述目前行為。

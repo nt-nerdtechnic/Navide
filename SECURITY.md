@@ -27,7 +27,7 @@ The project aims to acknowledge reports within 48 hours and provide a status upd
 
 Navide's Electron application, Python backend, PTYs, orchestration state, and workspace data run on the user's machine. The backend listens on loopback and is not designed to be exposed as a remote service.
 
-Navide is local-first, not universally offline. External coding CLIs, cloud AI providers, Context7, search, Git hosts, MCP servers, and update checks can communicate with third parties when used. See [Privacy and Data Flows](docs/privacy.md).
+Navide is local-first, not universally offline. External coding CLIs, cloud AI providers, Context7, search, Git hosts, MCP servers, and update checks can communicate with third parties when used. See [Privacy and Data Flows](docs/en-US/privacy.md).
 
 ### Credentials
 
@@ -64,4 +64,4 @@ MCP servers and provider integrations execute according to their own configurati
 - Provider log readers depend on files or databases owned by external tools
 - Automatic update security depends on signed, notarized release artifacts and GitHub Release metadata
 
-The [Product Roadmap](docs/roadmap.md) defines policy, isolation, and secret handling as a dedicated long-term horizon. Documentation must not claim those controls have shipped before they are implemented and verified.
+The [Product Roadmap](docs/en-US/roadmap.md) defines policy, isolation, and secret handling as a dedicated long-term horizon. Documentation must not claim those controls have shipped before they are implemented and verified.

@@ -189,7 +189,7 @@ Sessions should publish structured progress back to the Project Intelligence Lay
 - Local API-key file permissions are defense in depth, not a secret vault.
 - Git history and run artifacts can preserve data after a working file is deleted.
 
-See [Privacy and Data Flows](privacy.md) and [SECURITY.md](../SECURITY.md).
+See [Privacy and Data Flows](privacy.md) and [SECURITY.md](../../SECURITY.md).
 
 ## Architectural direction
 

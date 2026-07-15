@@ -1,6 +1,6 @@
 # 隱私與資料流
 
-[English](../privacy.md) | 繁體中文 | [文件中心](README.md)
+[English](../en-US/privacy.md) | 繁體中文 | [文件中心](README.md)
 
 Navide 採用 **Local-first**，但不代表所有情況都完全離線。Electron 應用程式、Python Backend、Terminal Session、私有專案智慧、Workspace 狀態與調度邏輯都在你的 Mac 上執行；當你啟用或使用外部服務時，資料可能離開裝置。
 

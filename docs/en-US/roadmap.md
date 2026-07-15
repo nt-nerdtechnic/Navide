@@ -1,12 +1,12 @@
 # Product Roadmap
 
-English | [繁體中文](zh-TW/roadmap.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/roadmap.md) | [Documentation](README.md)
 
 Navide's long-term direction is to become **the engineering instrument for the Agent era**: the primary environment in which one engineer directs an AI engineering force through the complete software lifecycle.
 
 The destination is larger than a multi-agent terminal manager or control plane. An engineer should eventually be able to understand, create, navigate, edit, run, debug, test, review, version, and deliver software without returning to a traditional IDE as the primary working environment.
 
-This roadmap is directional. It does not promise dates or claim that future capabilities have shipped. Released behavior belongs in [CHANGELOG.md](../CHANGELOG.md); current behavior belongs in the [User Guide](user-guide.md); the underlying purpose belongs in the [Manifesto](manifesto.md) and [Product Vision](vision.md).
+This roadmap is directional. It does not promise dates or claim that future capabilities have shipped. Released behavior belongs in [CHANGELOG.md](../../CHANGELOG.md); current behavior belongs in the [User Guide](user-guide.md); the underlying purpose belongs in the [Manifesto](manifesto.md) and [Product Vision](vision.md).
 
 ## North star
 

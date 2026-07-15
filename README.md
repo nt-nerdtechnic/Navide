@@ -10,7 +10,7 @@ It is not another chat panel inside the traditional IDE. Navide is being built a
 
 English | [繁體中文](README.zh-TW.md)
 
-[Download v0.1.40 preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [Getting started](docs/getting-started.md) | [Documentation](docs/README.md) | [Roadmap](docs/roadmap.md)
+[Download v0.1.40 preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -101,7 +101,7 @@ Navide has a working local-first foundation, but the complete Agent-era environm
 | Manual and analyzer-assisted automation controls | Complete policy-driven management by exception |
 | Editor, Diff, terminal, Git, tests, and review surfaces | Full professional delivery without another IDE as the primary environment |
 
-Product direction describes intent, not currently shipped behavior or a delivery-date promise. See the [Product Roadmap](docs/roadmap.md) for scope and exit criteria.
+Product direction describes intent, not currently shipped behavior or a delivery-date promise. See the [Product Roadmap](docs/en-US/roadmap.md) for scope and exit criteria.
 
 ## Private by default, honest about boundaries
 
@@ -109,7 +109,7 @@ Navide's orchestration process, private project intelligence, and workspace stat
 
 Local-first does not mean universally offline. External agent CLIs, cloud AI providers, Context7, search, Git hosting, MCP servers, and update checks may communicate with third parties when used. Agents normally inherit the current user's operating-system permissions, and Navide does not yet provide a complete workspace sandbox.
 
-Read [Privacy and Data Flows](docs/privacy.md) and the [Security Policy](SECURITY.md) before using sensitive code, credentials, YOLO, or Full Auto.
+Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](SECURITY.md) before using sensitive code, credentials, YOLO, or Full Auto.
 
 ## Try Navide
 
@@ -140,14 +140,14 @@ uv --project backend sync
 pnpm dev
 ```
 
-The onboarding wizard checks runtimes, detects agent CLIs, and explains relevant macOS permissions. Continue with [Getting Started](docs/getting-started.md) and the [User Guide](docs/user-guide.md).
+The onboarding wizard checks runtimes, detects agent CLIs, and explains relevant macOS permissions. Continue with [Getting Started](docs/en-US/getting-started.md) and the [User Guide](docs/en-US/user-guide.md).
 
 ## Documentation and deeper reading
 
-- **Use Navide:** [Getting started](docs/getting-started.md), [User guide](docs/user-guide.md), and [Troubleshooting](docs/troubleshooting.md)
-- **Understand the product:** [Manifesto](docs/manifesto.md), [Vision](docs/vision.md), [Positioning](docs/product-positioning.md), and [Roadmap](docs/roadmap.md)
-- **Review the boundaries:** [Privacy and data flows](docs/privacy.md) and [Security policy](SECURITY.md)
-- **Explore everything:** [Navide documentation index](docs/README.md)
+- **Use Navide:** [Getting started](docs/en-US/getting-started.md), [User guide](docs/en-US/user-guide.md), and [Troubleshooting](docs/en-US/troubleshooting.md)
+- **Understand the product:** [Manifesto](docs/en-US/manifesto.md), [Vision](docs/en-US/vision.md), [Positioning](docs/en-US/product-positioning.md), and [Roadmap](docs/en-US/roadmap.md)
+- **Review the boundaries:** [Privacy and data flows](docs/en-US/privacy.md) and [Security policy](SECURITY.md)
+- **Explore everything:** [English documentation index](docs/en-US/README.md) or [language gateway](docs/README.md)
 
 ## License
 

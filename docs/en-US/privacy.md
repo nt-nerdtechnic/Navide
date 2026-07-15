@@ -1,6 +1,6 @@
 # Privacy and Data Flows
 
-English | [繁體中文](zh-TW/privacy.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/privacy.md) | [Documentation](README.md)
 
 Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your Mac. Data can leave the machine when you enable or use an external service.
 
@@ -57,4 +57,4 @@ Cross-agent handoffs can include task context and prior-stage output. Automatic 
 
 Private project intelligence can be removed from the workspace's `.agent-team/` directory after active sessions are stopped. Deleting it can remove resumability, run history, attribution, and accumulated context without deleting the source repository. Application-wide settings and histories live in the Navide application data directory. Back up any configuration you intend to preserve before deletion.
 
-For vulnerability reporting, see the [Security Policy](../SECURITY.md).
+For vulnerability reporting, see the [Security Policy](../../SECURITY.md).

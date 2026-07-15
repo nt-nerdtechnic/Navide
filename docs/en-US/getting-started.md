@@ -1,6 +1,6 @@
 # Getting Started
 
-English | [繁體中文](zh-TW/getting-started.md) | [Documentation](README.md)
+English | [繁體中文](../zh-TW/getting-started.md) | [Documentation](README.md)
 
 Navide supports macOS 13 or newer on Apple silicon. The [v0.1.40 GitHub prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) provides unsigned DMG and ZIP downloads. It is not signed or notarized by Apple.
 

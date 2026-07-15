@@ -1,6 +1,6 @@
 # 產品定位與公開主張
 
-[English](../product-positioning.md) | 繁體中文 | [文件中心](README.md)
+[English](../en-US/product-positioning.md) | 繁體中文 | [文件中心](README.md)
 
 這份文件用來維持 Navide 在 README、網站文案、Demo、Release Notes、簡報與社群貼文中的公開敘事一致。它是溝通參考，不取代 User Guide、Roadmap 或 Release History。
 
