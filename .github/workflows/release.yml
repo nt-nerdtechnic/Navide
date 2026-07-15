@@ -17,6 +17,9 @@ jobs:
     name: Test, sign, notarize, and release macOS arm64
     runs-on: macos-14
     timeout-minutes: 60
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
 
     steps:
       - name: Check out tagged source

@@ -26,6 +26,7 @@ backend/dist/
 backend/build/
 
 # ─── Electron packaging output ──────────────────────────────────────────────
+dist-local/
 dist-release/
 backend/*.egg-info/
 backend/.mypy_cache/

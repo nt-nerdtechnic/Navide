@@ -38,9 +38,30 @@ only the DMG.
 
 ## One-time GitHub setup
 
-Add these Actions secrets in the GitHub repository settings:
+### Release authorization
 
-| Secret | Value |
+Running `release.sh` locally is not a security boundary: anyone with a source
+checkout can run or modify a local script. GitHub must enforce who can create
+an official release:
+
+1. Create a `production` Environment under **Settings → Environments**.
+2. Add the release maintainers as required reviewers and enable prevention of
+   self-review.
+3. Restrict the Environment's deployment refs to tags matching `v*.*.*`.
+4. Create an active tag ruleset under **Settings → Rules → Rulesets** for
+   `v*.*.*`; restrict tag creation and put only the release-maintainer team in
+   its bypass list.
+5. Store the Apple credentials listed below as `production` Environment
+   secrets. Remove repository-level copies so no job can read them without the
+   Environment approval gate.
+
+The release workflow declares the `production` Environment. A tag push can
+start the workflow, but the signing job cannot access its protected secrets or
+publish until an authorized reviewer approves it.
+
+Add these secrets to the protected `production` Environment:
+
+| `production` Environment secret | Value |
 | --- | --- |
 | `MAC_CSC_LINK` | Base64-encoded Developer ID Application `.p12` certificate |
 | `MAC_CSC_KEY_PASSWORD` | Password used when exporting that certificate |
@@ -56,17 +77,19 @@ committed.
 ## Creating a release
 
 1. Finish and verify the intended changes. Update `CHANGELOG.md`.
-2. Run `./build.sh`, select patch/minor/major, and verify the local app. The
-   script synchronizes version files, builds, creates the version commit, and
-   creates the local `vX.Y.Z` tag.
-3. Confirm the repository is clean and run `pnpm release:check vX.Y.Z`.
-4. Push the commit first: `git push origin main`.
-5. Push the exact tag: `git push origin vX.Y.Z`.
-6. Watch the **Release macOS** Actions workflow. It installs locked
+2. Commit every intended source change and confirm the repository is clean.
+3. Run `./release.sh X.Y.Z` (or `pnpm release:prepare -- X.Y.Z`). The script
+   validates that the requested version is newer, synchronizes all version
+   files, runs the release gates, builds the unsigned local artifacts, and
+   creates the release commit and annotated `vX.Y.Z` tag.
+4. Review the result, then answer the script's publish prompt. If you defer the
+   push, publish later with `git push origin main` followed by
+   `git push origin vX.Y.Z`.
+5. Watch the **Release macOS** Actions workflow. It installs locked
    dependencies, verifies versions, runs frontend/backend tests, builds the
    backend, signs and notarizes Navide, validates every update asset, and only
    then creates the public GitHub Release.
-7. Install the release DMG on a test Mac. Publish a newer patch release and use
+6. Install the release DMG on a test Mac. Publish a newer patch release and use
    the in-app flow to verify check, download, restart, and the resulting app
    version.
 
@@ -94,7 +117,13 @@ credentials are configured.
 
 ## Local packaging
 
-`pnpm dist` remains suitable for local unsigned packaging. It now creates both
-DMG and ZIP outputs and updater metadata because those formats are part of the
-production contract. An unsigned local build is for local testing only and
-must not be attached to a public release.
+Run `./build.sh` (or `pnpm package:local`) for a fast local unsigned `.app`
+without changing the version, creating a commit, or creating a tag. Add
+`--install` to replace the local copy under `/Applications` after quitting the
+running app. Local output is written to `dist-local/`.
+
+`pnpm dist` creates the full unsigned DMG, ZIP, blockmaps, and updater metadata.
+Those formats are part of the production contract, but unsigned local artifacts
+must not be attached to a public release. Formal versions are prepared only
+with `./release.sh X.Y.Z` and signed artifacts are produced only by GitHub
+Actions after `production` Environment approval.

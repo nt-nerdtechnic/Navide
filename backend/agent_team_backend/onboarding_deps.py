@@ -15,6 +15,7 @@ import json
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -289,6 +290,32 @@ def _probe_alternate(dep: Dep, executable: str) -> dict[str, Any]:
     }
 
 
+_NPM_AGENT_PACKAGES = {
+    "claude": "@anthropic-ai/claude-code",
+    "codex": "@openai/codex",
+}
+
+
+def _candidate_removal(candidate: dict[str, Any], dep: Dep, version: str) -> dict[str, str]:
+    """Return a confirmed removal command only when ownership is unambiguous."""
+    package = _NPM_AGENT_PACKAGES.get(dep.id, "")
+    resolved = str(candidate.get("resolved_path") or "")
+    path = str(candidate.get("path") or "")
+    package_marker = f"/node_modules/{package}/" if package else ""
+    npm = Path(path).parent / "npm"
+    if not package_marker or package_marker not in resolved or not npm.is_file() or not os.access(npm, os.X_OK):
+        return {"manager": "", "command": ""}
+
+    uninstall = f"{shlex.quote(str(npm))} uninstall -g {shlex.quote(package)}"
+    description = f"Remove {dep.label} {version or ''} from {path}".replace("  ", " ")
+    confirmed = (
+        f"printf '%s\\n' {shlex.quote(description)}; "
+        "printf 'Continue? [y/N] '; read -r answer; "
+        f"case \"$answer\" in [Yy]*) {uninstall} ;; *) echo 'Cancelled.' ;; esac"
+    )
+    return {"manager": "npm", "command": confirmed}
+
+
 def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
     """Build actionable health findings for installed agent CLIs."""
     status_by_id = {status["id"]: status for status in dep_statuses}
@@ -312,7 +339,14 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
                 "signal": dep_status.get("signal", ""),
                 "duration_ms": dep_status.get("duration_ms"),
             } if is_primary else _probe_alternate(dep, candidate["resolved_path"])
-            detailed_candidates.append({**candidate, **probe, "is_primary": is_primary})
+            removal = _candidate_removal(candidate, dep, str(probe.get("version") or ""))
+            detailed_candidates.append({
+                **candidate,
+                **probe,
+                "is_primary": is_primary,
+                "install_manager": removal["manager"],
+                "removal_command": removal["command"],
+            })
         entry = {
             "agent_key": dep.id,
             "label": dep.label,

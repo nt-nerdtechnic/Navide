@@ -22,6 +22,8 @@ const health: CliHealthStatus = {
         signal: '',
         duration_ms: 42,
         is_primary: true,
+        install_manager: 'npm',
+        removal_command: "printf 'remove'; npm uninstall -g @anthropic-ai/claude-code",
       },
       {
         path: '/opt/homebrew/bin/claude',
@@ -33,6 +35,8 @@ const health: CliHealthStatus = {
         signal: '',
         duration_ms: 100,
         is_primary: false,
+        install_manager: 'npm',
+        removal_command: "printf 'remove'; npm uninstall -g @anthropic-ai/claude-code",
       },
     ],
   }],
@@ -98,5 +102,43 @@ describe('CliHealthGuide', () => {
     expect(wrapper.emitted('use-binary')).toEqual([[
       { agentKey: 'claude', path: '/opt/homebrew/bin/claude', version: '2.1.168' },
     ]])
+  })
+
+  it('opens a confirmed package-manager removal in Terminal', async () => {
+    const commands: string[] = []
+    window.agentTeam = {
+      openTerminal: async (command: string) => {
+        commands.push(command)
+        return { ok: true }
+      },
+    } as typeof window.agentTeam
+    const mock = createMockBackend('connected')
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: health },
+      global: { plugins: [i18n] },
+    })
+
+    await wrapper.findAll('.ch-remove-binary')[1].trigger('click')
+
+    expect(commands).toEqual(["printf 'remove'; npm uninstall -g @anthropic-ai/claude-code"])
+    expect(wrapper.text()).toContain('confirmation prompt')
+  })
+
+  it('offers removal for an older backend payload when npm ownership is clear', () => {
+    const legacyHealth = structuredClone(health)
+    delete legacyHealth.entries[0].candidates[0].install_manager
+    delete legacyHealth.entries[0].candidates[0].removal_command
+    delete legacyHealth.entries[0].candidates[1].install_manager
+    delete legacyHealth.entries[0].candidates[1].removal_command
+    legacyHealth.entries[0].candidates[0].resolved_path = '/Users/test/.nvm/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    legacyHealth.entries[0].candidates[1].resolved_path = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    const mock = createMockBackend('connected')
+
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: legacyHealth },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(2)
   })
 })

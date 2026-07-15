@@ -44,6 +44,8 @@ export interface CliHealthCandidate {
   signal: string
   duration_ms: number | null
   is_primary: boolean
+  install_manager?: string
+  removal_command?: string
 }
 
 export interface CliHealthEntry {

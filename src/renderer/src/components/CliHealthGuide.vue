@@ -37,6 +37,32 @@ async function openDiagnostics(entry: CliHealthEntry): Promise<void> {
     : t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`
+}
+
+function removalCommand(entry: CliHealthEntry, candidate: CliHealthCandidate): string {
+  if (candidate.removal_command) return candidate.removal_command
+  const packages: Record<string, string> = {
+    claude: '@anthropic-ai/claude-code',
+    codex: '@openai/codex',
+  }
+  const packageName = packages[entry.agent_key]
+  if (!packageName || !candidate.resolved_path.includes(`/node_modules/${packageName}/`)) return ''
+
+  const npmPath = candidate.path.replace(/\/[^/]+$/, '/npm')
+  const description = `Remove ${entry.label} ${candidate.version || ''} from ${candidate.path}`.replace(/  +/g, ' ')
+  const uninstall = `${shellQuote(npmPath)} uninstall -g ${shellQuote(packageName)}`
+  return `printf '%s\\n' ${shellQuote(description)}; printf 'Continue? [y/N] '; read -r answer; case "$answer" in [Yy]*) ${uninstall} ;; *) echo 'Cancelled.' ;; esac`
+}
+
+async function openRemoval(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
+  const result = await window.agentTeam?.openTerminal(removalCommand(entry, candidate))
+  message.value = result?.ok
+    ? t('cli-health.removal-opened', { label: entry.label })
+    : t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
+}
+
 async function useBinary(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
   await props.backend.send('onboarding.cli_health.dismiss', {
     fingerprint: health.value.fingerprint,
@@ -105,13 +131,22 @@ async function dismiss(): Promise<void> {
                 <span v-if="candidate.signal" class="ch-signal">{{ candidate.signal }}</span>
               </div>
               <code class="ch-path">{{ candidate.path }}</code>
-              <button
-                v-if="candidate.status === 'ok' && !candidate.is_primary"
-                class="ch-btn primary ch-use-binary"
-                @click="useBinary(entry, candidate)"
-              >
-                {{ $t('cli-health.use-version', { version: candidate.version || $t('cli-health.unknown-version') }) }}
-              </button>
+              <div class="ch-candidate-actions">
+                <button
+                  v-if="candidate.status === 'ok' && !candidate.is_primary"
+                  class="ch-btn primary ch-use-binary"
+                  @click="useBinary(entry, candidate)"
+                >
+                  {{ $t('cli-health.use-version', { version: candidate.version || $t('cli-health.unknown-version') }) }}
+                </button>
+                <button
+                  v-if="removalCommand(entry, candidate)"
+                  class="ch-btn danger ch-remove-binary"
+                  @click="openRemoval(entry, candidate)"
+                >
+                  {{ $t('cli-health.remove-installation') }}
+                </button>
+              </div>
             </div>
             <div class="ch-actions-note">{{ $t('cli-health.use-version-note') }}</div>
           </section>
@@ -222,7 +257,7 @@ h2 { margin: 0 0 8px; color: var(--text-bright); font-size: 22px; }
 .ch-candidate-top code { margin-left: auto; color: var(--text-bright); }
 .ch-signal { color: var(--danger-fg); font-weight: 700; }
 .ch-path { display: block; margin-top: 8px; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
-.ch-use-binary { margin-top: 12px; }
+.ch-candidate-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .ch-actions-note { margin-top: 14px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .ch-version-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .repair ol { color: var(--text-secondary); line-height: 1.8; }
@@ -233,6 +268,7 @@ h2 { margin: 0 0 8px; color: var(--text-bright); font-size: 22px; }
 .ch-footer span { flex: 1; }
 .ch-btn { border: 1px solid var(--border-default); border-radius: 7px; padding: 9px 14px; cursor: pointer; color: var(--text-primary); background: var(--bg-subtle); }
 .ch-btn.primary { border-color: var(--accent-emphasis); background: var(--accent-emphasis); color: var(--text-on-emphasis); }
+.ch-btn.danger { border-color: var(--danger-fg); color: var(--danger-fg); background: transparent; }
 .ch-btn.ghost { background: transparent; }
 .ch-btn:disabled { opacity: .55; cursor: default; }
 .ch-btn code { font-size: 11px; }

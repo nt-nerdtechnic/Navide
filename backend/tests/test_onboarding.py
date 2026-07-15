@@ -206,6 +206,32 @@ def test_cli_health_reports_distinct_duplicate_installations(
     assert len(health["fingerprint"]) == 16
 
 
+def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    prefix = tmp_path / "node"
+    npm = _make_executable(prefix / "bin" / "npm")
+    target = _make_executable(
+        prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+    )
+    binary = prefix / "bin" / "claude"
+    binary.symlink_to(target)
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [{
+        "path": str(binary),
+        "resolved_path": str(target),
+        "aliases": [str(binary)],
+    }])
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(binary)])
+    candidate = health["entries"][0]["candidates"][0]
+
+    assert candidate["install_manager"] == "npm"
+    assert str(npm) in candidate["removal_command"]
+    assert "uninstall -g @anthropic-ai/claude-code" in candidate["removal_command"]
+    assert "Continue? [y/N]" in candidate["removal_command"]
+
+
 def test_cli_health_collapses_aliases_to_same_physical_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

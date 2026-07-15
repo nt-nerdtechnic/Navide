@@ -603,6 +603,8 @@
     "open-terminal": "開啟診斷終端機",
     "use-version": "讓 Navide 使用 {version}",
     "use-version-note": "這個動作安全且可還原：只會變更 Navide 啟動的執行檔，不會解除安裝任何套件，也不會降低 macOS 安全性。",
+    "remove-installation": "移除此安裝…",
+    "removal-opened": "已在終端機開啟移除 {label} 的確認步驟；完成後請回到這裡重新偵測。",
     "terminal-opened": "已在終端機開啟診斷指令。",
     "terminal-failed": "無法開啟終端機：{error}",
     "still-detected": "仍偵測到問題，請確認上方路徑後再試一次。",

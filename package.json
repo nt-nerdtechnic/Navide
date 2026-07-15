@@ -24,8 +24,10 @@
     "test:run": "vitest run",
     "test:e2e": "playwright test",
     "backend:dev": "uv --project backend run python -m agent_team_backend",
+    "package:local": "bash ./build.sh",
     "dist": "pnpm build && electron-builder",
-    "release:check": "node scripts/verify-release-version.mjs"
+    "release:check": "node scripts/verify-release-version.mjs",
+    "release:prepare": "bash ./release.sh"
   },
   "build": {
     "appId": "com.nerdtechnic.agent-team",
