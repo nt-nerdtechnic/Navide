@@ -1,7 +1,19 @@
+import { normalizeResumeSessionId } from './resume-command'
+
 export interface HistoryTitleEntry {
   paneId: string
   agentLabel: string
   customName?: string
+  agentKey?: string
+  sessionId?: string
+  sessionHomeId?: string
+}
+
+export interface HistoryTitleIdentity {
+  paneId: string
+  agentKey?: string
+  sessionId?: string
+  sessionHomeId?: string
 }
 
 export function historyEntryLabel(entry: HistoryTitleEntry): string {
@@ -10,12 +22,37 @@ export function historyEntryLabel(entry: HistoryTitleEntry): string {
 
 export function updateHistoryCustomName(
   entries: HistoryTitleEntry[],
-  paneId: string,
+  identity: string | HistoryTitleIdentity,
   customName?: string
 ): boolean {
-  const entry = entries.find((candidate) => candidate.paneId === paneId)
-  if (!entry) return false
-  entry.customName = customName?.trim() || undefined
+  const source = typeof identity === 'string' ? { paneId: identity } : identity
+  const exact = entries.find((candidate) => candidate.paneId === source.paneId)
+  if (exact) {
+    exact.customName = customName?.trim() || undefined
+    return true
+  }
+
+  const sessionHomeId = source.sessionHomeId?.trim()
+  let matches = source.agentKey === 'codex' && sessionHomeId
+    ? entries.filter((candidate) =>
+        candidate.agentKey === 'codex'
+        && (candidate.sessionHomeId?.trim() === sessionHomeId || candidate.paneId === sessionHomeId)
+      )
+    : []
+
+  const agentKey = source.agentKey
+  const sessionId = agentKey && source.sessionId
+    ? normalizeResumeSessionId(agentKey, source.sessionId)
+    : ''
+  if (matches.length === 0 && agentKey && sessionId) {
+    matches = entries.filter((candidate) =>
+      candidate.agentKey === agentKey
+      && !!candidate.sessionId
+      && normalizeResumeSessionId(agentKey, candidate.sessionId) === sessionId
+    )
+  }
+  if (matches.length === 0) return false
+  for (const entry of matches) entry.customName = customName?.trim() || undefined
   return true
 }
 

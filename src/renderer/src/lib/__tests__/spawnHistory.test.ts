@@ -39,6 +39,84 @@ describe('spawn history titles', () => {
     expect(updateHistoryCustomName(entries, 'missing', 'Reviewer')).toBe(false)
     expect(entries).toEqual([entry()])
   })
+
+  it('matches a changed Codex pane id through the stable session home', () => {
+    const entries = [entry({
+      paneId: 'old-pane',
+      agentKey: 'codex',
+      sessionId: 'session-1',
+      sessionHomeId: 'codex-home-1',
+    })]
+
+    expect(updateHistoryCustomName(entries, {
+      paneId: 'new-pane',
+      agentKey: 'codex',
+      sessionId: 'session-1',
+      sessionHomeId: 'codex-home-1',
+    }, 'Restored Codex')).toBe(true)
+    expect(entries[0].customName).toBe('Restored Codex')
+  })
+
+  it('matches a legacy Codex history pane id to the stable session home', () => {
+    const entries = [entry({
+      paneId: 'codex-home-1',
+      agentKey: 'codex',
+      sessionId: 'session-1',
+    })]
+
+    expect(updateHistoryCustomName(entries, {
+      paneId: 'new-pane',
+      agentKey: 'codex',
+      sessionId: 'session-1',
+      sessionHomeId: 'codex-home-1',
+    }, 'Restored legacy Codex')).toBe(true)
+    expect(entries[0].customName).toBe('Restored legacy Codex')
+  })
+
+  it('matches a changed pane id through the normalized vendor session id', () => {
+    const entries = [entry({
+      paneId: 'old-pane',
+      agentKey: 'claude',
+      sessionId: 'session-1',
+    })]
+
+    expect(updateHistoryCustomName(entries, {
+      paneId: 'new-pane',
+      agentKey: 'claude',
+      sessionId: ' session-1 ',
+    }, 'Restored Claude')).toBe(true)
+    expect(entries[0].customName).toBe('Restored Claude')
+  })
+
+  it('does not match a changed pane id from a different session', () => {
+    const entries = [entry({
+      paneId: 'old-pane',
+      agentKey: 'claude',
+      sessionId: 'session-1',
+    })]
+
+    expect(updateHistoryCustomName(entries, {
+      paneId: 'new-pane',
+      agentKey: 'claude',
+      sessionId: 'session-2',
+    }, 'Wrong title')).toBe(false)
+    expect(entries[0].customName).toBeUndefined()
+  })
+
+  it('prefers an exact pane id over other entries in the same session lineage', () => {
+    const entries = [
+      entry({ paneId: 'exact-pane', agentKey: 'claude', sessionId: 'session-1' }),
+      entry({ paneId: 'older-pane', agentKey: 'claude', sessionId: 'session-1' }),
+    ]
+
+    expect(updateHistoryCustomName(entries, {
+      paneId: 'exact-pane',
+      agentKey: 'claude',
+      sessionId: 'session-1',
+    }, 'Exact title')).toBe(true)
+    expect(entries[0].customName).toBe('Exact title')
+    expect(entries[1].customName).toBeUndefined()
+  })
 })
 
 describe('terminal crash-loop diagnostics', () => {

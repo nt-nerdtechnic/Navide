@@ -2847,7 +2847,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // stored there. project.json is authoritative when it still has the pane.
   for (const saved of allProjectPanes) {
     if (saved.custom_name) {
-      updateHistoryCustomName(spawnHistory.value, saved.pane_id, saved.custom_name)
+      updateHistoryCustomName(spawnHistory.value, {
+        paneId: saved.pane_id,
+        agentKey: saved.agent,
+        sessionId: saved.session_id,
+        sessionHomeId: saved.session_home_id,
+      }, saved.custom_name)
     }
   }
 
