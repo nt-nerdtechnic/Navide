@@ -2426,6 +2426,17 @@ function onFocusPane(paneId: string): void {
   })
 }
 
+async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
+  const ws = entry.workspacePath || currentWorkspace.value
+  if (!ws) return
+  const originDir = entry.origin === 'pipeline' ? 'pipeline' : 'manual'
+  const logPath = `${ws}/.agent-team/${originDir}/${entry.agentKey}-p-${entry.paneId}.log`
+  const api = (window as Window & { agentTeam?: { openPath?: (target: string) => Promise<{ ok: boolean; error?: string }> } }).agentTeam
+  if (api?.openPath) {
+    await api.openPath(logPath)
+  }
+}
+
 async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   if (revivingHistoryPaneId.value) return
   const sessionId = entry.sessionId?.trim()
@@ -6700,6 +6711,10 @@ function paneIsCommander(p: ActivePane): boolean {
                   :disabled="!!revivingHistoryPaneId"
                   @click="onResumeHistoryAgent(entry)"
                 >{{ revivingHistoryPaneId === entry.paneId ? '…' : $t('action.resume-session') }}</button>
+                <button
+                  class="ah-revive ah-preview"
+                  @click="onPreviewHistoryAgent(entry)"
+                >預覽</button>
               </div>
             </div>
           </div>
@@ -8157,6 +8172,11 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--bg-selected);
   border-color: var(--accent-bright);
   color: var(--accent-bright);
+}
+.ah-revive.ah-preview {
+  border-color: var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
 }
 .ah-revive:disabled {
   cursor: wait;
