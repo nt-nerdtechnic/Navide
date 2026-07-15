@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from '../spawnHistory'
+import {
+  formatTerminalExit,
+  historyEntryLabel,
+  isTerminalCrashLoopOpen,
+  recordTerminalExit,
+  resetTerminalCrashLoop,
+  terminalCrashKey,
+  updateHistoryCustomName,
+  type HistoryTitleEntry,
+} from '../spawnHistory'
 
 function entry(overrides: Partial<HistoryTitleEntry> = {}): HistoryTitleEntry {
   return {
@@ -29,5 +38,43 @@ describe('spawn history titles', () => {
     const entries = [entry()]
     expect(updateHistoryCustomName(entries, 'missing', 'Reviewer')).toBe(false)
     expect(entries).toEqual([entry()])
+  })
+})
+
+describe('terminal crash-loop diagnostics', () => {
+  const key = terminalCrashKey({
+    agentKey: 'claude',
+    cwd: '/workspace',
+    resumeKey: 'session-1',
+    command: ['zsh', '-lc', 'claude --resume session-1'],
+  })
+
+  it('opens after three consecutive exits within one second', () => {
+    resetTerminalCrashLoop(key)
+    const fastExit = { reason: 'exit', exit_code: -9, signal: 'SIGKILL', uptime_ms: 42 }
+
+    expect(recordTerminalExit(key, fastExit)).toEqual({ count: 1, open: false })
+    expect(recordTerminalExit(key, fastExit)).toEqual({ count: 2, open: false })
+    expect(recordTerminalExit(key, fastExit)).toEqual({ count: 3, open: true })
+    expect(isTerminalCrashLoopOpen(key)).toBe(true)
+  })
+
+  it('resets the consecutive count after a non-fast exit', () => {
+    resetTerminalCrashLoop(key)
+    recordTerminalExit(key, { reason: 'exit', exit_code: -9, uptime_ms: 50 })
+
+    expect(recordTerminalExit(key, { reason: 'exit', exit_code: 0, uptime_ms: 1_500 }))
+      .toEqual({ count: 0, open: false })
+    expect(isTerminalCrashLoopOpen(key)).toBe(false)
+  })
+
+  it('formats the exact signal, lifetime, and resolved binary', () => {
+    expect(formatTerminalExit({
+      reason: 'exit',
+      exit_code: -9,
+      signal: 'SIGKILL',
+      uptime_ms: 42,
+      startup_probe: { binary_path: '/opt/bin/claude' },
+    })).toBe('Process was terminated by SIGKILL 42ms after spawn — /opt/bin/claude')
   })
 })

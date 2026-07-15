@@ -7,6 +7,14 @@ import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 import { createResizeController, type ResizeController } from './useTerminalResize'
 import { installTerminalZoomShortcuts, terminalFontSize } from './useTerminalFontSize'
+import {
+  formatTerminalExit,
+  isTerminalCrashLoopOpen,
+  recordTerminalExit,
+  terminalCrashKey,
+  type TerminalExitDetails,
+  type TerminalStartupProbe,
+} from '../lib/spawnHistory'
 
 import type { ITheme } from '@xterm/xterm'
 
@@ -471,6 +479,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const isAltBuffer = ref(false)
   let isDisposed = false
   let activeAgentKey: string | undefined
+  let activeCrashKey = ''
 
   // Rolling ANSI-stripped text accumulator used by the pipeline orchestrator
   // to detect stage sentinels and QUESTION blocks. Capped at ~128KB to keep
@@ -1138,15 +1147,22 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     })
 
     exitUnsub = backend.on('terminal.exit', (raw) => {
-      const payload = raw as { terminal_session_id: string; reason: string; exit_code: number | null }
+      const payload = raw as TerminalExitDetails & { terminal_session_id: string }
       if (payload.terminal_session_id !== sessionId.value) return
-      status.value = 'exited'
+      const crashState = activeCrashKey && activeAgentKey && activeAgentKey !== 'terminal'
+        ? recordTerminalExit(activeCrashKey, payload)
+        : { count: 0, open: false }
+      status.value = crashState.open ? 'error' : 'exited'
+      error.value = crashState.open
+        ? `${formatTerminalExit(payload)}. Automatic rebuild stopped after ${crashState.count} fast crashes.`
+        : ''
       rememberSessionId('')  // the PTY is gone — don't try to reattach to it
       // Session ended cleanly — discard its scrollback snapshot so a future
       // pane with the same key doesn't see stale output from a closed session.
       rawScrollBuffer = ''
       try { localStorage.removeItem(scrollSnapKey()) } catch {}
-      term.writeln(`\r\n\x1b[33m[session ${payload.reason}, exit=${payload.exit_code}]\x1b[0m`)
+      const color = crashState.open ? 31 : 33
+      term.writeln(`\r\n\x1b[${color}m[session] ${error.value || formatTerminalExit(payload)}\x1b[0m`)
       cleanupSession()
     })
   }
@@ -1351,6 +1367,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const resp = await backend.send<{
         terminal_session_id: string
         pid: number
+        startup_probe?: TerminalStartupProbe | null
       }>('terminal.create', {
         pane_id: paneId,
         agent_key: opts.agentKey ?? null,
@@ -1377,11 +1394,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         status.value = 'error'
         error.value = resp.error?.message ?? 'spawn failed'
         term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
+        const binaryPath = String(resp.error?.details?.binary_path ?? '')
+        if (binaryPath && !error.value.includes(binaryPath)) {
+          term.writeln(`\x1b[31m[binary] ${binaryPath}\x1b[0m`)
+        }
         return
       }
       sessionId.value = resp.payload.terminal_session_id
       rememberSessionId(sessionId.value)  // enable reattach after a reload
       status.value = 'running'
+      const probe = resp.payload.startup_probe
+      if (probe?.binary_path) {
+        const version = probe.version ? ` v${probe.version}` : ''
+        const duration = typeof probe.duration_ms === 'number' ? `, ${probe.duration_ms}ms` : ''
+        term.writeln(`\x1b[2m[startup probe] ${probe.binary_path}${version}${duration}\x1b[0m`)
+      }
       // TEMP diagnostic: marks a fresh pane spawn so we can confirm the new code
       // is actually loaded (opening a pane writes a line even without resizing).
       dbgLog(`spawn cols=${term.cols} rows=${term.rows}`)
@@ -1471,6 +1498,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     error.value = ''
     status.value = 'starting'
     activeAgentKey = opts.agentKey
+    activeCrashKey = terminalCrashKey({
+      agentKey: opts.agentKey,
+      cwd: opts.cwd,
+      resumeKey: opts.resumeKey,
+      command: opts.command,
+    })
+    if (opts.isResume && isTerminalCrashLoopOpen(activeCrashKey)) {
+      status.value = 'error'
+      error.value = 'Automatic rebuild stopped after 3 fast crashes. Use Respawn after fixing the CLI.'
+      term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
+      return
+    }
     lastCommand.value = Array.isArray(opts.command) ? opts.command.join(' ') : opts.command
     // Use the stable CLI session id as the reattach key when provided, so the
     // lookup below survives a reload (paneId does not).

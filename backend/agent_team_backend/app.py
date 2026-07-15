@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import os
 import re
+import shutil
+import signal
+import subprocess
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -448,7 +452,10 @@ async def _active_emit(event: dict[str, Any]) -> None:
         if exit_pane_id:
             _schedule_pane_unregister(exit_pane_id)
     session_id = payload.get("terminal_session_id") if isinstance(payload, dict) else None
-    sess = _PTY_OWNERS.get(session_id) if session_id else None
+    if session_id and event.get("type") == "terminal.exit":
+        sess = _PTY_OWNERS.pop(session_id, None)
+    else:
+        sess = _PTY_OWNERS.get(session_id) if session_id else None
     if sess is None:
         return  # detached: drop output, PTY keeps running, TUI redraws on reattach
     try:
@@ -977,6 +984,90 @@ async def _ensure_fresh_path_for_spawn(agent_key: str) -> None:
     await asyncio.to_thread(onboarding_deps._refresh_path_from_login_shell)
 
 
+class AgentCliProbeError(RuntimeError):
+    def __init__(self, message: str, details: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.details = details
+
+
+def _probe_agent_cli_for_spawn(agent_key: str) -> dict[str, Any] | None:
+    """Resolve and smoke-test an agent CLI before allocating its PTY."""
+    dep = onboarding_deps.DEPS_BY_ID.get(agent_key)
+    if dep is None or dep.group != "agent_cli":
+        return None
+    executable = shutil.which(dep.check_cmd[0])
+    if not executable:
+        raise AgentCliProbeError(
+            f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
+            {
+                "agent_key": agent_key,
+                "binary_path": "",
+                "probe_command": dep.check_cmd,
+                "reason": "not_found",
+            },
+        )
+    command = [executable, *dep.check_cmd[1:]]
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            env=os.environ.copy(),
+        )
+    except subprocess.TimeoutExpired as err:
+        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+        raise AgentCliProbeError(
+            f"{dep.label} startup probe timed out after {duration_ms}ms ({executable})",
+            {
+                "agent_key": agent_key,
+                "binary_path": executable,
+                "probe_command": command,
+                "duration_ms": duration_ms,
+                "reason": "timeout",
+            },
+        ) from err
+    except OSError as err:
+        duration_ms = max(0, round((time.monotonic() - started) * 1000))
+        raise AgentCliProbeError(
+            f"{dep.label} startup probe could not execute {executable}: {err}",
+            {
+                "agent_key": agent_key,
+                "binary_path": executable,
+                "probe_command": command,
+                "duration_ms": duration_ms,
+                "reason": "exec_error",
+            },
+        ) from err
+
+    duration_ms = max(0, round((time.monotonic() - started) * 1000))
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    version = onboarding_deps._parse_version(output, dep.version_regex)
+    signal_name: str | None = None
+    if proc.returncode < 0:
+        try:
+            signal_name = signal.Signals(-proc.returncode).name
+        except ValueError:
+            signal_name = f"SIG{-proc.returncode}"
+    details = {
+        "agent_key": agent_key,
+        "binary_path": executable,
+        "probe_command": command,
+        "duration_ms": duration_ms,
+        "exit_code": proc.returncode,
+        "signal": signal_name,
+        "version": version,
+    }
+    if proc.returncode != 0:
+        cause = f"was terminated by {signal_name}" if signal_name else f"exited with code {proc.returncode}"
+        raise AgentCliProbeError(
+            f"{dep.label} startup probe {cause} after {duration_ms}ms ({executable})",
+            {**details, "reason": "signal" if signal_name else "nonzero_exit"},
+        )
+    return details
+
+
 async def handle_message(session: Session, msg: dict[str, Any]) -> None:
     msg_id: str = msg.get("id", "")
     msg_type: str = msg.get("type", "")
@@ -993,6 +1084,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             agent_key = payload.get("agent_key") or ""
             env = dict(payload.get("env") or {})
             await _ensure_fresh_path_for_spawn(agent_key)
+            startup_probe = await asyncio.to_thread(_probe_agent_cli_for_spawn, agent_key)
+            if startup_probe:
+                metadata["startup_probe"] = startup_probe
             if agent_key == "codex":
                 # Compatibility: `codex resume <id>` only works inside the home
                 # that recorded the session. Resume in whichever home owns it;
@@ -1022,6 +1116,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 metadata=metadata,
                 output_log_file=payload.get("output_log_file") or "",
             )
+            # Claim immediately. A CLI can die while attribution registration is
+            # still running; its terminal.exit must still reach this renderer.
+            _PTY_OWNERS[term.id] = session
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
             if agent_key in ("claude", "codex", "antigravity", "grok"):
@@ -1061,8 +1158,22 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         session_home_id=str(metadata.get("session_home_id") or ""),
                     ),
                 )
-            # The creating window owns this PTY's output stream.
-            _PTY_OWNERS[term.id] = session
+            if getattr(term, "closed", False):
+                _PTY_OWNERS.pop(term.id, None)
+                details = {
+                    "agent_key": agent_key,
+                    "binary_path": (startup_probe or {}).get("binary_path", ""),
+                    "reason": getattr(term, "close_reason", None),
+                    "exit_code": getattr(term, "exit_code", None),
+                    "signal": getattr(term, "exit_signal", None),
+                    "uptime_ms": getattr(term, "uptime_ms", None),
+                    "startup_probe": startup_probe,
+                }
+                cause = getattr(term, "exit_signal", None) or f"exit code {getattr(term, 'exit_code', None)}"
+                raise AgentCliProbeError(
+                    f"Process died {getattr(term, 'uptime_ms', None)}ms after spawn ({cause})",
+                    details,
+                )
             await session.send_json(
                 make_response(
                     msg_id,
@@ -1072,6 +1183,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                         "pane_id": term.pane_id,
                         "pid": term.proc.pid,
                         "command": term.command,
+                        "startup_probe": startup_probe,
                     },
                 )
             )
@@ -3290,6 +3402,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             await session.send_json(
                 make_error(msg_id, msg_type, "UNKNOWN_TYPE", f"Unsupported message type: {msg_type!r}")
             )
+    except AgentCliProbeError as err:
+        await session.send_json(
+            make_error(msg_id, msg_type, "CLI_PROBE_FAILED", str(err), err.details)
+        )
     except FileNotFoundError as err:
         await session.send_json(
             make_error(msg_id, msg_type, "SETUP_ERROR", str(err))

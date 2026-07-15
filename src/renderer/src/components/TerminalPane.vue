@@ -281,11 +281,10 @@ onMounted(() => {
         <div class="prep-text">{{ preparingLabel || 'Preparing CLI' }}</div>
       </div>
     </div>
-    <!-- Exited CLIs (crash, command-not-found, user quit) get an in-place
-         restart: same clean kill+respawn path as onClear. Scrollback with the
-         exit message stays readable behind the floating button. -->
+    <!-- Exited or probe-failed CLIs get an in-place clean restart. Error output
+         and the resolved binary path stay readable behind the button. -->
     <button
-      v-if="displayStatus === 'exited' && !isPreparing"
+      v-if="(displayStatus === 'exited' || displayStatus === 'error') && !isPreparing"
       class="respawn-btn"
       @click.stop="emit('rebuild-clean')"
     >↻ {{ $t('pane.terminal.respawn') }}</button>

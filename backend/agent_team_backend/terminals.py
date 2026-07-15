@@ -14,6 +14,7 @@ import signal
 import struct
 import subprocess
 import termios
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import IO, Any, Awaitable, Callable
@@ -96,8 +97,13 @@ class TerminalSession:
     cwd: str
     master_fd: int
     proc: subprocess.Popen[bytes]
+    started_monotonic: float = field(default_factory=time.monotonic)
     sequence: int = 0
     closed: bool = False
+    close_reason: str | None = None
+    exit_code: int | None = None
+    uptime_ms: int | None = None
+    exit_signal: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     output_log_fp: IO[str] | None = field(default=None, repr=False)
     # Per-session vendor-parser state — used by vendor_parsers.parse_chunk to
@@ -167,6 +173,7 @@ class TerminalService:
         if env:
             final_env.update(env)
 
+        started_monotonic = time.monotonic()
         try:
             proc = subprocess.Popen(
                 argv,
@@ -212,6 +219,7 @@ class TerminalService:
             cwd=cwd,
             master_fd=master,
             proc=proc,
+            started_monotonic=started_monotonic,
             metadata=metadata or {},
             output_log_fp=log_fp,
         )
@@ -610,6 +618,17 @@ class TerminalService:
         except Exception:
             pass
         exit_code = session.proc.returncode
+        uptime_ms = max(0, round((time.monotonic() - session.started_monotonic) * 1000))
+        exit_signal: str | None = None
+        if exit_code is not None and exit_code < 0:
+            try:
+                exit_signal = signal.Signals(-exit_code).name
+            except ValueError:
+                exit_signal = f"SIG{-exit_code}"
+        session.close_reason = reason
+        session.exit_code = exit_code
+        session.uptime_ms = uptime_ms
+        session.exit_signal = exit_signal
         log.info("terminal session closed id=%s reason=%s exit=%s", session.id, reason, exit_code)
         if session.output_log_fp:
             try:
@@ -624,6 +643,9 @@ class TerminalService:
                 "pane_id": session.pane_id,
                 "reason": reason,
                 "exit_code": exit_code,
+                "uptime_ms": uptime_ms,
+                "signal": exit_signal,
+                "startup_probe": session.metadata.get("startup_probe"),
             },
         )
         self._loop.create_task(self._emit(event))

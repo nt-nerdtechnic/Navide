@@ -60,6 +60,20 @@ def _session() -> app.Session:
     return session
 
 
+@pytest.fixture(autouse=True)
+def _stub_agent_cli_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        app,
+        "_probe_agent_cli_for_spawn",
+        lambda agent_key: {
+            "agent_key": agent_key,
+            "binary_path": f"/test/bin/{agent_key}",
+            "version": "1.0.0",
+            "duration_ms": 1,
+        } if agent_key and agent_key != "terminal" else None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_terminal_create_codex_prepares_home_and_registers_home_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -334,6 +348,80 @@ async def test_spawn_path_refresh_skips_plain_terminal(
     await app._ensure_fresh_path_for_spawn("terminal")
 
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_probe_failure_returns_details_without_spawning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_probe(_agent_key: str) -> None:
+        raise app.AgentCliProbeError(
+            "Claude Code startup probe was terminated by SIGKILL after 42ms (/opt/bin/claude)",
+            {
+                "binary_path": "/opt/bin/claude",
+                "signal": "SIGKILL",
+                "exit_code": -9,
+                "duration_ms": 42,
+            },
+        )
+
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", fail_probe)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "probe-fail",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "claude-pane",
+            "agent_key": "claude",
+            "command": "claude",
+            "cwd": "/ws",
+        },
+    })
+
+    assert session.terminals.created == []  # type: ignore[attr-defined]
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "CLI_PROBE_FAILED"
+    assert response["error"]["details"]["signal"] == "SIGKILL"
+    assert response["error"]["details"]["binary_path"] == "/opt/bin/claude"
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_rejects_child_that_died_before_ack() -> None:
+    session = _session()
+
+    def create_closed(**kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            id="dead-term",
+            pane_id=kwargs["pane_id"],
+            command=kwargs["command"],
+            proc=SimpleNamespace(pid=1234),
+            closed=True,
+            close_reason="exit",
+            exit_code=-9,
+            exit_signal="SIGKILL",
+            uptime_ms=42,
+        )
+
+    session.terminals.create = create_closed  # type: ignore[method-assign]
+
+    await app.handle_message(session, {
+        "id": "early-death",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "terminal-pane",
+            "agent_key": "terminal",
+            "command": "bash",
+            "cwd": "/ws",
+        },
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "CLI_PROBE_FAILED"
+    assert response["error"]["details"]["uptime_ms"] == 42
+    assert response["error"]["details"]["signal"] == "SIGKILL"
 
 
 @pytest.mark.asyncio
