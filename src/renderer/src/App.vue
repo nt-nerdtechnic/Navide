@@ -27,6 +27,7 @@ import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
+import { usePaneReorderDrag } from './composables/usePaneReorderDrag'
 import { cliHealthGuideForLaunch, type CliHealthStatus, type OnboardStatus } from './composables/useOnboarding'
 import { playDoneSound, playAttentionSound } from './composables/useSoundNotify'
 import { formatIssueForDispatch, buildIssueKickoff, type IssueDetail, type Issue, type IssueProvider, type IssueHandlerMode } from './composables/useIssues'
@@ -52,9 +53,7 @@ import {
   buildPaneContextPaste,
   chunkForPty,
   CLI_CHIP_LINE_CAP,
-  CLI_PASTE_LINE_CAP,
-  PANE_ID_MIME,
-  writeCliPaneDragPayload
+  CLI_PASTE_LINE_CAP
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
@@ -5765,54 +5764,33 @@ function reorderPane(fromId: string, toId: string): void {
 // TerminalPane (Auto meeting cards, Spotlight thumbnails, Fullscreen PiP rows).
 // Give all three the same drag contract as a TerminalPane header so they can
 // reorder each other and still be dropped onto tabs, terminals, or AI Chat.
-const auxiliaryDragOverPaneId = ref('')
-const auxiliaryDraggingPaneId = ref('')
-
-function onAuxiliaryPaneDragStart(e: DragEvent, paneId: string): void {
-  const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane || !e.dataTransfer) return
-  writeCliPaneDragPayload(e.dataTransfer, {
-    paneId: pane.id,
-    agentKey: pane.agentKey,
-    label: pane.customName || pane.agentLabel,
-    sessionId: pane.pinnedSessionId || null,
-    sessionHomeId: pane.sessionHomeId,
-    workspacePath: pane.workspacePath,
-    conversationLogPath: pane.outputLogFile
-  })
-  e.dataTransfer.effectAllowed = 'move'
-  auxiliaryDraggingPaneId.value = paneId
-}
-
-function onAuxiliaryPaneDragEnd(e: DragEvent): void {
-  const paneId = auxiliaryDraggingPaneId.value
-  auxiliaryDraggingPaneId.value = ''
-  auxiliaryDragOverPaneId.value = ''
-  if (!paneId || e.dataTransfer?.dropEffect !== 'none') return
-  window.agentTeam?.cliPaneDragEnd?.(paneId, e.screenX, e.screenY)
-}
-
-function onAuxiliaryPaneDragOver(e: DragEvent, targetPaneId: string): void {
-  if (
-    auxiliaryDraggingPaneId.value === targetPaneId
-    || !e.dataTransfer?.types.includes(PANE_ID_MIME)
-  ) return
-  e.preventDefault()
-  auxiliaryDragOverPaneId.value = targetPaneId
-}
-
-function onAuxiliaryPaneDragLeave(e: DragEvent, targetPaneId: string): void {
-  const target = e.currentTarget as HTMLElement | null
-  if (target?.contains(e.relatedTarget as Node | null)) return
-  if (auxiliaryDragOverPaneId.value === targetPaneId) auxiliaryDragOverPaneId.value = ''
-}
-
-function onAuxiliaryPaneDrop(e: DragEvent, targetPaneId: string): void {
-  auxiliaryDragOverPaneId.value = ''
-  const draggedPaneId = e.dataTransfer?.getData(PANE_ID_MIME) || ''
-  if (!draggedPaneId || draggedPaneId === targetPaneId) return
-  reorderPane(draggedPaneId, targetPaneId)
-}
+const {
+  dragOverPaneId: auxiliaryDragOverPaneId,
+  draggingPaneId: auxiliaryDraggingPaneId,
+  onDragStart: onAuxiliaryPaneDragStart,
+  onDragEnd: onAuxiliaryPaneDragEnd,
+  onDragOver: onAuxiliaryPaneDragOver,
+  onDragLeave: onAuxiliaryPaneDragLeave,
+  onDrop: onAuxiliaryPaneDrop,
+} = usePaneReorderDrag({
+  payloadFor(paneId) {
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (!pane) return null
+    return {
+      paneId: pane.id,
+      agentKey: pane.agentKey,
+      label: pane.customName || pane.agentLabel,
+      sessionId: pane.pinnedSessionId || null,
+      sessionHomeId: pane.sessionHomeId,
+      workspacePath: pane.workspacePath,
+      conversationLogPath: pane.outputLogFile,
+    }
+  },
+  reorder: reorderPane,
+  handOff: (paneId, screenX, screenY) => {
+    window.agentTeam?.cliPaneDragEnd?.(paneId, screenX, screenY)
+  },
+})
 
 // Persist the pane's collapsed-to-sidebar state to project.json so it survives
 // a restart (mirrors project.rename_pane / custom_name).

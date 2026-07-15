@@ -62,7 +62,7 @@ def _build_curl_command(port_file: str, event_kind: str) -> str:
     return (
         f"{_AGENT_TEAM_MARKER} kind={event_kind}\n"
         f"PORT=$(cat {safe_port_file} 2>/dev/null); "
-        f"[ -n \"$PORT\" ] && curl -fsS -m 2 -X POST "
+        f"[ -n \"$PORT\" ] && curl -fsS -m 2 -o /dev/null -X POST "
         f"-H 'Content-Type: application/json' "
         f"-H 'X-Agent-Team-Event: {event_kind}' "
         f"--data-binary @- "

@@ -140,6 +140,27 @@ describe('createResizeController — requestResizeRedraw gates', () => {
     expect(onStableWidthChange).toHaveBeenCalledWith(96)
   })
 
+  it('can redraw a font zoom without reporting stable width, while ordinary resize still reports', async () => {
+    attach()
+    await ackCurrentSize()
+    ctrl.requestResizeRedraw()
+    await vi.advanceTimersByTimeAsync(SETTLE_MS)
+
+    term.cols = 96
+    await ackCurrentSize()
+    ctrl.requestResizeRedraw({ notifyStableWidth: false })
+    await vi.advanceTimersByTimeAsync(SETTLE_MS)
+    expect(redrawCount()).toBe(2)
+    expect(onStableWidthChange).not.toHaveBeenCalled()
+
+    term.cols = 104
+    await ackCurrentSize()
+    ctrl.requestResizeRedraw()
+    await vi.advanceTimersByTimeAsync(SETTLE_MS)
+    expect(onStableWidthChange).toHaveBeenCalledOnce()
+    expect(onStableWidthChange).toHaveBeenCalledWith(104)
+  })
+
   it('coalesces concurrent requests into a single timer/redraw', async () => {
     attach()
     term.cols = 100

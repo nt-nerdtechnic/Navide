@@ -1478,17 +1478,16 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // recompute cols/rows and resync the PTY — that keeps the content filling the pane.
   //
   // Scrollback written before the zoom is NOT re-flowed: agent CLIs hard-wrap their own
-  // output (standalone short lines, isWrapped=false), so xterm cannot re-wrap them into
-  // the new grid and simply drops whatever no longer fits. The CLI only repaints its
-  // current screen on SIGWINCH and never re-emits history. Rebuild (resume) is the fix:
-  // it re-spawns at the current size and reprints the conversation at the new width.
+  // output (standalone short lines, isWrapped=false), so xterm cannot re-wrap it into
+  // the new grid. SIGWINCH redraws the current screen; font-only changes intentionally
+  // do not auto-resume the CLI to reprint history.
   watch(terminalFontSize, (size) => {
     term.options.fontSize = size
     resizeCtrl.applyFit()
     // The container's CSS size does not change when only the xterm cell size
-    // changes, so ResizeObserver may stay silent. Explicitly arm settlement so
-    // the resulting cols change reaches the shared idle-gated rebuild path.
-    resizeCtrl.requestResizeRedraw()
+    // changes, so ResizeObserver may stay silent. Redraw after settlement, but
+    // do not report a stable-width change that would auto-resume the CLI.
+    resizeCtrl.requestResizeRedraw({ notifyStableWidth: false })
   })
 
   async function spawn(opts: SpawnOptions): Promise<void> {

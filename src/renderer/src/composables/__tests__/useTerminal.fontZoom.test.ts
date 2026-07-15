@@ -129,7 +129,7 @@ describe('terminal font zoom — app-wide', () => {
     b.scope.stop()
   })
 
-  it('arms stable-width settlement so zoom uses the shared rebuild path', async () => {
+  it('arms redraw without stable-width notification', async () => {
     const a = await spawnPane('pane-a')
     const b = await spawnPane('pane-b')
     ctrl.requestResizeRedraw.mockClear()
@@ -137,6 +137,7 @@ describe('terminal font zoom — app-wide', () => {
     await press('-')
 
     expect(ctrl.requestResizeRedraw).toHaveBeenCalledTimes(2)
+    expect(ctrl.requestResizeRedraw).toHaveBeenCalledWith({ notifyStableWidth: false })
     a.scope.stop()
     b.scope.stop()
   })

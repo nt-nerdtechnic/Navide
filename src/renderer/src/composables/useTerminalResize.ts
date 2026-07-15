@@ -8,7 +8,7 @@ type BackendSend = ReturnType<typeof useBackend>['send']
 export interface ResizeController {
   applyFit(): void
   sendResizeNow(): void
-  requestResizeRedraw(): void
+  requestResizeRedraw(opts?: { notifyStableWidth?: boolean }): void
   readonly ackedCols: number
   readonly ackedRows: number
   attachObserver(el: HTMLElement): void
@@ -55,6 +55,7 @@ export function createResizeController(
   let resizeRedrawTimer: ReturnType<typeof setTimeout> | null = null
   let resizeRedrawDeadline = 0
   let lastRedrawCols = 0
+  let notifyStableWidthOnSettle = false
   // True while the observer is attached (mount…dispose lifecycle).
   let active = false
 
@@ -155,8 +156,9 @@ export function createResizeController(
   // after a fresh spawn/resume — both can settle at a width that differs from
   // the one the CLI's first frame was drawn at, and only a SIGWINCH-based
   // repaint (not a numeric resize) fixes already-printed content.
-  function requestResizeRedraw(): void {
+  function requestResizeRedraw(opts?: { notifyStableWidth?: boolean }): void {
     resizeRedrawDeadline = Date.now() + RESIZE_REDRAW_MAX_WAIT_MS
+    notifyStableWidthOnSettle ||= opts?.notifyStableWidth !== false
     armResizeRedraw()
   }
 
@@ -166,17 +168,19 @@ export function createResizeController(
     if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer)
     resizeRedrawTimer = setTimeout(() => {
       resizeRedrawTimer = null
-      if (!active || !sessionId.value) return
+      if (!active || !sessionId.value) { notifyStableWidthOnSettle = false; return }
       // Not fully settled yet (xterm still differs from the backend-acked size):
       // wait for the resize to finish, then re-check.
       if (term.cols !== _ackedCols || term.rows !== _ackedRows) { armResizeRedraw(); return }
       // Width unchanged since the last clean repaint (rows-only / no-op): skip.
-      if (term.cols === lastRedrawCols) return
+      if (term.cols === lastRedrawCols) { notifyStableWidthOnSettle = false; return }
       // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
       const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       const previousRedrawCols = lastRedrawCols
       const shrank = previousRedrawCols > 0 && term.cols < previousRedrawCols
+      const notifyStableWidth = notifyStableWidthOnSettle
+      notifyStableWidthOnSettle = false
       lastRedrawCols = term.cols
       // NOTE: we deliberately do NOT term.clear() on a width shrink. Wiping the
       // scrollback drops the user's conversation history (and, on a rebuild/
@@ -192,7 +196,7 @@ export function createResizeController(
       })
       // The first settled size establishes a baseline. Only later changes are
       // actionable; emitting on first paint would rebuild a resumed pane again.
-      if (previousRedrawCols > 0) onStableWidthChange?.(term.cols)
+      if (notifyStableWidth && previousRedrawCols > 0) onStableWidthChange?.(term.cols)
     }, RESIZE_REDRAW_SETTLE_MS)
   }
 
