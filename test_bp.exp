@@ -1,0 +1,8 @@
+#!/usr/bin/expect -f
+spawn bash --noprofile --norc
+expect "\\$"
+send "echo \"hello"
+send "\x1b\[200~\r\x1b\[201~"
+send "world\""
+send "\r"
+expect "\\$"

@@ -125,10 +125,7 @@ export interface SpawnOptions {
  * uniform and contain the protocol difference here.
  */
 export function encodeShiftEnter(agentKey?: string): string {
-  const key = agentKey?.toLowerCase()
-  if (key === 'codex') return '\x1b[13;2u'
-  if (key === 'terminal' || !key) return '\x16\x0a' // bash/zsh literal newline
-  return '\x1b\r'
+  return agentKey?.toLowerCase() === 'codex' ? '\x1b[13;2u' : '\x1b\r'
 }
 
 export type TerminalStatus = 'idle' | 'starting' | 'running' | 'exited' | 'error'
@@ -715,7 +712,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
       if (e.type !== 'keydown') return true
       // IME guard: allow the browser to process composition (e.g. Zhuyin/Pinyin)
-      if (e.isComposing || e.keyCode === 229) return true
+      if (e.isComposing) return true
 
       const buf = term.buffer.active
       const curX = buf.cursorX
