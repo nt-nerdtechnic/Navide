@@ -19,6 +19,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -504,6 +505,33 @@ def _flag_path() -> Path:
     return app_data_dir() / "onboarding.json"
 
 
+_STATE_LOCK = threading.Lock()
+
+
+def _read_state(path: Path | None = None) -> dict[str, Any]:
+    target = path or _flag_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_state(data: dict[str, Any], path: Path | None = None) -> None:
+    """Atomically replace onboarding state so a restart cannot observe a partial write."""
+    target = path or _flag_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _legacy_flag_path() -> Path:
     return Path.home() / ".agent-team" / "onboarding.json"
 
@@ -547,15 +575,10 @@ def is_complete() -> bool:
 def set_complete(value: bool) -> None:
     path = _flag_path()
     try:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-        except (OSError, ValueError):
-            data = {}
-        data["complete"] = value
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        with _STATE_LOCK:
+            data = _read_state(path)
+            data["complete"] = value
+            _write_state(data, path)
     except OSError:
         pass
 
@@ -575,14 +598,53 @@ def dismiss_cli_health(fingerprint: str) -> None:
     path = _flag_path()
     _migrate_legacy_flag()
     try:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-        except (OSError, ValueError):
-            data = {}
-        data["dismissed_cli_health"] = fingerprint
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        with _STATE_LOCK:
+            data = _read_state(path)
+            data["dismissed_cli_health"] = fingerprint
+            _write_state(data, path)
     except OSError:
         pass
+
+
+def cli_binary_override(agent_key: str) -> str:
+    """Return a persisted executable only while it still exists and is executable."""
+    _migrate_legacy_flag()
+    data = _read_state()
+    overrides = data.get("cli_binary_overrides")
+    if not isinstance(overrides, dict):
+        return ""
+    path = str(overrides.get(agent_key) or "")
+    dep = DEPS_BY_ID.get(agent_key)
+    if dep is None or Path(path).name != dep.check_cmd[0]:
+        return ""
+    return path if Path(path).is_file() and os.access(path, os.X_OK) else ""
+
+
+def select_cli_binary(agent_key: str, path: str, fingerprint: str) -> dict[str, Any]:
+    """Persist a verified CLI choice and its dismissal in one atomic transaction."""
+    dep = DEPS_BY_ID.get(agent_key)
+    if dep is None or dep.group != "agent_cli":
+        return {"ok": False, "error": "unknown agent CLI"}
+    if not re.fullmatch(r"[0-9a-f]{16}", fingerprint or ""):
+        return {"ok": False, "error": "invalid fingerprint"}
+    candidates = _distinct_executables(dep.check_cmd[0])
+    selected = next((candidate for candidate in candidates if path in candidate.get("aliases", [])), None)
+    if selected is None:
+        return {"ok": False, "error": "binary is not an installed PATH candidate"}
+
+    canonical_path = path
+    state_path = _flag_path()
+    _migrate_legacy_flag()
+    try:
+        with _STATE_LOCK:
+            data = _read_state(state_path)
+            overrides = data.get("cli_binary_overrides")
+            if not isinstance(overrides, dict):
+                overrides = {}
+            overrides[agent_key] = canonical_path
+            data["cli_binary_overrides"] = overrides
+            data["dismissed_cli_health"] = fingerprint
+            _write_state(data, state_path)
+    except OSError as error:
+        return {"ok": False, "error": str(error)}
+    return {"ok": True, "agent_key": agent_key, "path": canonical_path}

@@ -608,7 +608,7 @@
     "terminal-opened": "Diagnostic command opened in Terminal.",
     "terminal-failed": "Could not open Terminal: {error}",
     "still-detected": "The issue is still detected. Check the paths above and try again.",
-    "close": "Close guide"
+    "close": "Close and don't remind me"
   },
   "onboard": {
     "step": {

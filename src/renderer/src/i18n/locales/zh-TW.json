@@ -608,7 +608,7 @@
     "terminal-opened": "已在終端機開啟診斷指令。",
     "terminal-failed": "無法開啟終端機：{error}",
     "still-detected": "仍偵測到問題，請確認上方路徑後再試一次。",
-    "close": "關閉導覽"
+    "close": "關閉且不再提醒"
   },
   "onboard": {
     "step": {

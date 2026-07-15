@@ -138,6 +138,26 @@ async function checkOnboarding(): Promise<void> {
   try {
     const resp = await backend.send<OnboardStatus>('onboarding.status', {})
     onboardingComplete.value = resp.payload?.complete ?? true
+    const health = resp.payload?.cli_health
+    // One-time migration for selections made by renderer versions that stored
+    // only UI settings. Persist the same path + fingerprint in the backend so
+    // startup probing and reminder suppression survive every kind of restart.
+    if (health?.needs_attention && health.fingerprint) {
+      for (const entry of health.entries) {
+        const selectedPath = settingsGet(`agentTeam.cliBinary.${entry.agent_key}`, '').trim()
+        if (!selectedPath || !entry.candidates.some((candidate) => candidate.path === selectedPath)) continue
+        const persisted = await backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
+          agent_key: entry.agent_key,
+          path: selectedPath,
+          fingerprint: health.fingerprint,
+        }).catch(() => null)
+        if (persisted?.ok && persisted.payload?.ok !== false) {
+          health.dismissed = true
+          health.needs_attention = false
+          break
+        }
+      }
+    }
     cliHealthGuide.value = cliHealthGuideForLaunch(resp.payload)
   } catch {
     // If the check fails, don't lock the user out — fail open.

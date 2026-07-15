@@ -991,6 +991,31 @@ class AgentCliProbeError(RuntimeError):
         self.details = details
 
 
+def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
+    """Replace the CLI executable while preserving shell flags and list wrappers."""
+    selected = onboarding_deps.cli_binary_override(agent_key)
+    dep = onboarding_deps.DEPS_BY_ID.get(agent_key)
+    if not selected or dep is None:
+        return command
+    text = _command_text(command)
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        return command
+    if not parts or Path(parts[0]).name != dep.check_cmd[0]:
+        return command
+    first_token = re.match(r"^\s*(?:'[^']*'|\"[^\"]*\"|\S+)", text)
+    if first_token is None:
+        return command
+    replaced = f"{text[:first_token.start()]}{shlex.quote(selected)}{text[first_token.end():]}"
+    if isinstance(command, list):
+        updated = list(command)
+        if updated:
+            updated[-1] = replaced
+        return updated
+    return replaced
+
+
 def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) -> dict[str, Any] | None:
     """Resolve and smoke-test an agent CLI before allocating its PTY."""
     dep = onboarding_deps.DEPS_BY_ID.get(agent_key)
@@ -1093,6 +1118,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             agent_key = payload.get("agent_key") or ""
             env = dict(payload.get("env") or {})
             await _ensure_fresh_path_for_spawn(agent_key)
+            payload["command"] = _command_with_persisted_cli_binary(
+                agent_key, payload.get("command")
+            )
             startup_probe = await asyncio.to_thread(
                 _probe_agent_cli_for_spawn, agent_key, payload.get("command")
             )
@@ -3019,6 +3047,14 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "onboarding.cli_health.dismiss":
             onboarding_deps.dismiss_cli_health(str(payload.get("fingerprint") or ""))
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+        elif msg_type == "onboarding.cli_health.select_binary":
+            result = onboarding_deps.select_cli_binary(
+                str(payload.get("agent_key") or ""),
+                str(payload.get("path") or ""),
+                str(payload.get("fingerprint") or ""),
+            )
+            await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── AI Chat ──────────────────────────────────────────────────────────────
         elif msg_type == "ai.chat.settings.get":

@@ -86,6 +86,26 @@ describe('CliHealthGuide', () => {
     expect(wrapper.emitted('close')).toEqual([[]])
   })
 
+  it('persists the fingerprint when closing from the verify step', async () => {
+    const mock = createMockBackend('connected')
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: health },
+      global: { plugins: [i18n] },
+    })
+    const next = () => wrapper!.findAll('button').find((button) => button.text() === 'Next')!
+
+    await next().trigger('click')
+    await next().trigger('click')
+    const close = wrapper.findAll('button').find((button) => button.text() === "Close and don't remind me")
+    await close!.trigger('click')
+
+    expect(mock.sent).toContainEqual({
+      type: 'onboarding.cli_health.dismiss',
+      payload: { fingerprint: '0123456789abcdef' },
+    })
+    expect(wrapper.emitted('close')).toEqual([[]])
+  })
+
   it('offers a working alternate as an immediate Navide action', async () => {
     const mock = createMockBackend('connected')
     wrapper = mount(CliHealthGuide, {
@@ -96,8 +116,12 @@ describe('CliHealthGuide', () => {
     await wrapper.get('.ch-use-binary').trigger('click')
 
     expect(mock.sent).toContainEqual({
-      type: 'onboarding.cli_health.dismiss',
-      payload: { fingerprint: '0123456789abcdef' },
+      type: 'onboarding.cli_health.select_binary',
+      payload: {
+        agent_key: 'claude',
+        path: '/opt/homebrew/bin/claude',
+        fingerprint: '0123456789abcdef',
+      },
     })
     expect(wrapper.emitted('use-binary')).toEqual([[
       { agentKey: 'claude', path: '/opt/homebrew/bin/claude', version: '2.1.168' },

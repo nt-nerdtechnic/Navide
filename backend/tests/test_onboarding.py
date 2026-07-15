@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -280,3 +281,29 @@ def test_cli_health_dismissal_is_fingerprint_scoped(
 
     ob.dismiss_cli_health("invalid")
     assert ob._dismissed_cli_health_fingerprint() == fingerprint
+
+
+def test_cli_binary_selection_persists_path_and_fingerprint_atomically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flag, _legacy = _patch_flag_paths(monkeypatch, tmp_path)
+    prefix = tmp_path / "node"
+    target = _make_executable(
+        prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+    )
+    binary = prefix / "bin" / "claude"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.symlink_to(target)
+    monkeypatch.setenv("PATH", str(binary.parent))
+    ob.set_complete(True)
+
+    result = ob.select_cli_binary("claude", str(binary), "0123456789abcdef")
+
+    assert result == {"ok": True, "agent_key": "claude", "path": str(binary)}
+    assert ob.cli_binary_override("claude") == str(binary)
+    assert ob._dismissed_cli_health_fingerprint() == "0123456789abcdef"
+    assert json.loads(flag.read_text(encoding="utf-8")) == {
+        "complete": True,
+        "cli_binary_overrides": {"claude": str(binary)},
+        "dismissed_cli_health": "0123456789abcdef",
+    }

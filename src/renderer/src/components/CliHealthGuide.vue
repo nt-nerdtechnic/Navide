@@ -64,9 +64,18 @@ async function openRemoval(entry: CliHealthEntry, candidate: CliHealthCandidate)
 }
 
 async function useBinary(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
-  await props.backend.send('onboarding.cli_health.dismiss', {
+  const selected = await props.backend.send<{ ok: boolean }>('onboarding.cli_health.select_binary', {
+    agent_key: entry.agent_key,
+    path: candidate.path,
     fingerprint: health.value.fingerprint,
-  }).catch(() => {})
+  }).catch(() => null)
+  // Compatibility with an older backend: keep the existing dismissal path
+  // while the renderer/backend are temporarily on different versions.
+  if (!selected?.ok || selected.payload?.ok === false) {
+    await props.backend.send('onboarding.cli_health.dismiss', {
+      fingerprint: health.value.fingerprint,
+    }).catch(() => {})
+  }
   emit('use-binary', {
     agentKey: entry.agent_key,
     path: candidate.path,
@@ -197,7 +206,7 @@ async function dismiss(): Promise<void> {
         <span />
         <button v-if="stepIndex > 0" class="ch-btn ghost" @click="stepIndex--">{{ $t('action.back') }}</button>
         <button v-if="stepIndex < steps.length - 1" class="ch-btn primary" @click="stepIndex++">{{ $t('action.next') }}</button>
-        <button v-else class="ch-btn ghost" @click="emit('close')">{{ $t('cli-health.close') }}</button>
+        <button v-else class="ch-btn ghost" @click="dismiss">{{ $t('cli-health.close') }}</button>
       </footer>
     </section>
   </div>

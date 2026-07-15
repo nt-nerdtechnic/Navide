@@ -80,3 +80,20 @@ def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
 
 def test_plain_terminal_skips_agent_cli_probe() -> None:
     assert app._probe_agent_cli_for_spawn("terminal") is None
+
+
+def test_persisted_cli_binary_rewrites_spawn_and_resume_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app.onboarding_deps,
+        "cli_binary_override",
+        lambda _agent_key: "/opt/homebrew/bin/claude",
+    )
+
+    assert app._command_with_persisted_cli_binary(
+        "claude", "claude --session-id abc"
+    ) == "/opt/homebrew/bin/claude --session-id abc"
+    assert app._command_with_persisted_cli_binary(
+        "claude", ["/bin/zsh", "-lc", "claude --resume abc"]
+    ) == ["/bin/zsh", "-lc", "/opt/homebrew/bin/claude --resume abc"]
