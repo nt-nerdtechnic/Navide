@@ -168,6 +168,15 @@ describe('terminal font zoom — app-wide', () => {
     a.scope.stop()
   })
 
+  it('⌘= grows without Shift', async () => {
+    const a = await spawnPane('pane-a')
+
+    await press('=', { code: 'Equal' })
+    expect(a.opts.fontSize).toBe(13)
+
+    a.scope.stop()
+  })
+
   it('⌘0 resets to the default size', async () => {
     const a = await spawnPane('pane-a')
 
@@ -207,7 +216,6 @@ describe('terminal font zoom — app-wide', () => {
 
     await press('-', { metaKey: false })
     await press('=', { metaKey: false })
-    await press('=', { code: 'Equal' })
     await press('-', { altKey: true })
     await press('-', { ctrlKey: true })
 

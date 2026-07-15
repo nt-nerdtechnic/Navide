@@ -39,7 +39,7 @@ export function zoomReset(): void { setFontSize(DEFAULT_FONT_SIZE) }
 let installed = false
 
 /**
- * Bind ⌘+ / ⌘- / ⌘0 at the window level.
+ * Bind ⌘= / ⌘+ / ⌘- / ⌘0 at the window level.
  *
  * This must NOT live on xterm's `attachCustomKeyEventHandler`: that only fires
  * while a terminal's hidden helper textarea holds focus, so the shortcut would
@@ -56,9 +56,9 @@ export function installTerminalZoomShortcuts(): void {
 
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!e.metaKey || e.altKey || e.ctrlKey) return
-    // `+` shares the Equal key and requires Shift on macOS. Match `code` as well
-    // as `key` so keyboard-layout differences cannot turn zoom-in into reset.
-    if (e.shiftKey && (e.code === 'Equal' || e.key === '+')) zoomIn()
+    // `+` shares the Equal key and requires Shift on macOS. Accept both forms,
+    // and match `code` so keyboard-layout differences cannot break zoom-in.
+    if (e.code === 'Equal' || e.key === '=' || e.key === '+') zoomIn()
     else if (!e.shiftKey && (e.code === 'Minus' || e.key === '-')) zoomOut()
     else if (!e.shiftKey && (e.code === 'Digit0' || e.key === '0')) zoomReset()
     else return
