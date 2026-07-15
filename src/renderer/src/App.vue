@@ -2450,21 +2450,7 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   }
 }
 
-async function onFreshSpawnHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
-  if (revivingHistoryPaneId.value) return
-  revivingHistoryPaneId.value = entry.paneId
-  try {
-    await onManualSpawn({
-      agentKey: entry.agentKey,
-      roleKey: entry.roleKey,
-      stageId: '',
-      workspacePath: entry.workspacePath || currentWorkspace.value,
-      customName: entry.customName,
-    })
-  } finally {
-    revivingHistoryPaneId.value = ''
-  }
-}
+
 watch(() => pipeline.state, (newState, oldState) => {
   if (newState === 'completed' && oldState === 'running') {
     showCompletionModal.value = true
@@ -6714,11 +6700,6 @@ function paneIsCommander(p: ActivePane): boolean {
                   :disabled="!!revivingHistoryPaneId"
                   @click="onResumeHistoryAgent(entry)"
                 >{{ revivingHistoryPaneId === entry.paneId ? '…' : $t('action.resume-session') }}</button>
-                <button
-                  class="ah-revive ah-fresh"
-                  :disabled="!!revivingHistoryPaneId"
-                  @click="onFreshSpawnHistoryAgent(entry)"
-                >{{ $t('action.fresh-spawn') }}</button>
               </div>
             </div>
           </div>
@@ -8176,11 +8157,6 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--bg-selected);
   border-color: var(--accent-bright);
   color: var(--accent-bright);
-}
-.ah-revive.ah-fresh {
-  border-color: var(--border-default);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
 }
 .ah-revive:disabled {
   cursor: wait;
