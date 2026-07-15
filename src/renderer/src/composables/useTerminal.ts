@@ -1525,7 +1525,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   }
 
   function pasteText(text: string): void {
-    if (!sessionId.value) return
+    if (!sessionId.value || status.value === 'exited' || status.value === 'error') return
     void backend.send('terminal.input', {
       terminal_session_id: sessionId.value,
       data: text

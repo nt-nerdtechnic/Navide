@@ -109,7 +109,8 @@ defineExpose({
   markBufferPosition: terminal.markBufferPosition,
   recleanBuffer: terminal.recleanBuffer,
   readRenderedText: terminal.readRenderedText,
-  fitTerminal: terminal.fitTerminal
+  fitTerminal: terminal.fitTerminal,
+  redraw: terminal.redraw
 })
 
 /** True when the drag carries a CLI pane's identity (pane→pane context share)
@@ -137,6 +138,7 @@ function onTerminalDragLeave(): void {
 function onTerminalDrop(e: DragEvent): void {
   isDragOver.value = false
   isCliDragOver.value = false
+  if (terminal.displayStatus.value === 'exited' || terminal.displayStatus.value === 'error') return
   // CLI pane dropped onto this terminal: share its recent output with this pane.
   // App.vue owns pane state, so it resolves the buffer and does the paste.
   if (isCliPaneDrag(e)) {

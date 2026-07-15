@@ -441,8 +441,7 @@ function onResizeMove(e: MouseEvent): void {
 function refitAllTerminals(): void {
   void nextTick(() => requestAnimationFrame(() => {
     for (const ref of Object.values(paneRefs)) {
-      (ref as unknown as { fitTerminal?: (opts?: { redrawAfterSettle?: boolean }) => void })
-        ?.fitTerminal?.({ redrawAfterSettle: true })
+      (ref as unknown as { redraw?: () => void })?.redraw?.()
     }
   }))
 }
@@ -5946,8 +5945,7 @@ watch(effectiveLayoutMode, () => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         for (const ref of Object.values(paneRefs)) {
-          (ref as unknown as { fitTerminal?: (opts?: { redrawAfterSettle?: boolean }) => void })
-            ?.fitTerminal?.({ redrawAfterSettle: true })
+          (ref as unknown as { redraw?: () => void })?.redraw?.()
         }
       })
     })
