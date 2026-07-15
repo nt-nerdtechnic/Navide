@@ -1,5 +1,7 @@
 # Product Vision
 
+[English](vision.md) | [繁體中文](zh-TW/vision.md)
+
 ## Vision
 
 Navide will become the primary engineering environment for the Agent era: a system in which one engineer can direct, synchronize, and verify an AI engineering force across the complete software lifecycle.

@@ -1,5 +1,7 @@
 # Product Positioning and Public Claims
 
+[English](product-positioning.md) | [繁體中文](zh-TW/product-positioning.md)
+
 This document keeps Navide's public story consistent across the README, website copy, demonstrations, release notes, presentations, and community posts. It is a communication reference, not a substitute for the user guide, roadmap, or release history.
 
 ## Category
@@ -139,4 +141,3 @@ These claims require new product or market evidence before publication.
 - The User Guide describes current behavior.
 - The Changelog and GitHub Releases describe shipped changes.
 - Privacy and Security documents define current boundaries, not aspirational guarantees.
-

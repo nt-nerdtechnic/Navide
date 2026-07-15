@@ -1,5 +1,7 @@
 # The Navide Manifesto
 
+[English](manifesto.md) | [繁體中文](zh-TW/manifesto.md)
+
 ## A new source of engineering power
 
 The steam engine did more than make individual labor faster. It separated productive power from human muscle and made new machines, factories, transportation systems, organizations, and ways of life possible.

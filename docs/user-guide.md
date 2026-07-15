@@ -1,5 +1,7 @@
 # User Guide
 
+[English](user-guide.md) | [繁體中文](zh-TW/user-guide.md)
+
 ## Product model
 
 Navide is designed for one engineer directing multiple AI agents. The primary interaction is not always editing a file; it is setting an outcome, coordinating sessions, observing progress, handling meaningful exceptions, and accepting verified results.

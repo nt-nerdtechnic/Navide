@@ -1,5 +1,7 @@
 # Product Roadmap
 
+[English](roadmap.md) | [繁體中文](zh-TW/roadmap.md)
+
 Navide's long-term direction is to become **the engineering instrument for the Agent era**: the primary environment in which one engineer directs an AI engineering force through the complete software lifecycle.
 
 The destination is larger than a multi-agent terminal manager or control plane. An engineer should eventually be able to understand, create, navigate, edit, run, debug, test, review, version, and deliver software without returning to a traditional IDE as the primary working environment.

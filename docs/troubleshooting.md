@@ -1,5 +1,7 @@
 # Troubleshooting
 
+[English](troubleshooting.md) | [繁體中文](zh-TW/troubleshooting.md)
+
 ## The app does not start
 
 1. Confirm Node.js 22+, pnpm 10+, Python 3.12+, and uv 0.11+.

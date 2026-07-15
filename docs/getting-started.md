@@ -1,5 +1,7 @@
 # Getting Started
 
+[English](getting-started.md) | [繁體中文](zh-TW/getting-started.md)
+
 Navide currently supports macOS 13 or newer and is installed from source. A signed downloadable release is planned but is not yet published.
 
 ## What you need
