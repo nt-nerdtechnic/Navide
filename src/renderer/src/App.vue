@@ -6351,11 +6351,12 @@ const latestPipelineLog = computed<string>(() => {
 
 function paneSubtitle(p: ActivePane): string {
   const preparationLabel = panePreparationLabel(p)
-  if (p.origin !== 'pipeline' && !p.stageId) return `${roleLabel(p.roleKey)} · ${i18n.global.t('label.manual')} · ${preparationLabel}`
+  const agentType = agentSpecs.find((s) => s.agentKey === p.agentKey)?.label ?? p.agentKey
+  if (p.origin !== 'pipeline' && !p.stageId) return `${agentType} · ${roleLabel(p.roleKey)} · ${i18n.global.t('label.manual')} · ${preparationLabel}`
   const stage = stagesApi.stageById.value[p.stageId] ?? { shortTitle: p.stageId }
   const prefix = p.origin === 'pipeline' ? `P${p.stageId} · ` : ''
   const stageLabel = stage.shortTitle || i18n.global.t('label.manual')
-  return `${prefix}${roleLabel(p.roleKey)} · ${stageLabel} · ${preparationLabel}`
+  return `${prefix}${agentType} · ${roleLabel(p.roleKey)} · ${stageLabel} · ${preparationLabel}`
 }
 
 function panePreparationLabel(p: ActivePane): string {
@@ -6535,6 +6536,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :issue-handoffs="issueHandoffView"
       @dispatch-issue="onDispatchIssue"
       @spawn-for-issue="onHandleIssue"
+      @rename-pane="setPaneCustomName"
     />
     <QuestionAlert
       :visible="!!activeQuestion"

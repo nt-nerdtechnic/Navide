@@ -220,7 +220,40 @@ const emit = defineEmits<{
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
   (e: 'spawn-for-issue', payload: { agentKey: string; mode: IssueHandlerMode; issue: Issue; provider: IssueProvider }): void
   (e: 'open-git-accounts'): void
+  (e: 'rename-pane', paneId: string, name: string): void
 }>()
+
+const renamingPaneId = ref<string | null>(null)
+const renameDraft = ref('')
+const renameInputRefs = ref<HTMLInputElement[]>([])
+let _cancelledRename = false
+
+async function startRename(p: ActivePaneView): Promise<void> {
+  _cancelledRename = false
+  renameDraft.value = p.agentLabel
+  renamingPaneId.value = p.id
+  await nextTick()
+  const el = renameInputRefs.value.find(el => el?.dataset?.paneId === p.id)
+  if (el) {
+    el.focus()
+    el.select()
+  }
+}
+
+function commitRename(): void {
+  if (_cancelledRename || !renamingPaneId.value) return
+  emit('rename-pane', renamingPaneId.value, renameDraft.value.trim())
+  renamingPaneId.value = null
+}
+
+function onRenameKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+  if (e.key === 'Escape') { e.preventDefault(); _cancelledRename = true; renamingPaneId.value = null }
+}
+
+function agentTypeLabel(agentKey: string): string {
+  return props.agentSpecs?.find(s => s.agentKey === agentKey)?.label ?? agentKey
+}
 
 const yoloLocal = computed<boolean>({
   get: () => props.yoloEnabled,
@@ -1041,7 +1074,23 @@ function onPipelineDividerEnd(): void {
         >
           <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
-            <span class="badge">{{ p.agentLabel }}</span>
+            <input
+              v-if="renamingPaneId === p.id"
+              ref="renameInputRefs"
+              :data-pane-id="p.id"
+              v-model="renameDraft"
+              class="rename-input"
+              @keydown="onRenameKeydown"
+              @blur="commitRename"
+              @click.stop
+              @mousedown.stop
+            />
+            <span
+              v-else
+              class="badge"
+              :title="$t('action.rename')"
+              @dblclick.stop="startRename(p)"
+            >{{ p.agentLabel }}</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
@@ -1058,10 +1107,10 @@ function onPipelineDividerEnd(): void {
           </div>
           <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            stage {{ p.stageId }} · {{ agentTypeLabel(p.agentKey) }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-else-if="!p.isMinimized" class="stage-line">
-            manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            {{ agentTypeLabel(p.agentKey) }} · manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
           <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
