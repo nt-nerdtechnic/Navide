@@ -382,19 +382,25 @@ class TerminalService:
         except OSError as err:
             log.warning("interrupt session %s failed: %s", session_id, err)
 
-    def kill(self, session_id: str) -> None:
+    def kill(self, session_id: str, force: bool = False) -> None:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
-        self._close(session, reason="killed")
+            
         try:
             pgid = os.getpgid(session.proc.pid)
-            os.killpg(pgid, signal.SIGTERM)
+            if force:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
             # Group already gone — closing the PTY master HUPs the child, so
             # it often dies before the SIGTERM lands. The escalation task
             # still runs to reap it and drop its crash-recovery record.
             pgid = 0
+            
+        self._close(session, reason="killed")
+            
         # A CLI that traps SIGTERM would survive the close and, being gone
         # from _sessions, escape the shutdown sweep — escalate to SIGKILL
         # after a grace period and only then drop its crash-recovery record.

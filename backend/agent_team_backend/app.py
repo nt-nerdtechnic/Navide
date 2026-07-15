@@ -1258,12 +1258,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             # the TerminalService does. Look it up before killing so we can
             # release the attribution registration.
             term_session_id = payload["terminal_session_id"]
+            force = bool(payload.get("force", False))
             pane_id_for_unreg = ""
             for sess in session.terminals._sessions.values():  # noqa: SLF001
                 if sess.id == term_session_id:
                     pane_id_for_unreg = sess.pane_id
                     break
-            session.terminals.kill(term_session_id)
+            session.terminals.kill(term_session_id, force=force)
             if pane_id_for_unreg:
                 attribution.unregister_pane(pane_id_for_unreg)
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))

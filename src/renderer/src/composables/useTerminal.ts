@@ -1561,10 +1561,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     await backend.send('terminal.interrupt', { terminal_session_id: sessionId.value })
   }
 
-  async function kill(): Promise<void> {
+  async function kill(opts?: { force?: boolean }): Promise<void> {
     if (!sessionId.value) return
     rememberSessionId('')  // explicit kill — never reattach to this PTY
-    await backend.send('terminal.kill', { terminal_session_id: sessionId.value })
+    await backend.send('terminal.kill', { 
+      terminal_session_id: sessionId.value,
+      force: opts?.force ?? false
+    })
   }
 
   function fitTerminal(opts?: { redrawAfterSettle?: boolean }): void {

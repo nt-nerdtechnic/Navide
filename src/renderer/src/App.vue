@@ -1829,7 +1829,7 @@ async function onReinject(paneId: string): Promise<void> {
   syncViews()
 }
 
-async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRemoved: true }): Promise<void> {
+async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean } = { markRemoved: true }): Promise<void> {
   clearPaneWidthRebuild(paneId)
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
@@ -1844,7 +1844,7 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean } = { markRe
   const ref = paneRefs[paneId]
   if (ref?.sessionId) {
     try {
-      await ref.kill()
+      await ref.kill({ force: opts.force })
     } catch {
       /* ignore */
     }
@@ -1946,7 +1946,7 @@ async function rebuildPaneViaResume(
     // replacement to the end, which would jump the rebuilt pane to the last slot.
     // Capture its index and move the replacement back into place after spawn.
     const origIndex = panes.value.findIndex((p) => p.id === paneId)
-    await onKill(paneId, { markRemoved: false })
+    await onKill(paneId, { markRemoved: false, force: true })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
@@ -2047,7 +2047,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   rebuildingPanes.add(paneId)
   try {
     const origIndex = panes.value.findIndex((p) => p.id === paneId)
-    await onKill(paneId, { markRemoved: false })
+    await onKill(paneId, { markRemoved: false, force: true })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
