@@ -103,7 +103,7 @@ describe('spawn history titles', () => {
     expect(entries[0].customName).toBeUndefined()
   })
 
-  it('prefers an exact pane id over other entries in the same session lineage', () => {
+  it('updates all entries in the same session lineage', () => {
     const entries = [
       entry({ paneId: 'exact-pane', agentKey: 'claude', sessionId: 'session-1' }),
       entry({ paneId: 'older-pane', agentKey: 'claude', sessionId: 'session-1' }),
@@ -115,7 +115,7 @@ describe('spawn history titles', () => {
       sessionId: 'session-1',
     }, 'Exact title')).toBe(true)
     expect(entries[0].customName).toBe('Exact title')
-    expect(entries[1].customName).toBeUndefined()
+    expect(entries[1].customName).toBe('Exact title')
   })
 })
 

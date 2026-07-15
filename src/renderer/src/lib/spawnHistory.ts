@@ -26,34 +26,37 @@ export function updateHistoryCustomName(
   customName?: string
 ): boolean {
   const source = typeof identity === 'string' ? { paneId: identity } : identity
-  const exact = entries.find((candidate) => candidate.paneId === source.paneId)
-  if (exact) {
-    exact.customName = customName?.trim() || undefined
-    return true
+  let updated = false
+  const nameToSet = customName?.trim() || undefined
+
+  for (const candidate of entries) {
+    if (candidate.paneId === source.paneId) {
+      candidate.customName = nameToSet
+      updated = true
+      continue
+    }
+
+    const sessionHomeId = source.sessionHomeId?.trim()
+    if (source.agentKey === 'codex' && sessionHomeId) {
+      if (candidate.agentKey === 'codex' && (candidate.sessionHomeId?.trim() === sessionHomeId || candidate.paneId === sessionHomeId)) {
+        candidate.customName = nameToSet
+        updated = true
+        continue
+      }
+    }
+
+    const agentKey = source.agentKey
+    const sessionId = agentKey && source.sessionId ? normalizeResumeSessionId(agentKey, source.sessionId) : ''
+    if (agentKey && sessionId) {
+      if (candidate.agentKey === agentKey && !!candidate.sessionId && normalizeResumeSessionId(agentKey, candidate.sessionId) === sessionId) {
+        candidate.customName = nameToSet
+        updated = true
+        continue
+      }
+    }
   }
 
-  const sessionHomeId = source.sessionHomeId?.trim()
-  let matches = source.agentKey === 'codex' && sessionHomeId
-    ? entries.filter((candidate) =>
-        candidate.agentKey === 'codex'
-        && (candidate.sessionHomeId?.trim() === sessionHomeId || candidate.paneId === sessionHomeId)
-      )
-    : []
-
-  const agentKey = source.agentKey
-  const sessionId = agentKey && source.sessionId
-    ? normalizeResumeSessionId(agentKey, source.sessionId)
-    : ''
-  if (matches.length === 0 && agentKey && sessionId) {
-    matches = entries.filter((candidate) =>
-      candidate.agentKey === agentKey
-      && !!candidate.sessionId
-      && normalizeResumeSessionId(agentKey, candidate.sessionId) === sessionId
-    )
-  }
-  if (matches.length === 0) return false
-  for (const entry of matches) entry.customName = customName?.trim() || undefined
-  return true
+  return updated
 }
 
 export interface TerminalStartupProbe {

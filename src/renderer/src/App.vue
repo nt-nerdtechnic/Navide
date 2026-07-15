@@ -5893,7 +5893,12 @@ function setPaneCustomName(paneId: string, rawName: string): void {
   const name = rawName.trim()
   // Empty name resets to the default label.
   pane.customName = name && name !== pane.agentLabel ? name : undefined
-  updateHistoryCustomName(spawnHistory.value, paneId, pane.customName)
+  updateHistoryCustomName(spawnHistory.value, {
+    paneId,
+    agentKey: pane.agentKey,
+    sessionId: pane.pinnedSessionId,
+    sessionHomeId: pane.sessionHomeId,
+  }, pane.customName)
   syncViews()
   backend.send('project.rename_pane', {
     workspace_path: pane.workspacePath,
