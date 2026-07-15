@@ -1428,6 +1428,7 @@ interface SpawnInternal {
   workspacePath: string
   origin: 'manual' | 'pipeline'
   runGroupId?: string
+  previousPaneId?: string
   kickoffPrompt?: string
   skipRoleInjection?: boolean
   /** True when commandOverride is a `--resume`/`resume` command restoring a
