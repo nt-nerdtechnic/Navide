@@ -2187,6 +2187,10 @@ function onPaneWidthSettled(paneId: string, cols: number): void {
   if (paneSettledWidths.get(paneId) === cols) return
   paneSettledWidths.set(paneId, cols)
 
+  // Temporarily disable auto-rebuild on resize to prevent unexpected CLI resumes
+  return
+
+  /*
   const pane = panes.value.find((candidate) => candidate.id === paneId)
   if (!pane || !paneCanRebuild(pane)) {
     const old = pendingWidthRebuilds.get(paneId)
@@ -2202,6 +2206,7 @@ function onPaneWidthSettled(paneId: string, cols: number): void {
     : { ...state, timer: existing?.timer ?? null }
   pendingWidthRebuilds.set(paneId, pending)
   armPaneWidthRebuild(paneId, pending, WIDTH_REBUILD_RETRY_MS)
+  */
 }
 
 // Some pane-removal paths intentionally detach without killing the backend PTY.
