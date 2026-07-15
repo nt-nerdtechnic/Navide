@@ -14,6 +14,8 @@ concurrency:
 
 jobs:
   release-macos-arm64:
+    # v0.1.40 is published manually as the explicitly documented unsigned preview.
+    if: github.ref_name != 'v0.1.40'
     name: Test, sign, notarize, and release macOS arm64
     runs-on: macos-14
     timeout-minutes: 60
