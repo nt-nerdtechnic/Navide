@@ -1,0 +1,8 @@
+#!/usr/bin/expect -f
+spawn zsh --no-rcs --no-globalrcs
+expect "%"
+send "echo \"hello"
+send "\x1b\x0d"
+send "world\""
+send "\r"
+expect "%"

@@ -1,0 +1,8 @@
+#!/usr/bin/expect -f
+spawn bash --noprofile --norc
+expect "\\$"
+send "echo \"hello"
+send "\x16\x0a"
+send "world\""
+send "\r"
+expect "\\$"

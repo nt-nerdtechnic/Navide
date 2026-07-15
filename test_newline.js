@@ -1,4 +1,4 @@
-const pty = require('node-pty');
+const pty = require('./node_modules/node-pty');
 const p = pty.spawn('bash', ['--noprofile', '--norc'], { cols: 80, rows: 24 });
 let out = '';
 p.onData(data => { out += data; });
