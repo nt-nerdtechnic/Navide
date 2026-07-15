@@ -5889,6 +5889,33 @@ function startRenamePane(paneId: string): void {
   void nextTick(() => { renameInput.value?.focus(); renameInput.value?.select() })
 }
 
+const inlineRenamingId = ref<string | null>(null)
+const inlineRenameDraft = ref('')
+const inlineRenameInputs = ref<HTMLInputElement[]>([])
+
+function startInlineRename(p: { id: string; customName?: string; agentLabel?: string }): void {
+  inlineRenameDraft.value = p.customName || p.agentLabel || ''
+  inlineRenamingId.value = p.id
+  void nextTick(() => {
+    const el = inlineRenameInputs.value.find(el => el?.dataset?.paneId === p.id)
+    if (el) {
+      el.focus()
+      el.select()
+    }
+  })
+}
+
+function commitInlineRename(): void {
+  if (!inlineRenamingId.value) return
+  setPaneCustomName(inlineRenamingId.value, inlineRenameDraft.value)
+  inlineRenamingId.value = null
+}
+
+function onInlineRenameKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter') { e.preventDefault(); commitInlineRename() }
+  if (e.key === 'Escape') { e.preventDefault(); inlineRenamingId.value = null }
+}
+
 // Applies a custom display name to a pane and persists it. Shared by the
 // context-menu rename dialog and the inline (double-click) header edit.
 function setPaneCustomName(paneId: string, rawName: string): void {
@@ -6862,9 +6889,27 @@ function paneIsCommander(p: ActivePane): boolean {
           <div class="spotlight-thumb-info">
             <div class="spotlight-thumb-name-row">
               <span v-if="p.origin === 'pipeline' && p.stageId" class="spotlight-thumb-pipe-tag">P{{ p.stageId }}</span>
-              <span class="spotlight-thumb-name">{{ p.agentLabel }}</span>
+              <input
+                v-if="inlineRenamingId === p.id"
+                ref="inlineRenameInputs"
+                :data-pane-id="p.id"
+                v-model="inlineRenameDraft"
+                class="inline-rename-input"
+                @keydown="onInlineRenameKeydown"
+                @blur="commitInlineRename"
+                @click.stop
+                @mousedown.stop
+              />
+              <span
+                v-else
+                class="spotlight-thumb-name"
+                :title="$t('action.rename')"
+                @dblclick.stop="startInlineRename(p)"
+              >{{ p.agentLabel }}</span>
             </div>
-            <span v-if="p.roleLabel" class="spotlight-thumb-role">{{ p.roleLabel }}</span>
+            <span class="spotlight-thumb-role">
+              {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
+            </span>
           </div>
           <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
         </div>
@@ -6907,9 +6952,27 @@ function paneIsCommander(p: ActivePane): boolean {
             <div class="meeting-info">
               <div class="meeting-name-row">
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
-                <span class="meeting-name">{{ p.agentLabel }}</span>
+                <input
+                  v-if="inlineRenamingId === p.id"
+                  ref="inlineRenameInputs"
+                  :data-pane-id="p.id"
+                  v-model="inlineRenameDraft"
+                  class="inline-rename-input"
+                  @keydown="onInlineRenameKeydown"
+                  @blur="commitInlineRename"
+                  @click.stop
+                  @mousedown.stop
+                />
+                <span
+                  v-else
+                  class="meeting-name"
+                  :title="$t('action.rename')"
+                  @dblclick.stop="startInlineRename(p)"
+                >{{ p.agentLabel }}</span>
               </div>
-              <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
+              <span class="meeting-sub">
+                {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
+              </span>
             </div>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
@@ -7629,6 +7692,20 @@ function paneIsCommander(p: ActivePane): boolean {
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
+}
+.inline-rename-input {
+  flex: 1;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-emphasis);
+  border-radius: 4px;
+  color: var(--text-bright);
+  font-size: 11px;
+  padding: 1px 3px;
+  min-width: 0;
+}
+.inline-rename-input:focus {
+  outline: none;
+  border-color: var(--accent-focus);
 }
 .spotlight-thumb-name {
   font-size: 11px;
