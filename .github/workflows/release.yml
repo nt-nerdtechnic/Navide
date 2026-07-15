@@ -76,6 +76,7 @@ jobs:
           pnpm build
           pnpm exec electron-builder --mac --arm64 --publish never -c.forceCodeSigning=true
         env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_API_KEY: ${{ runner.temp }}/AuthKey.p8
