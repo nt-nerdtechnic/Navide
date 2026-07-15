@@ -71,6 +71,17 @@ jobs:
         env:
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
 
+      - name: Verify Code Signing Secrets
+        run: |
+          if [ -z "${{ secrets.MAC_CSC_LINK }}" ]; then
+            echo "::error::MAC_CSC_LINK secret is missing or empty. Please set it in GitHub Secrets (or the 'production' environment)."
+            exit 1
+          fi
+          if [ -z "${{ secrets.MAC_CSC_KEY_PASSWORD }}" ]; then
+            echo "::error::MAC_CSC_KEY_PASSWORD secret is missing or empty. Please set it in GitHub Secrets."
+            exit 1
+          fi
+
       - name: Build, sign, and notarize application
         run: |
           pnpm build
