@@ -1,239 +1,252 @@
 # Product Roadmap
 
-Navide's long-term direction is a **local-first multi-agent development control plane**: a place to configure, run, observe, govern, and review teams of coding agents without locking the workflow to one model vendor.
+Navide's long-term direction is to become **the engineering instrument for the Agent era**: the primary environment in which one engineer directs an AI engineering force through the complete software lifecycle.
 
-This roadmap is directional. It does not promise dates or guarantee that every item will ship. Released behavior belongs in [CHANGELOG.md](../CHANGELOG.md); current behavior belongs in the [User Guide](user-guide.md).
+The destination is larger than a multi-agent terminal manager or control plane. An engineer should eventually be able to understand, create, navigate, edit, run, debug, test, review, version, and deliver software without returning to a traditional IDE as the primary working environment.
+
+This roadmap is directional. It does not promise dates or claim that future capabilities have shipped. Released behavior belongs in [CHANGELOG.md](../CHANGELOG.md); current behavior belongs in the [User Guide](user-guide.md); the underlying purpose belongs in the [Manifesto](manifesto.md) and [Product Vision](vision.md).
+
+## North star
+
+```text
+Engineer defines an outcome
+  → Navide recovers private project intelligence
+  → the right agents and sessions are assembled
+  → work is decomposed, owned, and synchronized
+  → agents execute in parallel within visible boundaries
+  → Navide detects conflicts, risks, and meaningful exceptions
+  → tests, reviews, and evidence converge on a result
+  → the engineer intervenes precisely where judgment matters
+  → the result is accepted and becomes context for the next evolution
+```
+
+The user remains responsible for intent, lasting decisions, credentials, destructive actions, external publication, and final acceptance.
 
 ## Product principles
 
-1. **Orchestration before imitation** — prioritize coordination, observability, control, and review over reproducing every general-purpose IDE feature.
-2. **User-owned state** — keep workspace state, run artifacts, and configuration inspectable and portable where practical.
-3. **Provider-neutral contracts** — model agent capabilities explicitly instead of assuming one CLI's syntax or storage layout.
-4. **Safe automation** — automation level, data flow, and tool authority must be visible and controllable.
-5. **Reviewable delivery** — an agent run is not complete until its artifacts, changes, checks, and unresolved risks can be reviewed.
-6. **Graceful degradation** — optional analyzers, documentation services, and provider integrations must not prevent basic terminal work.
+1. **One engineer, an AI engineering force** — optimize the complete system for an individual directing many agents, not for reproducing a traditional human organization chart.
+2. **Outcomes before keystrokes** — the primary unit of work is a goal with acceptance evidence, while files and edits remain first-class implementation artifacts.
+3. **Evolution is the center** — project creation matters, but repeated feature, fix, test, and refinement loops dominate real engineering work.
+4. **Management by exception** — routine reversible work should continue without approval noise; ambiguity, risk, conflict, external impact, and irreversible actions should return to the engineer.
+5. **Private project intelligence** — `.agent-team/` is local, per-user, excluded from Git, inspectable, controllable, and never an implicit team or cloud synchronization layer.
+6. **Autonomous but not opaque** — work must remain visible, interruptible, recoverable, and accountable through evidence.
+7. **Complete engineering capability** — Navide must eventually cover the professional workflow required to replace the traditional IDE, while reinterpreting that workflow for the Agent era.
+8. **Provider independence** — agent and model capabilities should be explicit rather than hidden behind assumptions about one vendor.
 
-## North-star workflow
+## Today and destination
 
-```text
-Issue or local task
-  → policy and repository preflight
-  → dependency graph and team proposal
-  → user approves scope, agents, cost, and authority
-  → agents execute in parallel with durable events and artifacts
-  → manager resolves dependencies and exceptions
-  → tests, security checks, and review gates run
-  → user reviews diff, evidence, cost, and open risks
-  → branch, commit, and draft pull request are prepared intentionally
-```
+| Area | Today | Destination |
+|---|---|---|
+| Genesis | Configurable linear SDLC pipeline | Adaptive creation workflow producing a validated initial system and durable project intelligence |
+| Evolution | Manual panes and maintenance tasks | Intent-driven daily workspace coordinating multiple owned, dependent sessions |
+| Intervention | Monaco, Diff, terminal, Git, diagnostics, review | Complete navigation, editing, execution, debugging, testing, review, versioning, and delivery environment |
+| Coordination | Manager protocol, handoffs, history, session attribution | Structured shared state, ownership, dependency, conflict, and progress synchronization |
+| Memory | Project state, runs, history, tokens | Versioned private Project Intelligence model for tasks, decisions, handoffs, evidence, and recovery |
+| Autonomy | Manual toggles, analyzer, Full Auto, YOLO, timeouts | Policy-driven management by exception with explicit authority and escalation |
+| Delivery | Git, issues, review, commit-related workflows | Traceable outcome-to-change-to-test-to-release lifecycle |
 
-The user remains the authority for destructive operations, credentials, publication, and final acceptance.
+## Horizon 0 — Establish the instrument
 
-## Horizon 0 — Documentation and release foundation
-
-**Outcome:** a new user can understand, install, evaluate, and safely operate Navide.
+**Outcome:** users can understand the new engineering model, install Navide, and evaluate it safely.
 
 Scope:
 
-- Canonical product naming and capability descriptions
-- Getting-started, user, privacy, troubleshooting, architecture, and roadmap documentation
-- Accurate supported-agent matrix and source-install commands
-- Versioned changelog and repeatable signed macOS release process
-- Screenshots or a short workflow demonstration when stable release UI is ready
+- Manifesto, product vision, accurate current-capability documentation, architecture, privacy, and roadmap
+- Canonical product naming and supported-agent information
+- Repeatable signed macOS release and updater validation
+- Guided first project and first Evolution task
+- Product demonstration centered on agent coordination rather than editor novelty
 
 Exit criteria:
 
-- Documentation has no material contradictions with the agent registry or default pipeline
-- A clean macOS machine can follow the documented installation path
-- The first signed GitHub Release contains DMG, ZIP, blockmaps, and updater metadata
-- Privacy documentation identifies every optional external-service category
+- A new user can explain Genesis, Evolution, Intervention, and private Project Intelligence
+- A clean supported Mac can complete the documented installation and first-run workflow
+- The first signed GitHub Release contains all required updater assets
+- Documentation distinguishes current behavior from future direction
 
-## Horizon 1 — Orchestration reliability and observability
+## Horizon 1 — Reliable session fabric
 
-**Outcome:** users can trust that a run's state is durable, understandable, and recoverable.
+**Outcome:** multiple agent sessions behave like a dependable local engineering force rather than unrelated terminal windows.
 
 Scope:
 
-- Unified run, pane, stage, question, handoff, command, and artifact event schema
-- Crash-safe persistence and deterministic restoration
-- Clear state transitions for starting, waiting, blocked, failed, completed, aborted, and resumed work
-- Explicit timeout and retry policies
-- Run summary containing changes, tests, token usage, elapsed time, warnings, and unresolved questions
-- Exportable diagnostics with automatic credential redaction
+- Explicit lifecycle states for preparing, ready, working, waiting, blocked, failed, completed, interrupted, and resumable sessions
+- Durable session identity, provider binding, rebuild, resume, and crash recovery
+- Structured session presence, ownership, progress, blockers, questions, and completion events
+- Clear distinction between raw terminal activity and engineering state
+- Reliable input delivery, cancellation, retry, timeout, and recovery semantics
+- Local diagnostics that explain why a session cannot progress or resume
 
 Exit criteria:
 
-- Restarting Navide during representative runs does not silently lose accepted work or corrupt state
-- Every automatic stage transition is attributable to a visible event or policy
-- Failed session binding offers a diagnosable recovery path
-- Run summaries reconcile with the underlying history and Git diff
+- Representative sessions survive application restart without silent state loss
+- Session identity and ownership remain stable across supported resume flows
+- Every automatic lifecycle transition has a visible cause
+- A failed session offers a recoverable action or an actionable diagnostic
 
-Non-goal:
+## Horizon 2 — Private Project Intelligence Layer
 
-- Autonomous publication or merge without an explicit user-controlled policy
-
-## Horizon 2 — Capability-based agent adapters
-
-**Outcome:** adding an agent no longer requires scattered knowledge of frontend, backend, session storage, and token parsing.
+**Outcome:** each new session can inherit the engineer's accumulated understanding of the project without replaying every conversation.
 
 Scope:
 
-- Declarative adapter manifest for identity, executable, install help, capabilities, and permission modes
-- Standard launch, readiness, resume, interrupt, and termination hooks
-- Optional session-discovery and usage-reader interface
-- Capability flags such as session pinning, resume, structured output, image input, MCP, sandbox, and token reporting
-- Compatibility test kit with fixtures for logs and session binding
-- Adapter health and version diagnostics in onboarding
+- Versioned local schema for project state, sessions, runs, tasks, decisions, handoffs, evidence, and coordination metadata
+- Clear separation between derived state, durable knowledge, raw logs, caches, and secrets
+- Structured facts and decisions with source and freshness metadata
+- Context assembly based on the current goal rather than indiscriminate history injection
+- Retention, compaction, deletion, redaction, backup, and explicit local export/import
+- Inspectable UI showing what Navide remembers and what a session will receive
 
 Exit criteria:
 
-- A simple CLI integration can be added without editing the pipeline UI core
-- Adapter validation reports missing or incompatible capabilities before a run starts
-- Built-in agents pass the same contract tests
-- Unknown capabilities degrade safely instead of receiving guessed flags
+- A resumed or replacement session receives the relevant goal, constraints, decisions, and evidence without manual transcript copying
+- Users can inspect and delete remembered information
+- `.agent-team/` remains excluded from Git and no private state is synchronized implicitly
+- Schema migration and corruption recovery are tested
+- Context selection avoids silently treating stale agent output as current project truth
 
-Non-goal:
+## Horizon 3 — Evolution Workspace
 
-- Normalizing every provider-specific feature into a lowest-common-denominator chat API
-
-## Horizon 3 — Policy, isolation, and secret handling
-
-**Outcome:** users can reason about what each agent may read, write, execute, and transmit.
+**Outcome:** daily feature development, fixes, tests, tuning, and maintenance become a coherent intent-driven loop.
 
 Scope:
 
-- Preflight showing workspace, repositories, dirty state, agent commands, external services, and effective authority
-- Policy profiles for read-only analysis, workspace write, test execution, network access, and unrestricted mode
-- Secret detection and redaction before handoff, export, diagnostics, and cloud requests
-- Workspace boundary enforcement using platform-appropriate sandbox primitives where feasible
-- Protected-path rules and explicit escalation events
-- Credential references through operating-system facilities or provider-owned stores rather than copying secrets into prompts
-- Audit trail for policy changes and bypasses
+- Replace the idea of maintenance as an afterthought with a first-class Evolution workspace
+- Goals with scope, acceptance criteria, priority, dependencies, and evidence requirements
+- Navide-proposed session composition that the engineer can edit
+- Task ownership, dependency graph, parallel scheduling, and partial retry
+- File, module, repository, and environment scope awareness
+- Conflict prevention or early warning for overlapping agent work
+- Continuous loop from goal through implementation, tests, repair, review, and acceptance
+- Checkpoints that allow an Evolution run to be forked or resumed
 
 Exit criteria:
 
-- Users can inspect effective permissions before launch
-- Protected paths and detected secrets are blocked or require explicit escalation according to policy
-- Handoff and diagnostic exports pass redaction tests
-- Unsupported sandbox guarantees are stated clearly per platform and agent
+- An engineer can start the next feature without constructing every session manually
+- Independent tasks execute in parallel while dependencies wait deterministically
+- Overlapping ownership is visible before destructive integration
+- Failed nodes can retry without restarting successful independent work
+- The accepted result becomes context for the next Evolution goal
 
-Non-goal:
+## Horizon 4 — Management by exception
 
-- Claiming a security boundary that the operating system or external CLI cannot enforce
-
-## Horizon 4 — Reproducible runs and artifact provenance
-
-**Outcome:** a completed run is a reviewable package of intent, actions, evidence, and outputs.
+**Outcome:** Navide protects the engineer's attention without surrendering control.
 
 Scope:
 
-- Immutable run manifest with task, repositories, base revisions, configuration, adapters, and policy
-- Content-addressed artifacts for plans, handoffs, patches, logs, test results, screenshots, and reports
-- Relationship between agent output, applied edits, commits, and review decisions
-- Re-run and fork-from-checkpoint workflows
-- Retention, export, import, and deletion controls
-- Schema versioning and migrations for durable artifacts
+- Explicit authority profiles for exploration, workspace edits, commands, tests, network access, credentials, Git publication, deployment, and unrestricted execution
+- Exception model for ambiguity, conflict, failed evidence, protected resources, external impact, budget limits, and irreversible actions
+- Consolidated decision queue instead of independent prompts from every session
+- Manager and peer coordination that can resolve routine questions before escalation
+- Secret detection and redaction before handoff, cloud requests, diagnostics, and export
+- Workspace and protected-path isolation using platform capabilities where enforceable
+- Complete audit trail for policy, escalation, override, and acceptance decisions
 
 Exit criteria:
 
-- Exported runs can be inspected without the original live processes
-- Every applied change identifies its originating run and available evidence
-- Replaying from a checkpoint does not mutate the original run record
-- Retention settings make storage growth visible and controllable
+- Routine reversible workflows can complete without approval fatigue
+- Sensitive or irreversible actions cannot proceed outside the effective policy
+- Every escalation explains the decision, available evidence, consequences, and recommended next step
+- Handoff and diagnostic redaction pass adversarial tests
+- Unsupported sandbox guarantees are stated honestly for every platform and agent
 
-## Horizon 5 — Dependency-graph orchestration
+## Horizon 5 — Complete Intervention environment
 
-**Outcome:** teams can execute complex work according to dependencies rather than a fixed sequence of stages.
+**Outcome:** an engineer can perform every precision task required to understand and change software without another IDE as the primary environment.
 
 Scope:
 
-- Task graph with typed inputs, outputs, dependencies, owners, and acceptance gates
-- Parallel scheduling constrained by repository, file ownership, policy, and resource limits
-- Conditional branches, retries, cancellation, and human approval nodes
-- Manager proposals that users can edit before execution
-- Conflict detection for overlapping file or repository scopes
-- Cost, token, and concurrency budgets
+- Fast project navigation, global search, symbol search, references, and code intelligence
+- Robust Monaco editing, multi-file operations, diagnostics, refactoring, formatting, and language-server integration
+- Integrated run configurations, tasks, test discovery, test results, logs, and interactive terminals
+- Debugging with breakpoints, stack and variable inspection, evaluation, and agent-readable debug evidence
+- First-class Diff, branch comparison, conflicts, history, blame, and review
+- Git branches, worktrees, commits, remotes, pull requests, checks, and review feedback
+- Extension points for languages, tools, debuggers, test systems, and engineering views
+- Performance, accessibility, keyboard control, and large-workspace reliability
 
 Exit criteria:
 
-- Independent nodes run in parallel while dependent nodes wait deterministically
-- Graph state survives restart and supports partial retry
-- Conflicting writes are prevented, isolated, or surfaced before integration
-- Budget exhaustion pauses work with a clear decision point
+- Target users complete representative professional projects without opening another IDE for a missing core capability
+- Intervention preserves context and returns cleanly to coordinated agent execution
+- Agents and humans can reference the same diagnostics, tests, symbols, diffs, and debug evidence
+- Large repositories remain responsive under defined performance budgets
 
-Non-goal:
+This horizon does not require copying every traditional IDE interaction. It requires outcome parity through a better Agent-era model.
 
-- Allowing a manager model to silently rewrite user-approved policy or budgets
+## Horizon 6 — Verifiable Genesis and delivery
 
-## Horizon 6 — Delivery integrations and reusable team templates
-
-**Outcome:** Navide connects local agent work to existing engineering systems without hiding publication decisions.
+**Outcome:** a product can move from initial intent to continuous delivery through one traceable engineering environment.
 
 Scope:
 
-- GitHub Issue and pull-request intake with repository and permission checks
-- Intentional branch, commit, push, and draft-PR workflow
-- Check, review, and unresolved-comment ingestion
-- Reusable pipeline, role, adapter, policy, and team templates
-- Signed template packages with version and compatibility metadata
-- Import/export before any hosted marketplace dependency
+- Adaptive Genesis workflow that produces requirements, architecture, implementation, tests, and an explicit first Evolution backlog
+- Immutable run manifest connecting intent, repositories, base revisions, agents, policies, actions, artifacts, and evidence
+- Provenance from requirement to task, change, test, review, commit, and release
+- GitHub issue and pull-request intake with repository and permission preflight
+- Intentional branch, commit, push, draft-PR, check, review, and follow-up flows
+- Build, packaging, deployment, and release gates with explicit human authority
+- Reproducible run export and fork-from-checkpoint behavior
 
 Exit criteria:
 
-- A work item can produce a draft PR with linked run evidence and explicit user approval
-- Failed checks and review feedback can become scoped follow-up graph nodes
-- Templates declare required adapters, permissions, and schema versions
-- Installing a template does not execute code or grant authority implicitly
+- A new product can enter Genesis and emerge as a tested prototype with an Evolution-ready project model
+- An accepted goal can produce a draft PR with linked evidence and explicit user approval
+- Failed checks and review feedback become scoped follow-up work
+- External writes, deployment, and release never occur through ambiguous authority
+- Exported run evidence can be inspected without the original live sessions
 
-## Horizon 7 — Cross-platform and ecosystem maturity
+## Horizon 7 — Agent, platform, and ecosystem maturity
 
-**Outcome:** the control-plane model works consistently beyond one developer machine and one operating system.
+**Outcome:** Navide remains durable as models, agents, languages, tools, and operating systems change.
 
 Scope:
 
+- Declarative adapter contract for agent identity, installation, capabilities, permissions, launch, readiness, resume, interruption, session discovery, and usage
+- Compatibility test kit and adapter health diagnostics
+- Reusable roles, pipelines, policies, team configurations, and engineering templates
+- Safe template packaging with version and capability metadata
 - Linux support with PTY, paths, permissions, packaging, and update parity
-- Windows support with ConPTY, path/line-ending behavior, packaging, and installer policy
-- Platform capability matrix and adapter compatibility reporting
-- Stable extension documentation and example adapters
-- Accessibility, internationalization, performance, and large-workspace hardening
-- Optional collaboration design only after local artifact and policy boundaries are mature
+- Windows support with ConPTY, filesystem behavior, packaging, and policy parity
+- Platform and adapter capability matrix
+- Internationalization and accessible workflows
 
 Exit criteria:
 
-- Platform CI exercises unit, integration, packaging, and representative terminal flows
+- A simple agent can be integrated without editing core pipeline UI logic
+- Built-in adapters pass a shared compatibility suite
+- Templates cannot execute code or grant authority implicitly
+- Platform CI covers unit, integration, packaging, terminal, editor, and representative Evolution workflows
 - Unsupported capabilities are visible before execution
-- Core run artifacts remain portable across supported platforms
-- Accessibility and keyboard workflows cover the primary orchestration path
 
 ## Cross-cutting quality gates
 
-Every horizon must consider:
+Every horizon must address:
 
-- Backward-compatible state or an explicit migration path
+- Backward-compatible local state or an explicit migration path
 - Threat model and privacy-data-flow changes
 - Unit, integration, and end-to-end coverage proportional to risk
-- Failure recovery and diagnostics
-- Documentation and changelog updates
-- Performance and storage impact
-- Manual authority boundaries for external writes and publication
+- Recovery, diagnostics, and user-controlled deletion
+- Performance, storage, accessibility, and internationalization
+- Current-capability documentation and release notes
+- Clear human authority for credentials, destructive operations, external writes, deployment, and publication
 
 ## Measures of progress
 
-Prefer operational measures over feature counts:
+Navide does not currently collect product telemetry. Measures should come from local reports, tests, opt-in diagnostics, or explicitly shared issue data unless a future privacy-reviewed telemetry design is adopted.
 
-- Successful first-run rate
-- Time from workspace open to first healthy agent pane
-- Session-binding and resume success rate
-- Runs recovered after restart without data loss
-- Automatic transitions with explainable evidence
-- Handoffs requiring manual repair
-- Agent-adapter integration effort
-- Runs ending with reviewable diff and test evidence
-- Secrets prevented from entering handoffs or exports
-- Draft PRs accepted versus abandoned after agent execution
+Useful measures include:
 
-Navide does not currently collect product telemetry. Measures should come from opt-in diagnostics, local reports, tests, or explicitly shared issue data unless a future privacy-reviewed telemetry design is adopted.
+- Engineers using Navide as their primary daily environment
+- Time from opening a workspace to starting a healthy Evolution goal
+- Session binding, rebuild, resume, and recovery success
+- Parallel sessions completed without ownership conflict or manual context copying
+- Exceptions that required human judgment versus routine approval prompts avoided
+- Goals completed with linked changes, tests, review, and evidence
+- Time spent directing and accepting work versus repairing orchestration failures
+- Traditional IDE exits required to complete a representative workflow
+- Secrets prevented from entering handoffs, cloud requests, or exported artifacts
 
-## Scope guard
+## The destination
 
-The roadmap should be re-evaluated whenever adjacent IDE functionality competes with control-plane reliability. Editor, chat, Git, and review features are in scope when they materially improve agent configuration, observation, intervention, or acceptance. General-purpose feature parity with established IDEs is not a primary goal.
+Navide is complete in its ambition when an engineer can begin with an idea, assemble and direct an AI engineering force, evolve the product continuously, intervene with precision, and deliver trustworthy software—while the traditional IDE is no longer the center of the work.

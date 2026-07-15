@@ -8,7 +8,7 @@
 
 ## 1 · TL;DR
 
-Local-first macOS control plane for **Claude Code, Codex, Antigravity CLI, and Grok CLI**, driven by a configurable multi-stage pipeline with shared roles, parallel agent slots, history, and token tracking.
+Historical foundation of Navide's AI-native macOS engineering environment for **Claude Code, Codex, Antigravity CLI, and Grok CLI**, driven by configurable pipelines, parallel agent sessions, private project history, and precision engineering surfaces.
 
 ```
 Tech stack: Electron 33 + Vue 3 + TypeScript + FastAPI + Python 3.12 + xterm.js + Monaco

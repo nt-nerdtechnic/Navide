@@ -116,4 +116,3 @@ Navide succeeds when:
 - The private Project Intelligence Layer makes each new session more effective than an isolated conversation.
 - Engineers spend more attention on direction, architecture, judgment, and acceptance than on repetitive execution.
 - A complete product can move from idea to continuous delivery without requiring a return to the traditional IDE workflow.
-

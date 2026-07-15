@@ -31,9 +31,11 @@ Navide's editor is a Monaco-based workspace surface for inspecting and accepting
 
 File reads and writes, workspace checks, AI editing requests, and related operations cross Navide's backend or preload boundaries. The renderer must not gain unrestricted filesystem access merely because Monaco runs in the renderer.
 
-## Product boundary
+## Product role
 
-The editor exists to improve agent observation, intervention, diff review, plan execution, and acceptance. General-purpose parity with established IDEs is not the primary product goal. New editor work should demonstrate how it improves the multi-agent control-plane workflow.
+The editor is Navide's precision Intervention surface. It exists for navigation, inspection, direct modification, refactoring, diagnostics, debugging context, diff review, plan execution, and acceptance when human judgment or exact control adds value.
+
+Navide intends to replace the traditional IDE as the engineer's primary environment. That requires complete professional editing and code-intelligence capability, but not an uncritical copy of every inherited IDE interaction. New editor work should strengthen the loop between coordinated agent execution, shared engineering evidence, and precise human intervention.
 
 ## Known limits
 

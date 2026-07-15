@@ -6,10 +6,15 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Documentation
 
-- Reposition Navide as a local-first multi-agent development control plane.
+- Reposition Navide as the engineering instrument for the Agent era: an AI-native environment for one engineer directing an AI engineering force.
+- Add the Navide Manifesto and Product Vision.
+- Define Genesis, Evolution, and Intervention as the three engineering loops.
+- Define management by exception as the human-agent operating philosophy.
+- Define `.agent-team/` as the local, per-user, Git-excluded Project Intelligence Layer.
+- Replace the control-plane-only roadmap with a path toward complete professional IDE replacement through an Agent-era interaction model.
 - Align supported agents with the current registry: Claude Code, Codex, Antigravity CLI, and Grok CLI.
 - Replace fixed-stage claims with the configurable pipeline model and included workflow.
-- Add documentation index, getting-started guide, user guide, architecture, privacy and data flows, troubleshooting, and a phased long-term roadmap.
+- Add and align the documentation index, getting-started guide, user guide, architecture, privacy and data flows, troubleshooting, and phased long-term roadmap.
 - Correct repository clone commands, contribution checks, privacy claims, credential-storage statements, and release expectations.
 
 ## Development version history

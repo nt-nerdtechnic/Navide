@@ -1,7 +1,7 @@
 # Contributing to Navide
 
 Thank you for your interest in contributing!
-<!-- 感謝你對 Navide (Agent-Team) 的貢獻興趣！ -->
+<!-- 感謝你對 Navide 的貢獻興趣！ -->
 
 ---
 
@@ -129,4 +129,4 @@ By participating you agree to abide by its terms.
 
 ## Documentation
 
-User-facing behavior changes must update the relevant document under [`docs/`](docs/README.md) and add an entry under `CHANGELOG.md`'s Unreleased section. Avoid describing configurable registries with fixed counts, and document any new external data flow in `docs/privacy.md`.
+User-facing behavior changes must update the relevant document under [`docs/`](docs/README.md) and add an entry under `CHANGELOG.md`'s Unreleased section. Avoid describing configurable registries with fixed counts, document any new external data flow in `docs/privacy.md`, and keep future vision distinct from shipped capability claims.

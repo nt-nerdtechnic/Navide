@@ -3,7 +3,7 @@
   "version": "0.1.39",
   "private": true,
   "author": "Navide Team",
-  "description": "Navide: local-first macOS control plane for Claude Code, Codex, Antigravity CLI, and Grok CLI",
+  "description": "Navide: the AI-native engineering environment for one engineer directing multiple coding agents",
   "repository": {
     "type": "git",
     "url": "https://github.com/nt-nerdtechnic/Navide.git"

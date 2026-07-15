@@ -65,4 +65,3 @@ The mission is focused:
 > **Build the engineering instrument for the Agent era.**
 
 Navide will be successful when an engineer can begin with an idea, direct an AI engineering force through creation and continuous evolution, intervene precisely when needed, and deliver trustworthy software without returning to a traditional IDE as the primary environment.
-
