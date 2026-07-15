@@ -2,7 +2,7 @@
 
 [English](../en-US/getting-started.md) | [繁體中文](../zh-TW/getting-started.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は Apple silicon 上の macOS 13 以降をサポートします。[v0.1.42 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.42) では、未署名の DMG と ZIP を提供しています。Apple による署名も Notarization も行われていません。
+Navide は Apple silicon 上の macOS 13 以降をサポートします。[v0.1.43 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.43) では、未署名の DMG と ZIP を提供しています。Apple による署名も Notarization も行われていません。
 
 Preview をインストールするには、DMG をダウンロードして Navide を Applications にコピーし、Finder でアプリを Control-click して**開く**を選択します。それでも macOS にブロックされる場合は、Navide に対して**システム設定 → プライバシーとセキュリティ → このまま開く**を使用してください。Gatekeeper をシステム全体で無効化しないでください。
 
