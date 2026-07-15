@@ -1,41 +1,59 @@
 # Navide Documentation
 
-[English](README.md) | [繁體中文](zh-TW/README.md)
+English | [繁體中文](zh-TW/README.md)
 
 Navide is the engineering instrument for the Agent era: an AI-native software engineering environment in which one person directs multiple coding agents through creation, continuous evolution, and precise human intervention.
 
-## Start here
+The root [README](../README.md) introduces the product and current distribution. This index organizes the complete documentation set.
 
-| Audience | Document | Purpose |
-|---|---|---|
-| Everyone | [Manifesto](manifesto.md) | Understand the historical shift Navide is responding to and the beliefs guiding the product |
-| Everyone | [Product vision](vision.md) | Understand the target user, operating philosophy, product model, and definition of success |
-| Maintainers | [Product positioning](product-positioning.md) | Keep the category, message hierarchy, vocabulary, evidence, and public claims consistent |
-| New users | [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
-| Users | [User guide](user-guide.md) | Learn workspaces, panes, pipelines, manager coordination, Git, history, and editor workflows |
-| Users | [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
-| Everyone | [Privacy and data flows](privacy.md) | Understand what stays local, what can connect to third parties, and where credentials are stored |
-| Contributors | [Contributing](../CONTRIBUTING.md) | Set up a development environment and submit changes |
-| Contributors | [Architecture](architecture.md) | Understand process boundaries, state ownership, and major services |
-| Agent integrators | [CLI extension guide](cli-extension-guide.md) | Add or maintain an AI coding CLI integration |
-| Maintainers | [Release guide](releases.md) | Version, sign, notarize, publish, and recover a macOS release |
-| Maintainers | [Product roadmap](roadmap.md) | Track the directional path toward a complete AI-native engineering environment |
+## Product
 
-## Reference documents
+| Document | Purpose |
+|---|---|
+| [Manifesto](manifesto.md) | The historical shift Navide responds to and the beliefs guiding the product |
+| [Product vision](vision.md) | Target user, product model, ownership, operating philosophy, and definition of success |
+| [Product positioning](product-positioning.md) | Category, message hierarchy, vocabulary, evidence, and public-claim boundaries |
+| [Product roadmap](roadmap.md) | Directional path from today's system to a complete AI-native engineering environment |
 
-- [Keyboard shortcuts](keybindings.md)
-- [Editor design](editor-design.md)
-- [Historical milestone record](spec.md)
-- [Security policy](../SECURITY.md)
-- [Changelog](../CHANGELOG.md)
+## Use Navide
 
-## Documentation principles
+| Document | Purpose |
+|---|---|
+| [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
+| [User guide](user-guide.md) | Learn workspaces, panes, pipelines, coordination, Git, history, and editor workflows |
+| [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
 
-- **Navide** is the public product name. `agent-team` is retained only where it is an internal package, directory, or compatibility identifier.
-- **Local-first** means Navide's orchestration process and workspace state run on the user's machine. Optional agents, AI providers, documentation services, search, Git hosting, and updates may communicate with third parties.
-- **Private project intelligence** under `.agent-team/` belongs to each user, stays local by default, and is excluded from Git; it is not a human-team synchronization layer.
-- Agent support and pipeline stages are described as configurable capabilities. Avoid fixed counts when users can change the registry.
-- Vision and roadmap documents may describe the intended future, while README capability lists and the user guide must describe shipped behavior accurately.
-- Founder use of Navide to develop Navide is first-party dogfooding evidence, not independent customer validation.
-- Public claims should follow [Product positioning](product-positioning.md) and distinguish shipped behavior, directional intent, and unsupported claims.
-- `roadmap.md` describes direction, not a delivery promise. Released behavior belongs in the changelog and current capabilities belong in the user guide.
+## Trust and safety
+
+| Document | Purpose |
+|---|---|
+| [Privacy and data flows](privacy.md) | Understand what stays local, what may reach third parties, and where credentials are stored |
+| [Security policy](../SECURITY.md) | Understand supported security boundaries and report vulnerabilities privately |
+
+## Development and maintenance
+
+| Document | Purpose |
+|---|---|
+| [Contributing](../CONTRIBUTING.md) | Set up a development environment and submit changes |
+| [Architecture](architecture.md) | Understand process boundaries, state ownership, and major services |
+| [CLI extension guide](cli-extension-guide.md) | Add or maintain an AI coding CLI integration |
+| [Release guide](releases.md) | Version, package, sign, notarize, publish, and recover a release |
+
+## Reference
+
+| Document | Purpose |
+|---|---|
+| [Keyboard shortcuts](keybindings.md) | Review default keyboard commands and interaction patterns |
+| [Editor design](editor-design.md) | Understand the current editor architecture and design direction |
+| [Historical milestone record](spec.md) | Review the original implementation milestone record |
+| [Changelog](../CHANGELOG.md) | Review shipped changes by version |
+
+## Documentation model
+
+- `README.md` is the public English product and distribution entry point; `README.zh-TW.md` is its Traditional Chinese counterpart.
+- `docs/` is the canonical English documentation root. Existing paths remain stable for public links.
+- `docs/zh-TW/` mirrors the localized public product and core user journey. Its index labels English-only fallbacks explicitly.
+- English documents are the source of truth for product and technical facts. Update English first, then synchronize localized counterparts in the same change.
+- Vision and roadmap documents may describe intended future outcomes. README capability lists and the User Guide describe current behavior.
+- Released behavior belongs in the Changelog and GitHub Releases. The roadmap is directional and does not promise dates.
+- Private Project Intelligence under `.agent-team/` belongs to each user, stays local by default, and is excluded from Git; it is not a human-team synchronization layer.

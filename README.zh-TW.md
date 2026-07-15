@@ -8,7 +8,9 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 
 它不是傳統 IDE 裡的另一個聊天面板。Navide 要成為傳統 IDE 之後的新工程環境。
 
-[English](README.md) | [繁體中文](README.zh-TW.md) | [Manifesto](docs/zh-TW/manifesto.md) | [Vision](docs/zh-TW/vision.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
+[English](README.md) | 繁體中文
+
+[下載 v0.1.40 Preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -140,13 +142,12 @@ pnpm dev
 
 Onboarding Wizard 會檢查 Runtime、偵測 Agent CLI，並說明相關 macOS 權限。接著可閱讀[開始使用](docs/zh-TW/getting-started.md)與[使用指南](docs/zh-TW/user-guide.md)。
 
-## 閱讀完整產品故事
+## 文件與深入閱讀
 
-- [Navide 宣言](docs/zh-TW/manifesto.md) — 為什麼 Agent 時代需要新的工程利器
-- [產品願景](docs/zh-TW/vision.md) — 目標使用者、產品原則、運作模型與成功定義
-- [產品定位與公開主張](docs/zh-TW/product-positioning.md) — 產品類別、訊息層次、用詞與公開主張邊界
-- [產品 Roadmap](docs/zh-TW/roadmap.md) — 從現有系統走向完整環境的方向性路徑
-- [文件中心](docs/zh-TW/README.md) — 產品、使用者、隱私、疑難排解與英文技術文件入口
+- **使用 Navide：**[開始使用](docs/zh-TW/getting-started.md)、[使用指南](docs/zh-TW/user-guide.md)與[疑難排解](docs/zh-TW/troubleshooting.md)
+- **理解產品：**[Navide 宣言](docs/zh-TW/manifesto.md)、[產品願景](docs/zh-TW/vision.md)、[產品定位](docs/zh-TW/product-positioning.md)與[產品 Roadmap](docs/zh-TW/roadmap.md)
+- **檢查能力邊界：**[隱私與資料流](docs/zh-TW/privacy.md)與英文版 [Security Policy](SECURITY.md)
+- **瀏覽完整內容：**[Navide 繁體中文文件中心](docs/zh-TW/README.md)
 
 ## 授權
 

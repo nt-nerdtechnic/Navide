@@ -1,6 +1,6 @@
 # The Navide Manifesto
 
-[English](manifesto.md) | [繁體中文](zh-TW/manifesto.md)
+English | [繁體中文](zh-TW/manifesto.md) | [Documentation](README.md)
 
 ## A new source of engineering power
 

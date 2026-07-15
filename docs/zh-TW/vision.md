@@ -1,6 +1,6 @@
 # 產品願景
 
-[繁體中文](vision.md) | [English](../vision.md) | [文件中心](README.md)
+[English](../vision.md) | 繁體中文 | [文件中心](README.md)
 
 ## 願景
 

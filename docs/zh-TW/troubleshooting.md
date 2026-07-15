@@ -1,6 +1,6 @@
 # 疑難排解
 
-[繁體中文](troubleshooting.md) | [English](../troubleshooting.md) | [文件中心](README.md)
+[English](../troubleshooting.md) | 繁體中文 | [文件中心](README.md)
 
 ## 應用程式無法啟動
 

@@ -1,6 +1,6 @@
 # User Guide
 
-[English](user-guide.md) | [繁體中文](zh-TW/user-guide.md)
+English | [繁體中文](zh-TW/user-guide.md) | [Documentation](README.md)
 
 ## Product model
 

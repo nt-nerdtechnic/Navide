@@ -8,7 +8,9 @@ Navide is an open-source, AI-native software engineering environment for one per
 
 It is not another chat panel inside the traditional IDE. Navide is being built as the environment that comes after it.
 
-[English](README.md) | [繁體中文](README.zh-TW.md) | [Manifesto](docs/manifesto.md) | [Vision](docs/vision.md) | [Documentation](docs/README.md) | [Roadmap](docs/roadmap.md)
+English | [繁體中文](README.zh-TW.md)
+
+[Download v0.1.40 preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.40) | [Getting started](docs/getting-started.md) | [Documentation](docs/README.md) | [Roadmap](docs/roadmap.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -140,13 +142,12 @@ pnpm dev
 
 The onboarding wizard checks runtimes, detects agent CLIs, and explains relevant macOS permissions. Continue with [Getting Started](docs/getting-started.md) and the [User Guide](docs/user-guide.md).
 
-## Read the product story
+## Documentation and deeper reading
 
-- [The Navide Manifesto](docs/manifesto.md) — why the Agent era requires a new engineering instrument
-- [Product Vision](docs/vision.md) — target user, product doctrine, operating model, and definition of success
-- [Product Positioning](docs/product-positioning.md) — category, message hierarchy, vocabulary, and public-claim boundaries
-- [Product Roadmap](docs/roadmap.md) — the directional path from today's system to the complete environment
-- [Documentation](docs/README.md) — user, contributor, architecture, privacy, and reference guides
+- **Use Navide:** [Getting started](docs/getting-started.md), [User guide](docs/user-guide.md), and [Troubleshooting](docs/troubleshooting.md)
+- **Understand the product:** [Manifesto](docs/manifesto.md), [Vision](docs/vision.md), [Positioning](docs/product-positioning.md), and [Roadmap](docs/roadmap.md)
+- **Review the boundaries:** [Privacy and data flows](docs/privacy.md) and [Security policy](SECURITY.md)
+- **Explore everything:** [Navide documentation index](docs/README.md)
 
 ## License
 

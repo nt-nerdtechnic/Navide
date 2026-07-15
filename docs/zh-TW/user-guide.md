@@ -1,6 +1,6 @@
 # 使用指南
 
-[繁體中文](user-guide.md) | [English](../user-guide.md) | [文件中心](README.md)
+[English](../user-guide.md) | 繁體中文 | [文件中心](README.md)
 
 ## 產品模型
 
