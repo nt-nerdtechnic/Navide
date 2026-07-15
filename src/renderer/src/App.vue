@@ -2429,10 +2429,17 @@ function onFocusPane(paneId: string): void {
 async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   const ws = entry.workspacePath || currentWorkspace.value
   if (!ws) return
-  const originDir = entry.origin === 'pipeline' ? 'pipeline' : 'manual'
-  const logPath = `${ws}/.agent-team/${originDir}/${entry.agentKey}-p-${entry.paneId}.log`
+  let logPath = (entry as any).outputLogFile
+  if (!logPath) {
+    const ymd = new Date(entry.spawnedAt).toISOString().slice(0, 10).replace(/-/g, '')
+    if (entry.origin === 'pipeline') {
+      logPath = `${ws}/.agent-team/stage-${entry.stageId}-${entry.paneId.slice(0, 8)}.log`
+    } else {
+      logPath = `${ws}/.agent-team/manual/${ymd}/${entry.agentKey}-${entry.paneId.slice(0, 8)}.log`
+    }
+  }
   const api = (window as Window & { agentTeam?: { openPath?: (target: string) => Promise<{ ok: boolean; error?: string }> } }).agentTeam
-  if (api?.openPath) {
+  if (api?.openPath && logPath) {
     await api.openPath(logPath)
   }
 }
