@@ -85,6 +85,11 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
           <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
           <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
           <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
+          <span
+            v-if="p.loopActive"
+            class="loop-tag"
+            :class="{ waiting: p.loopWaitUntil != null }"
+          >🔁 Loop</span>
           <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
         </div>
         <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
@@ -390,6 +395,19 @@ button.icon-btn:hover {
 }
 .state[data-state='exited'] {
   background: var(--bg-muted);
+}
+.loop-tag {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--success-subtle);
+  color: var(--success-fg);
+  border: 1px solid var(--success-emphasis);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.loop-tag.waiting {
+  opacity: 0.55;
 }
 .minimized-tag {
   margin-left: auto;

@@ -6920,6 +6920,11 @@ function paneIsCommander(p: ActivePane): boolean {
               </div>
               <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
             </div>
+            <span
+              v-if="p.loopActive"
+              class="meeting-loop"
+              :class="{ waiting: p.loopWaitUntil != null }"
+            >🔁 Loop</span>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
           <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
@@ -7038,6 +7043,11 @@ function paneIsCommander(p: ActivePane): boolean {
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
             </div>
+            <span
+              v-if="p.loopActive"
+              class="meeting-loop"
+              :class="{ waiting: p.loopWaitUntil != null }"
+            >🔁 Loop</span>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
           <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
@@ -7945,6 +7955,19 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
 .meeting-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
 .meeting-badge[data-status="error"]    { background: var(--danger-subtle); color: var(--danger-bright); border: 1px solid var(--danger-emphasis); }
+.meeting-loop {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--success-subtle);
+  color: var(--success-fg);
+  border: 1px solid var(--success-emphasis);
+  white-space: nowrap;
+}
+.meeting-loop.waiting {
+  opacity: 0.55;
+}
 .meeting-empty {
   color: var(--text-disabled);
   font-size: 11px;
