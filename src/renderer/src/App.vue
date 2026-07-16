@@ -57,12 +57,6 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
-import {
-  advanceWidthRebuild,
-  coalesceWidthRebuild,
-  isWidthRebuildReady,
-  type WidthRebuildScheduleState,
-} from './lib/paneWidthRebuild'
 import { quickClassify } from './lib/quick-classify'
 import {
   buildResumeCommand,
@@ -1835,7 +1829,6 @@ async function onReinject(paneId: string): Promise<void> {
 async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean } = {}): Promise<void> {
   const markRemoved = opts.markRemoved ?? true
   const force = opts.force ?? true
-  clearPaneWidthRebuild(paneId)
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
     window.clearTimeout(pane.injectionTimer)
@@ -1887,13 +1880,7 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
 }
 
 /** Recover a render-corrupted pane: kill it and re-spawn the same CLI session
- *  via --resume at the current size. A fresh terminal has no stale content for
- *  xterm to reflow, so the cursor-up overlap/ghosting clears (reuses the exact
- *  restart-resume path). Only offered for panes with a resumable session id
- *  (see :can-rebuild). Interrupts the in-flight turn and reprints the
- *  conversation; no-ops if the id isn't actually resumable. */
-// Guards against double-click re-entrancy: the kill→respawn window is async, so
-// a second click on the same pane would otherwise spawn a duplicate resumed CLI.
+ *  via --resume at the current size. */
 const rebuildingPanes = new Set<string>()
 const rebuildingAllPanes = ref(false)
 
@@ -1903,34 +1890,30 @@ function paneCanRebuild(pane: ActivePane): boolean {
 
 const rebuildablePaneCount = computed(() => panes.value.filter(paneCanRebuild).length)
 
-type PaneRebuildResult = 'rebuilt' | 'busy' | 'skipped'
-
-async function rebuildPaneViaResume(
-  paneId: string,
-  opts: { requireIdle?: boolean } = {}
-): Promise<PaneRebuildResult> {
-  if (rebuildingPanes.has(paneId)) return 'skipped'
+async function rebuildPaneViaResume(paneId: string): Promise<void> {
+  if (rebuildingPanes.has(paneId)) return
   const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane) return 'skipped'
+  if (!pane) return
   const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
-  if (!sessionId) return 'skipped'
-  if (opts.requireIdle && !paneIsSafeForWidthRebuild(paneId)) return 'busy'
+  if (!sessionId) return
   const ws = pane.workspacePath
   if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
     pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
-    return 'skipped'
+    return
   }
   const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
   const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
   const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag)
-  if (!resumeCmd) return 'skipped'
-  // Session validation above is asynchronous. An agent may have started a turn
-  // while it was in flight, so automated rebuilds must recheck immediately
-  // before entering the kill/respawn section. Manual rebuilds remain explicit
-  // user actions and retain their existing interrupting behavior.
-  if (opts.requireIdle) {
-    if (panes.value.find((p) => p.id === paneId) !== pane) return 'skipped'
-    if (!paneIsSafeForWidthRebuild(paneId)) return 'busy'
+  if (!resumeCmd) return
+
+  // Safety: Ensure the requested session actually exists on disk.
+  const hasSession = await backend.send('terminals.has_session', {
+    workspace_path: ws,
+    session_id: sessionId,
+  })
+  if (!hasSession) {
+    showToast(`Session ${sessionId.slice(0, 8)} not found`)
+    return
   }
   // Snapshot identity before onKill removes the pane from the list.
   const snap = {
@@ -2009,7 +1992,6 @@ async function rebuildPaneViaResume(
   } finally {
     rebuildingPanes.delete(paneId)
   }
-  return 'rebuilt'
 }
 
 async function rebuildAllPanesViaResume(): Promise<void> {
@@ -2106,140 +2088,6 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   }
 }
 
-// Real terminal-width changes (splitter drag, window resize, font zoom) share one
-// resume-rebuild path. Each pane waits until its latest lifecycle signal says the
-// turn is complete, the renderer reports idle, and raw PTY output has been quiet.
-// The extra idle grace filters brief gaps between tool/output bursts.
-const WIDTH_REBUILD_RETRY_MS = 500
-const WIDTH_REBUILD_IDLE_GRACE_MS = 750
-const WIDTH_REBUILD_RAW_QUIET_MS = 2_500
-
-interface PendingWidthRebuild extends WidthRebuildScheduleState {
-  timer: ReturnType<typeof setTimeout> | null
-}
-
-const paneSettledWidths = new Map<string, number>()
-const pendingWidthRebuilds = new Map<string, PendingWidthRebuild>()
-
-function paneIsSafeForWidthRebuild(paneId: string, now = Date.now()): boolean {
-  const paneRef = paneRefs[paneId]
-  if (!paneRef) return false
-
-  // displayStatus intentionally reports the first short output burst as idle.
-  // Treat a recent agent_active or any recent PTY byte as authoritative activity.
-  const lastActiveAt = paneLastActiveAt.get(paneId) ?? 0
-  const turnCompleteAt = paneTurnCompleteAt.get(paneId) ?? 0
-  const lastRawAt = Number((paneRef.lastRawActivityAt as unknown as number | undefined) ?? 0)
-  return isWidthRebuildReady({
-    displayStatus: paneRef.displayStatus as unknown as string,
-    lastActiveAt,
-    turnCompleteAt,
-    lastRawActivityAt: lastRawAt,
-    now,
-    rawQuietMs: WIDTH_REBUILD_RAW_QUIET_MS,
-  })
-}
-
-function clearPaneWidthRebuild(paneId: string): void {
-  const pending = pendingWidthRebuilds.get(paneId)
-  if (pending?.timer) clearTimeout(pending.timer)
-  pendingWidthRebuilds.delete(paneId)
-  paneSettledWidths.delete(paneId)
-}
-
-function armPaneWidthRebuild(paneId: string, pending: PendingWidthRebuild, delayMs: number): void {
-  if (pending.timer) clearTimeout(pending.timer)
-  const generation = pending.generation
-  pending.timer = setTimeout(() => {
-    pending.timer = null
-    void tryPaneWidthRebuild(paneId, generation)
-  }, delayMs)
-}
-
-async function tryPaneWidthRebuild(paneId: string, generation: number): Promise<void> {
-  const pending = pendingWidthRebuilds.get(paneId)
-  if (!pending || pending.generation !== generation) return
-
-  const pane = panes.value.find((candidate) => candidate.id === paneId)
-  if (!pane || !paneCanRebuild(pane)) {
-    clearPaneWidthRebuild(paneId)
-    return
-  }
-
-  const now = Date.now()
-  const advance = advanceWidthRebuild(
-    pending.idleSince,
-    paneIsSafeForWidthRebuild(paneId, now),
-    now,
-    WIDTH_REBUILD_IDLE_GRACE_MS,
-    WIDTH_REBUILD_RETRY_MS
-  )
-  pending.idleSince = advance.idleSince
-  if (advance.action !== 'rebuild') {
-    armPaneWidthRebuild(paneId, pending, advance.delayMs)
-    return
-  }
-
-  // Recheck synchronously here and again inside rebuildPaneViaResume after its
-  // async session validation. Keep the pending request only if activity raced us.
-  if (!paneIsSafeForWidthRebuild(paneId)) {
-    pending.idleSince = null
-    armPaneWidthRebuild(paneId, pending, WIDTH_REBUILD_RETRY_MS)
-    return
-  }
-
-  const result = await rebuildPaneViaResume(paneId, { requireIdle: true })
-  const current = pendingWidthRebuilds.get(paneId)
-  if (!current || current !== pending) return
-  if (result === 'busy') {
-    current.idleSince = null
-    armPaneWidthRebuild(paneId, current, WIDTH_REBUILD_RETRY_MS)
-  } else {
-    // `skipped` is authoritative too (for example, the persisted session does
-    // not exist); retrying forever cannot make that pane resumable.
-    pendingWidthRebuilds.delete(paneId)
-  }
-}
-
-function onPaneWidthSettled(paneId: string, cols: number): void {
-  if (!Number.isFinite(cols) || cols <= 0) return
-  if (paneSettledWidths.get(paneId) === cols) return
-  paneSettledWidths.set(paneId, cols)
-
-  // Temporarily disable auto-rebuild on resize to prevent unexpected CLI resumes
-  return
-
-  /*
-  const pane = panes.value.find((candidate) => candidate.id === paneId)
-  if (!pane || !paneCanRebuild(pane)) {
-    const old = pendingWidthRebuilds.get(paneId)
-    if (old?.timer) clearTimeout(old.timer)
-    pendingWidthRebuilds.delete(paneId)
-    return
-  }
-
-  const existing = pendingWidthRebuilds.get(paneId) ?? null
-  const state = coalesceWidthRebuild(existing, cols)
-  const pending: PendingWidthRebuild = state === existing
-    ? existing
-    : { ...state, timer: existing?.timer ?? null }
-  pendingWidthRebuilds.set(paneId, pending)
-  armPaneWidthRebuild(paneId, pending, WIDTH_REBUILD_RETRY_MS)
-  */
-}
-
-// Some pane-removal paths intentionally detach without killing the backend PTY.
-// Reconcile by id so those paths cannot leave retry timers behind.
-watch(() => panes.value.map((pane) => pane.id), (ids) => {
-  const liveIds = new Set(ids)
-  for (const paneId of pendingWidthRebuilds.keys()) {
-    if (!liveIds.has(paneId)) clearPaneWidthRebuild(paneId)
-  }
-})
-
-onUnmounted(() => {
-  for (const paneId of [...pendingWidthRebuilds.keys()]) clearPaneWidthRebuild(paneId)
-})
 
 async function onInterrupt(paneId: string): Promise<void> {
   const ref = paneRefs[paneId]
@@ -6875,7 +6723,6 @@ function paneIsCommander(p: ActivePane): boolean {
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
           @rebuild-clean="rebuildPaneClean(p.id)"
-          @width-settled="onPaneWidthSettled(p.id, $event)"
           @rename="(name) => setPaneCustomName(p.id, name)"
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
           @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"
