@@ -4,6 +4,18 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.45] — 2026-07-16 — unsigned preview
+
+### Changed
+
+- Add `restoreMode` and `replacePaneId` to `spawnPane` to enable atomic pane replacement with focus continuity.
+- Update pane rebuild logic to support `keepInList` during `onKill`.
+- Refine terminal refit logic with `skipReattach` option for smoother layout transitions.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.44] — 2026-07-15 — unsigned preview
 
 ### Added
