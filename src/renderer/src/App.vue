@@ -5241,7 +5241,14 @@ const minimizedPanes = ref(new Set<string>())
 // looking at it — clear its Dock badge pending state. markSeen itself gates on
 // app focus, so programmatic focus changes while backgrounded (tab bookkeeping,
 // pane add/remove) don't silently eat the badge.
-watch(focusPaneId, (id) => { if (id) sysNotify.markSeen(id) })
+watch(focusPaneId, (id) => {
+  if (id) {
+    sysNotify.markSeen(id)
+    void nextTick(() => {
+      paneRefs[id]?.focus?.()
+    })
+  }
+})
 // Regaining app focus with a pending pane already focused must also count as
 // seen — focusPaneId didn't change, so the watcher above won't fire.
 watch(sysNotify.appFocused, (focused) => {
