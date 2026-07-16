@@ -39,8 +39,8 @@
       "loop-tooltip": "Loop — send the configured loop prompt to this pane; click again to clear the badge",
       "loop-badge-tooltip": "Loop prompt was sent to this pane",
       "loop-waiting-tooltip": "Loop paused — session limit hit; auto-resume at {time}. Click to resume now",
-      "loop-badge-estimate": "🔁 Loop · ~{time}",
-      "loop-badge-resume": "🔁 resumes {time}",
+      "loop-badge-estimate": "⟳ Loop · ~{time}",
+      "loop-badge-resume": "⟳ resumes {time}",
       "loop-estimate-tooltip": "Quota reset estimated around {time} (5-hour session window heuristic); replaced by the exact time if a limit message appears",
       "loop-paused-notify-title": "Loop paused",
       "loop-paused-notify-body": "Session limit hit — auto-resume at {time} (click the loop badge to resume now)"

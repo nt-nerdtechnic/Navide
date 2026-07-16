@@ -89,7 +89,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
             v-if="p.loopActive"
             class="loop-tag"
             :class="{ waiting: p.loopWaitUntil != null }"
-          >🔁 Loop</span>
+          >⟳ Loop</span>
           <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
         </div>
         <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>

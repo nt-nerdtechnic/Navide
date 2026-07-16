@@ -6924,7 +6924,7 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.loopActive"
               class="meeting-loop"
               :class="{ waiting: p.loopWaitUntil != null }"
-            >🔁 Loop</span>
+            >⟳ Loop</span>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
           <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
@@ -6979,7 +6979,7 @@ function paneIsCommander(p: ActivePane): boolean {
             v-if="p.loopActive"
             class="spotlight-thumb-loop"
             :class="{ waiting: p.loopWaitUntil != null }"
-          >🔁 Loop</span>
+          >⟳ Loop</span>
           <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
         </div>
         <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="spotlight-strip-empty">
@@ -7047,7 +7047,7 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.loopActive"
               class="meeting-loop"
               :class="{ waiting: p.loopWaitUntil != null }"
-            >🔁 Loop</span>
+            >⟳ Loop</span>
             <span class="meeting-badge" :data-status="p.status">{{ p.status }}</span>
           </div>
           <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="meeting-empty">
