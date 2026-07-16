@@ -116,6 +116,8 @@ export interface SpawnOptions {
   isResume?: boolean
   // If 'fresh', ignores the localStorage scrollback snapshot even if resuming.
   restoreMode?: 'memory-resume' | 'fresh'
+  // If true, prevents reattaching to an existing PTY (useful for explicit rebuilds).
+  skipReattach?: boolean
 }
 
 /**
@@ -1553,7 +1555,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // True persistence: a PTY from before a reload may still be running. Reattach
     // to it (recovering bash/build panes too, with no --resume round-trip) before
     // spawning anew. Falls through to a fresh spawn if the PTY is gone.
-    if (await tryReattach()) return
+    if (!opts.skipReattach && await tryReattach()) return
     // Park the spawn and create the PTY only once the container is measurable, so
     // the CLI paints at the real width. Visible panes create immediately; a
     // hidden-tab pane creates when its tab is first shown (reconciler/observer).
@@ -1594,11 +1596,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (opts?.redrawAfterSettle) resizeCtrl.requestResizeRedraw()
   }
 
-  // Ask the CLI to repaint its current frame by sending a SIGWINCH (via terminal.redraw).
-  // We used to send Ctrl+L, but while Claude Code repaints properly, pure shells (bash/zsh)
-  // interpret Ctrl+L as "clear screen", which visually wipes the scrollback.
-  // We deliberately do NOT call term.clear() here. Letting the CLI repaint via SIGWINCH
-  // keeps the scrollback intact and scrollable for both TUI apps and pure shells.
+  /**
+   * WARNING: `redraw()` should ONLY be used for manually triggered "redraw / clear screen"
+   * actions by the user. Do NOT hook this into automatic resize/layout pathways (like window
+   * resizes or layout mode changes). For automatic resizing, always use `fitTerminal`
+   * instead, which correctly handles PTY dimensions and scrollback preservation.
+   *
+   * Ask the CLI to repaint its current frame by sending a SIGWINCH (via terminal.redraw).
+   * We used to send Ctrl+L, but while Claude Code repaints properly, pure shells (bash/zsh)
+   * interpret Ctrl+L as "clear screen", which visually wipes the scrollback.
+   * We deliberately do NOT call term.clear() here. Letting the CLI repaint via SIGWINCH
+   * keeps the scrollback intact and scrollable for both TUI apps and pure shells.
+   */
   function redraw(): void {
     if (!sessionId.value) return
     void backend.send('terminal.redraw', {

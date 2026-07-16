@@ -435,7 +435,7 @@ function onResizeMove(e: MouseEvent): void {
 function refitAllTerminals(): void {
   void nextTick(() => requestAnimationFrame(() => {
     for (const ref of Object.values(paneRefs)) {
-      (ref as unknown as { redraw?: () => void })?.redraw?.()
+      (ref as unknown as { fitTerminal?: (opts: { redrawAfterSettle: boolean }) => void })?.fitTerminal?.({ redrawAfterSettle: true })
     }
   }))
 }
@@ -1628,6 +1628,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       // spawned into a non-active tab still starts.
       isResume: opts.isResume,
       restoreMode: opts.restoreMode,
+      skipReattach: opts.restoreMode === 'fresh',
     })
 
     if ((ref.status as unknown as string) === 'running') {
@@ -5871,7 +5872,7 @@ watch(effectiveLayoutMode, () => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         for (const ref of Object.values(paneRefs)) {
-          (ref as unknown as { redraw?: () => void })?.redraw?.()
+          (ref as unknown as { fitTerminal?: (opts: { redrawAfterSettle: boolean }) => void })?.fitTerminal?.({ redrawAfterSettle: true })
         }
       })
     })
