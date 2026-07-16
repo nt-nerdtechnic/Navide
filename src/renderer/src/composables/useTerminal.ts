@@ -755,9 +755,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         return false
       }
 
+      // Every branch below that sends bytes itself and returns false MUST also
+      // call e.preventDefault(): returning false only stops xterm's handling,
+      // not the browser default. Without it the hidden helper-textarea caret
+      // moves away from the end of its value, and xterm's CompositionHelper
+      // (which anchors compositions at value.length) then commits stale text
+      // on the next IME input.
+
       // ── Shift+←/→: extend selection character by character ────────────────
       if (e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey &&
           (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault()
         if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
         const newX = e.key === 'ArrowLeft' ? Math.max(0, curX - 1) : Math.min(term.cols - 1, curX + 1)
         const len = Math.abs(selAnchorX - newX)
@@ -769,6 +777,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
       // ── Cmd+Shift+←: select to beginning of line ──────────────────────────
       if (e.metaKey && e.shiftKey && e.key === 'ArrowLeft') {
+        e.preventDefault()
         if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
         if (curX > 0) term.select(0, curY, curX)
         else term.clearSelection()
@@ -778,6 +787,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
 
       // ── Cmd+Shift+→: select to end of line ────────────────────────────────
       if (e.metaKey && e.shiftKey && e.key === 'ArrowRight') {
+        e.preventDefault()
         if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
         const line = buf.getLine(curY)
         const lineEnd = line ? line.translateToString(true).length : term.cols
@@ -791,6 +801,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // ── Delete/Backspace with active selection: delete the selected region ───
       if (selAnchorX >= 0 && (e.key === 'Backspace' || e.key === 'Delete') &&
           !e.metaKey && !e.altKey) {
+        e.preventDefault()
         const count = Math.abs(curX - selAnchorX)
         if (count > 0) {
           // cursor right of anchor → backspace; cursor left → forward-delete
@@ -815,10 +826,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       // it lives on a window-level listener (see useTerminalFontSize).
 
       // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
-      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { pasteText('\x15'); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { pasteText('\x01'); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { pasteText('\x05'); return false }
-      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { pasteText('\x17'); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x15'); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { e.preventDefault(); pasteText('\x01'); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { e.preventDefault(); pasteText('\x05'); return false }
+      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x17'); return false }
       return true
     })
     // Make the whole pane click-focusable so the user can type immediately.
