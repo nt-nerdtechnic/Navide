@@ -7814,11 +7814,12 @@ function paneIsCommander(p: ActivePane): boolean {
 .spotlight-thumb-loop {
   font-size: 9px;
   padding: 1px 5px;
-  border-radius: 999px;
+  border-radius: 3px;
   align-self: flex-start;
   margin-top: auto;
-  background: var(--success-muted);
+  background: var(--success-subtle);
   color: var(--success-fg);
+  border: 1px solid var(--success-emphasis);
   white-space: nowrap;
 }
 .spotlight-thumb-loop.waiting {
