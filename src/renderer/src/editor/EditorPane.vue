@@ -35,7 +35,7 @@ const emit = defineEmits<{
   (e: 'askWithAI', payload: { selection: string; question: string }): void
 }>()
 
-const { toast, alert } = useNotify()
+const { toast, alert, confirm } = useNotify()
 
 const content = ref('')
 const dirty = ref(false)
@@ -55,6 +55,12 @@ const backendStatus = computed(() => props.backend.status.value)
 // that restarts the backend; the status watch reloads the file once reconnected.
 function retryBackend(): void {
   void props.backend.restart()
+}
+// A one-off load failure while the socket stays connected must not latch the
+// error screen forever — let the user retry the read directly.
+function retryLoad(): void {
+  loadError.value = ''
+  void load()
 }
 const editorRef = ref<InstanceType<typeof EditorViewMonaco> | null>(null)
 
@@ -97,10 +103,12 @@ function onCursorChange(pos: Position): void {
 const floatingChat = ref<{ x: number; y: number } | null>(null)
 
 function onEditorBodyMouseup(e: MouseEvent): void {
+  // event.currentTarget is null once dispatch completes — capture it before the rAF.
+  const bodyEl = e.currentTarget as HTMLElement
   requestAnimationFrame(() => {
     const sel = editorRef.value?.getSelectionText() ?? ''
     if (sel.trim()) {
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const rect = bodyEl.getBoundingClientRect()
       floatingChat.value = {
         x: e.clientX - rect.left,
         y: Math.max(4, e.clientY - rect.top - 38),
@@ -117,14 +125,23 @@ function onAddToChatFloat(): void {
 
 interface FsRead {
   ok: boolean; content?: string; error?: string
-  encoding?: string; bom?: boolean
+  encoding?: string; bom?: boolean; mtime?: number
   is_binary?: boolean; is_image?: boolean; size?: number; ext?: string
 }
+interface FsWrite { ok: boolean; error?: string; mtime?: number; conflict?: boolean }
 interface AiResult { ok: boolean; text?: string; error?: string }
 
 // ── Encoding state ────────────────────────────────────────────────────────────
 const fileEncoding = ref<string>('UTF-8')
 const fileBom = ref<boolean>(false)
+// Codec name to echo back on save so non-UTF-8 files are not re-encoded.
+const fileCodec = ref<string | null>(null)
+// Disk mtime seen at load/save time — sent back as expected_mtime so the
+// backend can detect external modifications (lost-update protection). Stays
+// null when the backend does not return mtime (older API) → conflict logic off.
+const fileMtime = ref<number | null>(null)
+// Pending save conflict: the file changed on disk since it was loaded.
+const saveConflict = ref(false)
 const isBinaryFile = ref<boolean>(false)
 const isImageFile = ref<boolean>(false)
 const imageDataUrl = ref<string>('')
@@ -177,7 +194,9 @@ async function load(): Promise<void> {
     eol.value = detectEOL(raw)
     content.value = raw
     fileEncoding.value = p.encoding ?? 'UTF-8'
+    fileCodec.value = p.encoding ?? null
     fileBom.value = p.bom ?? false
+    fileMtime.value = p.mtime ?? null
     loaded.value = true
     const targetLine = props.revealAt && props.revealAt > 0
       ? props.revealAt
@@ -207,26 +226,49 @@ function navigateToLastEdit(): void {
   editorRef.value?.revealPosition(lastEditLine.value, lastEditCol.value ?? 0)
 }
 
-async function save(): Promise<void> {
+async function save(opts: { force?: boolean } = {}): Promise<void> {
   if (!dirty.value) return
   const preContent = content.value // capture before the async write
   const snapshot = convertToEOL(preContent, eol.value)
   try {
-    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+    const params: Record<string, unknown> = {
       workspace_path: props.workspacePath,
       rel_path: props.relPath,
       content: snapshot,
-    })
-    if (!resp.payload?.ok) {
-      void alert(resp.payload?.error || 'Save failed', { title: 'Save error' })
+    }
+    // Preserve the on-disk encoding instead of silently re-encoding to UTF-8.
+    if (fileCodec.value) params.encoding = fileCodec.value
+    // Conflict detection — only when the backend gave us an mtime baseline.
+    if (!opts.force && fileMtime.value !== null) params.expected_mtime = fileMtime.value
+    const resp = await props.backend.send<FsWrite>('fs.write_file', params)
+    const p = resp.payload
+    if (p?.conflict) {
+      saveConflict.value = true
       return
     }
+    if (!p?.ok) {
+      void alert(p?.error || 'Save failed', { title: 'Save error' })
+      return
+    }
+    saveConflict.value = false
+    if (p.mtime !== undefined) fileMtime.value = p.mtime
     // Only clear dirty when no further edits landed while the request was in-flight.
     if (content.value === preContent) dirty.value = false
     toast('Saved', { type: 'success' })
   } catch (err) {
     void alert(err instanceof Error ? err.message : 'Save failed', { title: 'Save error' })
   }
+}
+
+// ── Save conflict actions (file changed on disk while dirty) ─────────────────
+function conflictOverwrite(): void {
+  saveConflict.value = false
+  void save({ force: true })
+}
+async function conflictReload(): Promise<void> {
+  saveConflict.value = false
+  await load()
+  dirty.value = false
 }
 
 // ── Cmd+K rewrite ─────────────────────────────────────────────────────────────
@@ -236,6 +278,17 @@ const cmdk = ref<{ open: boolean; instruction: string; busy: boolean; range: Ran
 const proposal = ref<{ range: Range; oldText: string; newText: string } | null>(null)
 const proposalEl = ref<HTMLDivElement | null>(null)
 const cmdkInput = ref<HTMLInputElement | null>(null)
+// Content snapshot taken when Cmd+K opens — a proposal computed against
+// different text must never be applied (its stored range would be stale).
+let cmdkBaseContent: string | null = null
+
+// Any edit while a proposal is pending shifts the captured range — discard it.
+watch(content, () => {
+  if (proposal.value) {
+    proposal.value = null
+    toast('Document changed — AI rewrite discarded', { type: 'info' })
+  }
+})
 
 function toEditorRange(
   range: { startLine: number; startCol: number; endLine: number; endCol: number } | Range | null,
@@ -286,6 +339,7 @@ function openCmdK(): void {
   const range = toEditorRange(editorRef.value?.getSelectionRange() ?? null)
   const code = editorRef.value?.getSelectionText() ?? ''
   cmdk.value = { open: true, instruction: '', busy: false, range, code }
+  cmdkBaseContent = content.value
   proposal.value = null
   void Promise.resolve().then(() => cmdkInput.value?.focus())
 }
@@ -322,6 +376,13 @@ async function submitCmdK(): Promise<void> {
       void alert(resp.payload?.error || 'Rewrite failed', { title: 'Cmd+K' })
       return
     }
+    // The document may have been edited during the async rewrite — the captured
+    // range no longer points at the selected code, so abort instead of proposing.
+    if (content.value !== cmdkBaseContent) {
+      toast('Document changed — AI rewrite discarded', { type: 'info' })
+      cmdk.value.open = false
+      return
+    }
     proposal.value = { range: cmdk.value.range, oldText: cmdk.value.code, newText: resp.payload.text }
     cmdk.value.open = false
     void nextTick(() => proposalEl.value?.focus())
@@ -355,6 +416,21 @@ const findWholeWord = ref(false)
 const findRegex = ref(false)
 const findMatches = ref<Array<{ line: number; startCol: number; endCol: number }>>([])
 const findIdx = ref(-1)
+// Cap match collection so a short query in a huge file cannot freeze the
+// renderer with hundreds of thousands of decorations.
+const FIND_MATCH_LIMIT = 1000
+const findLimited = ref(false)
+// Debounce keystroke-driven rescans (find input + editor edits) — a full
+// document scan per character is visibly laggy on large files.
+const FIND_DEBOUNCE_MS = 100
+let findDebounceTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleComputeMatches(opts: { navigate?: boolean } = {}): void {
+  if (findDebounceTimer) clearTimeout(findDebounceTimer)
+  findDebounceTimer = setTimeout(() => {
+    findDebounceTimer = null
+    if (findOpen.value) computeMatches(opts)
+  }, FIND_DEBOUNCE_MS)
+}
 const findInputEl = ref<HTMLInputElement | null>(null)
 const replaceOpen = ref(false)
 const replaceQuery = ref('')
@@ -369,10 +445,10 @@ function isWordBoundary(haystack: string, matchStart: number, matchLen: number):
 /** True when the query contains only word characters — whole-word is meaningful. */
 function queryIsAllWord(q: string): boolean { return /^[a-zA-Z0-9_]+$/.test(q) }
 
-watch([findQuery, findCase, findWholeWord, findRegex], () => { if (findOpen.value) computeMatches() })
+watch([findQuery, findCase, findWholeWord, findRegex], () => { if (findOpen.value) scheduleComputeMatches() })
 // Content changed while find is open → recompute highlights but don't scroll/steal focus.
 // The user may be editing in the editor itself; navigating to a match would be disruptive.
-watch(content, () => { if (findOpen.value && findQuery.value) computeMatches({ navigate: false }) })
+watch(content, () => { if (findOpen.value && findQuery.value) scheduleComputeMatches({ navigate: false }) })
 
 // Sync findOpen/editorTextFocus to keybinding context so when-clauses work.
 watch(findOpen, (v) => {
@@ -410,8 +486,10 @@ function useSelectionForFind(): void {
 function closeFind(): void {
   findOpen.value = false
   replaceOpen.value = false
+  if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null }
   findMatches.value = []
   findIdx.value = -1
+  findLimited.value = false
   editorRef.value?.setDecorations([])
   editorRef.value?.focus()
 }
@@ -426,15 +504,17 @@ function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void 
   const text = editorRef.value?.getValue() ?? content.value
   const lines = text.split('\n')
   const matches: Array<{ line: number; startCol: number; endCol: number }> = []
+  let limited = false
 
   if (findRegex.value) {
     try {
       const flags = 'g' + (findCase.value ? '' : 'i')
       const re = new RegExp(q, flags)
-      for (let li = 0; li < lines.length; li++) {
+      for (let li = 0; li < lines.length && !limited; li++) {
         re.lastIndex = 0
         let m: RegExpExecArray | null
         while ((m = re.exec(lines[li])) !== null) {
+          if (matches.length >= FIND_MATCH_LIMIT) { limited = true; break }
           matches.push({ line: li, startCol: m.index, endCol: m.index + m[0].length })
           if (m[0].length === 0) { re.lastIndex++; break }
         }
@@ -444,13 +524,14 @@ function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void 
     }
   } else {
     const needle = findCase.value ? q : q.toLowerCase()
-    for (let li = 0; li < lines.length; li++) {
+    for (let li = 0; li < lines.length && !limited; li++) {
       const haystack = findCase.value ? lines[li] : lines[li].toLowerCase()
       let start = 0
       while (true) {
         const idx = haystack.indexOf(needle, start)
         if (idx === -1) break
         if (!findWholeWord.value || !queryIsAllWord(q) || isWordBoundary(haystack, idx, q.length)) {
+          if (matches.length >= FIND_MATCH_LIMIT) { limited = true; break }
           matches.push({ line: li, startCol: idx, endCol: idx + q.length })
         }
         start = idx + needle.length
@@ -458,6 +539,7 @@ function computeMatches({ navigate = true }: { navigate?: boolean } = {}): void 
     }
   }
 
+  findLimited.value = limited
   findMatches.value = matches
   if (findIdx.value < 0 || findIdx.value >= matches.length) findIdx.value = matches.length > 0 ? 0 : -1
   updateFindDecorations()
@@ -524,8 +606,9 @@ function replaceAll(): void {
   let newText: string
   try {
     if (findRegex.value) {
-      // Regex mode: use query as regex; allow backreferences in replacement string
-      const flags = findCase.value ? 'g' : 'gi'
+      // Regex mode: use query as regex; allow backreferences in replacement string.
+      // 'm' flag so ^/$ anchor per line, matching the per-line highlighter.
+      const flags = findCase.value ? 'gm' : 'gim'
       const re = new RegExp(q, flags)
       newText = oldText.replace(re, replaceQuery.value)
     } else {
@@ -668,7 +751,12 @@ function ctxCopy(): void {
 function ctxCut(): void {
   closeContextMenu()
   const sel = editorRef.value?.getSelectionText() ?? ''
-  if (sel) { void navigator.clipboard.writeText(sel); editorRef.value?.insertText('') }
+  if (sel) {
+    void navigator.clipboard.writeText(sel)
+    // insertText('') is a no-op in Monaco — delete the selection via a real edit.
+    const range = toEditorRange(editorRef.value?.getSelectionRange() ?? null)
+    if (range) editorRef.value?.applyEditExternal(range, '')
+  }
   editorRef.value?.focus()
 }
 
@@ -768,6 +856,7 @@ onMounted(() => {
     const ev = raw as { workspace_path?: string }
     if (ev?.workspace_path !== props.workspacePath) return
     if (!loaded.value || dirty.value) return
+    const preContent = content.value // snapshot to detect edits typed mid-read
     void (async () => {
       try {
         const resp = await props.backend.send<FsRead>('fs.read_file', {
@@ -775,6 +864,10 @@ onMounted(() => {
           rel_path: props.relPath,
         })
         if (!resp.payload?.ok) return
+        // The user may have started typing while the read was in flight —
+        // applying the disk version now would clobber those keystrokes.
+        if (dirty.value || content.value !== preContent) return
+        if (resp.payload.mtime !== undefined) fileMtime.value = resp.payload.mtime
         const fresh = resp.payload.content ?? ''
         if (fresh !== content.value) {
           eol.value = detectEOL(fresh)
@@ -786,6 +879,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
+  if (findDebounceTimer) { clearTimeout(findDebounceTimer); findDebounceTimer = null }
   if (_ctxEscHandler) { document.removeEventListener('keydown', _ctxEscHandler, true); _ctxEscHandler = null }
   document.removeEventListener('click', closeContextMenu, true)
   _unsubGitChanged?.()
@@ -847,6 +941,15 @@ const ENCODING_OPTIONS = [
 function openEncodingPicker(): void { encodingPickerOpen.value = !encodingPickerOpen.value; indentPickerOpen.value = false }
 async function reopenWithEncoding(enc: string): Promise<void> {
   encodingPickerOpen.value = false
+  // Reopening replaces the buffer with the on-disk content — never silently
+  // discard unsaved edits.
+  if (dirty.value) {
+    const ok = await confirm(
+      'Reopening with a different encoding discards your unsaved changes. Continue?',
+      { title: 'Unsaved changes', confirmText: 'Reopen' },
+    )
+    if (!ok) return
+  }
   // Map display name → Python codec name for re-open request
   const encMap: Record<string, string> = {
     'UTF-8': 'utf-8', 'UTF-8 with BOM': 'utf-8-sig', 'UTF-16': 'utf-16',
@@ -864,7 +967,9 @@ async function reopenWithEncoding(enc: string): Promise<void> {
     if (resp.payload?.ok && resp.payload.content !== undefined) {
       content.value = resp.payload.content
       fileEncoding.value = enc
+      fileCodec.value = encMap[enc] ?? enc.toLowerCase()
       fileBom.value = resp.payload.bom ?? false
+      fileMtime.value = resp.payload.mtime ?? fileMtime.value
       eol.value = detectEOL(resp.payload.content)
       dirty.value = false
     } else {
@@ -1001,7 +1106,10 @@ defineExpose({
         <span>{{ backend.lastError.value || $t('error.backend-start-failed') }}</span>
         <button class="ep-retry" @click="retryBackend">{{ $t('action.retry') }}</button>
       </div>
-      <div v-else-if="loadError" class="ep-error">{{ loadError }}</div>
+      <div v-else-if="loadError" class="ep-error ep-backend-error">
+        <span>{{ loadError }}</span>
+        <button class="ep-retry" @click="retryLoad">{{ $t('action.retry') }}</button>
+      </div>
       <!-- Binary / image file preview -->
       <div v-else-if="loaded && isBinaryFile" class="ep-binary">
         <div v-if="isImageFile && imageDataUrl" class="ep-binary-img-wrap">
@@ -1148,9 +1256,9 @@ defineExpose({
           :title="$t('action.use-regex')"
           @click="findRegex = !findRegex"
         >.*</button>
-        <span class="ep-find-count">
+        <span class="ep-find-count" :title="findLimited ? $t('label.find-limited', { n: findMatches.length }) : undefined">
           <template v-if="findQuery && findMatches.length === 0">{{ $t('label.no-results') }}</template>
-          <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}</template>
+          <template v-else-if="findMatches.length">{{ findIdx + 1 }}/{{ findMatches.length }}{{ findLimited ? '+' : '' }}</template>
         </span>
         <button class="ep-find-nav" title="Previous match (⇧↵)" :disabled="!findMatches.length" @click="prevMatch">↑</button>
         <button class="ep-find-nav" title="Next match (↵)" :disabled="!findMatches.length" @click="nextMatch">↓</button>
@@ -1173,6 +1281,13 @@ defineExpose({
         <button class="ep-find-nav" title="Replace (↵)" :disabled="findIdx < 0" @click="replaceNext">⇥</button>
         <button class="ep-find-nav" title="Replace all (⌥↵)" :disabled="!findMatches.length" @click="replaceAll">⇥⇥</button>
       </div>
+    </div>
+
+    <!-- Save conflict bar — the file changed on disk since it was loaded -->
+    <div v-if="saveConflict" class="ep-conflict">
+      <span class="ep-conflict-msg">{{ $t('label.save-conflict') }}</span>
+      <button class="ep-act" @click="conflictOverwrite">{{ $t('action.overwrite') }}</button>
+      <button class="ep-act" @click="conflictReload">{{ $t('action.reload') }}</button>
     </div>
 
     <!-- Status bar -->
@@ -1346,6 +1461,18 @@ defineExpose({
 .ep-diff-add { color: var(--diff-add-fg); background: var(--diff-add-bg); }
 .ep-diff-del { color: var(--diff-del-fg); background: var(--diff-del-bg); }
 .ep-diff-ctx { color: var(--text-muted); }
+
+.ep-conflict {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.ep-conflict-msg { color: var(--attention-fg); flex: 1; }
 
 .ep-find {
   display: flex;

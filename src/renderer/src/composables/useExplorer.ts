@@ -13,7 +13,15 @@ export interface FsEntry {
 interface ListDirResult {
   ok: boolean
   entries?: FsEntry[]
+  truncated?: boolean
   error?: string
+}
+
+interface FetchDirResult {
+  ok: boolean
+  entries: FsEntry[]
+  truncated: boolean
+  error: string
 }
 
 const SHOW_HIDDEN_KEY = 'agentTeam.explorerShowHidden'
@@ -31,6 +39,10 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
   const expanded = ref<Set<string>>(new Set())
   const loadingDirs = ref<Set<string>>(new Set())
   const error = ref('')
+  /** Dirs whose last listing was capped by the backend (`truncated: true`). */
+  const truncatedDirs = ref<Set<string>>(new Set())
+  /** Per-dir load errors so a failed expand is visible instead of rendering empty. */
+  const dirErrors = ref<Map<string, string>>(new Map())
 
   const showHidden = ref<boolean>(
     (() => {
@@ -47,7 +59,7 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     return workspacePath.value || ''
   }
 
-  async function fetchDir(rel: string): Promise<FsEntry[]> {
+  async function fetchDir(rel: string): Promise<FetchDirResult> {
     try {
       const resp = await backend.send<ListDirResult>('fs.list_dir', {
         workspace_path: ws(),
@@ -56,14 +68,16 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
       })
       const payload = resp.payload
       if (!payload?.ok) {
-        error.value = payload?.error || resp.error?.message || 'failed to list directory'
-        return []
+        const msg = payload?.error || resp.error?.message || 'failed to list directory'
+        error.value = msg
+        return { ok: false, entries: [], truncated: false, error: msg }
       }
       error.value = ''
-      return payload.entries ?? []
+      return { ok: true, entries: payload.entries ?? [], truncated: !!payload.truncated, error: '' }
     } catch (err) {
-      error.value = err instanceof Error ? err.message : 'failed to list directory'
-      return []
+      const msg = err instanceof Error ? err.message : 'failed to list directory'
+      error.value = msg
+      return { ok: false, entries: [], truncated: false, error: msg }
     }
   }
 
@@ -73,13 +87,31 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     if (!currentWs) return []
     loadingDirs.value = new Set(loadingDirs.value).add(rel)
     try {
-      const entries = await fetchDir(rel)
+      const res = await fetchDir(rel)
       // Discard results if the workspace changed while the request was in flight.
-      if (ws() !== currentWs) return entries
+      if (ws() !== currentWs) return res.entries
+      if (!res.ok) {
+        // Record a per-dir error and leave the cache untouched: a never-loaded
+        // dir stays uncached (so re-expand retries), a previously loaded one
+        // keeps its last good entries.
+        const errs = new Map(dirErrors.value)
+        errs.set(rel, res.error)
+        dirErrors.value = errs
+        return []
+      }
+      if (dirErrors.value.has(rel)) {
+        const errs = new Map(dirErrors.value)
+        errs.delete(rel)
+        dirErrors.value = errs
+      }
+      const trunc = new Set(truncatedDirs.value)
+      if (res.truncated) trunc.add(rel)
+      else trunc.delete(rel)
+      truncatedDirs.value = trunc
       const next = new Map(childrenCache.value)
-      next.set(rel, entries)
+      next.set(rel, res.entries)
       childrenCache.value = next
-      return entries
+      return res.entries
     } finally {
       const s = new Set(loadingDirs.value)
       s.delete(rel)
@@ -121,6 +153,30 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     await Promise.all(dirs.map((d) => loadDir(d)))
   }
 
+  /**
+   * Drop a dir and all its descendants from expansion/cache/error state after
+   * it was renamed or deleted, so refreshes stop hitting the vanished path.
+   * On rename, pass `renamedTo` to keep the subtree expanded under its new path.
+   */
+  function pruneDir(rel: string, renamedTo?: string): void {
+    if (!rel) return
+    const prefix = rel + '/'
+    const matches = (k: string): boolean => k === rel || k.startsWith(prefix)
+    const remap = (k: string): string => (k === rel ? renamedTo! : renamedTo + k.slice(rel.length))
+    const exp = new Set<string>()
+    for (const k of expanded.value) {
+      if (!matches(k)) exp.add(k)
+      else if (renamedTo) exp.add(remap(k))
+    }
+    expanded.value = exp
+    const cache = new Map(childrenCache.value)
+    for (const k of [...cache.keys()]) if (matches(k)) cache.delete(k)
+    childrenCache.value = cache
+    loadingDirs.value = new Set([...loadingDirs.value].filter((k) => !matches(k)))
+    truncatedDirs.value = new Set([...truncatedDirs.value].filter((k) => !matches(k)))
+    dirErrors.value = new Map([...dirErrors.value].filter(([k]) => !matches(k)))
+  }
+
   function setShowHidden(value: boolean): void {
     showHidden.value = value
     try {
@@ -146,8 +202,13 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
   }
 
   // ── git.changed → invalidate ──────────────────────────────────────────────
-  const off = backend.on('git.changed', () => {
-    if (ws()) void refreshVisible()
+  // Only refresh for events from this workspace (broadcasts reach every
+  // session); refresh on a missing workspace_path for safety, like useGit.
+  const off = backend.on('git.changed', (payload: unknown) => {
+    if (!ws()) return
+    const p = payload as { workspace_path?: string } | null
+    if (p?.workspace_path && p.workspace_path !== ws()) return
+    void refreshVisible()
   })
   onScopeDispose(() => off())
 
@@ -156,6 +217,8 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     childrenCache.value = new Map()
     expanded.value = new Set()
     error.value = ''
+    truncatedDirs.value = new Set()
+    dirErrors.value = new Map()
   })
 
   return {
@@ -163,12 +226,15 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     expanded,
     showHidden,
     error,
+    truncatedDirs,
+    dirErrors,
     isExpanded,
     isLoading,
     loadDir,
     toggleDir,
     reloadAll,
     refreshVisible,
+    pruneDir,
     setShowHidden,
     buildStatusMap,
   }

@@ -32,21 +32,44 @@ interface Row {
   depth: number
 }
 
-// Flatten the lazily-loaded cache + expanded set into a render list.
-const rows = computed<Row[]>(() => {
+interface DirNote {
+  dirRel: string
+  kind: 'error' | 'truncated'
+  message: string
+  depth: number
+}
+
+// Flatten the lazily-loaded cache + expanded set into a render list, plus
+// inline notes (load error / truncated listing) anchored after the last
+// rendered row of the dir they belong to. Notes are kept out of `rows` so
+// selection and keyboard navigation are unaffected.
+const treeView = computed<{ rows: Row[]; notes: Map<string, DirNote[]> }>(() => {
   const out: Row[] = []
+  const notes = new Map<string, DirNote[]>()
+  const addNotes = (dirRel: string, depth: number): void => {
+    const anchor = out[out.length - 1]?.entry.rel_path
+    if (anchor === undefined) return
+    const list = notes.get(anchor) ?? []
+    const err = explorer.dirErrors.value.get(dirRel)
+    if (err) list.push({ dirRel, kind: 'error', message: err, depth })
+    if (explorer.truncatedDirs.value.has(dirRel)) list.push({ dirRel, kind: 'truncated', message: '', depth })
+    if (list.length) notes.set(anchor, list)
+  }
   const walk = (rel: string, depth: number): void => {
     const children = explorer.childrenCache.value.get(rel) ?? []
     for (const entry of children) {
       out.push({ entry, depth })
       if (entry.is_dir && explorer.isExpanded(entry.rel_path)) {
         walk(entry.rel_path, depth + 1)
+        addNotes(entry.rel_path, depth + 1)
       }
     }
   }
   walk('', 0)
-  return out
+  addNotes('', 0)
+  return { rows: out, notes }
 })
+const rows = computed<Row[]>(() => treeView.value.rows)
 
 const wsName = computed(() => {
   const p = props.workspacePath.replace(/\/+$/, '')
@@ -175,6 +198,7 @@ async function deleteSelected(): Promise<void> {
       void alert(err instanceof Error ? err.message : `Failed to delete "${rel}"`, { title: 'Error' })
     }
   }
+  for (const rel of deleted) explorer.pruneDir(rel)
   clearSelection()
   await explorer.refreshVisible()
 }
@@ -309,6 +333,9 @@ async function submitPrompt(): Promise<void> {
     void alert(res.payload?.error || 'Operation failed', { title: 'Error' })
     return
   }
+  // Drop stale expansion/cache state under the old path; keep the subtree
+  // expanded under the new one.
+  if (p.kind === 'rename' && p.srcRel) explorer.pruneDir(p.srcRel, rel)
   // Make sure the affected dir is expanded so the result is visible.
   if (p.kind !== 'rename' && p.parentRel && !explorer.isExpanded(p.parentRel)) {
     await explorer.toggleDir(p.parentRel)
@@ -336,6 +363,7 @@ async function doDelete(entry: FsEntry): Promise<void> {
     void alert(res.payload?.error || 'Delete failed', { title: 'Error' })
     return
   }
+  explorer.pruneDir(entry.rel_path)
   await explorer.refreshVisible()
 }
 
@@ -360,7 +388,7 @@ function doInitialLoad(): void {
 }
 
 // The tree never loaded successfully: nothing cached yet, or the last load
-// errored (a failed loadDir still caches an empty root). While the backend is
+// errored (a failed loadDir leaves the root uncached). While the backend is
 // down this is a "waiting" state, not an empty directory.
 const treeNeverLoaded = computed(
   () => explorer.childrenCache.value.size === 0 || !!explorer.error.value,
@@ -494,31 +522,40 @@ defineExpose({ revealFile, focusTree })
 
     <!-- Tree -->
     <div ref="treeEl" class="exp-tree" tabindex="0" @contextmenu="openCtx($event, null)" @keydown="onTreeKeydown" @focus="onTreeFocus">
-      <div
-        v-for="(row, rowIdx) in rows"
-        :key="row.entry.rel_path"
-        :data-rel="row.entry.rel_path"
-        class="exp-row"
-        :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
-        :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
-        :draggable="true"
-        @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.entry.rel_path))"
-        @click.stop="handleRowClick($event, row.entry)"
-        @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
-        @contextmenu.stop="openCtx($event, row.entry)"
-      >
-        <span class="exp-chevron" :class="{ open: explorer.isExpanded(row.entry.rel_path) }">
-          <svg v-if="row.entry.is_dir" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M6 4l4 4-4 4V4Z"/></svg>
-        </span>
-        <span class="exp-glyph" :class="row.entry.is_dir ? 'is-dir' : 'is-file'">
-          <svg v-if="row.entry.is_dir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
-          <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1H3.75ZM9 2.5 12.5 6H9V2.5Z"/></svg>
-        </span>
-        <span class="exp-name" :class="statusClassFor(row.entry)">{{ row.entry.name }}</span>
-        <span v-if="statusFor(row.entry.rel_path)" class="exp-status" :class="statusClassFor(row.entry)">
-          {{ statusFor(row.entry.rel_path)!.letter }}
-        </span>
-      </div>
+      <template v-for="(row, rowIdx) in rows" :key="row.entry.rel_path">
+        <div
+          :data-rel="row.entry.rel_path"
+          class="exp-row"
+          :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
+          :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
+          :draggable="true"
+          @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.entry.rel_path))"
+          @click.stop="handleRowClick($event, row.entry)"
+          @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
+          @contextmenu.stop="openCtx($event, row.entry)"
+        >
+          <span class="exp-chevron" :class="{ open: explorer.isExpanded(row.entry.rel_path) }">
+            <svg v-if="row.entry.is_dir" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M6 4l4 4-4 4V4Z"/></svg>
+          </span>
+          <span class="exp-glyph" :class="row.entry.is_dir ? 'is-dir' : 'is-file'">
+            <svg v-if="row.entry.is_dir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
+            <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1H3.75ZM9 2.5 12.5 6H9V2.5Z"/></svg>
+          </span>
+          <span class="exp-name" :class="statusClassFor(row.entry)">{{ row.entry.name }}</span>
+          <span v-if="statusFor(row.entry.rel_path)" class="exp-status" :class="statusClassFor(row.entry)">
+            {{ statusFor(row.entry.rel_path)!.letter }}
+          </span>
+        </div>
+        <div
+          v-for="note in treeView.notes.get(row.entry.rel_path) ?? []"
+          :key="`${note.kind}:${note.dirRel}`"
+          class="exp-note"
+          :class="note.kind"
+          :style="{ paddingLeft: 20 + note.depth * 12 + 'px' }"
+        >
+          {{ note.kind === 'error' ? $t('label.dir-list-error', { message: note.message }) : $t('label.list-truncated') }}
+        </div>
+      </template>
 
       <div v-if="rows.length === 0 && workspacePath" class="exp-empty">
         {{ waitingForBackend ? $t('label.waiting-backend') : (explorer.error.value || $t('label.no-items')) }}
@@ -682,6 +719,20 @@ defineExpose({ revealFile, focusTree })
   color: var(--text-muted);
   text-align: center;
 }
+
+/* Inline dir notes (load error / truncated listing) */
+.exp-note {
+  padding-right: 8px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+.exp-note.error { color: var(--danger-fg); }
+.exp-note.truncated { color: var(--attention-fg); }
 
 /* Inline prompt */
 .exp-prompt-overlay {

@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -73,8 +74,13 @@ def find_in_files(
     includes: str = "",
     excludes: str = "",
     max_results: int = _MAX_RESULTS,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    """Search files under ``workspace_path``, grouped by file."""
+    """Search files under ``workspace_path``, grouped by file.
+
+    ``cancel_event`` (if given) aborts the scan early — set by the caller when
+    a newer search supersedes this one.
+    """
     if not query:
         return {"ok": True, "results": [], "total": 0, "truncated": False}
     root = Path(workspace_path).resolve()
@@ -90,9 +96,11 @@ def find_in_files(
         return _find_rg(
             rg, root, query, is_regex, case_sensitive, whole_word,
             _split_globs(includes), _split_globs(excludes), max_results,
+            cancel_event=cancel_event,
         )
     return _find_python(
-        root, pattern, _split_globs(includes), _split_globs(excludes), max_results
+        root, pattern, _split_globs(includes), _split_globs(excludes), max_results,
+        cancel_event=cancel_event,
     )
 
 
@@ -115,6 +123,7 @@ def _find_rg(
     includes: list[str],
     excludes: list[str],
     max_results: int,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     args = [rg, "--json", "-s" if case_sensitive else "-i"]
     if whole_word:
@@ -125,59 +134,98 @@ def _find_rg(
         args += ["-g", g]
     for g in excludes:
         args += ["-g", f"!{g}"]
+    # Always exclude noise dirs (node_modules / dist / .venv / …): rg only
+    # skips them via .gitignore, which non-git workspaces lack. Mirrors the
+    # Python fallback's os.walk pruning; .gitignore is still respected.
+    for seg in sorted(_NOISE_SEGMENTS):
+        args += ["-g", f"!{seg}/"]
     args += ["--", query, str(root)]
 
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, timeout=_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Search timed out"}
-    if proc.returncode not in (0, 1):  # 0 = matches, 1 = none, 2 = error
-        return {"ok": False, "error": (proc.stderr or "Search failed").strip()[:500]}
+        proc = subprocess.Popen(
+            args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
 
     grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     total = 0
     truncated = False
+    cancelled = False
+    timed_out = threading.Event()
 
-    for line in proc.stdout.splitlines():
-        if total >= max_results:
-            truncated = True
-            break
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if obj.get("type") != "match":
-            continue
-        data = obj.get("data", {})
-        abs_path = (data.get("path") or {}).get("text")
-        if not abs_path:
-            continue
-        try:
-            rel = str(Path(abs_path).resolve().relative_to(root))
-        except ValueError:
-            rel = abs_path
-        line_no = data.get("line_number", 0)
-        text = ((data.get("lines") or {}).get("text") or "").rstrip("\n")
-        # rg submatches report byte offsets in the UTF-8-encoded line.
-        # The frontend (JS) uses character-index `.slice()`, so convert here.
-        text_bytes = text.encode("utf-8")
-        for sm in data.get("submatches", []):
+    def _kill_on_timeout() -> None:
+        timed_out.set()
+        proc.kill()
+
+    # Stream stdout line-by-line so hitting max_results terminates the rg
+    # process early instead of buffering its entire output; the timer
+    # replaces subprocess.run's timeout.
+    timer = threading.Timer(_TIMEOUT_S, _kill_on_timeout)
+    timer.start()
+    stderr_text = ""
+    try:
+        assert proc.stdout is not None
+        for raw_line in proc.stdout:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
             if total >= max_results:
                 truncated = True
                 break
-            byte_start = sm.get("start", 0)
-            byte_end = sm.get("end", 0)
-            col_char = len(text_bytes[:byte_start].decode("utf-8", errors="ignore"))
-            end_char = col_char + len(
-                text_bytes[byte_start:byte_end].decode("utf-8", errors="ignore")
-            )
-            _grouped_append(grouped, order, rel, {
-                "line": line_no, "col": col_char, "end": end_char, "text": text,
-            })
-            total += 1
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") != "match":
+                continue
+            data = obj.get("data", {})
+            abs_path = (data.get("path") or {}).get("text")
+            if not abs_path:
+                continue
+            try:
+                rel = str(Path(abs_path).resolve().relative_to(root))
+            except ValueError:
+                rel = abs_path
+            line_no = data.get("line_number", 0)
+            text = ((data.get("lines") or {}).get("text") or "").rstrip("\n")
+            # rg submatches report byte offsets in the UTF-8-encoded line.
+            # The frontend (JS) uses character-index `.slice()`, so convert here.
+            text_bytes = text.encode("utf-8")
+            for sm in data.get("submatches", []):
+                if total >= max_results:
+                    truncated = True
+                    break
+                byte_start = sm.get("start", 0)
+                byte_end = sm.get("end", 0)
+                col_char = len(text_bytes[:byte_start].decode("utf-8", errors="ignore"))
+                end_char = col_char + len(
+                    text_bytes[byte_start:byte_end].decode("utf-8", errors="ignore")
+                )
+                _grouped_append(grouped, order, rel, {
+                    "line": line_no, "col": col_char, "end": end_char, "text": text,
+                })
+                total += 1
+    finally:
+        timer.cancel()
+        proc.kill()  # no-op if rg already exited
+        try:
+            _, stderr_text = proc.communicate()
+        except Exception:
+            stderr_text = ""
+
+    if cancelled:
+        return {"ok": False, "error": "cancelled"}
+    if timed_out.is_set():
+        if total == 0:
+            return {"ok": False, "error": "Search timed out"}
+        truncated = True  # partial results beat a timeout with nothing
+    elif not truncated and proc.returncode not in (0, 1):  # 0 = matches, 1 = none, 2 = error
+        return {"ok": False, "error": (stderr_text or "Search failed").strip()[:500]}
 
     results = [grouped[r] for r in order if grouped[r]["matches"]]
     return {"ok": True, "results": results, "total": total, "truncated": truncated}
@@ -189,6 +237,7 @@ def _find_python(
     includes: list[str],
     excludes: list[str],
     max_results: int,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     grouped: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -199,6 +248,8 @@ def _find_python(
         # Prune noise dirs (node_modules / .git / …) — matches Explorer behaviour.
         dirnames[:] = [d for d in dirnames if d not in _NOISE_SEGMENTS]
         for fn in sorted(filenames):
+            if cancel_event is not None and cancel_event.is_set():
+                return {"ok": False, "error": "cancelled"}
             if total >= max_results:
                 truncated = True
                 break

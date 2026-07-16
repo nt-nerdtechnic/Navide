@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
+
+import pytest
 
 from agent_team_backend import search_service
 
@@ -91,6 +94,72 @@ def test_find_truncates(tmp_path: Path) -> None:
     assert res["truncated"] is True
     assert res["total"] == 2
 
+
+
+def test_find_excludes_noise_dirs(tmp_path: Path) -> None:
+    # Non-git workspace: no .gitignore, so only the explicit noise-dir globs
+    # keep rg out of node_modules/dist/etc. (fallback prunes via os.walk).
+    ws = _ws(tmp_path)
+    for noise in ("node_modules/pkg", "dist", ".venv/lib"):
+        d = tmp_path / noise
+        d.mkdir(parents=True)
+        (d / "hit.js").write_text("foo\n", encoding="utf-8")
+
+    res = search_service.find_in_files(ws, "foo")
+
+    assert res["ok"] is True
+    paths = {r["rel_path"] for r in res["results"]}
+    assert not any(
+        p.startswith(("node_modules", "dist", ".venv")) for p in paths
+    ), paths
+    assert "src/a.ts" in paths  # real sources still found
+
+
+def test_find_excludes_noise_dirs_python_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(search_service, "_rg_bin", lambda: None)
+    ws = _ws(tmp_path)
+    nm = tmp_path / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / "hit.js").write_text("foo\n", encoding="utf-8")
+
+    res = search_service.find_in_files(ws, "foo")
+
+    paths = {r["rel_path"] for r in res["results"]}
+    assert not any(p.startswith("node_modules") for p in paths)
+
+
+def test_find_cap_terminates_early_across_files(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    for i in range(10):
+        (tmp_path / f"many{i}.txt").write_text("foo\n" * 50, encoding="utf-8")
+
+    res = search_service.find_in_files(ws, "foo", max_results=7)
+
+    assert res["ok"] is True
+    assert res["truncated"] is True
+    assert res["total"] == 7
+    assert sum(len(r["matches"]) for r in res["results"]) == 7
+
+
+def test_find_cancelled_event_aborts(tmp_path: Path) -> None:
+    ev = threading.Event()
+    ev.set()  # superseded before it starts
+    res = search_service.find_in_files(_ws(tmp_path), "foo", cancel_event=ev)
+    assert res["ok"] is False
+    assert res["error"] == "cancelled"
+
+
+def test_find_cancelled_event_aborts_python_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(search_service, "_rg_bin", lambda: None)
+    ev = threading.Event()
+    ev.set()
+    res = search_service.find_in_files(_ws(tmp_path), "foo", cancel_event=ev)
+    assert res["ok"] is False
+    assert res["error"] == "cancelled"
 
 
 def test_match_shape(tmp_path: Path) -> None:

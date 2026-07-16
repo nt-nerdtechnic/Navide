@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import stat
 from pathlib import Path
 
 from agent_team_backend import fs_service
@@ -128,15 +129,25 @@ def test_read_file(tmp_path: Path) -> None:
     assert res["ok"] is True and res["content"] == "hi"
 
 
-def test_read_file_has_no_size_limit(tmp_path: Path) -> None:
+def test_read_file_returns_mtime(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
-    content = "x" * (10 * 1024 * 1024 + 1)
-    (Path(ws) / "large.txt").write_text(content)
+    res = fs_service.read_file(ws, "README.md")
+    assert res["ok"] is True
+    assert res["mtime"] == (Path(ws) / "README.md").stat().st_mtime
+
+
+def test_read_file_rejects_oversized(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    size = fs_service._READ_SIZE_LIMIT + 1
+    with (Path(ws) / "large.txt").open("wb") as fh:
+        fh.truncate(size)
 
     res = fs_service.read_file(ws, "large.txt")
 
-    assert res["ok"] is True
-    assert res["content"] == content
+    assert res["ok"] is False
+    assert "file too large" in res["error"]
+    assert res["is_binary"] is False
+    assert res["size"] == size
 
 
 def test_read_large_pdf_is_classified_as_binary(tmp_path: Path) -> None:
@@ -169,6 +180,84 @@ def test_write_file_blocks_internal_dir(tmp_path: Path) -> None:
     assert fs_service.write_file(_ws(tmp_path), ".agent-team/x", "y")["ok"] is False
 
 
+def test_write_file_returns_mtime(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "src/main.ts", "// edited")
+    assert res["ok"] is True
+    assert res["mtime"] == (Path(ws) / "src" / "main.ts").stat().st_mtime
+
+
+def test_write_file_custom_encoding(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "big5.txt", "中文", encoding="big5")
+    assert res["ok"] is True
+    assert (Path(ws) / "big5.txt").read_bytes() == "中文".encode("big5")
+
+
+def test_write_file_accepts_display_label(tmp_path: Path) -> None:
+    # read_file returns display labels ("UTF-8 with BOM"); write_file must
+    # accept them back so the encoding round-trips.
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "bom.txt", "hi", encoding="UTF-8 with BOM")
+    assert res["ok"] is True
+    assert (Path(ws) / "bom.txt").read_bytes() == b"\xef\xbb\xbfhi"
+
+
+def test_write_file_unknown_encoding_errors(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "x.txt", "hi", encoding="no-such-codec")
+    assert res["ok"] is False
+    assert "cannot encode" in res["error"]
+    assert not (Path(ws) / "x.txt").exists()
+
+
+def test_write_file_unencodable_content_errors(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "x.txt", "中文", encoding="ascii")
+    assert res["ok"] is False
+    assert "cannot encode" in res["error"]
+    assert not (Path(ws) / "x.txt").exists()
+
+
+def test_write_file_mtime_conflict_refuses_write(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    target = Path(ws) / "README.md"
+    stale = target.stat().st_mtime - 10.0
+    res = fs_service.write_file(ws, "README.md", "clobber", expected_mtime=stale)
+    assert res["ok"] is False
+    assert res["conflict"] is True
+    assert res["error"] == "file changed on disk"
+    assert res["mtime"] == target.stat().st_mtime
+    assert target.read_text() == "hi"  # untouched
+
+
+def test_write_file_matching_mtime_writes(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    target = Path(ws) / "README.md"
+    res = fs_service.write_file(
+        ws, "README.md", "new", expected_mtime=target.stat().st_mtime
+    )
+    assert res["ok"] is True
+    assert target.read_text() == "new"
+
+
+def test_write_file_expected_mtime_ignored_for_new_file(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    res = fs_service.write_file(ws, "brand-new.txt", "x", expected_mtime=123.0)
+    assert res["ok"] is True
+    assert (Path(ws) / "brand-new.txt").read_text() == "x"
+
+
+def test_write_file_preserves_mode(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    script = Path(ws) / "run.sh"
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o755)
+    res = fs_service.write_file(ws, "run.sh", "#!/bin/sh\necho hi\n")
+    assert res["ok"] is True
+    assert stat.S_IMODE(script.stat().st_mode) == 0o755
+
+
 # ── read_image ────────────────────────────────────────────────────────────────
 
 # Smallest valid PNG: a 1x1 transparent pixel.
@@ -187,9 +276,9 @@ def test_read_image_returns_data_url(tmp_path: Path) -> None:
     assert res["size"] == len(_PNG_1X1)
 
 
-def test_read_image_has_no_size_limit(tmp_path: Path) -> None:
+def test_read_image_under_size_limit_ok(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
-    image = _PNG_1X1 + b"\0" * (10 * 1024 * 1024)
+    image = _PNG_1X1 + b"\0" * (10 * 1024 * 1024)  # 10 MB — below the 20 MB cap
     (Path(ws) / "large.png").write_bytes(image)
 
     res = fs_service.read_image(ws, "large.png")
@@ -197,6 +286,17 @@ def test_read_image_has_no_size_limit(tmp_path: Path) -> None:
     assert res["ok"] is True
     assert res["size"] == len(image)
     assert res["data_url"].startswith("data:image/png;base64,")
+
+
+def test_read_image_rejects_oversized(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    with (Path(ws) / "huge.png").open("wb") as fh:
+        fh.truncate(fs_service._IMAGE_SIZE_LIMIT + 1)
+
+    res = fs_service.read_image(ws, "huge.png")
+
+    assert res["ok"] is False
+    assert "image too large" in res["error"]
 
 
 def test_read_image_rejects_non_image(tmp_path: Path) -> None:

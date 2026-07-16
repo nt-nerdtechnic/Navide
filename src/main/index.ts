@@ -11,6 +11,7 @@ import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { BackendBroadcastTracker } from './backend-broadcast'
+import { watchBackendExit } from './backend-crash'
 import {
   CliBufferRelay,
   CLI_BUFFER_REPLY_CHANNEL,
@@ -322,6 +323,21 @@ app.on('browser-window-created', (_event, win) => {
 
 ipcMain.handle('backend:info', () => backendInfoPayload())
 
+// A backend that dies after a successful start must not keep reporting
+// 'ready' with a dead port: watch its exit and, if it is still the active
+// handle (deliberate stop/restart/quit paths clear `backend` BEFORE killing
+// the process, so those exits are ignored), surface the crash so every
+// window's useBackend reaches the terminal 'error' state and the existing
+// Retry UI takes over. Deliberately no auto-restart.
+function watchBackendCrash(b: BackendHandle): void {
+  watchBackendExit(b.proc, () => backend === b, (message) => {
+    console.error(`[main] ${message}`)
+    backend = null
+    backendLastError = message
+    broadcastBackendChanged()
+  })
+}
+
 // Serialize lifecycle ops so a double-click can't spawn two backends or race a
 // stop against a start.
 let backendBusy = false
@@ -330,6 +346,14 @@ ipcMain.handle('backend:restart', async () => {
   if (backendBusy) return backendInfoPayload()
   backendBusy = true
   try {
+    // A restart during the initial spawn must not double-spawn: wait for the
+    // in-flight start to settle first (its promise never rejects) so the
+    // handle it produces lands in `backend` and is stopped below instead of
+    // being orphaned when overwritten.
+    if (backendStarting) {
+      await backendStarting
+      backendStarting = null
+    }
     if (backend) {
       const b = backend
       backend = null
@@ -338,6 +362,7 @@ ipcMain.handle('backend:restart', async () => {
     try {
       backend = await startBackend(readHealthCheckTimeoutSec(healthTimeoutPath()) * 1000)
       backendLastError = null
+      watchBackendCrash(backend)
       console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
     } catch (err) {
       console.error('[main] backend restart failed', err)
@@ -1337,6 +1362,7 @@ app.whenReady().then(async () => {
     .then((b) => {
       backend = b
       backendLastError = null
+      watchBackendCrash(b)
       console.log(`[main] backend ready at ${b.host}:${b.port}`)
       broadcastBackendChanged()
     })

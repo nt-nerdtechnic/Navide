@@ -9,6 +9,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -316,6 +317,9 @@ class Session:
         # In-flight handle_message tasks; cancelled in ws() finally so handlers
         # never outlive the connection and drain onto a closed socket.
         self._handler_tasks: set[asyncio.Task] = set()
+        # In-flight find_in_files cancellation handle: a newer search from
+        # this session sets the event so the superseded scan stops early.
+        self._search_cancel: threading.Event | None = None
         # Set once the peer is gone (send failed or ws() loop exited). All
         # further send_json calls become silent no-ops.
         self.dead = False
@@ -2887,14 +2891,15 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.mkdir":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.mkdir(ws_path, payload.get("rel_path", "") or "")
+            result = await asyncio.to_thread(fs_service.mkdir, ws_path, payload.get("rel_path", "") or "")
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "fs.create_file":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.create_file(
+            result = await asyncio.to_thread(
+                fs_service.create_file,
                 ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
             )
             await session.send_json(make_response(msg_id, msg_type, result))
@@ -2903,7 +2908,8 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.rename":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.rename(
+            result = await asyncio.to_thread(
+                fs_service.rename,
                 ws_path, payload.get("src_path", "") or "", payload.get("dst_path", "") or ""
             )
             await session.send_json(make_response(msg_id, msg_type, result))
@@ -2912,15 +2918,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.delete":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.delete(ws_path, payload.get("rel_path", "") or "")
+            # to_thread: shutil.rmtree on a big dir would block the event loop.
+            result = await asyncio.to_thread(fs_service.delete, ws_path, payload.get("rel_path", "") or "")
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "fs.write_file":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.write_file(
-                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or ""
+            expected_mtime = payload.get("expected_mtime")
+            result = await asyncio.to_thread(
+                fs_service.write_file,
+                ws_path, payload.get("rel_path", "") or "", payload.get("content", "") or "",
+                encoding=payload.get("encoding") or "utf-8",
+                expected_mtime=float(expected_mtime) if expected_mtime is not None else None,
             )
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
@@ -2940,7 +2951,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.read_image":
             ws_path = payload.get("workspace_path") or ""
-            result = fs_service.read_image(ws_path, payload.get("rel_path", "") or "")
+            result = await asyncio.to_thread(fs_service.read_image, ws_path, payload.get("rel_path", "") or "")
             await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────
@@ -2991,6 +3002,13 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         # ── Search (search.*) ───────────────────────────────────────────────
         elif msg_type == "search.find_in_files":
+            # A new search supersedes any in-flight one from this session:
+            # cancel it so stale scans don't stack up server-side. (The
+            # frontend's seq guard already discards the stale response.)
+            if session._search_cancel is not None:
+                session._search_cancel.set()
+            cancel_event = threading.Event()
+            session._search_cancel = cancel_event
             result = await asyncio.to_thread(
                 search_service.find_in_files,
                 payload.get("workspace_path") or "",
@@ -3000,7 +3018,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 whole_word=bool(payload.get("whole_word")),
                 includes=payload.get("includes", "") or "",
                 excludes=payload.get("excludes", "") or "",
+                cancel_event=cancel_event,
             )
+            if session._search_cancel is cancel_event:
+                session._search_cancel = None
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "search.replace_in_files":
@@ -3211,7 +3232,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             ws_path = payload.get("workspace_path", "") or ""
             file_path = payload.get("file_path", "") or ""
             new_content = payload.get("new_content", "") or ""
-            result = fs_service.write_file(ws_path, file_path, new_content)
+            result = await asyncio.to_thread(fs_service.write_file, ws_path, file_path, new_content)
             await session.send_json(make_response(msg_id, msg_type, result))
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))

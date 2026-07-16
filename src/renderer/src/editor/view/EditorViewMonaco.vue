@@ -31,6 +31,9 @@ let decorationColl: monaco.editor.IEditorDecorationsCollection | null = null
 let inlineDisposer: monaco.IDisposable | null = null
 let pendingGhost: string | null = null
 let ignoreNextModelChange = false
+// Last value emitted to the parent — lets the modelValue watcher skip the
+// echo round-trip without re-serializing the whole document per keystroke.
+let lastEmittedValue: string | null = null
 
 type MonacoTypescriptApi = {
   CompilerOptions: unknown
@@ -300,7 +303,8 @@ onMounted(() => {
   // Emit content changes
   editor.onDidChangeModelContent(() => {
     if (ignoreNextModelChange) { ignoreNextModelChange = false; return }
-    emit('update:modelValue', editor!.getValue())
+    lastEmittedValue = editor!.getValue()
+    emit('update:modelValue', lastEmittedValue)
   })
 
   // Emit cursor position changes
@@ -346,10 +350,15 @@ onBeforeUnmount(() => {
 
 // ── Watchers ──────────────────────────────────────────────────────────────────
 watch(() => props.modelValue, (v) => {
-  if (!editor || editor.getValue() === v) return
+  if (!editor || v === lastEmittedValue) return
+  const model = editor.getModel()
+  if (!model || model.getValue() === v) return
   ignoreNextModelChange = true
   const pos = editor.getPosition()
-  editor.setValue(v)
+  // pushEditOperations (not setValue) so the undo/redo stack survives external
+  // updates such as EOL switches and disk reloads.
+  model.pushEditOperations([], [{ range: model.getFullModelRange(), text: v }], () => null)
+  lastEmittedValue = v
   if (pos) editor.setPosition(pos)
 })
 
@@ -373,15 +382,22 @@ function applyDiagnostics(
     warning: monaco.MarkerSeverity.Warning,
     info: monaco.MarkerSeverity.Info,
   }
-  monaco.editor.setModelMarkers(model, 'diagnostics', diags.map((d) => ({
-    startLineNumber: d.line + 1,
-    startColumn: d.col + 1,
-    endLineNumber: (d.endLine ?? d.line) + 1,
-    endColumn: model.getLineLength((d.endLine ?? d.line) + 1) + 1,
-    severity: severityMap[d.severity] ?? monaco.MarkerSeverity.Info,
-    message: d.message,
-    source: d.source,
-  })))
+  // Diagnostics use 1-based lines (matching producers); clamp so stale entries
+  // pointing past the current line count can never make Monaco throw.
+  const lineCount = model.getLineCount()
+  monaco.editor.setModelMarkers(model, 'diagnostics', diags.map((d) => {
+    const startLine = Math.min(Math.max(d.line, 1), lineCount)
+    const endLine = Math.min(Math.max(d.endLine ?? d.line, startLine), lineCount)
+    return {
+      startLineNumber: startLine,
+      startColumn: d.col + 1,
+      endLineNumber: endLine,
+      endColumn: model.getLineLength(endLine) + 1,
+      severity: severityMap[d.severity] ?? monaco.MarkerSeverity.Info,
+      message: d.message,
+      source: d.source,
+    }
+  }))
 }
 
 // ── Decoration helpers ────────────────────────────────────────────────────────
@@ -495,7 +511,8 @@ function applyEditExternal(range: { start: { line: number; col: number }; end: {
     range: new monaco.Range(range.start.line + 1, range.start.col + 1, range.end.line + 1, range.end.col + 1),
     text: newText,
   }], () => null)
-  emit('update:modelValue', model.getValue())
+  lastEmittedValue = model.getValue()
+  emit('update:modelValue', lastEmittedValue)
 }
 function undo(): void { editor?.trigger('', 'undo', null) }
 function redo(): void { editor?.trigger('', 'redo', null) }

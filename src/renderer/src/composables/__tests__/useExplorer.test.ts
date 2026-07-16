@@ -35,7 +35,70 @@ describe('useExplorer', () => {
     const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
     await result.loadDir('')
     expect(result.error.value).toBeTruthy()
-    expect(result.childrenCache.value.get('')).toEqual([])
+    // Failures record a per-dir error and leave the cache untouched.
+    expect(result.childrenCache.value.has('')).toBe(false)
+    expect(result.dirErrors.value.get('')).toBe('boom')
+    scope.stop()
+  })
+
+  it('a failed expand records a per-dir error and re-expand retries', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('fs.list_dir', { ok: false, error: 'permission denied' })
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    await result.toggleDir('src')
+    expect(result.isExpanded('src')).toBe(true)
+    expect(result.childrenCache.value.has('src')).toBe(false)
+    expect(result.dirErrors.value.get('src')).toBe('permission denied')
+
+    // Collapse and re-expand: the dir is uncached, so the load retries.
+    await result.toggleDir('src')
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries() })
+    await result.toggleDir('src')
+    expect(result.childrenCache.value.get('src')).toHaveLength(2)
+    expect(result.dirErrors.value.has('src')).toBe(false)
+    scope.stop()
+  })
+
+  it('stores the truncated flag per dir and clears it on a full reload', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries(), truncated: true })
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    await result.loadDir('')
+    expect(result.truncatedDirs.value.has('')).toBe(true)
+
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries() })
+    await result.loadDir('')
+    expect(result.truncatedDirs.value.has('')).toBe(false)
+    scope.stop()
+  })
+
+  it('pruneDir drops the dir and its descendants from expanded/cache state', async () => {
+    const mock = createMockBackend('connected')
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    result.expanded.value = new Set(['src', 'src/sub', 'src2', 'other'])
+    result.childrenCache.value = new Map([
+      ['', entries()],
+      ['src', []],
+      ['src/sub', []],
+      ['src2', []],
+    ])
+    result.pruneDir('src')
+    // 'src2' shares the prefix string but is not a descendant — it must survive.
+    expect(result.expanded.value).toEqual(new Set(['src2', 'other']))
+    expect([...result.childrenCache.value.keys()].sort()).toEqual(['', 'src2'])
+    scope.stop()
+  })
+
+  it('pruneDir with renamedTo keeps the subtree expanded under the new path', () => {
+    const mock = createMockBackend('connected')
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    result.expanded.value = new Set(['src', 'src/sub', 'other'])
+    result.pruneDir('src', 'lib')
+    expect(result.expanded.value).toEqual(new Set(['lib', 'lib/sub', 'other']))
     scope.stop()
   })
 
@@ -77,6 +140,25 @@ describe('useExplorer', () => {
     await flush()
     const after = mock.sent.filter((s) => s.type === 'fs.list_dir').length
     expect(after).toBeGreaterThan(before)
+    scope.stop()
+  })
+
+  it('ignores git.changed events from other workspaces', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries() })
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    await result.loadDir('')
+    const before = mock.sent.filter((s) => s.type === 'fs.list_dir').length
+
+    mock.emit('git.changed', { workspace_path: '/other-ws' })
+    await flush()
+    expect(mock.sent.filter((s) => s.type === 'fs.list_dir').length).toBe(before)
+
+    // A payload without workspace_path still refreshes (safety, like useGit).
+    mock.emit('git.changed', {})
+    await flush()
+    expect(mock.sent.filter((s) => s.type === 'fs.list_dir').length).toBeGreaterThan(before)
     scope.stop()
   })
 

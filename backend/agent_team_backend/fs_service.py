@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import os
 import shutil
+import stat as stat_mod
 from pathlib import Path
 from typing import Any
 
@@ -277,6 +278,18 @@ _ENCODINGS_TO_TRY = [
     "latin-1",     # always succeeds — last resort for Western text
 ]
 
+# Normalise encoding name for display (match VS Code labels).
+_ENC_DISPLAY: dict[str, str] = {
+    "utf_8": "UTF-8", "utf_8_sig": "UTF-8 with BOM",
+    "utf_16": "UTF-16", "utf_16_le": "UTF-16 LE", "utf_16_be": "UTF-16 BE",
+    "latin_1": "Latin-1", "latin-1": "Latin-1",
+    "cp1252": "Windows 1252", "cp1251": "Windows 1251",
+    "gb2312": "GB2312", "gbk": "GBK", "big5": "Big5",
+    "shift_jis": "Shift JIS", "euc_jp": "EUC-JP", "euc_kr": "EUC-KR",
+}
+# Reverse map so write_file also accepts the display labels read_file returns.
+_ENC_FROM_LABEL: dict[str, str] = {v: k for k, v in _ENC_DISPLAY.items()}
+
 
 def _detect_encoding(raw: bytes) -> str:
     """Return the best encoding guess for *raw* bytes."""
@@ -319,6 +332,9 @@ def _is_binary_content(raw: bytes) -> bool:
     return null_count / len(sample) > 0.003
 
 
+_READ_SIZE_LIMIT = 5 * 1024 * 1024  # 5 MB — cap editor reads; bigger payloads stall WS serialization
+
+
 def read_file(workspace_path: str, rel_path: str, encoding_override: str | None = None) -> dict[str, Any]:
     """Read a file, auto-detecting encoding.
 
@@ -326,7 +342,8 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
 
 
     Returns:
-        ok=True  → {"ok": True, "content": str, "encoding": str, "bom": bool}
+        ok=True  → {"ok": True, "content": str, "encoding": str, "bom": bool,
+                     "mtime": float}
         ok=False → {"ok": False, "error": str, "is_binary": bool,
                      "size": int, "ext": str}
     """
@@ -334,7 +351,8 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
         target = _resolve_safe(workspace_path, rel_path)
         if not target.is_file():
             raise FsError("not a file")
-        size = target.stat().st_size
+        st = target.stat()
+        size = st.st_size
         ext = target.suffix.lower()
 
         # Fast-path: known binary extension
@@ -344,6 +362,15 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
                 "error": "binary file",
                 "is_binary": True,
                 "is_image": ext in _IMAGE_EXTENSIONS,
+                "size": size,
+                "ext": ext,
+            }
+
+        if size > _READ_SIZE_LIMIT:
+            return {
+                "ok": False,
+                "error": f"file too large ({size / (1024 * 1024):.1f} MB > 5 MB)",
+                "is_binary": False,
                 "size": size,
                 "ext": ext,
             }
@@ -385,18 +412,12 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
             content = raw.decode("latin-1", errors="replace")
             used_enc = "latin-1"
 
-        # Normalise encoding name for display (match VS Code labels)
-        _ENC_DISPLAY: dict[str, str] = {
-            "utf_8": "UTF-8", "utf_8_sig": "UTF-8 with BOM",
-            "utf_16": "UTF-16", "utf_16_le": "UTF-16 LE", "utf_16_be": "UTF-16 BE",
-            "latin_1": "Latin-1", "latin-1": "Latin-1",
-            "cp1252": "Windows 1252", "cp1251": "Windows 1251",
-            "gb2312": "GB2312", "gbk": "GBK", "big5": "Big5",
-            "shift_jis": "Shift JIS", "euc_jp": "EUC-JP", "euc_kr": "EUC-KR",
-        }
         enc_label = _ENC_DISPLAY.get(used_enc.replace("-", "_"), used_enc.upper())
 
-        return {"ok": True, "content": content, "encoding": enc_label, "bom": bom}
+        return {
+            "ok": True, "content": content, "encoding": enc_label, "bom": bom,
+            "mtime": st.st_mtime,
+        }
 
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc), "is_binary": False, "size": 0, "ext": ""}
@@ -412,6 +433,9 @@ _IMAGE_MIME: dict[str, str] = {
 }
 
 
+_IMAGE_SIZE_LIMIT = 20 * 1024 * 1024  # 20 MB — cap previews; base64+WS framing of bigger blobs stalls the app
+
+
 def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
     """Read an image file and return it as a base64 ``data:`` URL.
 
@@ -419,8 +443,7 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
         ok=True  → {"ok": True, "data_url": str, "mime": str, "size": int}
         ok=False → {"ok": False, "error": str}
 
-    Rejects non-image extensions. Image files are returned without an
-    application-level size limit.
+    Rejects non-image extensions and images larger than 20 MB.
     """
     try:
         target = _resolve_safe(workspace_path, rel_path)
@@ -431,6 +454,8 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
         if mime is None:
             return {"ok": False, "error": "not an image"}
         size = target.stat().st_size
+        if size > _IMAGE_SIZE_LIMIT:
+            return {"ok": False, "error": f"image too large ({size / (1024 * 1024):.1f} MB > 20 MB)"}
         b64 = base64.b64encode(target.read_bytes()).decode("ascii")
         return {"ok": True, "data_url": f"data:{mime};base64,{b64}", "mime": mime, "size": size}
     except (FsError, OSError) as exc:
@@ -440,30 +465,62 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool
 
 
-def write_file(workspace_path: str, rel_path: str, content: str) -> dict[str, Any]:
-    """Overwrite (or create) a text file with `content`."""
+def write_file(
+    workspace_path: str,
+    rel_path: str,
+    content: str,
+    encoding: str = "utf-8",
+    expected_mtime: float | None = None,
+) -> dict[str, Any]:
+    """Overwrite (or create) a text file with `content`.
+
+    ``encoding`` is the codec used to encode ``content`` (read_file's display
+    labels, e.g. "UTF-8 with BOM", are accepted too). When ``expected_mtime``
+    is given and the file on disk has a different mtime, the write is refused
+    with ``conflict=True`` so the caller can surface a conflict dialog.
+    Success responses include the file's new ``mtime``.
+    """
     try:
         target = _resolve_safe(workspace_path, rel_path)
         if target == Path(workspace_path).resolve():
             raise FsError("invalid path")
         if target.exists() and target.is_dir():
             raise FsError("path is a directory")
-        encoded = content.encode("utf-8")
+        codec = _ENC_FROM_LABEL.get(encoding, encoding)
+        try:
+            encoded = content.encode(codec)
+        except (LookupError, UnicodeEncodeError) as exc:
+            return {"ok": False, "error": f"cannot encode content as {encoding}: {exc}"}
         if len(encoded) > _WRITE_SIZE_LIMIT:
             raise FsError(f"content too large ({len(encoded) // 1024} KB; limit 50 MB)")
+        orig_mode: int | None = None
+        if target.exists():
+            st = target.stat()
+            orig_mode = st.st_mode
+            if expected_mtime is not None and abs(st.st_mtime - expected_mtime) > 1e-4:
+                return {
+                    "ok": False,
+                    "conflict": True,
+                    "mtime": st.st_mtime,
+                    "error": "file changed on disk",
+                }
         target.parent.mkdir(parents=True, exist_ok=True)
         # Atomic write: write to a temp file then rename so a crash can't
         # leave the target half-written/truncated.
         tmp = target.with_suffix(target.suffix + ".tmp")
         try:
             tmp.write_bytes(encoded)
+            if orig_mode is not None:
+                # os.replace swaps the inode; keep the original permission
+                # bits (e.g. a script's executable bit) on the replacement.
+                os.chmod(tmp, stat_mod.S_IMODE(orig_mode))
             os.replace(tmp, target)
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": True}
+    return {"ok": True, "mtime": target.stat().st_mtime}
 
 
 def stat_path(abs_path: str) -> dict[str, Any]:

@@ -20,6 +20,14 @@ const FILE_ENTRY = {
   is_noise: false,
 }
 
+const DIR_ENTRY = {
+  name: 'src',
+  rel_path: 'src',
+  is_dir: true,
+  is_hidden: false,
+  is_noise: false,
+}
+
 function mountPane(backend: unknown) {
   return mount(ExplorerPane, {
     props: { workspacePath: '/ws', backend: backend as never },
@@ -62,6 +70,31 @@ describe('ExplorerPane – connection states', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('No items to display')
     expect(wrapper.text()).not.toContain('Waiting for backend')
+  })
+
+  it('renders a truncated note when the listing was capped by the backend', async () => {
+    const { backend, setResponse } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY], truncated: true })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    expect(wrapper.text()).toContain('List truncated')
+    expect(wrapper.find('.exp-note.truncated').exists()).toBe(true)
+  })
+
+  it('renders an inline error note when expanding a dir fails', async () => {
+    const { backend, setResponse } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [DIR_ENTRY] })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    setResponse('fs.list_dir', { ok: false, error: 'permission denied' })
+    await wrapper.find('.exp-row').trigger('click') // expand 'src'
+    await flushPromises()
+
+    const note = wrapper.find('.exp-note.error')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('Cannot load directory')
+    expect(note.text()).toContain('permission denied')
   })
 
   it('re-runs the initial load on reconnect after a failed load', async () => {

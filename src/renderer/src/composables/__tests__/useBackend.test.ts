@@ -156,4 +156,94 @@ describe('useBackend applyBackendChanged', () => {
 
     expect(FakeWebSocket.instances).toHaveLength(2) // tore down and reconnected
   })
+
+  it('reaches the terminal error state when main reports a backend crash', async () => {
+    const { backend, socket } = await setupConnected()
+
+    // Main's crash watcher broadcasts an error snapshot when the backend
+    // process dies after a successful start.
+    backendChangedCb!({ status: 'error', error: 'backend exited unexpectedly (code 1)' })
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(backend.status.value).toBe('error')
+    expect(backend.lastError.value).toBe('backend exited unexpectedly (code 1)')
+    expect(socket.closed).toBe(true)
+    expect(FakeWebSocket.instances).toHaveLength(1) // no reconnect loop against the dead port
+
+    // send() fail-fasts instead of queueing forever against a dead backend.
+    await expect(backend.send('fs.write_file', {})).rejects.toThrow('ws not open')
+  })
+})
+
+describe('useBackend init() deadline', () => {
+  let scope: EffectScope
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+  })
+
+  afterEach(() => {
+    scope?.stop()
+    vi.runOnlyPendingTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  function setup(agentTeam: Record<string, unknown>): ReturnType<typeof useBackend> {
+    vi.stubGlobal('agentTeam', agentTeam)
+    let backend!: ReturnType<typeof useBackend>
+    scope = effectScope()
+    scope.run(() => {
+      backend = useBackend()
+    })
+    return backend
+  }
+
+  it('keeps polling past 50s when the configured health timeout is higher', async () => {
+    const getBackendInfo = vi.fn().mockResolvedValue({ status: 'starting' })
+    const backend = setup({
+      getBackendInfo,
+      readHealthCheckTimeout: vi.fn().mockResolvedValue({ ok: true, timeoutSec: 120 }),
+      onBackendChanged: vi.fn()
+    })
+
+    // The old hardcoded deadline flipped to a false 'backend did not start'
+    // error at 50s while main was still legitimately waiting on /health.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(backend.status.value).not.toBe('error')
+
+    // Slow-but-successful start: init() is still polling and connects.
+    getBackendInfo.mockResolvedValue(READY_INFO)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(backend.status.value).toBe('connecting')
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('gives up with an error once the configured deadline passes', async () => {
+    const backend = setup({
+      getBackendInfo: vi.fn().mockResolvedValue({ status: 'starting' }),
+      readHealthCheckTimeout: vi.fn().mockResolvedValue({ ok: true, timeoutSec: 15 }),
+      onBackendChanged: vi.fn()
+    })
+
+    // 15s configured + 5s margin → errors shortly after 20s.
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(backend.status.value).toBe('error')
+    expect(backend.lastError.value).toBe('backend did not start')
+  })
+
+  it('falls back to the 45s default when the setting is unavailable', async () => {
+    const backend = setup({
+      getBackendInfo: vi.fn().mockResolvedValue({ status: 'starting' }),
+      onBackendChanged: vi.fn()
+    })
+
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(backend.status.value).not.toBe('error')
+
+    await vi.advanceTimersByTimeAsync(10_000) // past 45s + 5s margin
+    expect(backend.status.value).toBe('error')
+  })
 })

@@ -296,9 +296,17 @@ export function useBackend() {
 
   async function init(): Promise<void> {
     let info: BackendInfo = { status: 'starting' }
-    // Kept just past backend.ts's own health-check timeout (45s) so this loop
-    // doesn't give up before main has finished trying.
-    const deadline = Date.now() + 50_000
+    // Poll until main settles on ready/error. Main's give-up point is the
+    // user-configurable health-check timeout (up to 120s, see
+    // src/main/health-timeout.ts), so derive the deadline from that same
+    // setting plus margin — a hardcoded 50s below it surfaced false
+    // 'backend did not start' errors on slow-but-successful starts.
+    let healthTimeoutSec = 45
+    try {
+      const cfg = await window.agentTeam?.readHealthCheckTimeout?.()
+      if (cfg?.ok && typeof cfg.timeoutSec === 'number') healthTimeoutSec = cfg.timeoutSec
+    } catch { /* setting unavailable — fall back to the default */ }
+    const deadline = Date.now() + healthTimeoutSec * 1000 + 5_000
     while (Date.now() < deadline) {
       info = (await window.agentTeam?.getBackendInfo?.()) ?? { status: 'starting' }
       if (info.status === 'ready' || info.status === 'error') break

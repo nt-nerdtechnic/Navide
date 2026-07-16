@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { settingsGet, settingsSet } from '../lib/settings'
 import { useNotify } from '../composables/useNotify'
@@ -19,6 +20,7 @@ const emit = defineEmits<{
 }>()
 
 const { confirm, toast, alert } = useNotify()
+const { t } = useI18n()
 
 interface Match { line: number; col: number; end: number; text: string }
 interface FileResult { rel_path: string; name: string; matches: Match[] }
@@ -68,12 +70,23 @@ function scheduleSearch(): void {
   debounce = setTimeout(() => void doSearch(), 250)
 }
 
-watch([query, caseSensitive, wholeWord, isRegex, includes, excludes], scheduleSearch)
+watch([query, caseSensitive, wholeWord, isRegex, includes, excludes], () => {
+  // An emptied query must invalidate any in-flight search immediately —
+  // waiting out the debounce would let a stale response repopulate the pane.
+  if (!query.value) {
+    if (debounce) { clearTimeout(debounce); debounce = null }
+    void doSearch()
+    return
+  }
+  scheduleSearch()
+})
 
 async function doSearch(): Promise<void> {
   const q = query.value
   if (!q) {
+    seq++ // drop any in-flight response via the mySeq !== seq stale guard
     results.value = []; total.value = 0; truncated.value = false; error.value = ''
+    searching.value = false
     return
   }
   const mySeq = ++seq
@@ -161,6 +174,12 @@ async function replaceInFiles(files: string[]): Promise<void> {
 
 async function replaceAll(): Promise<void> {
   if (!total.value) return
+  // The backend caps results; files whose matches fell past the cap are not in
+  // `results`, so a replace-all here would silently skip them. Block instead.
+  if (truncated.value) {
+    void alert(t('hint.replace-all-truncated'), { title: 'Replace All' })
+    return
+  }
   const q = query.value
   const r = replacement.value
   // Capture the file list before the async confirm() so a concurrent search
@@ -231,9 +250,14 @@ function toggleFile(rel: string): void {
 }
 
 function clearSearch(): void {
+  if (debounce) { clearTimeout(debounce); debounce = null }
+  seq++ // drop any in-flight response via the mySeq !== seq stale guard
   query.value = ''
   results.value = []
   total.value = 0
+  truncated.value = false
+  error.value = ''
+  searching.value = false
 }
 
 // Auto-focus when pane becomes active (e.g. clicking Search in the activity bar).
@@ -301,7 +325,12 @@ defineExpose({ openReplace, focusInput, setQuery })
             spellcheck="false"
             @keydown.enter="replaceAll"
           />
-          <button class="sp-replace-all" :disabled="!total" title="Replace All" @click="replaceAll">
+          <button
+            class="sp-replace-all"
+            :disabled="!total || truncated"
+            :title="truncated ? $t('hint.replace-all-truncated') : 'Replace All'"
+            @click="replaceAll"
+          >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3 3h7v2l3-3-3-3v2H1v6h2V3Zm10 10H6v-2l-3 3 3 3v-2h8V9h-2v4Z"/></svg>
           </button>
         </div>
