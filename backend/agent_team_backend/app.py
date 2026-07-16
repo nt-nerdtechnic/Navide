@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
+from uvicorn.protocols.utils import ClientDisconnected
 
 from . import __version__
 from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
@@ -288,7 +289,10 @@ async def broadcast(event: dict[str, Any], *, exclude: "Session | None" = None) 
         try:
             await session.send_json(event)
         except Exception as err:  # noqa: BLE001
+            # send_json already marks dead + discards on send failure; this is
+            # a defensive net for anything unexpected it re-raised.
             log.warning("broadcast send failed: %s", err)
+            _SESSIONS.discard(session)
 
 
 class Session:
@@ -309,11 +313,32 @@ class Session:
         # Track background tasks so they can be cancelled on disconnect.
         self._chat_tasks: set[asyncio.Task] = set()
         self._review_tasks: set[asyncio.Task] = set()
+        # In-flight handle_message tasks; cancelled in ws() finally so handlers
+        # never outlive the connection and drain onto a closed socket.
+        self._handler_tasks: set[asyncio.Task] = set()
+        # Set once the peer is gone (send failed or ws() loop exited). All
+        # further send_json calls become silent no-ops.
+        self.dead = False
 
     async def send_json(self, data: dict[str, Any]) -> None:
-        """Serialized websocket send — sole writer for this connection."""
-        async with self._send_lock:
-            await self.websocket.send_json(data)
+        """Serialized websocket send — sole writer for this connection.
+
+        Never raises on a dead peer: the first send failure marks the session
+        dead and removes it from _SESSIONS; subsequent calls are silent no-ops.
+        Callers must not crash just because the client went away.
+        """
+        if self.dead:
+            return
+        try:
+            async with self._send_lock:
+                await self.websocket.send_json(data)
+        except (RuntimeError, WebSocketDisconnect, ClientDisconnected) as err:
+            # RuntimeError: starlette's 'Cannot call "send" once a close
+            # message has been sent'; ClientDisconnected: uvicorn transport
+            # torn down mid-send.
+            self.dead = True
+            _SESSIONS.discard(self)
+            log.warning("ws send failed; marking session %#x dead: %s", id(self), err)
 
     async def _send_event(self, event: dict[str, Any]) -> None:
         try:
@@ -831,6 +856,10 @@ async def ws(websocket: WebSocket) -> None:
     _SESSIONS.add(session)
     try:
         while True:
+            if session.dead:
+                # A send already failed on this connection; stop receiving.
+                log.info("ws session marked dead; closing receive loop")
+                break
             try:
                 msg = await websocket.receive_json()
             except (ValueError, KeyError) as parse_err:
@@ -842,10 +871,14 @@ async def ws(websocket: WebSocket) -> None:
             # block the receive loop.  Without this, a classify in flight would
             # cause terminal.create messages to queue in the OS buffer and time
             # out on the frontend's 10-second deadline.
-            asyncio.create_task(handle_message(session, msg))
+            task = asyncio.create_task(handle_message(session, msg))
+            session._handler_tasks.add(task)
+            task.add_done_callback(session._handler_tasks.discard)
     except WebSocketDisconnect:
         log.info("ws client disconnected")
     finally:
+        # Peer is gone: silence any in-flight sends before cancelling tasks.
+        session.dead = True
         _SESSIONS.discard(session)
         # Release PTY ownership so their output is dropped until reattached.
         orphaned = [tid for tid, owner in _PTY_OWNERS.items() if owner is session]
@@ -857,6 +890,8 @@ async def ws(websocket: WebSocket) -> None:
         for t in session._chat_tasks:
             t.cancel()
         for t in session._review_tasks:
+            t.cancel()
+        for t in session._handler_tasks:
             t.cancel()
 
 
@@ -2894,7 +2929,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "fs.read_file":
             ws_path = payload.get("workspace_path") or ""
             enc_override = payload.get("encoding_override") or None
-            result = fs_service.read_file(ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override)
+            result = await asyncio.to_thread(
+                fs_service.read_file, ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
 
         elif msg_type == "fs.stat_path":
@@ -3470,6 +3507,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         )
     except Exception as err:  # noqa: BLE001
         log.exception("handle_message failed for type=%s", msg_type)
-        await session.send_json(
-            make_error(msg_id, msg_type, "INTERNAL_ERROR", str(err))
-        )
+        if not session.dead:
+            await session.send_json(
+                make_error(msg_id, msg_type, "INTERNAL_ERROR", str(err))
+            )
