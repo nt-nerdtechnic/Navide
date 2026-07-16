@@ -359,15 +359,27 @@ function doInitialLoad(): void {
   void git.loadStatus()
 }
 
+// The tree never loaded successfully: nothing cached yet, or the last load
+// errored (a failed loadDir still caches an empty root). While the backend is
+// down this is a "waiting" state, not an empty directory.
+const treeNeverLoaded = computed(
+  () => explorer.childrenCache.value.size === 0 || !!explorer.error.value,
+)
+const waitingForBackend = computed(
+  () => props.backend.status.value !== 'connected' && treeNeverLoaded.value,
+)
+
 onMounted(() => {
   if (props.backend.status.value === 'connected') {
     doInitialLoad()
   }
-  // If backend isn't connected yet (fresh editor window), wait for it.
+  // If backend isn't connected yet (fresh editor window), wait for it. Also
+  // re-run the initial load after a reconnect when the previous attempt failed
+  // (e.g. request timeout while the socket was wedged).
   watch(
     () => props.backend.status.value,
     (s) => {
-      if (s === 'connected' && explorer.childrenCache.value.size === 0) doInitialLoad()
+      if (s === 'connected' && treeNeverLoaded.value) doInitialLoad()
     },
   )
 })
@@ -509,7 +521,7 @@ defineExpose({ revealFile, focusTree })
       </div>
 
       <div v-if="rows.length === 0 && workspacePath" class="exp-empty">
-        {{ explorer.error.value || $t('label.no-items') }}
+        {{ waitingForBackend ? $t('label.waiting-backend') : (explorer.error.value || $t('label.no-items')) }}
       </div>
       <div v-if="!workspacePath" class="exp-empty">{{ $t('label.select-workspace') }}</div>
 

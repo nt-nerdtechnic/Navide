@@ -50,6 +50,12 @@ watch([() => props.revealAt, () => props.revealSeq] as const, ([line]) => {
 })
 const loadError = ref('')
 const loaded = ref(false)
+const backendStatus = computed(() => props.backend.status.value)
+// Backend gave up for good (failed start / socket error) — offer a manual retry
+// that restarts the backend; the status watch reloads the file once reconnected.
+function retryBackend(): void {
+  void props.backend.restart()
+}
 const editorRef = ref<InstanceType<typeof EditorViewMonaco> | null>(null)
 
 const model = 'qwen2:latest' // analyzer's default; rewrite/complete proxy to local LLM
@@ -747,7 +753,12 @@ onMounted(() => {
   watch(
     () => props.backend.status.value,
     (s) => {
-      if (s === 'connected' && !loaded.value && !loadError.value) void load()
+      if (s === 'connected' && !loaded.value) {
+        // A load that failed while the socket was down (e.g. request timeout)
+        // must not latch the error forever — clear it and retry on reconnect.
+        loadError.value = ''
+        void load()
+      }
     },
     { immediate: true },
   )
@@ -986,7 +997,11 @@ defineExpose({
 
     <!-- Editor -->
     <div class="ep-body" @focusin="onEditorBodyFocusin" @focusout="onEditorBodyFocusout" @contextmenu="showContextMenu" @mouseup="onEditorBodyMouseup">
-      <div v-if="loadError" class="ep-error">{{ loadError }}</div>
+      <div v-if="!loaded && backendStatus === 'error'" class="ep-error ep-backend-error">
+        <span>{{ backend.lastError.value || $t('error.backend-start-failed') }}</span>
+        <button class="ep-retry" @click="retryBackend">{{ $t('action.retry') }}</button>
+      </div>
+      <div v-else-if="loadError" class="ep-error">{{ loadError }}</div>
       <!-- Binary / image file preview -->
       <div v-else-if="loaded && isBinaryFile" class="ep-binary">
         <div v-if="isImageFile && imageDataUrl" class="ep-binary-img-wrap">
@@ -1008,7 +1023,9 @@ defineExpose({
         @update:model-value="onChange"
         @cursor-change="onCursorChange"
       />
-      <div v-else class="ep-loading">{{ $t('label.loading') }}</div>
+      <div v-else class="ep-loading">
+        {{ backendStatus === 'connected' ? $t('label.loading') : $t('label.waiting-backend') }}
+      </div>
 
       <!-- Floating "Add to Chat" button — appears on text selection -->
       <Transition name="ep-float-fade">
@@ -1243,6 +1260,17 @@ defineExpose({
 .ep-body { flex: 1; position: relative; min-height: 0; }
 .ep-error, .ep-loading { padding: 24px; color: var(--text-muted); font-size: 12px; }
 .ep-error { color: var(--danger-fg); }
+.ep-backend-error { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.ep-retry {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ep-retry:hover { background: var(--bg-muted); color: var(--text-bright); }
 
 /* Binary / image file preview */
 .ep-binary { flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: var(--bg-subtle); }

@@ -17,7 +17,10 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from agent_team_backend import app as app_module
-from agent_team_backend.app import _SESSIONS, Session, broadcast
+
+# NOTE: always reference app_module attributes at call time (not from-imports):
+# test_analyzer_routing.py reloads the app module mid-suite, which rebinds
+# _SESSIONS / Session / broadcast to fresh objects.
 
 
 class ClosedSocket:
@@ -54,20 +57,20 @@ class ScriptedSocket:
 
 async def test_send_json_on_closed_socket_marks_dead_without_raising() -> None:
     sock = ClosedSocket()
-    session = Session(sock)  # type: ignore[arg-type]
-    _SESSIONS.add(session)
+    session = app_module.Session(sock)  # type: ignore[arg-type]
+    app_module._SESSIONS.add(session)
     try:
         await session.send_json({"type": "x"})  # must not raise
         assert session.dead is True
-        assert session not in _SESSIONS
+        assert session not in app_module._SESSIONS
         assert sock.send_attempts == 1
     finally:
-        _SESSIONS.discard(session)
+        app_module._SESSIONS.discard(session)
 
 
 async def test_dead_session_send_json_is_silent_noop() -> None:
     sock = ClosedSocket()
-    session = Session(sock)  # type: ignore[arg-type]
+    session = app_module.Session(sock)  # type: ignore[arg-type]
     await session.send_json({"type": "x"})
     await session.send_json({"type": "y"})
     # The second call must not touch the socket at all.
@@ -76,18 +79,18 @@ async def test_dead_session_send_json_is_silent_noop() -> None:
 
 async def test_broadcast_prunes_dead_session() -> None:
     sock = ClosedSocket()
-    session = Session(sock)  # type: ignore[arg-type]
-    _SESSIONS.add(session)
+    session = app_module.Session(sock)  # type: ignore[arg-type]
+    app_module._SESSIONS.add(session)
     try:
-        await broadcast({"type": "event"})  # must not raise
+        await app_module.broadcast({"type": "event"})  # must not raise
         assert session.dead is True
-        assert session not in _SESSIONS
+        assert session not in app_module._SESSIONS
     finally:
-        _SESSIONS.discard(session)
+        app_module._SESSIONS.discard(session)
 
 
 async def test_disconnect_cancels_inflight_handler_tasks(monkeypatch) -> None:
-    sessions: list[Session] = []
+    sessions: list[app_module.Session] = []
     handler_tasks: list[asyncio.Task] = []
 
     orig_session = app_module.Session
@@ -109,7 +112,7 @@ async def test_disconnect_cancels_inflight_handler_tasks(monkeypatch) -> None:
     assert len(sessions) == 1
     session = sessions[0]
     assert session.dead is True
-    assert session not in _SESSIONS
+    assert session not in app_module._SESSIONS
 
     assert len(handler_tasks) == 1
     task = handler_tasks[0]
