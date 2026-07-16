@@ -35,7 +35,10 @@
       "commander-tooltip": "全域管理者 — 跨階段協調,決定 ---STAGE-DONE---",
       "idle-status-tooltip": "程序仍存活,但 Agent 已完成最後一個回合,正停在互動提示字元",
       "rename-title-tooltip": "雙擊可重新命名此 pane",
-      "respawn": "重新啟動"
+      "respawn": "重新啟動",
+      "loop-tooltip": "Loop — 將設定的 Loop 提示詞送入此 pane；再按一次清除標記",
+      "loop-badge-tooltip": "已對此 pane 送出 Loop 提示詞",
+      "loop-waiting-tooltip": "Loop 暫停 — 已達工作階段上限；將於 {time} 自動續跑"
     },
     "prep": {
       "starting": "啟動 CLI 中",
@@ -301,7 +304,10 @@
       "rerun-env-check": "↻ 重新執行環境檢測",
       "backend-timeout": "後端啟動逾時",
       "backend-timeout-hint": "啟動或重啟時等待後端變為健康狀態的時間，逾時就放棄。較慢的機器可拉長此值（15–120 秒）。",
-      "backend-timeout-label": "逾時秒數"
+      "backend-timeout-label": "逾時秒數",
+      "loop-prompt": "Loop 提示詞",
+      "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。",
+      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。"
     },
     "roles": {
       "title": "角色",

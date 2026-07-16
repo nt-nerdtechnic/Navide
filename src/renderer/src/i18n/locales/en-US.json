@@ -35,7 +35,10 @@
       "commander-tooltip": "Global Manager — coordinates across stages, decides ---STAGE-DONE---",
       "idle-status-tooltip": "Process still alive, but agent has finished the last turn and is at an interactive prompt",
       "rename-title-tooltip": "Double-click to rename this pane",
-      "respawn": "Respawn"
+      "respawn": "Respawn",
+      "loop-tooltip": "Loop — send the configured loop prompt to this pane; click again to clear the badge",
+      "loop-badge-tooltip": "Loop prompt was sent to this pane",
+      "loop-waiting-tooltip": "Loop paused — session limit hit; auto-resume at {time}"
     },
     "prep": {
       "starting": "starting CLI",
@@ -301,7 +304,10 @@
       "rerun-env-check": "↻ Re-run environment check",
       "backend-timeout": "Backend Startup Timeout",
       "backend-timeout-hint": "How long to wait for the backend to become healthy on startup or restart before giving up. Raise this on slower machines (15–120 seconds).",
-      "backend-timeout-label": "Timeout (seconds)"
+      "backend-timeout-label": "Timeout (seconds)",
+      "loop-prompt": "Loop Prompt",
+      "loop-prompt-hint": "Prompt sent to a CLI pane when its loop button is clicked.",
+      "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets."
     },
     "roles": {
       "title": "Roles",

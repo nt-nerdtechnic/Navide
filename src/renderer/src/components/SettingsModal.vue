@@ -9,6 +9,13 @@ import { stageToBackend, stageDefToFrontend, type Stage, type StageSlot } from '
 import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCatalog'
 import { useTheme } from '../composables/useTheme'
 import { useSettings } from '../composables/useSettings'
+import { settingsGet, settingsSet } from '../lib/settings'
+import {
+  LOOP_PROMPT_SETTING_KEY,
+  DEFAULT_LOOP_PROMPT,
+  LOOP_RESUME_SETTING_KEY,
+  DEFAULT_LOOP_RESUME,
+} from '../lib/loopPrompt'
 import { useNotify } from '../composables/useNotify'
 import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
@@ -154,6 +161,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'restore windows environment onboarding backend timeout health check 啟動逾時 還原視窗 環境檢測',
   },
   {
+    id: 'appearance-loop-prompt',
+    tab: 'appearance',
+    section: 'appearance-loop-prompt',
+    title: 'Loop Prompt / Loop 提示詞',
+    group: 'Appearance',
+    summary: 'Edit the prompt sent to a CLI pane when its loop button is clicked, and the auto-resume prompt after a session-limit pause.',
+    keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
+  },
+  {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
@@ -270,6 +286,17 @@ const SUPPORTED_LANGUAGES = [
 function onHealthTimeoutChange(raw: string): void {
   const n = Number(raw)
   if (Number.isFinite(n)) setHealthCheckTimeoutSec(n)
+}
+
+// Loop prompt sent to a CLI pane when its loop button is clicked, and the
+// resume prompt auto-sent after a session-limit pause once the quota resets.
+const loopPromptText = ref(settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT))
+function onLoopPromptChange(): void {
+  settingsSet(LOOP_PROMPT_SETTING_KEY, loopPromptText.value)
+}
+const loopResumeText = ref(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME))
+function onLoopResumeChange(): void {
+  settingsSet(LOOP_RESUME_SETTING_KEY, loopResumeText.value)
 }
 
 const { confirm: notifyConfirm } = useNotify()
@@ -1984,6 +2011,14 @@ async function plDelete(id: string, name: string) {
             <h3 class="ap-title">{{ $t('settings.appearance.environment') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
             <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
+          </section>
+
+          <section class="ap-section" data-settings-section="appearance-loop-prompt">
+            <h3 class="ap-title">{{ $t('settings.appearance.loop-prompt') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
+            <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
+            <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
+            <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
           </section>
 
           <section class="ap-section" data-settings-section="appearance-runtime">

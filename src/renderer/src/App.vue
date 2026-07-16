@@ -65,6 +65,14 @@ import {
 } from './lib/resume-command'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
+import {
+  LOOP_PROMPT_SETTING_KEY,
+  DEFAULT_LOOP_PROMPT,
+  LOOP_RESUME_SETTING_KEY,
+  DEFAULT_LOOP_RESUME,
+  SESSION_LIMIT_RE,
+  parseLimitReset,
+} from './lib/loopPrompt'
 import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
@@ -567,6 +575,13 @@ interface ActivePane {
    *  BLOCKING overlay is dropped — detection has preconditions the user may
    *  need the terminal for (e.g. a first-run API-key prompt). */
   sessionOverlayExpired?: boolean
+  /** Runtime-only LOOP badge — lit after the loop prompt was injected via the
+   *  pane's loop button. Not persisted to PaneRecord. */
+  loopActive?: boolean
+  /** Epoch ms of the scheduled session-limit auto-resume (runtime-only). Set
+   *  while the loop is paused waiting for the CLI quota to reset; an app
+   *  restart during the window drops the pending resume (accepted). */
+  loopWaitUntil?: number | null
 }
 
 interface SpawnHistoryEntry extends HistoryTitleEntry {
@@ -932,6 +947,81 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
       return
     }
   }
+}
+
+// Loop launch button: first click injects the configurable loop prompt and
+// lights the LOOP badge; second click only clears the badge (the app cannot
+// stop the CLI-internal loop) and cancels any pending auto-resume.
+function togglePaneLoop(paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  if (pane.loopActive) {
+    pane.loopActive = false
+    pane.loopWaitUntil = null
+    stopLoopLimitWatcher(paneId)
+    return
+  }
+  pane.loopActive = true
+  void injectPane(paneId, settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT), 'loop-start', true)
+  startLoopLimitWatcher(paneId)
+}
+
+// While a pane's loop is active, watch its raw PTY buffer for the CLI
+// session-limit message and auto-resume once the quota resets. The interval
+// self-cleans when the pane is gone, the loop was turned off, or the terminal
+// exited, so no hook into the pane-removal paths is needed. Interval-based
+// (rather than one long setTimeout) to survive background timer throttling.
+const loopLimitWatchers = new Map<string, number>()
+const LOOP_LIMIT_POLL_MS = 5000
+// Tail-only matching: repainted TUI frames keep the limit message near the
+// buffer tail, and slicing avoids rescanning the capped 128KB cleanBuffer.
+const LOOP_LIMIT_TAIL_CHARS = 2000
+
+function stopLoopLimitWatcher(paneId: string): void {
+  const timer = loopLimitWatchers.get(paneId)
+  if (timer !== undefined) {
+    clearInterval(timer)
+    loopLimitWatchers.delete(paneId)
+  }
+}
+
+function startLoopLimitWatcher(paneId: string): void {
+  stopLoopLimitWatcher(paneId)
+  loopLimitWatchers.set(paneId, window.setInterval(() => {
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (!pane || !pane.loopActive) {
+      stopLoopLimitWatcher(paneId)
+      return
+    }
+    const ref = paneRefs[paneId]
+    if (!ref) return
+    const status = ref.displayStatus as string | undefined
+    if (status === 'exited' || status === 'error') {
+      pane.loopWaitUntil = null
+      stopLoopLimitWatcher(paneId)
+      return
+    }
+    if (pane.loopWaitUntil != null) {
+      // Waiting mode: matching is suspended so TUI redraws of the same limit
+      // message cannot double-schedule. Resume once the quota window is due.
+      if (Date.now() >= pane.loopWaitUntil) {
+        pane.loopWaitUntil = null
+        void injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), 'loop-resume', true)
+      }
+      return
+    }
+    const tail = (((ref.cleanBuffer as unknown as string) ?? '')).slice(-LOOP_LIMIT_TAIL_CHARS)
+    if (!SESSION_LIMIT_RE.test(tail)) return
+    const resumeAt = parseLimitReset(tail)
+    if (resumeAt == null) {
+      // Fail open: badge stays lit, no auto-resume. Stop watching so the
+      // unparseable message isn't re-warned every poll.
+      console.warn(`[loop] pane ${paneId}: session-limit message matched but reset time was unparseable; auto-resume not scheduled`)
+      stopLoopLimitWatcher(paneId)
+      return
+    }
+    pane.loopWaitUntil = resumeAt
+  }, LOOP_LIMIT_POLL_MS))
 }
 
 // Dispatch a cloud issue into a running agent pane as a task (one-way: no
@@ -6744,6 +6834,8 @@ function paneIsCommander(p: ActivePane): boolean {
           :preparing-label="panePreparationLabel(p)"
           :backend="backend"
           :workspace-path="p.workspacePath"
+          :loop-active="p.loopActive"
+          :loop-wait-until="p.loopWaitUntil"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
@@ -6752,6 +6844,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
           @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"
           @cli-context-drop="(sourceId) => injectPaneContext(sourceId, p.id)"
+          @toggle-loop="togglePaneLoop(p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">

@@ -25,6 +25,11 @@ interface Props {
   canRebuild?: boolean
   isPreparing?: boolean
   preparingLabel?: string
+  /** Runtime-only LOOP badge state — lit after the loop prompt was injected. */
+  loopActive?: boolean
+  /** Epoch ms of the scheduled session-limit auto-resume; set while the loop
+   *  is paused waiting for the CLI quota to reset. */
+  loopWaitUntil?: number | null
   backend: ReturnType<typeof useBackend>
   workspacePath?: string
 }
@@ -42,6 +47,8 @@ const emit = defineEmits<{
   /** Another CLI pane was dropped onto this pane's terminal area — App.vue
    *  pastes that pane's recent output into this pane's input prompt. */
   (e: 'cli-context-drop', sourcePaneId: string): void
+  /** Loop button clicked — App.vue injects the loop prompt or clears the badge. */
+  (e: 'toggle-loop'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -260,6 +267,22 @@ onMounted(() => {
         >{{ title }}</span>
         <span v-if="isCommander" class="commander-inline" :title="$t('pane.terminal.commander-tooltip')">🎯 Mgr</span>
         <span
+          v-if="loopActive"
+          class="loop-inline"
+          :class="{ waiting: loopWaitUntil != null }"
+          :title="loopWaitUntil != null
+            ? $t('pane.terminal.loop-waiting-tooltip', { time: new Date(loopWaitUntil).toLocaleTimeString() })
+            : $t('pane.terminal.loop-badge-tooltip')"
+        >🔁 Loop</span>
+        <button
+          v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
+          class="loop-btn"
+          :class="{ active: loopActive }"
+          @click.stop="emit('toggle-loop')"
+          :title="$t('pane.terminal.loop-tooltip')"
+          :aria-label="$t('pane.terminal.loop-tooltip')"
+        >🔁</button>
+        <span
           class="status"
           :data-status="displayStatus"
           :title="displayStatus === 'idle' ? $t('pane.terminal.idle-status-tooltip') : ''"
@@ -414,6 +437,39 @@ onMounted(() => {
   letter-spacing: 0.2px;
   white-space: nowrap;
   flex-shrink: 0;
+}
+.loop-inline {
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--success-fg);
+  background: var(--success-muted);
+  border: 1px solid var(--success-muted);
+  border-radius: 999px;
+  padding: 1px 6px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.loop-inline.waiting {
+  opacity: 0.55;
+}
+.loop-btn {
+  font-size: 10px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border-muted);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  padding: 2px 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.loop-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-emphasis);
+}
+.loop-btn.active {
+  border-color: var(--success-fg);
 }
 .status {
   margin-left: auto;
