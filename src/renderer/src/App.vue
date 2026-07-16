@@ -1826,9 +1826,10 @@ async function onReinject(paneId: string): Promise<void> {
   syncViews()
 }
 
-async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean } = {}): Promise<void> {
+async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boolean, keepInList?: boolean } = {}): Promise<void> {
   const markRemoved = opts.markRemoved ?? true
   const force = opts.force ?? true
+  const keepInList = opts.keepInList ?? false
   const pane = panes.value.find((p) => p.id === paneId)
   if (pane?.injectionTimer !== null && pane?.injectionTimer !== undefined) {
     window.clearTimeout(pane.injectionTimer)
@@ -1869,7 +1870,9 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
     histEntry.sessionId = pane?.pinnedSessionId ?? histEntry.sessionId
     histEntry.removedAt = new Date().toISOString()
   }
-  panes.value = panes.value.filter((p) => p.id !== paneId)
+  if (!keepInList) {
+    panes.value = panes.value.filter((p) => p.id !== paneId)
+  }
   issueHandoffs.value.forEach((v, k) => {
     if (v.paneId === paneId) issueHandoffs.value.set(k, { ...v, state: 'pane-gone' })
   })
@@ -1930,11 +1933,9 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   }
   rebuildingPanes.add(paneId)
   try {
-    // Preserve layout order: onKill removes the pane and spawnPane appends the
-    // replacement to the end, which would jump the rebuilt pane to the last slot.
-    // Capture its index and move the replacement back into place after spawn.
-    const origIndex = panes.value.findIndex((p) => p.id === paneId)
-    await onKill(paneId, { markRemoved: false, force: true })
+    // Preserve layout order: keep the old pane as a dummy to avoid layout
+    // reflow, then swap the replacement pane into its slot.
+    await onKill(paneId, { markRemoved: false, force: true, keepInList: true })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
@@ -1981,13 +1982,18 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
           run_group_id: snap.runGroupId || '',
         })
       }
-      if (origIndex >= 0) {
+      const currentOrigIndex = panes.value.findIndex((p) => p.id === paneId)
+      if (currentOrigIndex >= 0) {
         const from = panes.value.findIndex((p) => p.id === newId)
-        if (from >= 0 && from !== origIndex) {
+        if (from >= 0 && from !== currentOrigIndex) {
           const [moved] = panes.value.splice(from, 1)
-          panes.value.splice(origIndex, 0, moved)
+          panes.value.splice(currentOrigIndex, 1, moved) // Replace the dummy pane
+        } else {
+          panes.value = panes.value.filter((p) => p.id !== paneId)
         }
       }
+    } else {
+      panes.value = panes.value.filter((p) => p.id !== paneId)
     }
   } finally {
     rebuildingPanes.delete(paneId)
@@ -2033,8 +2039,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   }
   rebuildingPanes.add(paneId)
   try {
-    const origIndex = panes.value.findIndex((p) => p.id === paneId)
-    await onKill(paneId, { markRemoved: false, force: true })
+    await onKill(paneId, { markRemoved: false, force: true, keepInList: true })
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
@@ -2075,13 +2080,18 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
         void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
       }
-      if (origIndex >= 0) {
+      const currentOrigIndex = panes.value.findIndex((p) => p.id === paneId)
+      if (currentOrigIndex >= 0) {
         const from = panes.value.findIndex((p) => p.id === newId)
-        if (from >= 0 && from !== origIndex) {
+        if (from >= 0 && from !== currentOrigIndex) {
           const [moved] = panes.value.splice(from, 1)
-          panes.value.splice(origIndex, 0, moved)
+          panes.value.splice(currentOrigIndex, 1, moved)
+        } else {
+          panes.value = panes.value.filter((p) => p.id !== paneId)
         }
       }
+    } else {
+      panes.value = panes.value.filter((p) => p.id !== paneId)
     }
   } finally {
     rebuildingPanes.delete(paneId)
