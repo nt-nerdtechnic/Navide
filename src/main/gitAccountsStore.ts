@@ -1,6 +1,21 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+
+/** Canonical key for a workspace path: resolve symlinks/worktrees when the path
+ * exists and strip trailing separators, so trailing-slash or symlinked variants
+ * of the same repo share one binding instead of silently missing it. */
+function normalizeWorkspaceKey(workspacePath: string): string {
+  const raw = String(workspacePath ?? '').trim()
+  if (!raw) return ''
+  let s = raw
+  try {
+    s = realpathSync.native(raw)
+  } catch {
+    // Path may not exist (e.g. a removed workspace) — fall back to the raw string.
+  }
+  return s.replace(/[/\\]+$/, '') || s
+}
 
 // Git account registry (main-owned): lets each workspace bind a distinct GitHub
 // account's Personal Access Token, so pushes authenticate as the right account
@@ -132,27 +147,37 @@ export class GitAccountsStore {
   }
 
   bind(workspacePath: string, accountId: string): void {
-    const ws = String(workspacePath ?? '')
-    if (!ws) throw new Error('empty workspace path')
+    const key = normalizeWorkspaceKey(workspacePath)
+    if (!key) throw new Error('empty workspace path')
     const doc = this.read()
     if (!doc.accounts.some((a) => a.id === accountId)) throw new Error('account not found')
-    doc.bindings[ws] = accountId
+    // Drop any stale binding stored under the un-normalized raw path.
+    const raw = String(workspacePath ?? '')
+    if (raw !== key) delete doc.bindings[raw]
+    doc.bindings[key] = accountId
     this.write(doc)
   }
 
   unbind(workspacePath: string): void {
     const doc = this.read()
-    if (delete doc.bindings[String(workspacePath ?? '')]) this.write(doc)
+    const key = normalizeWorkspaceKey(workspacePath)
+    const raw = String(workspacePath ?? '')
+    const removed = delete doc.bindings[key]
+    const removedRaw = raw !== key ? delete doc.bindings[raw] : false
+    if (removed || removedRaw) this.write(doc)
   }
 
   getBinding(workspacePath: string): string | null {
-    return this.read().bindings[String(workspacePath ?? '')] ?? null
+    const b = this.read().bindings
+    return b[normalizeWorkspaceKey(workspacePath)] ?? b[String(workspacePath ?? '')] ?? null
   }
 
   /** Decrypt the token for the account bound to this workspace, if any. */
   getCredentialForWorkspace(workspacePath: string): GitCredential | null {
     const doc = this.read()
-    const accountId = doc.bindings[String(workspacePath ?? '')]
+    // Prefer the normalized key; fall back to a legacy raw-path binding.
+    const accountId =
+      doc.bindings[normalizeWorkspaceKey(workspacePath)] ?? doc.bindings[String(workspacePath ?? '')]
     if (!accountId) return null
     const account = doc.accounts.find((a) => a.id === accountId)
     if (!account) return null

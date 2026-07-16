@@ -244,11 +244,11 @@ export function useGit(
     }
   }
 
-  async function loadLog(): Promise<void> {
+  async function loadLog(): Promise<boolean> {
     const ws = workspacePath()
     if (!ws) {
       gitLog.value = []
-      return
+      return false
     }
     const scope = logScope.value  // capture before await to detect scope changes
     isLoadingLog.value = true
@@ -260,9 +260,12 @@ export function useGit(
       })
       if (resp.ok && resp.payload && workspacePath() === ws && logScope.value === scope) {
         gitLog.value = resp.payload.commits ?? []
+        return true
       }
+      return false
     } catch {
       // transient WS error — loading flag reset in finally
+      return false
     } finally {
       if (workspacePath() === ws && logScope.value === scope) isLoadingLog.value = false
     }
@@ -272,8 +275,9 @@ export function useGit(
   const canLoadMoreLog = computed(() => gitLog.value.length >= logLimit.value)
 
   async function loadMoreLog(): Promise<void> {
+    const prev = logLimit.value
     logLimit.value += LOG_PAGE
-    await loadLog()
+    if (!(await loadLog())) logLimit.value = prev
   }
 
   async function setLogScope(scope: 'all' | 'current'): Promise<void> {
@@ -309,12 +313,13 @@ export function useGit(
     }
   }
 
-  async function rebaseOn(branch: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+  async function rebaseOn(branch: string): Promise<{ ok: boolean; output?: string; error?: string; conflict_files?: string[] }> {
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.rebase', { workspace_path: ws, branch })
+      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.rebase', { workspace_path: ws, branch }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
+      else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -502,7 +507,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.cherry_pick', { workspace_path: ws, commit_hash })
+      const resp = await send<{ ok: boolean; error?: string }>('git.cherry_pick', { workspace_path: ws, commit_hash }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -598,7 +603,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch })
+      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[] }>('git.merge', { workspace_path: ws, branch }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog(); await loadBranches() }
       else if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
       return resp.payload ?? { ok: false, error: 'no response' }
@@ -613,7 +618,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target })
+      const resp = await send<{ ok: boolean; output: string; error: string; conflict_files: string[]; source_branch: string }>('git.merge_into', { workspace_path: ws, target }, 20_000)
       // git.changed broadcast from the backend handles all reloads on success;
       // on conflict we still need a status refresh to show the dirty files.
       if (resp.ok && resp.payload && !resp.payload.ok) { await loadStatus() }
@@ -629,7 +634,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.revert', { workspace_path: ws, commit_hash })
+      const resp = await send<{ ok: boolean; error?: string }>('git.revert', { workspace_path: ws, commit_hash }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -713,7 +718,7 @@ export function useGit(
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     isFetching.value = true
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.fetch', await withCredential(ws, { workspace_path: ws }), 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.fetch', await withCredential(ws, { workspace_path: ws }), 65_000)
       await loadStatus()
       await loadBranches()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
@@ -731,7 +736,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', await withCredential(ws, { workspace_path: ws }), 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull', await withCredential(ws, { workspace_path: ws }), 65_000)
       await loadStatus()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
     } catch (e) {
@@ -747,7 +752,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, output: '', error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', await withCredential(ws, { workspace_path: ws, remote, branch }), 30_000)
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.push', await withCredential(ws, { workspace_path: ws, remote, branch }), 65_000)
       await loadStatus()
       return resp.payload ?? { ok: false, output: '', error: 'no response' }
     } catch (e) {
@@ -763,7 +768,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true, start_point })
+      const resp = await send<{ ok: boolean; error?: string }>('git.create_branch', { workspace_path: ws, name, switch_to: true, start_point }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -777,7 +782,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.switch_branch', { workspace_path: ws, name })
+      const resp = await send<{ ok: boolean; error?: string }>('git.switch_branch', { workspace_path: ws, name }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -834,7 +839,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.delete_branch', { workspace_path: ws, name, force })
+      const resp = await send<{ ok: boolean; error?: string }>('git.delete_branch', { workspace_path: ws, name, force }, 20_000)
       if (resp.ok && resp.payload?.ok) await loadBranches()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -848,7 +853,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message, paths })
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash', { workspace_path: ws, message, paths }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -862,7 +867,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.stash_pop', { workspace_path: ws, index })
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash_pop', { workspace_path: ws, index }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadStashes() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -876,7 +881,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.stash_drop', { workspace_path: ws, index })
+      const resp = await send<{ ok: boolean; error?: string }>('git.stash_drop', { workspace_path: ws, index }, 20_000)
       if (resp.ok && resp.payload?.ok) await loadStashes()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -890,7 +895,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.amend', { workspace_path: ws, message })
+      const resp = await send<{ ok: boolean; error?: string }>('git.amend', { workspace_path: ws, message }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -904,7 +909,7 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error?: string }>('git.undo_commit', { workspace_path: ws })
+      const resp = await send<{ ok: boolean; error?: string }>('git.undo_commit', { workspace_path: ws }, 20_000)
       if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadLog() }
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -1003,6 +1008,7 @@ export function useGit(
       const resp = await send<{ ok: boolean; error?: string; hash?: string }>(
         'git.commit',
         { workspace_path: ws, message, all },
+        20_000,
       )
       if (resp.ok && resp.payload?.ok) {
         await loadStatus()
@@ -1029,7 +1035,7 @@ export function useGit(
       const resp = await send<{ ok: boolean; pull_output: string; push_output: string; error: string }>(
         'git.sync',
         await withCredential(ws, { workspace_path: ws }),
-        30_000,
+        65_000,
       )
       if (resp.ok && resp.payload) {
         const { pull_output, push_output, error } = resp.payload
@@ -1037,6 +1043,8 @@ export function useGit(
         syncError.value = error || ''
         await loadStatus()
         await loadLog()
+      } else {
+        syncError.value = resp.error?.message || 'sync failed'
       }
     } catch (e) {
       syncError.value = e instanceof Error ? e.message : String(e)
@@ -1108,7 +1116,7 @@ export function useGit(
         patch,
         reverse,
         cached,
-      })
+      }, 20_000)
       if (resp.ok && resp.payload?.ok) await loadStatus()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
@@ -1148,7 +1156,7 @@ export function useGit(
         url,
         target_dir,
         workspace_path: tag,
-      })
+      }, 65_000)
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -1236,7 +1244,7 @@ export function useGit(
     try {
       const resp = await send<{ ok: boolean; output: string; error: string }>('git.pull_rebase', await withCredential(ws, {
         workspace_path: ws,
-      }))
+      }), 65_000)
       if (resp.ok && resp.payload?.ok) {
         await loadStatus()
         await loadLog()
@@ -1257,7 +1265,7 @@ export function useGit(
     try {
       const resp = await send<{ ok: boolean; output: string; error: string }>('git.push_force', await withCredential(ws, {
         workspace_path: ws, remote, branch,
-      }))
+      }), 65_000)
       if (resp.ok && resp.payload?.ok) await loadStatus()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {

@@ -577,6 +577,21 @@
     "attention-title": "CLI needs your input",
     "attention-body": "{label} is waiting for your reply"
   },
+  "preview": {
+    "binary-file": "Binary file",
+    "cannot-display-text": "This file type cannot be displayed as text.",
+    "open-externally": "Open externally",
+    "fit-window": "Fit to window",
+    "actual-size": "Actual size",
+    "pdf-unavailable": "The embedded PDF viewer is not available in this window.",
+    "hex-loading": "Loading hex dump…",
+    "hex-error": "Failed to load file contents.",
+    "hex-truncated": "Showing the first 64 KB of {total}.",
+    "toggle-preview": "Preview",
+    "toggle-raw": "Raw",
+    "switch-to-preview": "Switch to preview",
+    "switch-to-raw": "Switch to raw editor"
+  },
   "restore": {
     "dialog-title": "Restore previous session?",
     "dialog-message": "The app didn't close properly last time. Reopen {count} workspace(s)?",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import mimetypes
 import os
 import re
 import shlex
@@ -18,6 +19,7 @@ from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 from uvicorn.protocols.utils import ClientDisconnected
 
@@ -771,6 +773,46 @@ async def health() -> dict[str, Any]:
         "started_at": STARTED_AT,
         "backend_log": str(backend_log_path()),
     }
+
+
+@app.get("/fs/raw")
+async def fs_raw(workspace: str, rel: str) -> FileResponse:
+    """Serve a raw workspace file over HTTP (Range/206 handled by FileResponse).
+
+    Same trust boundary as the ws fs.* handlers: the workspace argument is not
+    checked against a known-workspace set (fs.list_dir does not do that
+    either) — any existing directory is accepted, and path safety (escape +
+    .agent-team guard) is enforced by fs_service._resolve_safe.
+    """
+    try:
+        target = fs_service._resolve_safe(workspace, rel)
+    except fs_service.FsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if target.is_dir():
+        raise HTTPException(status_code=400, detail="path is a directory")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    # XSS hardening: only media the preview pane embeds is served inline; every
+    # other type (text/html, image/svg+xml, …) could execute script on this
+    # origin if navigated to directly, so it is downgraded to an opaque
+    # attachment. PDF is exempt from the CSP sandbox because it would disable
+    # Chromium's embedded viewer.
+    inline = media_type == "application/pdf" or media_type.startswith(
+        ("image/", "video/", "audio/")
+    )
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if media_type != "application/pdf":
+        headers["Content-Security-Policy"] = "sandbox"
+    if not inline:
+        return FileResponse(
+            target,
+            media_type="application/octet-stream",
+            filename=target.name,
+            content_disposition_type="attachment",
+            headers=headers,
+        )
+    return FileResponse(target, media_type=media_type, headers=headers)
 
 
 @app.get("/mcp/servers")
@@ -2712,7 +2754,9 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             branch = payload.get("branch") or ""
             result = await git_service.rebase_on(ws_path, branch)
             await session.send_json(make_response(msg_id, msg_type, result))
-            if result.get("ok"):
+            # Refresh on success or when a rebase was left in progress on conflict,
+            # so the UI shows the in-progress operation and conflicted files.
+            if result.get("ok") or result.get("conflict_files"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
         elif msg_type == "git.restore_from_branch":

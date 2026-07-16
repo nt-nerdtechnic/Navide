@@ -1118,8 +1118,8 @@ defineExpose({
         <div v-else class="ep-binary-placeholder">
           <span class="ep-binary-icon">⬛</span>
           <p class="ep-binary-name">{{ props.name }}</p>
-          <p class="ep-binary-meta">Binary file · {{ binaryExt.toUpperCase().replace('.','') || 'BIN' }} · {{ binarySize > 1048576 ? (binarySize/1048576).toFixed(1)+' MB' : binarySize > 1024 ? (binarySize/1024).toFixed(1)+' KB' : binarySize+' B' }}</p>
-          <p class="ep-binary-hint">This file type cannot be displayed as text.</p>
+          <p class="ep-binary-meta">{{ $t('preview.binary-file') }} · {{ binaryExt.toUpperCase().replace('.','') || 'BIN' }} · {{ binarySize > 1048576 ? (binarySize/1048576).toFixed(1)+' MB' : binarySize > 1024 ? (binarySize/1024).toFixed(1)+' KB' : binarySize+' B' }}</p>
+          <p class="ep-binary-hint">{{ $t('preview.cannot-display-text') }}</p>
         </div>
       </div>
       <EditorViewMonaco

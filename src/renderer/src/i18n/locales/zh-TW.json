@@ -577,6 +577,21 @@
     "attention-title": "CLI 需要你的回覆",
     "attention-body": "{label} 正在等待你的輸入"
   },
+  "preview": {
+    "binary-file": "二進位檔案",
+    "cannot-display-text": "此檔案類型無法以文字顯示。",
+    "open-externally": "以外部程式開啟",
+    "fit-window": "符合視窗大小",
+    "actual-size": "實際大小",
+    "pdf-unavailable": "此視窗無法使用內嵌 PDF 檢視器。",
+    "hex-loading": "正在載入 hex 內容…",
+    "hex-error": "無法載入檔案內容。",
+    "hex-truncated": "僅顯示前 64 KB（共 {total}）。",
+    "toggle-preview": "預覽",
+    "toggle-raw": "原始",
+    "switch-to-preview": "切換到預覽",
+    "switch-to-raw": "切換到原始編輯器"
+  },
   "restore": {
     "dialog-title": "恢復上次的工作階段？",
     "dialog-message": "偵測到上次未正常關閉。要重新開啟 {count} 個 workspace 嗎？",

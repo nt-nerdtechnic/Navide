@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -64,6 +64,32 @@ describe('GitAccountsStore', () => {
     })
     // Unbound workspace → no credential, no throw.
     expect(store.getCredentialForWorkspace('/Users/me/repo-b')).toBeNull()
+  })
+
+  it('normalizes trailing-slash workspace paths to the same binding', () => {
+    const store = new GitAccountsStore(file, fakeCrypto())
+    const account = store.add({ label: 'w', host: 'github.com', username: 'u', token: 'tok-1234' })
+    // Bind with a trailing slash on a real dir; look up without one.
+    store.bind(`${dir}/`, account.id)
+    expect(store.getBinding(dir)).toBe(account.id)
+    expect(store.getCredentialForWorkspace(dir)?.token).toBe('tok-1234')
+    // And unbind via the non-slash form clears it.
+    store.unbind(dir)
+    expect(store.getBinding(dir)).toBeNull()
+  })
+
+  it('still resolves a legacy raw-path binding via fallback', () => {
+    const account = new GitAccountsStore(file, fakeCrypto()).add({
+      label: 'w', host: 'github.com', username: 'u', token: 'tok-5678'
+    })
+    // Simulate a binding written by an older build under a non-normalized key.
+    writeFileSync(
+      file,
+      JSON.stringify({ version: 1, accounts: JSON.parse(readFileSync(file, 'utf-8')).accounts, bindings: { '/legacy/ws/': account.id } }),
+      'utf-8'
+    )
+    const store = new GitAccountsStore(file, fakeCrypto())
+    expect(store.getCredentialForWorkspace('/legacy/ws/')?.token).toBe('tok-5678')
   })
 
   it('persists across store instances (same file)', () => {

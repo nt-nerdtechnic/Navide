@@ -53,10 +53,10 @@ function openBranchDiffTab(base = 'main'): void {
 }
 
 const {
-  gitStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
+  gitStatus, loadStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
   logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
-  isCommitting, isFetching, isGenerating, isInitializing,
+  isCommitting, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
@@ -268,9 +268,9 @@ function openCommitCtxMenu(e: MouseEvent, hash: string): void {
 function openBranchCtxMenu(e: MouseEvent, name: string): void {
   e.preventDefault()
   e.stopPropagation()
-  // Branch menu has a single item (~48px), so clamp to its real height, not the file menu's.
+  // Branch menu has 4 items + separator (~130px), so clamp to its real height, not the file menu's.
   const x = Math.min(e.clientX, window.innerWidth - 224)
-  const y = Math.min(e.clientY, window.innerHeight - 48)
+  const y = Math.min(e.clientY, window.innerHeight - 130)
   ctxMenu.value = { show: true, x, y, kind: 'branch', file: null, dir: '', branch: name, hash: '', staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
@@ -724,9 +724,7 @@ function isAuthLikeError(msg: string): boolean {
 const remoteOpLabel: Record<string, string> = {
   fetch: 'Fetch', pull: 'Pull', push: 'Push', sync: 'Sync', publish: 'Publish'
 }
-const remoteOutput = ref('')
 const remoteError = ref('')
-const showRemoteOutput = ref(false)
 
 // Tracks the in-flight remote operation so the clicked button shows a spinner
 // and the rest stay disabled until it finishes.
@@ -745,70 +743,69 @@ async function runRemote(op: Exclude<typeof remoteBusy.value, ''>, fn: () => Pro
           ? `\n\n${t('git.account.credential-invalid')}`
           : ''
       void notifyAlert(remoteError.value + hint, { title: `${label} failed` })
-    } else if (remoteOutput.value) notifyToast(`${label} done`, { type: 'success' })
+    } else notifyToast(`${label} done`, { type: 'success' })
   } finally {
     remoteBusy.value = ''
   }
 }
 async function doFetch(): Promise<void> {
   await runRemote('fetch', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await fetchRemote()
-    remoteOutput.value = r.output; remoteError.value = r.error
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error
   })
 }
 async function doPull(): Promise<void> {
   await runRemote('pull', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pullOnly()
-    remoteOutput.value = r.output; remoteError.value = r.error
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error
   })
+}
+// Derive the push remote from the tracked upstream ("origin/main" → "origin");
+// fall back to "origin" when the branch has no upstream.
+function trackedRemote(): string {
+  const rb = gitStatus.value?.remote_branch || ''
+  return rb.includes('/') ? rb.split('/')[0] : 'origin'
 }
 async function doPush(remote = ''): Promise<void> {
   const branch = remote ? (gitStatus.value?.branch ?? '') : ''
   await runRemote('push', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pushOnly(remote, branch)
-    remoteOutput.value = r.output; remoteError.value = r.error
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error
   })
 }
 async function doPullRebase(): Promise<void> {
   showRemoteMenu.value = false
   await runRemote('pull', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pullRebase()
-    remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error ?? ''
   })
 }
 async function doPushForce(remote = ''): Promise<void> {
   showRemoteMenu.value = false
   const branch = remote ? (gitStatus.value?.branch ?? '') : ''
   await runRemote('push', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pushForce(remote, branch)
-    remoteOutput.value = r.output ?? ''; remoteError.value = r.error ?? ''
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error ?? ''
   })
 }
 async function doSync(): Promise<void> {
   await runRemote('sync', async () => {
-    showRemoteOutput.value = false; remoteOutput.value = ''; remoteError.value = ''
+    remoteError.value = ''
     await sync()
-    remoteOutput.value = syncOutput.value; remoteError.value = syncError.value
-    showRemoteOutput.value = !!(syncOutput.value || syncError.value)
+    remoteError.value = syncError.value
   })
 }
 async function doPushUpstream(): Promise<void> {
   const branch = gitStatus.value?.branch; if (!branch) return
   await runRemote('publish', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pushUpstream(branch)
-    remoteOutput.value = r.output || ''; remoteError.value = r.error || ''
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error || ''
   })
 }
 
@@ -824,6 +821,7 @@ const showRemoteBranches = ref(false)
 const newBranchName = ref('')
 const branchError = ref('')
 const branchCreating = ref(false)
+const branchBusy = ref(false)
 
 async function doCreateBranch(): Promise<void> {
   if (!newBranchName.value.trim()) return
@@ -836,8 +834,14 @@ async function doCreateBranch(): Promise<void> {
   }
 }
 async function doSwitch(name: string): Promise<void> {
+  if (branchBusy.value) return
+  branchBusy.value = true
   branchError.value = ''
-  const r = await switchBranch(name); if (!r.ok) branchError.value = r.error || 'switch failed'
+  try {
+    const r = await switchBranch(name); if (!r.ok) branchError.value = r.error || 'switch failed'
+  } finally {
+    branchBusy.value = false
+  }
 }
 async function doCheckoutRemote(remoteRef: string): Promise<void> {
   branchError.value = ''
@@ -857,14 +861,25 @@ async function doCompareBranch(branch: string): Promise<void> {
   const current = gitStatus.value?.branch; if (!current) return
   const r = await compareBranches(branch, current)
   if (r.ok) compareResult.value = { stat: r.stat, files: r.files }
-  else notifyToast(r.error || 'compare failed', { type: 'error' })
+  else { comparingBranch.value = ''; notifyToast(r.error || 'compare failed', { type: 'error' }) }
 }
 
 const rebaseError = ref(''), rebaseOutput = ref('')
 async function doRebase(branch: string): Promise<void> {
+  if (branchBusy.value) return
+  branchBusy.value = true
   rebaseError.value = ''; rebaseOutput.value = ''
-  const r = await rebaseOn(branch)
-  rebaseOutput.value = r.output || ''; if (!r.ok) rebaseError.value = r.error || 'rebase failed'
+  try {
+    const r = await rebaseOn(branch)
+    if (r.ok) rebaseOutput.value = r.output || ''
+    else if ((r.conflict_files?.length ?? 0) > 0) {
+      mergeConflictFiles.value = r.conflict_files as string[]
+      mergeConflictContext.value = `Rebase onto ${branch}`
+      showMergeConflictModal.value = true
+    } else rebaseError.value = r.error || 'rebase failed'
+  } finally {
+    branchBusy.value = false
+  }
 }
 
 const mergeError = ref(''), mergeOutput = ref('')
@@ -873,22 +888,30 @@ const mergeConflictFiles = ref<string[]>([])
 const mergeConflictContext = ref('')  // describes which branch was merged into which
 
 function _handleMergeResult(r: { ok: boolean; output?: string; error?: string; conflict_files?: string[] }): void {
-  mergeOutput.value = r.output || ''
-  if (!r.ok) {
-    const files = r.conflict_files ?? []
-    if (files.length > 0) {
-      mergeConflictFiles.value = files
-      showMergeConflictModal.value = true
-    } else {
-      mergeError.value = r.error || 'merge failed'
-    }
+  if (r.ok) {
+    mergeOutput.value = r.output || ''
+    return
+  }
+  mergeOutput.value = ''
+  const files = r.conflict_files ?? []
+  if (files.length > 0) {
+    mergeConflictFiles.value = files
+    showMergeConflictModal.value = true
+  } else {
+    mergeError.value = r.error || 'merge failed'
   }
 }
 
 async function doMerge(branch: string): Promise<void> {
+  if (branchBusy.value) return
+  branchBusy.value = true
   mergeError.value = ''; mergeOutput.value = ''
-  const r = await mergeBranch(branch)
-  _handleMergeResult(r)
+  try {
+    const r = await mergeBranch(branch)
+    _handleMergeResult(r)
+  } finally {
+    branchBusy.value = false
+  }
 }
 
 async function doMergeInto(target: string): Promise<void> {
@@ -923,10 +946,9 @@ async function doMergeIntoAndPush(target: string): Promise<void> {
     return
   }
   await runRemote('push', async () => {
-    remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+    remoteError.value = ''
     const r = await pushOnly('', target)
-    remoteOutput.value = r.output; remoteError.value = r.error
-    showRemoteOutput.value = !!(r.output || r.error)
+    remoteError.value = r.error
   })
 }
 
@@ -962,6 +984,7 @@ function closeChangesSectionMenu(): void { changesSectionMenu.value.show = false
 // ── stash ─────────────────────────────────────────────────────────────────────
 const stashExpanded = ref(false), stashMessage = ref(''), stashError = ref('')
 const showStashPrompt = ref(false)
+const stashBusy = ref(false)
 // Auto-expand the Stashes section when stashes appear (e.g. after a stash push)
 watch(() => gitStashes.value.length, (n, prev) => {
   if (n > 0 && (prev ?? 0) === 0) stashExpanded.value = true
@@ -976,16 +999,34 @@ async function doStash(): Promise<void> {
   else stashError.value = r.error || 'stash failed'
 }
 async function doStashApply(i: number): Promise<void> {
+  if (stashBusy.value) return
+  stashBusy.value = true
   stashError.value = ''
-  const r = await stashApply(i); if (!r.ok) stashError.value = r.error || 'apply failed'
+  try {
+    const r = await stashApply(i); if (!r.ok) stashError.value = r.error || 'apply failed'
+  } finally {
+    stashBusy.value = false
+  }
 }
 async function doStashPop(i: number): Promise<void> {
+  if (stashBusy.value) return
+  stashBusy.value = true
   stashError.value = ''
-  const r = await stashPop(i); if (!r.ok) stashError.value = r.error || 'pop failed'
+  try {
+    const r = await stashPop(i); if (!r.ok) stashError.value = r.error || 'pop failed'
+  } finally {
+    stashBusy.value = false
+  }
 }
 async function doStashDrop(i: number): Promise<void> {
+  if (stashBusy.value) return
+  stashBusy.value = true
   stashError.value = ''
-  const r = await stashDrop(i); if (!r.ok) stashError.value = r.error || 'drop failed'
+  try {
+    const r = await stashDrop(i); if (!r.ok) stashError.value = r.error || 'drop failed'
+  } finally {
+    stashBusy.value = false
+  }
 }
 
 // ── remotes ───────────────────────────────────────────────────────────────────
@@ -1002,14 +1043,21 @@ async function doRemoveRemote(name: string): Promise<void> {
 
 // ── tags ──────────────────────────────────────────────────────────────────────
 const tagExpanded = ref(false), newTagName = ref(''), newTagMessage = ref(''), tagError = ref('')
+const tagBusy = ref(false)
 async function doCreateTag(): Promise<void> {
   tagError.value = ''
   const r = await createTag(newTagName.value.trim(), newTagMessage.value.trim())
   if (r.ok) { newTagName.value = ''; newTagMessage.value = '' } else tagError.value = r.error || 'failed'
 }
 async function doDeleteTag(name: string): Promise<void> {
+  if (tagBusy.value) return
+  tagBusy.value = true
   tagError.value = ''
-  const r = await deleteTag(name); if (!r.ok) tagError.value = r.error || 'failed'
+  try {
+    const r = await deleteTag(name); if (!r.ok) tagError.value = r.error || 'failed'
+  } finally {
+    tagBusy.value = false
+  }
 }
 
 // ── worktrees ─────────────────────────────────────────────────────────────────
@@ -1406,7 +1454,7 @@ function onGitDividerEnd(): void {
 
 watch(() => props.workspacePath, () => {
   commitMessage.value = ''; commitError.value = ''; genAttempt.value = 0
-  remoteOutput.value = ''; remoteError.value = ''; showRemoteOutput.value = false
+  remoteError.value = ''
   branchError.value = ''; stashError.value = ''
   clearGitError()
   boundAccountId.value = null
@@ -1497,7 +1545,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <svg v-if="viewMode === 'tree'" width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 2.75a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM1.5 8a.75.75 0 1 1 1.5 0A.75.75 0 0 1 1.5 8zm.75 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 3.5h9.5a.75.75 0 0 0 0-1.5h-9.5a.75.75 0 0 0 0 1.5zM4 8.75h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5zm0 5.5h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5z"/></svg>
           <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4h12v1.5H2zm0 3.5h12V9H2zm0 3.5h12v1.5H2z"/></svg>
         </button>
-        <button class="hdr-btn" :title="$t('action.refresh')" :disabled="isFetching" @click.stop="doFetch">
+        <button class="hdr-btn" :title="$t('action.refresh')" @click.stop="loadStatus">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
         <!-- Diff Review button (mini-IDE only) — opens combined diff+review in editor tab -->
@@ -1549,10 +1597,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">{{ $t('action.go-to-commit') }}</button>
       </div>
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
-      <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': opInProgress === 'merge' && conflictFileCount > 0 }">
+      <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': (opInProgress === 'merge' || opInProgress === 'rebase') && conflictFileCount > 0 }">
         <span class="op-text">
           ⚠ {{ opInProgress }} in progress
-          <template v-if="opInProgress === 'merge' && conflictFileCount > 0">・{{ conflictFileCount }} conflict file(s)</template>
+          <template v-if="(opInProgress === 'merge' || opInProgress === 'rebase') && conflictFileCount > 0">・{{ conflictFileCount }} conflict file(s)</template>
         </span>
         <button class="op-abort-btn" @click="doAbort">Abort {{ opInProgress }}</button>
       </div>
@@ -1974,7 +2022,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" :title="$t('action.pull')" :disabled="!!remoteBusy" @click="doPull">
           <span v-if="remoteBusy === 'pull'" class="spinner">⟳</span><template v-else>↓</template>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush()">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush(trackedRemote())">
           <span v-if="remoteBusy === 'push'" class="spinner">⟳</span><template v-else>↑<span v-if="gitStatus.ahead" class="ahead-num">{{ gitStatus.ahead }}</span></template>
         </button>
         <button class="remote-btn" :class="{ busy: remoteBusy === 'sync' }" title="Sync (pull --rebase + push)" :disabled="!!remoteBusy" @click="doSync">
@@ -1987,8 +2035,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="menu-item" @click="doPull(); showRemoteMenu = false">↓ Pull</button>
             <button class="menu-item" @click="doPullRebase">↓ Pull (Rebase)</button>
             <div class="menu-sep" />
-            <button class="menu-item" @click="doPush(); showRemoteMenu = false">↑ Push</button>
-            <button class="menu-item danger" @click="doPushForce()">↑ Push (Force with lease)</button>
+            <button class="menu-item" @click="doPush(trackedRemote()); showRemoteMenu = false">↑ Push</button>
+            <button class="menu-item danger" @click="doPushForce(trackedRemote())">↑ Push (Force with lease)</button>
             <template v-if="gitRemotes.length > 1">
               <div class="menu-sep" />
               <div class="menu-group-label">Push to remote</div>
@@ -2047,9 +2095,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div class="spacer" />
           <template v-if="!b.is_current">
             <button class="row-btn always" title="Compare" @click.stop="doCompareBranch(b.name)">⇔</button>
-            <button class="row-btn always" title="Rebase onto" @click.stop="doRebase(b.name)">⇡</button>
-            <button class="row-btn always" title="Merge into current" @click.stop="doMerge(b.name)">⇣</button>
-            <button class="row-btn always" title="Switch" @click.stop="doSwitch(b.name)">↵</button>
+            <button class="row-btn always" title="Rebase onto" :disabled="branchBusy" @click.stop="doRebase(b.name)">⇡</button>
+            <button class="row-btn always" title="Merge into current" :disabled="branchBusy" @click.stop="doMerge(b.name)">⇣</button>
+            <button class="row-btn always" title="Switch" :disabled="branchBusy" @click.stop="doSwitch(b.name)">↵</button>
           </template>
         </div>
         <!-- remote branches (toggleable) -->
@@ -2184,9 +2232,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span class="stash-ref">{{ s.ref }}</span>
           <span class="stash-msg">{{ s.message }}</span>
           <div class="row-actions always">
-            <button class="row-btn always" title="Apply (keep draft)" @click.stop="doStashApply(s.index)">⎘</button>
-            <button class="row-btn always" title="Pop (apply &amp; remove)" @click.stop="doStashPop(s.index)">↑</button>
-            <button class="row-btn always danger" title="Drop" @click.stop="doStashDrop(s.index)">✕</button>
+            <button class="row-btn always" title="Apply (keep draft)" :disabled="stashBusy" @click.stop="doStashApply(s.index)">⎘</button>
+            <button class="row-btn always" title="Pop (apply &amp; remove)" :disabled="stashBusy" @click.stop="doStashPop(s.index)">↑</button>
+            <button class="row-btn always danger" title="Drop" :disabled="stashBusy" @click.stop="doStashDrop(s.index)">✕</button>
           </div>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
@@ -2232,7 +2280,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <code class="chash" style="margin-left:4px">{{ t.commit_hash }}</code>
           <span v-if="t.message" class="b-track">{{ t.message }}</span>
           <div class="spacer" />
-          <button class="row-btn always danger" @click.stop="doDeleteTag(t.name)">✕</button>
+          <button class="row-btn always danger" :disabled="tagBusy" @click.stop="doDeleteTag(t.name)">✕</button>
         </div>
         <div class="input-row" style="margin-top:6px; flex-wrap:wrap; gap:4px">
           <input v-model="newTagName" class="git-input" placeholder="v1.0.0" style="flex:1;min-width:72px" />

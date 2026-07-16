@@ -643,14 +643,18 @@ ipcMain.handle('window:openBranchDiff', (_event, args: Record<string, string>) =
   return { ok: true }
 })
 
-// Allowlist for git ref names: alphanumeric, dots, slashes, hyphens, underscores.
-// Rejects anything starting with '-' (flag smuggling) and shell metacharacters.
-const GIT_REF_RE = /^[A-Za-z0-9._/\-]+$/
+// Reject only what git itself forbids in ref names (git-check-ref-format), so
+// non-ASCII (e.g. CJK) branch names are allowed — matching the Python backend's
+// _INVALID_REF_RE. An ASCII allowlist here wrongly rejected branches like
+// "AI修改". Not the security boundary: execFile is exec-not-shell and the
+// leading-'-' check below blocks flag smuggling.
+const INVALID_GIT_REF_RE = /(\.\.|\x00|@\{|\\|[ ~^:?*[\]]|\/$|\.lock$|\.lock\/)/
 
 function validateRef(value: string, label: string): string | null {
   if (!value) return null // empty is OK (means "omit")
   if (value.startsWith('-')) return `invalid ${label}: must not start with '-'`
-  if (!GIT_REF_RE.test(value)) return `invalid ${label}: contains disallowed characters`
+  if (INVALID_GIT_REF_RE.test(value))
+    return `invalid ${label}: contains characters git disallows in ref names`
   return null
 }
 
@@ -665,6 +669,9 @@ ipcMain.handle('git:diff-head', async (_event, args: { workspace_path: string; b
   const base = (args.base ?? '').trim()
   const refErr = validateRef(base, 'base') ?? validateRef(compare, 'compare')
   if (refErr) return { ok: false, diff: '', error: refErr }
+  // A compare target needs an explicit base — align with the backend, which
+  // errors here rather than silently diffing HEAD and ignoring compare.
+  if (compare && !base) return { ok: false, diff: '', error: 'base branch is required to compare' }
   try {
     const gitArgs: string[] = ['-c', 'core.quotePath=false', 'diff']
     if (compare && base) {
@@ -672,10 +679,21 @@ ipcMain.handle('git:diff-head', async (_event, args: { workspace_path: string; b
     } else {
       gitArgs.push('HEAD')
     }
-    const { stdout } = await execFileAsync('git', gitArgs, { cwd, maxBuffer: 4 * 1024 * 1024 })
-    return { ok: true, diff: stdout.slice(0, 100_000) }
+    // timeout+SIGKILL so a hung git (stale mount, wedged filter) can't spin the
+    // diff pane forever; generous maxBuffer since we only keep the first 100 K.
+    const { stdout } = await execFileAsync('git', gitArgs, {
+      cwd,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 30_000,
+      killSignal: 'SIGKILL'
+    })
+    const truncated = stdout.length > 100_000
+    return { ok: true, diff: stdout.slice(0, 100_000), truncated }
   } catch (err: unknown) {
-    const e = err as { stderr?: string; message?: string }
+    const e = err as { stderr?: string; message?: string; killed?: boolean; code?: string }
+    if (e.killed) return { ok: false, diff: '', error: 'git diff timed out' }
+    if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER')
+      return { ok: false, diff: '', error: 'diff too large to display' }
     return { ok: false, diff: '', error: e.stderr?.trim() || e.message || 'git error' }
   }
 })
@@ -1175,7 +1193,14 @@ ipcMain.handle('git-accounts:getBinding', (_event, workspacePath: string) => {
   }
 })
 
-ipcMain.handle('git-accounts:getCredential', (_event, workspacePath: string) => {
+ipcMain.handle('git-accounts:getCredential', (event, workspacePath: string) => {
+  // Sensitive: returns a decrypted PAT. Restrict to the top frame of a known
+  // app window so a sub-frame/iframe injected into rendered content can't call
+  // this to exfiltrate a token.
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (!win || !mainWindows.has(win) || event.senderFrame?.parent) {
+    return { ok: false, error: 'unauthorized' }
+  }
   try {
     return { ok: true, credential: getGitAccountsStore().getCredentialForWorkspace(workspacePath) }
   } catch (e) {

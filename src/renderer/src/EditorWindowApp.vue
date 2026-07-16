@@ -18,6 +18,8 @@ import type AIChatPaneType from './components/AIChatPane.vue'
 const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vue'))
 import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
+import FilePreviewPane from './editor/FilePreviewPane.vue'
+import { previewKind, isMarkdownFile } from './editor/previewTypes'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
 import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from './lib/settings'
@@ -198,6 +200,25 @@ function togglePlanView(relPath: string): void {
     s.add(relPath)
   }
   planViewFiles.value = s
+}
+
+// ── File preview mode ─────────────────────────────────────────────────────────
+// Tracks files shown in the preview pane (media/PDF/binary via FilePreviewPane)
+// or, for plain .md files, the rendered markdown view (PlanFileView pipeline).
+const previewFiles = ref(new Set<string>())
+
+function isPreviewToggleFile(relPath: string): boolean {
+  return previewKind(relPath) !== null || isMarkdownFile(relPath)
+}
+
+function togglePreview(relPath: string): void {
+  const s = new Set(previewFiles.value)
+  if (s.has(relPath)) {
+    s.delete(relPath)
+  } else {
+    s.add(relPath)
+  }
+  previewFiles.value = s
 }
 
 const initialSidebar = (['explorer', 'search', 'git', 'plans', 'problems'] as const).find(
@@ -390,6 +411,11 @@ function openFile(p: { filepath: string; name?: string; line?: number }): void {
       const s = new Set(planViewFiles.value)
       s.add(relPath)
       planViewFiles.value = s
+    } else if (previewKind(relPath) !== null) {
+      // Media/PDF/known-binary files auto-open in preview; markdown stays raw.
+      const s = new Set(previewFiles.value)
+      s.add(relPath)
+      previewFiles.value = s
     }
   }
   activeRel.value = relPath
@@ -1784,6 +1810,12 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :title="planViewFiles.has(activeFile.relPath) ? 'Switch to raw editor' : 'Switch to plan view'"
             @click="togglePlanView(activeFile.relPath)"
           >{{ planViewFiles.has(activeFile.relPath) ? 'Raw' : 'Plan' }}</button>
+          <button
+            v-if="activeFile && isPreviewToggleFile(activeFile.relPath)"
+            class="ide-tab-act ide-tab-act--preview-toggle"
+            :title="previewFiles.has(activeFile.relPath) ? $t('preview.switch-to-raw') : $t('preview.switch-to-preview')"
+            @click="togglePreview(activeFile.relPath)"
+          >{{ previewFiles.has(activeFile.relPath) ? $t('preview.toggle-raw') : $t('preview.toggle-preview') }}</button>
           <template v-if="!isPlanFile(activeFile?.relPath ?? '')">
             <button class="ide-tab-act" :title="'AI complete (⌘I)'" @click="activeEditor()?.requestGhost()">✦ Complete</button>
             <button class="ide-tab-act" :title="'AI rewrite selection (⌘K)'" @click="activeEditor()?.openCmdK()">✦ Cmd+K</button>
@@ -1805,19 +1837,29 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 
       <div class="ide-editors">
         <template v-for="f in openFiles" :key="f.relPath">
-          <!-- Plan view: shown for .plan.md files when in plan mode -->
+          <!-- Plan view: .plan.md files in plan mode, and plain .md files in
+               markdown preview mode (same rendering pipeline). -->
           <PlanFileView
-            v-if="f.kind === 'file' && isPlanFile(f.relPath) && planViewFiles.has(f.relPath)"
+            v-if="f.kind === 'file' && ((isPlanFile(f.relPath) && planViewFiles.has(f.relPath)) || (isMarkdownFile(f.relPath) && previewFiles.has(f.relPath)))"
             v-show="f.relPath === activeRel"
             :workspace-path="workspacePath"
             :rel-path="f.relPath"
             :backend="backend"
             @dirty="(v) => markDirty(f.relPath, v)"
           />
+          <!-- File preview: media/PDF/binary files in preview mode -->
+          <FilePreviewPane
+            v-if="f.kind === 'file' && !isMarkdownFile(f.relPath) && !isPlanFile(f.relPath) && previewFiles.has(f.relPath)"
+            v-show="f.relPath === activeRel"
+            :workspace-path="workspacePath"
+            :rel-path="f.relPath"
+            :name="f.name"
+            :backend="backend"
+          />
           <!-- Code editor: shown for all non-plan files, and plan files in raw mode.
                Key changes when toggling plan/raw, forcing a fresh load from disk. -->
           <EditorPane
-            v-if="f.kind === 'file' && !(isPlanFile(f.relPath) && planViewFiles.has(f.relPath))"
+            v-if="f.kind === 'file' && !(isPlanFile(f.relPath) && planViewFiles.has(f.relPath)) && !previewFiles.has(f.relPath)"
             :key="f.relPath + ':' + (planViewFiles.has(f.relPath) ? 'plan' : 'raw')"
             v-show="f.relPath === activeRel"
             :ref="(el) => setEditorRef(f.relPath, el)"

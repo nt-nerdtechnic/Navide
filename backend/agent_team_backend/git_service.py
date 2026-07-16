@@ -7,6 +7,7 @@ never blocked.  No gitpython or other heavy dependency is required.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -37,6 +38,11 @@ _COMMIT_SUMMARY_UNTRACKED_BYTES_THRESHOLD = 32_000
 
 # Only allow https/http and SSH-style URLs; block git pseudo-protocols (ext::, fd::, file://, etc.)
 _SAFE_GIT_URL = re.compile(r"^(https?://|ssh://|git@[\w.\-]+:)")
+
+# git's "transport::address" remote-helper syntax (ext::, fd::, …) can execute
+# arbitrary commands via the helper. Block that form while still allowing
+# http(s)/ssh/git@ URLs and local filesystem paths (used by clone_repo).
+_GIT_REMOTE_HELPER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*::")
 
 
 # ─── Data classes ─────────────────────────────────────────────────────────────
@@ -81,7 +87,15 @@ class GitSyncResult:
 # ─── Input validation helpers ─────────────────────────────────────────────────
 
 _HASH_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
-_REF_RE = re.compile(r"^[A-Za-z0-9._/\-]+$")  # conservative safe ref pattern
+# Blocklist of characters/sequences git itself forbids in ref names (see
+# git-check-ref-format). Non-ASCII (e.g. CJK) refs are legal in git, so we
+# reject only what git rejects rather than allowlisting ASCII — an ASCII
+# allowlist wrongly blocked branches like "AI修改". Not the security boundary:
+# subprocess calls are exec-not-shell, and leading-'-'/'..' are checked
+# separately below.
+_INVALID_REF_RE = re.compile(
+    r"(^-|\.\.|\x00|@\{|\\|[ ~^:?*\[\]]|/$|\.lock$|\.lock/)"
+)
 
 
 def _validate_commit_hash(value: str) -> str | None:
@@ -89,6 +103,35 @@ def _validate_commit_hash(value: str) -> str | None:
     if not value or not _HASH_RE.match(value.strip()):
         return "invalid commit hash (expected 4–40 hex chars)"
     return None
+
+
+# ── Per-repository write serialization ────────────────────────────────────────
+# Concurrent mutating git commands on one working tree collide on .git/index.lock
+# and surface a raw "another git process is running" error. Serialize writes per
+# repo (keyed by realpath); reads stay unlocked so a status refresh never blocks
+# behind a slow push. Deadlock-safe: no mutating op calls another mutating op.
+_repo_write_locks: dict[str, asyncio.Lock] = {}
+
+
+def _repo_write_lock(workspace_path: str) -> asyncio.Lock:
+    try:
+        key = os.path.realpath(workspace_path) if workspace_path else ""
+    except OSError:
+        key = workspace_path or ""
+    lock = _repo_write_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _repo_write_locks[key] = lock
+    return lock
+
+
+def _serialize_write(fn):
+    """Decorator: serialize a mutating git op per workspace (its first argument)."""
+    @functools.wraps(fn)
+    async def wrapper(workspace_path, *args, **kwargs):
+        async with _repo_write_lock(workspace_path):
+            return await fn(workspace_path, *args, **kwargs)
+    return wrapper
 
 
 _GIT_ESCAPE_RE = re.compile(r'\\([\\abtnvfr"]|[0-7]{3})')
@@ -127,8 +170,8 @@ def _validate_ref_name(value: str, label: str = "name") -> str | None:
         return f"invalid {label}: must not start with '-'"
     if ".." in v:
         return f"invalid {label}: must not contain '..'"
-    if not _REF_RE.match(v):
-        return f"invalid {label}: contains disallowed characters"
+    if _INVALID_REF_RE.search(v):
+        return f"invalid {label}: contains characters git disallows in ref names"
     return None
 
 
@@ -343,6 +386,7 @@ async def get_log(
     return commits
 
 
+@_serialize_write
 async def cherry_pick(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     """Apply *commit_hash* onto the current branch (`git cherry-pick --no-edit`)."""
     if err := _validate_commit_hash(commit_hash):
@@ -381,6 +425,7 @@ async def list_tags(workspace_path: str) -> list[dict[str, Any]]:
     return tags
 
 
+@_serialize_write
 async def create_tag(workspace_path: str, name: str, message: str = "", commit_hash: str = "") -> dict[str, Any]:
     """Create an annotated tag (if message given) or lightweight tag."""
     if err := _validate_ref_name(name, "tag name"):
@@ -399,6 +444,7 @@ async def create_tag(workspace_path: str, name: str, message: str = "", commit_h
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def delete_tag(workspace_path: str, name: str) -> dict[str, Any]:
     """Delete a local tag."""
     if err := _validate_ref_name(name, "tag name"):
@@ -427,6 +473,7 @@ async def file_log(workspace_path: str, filepath: str, n: int = 15) -> list[dict
     return commits
 
 
+@_serialize_write
 async def resolve_conflict_ours(workspace_path: str, filepath: str) -> dict[str, Any]:
     """Accept 'ours' side in a merge conflict for *filepath*."""
     rc, _, stderr = await _run(["git", "checkout", "--ours", "--", filepath], workspace_path)
@@ -436,6 +483,7 @@ async def resolve_conflict_ours(workspace_path: str, filepath: str) -> dict[str,
     return {"ok": rc2 == 0, "error": stderr2.strip() if rc2 != 0 else ""}
 
 
+@_serialize_write
 async def resolve_conflict_theirs(workspace_path: str, filepath: str) -> dict[str, Any]:
     """Accept 'theirs' side in a merge conflict for *filepath*."""
     rc, _, stderr = await _run(["git", "checkout", "--theirs", "--", filepath], workspace_path)
@@ -445,6 +493,7 @@ async def resolve_conflict_theirs(workspace_path: str, filepath: str) -> dict[st
     return {"ok": rc2 == 0, "error": stderr2.strip() if rc2 != 0 else ""}
 
 
+@_serialize_write
 async def discard_changes(workspace_path: str, files: list[str]) -> dict[str, Any]:
     """Discard unstaged changes in *files* (git restore -- <files>).
     Untracked files are deleted from disk; tracked files revert to HEAD.
@@ -531,6 +580,7 @@ async def add_worktree(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def remove_worktree(workspace_path: str, worktree_path: str, force: bool = False) -> dict[str, Any]:
     """Remove an existing worktree directory."""
     if not worktree_path.strip():
@@ -575,6 +625,7 @@ async def get_config(workspace_path: str) -> dict[str, Any]:
     return {"ok": True, "config": result}
 
 
+@_serialize_write
 async def set_config(workspace_path: str, key: str, value: str) -> dict[str, Any]:
     """Set a local git config key to *value*.
 
@@ -624,7 +675,7 @@ async def blame_file(workspace_path: str, filepath: str) -> dict[str, Any]:
     current_hash = ""
     current_line_no = 0
     for line in out.splitlines():
-        if re.match(r"^[0-9a-f]{40} ", line):
+        if re.match(r"^[0-9a-f]{40}(?:[0-9a-f]{24})? ", line):
             parts = line.split()
             current_hash = parts[0][:8]
             current_line_no = int(parts[2]) if len(parts) > 2 else 0
@@ -650,7 +701,7 @@ async def blame_file(workspace_path: str, filepath: str) -> dict[str, Any]:
     return {"ok": True, "lines": entries}
 
 
-_ZERO_HASH = "0" * 40
+_ZERO_HASH_RE = re.compile(r"^0+$")  # all-zero object name (SHA-1 or SHA-256) = uncommitted line
 
 
 def _parse_blame_porcelain(out: str) -> dict[int, dict]:
@@ -666,7 +717,7 @@ def _parse_blame_porcelain(out: str) -> dict[int, dict]:
     current_hash = ""
     current_line_no = 0
     for line in out.splitlines():
-        if re.match(r"^[0-9a-f]{40} ", line):
+        if re.match(r"^[0-9a-f]{40}(?:[0-9a-f]{24})? ", line):
             parts = line.split()
             current_hash = parts[0]
             current_line_no = int(parts[2]) if len(parts) > 2 else 0
@@ -684,7 +735,7 @@ def _parse_blame_porcelain(out: str) -> dict[int, dict]:
                 "short_hash": current_hash[:8],
                 "author": meta.get("author", ""),
                 "date": meta.get("date", ""),
-                "committed": current_hash != _ZERO_HASH,
+                "committed": not _ZERO_HASH_RE.match(current_hash),
             }
     return result
 
@@ -818,19 +869,45 @@ async def diff_branches(workspace_path: str, base: str, compare: str) -> dict[st
     return {"ok": True, "diff": out[:30_000], "truncated": len(out) > 30_000}
 
 
+async def _rebase_in_progress(workspace_path: str) -> bool:
+    """True if git left a rebase in progress (rebase-merge/rebase-apply dir)."""
+    git_dir = await _resolve_git_dir(workspace_path)
+    if git_dir is None:
+        return False
+    return (git_dir / "rebase-merge").is_dir() or (git_dir / "rebase-apply").is_dir()
+
+
+@_serialize_write
 async def rebase_on(workspace_path: str, branch: str) -> dict[str, Any]:
-    """Rebase current branch onto *branch*.  Returns output or error."""
+    """Rebase current branch onto *branch*.
+
+    On conflict the rebase is left in progress (like ``merge_into``) so the UI
+    can resolve or abort it — ``get_status`` reports the ``rebase`` operation and
+    ``abort_operation("rebase")`` backs it out. A rebase that fails before it
+    starts (e.g. a dirty tree) leaves nothing in progress and is reported as a
+    plain error.
+    """
     if err := _validate_ref_name(branch, "branch name"):
-        return {"ok": False, "output": "", "error": err}
+        return {"ok": False, "output": "", "error": err, "conflict_files": []}
     rc, out, stderr = await _run(["git", "rebase", branch.strip()], workspace_path)
     output = (out + stderr).strip()
-    if rc != 0:
-        # Abort the rebase to leave the repo in a clean state
-        await _run(["git", "rebase", "--abort"], workspace_path)
-        return {"ok": False, "output": output, "error": "rebase failed — automatically aborted"}
-    return {"ok": True, "output": output, "error": ""}
+    if rc == 0:
+        return {"ok": True, "output": output, "error": "", "conflict_files": []}
+    conflict_files = _parse_conflict_files(output)
+    if await _rebase_in_progress(workspace_path):
+        # Leave it for the UI to resolve (edit + stage + `git rebase --continue`)
+        # or abort. Do NOT auto-abort — that made the rebase-conflict UI dead.
+        return {
+            "ok": False,
+            "output": output,
+            "error": stderr.strip() or "rebase stopped — resolve conflicts or abort",
+            "conflict_files": conflict_files,
+        }
+    # Never entered a rebase (pre-flight failure) — nothing to leave behind.
+    return {"ok": False, "output": output, "error": stderr.strip() or "rebase failed", "conflict_files": conflict_files}
 
 
+@_serialize_write
 async def restore_file_from_branch(workspace_path: str, branch: str, filepath: str) -> dict[str, Any]:
     """Restore a single file from *branch* into the working tree."""
     if err := _validate_ref_name(branch, "branch name"):
@@ -844,6 +921,7 @@ async def restore_file_from_branch(workspace_path: str, branch: str, filepath: s
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def clean_untracked(workspace_path: str, dry_run: bool = True) -> dict[str, Any]:
     """Remove untracked files and directories.
 
@@ -986,6 +1064,7 @@ async def _askpass_env(
         await cleanup()
 
 
+@_serialize_write
 async def push_set_upstream(
     workspace_path: str,
     branch: str,
@@ -1025,6 +1104,7 @@ async def fetch(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def pull_only(
     workspace_path: str,
     *,
@@ -1040,6 +1120,7 @@ async def pull_only(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def push_only(
     workspace_path: str,
     remote: str = "",
@@ -1064,6 +1145,7 @@ async def push_only(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def pull_rebase(
     workspace_path: str,
     *,
@@ -1079,6 +1161,7 @@ async def pull_rebase(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def push_force(
     workspace_path: str,
     remote: str = "",
@@ -1156,6 +1239,7 @@ async def diff_all(workspace_path: str, staged: bool = False) -> dict[str, Any]:
     return {"ok": True, "diff": out}
 
 
+@_serialize_write
 async def apply_patch(
     workspace_path: str, patch: str, reverse: bool = False, cached: bool = True
 ) -> dict[str, Any]:
@@ -1193,6 +1277,7 @@ def _parse_conflict_files(output: str) -> list[str]:
     return files
 
 
+@_serialize_write
 async def merge_branch(workspace_path: str, branch: str) -> dict[str, Any]:
     """Merge *branch* into the current branch (--no-ff to always create a merge commit)."""
     if err := _validate_ref_name(branch, "branch name"):
@@ -1208,6 +1293,7 @@ async def merge_branch(workspace_path: str, branch: str) -> dict[str, Any]:
     }
 
 
+@_serialize_write
 async def merge_into(workspace_path: str, target: str) -> dict[str, Any]:
     """Switch to *target*, merge current branch into it, stay on *target*.
 
@@ -1234,6 +1320,7 @@ async def merge_into(workspace_path: str, target: str) -> dict[str, Any]:
     return {"ok": True, "output": output, "error": "", "conflict_files": [], "source_branch": source}
 
 
+@_serialize_write
 async def abort_operation(workspace_path: str, op: str) -> dict[str, Any]:
     """Abort an in-progress merge / rebase / cherry-pick."""
     op = (op or "").strip()
@@ -1248,6 +1335,7 @@ async def abort_operation(workspace_path: str, op: str) -> dict[str, Any]:
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def revert_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     """Create a revert commit for *commit_hash* without interactive editor."""
     if err := _validate_commit_hash(commit_hash):
@@ -1288,6 +1376,7 @@ async def list_remotes(workspace_path: str) -> list[dict[str, Any]]:
     return list(seen.values())
 
 
+@_serialize_write
 async def add_remote(workspace_path: str, name: str, url: str) -> dict[str, Any]:
     """Add a new remote."""
     if err := _validate_ref_name(name, "remote name"):
@@ -1301,6 +1390,7 @@ async def add_remote(workspace_path: str, name: str, url: str) -> dict[str, Any]
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin") -> dict[str, Any]:
     """git init → remote add → fetch → checkout, connecting an existing directory to a remote repo."""
     url = url.strip()
@@ -1345,6 +1435,7 @@ async def connect_to_remote(workspace_path: str, url: str, remote: str = "origin
     return {"ok": True, "branch": branch}
 
 
+@_serialize_write
 async def remove_remote(workspace_path: str, name: str) -> dict[str, Any]:
     """Remove a remote by name."""
     if err := _validate_ref_name(name, "remote name"):
@@ -1410,6 +1501,7 @@ async def list_branches(workspace_path: str) -> dict[str, Any]:
     return {"ok": True, "branches": branches, "current": current}
 
 
+@_serialize_write
 async def checkout_remote_branch(workspace_path: str, remote_ref: str) -> dict[str, Any]:
     """Create a local tracking branch from a remote ref (e.g. 'origin/feat/x').
 
@@ -1424,11 +1516,6 @@ async def checkout_remote_branch(workspace_path: str, remote_ref: str) -> dict[s
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
-_INVALID_REF_RE = re.compile(
-    r"(^-|\.\.|\x00|@\{|\\|[ ~^:?*\[\]]|/$|\.lock$|\.lock/)"
-)
-
-
 def _validate_branch_name(name: str) -> str | None:
     """Return an error string if *name* is not a safe git ref, else None."""
     if not name or not name.strip():
@@ -1438,6 +1525,7 @@ def _validate_branch_name(name: str) -> str | None:
     return None
 
 
+@_serialize_write
 async def create_branch(
     workspace_path: str, name: str, switch_to: bool = True, start_point: str = ""
 ) -> dict[str, Any]:
@@ -1445,7 +1533,7 @@ async def create_branch(
     if err := _validate_branch_name(name):
         return {"ok": False, "error": err}
     sp = start_point.strip()
-    if sp and (err := _validate_commit_hash(sp)):
+    if sp and (err := _validate_ref_name(sp, "start point")):
         return {"ok": False, "error": err}
     if switch_to:
         # git checkout -b does not accept -- before <new_branch>; rely on the leading-dash check above.
@@ -1458,6 +1546,7 @@ async def create_branch(
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def switch_branch(workspace_path: str, name: str) -> dict[str, Any]:
     """Switch to an existing local branch."""
     if err := _validate_branch_name(name):
@@ -1466,6 +1555,7 @@ async def switch_branch(workspace_path: str, name: str) -> dict[str, Any]:
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def checkout_commit(workspace_path: str, commit_hash: str) -> dict[str, Any]:
     """Check out a commit in detached-HEAD state."""
     if err := _validate_commit_hash(commit_hash):
@@ -1474,6 +1564,7 @@ async def checkout_commit(workspace_path: str, commit_hash: str) -> dict[str, An
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def delete_branch(workspace_path: str, name: str, force: bool = False) -> dict[str, Any]:
     """Delete a local branch (-d or -D)."""
     if err := _validate_branch_name(name):
@@ -1504,6 +1595,7 @@ async def stash_list(workspace_path: str) -> list[dict[str, Any]]:
     return entries
 
 
+@_serialize_write
 async def stash_push(
     workspace_path: str, message: str = "", paths: list[str] | None = None
 ) -> dict[str, Any]:
@@ -1521,24 +1613,28 @@ async def stash_push(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def stash_pop(workspace_path: str, index: int = 0) -> dict[str, Any]:
     """Apply and remove stash@{index}."""
     rc, out, stderr = await _run(["git", "stash", "pop", f"stash@{{{index}}}"], workspace_path)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def stash_apply(workspace_path: str, index: int = 0) -> dict[str, Any]:
     """Apply stash@{index} but keep it in the stash list (unlike pop)."""
     rc, out, stderr = await _run(["git", "stash", "apply", f"stash@{{{index}}}"], workspace_path)
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def stash_drop(workspace_path: str, index: int) -> dict[str, Any]:
     """Drop stash@{index} without applying."""
     rc, _, stderr = await _run(["git", "stash", "drop", f"stash@{{{index}}}"], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def amend_commit(workspace_path: str, message: str = "") -> dict[str, Any]:
     """Amend the last commit. If *message* is empty, keep the original message."""
     if message.strip():
@@ -1552,12 +1648,14 @@ async def amend_commit(workspace_path: str, message: str = "") -> dict[str, Any]
     return {"ok": True, "hash": hash_match.group(1) if hash_match else ""}
 
 
+@_serialize_write
 async def undo_last_commit(workspace_path: str) -> dict[str, Any]:
     """Soft-reset HEAD~1 — files go back to staged, commit is removed."""
     rc, _, stderr = await _run(["git", "reset", "--soft", "HEAD~1"], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def stage_files(workspace_path: str, files: list[str]) -> dict[str, Any]:
     if not files:
         return {"ok": True}
@@ -1565,6 +1663,7 @@ async def stage_files(workspace_path: str, files: list[str]) -> dict[str, Any]:
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def unstage_files(workspace_path: str, files: list[str]) -> dict[str, Any]:
     if not files:
         return {"ok": True}
@@ -1583,6 +1682,7 @@ async def unstage_files(workspace_path: str, files: list[str]) -> dict[str, Any]
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def stage_all(workspace_path: str) -> dict[str, Any]:
     rc, _, stderr = await _run(["git", "add", "-A"], workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
@@ -1623,7 +1723,12 @@ async def check_staged(workspace_path: str) -> dict[str, Any]:
     if not workspace_path:
         return {"ok": True, "error_count": 0, "summary": ""}
 
-    rc, stdout, _ = await _run(["git", "diff", "--cached", "--name-only"], workspace_path)
+    # core.quotePath=false keeps non-ASCII filenames raw (not octal-escaped) so
+    # their real suffix survives for the eslint/ruff extension filters below.
+    rc, stdout, _ = await _run(
+        ["git", "-c", "core.quotePath=false", "diff", "--cached", "--name-only"],
+        workspace_path,
+    )
     if rc != 0:
         return {"ok": True, "error_count": 0, "summary": ""}
 
@@ -1665,6 +1770,7 @@ async def check_staged(workspace_path: str) -> dict[str, Any]:
     return {"ok": True, "error_count": 0, "summary": ""}
 
 
+@_serialize_write
 async def commit(workspace_path: str, message: str, all: bool = False) -> dict[str, Any]:
     if not message.strip():
         return {"ok": False, "error": "empty commit message"}
@@ -1682,6 +1788,7 @@ async def commit(workspace_path: str, message: str, all: bool = False) -> dict[s
     return {"ok": True, "hash": hash_match.group(1) if hash_match else ""}
 
 
+@_serialize_write
 async def sync(
     workspace_path: str,
     *,
@@ -1794,6 +1901,7 @@ def _detect_gitignore_template(workspace_path: str) -> str:
     return "\n".join(parts) if parts else _GENERIC_GITIGNORE
 
 
+@_serialize_write
 async def init_repo(workspace_path: str, create_gitignore: bool = True) -> dict[str, Any]:
     """Run `git init` in *workspace_path*.
 
@@ -1833,6 +1941,10 @@ async def clone_repo(
     target = (target_dir or "").strip()
     if not url or url.startswith("-"):
         return {"ok": False, "path": "", "error": "invalid repository URL"}
+    if _GIT_REMOTE_HELPER_RE.match(url):
+        # Block ext::/fd:: remote-helper URLs that can run arbitrary commands,
+        # while still permitting http(s)/ssh/git@ URLs and local paths.
+        return {"ok": False, "path": "", "error": "unsupported repository URL scheme"}
     if not target:
         return {"ok": False, "path": "", "error": "target directory is required"}
     dest = Path(target)
@@ -1893,6 +2005,7 @@ def _append_ignore_pattern(file_path: Path, pattern: str) -> bool:
     return True
 
 
+@_serialize_write
 async def add_to_gitignore(
     workspace_path: str,
     pattern: str,
@@ -1955,11 +2068,12 @@ async def add_to_gitignore(
             if tracked:
                 # -f: tracked files whose staged content differs from disk/HEAD
                 # otherwise make `git rm --cached` refuse.
-                await _run(
+                rm_rc, _, _ = await _run(
                     ["git", "rm", "--cached", "-r", "-f", "--quiet", "--", path],
                     workspace_path,
                 )
-                untracked = tracked
+                if rm_rc == 0:
+                    untracked = tracked
 
     return {"ok": True, "target_file": str(dest), "written": written, "untracked": untracked}
 

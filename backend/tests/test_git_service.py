@@ -804,6 +804,24 @@ class TestInputValidation:
         err = git_service._validate_ref_name("feature/my-branch", "branch")
         assert err is None
 
+    def test_non_ascii_ref_name_accepted(self):
+        # git allows non-ASCII refs; the app must too (regression: Chinese
+        # branch names like "AI修改" were wrongly rejected by an ASCII allowlist).
+        assert git_service._validate_ref_name("AI修改", "branch") is None
+        assert git_service._validate_ref_name("功能/新版", "branch") is None
+        assert git_service._validate_branch_name("AI修改") is None
+
+    def test_ref_and_branch_validators_agree_on_non_ascii(self):
+        # The create path (_validate_branch_name) and the operate path
+        # (_validate_ref_name) must not disagree — that split was the root bug.
+        name = "origin/小切口已完整的版本"
+        assert git_service._validate_ref_name(name, "branch") is None
+        assert git_service._validate_branch_name(name) is None
+
+    def test_ref_name_still_rejects_dangerous_chars(self):
+        for bad in ("-flag", "a..b", "with space", "ref~1", "a^b", "c:d", "e?f", "g*h", "i[j", "k\\l", "trailing/"):
+            assert git_service._validate_ref_name(bad, "branch") is not None
+
 
 # ── clean_untracked ───────────────────────────────────────────────────────────
 
@@ -929,6 +947,31 @@ class TestRebaseOn:
         init_repo(tmp_path)
         result = await git_service.rebase_on(str(tmp_path), "--abort")
         assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_rebase_conflict_left_in_progress(self, tmp_path):
+        # A conflicting rebase must NOT auto-abort: it stays in progress with
+        # conflict_files so the UI can resolve or abort it.
+        init_repo(tmp_path)
+        orig = (await git_service.get_status(str(tmp_path)))["branch"]
+        (tmp_path / "f.txt").write_text("base\n")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True, capture_output=True)
+        await git_service.create_branch(str(tmp_path), "base", switch_to=True)
+        (tmp_path / "f.txt").write_text("from-base\n")
+        subprocess.run(["git", "commit", "-am", "base edit"], cwd=tmp_path, check=True, capture_output=True)
+        await git_service.switch_branch(str(tmp_path), orig)
+        (tmp_path / "f.txt").write_text("from-main\n")
+        subprocess.run(["git", "commit", "-am", "main edit"], cwd=tmp_path, check=True, capture_output=True)
+
+        result = await git_service.rebase_on(str(tmp_path), "base")
+        assert result["ok"] is False
+        assert result["conflict_files"]  # conflicts reported
+        # Rebase left in progress (NOT auto-aborted) so the UI can act on it.
+        status = await git_service.get_status(str(tmp_path))
+        assert status["operation_in_progress"] == "rebase"
+        # Clean up so tmp fixtures don't leave a dangling rebase.
+        await git_service.abort_operation(str(tmp_path), "rebase")
 
 
 # ── restore_file_from_branch ──────────────────────────────────────────────────
@@ -1234,6 +1277,36 @@ class TestCloneRepo:
     async def test_rejects_flag_url(self, tmp_path):
         r = await git_service.clone_repo("--upload-pack=evil", str(tmp_path / "x"))
         assert r["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_rejects_ext_remote_helper_url(self, tmp_path):
+        # ext:: remote-helper URLs can execute arbitrary commands — must be blocked.
+        r = await git_service.clone_repo('ext::sh -c "touch /tmp/pwned"', str(tmp_path / "x"))
+        assert r["ok"] is False
+        assert "scheme" in r["error"]
+
+    @pytest.mark.asyncio
+    async def test_rejects_fd_remote_helper_url(self, tmp_path):
+        r = await git_service.clone_repo("fd::7", str(tmp_path / "x"))
+        assert r["ok"] is False
+
+
+class TestBlamePorcelainSha256:
+    def test_parses_sha256_object_names(self):
+        # SHA-256 repos emit 64-hex object names; the parser must accept them
+        # (regression: a 40-hex-only regex returned an empty blame silently).
+        h = "a" * 64
+        out = f"{h} 1 1 1\nauthor Alice\nauthor-time 1700000000\n\tcode\n"
+        result = git_service._parse_blame_porcelain(out)
+        assert 1 in result
+        assert result[1]["author"] == "Alice"
+        assert result[1]["committed"] is True
+
+    def test_marks_all_zero_sha256_uncommitted(self):
+        h = "0" * 64
+        out = f"{h} 1 1 1\nauthor Not Committed Yet\nauthor-time 1700000000\n\twip\n"
+        result = git_service._parse_blame_porcelain(out)
+        assert result[1]["committed"] is False
 
     @pytest.mark.asyncio
     async def test_rejects_nonempty_target(self, tmp_path):
