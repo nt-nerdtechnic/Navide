@@ -1566,25 +1566,25 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div v-if="showViewMenu" class="tp-dropdown" :style="{ top: viewMenuPos.top + 'px', right: viewMenuPos.right + 'px' }" @click.stop>
             <div class="menu-group-label">{{ $t('label.view') }}</div>
             <button class="menu-item" @click="viewMode = 'list'; showViewMenu = false">
-              <span class="menu-check">{{ viewMode === 'list' ? '✓' : '' }}</span> View as List
+              <span class="menu-check">{{ viewMode === 'list' ? '✓' : '' }}</span> {{ $t('action.view-as-list') }}
             </button>
             <button class="menu-item" @click="viewMode = 'tree'; showViewMenu = false">
-              <span class="menu-check">{{ viewMode === 'tree' ? '✓' : '' }}</span> View as Tree
+              <span class="menu-check">{{ viewMode === 'tree' ? '✓' : '' }}</span> {{ $t('action.view-as-tree') }}
             </button>
             <div class="menu-sep" />
             <div class="menu-group-label">{{ $t('label.sort-by') }}</div>
             <button class="menu-item" @click="sortBy = 'name'; showViewMenu = false">
-              <span class="menu-check">{{ sortBy === 'name' ? '✓' : '' }}</span> Name
+              <span class="menu-check">{{ sortBy === 'name' ? '✓' : '' }}</span> {{ $t('label.name') }}
             </button>
             <button class="menu-item" @click="sortBy = 'path'; showViewMenu = false">
-              <span class="menu-check">{{ sortBy === 'path' ? '✓' : '' }}</span> Path
+              <span class="menu-check">{{ sortBy === 'path' ? '✓' : '' }}</span> {{ $t('label.path') }}
             </button>
             <button class="menu-item" @click="sortBy = 'status'; showViewMenu = false">
-              <span class="menu-check">{{ sortBy === 'status' ? '✓' : '' }}</span> Status
+              <span class="menu-check">{{ sortBy === 'status' ? '✓' : '' }}</span> {{ $t('label.status') }}
             </button>
             <div class="menu-sep" />
             <button class="menu-item" @click="showIgnored = !showIgnored; showViewMenu = false">
-              <span class="menu-check">{{ showIgnored ? '✓' : '' }}</span> Show Ignored Files
+              <span class="menu-check">{{ showIgnored ? '✓' : '' }}</span> {{ $t('action.show-ignored-files') }}
             </button>
           </div>
         </Teleport>
@@ -1593,16 +1593,16 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
       <!-- All-conflicts-resolved banner -->
       <div v-if="allConflictsResolved" class="op-banner op-banner-ready">
-        <span class="op-text">✓ All conflicts resolved — ready to commit merge</span>
+        <span class="op-text">✓ {{ $t('label.conflicts-resolved') }}</span>
         <button class="op-commit-btn" @click="$el.closest('.git-pane')?.querySelector('textarea')?.focus()">{{ $t('action.go-to-commit') }}</button>
       </div>
       <!-- In-progress operation banner (merge / rebase / cherry-pick) -->
       <div v-else-if="opInProgress" class="op-banner" :class="{ 'op-banner-conflict': (opInProgress === 'merge' || opInProgress === 'rebase') && conflictFileCount > 0 }">
         <span class="op-text">
-          ⚠ {{ opInProgress }} in progress
-          <template v-if="(opInProgress === 'merge' || opInProgress === 'rebase') && conflictFileCount > 0">・{{ conflictFileCount }} conflict file(s)</template>
+          ⚠ {{ $t('label.op-in-progress', { op: opInProgress }) }}
+          <template v-if="(opInProgress === 'merge' || opInProgress === 'rebase') && conflictFileCount > 0">・{{ $t('label.conflict-files', { count: conflictFileCount }) }}</template>
         </span>
-        <button class="op-abort-btn" @click="doAbort">Abort {{ opInProgress }}</button>
+        <button class="op-abort-btn" @click="doAbort">{{ $t('action.abort-op', { op: opInProgress }) }}</button>
       </div>
 
       <!-- ── PART 1 scroll region ──────────────────────────────── -->
@@ -1615,14 +1615,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             ref="commitInputEl"
             v-model="commitMessage"
             class="commit-input"
-            :placeholder="amendMode ? 'Amend message…' : 'Message (⌘↩ to commit)'"
+            :placeholder="amendMode ? $t('label.amend-message-placeholder') : $t('label.commit-message-placeholder')"
             rows="1"
             @input="onCommitInput"
             @keydown.meta.enter.prevent="canCommit && doCommit()"
             @keydown.ctrl.enter.prevent="canCommit && doCommit()"
             @click.stop
           />
-          <button class="ai-btn" :class="{ generating: isGenerating, 'auto-active': autoCommit }" :disabled="isGenerating || !hasChanges" :title="autoCommit ? 'Auto Commit enabled' : 'AI commit message'" @click.stop="doGenerate">
+          <button class="ai-btn" :class="{ generating: isGenerating, 'auto-active': autoCommit }" :disabled="isGenerating || !hasChanges" :title="autoCommit ? $t('action.auto-commit-enabled') : $t('action.ai-commit-message')" @click.stop="doGenerate">
             <span v-if="isGenerating" class="spinner">⟳</span><span v-else>✦</span>
           </button>
         </div>
@@ -1641,21 +1641,21 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <Teleport to="body">
             <div v-if="showCommitMenu" class="tp-backdrop" @click="showCommitMenu = false" />
             <div v-if="showCommitMenu" class="tp-dropdown" :style="{ top: showCommitMenuPos.top + 'px', right: showCommitMenuPos.right + 'px' }" @click.stop>
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit()">✓ Commit</button>
-              <button class="menu-item" :disabled="!gitLog.length" @click="runCommit({ amend: true })">✎ Commit (Amend)</button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit()">✓ {{ $t('action.commit') }}</button>
+              <button class="menu-item" :disabled="!gitLog.length" @click="runCommit({ amend: true })">✎ {{ $t('action.amend-commit') }}</button>
               <div class="menu-sep" />
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'push' })">↑ Commit &amp; Push</button>
-              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'sync' })">⇅ Commit &amp; Sync</button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'push' })">↑ {{ $t('action.commit-and-push') }}</button>
+              <button class="menu-item" :disabled="!canCommit" @click="runCommit({ then: 'sync' })">⇅ {{ $t('action.commit-and-sync') }}</button>
               <div class="menu-sep" />
               <button class="menu-item" :disabled="!gitLog.length" @click="doUndo(); showCommitMenu = false">
-                ↺ Undo Last Commit
+                ↺ {{ $t('action.undo-last-commit') }}
               </button>
               <div class="menu-sep" />
               <button class="menu-item auto-commit-btn" :class="{ 'on': autoCommit }" @click="autoCommit = !autoCommit; showCommitMenu = false">
-                ✦ Auto Commit
+                ✦ {{ $t('action.auto-commit') }}
                 <span class="spacer" />
-                <span class="ac-badge">{{ autoCommit ? 'ON' : 'OFF' }}</span>
-                <span v-if="autoCommitPending" class="auto-pending-dot" title="Scheduled — auto-commit in 60 seconds" />
+                <span class="ac-badge">{{ autoCommit ? $t('label.on') : $t('label.off') }}</span>
+                <span v-if="autoCommitPending" class="auto-pending-dot" :title="$t('label.auto-commit-scheduled')" />
               </button>
             </div>
           </Teleport>
@@ -1670,7 +1670,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <template v-else-if="autoCommitStep === 'checking'">{{ $t('label.running-lint') }}</template>
             <template v-else-if="autoCommitStep === 'generating'">{{ $t('label.generating-message') }}</template>
             <template v-else-if="autoCommitStep === 'committing'">{{ $t('label.committing') }}</template>
-            <template v-else>Auto Commit waiting — triggers in {{ autoCommitCountdown }}s</template>
+            <template v-else>{{ $t('label.auto-commit-waiting', { count: autoCommitCountdown }) }}</template>
           </span>
         </div>
       </div>
@@ -1821,7 +1821,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 
       <!-- Merge conflict modal -->
       <div v-if="showMergeConflictModal" class="merge-conflict-box">
-        <div class="clean-title">Merge conflict ({{ mergeConflictFiles.length }} file(s))</div>
+        <div class="clean-title">{{ $t('label.merge-conflict-files', { count: mergeConflictFiles.length }) }}</div>
         <div v-if="mergeConflictContext" class="merge-conflict-context">{{ mergeConflictContext }}</div>
         <div v-for="f in mergeConflictFiles" :key="f" class="clean-file conflict-file">{{ f }}</div>
         <div class="merge-conflict-actions">
@@ -1838,13 +1838,13 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             v-model="stashMessage"
             class="git-input"
             type="text"
-            placeholder="Name this draft… (optional)"
+            :placeholder="$t('label.name-draft-placeholder')"
             @keydown.enter="doStash"
             @keydown.esc="showStashPrompt = false"
           />
         </div>
         <div class="clean-actions">
-          <button class="btn-ghost" @click="showStashPrompt = false">Cancel</button>
+          <button class="btn-ghost" @click="showStashPrompt = false">{{ $t('action.cancel') }}</button>
           <button class="btn-primary" @click="doStash">{{ $t('action.save-draft') }}</button>
         </div>
         <p v-if="stashError" class="err-text">{{ stashError }}</p>
@@ -2013,33 +2013,33 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span class="account-pill-label">{{ boundAccount ? boundAccount.label : $t('git.account.unbound') }}</span>
         </button>
         <button v-if="gitStatus.branch && !gitStatus.remote_branch" class="remote-btn publish-btn" :class="{ busy: remoteBusy === 'publish' }" :title="$t('action.publish-branch')" :disabled="!!remoteBusy" @click="doPushUpstream">
-          <span v-if="remoteBusy === 'publish'" class="spinner">⟳</span><template v-else>↑ Publish</template>
+          <span v-if="remoteBusy === 'publish'" class="spinner">⟳</span><template v-else>↑ {{ $t('action.publish') }}</template>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'fetch' }" title="Fetch" :disabled="!!remoteBusy" @click="doFetch">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'fetch' }" :title="$t('action.fetch')" :disabled="!!remoteBusy" @click="doFetch">
           <span v-if="remoteBusy === 'fetch'" class="spinner">⟳</span>
           <svg v-else width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
         </button>
         <button class="remote-btn" :class="{ busy: remoteBusy === 'pull' }" :title="$t('action.pull')" :disabled="!!remoteBusy" @click="doPull">
           <span v-if="remoteBusy === 'pull'" class="spinner">⟳</span><template v-else>↓</template>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" title="Push" :disabled="!!remoteBusy" @click="doPush(trackedRemote())">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'push' }" :title="$t('action.push')" :disabled="!!remoteBusy" @click="doPush(trackedRemote())">
           <span v-if="remoteBusy === 'push'" class="spinner">⟳</span><template v-else>↑<span v-if="gitStatus.ahead" class="ahead-num">{{ gitStatus.ahead }}</span></template>
         </button>
-        <button class="remote-btn" :class="{ busy: remoteBusy === 'sync' }" title="Sync (pull --rebase + push)" :disabled="!!remoteBusy" @click="doSync">
+        <button class="remote-btn" :class="{ busy: remoteBusy === 'sync' }" :title="$t('action.sync-title')" :disabled="!!remoteBusy" @click="doSync">
           <span v-if="remoteBusy === 'sync'" class="spinner">⟳</span><template v-else>⇅</template>
         </button>
-        <button class="remote-btn" title="More pull/push options" :disabled="!!remoteBusy" @click.stop="openRemoteMenu($event)">▾</button>
+        <button class="remote-btn" :title="$t('action.more-pull-push')" :disabled="!!remoteBusy" @click.stop="openRemoteMenu($event)">▾</button>
         <Teleport to="body">
           <div v-if="showRemoteMenu" class="tp-backdrop" @click="showRemoteMenu = false" />
           <div v-if="showRemoteMenu" class="tp-dropdown" :style="{ top: remoteMenuPos.top + 'px', right: remoteMenuPos.right + 'px' }" @click.stop>
-            <button class="menu-item" @click="doPull(); showRemoteMenu = false">↓ Pull</button>
-            <button class="menu-item" @click="doPullRebase">↓ Pull (Rebase)</button>
+            <button class="menu-item" @click="doPull(); showRemoteMenu = false">↓ {{ $t('action.pull') }}</button>
+            <button class="menu-item" @click="doPullRebase">↓ {{ $t('action.pull-rebase') }}</button>
             <div class="menu-sep" />
-            <button class="menu-item" @click="doPush(trackedRemote()); showRemoteMenu = false">↑ Push</button>
-            <button class="menu-item danger" @click="doPushForce(trackedRemote())">↑ Push (Force with lease)</button>
+            <button class="menu-item" @click="doPush(trackedRemote()); showRemoteMenu = false">↑ {{ $t('action.push') }}</button>
+            <button class="menu-item danger" @click="doPushForce(trackedRemote())">↑ {{ $t('action.push-force-lease') }}</button>
             <template v-if="gitRemotes.length > 1">
               <div class="menu-sep" />
-              <div class="menu-group-label">Push to remote</div>
+              <div class="menu-group-label">{{ $t('label.push-to-remote') }}</div>
               <button
                 v-for="r in gitRemotes"
                 :key="r.name"
@@ -2081,9 +2081,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <!-- Branch panel -->
       <div v-if="branchExpanded" class="collapsible-body">
         <div class="input-row">
-          <input v-model="newBranchName" class="git-input" placeholder="New branch name…" @keydown.enter="doCreateBranch" />
+          <input v-model="newBranchName" class="git-input" :placeholder="$t('label.new-branch-placeholder')" @keydown.enter="doCreateBranch" />
           <button class="btn-ghost sm" :disabled="branchCreating || !newBranchName.trim() || /\s|\.\./.test(newBranchName.trim()) || newBranchName.trim().startsWith('-')" @click="doCreateBranch">＋</button>
-          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? 'Hide remote branches' : 'Show remote branches'" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
+          <button class="btn-ghost sm" :class="{ active: showRemoteBranches }" :title="showRemoteBranches ? $t('action.hide-remote-branches') : $t('action.show-remote-branches')" @click="showRemoteBranches = !showRemoteBranches">⇅</button>
         </div>
         <p v-if="branchError || mergeError || rebaseError" class="err-text">{{ branchError || mergeError || rebaseError }}</p>
         <p v-if="mergeOutput || rebaseOutput" class="ok-text">{{ mergeOutput || rebaseOutput }}</p>
@@ -2094,16 +2094,16 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span v-if="b.tracking" class="b-track">→ {{ b.tracking }}</span>
           <div class="spacer" />
           <template v-if="!b.is_current">
-            <button class="row-btn always" title="Compare" @click.stop="doCompareBranch(b.name)">⇔</button>
-            <button class="row-btn always" title="Rebase onto" :disabled="branchBusy" @click.stop="doRebase(b.name)">⇡</button>
-            <button class="row-btn always" title="Merge into current" :disabled="branchBusy" @click.stop="doMerge(b.name)">⇣</button>
-            <button class="row-btn always" title="Switch" :disabled="branchBusy" @click.stop="doSwitch(b.name)">↵</button>
+            <button class="row-btn always" :title="$t('action.compare')" @click.stop="doCompareBranch(b.name)">⇔</button>
+            <button class="row-btn always" :title="$t('action.rebase-onto')" :disabled="branchBusy" @click.stop="doRebase(b.name)">⇡</button>
+            <button class="row-btn always" :title="$t('action.merge-into-current')" :disabled="branchBusy" @click.stop="doMerge(b.name)">⇣</button>
+            <button class="row-btn always" :title="$t('action.switch')" :disabled="branchBusy" @click.stop="doSwitch(b.name)">↵</button>
           </template>
         </div>
         <!-- remote branches (toggleable) -->
         <template v-if="showRemoteBranches">
-          <div class="branch-section-label">Remote branches</div>
-          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">No remote branches</div>
+          <div class="branch-section-label">{{ $t('label.remote-branches') }}</div>
+          <div v-if="!gitBranches.some(x => x.is_remote)" class="empty-msg">{{ $t('label.no-remote-branches') }}</div>
           <div
             v-for="b in gitBranches.filter(x => x.is_remote)"
             :key="b.name"
@@ -2113,7 +2113,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <span class="b-check">{{ b.has_local ? '✓' : '' }}</span>
             <span class="b-name remote">{{ b.name }}</span>
             <div class="spacer" />
-            <button v-if="!b.has_local" class="row-btn always" title="Checkout locally" @click.stop="doCheckoutRemote(b.name)">⬇</button>
+            <button v-if="!b.has_local" class="row-btn always" :title="$t('action.checkout-locally')" @click.stop="doCheckoutRemote(b.name)">⬇</button>
           </div>
         </template>
         <div v-if="comparingBranch && compareResult" class="compare-panel">
@@ -2130,19 +2130,19 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="historyExpanded = !historyExpanded">
           <span class="sec-caret">{{ historyExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">History</span>
+          <span class="sec-label">{{ $t('label.history') }}</span>
           <div class="spacer" />
         </div>
         <div v-if="historyExpanded" class="card-body">
         <div class="history-search-row">
           <svg width="11" height="11" viewBox="0 0 16 16" fill="var(--text-muted)" style="flex-shrink:0"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
-          <input v-model="historySearch" class="search-input" placeholder="Search commits…" @click.stop />
+          <input v-model="historySearch" class="search-input" :placeholder="$t('label.search-commits')" @click.stop />
         </div>
         <div class="history-scope-row" @click.stop>
-          <button class="scope-btn" :class="{ active: logScope === 'all' }" :disabled="isLoadingLog" @click="setLogScope('all')">All branches</button>
-          <button class="scope-btn" :class="{ active: logScope === 'current' }" :disabled="isLoadingLog" @click="setLogScope('current')">Current</button>
+          <button class="scope-btn" :class="{ active: logScope === 'all' }" :disabled="isLoadingLog" @click="setLogScope('all')">{{ $t('label.all-branches') }}</button>
+          <button class="scope-btn" :class="{ active: logScope === 'current' }" :disabled="isLoadingLog" @click="setLogScope('current')">{{ $t('label.current') }}</button>
         </div>
-        <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? 'No matches' : 'No commits yet' }}</div>
+        <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? $t('label.no-matches') : $t('label.no-commits-yet') }}</div>
         <div v-else class="commit-list">
           <div v-for="{ c, gi } in pagedLog" :key="c.hash">
             <div class="commit-row" @click="toggleCommitDetail(c.hash)" @contextmenu.prevent="openCommitCtxMenu($event, c.hash)">
@@ -2222,7 +2222,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="stashExpanded = !stashExpanded">
           <span class="sec-caret">{{ stashExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Draft</span>
+          <span class="sec-label">{{ $t('label.draft') }}</span>
           <span v-if="gitStashes.length" class="sec-badge">{{ gitStashes.length }}</span>
           <div class="spacer" />
         </div>
@@ -2245,7 +2245,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="remoteExpanded = !remoteExpanded">
           <span class="sec-caret">{{ remoteExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Remotes</span>
+          <span class="sec-label">{{ $t('label.remotes') }}</span>
           <span v-if="gitRemotes.length" class="sec-badge">{{ gitRemotes.length }}</span>
           <div class="spacer" />
         </div>
@@ -2269,7 +2269,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="tagExpanded = !tagExpanded">
           <span class="sec-caret">{{ tagExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Tags</span>
+          <span class="sec-label">{{ $t('label.tags') }}</span>
           <span v-if="gitTags.length" class="sec-badge">{{ gitTags.length }}</span>
           <div class="spacer" />
         </div>
@@ -2295,7 +2295,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="worktreeExpanded = !worktreeExpanded">
           <span class="sec-caret">{{ worktreeExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Worktrees</span>
+          <span class="sec-label">{{ $t('label.worktrees') }}</span>
           <span v-if="gitWorktrees.length > 1" class="sec-badge">{{ gitWorktrees.length }}</span>
           <div class="spacer" />
         </div>
@@ -2333,7 +2333,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="configExpanded = !configExpanded">
           <span class="sec-caret">{{ configExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Config</span>
+          <span class="sec-label">{{ $t('label.config') }}</span>
           <div class="spacer" />
         </div>
         <div v-if="configExpanded" class="card-body collapsible-body">
@@ -2369,7 +2369,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div class="git-card">
         <div class="card-hdr clickable" @click="toggleIssuesCard">
           <span class="sec-caret">{{ issuesExpanded ? '▾' : '▸' }}</span>
-          <span class="sec-label">Issues</span>
+          <span class="sec-label">{{ $t('label.issues') }}</span>
           <span v-if="issuesExpanded && issueProviderLabel()" class="sec-badge">{{ issueProviderLabel() }}</span>
           <span v-if="issuesExpanded && openIssueCount" class="sec-badge">{{ openIssueCount }} open</span>
           <div class="spacer" />
@@ -2485,7 +2485,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
     <Teleport to="body">
       <div v-if="stagedSectionMenu.show" class="tp-backdrop" @click="closeStagedSectionMenu" @contextmenu.prevent="closeStagedSectionMenu" />
       <div v-if="stagedSectionMenu.show" class="ctx-menu" :style="{ top: stagedSectionMenu.y + 'px', left: stagedSectionMenu.x + 'px' }" @click.stop>
-        <button v-if="hasStaged" class="menu-item" @click="doUnstageAll(); closeStagedSectionMenu()">Unstage All</button>
+        <button v-if="hasStaged" class="menu-item" @click="doUnstageAll(); closeStagedSectionMenu()">{{ $t('action.unstage-all') }}</button>
       </div>
     </Teleport>
 
@@ -2493,10 +2493,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
     <Teleport to="body">
       <div v-if="changesSectionMenu.show" class="tp-backdrop" @click="closeChangesSectionMenu" @contextmenu.prevent="closeChangesSectionMenu" />
       <div v-if="changesSectionMenu.show" class="ctx-menu" :style="{ top: changesSectionMenu.y + 'px', left: changesSectionMenu.x + 'px' }" @click.stop>
-        <button class="menu-item" @click="openStashPrompt(); closeChangesSectionMenu()">Save Draft</button>
+        <button class="menu-item" @click="openStashPrompt(); closeChangesSectionMenu()">{{ $t('action.save-draft') }}</button>
         <div class="menu-sep" />
-        <button v-if="hasChanges" class="menu-item" @click="stageAll(); closeChangesSectionMenu()">Stage All</button>
-        <button v-if="hasChanges" class="menu-item danger" @click="openDiscardAll(); closeChangesSectionMenu()">Discard All</button>
+        <button v-if="hasChanges" class="menu-item" @click="stageAll(); closeChangesSectionMenu()">{{ $t('action.stage-all') }}</button>
+        <button v-if="hasChanges" class="menu-item danger" @click="openDiscardAll(); closeChangesSectionMenu()">{{ $t('action.discard-all') }}</button>
       </div>
     </Teleport>
 
@@ -2505,29 +2505,29 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ctxMenu.show" class="tp-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
       <!-- Multi-select menu -->
       <div v-if="ctxMenu.show && selectedKeys.size > 1" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">Stage {{ selectedChangesPaths.length }} file(s)</button>
-        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">Unstage {{ selectedStagedPaths.length }} file(s)</button>
-        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">Discard {{ selectedChangesPaths.length }} file(s)</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item" @click="stageSelected(); closeCtxMenu()">{{ $t('action.stage-files', { count: selectedChangesPaths.length }) }}</button>
+        <button v-if="selectedStagedPaths.length > 0" class="menu-item" @click="unstageSelected(); closeCtxMenu()">{{ $t('action.unstage-files', { count: selectedStagedPaths.length }) }}</button>
+        <button v-if="selectedChangesPaths.length > 0" class="menu-item danger" @click="discardSelected(); closeCtxMenu()">{{ $t('action.discard-files', { count: selectedChangesPaths.length }) }}</button>
       </div>
       <!-- File menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'file'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button class="menu-item" @click="ctxOpenChanges">Open Changes</button>
-        <button class="menu-item" @click="ctxOpenInEditor">Open in Editor</button>
-        <button class="menu-item" @click="ctxOpenFile">Open File</button>
-        <button class="menu-item" @click="ctxOpenFileAtHead">Open File (HEAD)</button>
-        <button class="menu-item" @click="ctxStashFile">Save File as Draft</button>
+        <button class="menu-item" @click="ctxOpenChanges">{{ $t('action.open-changes') }}</button>
+        <button class="menu-item" @click="ctxOpenInEditor">{{ $t('action.open-in-editor') }}</button>
+        <button class="menu-item" @click="ctxOpenFile">{{ $t('action.open-file-plain') }}</button>
+        <button class="menu-item" @click="ctxOpenFileAtHead">{{ $t('action.open-file-head') }}</button>
+        <button class="menu-item" @click="ctxStashFile">{{ $t('action.save-file-as-draft') }}</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="ctxStageToggle">{{ ctxMenu.staged ? 'Unstage Changes' : 'Stage Changes' }}</button>
-        <button v-if="!ctxMenu.staged" class="menu-item danger" @click="ctxDiscard">Discard Changes</button>
+        <button class="menu-item" @click="ctxStageToggle">{{ ctxMenu.staged ? $t('action.unstage-changes') : $t('action.stage-changes') }}</button>
+        <button v-if="!ctxMenu.staged" class="menu-item danger" @click="ctxDiscard">{{ $t('action.discard-changes') }}</button>
         <div v-if="gitBranches.some(x=>!x.is_current)" class="menu-item has-sub danger">
-          <span>Restore from branch</span><span class="sub-caret">▸</span>
+          <span>{{ $t('action.restore-from-branch') }}</span><span class="sub-caret">▸</span>
           <div class="ctx-submenu">
             <button v-for="b in gitBranches.filter(x=>!x.is_current)" :key="b.name" class="menu-item" @click="ctxRestoreFromBranch(b.name)">{{ b.name }}</button>
           </div>
         </div>
         <div class="menu-sep" />
         <div class="menu-item has-sub">
-          <span>Add to ignore</span><span class="sub-caret">▸</span>
+          <span>{{ $t('action.add-to-ignore') }}</span><span class="sub-caret">▸</span>
           <div class="ctx-submenu">
             <button class="menu-item" @click="ctxAddToGitignore('project')">.gitignore (project root)</button>
             <button class="menu-item" @click="ctxAddToGitignore('nested')">.gitignore (current folder)</button>
@@ -2535,22 +2535,22 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             <button class="menu-item" @click="ctxAddToGitignore('global')">Global .gitignore</button>
           </div>
         </div>
-        <button v-if="ctxIsIgnored" class="menu-item" @click="ctxWhyIgnored">Why is this ignored?</button>
+        <button v-if="ctxIsIgnored" class="menu-item" @click="ctxWhyIgnored">{{ $t('action.why-ignored') }}</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="ctxReveal">Reveal in Finder</button>
-        <button class="menu-item" @click="ctxCopyPath(false)">Copy Path</button>
-        <button class="menu-item" @click="ctxCopyPath(true)">Copy Relative Path</button>
+        <button class="menu-item" @click="ctxReveal">{{ $t('action.reveal-in-finder') }}</button>
+        <button class="menu-item" @click="ctxCopyPath(false)">{{ $t('action.copy-path') }}</button>
+        <button class="menu-item" @click="ctxCopyPath(true)">{{ $t('action.copy-relative-path') }}</button>
       </div>
 
       <!-- Folder menu (applies to all changed files under the folder) -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'folder'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button v-if="ctxMenu.staged" class="menu-item" @click="ctxFolderUnstage">Unstage Changes</button>
+        <button v-if="ctxMenu.staged" class="menu-item" @click="ctxFolderUnstage">{{ $t('action.unstage-changes') }}</button>
         <template v-else>
-          <button class="menu-item" @click="ctxFolderStage">Stage Changes</button>
-          <button class="menu-item danger" @click="ctxFolderDiscard">Discard Changes</button>
+          <button class="menu-item" @click="ctxFolderStage">{{ $t('action.stage-changes') }}</button>
+          <button class="menu-item danger" @click="ctxFolderDiscard">{{ $t('action.discard-changes') }}</button>
           <div class="menu-sep" />
           <div class="menu-item has-sub">
-            <span>Add to ignore</span><span class="sub-caret">▸</span>
+            <span>{{ $t('action.add-to-ignore') }}</span><span class="sub-caret">▸</span>
             <div class="ctx-submenu">
               <button class="menu-item" @click="ctxFolderAddIgnore('project')">.gitignore (project root)</button>
               <button class="menu-item" @click="ctxFolderAddIgnore('nested')">.gitignore (current folder)</button>
@@ -2560,31 +2560,31 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           </div>
         </template>
         <div class="menu-sep" />
-        <button class="menu-item" @click="ctxFolderReveal">Reveal in Finder</button>
-        <button class="menu-item" @click="ctxFolderCopyPath(false)">Copy Path</button>
-        <button class="menu-item" @click="ctxFolderCopyPath(true)">Copy Relative Path</button>
+        <button class="menu-item" @click="ctxFolderReveal">{{ $t('action.reveal-in-finder') }}</button>
+        <button class="menu-item" @click="ctxFolderCopyPath(false)">{{ $t('action.copy-path') }}</button>
+        <button class="menu-item" @click="ctxFolderCopyPath(true)">{{ $t('action.copy-relative-path') }}</button>
       </div>
 
       <!-- Branch menu -->
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'branch'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button class="menu-item" @click="doMergeInto(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }}</button>
-        <button class="menu-item" @click="doMergeIntoAndPush(ctxMenu.branch)">Merge current branch into {{ ctxMenu.branch }} &amp; push</button>
+        <button class="menu-item" @click="doMergeInto(ctxMenu.branch)">{{ $t('action.merge-current-into', { branch: ctxMenu.branch }) }}</button>
+        <button class="menu-item" @click="doMergeIntoAndPush(ctxMenu.branch)">{{ $t('action.merge-current-into-push', { branch: ctxMenu.branch }) }}</button>
         <div class="menu-sep" />
-        <button class="menu-item danger" @click="ctxDeleteBranch">Delete Branch</button>
+        <button class="menu-item danger" @click="ctxDeleteBranch">{{ $t('action.delete-branch') }}</button>
       </div>
 
       <div v-else-if="ctxMenu.show && ctxMenu.kind === 'commit'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button class="menu-item" @click="doOpenChanges(ctxMenu.hash); closeCtxMenu()">⇄ Open Changes</button>
+        <button class="menu-item" @click="doOpenChanges(ctxMenu.hash); closeCtxMenu()">⇄ {{ $t('action.open-changes') }}</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="doCheckoutCommit(ctxMenu.hash); closeCtxMenu()">⎇ Checkout (Detached)</button>
-        <button class="menu-item" @click="startCreateBranchFromCommit(ctxMenu.hash)">＋ Create Branch…</button>
-        <button class="menu-item" @click="startCreateTagFromCommit(ctxMenu.hash)">🏷 Create Tag…</button>
+        <button class="menu-item" @click="doCheckoutCommit(ctxMenu.hash); closeCtxMenu()">⎇ {{ $t('action.checkout-detached') }}</button>
+        <button class="menu-item" @click="startCreateBranchFromCommit(ctxMenu.hash)">＋ {{ $t('action.create-branch') }}</button>
+        <button class="menu-item" @click="startCreateTagFromCommit(ctxMenu.hash)">🏷 {{ $t('action.create-tag') }}</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="doCherryPick(ctxMenu.hash); closeCtxMenu()">🍒 Cherry-pick</button>
-        <button class="menu-item" @click="doRevert(ctxMenu.hash); closeCtxMenu()">↺ Revert</button>
+        <button class="menu-item" @click="doCherryPick(ctxMenu.hash); closeCtxMenu()">🍒 {{ $t('action.cherry-pick') }}</button>
+        <button class="menu-item" @click="doRevert(ctxMenu.hash); closeCtxMenu()">↺ {{ $t('action.revert') }}</button>
         <div class="menu-sep" />
-        <button class="menu-item" @click="copyCommitId(ctxMenu.hash); closeCtxMenu()">⧉ Copy Commit ID</button>
-        <button class="menu-item" @click="copyCommitMessage(ctxMenu.hash); closeCtxMenu()">⧉ Copy Commit Message</button>
+        <button class="menu-item" @click="copyCommitId(ctxMenu.hash); closeCtxMenu()">⧉ {{ $t('action.copy-commit-id') }}</button>
+        <button class="menu-item" @click="copyCommitMessage(ctxMenu.hash); closeCtxMenu()">⧉ {{ $t('action.copy-commit-message') }}</button>
       </div>
     </Teleport>
 
@@ -2593,14 +2593,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="commitRefModal" class="tp-backdrop" @click="commitRefModal = null" />
       <div v-if="commitRefModal" class="ignore-modal" @click.stop>
         <div class="ignore-modal-path">
-          {{ commitRefModal.kind === 'branch' ? 'Create branch from' : 'Create tag at' }} {{ commitRefModal.hash.slice(0, 7) }}
+          {{ commitRefModal.kind === 'branch' ? $t('label.create-branch-from') : $t('label.create-tag-at') }} {{ commitRefModal.hash.slice(0, 7) }}
         </div>
-        <input v-model="commitRefModal.name" class="git-input" :placeholder="commitRefModal.kind === 'branch' ? 'branch name…' : 'v1.0.0'" @keydown.enter="submitCommitRef" />
-        <input v-if="commitRefModal.kind === 'tag'" v-model="commitRefModal.message" class="git-input" placeholder="Message (optional)" @keydown.enter="submitCommitRef" />
+        <input v-model="commitRefModal.name" class="git-input" :placeholder="commitRefModal.kind === 'branch' ? $t('label.branch-name-placeholder') : 'v1.0.0'" @keydown.enter="submitCommitRef" />
+        <input v-if="commitRefModal.kind === 'tag'" v-model="commitRefModal.message" class="git-input" :placeholder="$t('label.message-optional')" @keydown.enter="submitCommitRef" />
         <p v-if="commitRefModal.error" class="err-text">{{ commitRefModal.error }}</p>
         <div style="display:flex; gap:6px; justify-content:flex-end">
-          <button class="btn-ghost sm" @click="commitRefModal = null">Cancel</button>
-          <button class="btn-ghost sm" @click="submitCommitRef">Create</button>
+          <button class="btn-ghost sm" @click="commitRefModal = null">{{ $t('action.cancel') }}</button>
+          <button class="btn-ghost sm" @click="submitCommitRef">{{ $t('action.create') }}</button>
         </div>
       </div>
     </Teleport>
@@ -2611,7 +2611,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       <div v-if="ignoreResult" class="ignore-modal" @click.stop>
         <div class="ignore-modal-path" :title="ignoreResult.path">{{ ignoreResult.path }}</div>
         <div class="ignore-modal-text">{{ ignoreResult.text }}</div>
-        <button class="btn-ghost sm" @click="ignoreResult = null">Close</button>
+        <button class="btn-ghost sm" @click="ignoreResult = null">{{ $t('action.close') }}</button>
       </div>
     </Teleport>
 
