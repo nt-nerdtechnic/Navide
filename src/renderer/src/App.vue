@@ -733,6 +733,8 @@ function syncViews(): void {
       sessionId: p.pinnedSessionId,
       slotLabel: p.slotLabel,
       isMinimized: minimizedPanes.value.has(p.id),
+      loopActive: p.loopActive,
+      loopWaitUntil: p.loopWaitUntil,
       canRebuild: paneCanRebuild(p)
     }
   })
@@ -6968,6 +6970,11 @@ function paneIsCommander(p: ActivePane): boolean {
               {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
             </span>
           </div>
+          <span
+            v-if="p.loopActive"
+            class="spotlight-thumb-loop"
+            :class="{ waiting: p.loopWaitUntil != null }"
+          >🔁 Loop</span>
           <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
         </div>
         <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="spotlight-strip-empty">
@@ -7804,6 +7811,19 @@ function paneIsCommander(p: ActivePane): boolean {
 .spotlight-thumb-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
 .spotlight-thumb-badge[data-status="error"],
 .spotlight-thumb-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
+.spotlight-thumb-loop {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  align-self: flex-start;
+  margin-top: auto;
+  background: var(--success-muted);
+  color: var(--success-fg);
+  white-space: nowrap;
+}
+.spotlight-thumb-loop.waiting {
+  opacity: 0.55;
+}
 .spotlight-strip-empty {
   color: var(--text-disabled);
   font-size: 11px;

@@ -469,9 +469,9 @@ onMounted(() => {
   font-size: 9px;
   font-weight: 600;
   color: var(--success-fg);
-  background: var(--success-muted);
-  border: 1px solid var(--success-muted);
-  border-radius: 999px;
+  background: var(--success-subtle);
+  border: 1px solid var(--success-emphasis);
+  border-radius: 4px;
   padding: 1px 6px;
   letter-spacing: 0.2px;
   white-space: nowrap;
@@ -486,22 +486,27 @@ onMounted(() => {
   border-color: var(--success-fg);
 }
 .loop-btn {
-  font-size: 10px;
-  line-height: 1;
+  font-size: 9px;
+  line-height: 1.4;
   background: transparent;
   border: 1px solid var(--border-muted);
   border-radius: 4px;
   color: var(--text-secondary);
-  padding: 2px 4px;
+  padding: 1px 6px;
   cursor: pointer;
   flex-shrink: 0;
+  opacity: 0.7;
 }
 .loop-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--accent-emphasis);
+  opacity: 1;
+  color: var(--success-fg);
+  border-color: var(--success-emphasis);
 }
 .loop-btn.active {
-  border-color: var(--success-fg);
+  opacity: 1;
+  color: var(--success-fg);
+  background: var(--success-subtle);
+  border-color: var(--success-emphasis);
 }
 .status {
   margin-left: auto;

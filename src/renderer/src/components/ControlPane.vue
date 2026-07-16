@@ -51,6 +51,10 @@ export interface ActivePaneView {
   slotLabel?: string
   /** True when the pane is minimized to the sidebar (hidden in grid, PTY alive). */
   isMinimized?: boolean
+  /** True while the pane's loop is active — shown as a 🔁 badge next to status. */
+  loopActive?: boolean
+  /** Epoch ms of the scheduled loop auto-resume; null/undefined when not waiting. */
+  loopWaitUntil?: number | null
   /** Uses App's canonical resume eligibility check. The sidebar only renders a
    *  rebuild control; App remains the sole owner of the rebuild operation. */
   canRebuild?: boolean
