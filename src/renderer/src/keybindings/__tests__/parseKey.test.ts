@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { parseKey, parseKeySpec, matchesEvent, parsedKeyEquals, eventToParsedKey } from '../parseKey'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 function mkEvent(
   key: string,
@@ -18,7 +22,25 @@ describe('parseKey', () => {
     expect(parseKey('ctrl+shift+f')).toEqual({ meta: false, ctrl: true, shift: true, alt: false, key: 'f' })
   })
 
-  it('normalizes mod to meta', () => {
+  it('resolves mod to meta on macOS', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel', userAgent: '' })
+    const r = parseKey('mod+s')
+    expect(r.meta).toBe(true)
+    expect(r.ctrl).toBe(false)
+  })
+
+  it('resolves mod to ctrl on non-macOS platforms', () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgent: '' })
+    const r = parseKey('mod+s')
+    expect(r.meta).toBe(false)
+    expect(r.ctrl).toBe(true)
+  })
+
+  it('falls back to userAgent when platform is empty', () => {
+    vi.stubGlobal('navigator', {
+      platform: '',
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
+    })
     const r = parseKey('mod+s')
     expect(r.meta).toBe(true)
     expect(r.ctrl).toBe(false)

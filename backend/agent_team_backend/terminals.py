@@ -418,7 +418,7 @@ class TerminalService:
             try:
                 # Reap the zombie so poll() flips before we unregister.
                 await asyncio.to_thread(session.proc.wait, 1.0)
-            except Exception:  # noqa: BLE001
+            except subprocess.TimeoutExpired:
                 pass
         if session.proc.poll() is not None:
             await asyncio.to_thread(pty_registry.unregister, session.proc.pid)
@@ -459,7 +459,7 @@ class TerminalService:
                     # Reap immediately (SIGKILL is not trappable) so _close's
                     # death-confirmed unregister drops the registry entry.
                     session.proc.wait(timeout=1.0)
-                except Exception:  # noqa: BLE001
+                except subprocess.TimeoutExpired:
                     pass
             self._close(session, reason="shutdown")
 
@@ -556,8 +556,8 @@ class TerminalService:
                 if not session.closed:
                     try:
                         self._loop.add_reader(session.master_fd, self._on_readable, session)
-                    except Exception:
-                        pass
+                    except (ValueError, OSError) as err:
+                        log.warning("re-add reader for session %s failed: %s", session.id, err)
 
         self._loop.create_task(_drain())
 

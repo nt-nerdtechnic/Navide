@@ -4305,26 +4305,29 @@ async function rejectCommand(card: CommandProposalCard): Promise<void> {
 }
 
 // ── Global keyboard shortcuts ─────────────────────────────────────────────────
+// Note: Cmd/Ctrl+L (focus chat input) is deliberately NOT handled here — the
+// host window handles it (EditorWindowApp.onAppKeydown), which also opens the
+// panel when it is closed. Handling it here too made the shortcut fire twice.
+// All shifted comparisons use e.key.toLowerCase(): with Shift held, e.key is
+// the UPPERCASE letter, so a lowercase strict compare never matches.
 function _onGlobalKeydown(e: KeyboardEvent): void {
-  // Ctrl+L / Cmd+L — focus AI chat textarea (mirrors VS Code's chat focus)
-  if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
-    e.preventDefault()
-    textareaEl.value?.focus()
-  }
   // Ctrl+Shift+S — save checkpoint
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 's') {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
     e.preventDefault()
     if (messages.value.length > 0) saveCheckpoint()
+    return
   }
   // Ctrl+Shift+N / Cmd+Shift+N — new chat thread (VS Code Copilot parity: Ctrl+Alt+N)
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'n') {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
     e.preventDefault()
     newThread()
+    return
   }
   // Ctrl+Shift+T / Cmd+Shift+T — toggle thread panel (VS Code: show chat history)
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 't') {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 't') {
     e.preventDefault()
     showThreads.value = !showThreads.value
+    return
   }
   // Ctrl+R — open prompt history palette (shell-style reverse search)
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'r') {
@@ -4336,11 +4339,13 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'h') {
     e.preventDefault()
     openHistoryPalette()
+    return
   }
   // Ctrl+Shift+M / Cmd+Shift+M — copy thread as markdown
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'm') {
     e.preventDefault()
     copyThreadAsMarkdown()
+    return
   }
   // Alt+[ / Alt+] — jump to previous / next AI response (Cursor-style message nav)
   if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && (e.key === '[' || e.key === ']')) {
@@ -4373,6 +4378,7 @@ function _onGlobalKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && msgCtxMenu.value) { msgCtxMenu.value = null; return }
   if (e.key === 'Escape' && diffApplyState.value) {
     diffApplyState.value = null
+    return
   }
   if (e.key === 'Escape' && compareResult.value) {
     compareResult.value = null; compareStage.value = null

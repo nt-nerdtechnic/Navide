@@ -14,12 +14,22 @@ const ALIASES: Record<string, string> = {
   pgdown: 'pagedown',
 }
 
+// 'mod' is the platform-primary modifier: Cmd (meta) on macOS, Ctrl elsewhere.
+// Resolved at parse time so rules written with 'mod' work on every platform.
+function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const platform = navigator.platform || ''
+  if (platform) return /mac|iphone|ipad|ipod/i.test(platform)
+  return /mac os x|macintosh/i.test(navigator.userAgent || '')
+}
+
 export function parseKey(segment: string): ParsedKey {
   const parts = segment.toLowerCase().split('+')
   let meta = false, ctrl = false, shift = false, alt = false
   const keyParts: string[] = []
   for (const p of parts) {
-    if (p === 'cmd' || p === 'meta' || p === 'mod') meta = true
+    if (p === 'cmd' || p === 'meta') meta = true
+    else if (p === 'mod') { if (isMacPlatform()) meta = true; else ctrl = true }
     else if (p === 'ctrl' || p === 'control') ctrl = true
     else if (p === 'shift') shift = true
     else if (p === 'alt' || p === 'option') alt = true

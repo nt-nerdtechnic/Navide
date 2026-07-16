@@ -7,6 +7,7 @@ import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 import { createResizeController, type ResizeController } from './useTerminalResize'
 import { installTerminalZoomShortcuts, terminalFontSize } from './useTerminalFontSize'
+import { setContext } from '../keybindings/contextService'
 import {
   formatTerminalExit,
   isTerminalCrashLoopOpen,
@@ -622,6 +623,14 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let _cmdKeyUp: ((e: KeyboardEvent) => void) | null = null
   let _cmdClickHandler: ((e: MouseEvent) => void) | null = null
   let _mousePosTracker: ((e: MouseEvent) => void) | null = null
+  // Whether THIS pane's xterm textarea currently holds focus. Used to publish
+  // the `terminalFocus` keybinding context (defaults.ts gates editor shortcuts
+  // like cmd+f on `!terminalFocus`) and to clear it if the pane is disposed
+  // while focused. Focus moving between two panes is safe: blur (old pane,
+  // sets false) always fires before focus (new pane, sets true).
+  let _ownsTerminalFocus = false
+  const _onTermFocus = (): void => { _ownsTerminalFocus = true; setContext('terminalFocus', true) }
+  const _onTermBlur = (): void => { _ownsTerminalFocus = false; setContext('terminalFocus', false) }
 
   // Set when a reattached pane is waiting to repaint. We never force_redraw at
   // reattach time: the renderer is mid-reflow then (reload, or a hidden tab
@@ -685,6 +694,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   function mount(el: HTMLElement): void {
     containerRef.value = el
     term.open(el)
+
+    // Publish terminal focus to the keybinding context (see _onTermFocus doc).
+    term.textarea?.addEventListener('focus', _onTermFocus)
+    term.textarea?.addEventListener('blur', _onTermBlur)
 
     // Anchor for Shift+Arrow keyboard selection
     let selAnchorX = -1
@@ -1664,6 +1677,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (mountedEl && _mousePosTracker) mountedEl.removeEventListener('mousemove', _mousePosTracker)
     if (mountedEl && _cmdClickHandler) mountedEl.removeEventListener('mousedown', _cmdClickHandler, { capture: true })
     document.querySelector('.term-file-picker-root')?.remove()
+    term.textarea?.removeEventListener('focus', _onTermFocus)
+    term.textarea?.removeEventListener('blur', _onTermBlur)
+    // A pane disposed while focused never fires blur — clear the context so
+    // `terminalFocus` cannot stay stuck on.
+    if (_ownsTerminalFocus) _onTermBlur()
     term.dispose()
     // PTY is intentionally NOT killed here. The backend keeps PTYs running
     // after a WS disconnect so that tryReattach() can rebind after a page

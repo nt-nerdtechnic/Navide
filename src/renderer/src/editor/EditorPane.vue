@@ -730,7 +730,9 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     e.shiftKey ? prevMatch() : nextMatch()
   }
-  else if (mod && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); openGoto() }
+  // Cmd/Ctrl+L (go to line) is NOT duplicated here: the central keybinding
+  // dispatcher owns it (defaults.ts `cmd+l` -> editor.action.gotoLine, when
+  // editorOpen) and consumes the event before this bubble-phase listener.
 }
 
 let _unsubGitChanged: (() => void) | null = null
