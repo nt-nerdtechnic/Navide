@@ -114,6 +114,8 @@ export interface SpawnOptions {
   // so the PTY must be created at the real measured width. A fresh spawn is
   // empty and may be created immediately even while hidden (see createWhenMeasurable).
   isResume?: boolean
+  // If 'fresh', ignores the localStorage scrollback snapshot even if resuming.
+  restoreMode?: 'memory-resume' | 'fresh'
 }
 
 /**
@@ -1383,7 +1385,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // Replay stored scrollback into the fresh xterm so prior history is visible
     // before the new PTY starts writing. Only for resume spawns that have a saved
     // snapshot — fresh spawns (no resumeKey) have no snapshot to replay.
-    if (opts.resumeKey) {
+    if (opts.resumeKey && opts.restoreMode !== 'fresh') {
       // Strip any trailing alt-buffer content before replaying. The snapshot
       // accumulates raw PTY output including Claude Code's TUI redraws; those
       // cursor-positioning codes were written at the old terminal width and
@@ -1592,16 +1594,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (opts?.redrawAfterSettle) resizeCtrl.requestResizeRedraw()
   }
 
-  // Ask the CLI to repaint its current frame by sending Ctrl+L (the universal
-  // redraw key). We deliberately do NOT call term.clear(): clearing xterm's
-  // buffer out-of-band wipes the scrollback the user is reading — and since
-  // Claude Code repaints its idle UI in place via cursor-up (it never appends
-  // new lines while idle), the scrollback then stays empty and there is
-  // nothing left to scroll through. It also desyncs the CLI's cursor
-  // bookkeeping from xterm. Letting the CLI clear+repaint via its own Ctrl+L
-  // stays consistent and keeps the scrollback intact and scrollable.
+  // Ask the CLI to repaint its current frame by sending a SIGWINCH (via terminal.redraw).
+  // We used to send Ctrl+L, but while Claude Code repaints properly, pure shells (bash/zsh)
+  // interpret Ctrl+L as "clear screen", which visually wipes the scrollback.
+  // We deliberately do NOT call term.clear() here. Letting the CLI repaint via SIGWINCH
+  // keeps the scrollback intact and scrollable for both TUI apps and pure shells.
   function redraw(): void {
-    pasteText('\x0c')
+    if (!sessionId.value) return
+    void backend.send('terminal.redraw', {
+      terminal_session_id: sessionId.value,
+      cols: term.cols,
+      rows: term.rows,
+    })
   }
 
   // Hard reset: drop the entire scrollback (including any corrupt frames frozen

@@ -81,8 +81,10 @@ function keyEvent(overrides: Partial<KeyboardEvent>): KeyboardEvent {
     metaKey: false,
     altKey: false,
     ctrlKey: false,
+    preventDefault: () => {},
+    stopPropagation: () => {},
     ...overrides,
-  } as KeyboardEvent
+  } as unknown as KeyboardEvent
 }
 
 describe('useTerminal — Shift+Enter key handling', () => {
@@ -115,12 +117,22 @@ describe('useTerminal — Shift+Enter key handling', () => {
     scope.stop()
   })
 
-  it.each([['claude'], [undefined]])('sends ESC+CR to %s and swallows the key', async (agentKey) => {
-    const { mock, scope } = await spawnedTerminal(agentKey)
+  it('sends bracketed paste LF to claude and swallows the key', async () => {
+    const { mock, scope } = await spawnedTerminal('claude')
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b\r' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[200~\n\x1b[201~' } },
+    ])
+    scope.stop()
+  })
+
+  it('sends Ctrl+V Ctrl+J to undefined (plain shell) and swallows the key', async () => {
+    const { mock, scope } = await spawnedTerminal(undefined)
+    const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
+    expect(handled).toBe(false)
+    expect(inputsSent(mock)).toEqual([
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x16\x0a' } },
     ])
     scope.stop()
   })

@@ -1627,6 +1627,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       // create immediately even while hidden (empty CLI) so a pipeline stage
       // spawned into a non-active tab still starts.
       isResume: opts.isResume,
+      restoreMode: opts.restoreMode,
     })
 
     if ((ref.status as unknown as string) === 'running') {
@@ -1945,6 +1946,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   }
   rebuildingPanes.add(paneId)
   try {
+    try { localStorage.removeItem(`terminal-scroll:${sessionId}`) } catch {}
     // Preserve layout order: keep the old pane as a dummy to avoid layout
     // reflow, then swap the replacement pane into its slot.
     await onKill(paneId, { markRemoved: false, force: true, keepInList: true })
