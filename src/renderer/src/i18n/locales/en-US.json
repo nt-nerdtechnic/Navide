@@ -431,6 +431,7 @@
     "pipeline-completed": "✓ Pipeline completed all 4 stages. Review each pane on the right.",
     "provide-task": "Provide task description + workspace, then start.",
     "missing": "⚠ missing",
+    "already-open": "● open",
     "tagline": "Drive Claude Code · Codex · Antigravity CLI together",
     "open-workspace": "📂 Open Workspace",
     "recent": "🕓 Recent",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { useRecentWorkspaces, type RecentWorkspace } from '../composables/useRecentWorkspaces'
 
@@ -10,6 +10,33 @@ const { recent, loaded, error, touch, pin, unpin, remove } = useRecentWorkspaces
 
 const picking = ref(false)
 const creating = ref(false)
+
+// Workspaces open in other windows (this window shows Welcome, so it has
+// none itself). Fed by main's registry; refreshed on workspace:openChanged.
+const openWorkspaces = ref<string[]>([])
+let disposeOpenChanged: (() => void) | null = null
+
+async function refreshOpenWorkspaces(): Promise<void> {
+  openWorkspaces.value = (await window.agentTeam?.listOpenWorkspaces?.()) ?? []
+}
+
+onMounted(() => {
+  void refreshOpenWorkspaces()
+  disposeOpenChanged = window.agentTeam?.onOpenWorkspacesChanged?.(() => {
+    void refreshOpenWorkspaces()
+  }) ?? null
+})
+
+onBeforeUnmount(() => {
+  disposeOpenChanged?.()
+  disposeOpenChanged = null
+})
+
+function isOpenElsewhere(path: string): boolean {
+  const norm = (p: string): string => p.replace(/\/+$/, '')
+  const target = norm(path)
+  return openWorkspaces.value.some((ws) => norm(ws) === target)
+}
 
 // Pinned first, then most-recent-first (backend already orders by recency).
 const ordered = computed<RecentWorkspace[]>(() => {
@@ -50,6 +77,9 @@ function timeAgo(iso: string): string {
 }
 
 async function openWorkspace(path: string): Promise<void> {
+  // Already open in another window → focus that window instead of opening a
+  // duplicate (two windows on one folder means conflicting PTY/git operations).
+  if (await window.agentTeam?.focusWorkspaceWindow?.(path)) return
   await touch(path)
   emit('select', path)
 }
@@ -141,6 +171,7 @@ async function removeItem(item: RecentWorkspace, ev: Event): Promise<void> {
             <div class="r-body">
               <div class="r-top">
                 <span class="r-name">{{ item.name }}</span>
+                <span v-if="isOpenElsewhere(item.path)" class="r-open" :title="$t('label.already-open')">{{ $t('label.already-open') }}</span>
                 <span class="r-badge" :class="stateBadge(item.last_known_state).cls">
                   {{ stateBadge(item.last_known_state).icon }}
                   {{ stateBadge(item.last_known_state).label }}
@@ -315,6 +346,13 @@ button:disabled {
 .r-missing {
   font-size: 10px;
   color: var(--danger-fg);
+}
+.r-open {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: var(--success-fg);
+  background: var(--success-subtle);
 }
 .r-time {
   margin-left: auto;

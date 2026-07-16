@@ -56,6 +56,9 @@ declare global {
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
       newWorkspace: () => Promise<string | null>
       getHomeDir: () => Promise<string>
+      listOpenWorkspaces: () => Promise<string[]>
+      focusWorkspaceWindow: (workspacePath: string) => Promise<boolean>
+      onOpenWorkspacesChanged: (cb: () => void) => () => void
       openPath: (target: string) => Promise<{ ok: boolean; revealed?: boolean; error?: string }>
       revealPath: (target: string) => Promise<{ ok: boolean; error?: string }>
       openTerminal: (command: string) => Promise<{ ok: boolean; error?: string }>

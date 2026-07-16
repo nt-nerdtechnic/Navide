@@ -3252,8 +3252,10 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             else:
                 try:
                     from .ai_chat_service import stream_chat
-                    # Use a shallow copy of session settings, overriding model if specified
-                    _ep_settings = dict(session.settings)
+                    # Use a shallow copy of AI chat settings, overriding model if specified.
+                    # (Session has no .settings attribute — reading it raised AttributeError
+                    # on every call, so enhance_prompt always returned ok=False.)
+                    _ep_settings = dict(ai_chat_settings_store.get())
                     if _ep_provider:
                         _ep_settings["provider"] = _ep_provider
                     if _ep_model:

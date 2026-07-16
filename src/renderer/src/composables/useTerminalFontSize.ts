@@ -54,6 +54,16 @@ export function installTerminalZoomShortcuts(): void {
   if (installed) return
   installed = true
 
+  // Cross-window sync: each renderer window has its own copy of this module,
+  // so a zoom in one window only reaches the others via localStorage. The
+  // `storage` event fires only in OTHER windows (never the writer), so there
+  // is no self-loop. loadPersisted re-reads the store and keeps its guards,
+  // so a garbage value falls back to the default instead of poisoning the ref.
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== STORAGE_KEY) return
+    terminalFontSize.value = loadPersisted()
+  })
+
   window.addEventListener('keydown', (e: KeyboardEvent) => {
     if (!e.metaKey || e.altKey || e.ctrlKey) return
     // `+` shares the Equal key and requires Shift on macOS. Accept both forms,

@@ -1912,44 +1912,47 @@ const rebuildablePaneCount = computed(
 
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
   if (rebuildingPanes.has(paneId)) return
-  const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane) return
-  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
-  if (!sessionId) return
-  const ws = pane.workspacePath
-  if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
-    pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
-    return
-  }
-  const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
-  const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
-  const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag)
-  if (!resumeCmd) return
-
-  // Safety: Ensure the requested session actually exists on disk.
-  const hasSession = await backend.send('terminals.has_session', {
-    workspace_path: ws,
-    session_id: sessionId,
-  })
-  if (!hasSession) {
-    pipelineLog(`⚠ rebuild session ${sessionId.slice(0, 8)} not found`)
-    return
-  }
-  // Snapshot identity before onKill removes the pane from the list.
-  const snap = {
-    agentKey: pane.agentKey,
-    customName: pane.customName,
-    roleKey: pane.roleKey,
-    stageId: pane.stageId,
-    stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
-    slotLabel: pane.slotLabel,
-    workspacePath: ws,
-    origin: pane.origin,
-    runGroupId: pane.runGroupId,
-    sessionHomeId: pane.sessionHomeId,
-  }
+  // Lock synchronously, before any await: a concurrent call (double-click, or
+  // overlap with the rebuild-all batch) would otherwise pass the has() check
+  // during canResumeSession/has_session and double kill/spawn the same pane.
   rebuildingPanes.add(paneId)
   try {
+    const pane = panes.value.find((p) => p.id === paneId)
+    if (!pane) return
+    const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+    if (!sessionId) return
+    const ws = pane.workspacePath
+    if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
+      pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
+      return
+    }
+    const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
+    const skipFlag = yoloEnabled.value ? (spec?.skipPermissionFlag ?? '') : ''
+    const resumeCmd = buildResumeCommand(pane.agentKey, sessionId, skipFlag)
+    if (!resumeCmd) return
+
+    // Safety: Ensure the requested session actually exists on disk.
+    const hasSession = await backend.send('terminals.has_session', {
+      workspace_path: ws,
+      session_id: sessionId,
+    })
+    if (!hasSession) {
+      pipelineLog(`⚠ rebuild session ${sessionId.slice(0, 8)} not found`)
+      return
+    }
+    // Snapshot identity before onKill removes the pane from the list.
+    const snap = {
+      agentKey: pane.agentKey,
+      customName: pane.customName,
+      roleKey: pane.roleKey,
+      stageId: pane.stageId,
+      stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
+      slotLabel: pane.slotLabel,
+      workspacePath: ws,
+      origin: pane.origin,
+      runGroupId: pane.runGroupId,
+      sessionHomeId: pane.sessionHomeId,
+    }
     try { localStorage.removeItem(`terminal-scroll:${sessionId}`) } catch {}
     // Preserve layout order: keep the old pane as a dummy to avoid layout
     // reflow, then swap the replacement pane into its slot.
@@ -3696,6 +3699,9 @@ async function titlebarRevealWorkspace(): Promise<void> {
 
 async function onWorkspaceBrowse(path: string): Promise<void> {
   if (path === currentWorkspace.value) return
+  // Already open in another window → focus that window, keep this one as-is
+  // (a duplicate open would run two sets of PTY/git operations on one folder).
+  if (await window.agentTeam?.focusWorkspaceWindow?.(path)) return
   if (pipeline.state === 'running') await onPipelineAbort()
   pipeline.workspacePath = ''
   await onPipelineReset()

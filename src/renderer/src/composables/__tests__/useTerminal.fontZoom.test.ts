@@ -75,7 +75,12 @@ vi.mock('@xterm/addon-fit', () => ({
 }))
 
 import { useTerminal } from '../useTerminal'
-import { DEFAULT_FONT_SIZE, terminalFontSize, zoomReset } from '../useTerminalFontSize'
+import {
+  DEFAULT_FONT_SIZE,
+  installTerminalZoomShortcuts,
+  terminalFontSize,
+  zoomReset,
+} from '../useTerminalFontSize'
 import { nextTick } from 'vue'
 
 /** Dispatch a real window keydown, as the browser would. */
@@ -226,5 +231,86 @@ describe('terminal font zoom — app-wide', () => {
     expect(a.opts.fontSize).toBe(DEFAULT_FONT_SIZE)
     expect(ctrl.applyFit).not.toHaveBeenCalled()
     a.scope.stop()
+  })
+})
+
+// Each window runs its own copy of the module, so a zoom in one window only
+// reaches the others through localStorage + the `storage` event (which never
+// fires in the writing window itself — no self-loop to guard against).
+describe('terminal font size — cross-window storage sync', () => {
+  afterEach(() => {
+    zoomReset()
+    localStorage.clear()
+  })
+
+  /** Simulate another window's write: the store already holds the new value
+   *  by the time the storage event reaches this window. */
+  function otherWindowWrites(key: string, value: string): void {
+    if (key === 'terminal.fontSize') localStorage.setItem(key, value)
+    window.dispatchEvent(new StorageEvent('storage', { key, newValue: value }))
+  }
+
+  it('adopts a size written by another window', () => {
+    installTerminalZoomShortcuts()
+
+    otherWindowWrites('terminal.fontSize', '16')
+
+    expect(terminalFontSize.value).toBe(16)
+  })
+
+  it('ignores storage events for other keys', () => {
+    installTerminalZoomShortcuts()
+    otherWindowWrites('terminal.fontSize', '16')
+
+    // The stored size changes, but the event announces an unrelated key —
+    // a handler without the key filter would re-read and pick up 20.
+    localStorage.setItem('terminal.fontSize', '20')
+    window.dispatchEvent(new StorageEvent('storage', { key: 'some.other.key', newValue: 'x' }))
+
+    expect(terminalFontSize.value).toBe(16)
+  })
+
+  it.each(['NaN', '0', '-3', 'garbage'])(
+    'falls back to the default instead of adopting garbage (%s)',
+    (bad) => {
+      installTerminalZoomShortcuts()
+      otherWindowWrites('terminal.fontSize', '16')
+      expect(terminalFontSize.value).toBe(16)
+
+      otherWindowWrites('terminal.fontSize', bad)
+
+      expect(terminalFontSize.value).toBe(DEFAULT_FONT_SIZE)
+    }
+  )
+})
+
+// loadPersisted guards the module-init read of localStorage. It is not
+// exported, so exercise it through a fresh module instance per case.
+describe('terminal font size — loadPersisted guards module init', () => {
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it.each(['NaN', 'abc', '0', '-5', ''])(
+    'garbage persisted value (%j) yields the default',
+    async (bad) => {
+      localStorage.setItem('terminal.fontSize', bad)
+      vi.resetModules()
+      const mod = await import('../useTerminalFontSize')
+      expect(mod.terminalFontSize.value).toBe(DEFAULT_FONT_SIZE)
+    }
+  )
+
+  it('a missing key yields the default', async () => {
+    vi.resetModules()
+    const mod = await import('../useTerminalFontSize')
+    expect(mod.terminalFontSize.value).toBe(DEFAULT_FONT_SIZE)
+  })
+
+  it('a valid persisted value is loaded and rounded', async () => {
+    localStorage.setItem('terminal.fontSize', '15.6')
+    vi.resetModules()
+    const mod = await import('../useTerminalFontSize')
+    expect(mod.terminalFontSize.value).toBe(16)
   })
 })

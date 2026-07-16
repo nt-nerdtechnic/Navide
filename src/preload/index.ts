@@ -55,6 +55,15 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('workspace:pick', defaultPath),
   newWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:new'),
   getHomeDir: (): Promise<string> => ipcRenderer.invoke('app:home-dir'),
+  listOpenWorkspaces: (): Promise<string[]> => ipcRenderer.invoke('workspace:listOpen'),
+  focusWorkspaceWindow: (workspacePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('workspace:focusExisting', workspacePath),
+  // Returns a disposer — Welcome mounts/unmounts with the workspace gate.
+  onOpenWorkspacesChanged: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('workspace:openChanged', listener)
+    return () => ipcRenderer.removeListener('workspace:openChanged', listener)
+  },
   openPath: (target: string): Promise<{ ok: boolean; revealed?: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:openPath', target),
   revealPath: (target: string): Promise<{ ok: boolean; error?: string }> =>

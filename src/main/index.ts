@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, safeStorage, session, shell } from 'electron'
 import { join, dirname } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
-import { appendFileSync, readFileSync, statSync, existsSync } from 'node:fs'
+import { appendFileSync, readFileSync, statSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
@@ -80,6 +80,36 @@ function broadcastToWorkspace(workspacePath: string, channel: string, payload: u
     if (win.isDestroyed() || detachedWindowIds.has(win.id)) continue
     if (mainWindowWorkspaces.get(win) !== workspacePath) continue
     win.webContents.send(channel, payload)
+  }
+}
+// Workspace paths can refer to the same folder via a trailing slash, a symlink,
+// or different casing (macOS FS is case-insensitive); realpath settles all
+// three. Falls back to the trimmed string when the folder no longer exists.
+function normalizeWorkspacePath(p: string): string {
+  const trimmed = (p ?? '').trim().replace(/\/+$/, '')
+  if (!trimmed) return ''
+  try {
+    return realpathSync(trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+function findMainWindowForWorkspace(workspacePath: string): BrowserWindow | null {
+  const target = normalizeWorkspacePath(workspacePath)
+  if (!target) return null
+  for (const [win, wp] of mainWindowWorkspaces) {
+    if (!win.isDestroyed() && normalizeWorkspacePath(wp) === target) return win
+  }
+  return null
+}
+
+// Tell every main window the set of open workspaces changed so Welcome screens
+// refresh their "open" badges (they re-query workspace:listOpen on this event).
+function broadcastOpenWorkspacesChanged(): void {
+  for (const win of mainWindows) {
+    if (win.isDestroyed() || detachedWindowIds.has(win.id)) continue
+    win.webContents.send('workspace:openChanged')
   }
 }
 // Crash-restore: persists open workspace windows so an unexpected exit can be
@@ -191,6 +221,7 @@ async function createWindow(
     if (mainWindows.size === 0) {
       if (editorWindow && !editorWindow.isDestroyed()) editorWindow.close()
     }
+    broadcastOpenWorkspacesChanged()
   })
 
   loadWindow(win, { window: 'main', ...params })
@@ -418,6 +449,12 @@ ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) =
   const params: Record<string, string> = {}
   const ws = (args?.workspace_path ?? '').trim()
   if (ws) {
+    // Already open in some window → focus it instead of duplicating.
+    const existing = findMainWindowForWorkspace(ws)
+    if (existing) {
+      revealMainWindow(existing)
+      return { ok: true }
+    }
     params.workspace_path = ws
     // duplicate=1 marks a window cloned from a live one (its source's CLI
     // sessions are still running), so the renderer skips pane restore once.
@@ -440,6 +477,28 @@ ipcMain.on('window:reportWorkspace', (event, workspacePath: string) => {
   if (ws) mainWindowWorkspaces.set(win, ws)
   else mainWindowWorkspaces.delete(win)
   windowRegistry.setWorkspace(win.id, ws)
+  broadcastOpenWorkspacesChanged()
+})
+
+// Welcome screens badge already-open workspaces and focus the existing window
+// instead of opening a duplicate (same-folder double-open causes PTY/git
+// conflicts). listOpen feeds the badges; focusExisting is the click path —
+// it returns false when the workspace is only open in the asking window
+// itself, so re-selecting your own workspace stays a normal no-op open.
+ipcMain.handle('workspace:listOpen', () => {
+  const open: string[] = []
+  for (const [win, wp] of mainWindowWorkspaces) {
+    if (!win.isDestroyed()) open.push(wp)
+  }
+  return open
+})
+
+ipcMain.handle('workspace:focusExisting', (event, workspacePath: string) => {
+  const self = BrowserWindow.fromWebContents(event.sender)
+  const existing = findMainWindowForWorkspace(String(workspacePath ?? ''))
+  if (!existing || existing === self) return false
+  revealMainWindow(existing)
+  return true
 })
 
 // ── Crash-restore prompt (see window-registry.ts) ────────────────────────────
@@ -455,16 +514,10 @@ ipcMain.handle('restore:apply', () => {
   pendingRestore = null
   for (const entry of entries) {
     // Already reopened manually → focus, don't duplicate.
-    let focused = false
-    for (const [win, wp] of mainWindowWorkspaces) {
-      if (!win.isDestroyed() && wp === entry.workspace_path) {
-        if (win.isMinimized()) win.restore()
-        win.focus()
-        focused = true
-        break
-      }
-    }
-    if (!focused) {
+    const existing = findMainWindowForWorkspace(entry.workspace_path)
+    if (existing) {
+      revealMainWindow(existing)
+    } else {
       // No duplicate=1 flag: a crash-restore boot's sessions are dead, so the
       // renderer runs pane restore (restore=1 is informational only).
       void createWindow(
@@ -1144,13 +1197,10 @@ function openWorkspaceFromPath(p: string): boolean {
   if (app.isReady()) {
     console.log('[main] open workspace from external path:', dir)
     // If a window already has this workspace open, focus it instead of duplicating.
-    for (const [win, wp] of mainWindowWorkspaces) {
-      if (!win.isDestroyed() && wp === dir) {
-        if (win.isMinimized()) win.restore()
-        app.focus({ steal: true })
-        win.focus()
-        return true
-      }
+    const existing = findMainWindowForWorkspace(dir)
+    if (existing) {
+      revealMainWindow(existing)
+      return true
     }
     // The app is usually backgrounded when a Quick Action / "Open With" fires,
     // so bring it to the front and focus the new window — otherwise the window

@@ -431,6 +431,7 @@
     "pipeline-completed": "✓ 流程完成所有 4 個階段。請查看右側各面板。",
     "provide-task": "請提供任務描述 + 工作區，然後開始。",
     "missing": "⚠ 遺失",
+    "already-open": "● 已開啟",
     "tagline": "同時驅動 Claude Code · Codex · Antigravity CLI",
     "open-workspace": "📂 開啟工作區",
     "recent": "🕓 最近",
