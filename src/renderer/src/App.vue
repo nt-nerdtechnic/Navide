@@ -1912,7 +1912,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     session_id: sessionId,
   })
   if (!hasSession) {
-    showToast(`Session ${sessionId.slice(0, 8)} not found`)
+    pipelineLog(`⚠ rebuild session ${sessionId.slice(0, 8)} not found`)
     return
   }
   // Snapshot identity before onKill removes the pane from the list.
@@ -5453,7 +5453,7 @@ async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promis
     const histEntry = spawnHistory.value.find((e) => e.paneId === pane.id)
     if (histEntry) {
       histEntry.runGroupId = runGroupId
-      appendSpawnHistory(ws, []) // trigger save
+      spawnHistory.value = [...spawnHistory.value] // trigger save
     }
   }
   return resp !== null
