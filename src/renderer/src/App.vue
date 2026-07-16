@@ -1436,6 +1436,8 @@ interface SpawnInternal {
   restoreMode?: 'memory-resume' | 'fresh'
   sessionHomeId?: string
   resumeSessionId?: string
+  /** Instructs spawnPane to atomically replace an existing pane's position in the UI array. */
+  replacePaneId?: string
 }
 
 /** Trailing line embedded in a Codex/Antigravity kickoff so the backend can match
@@ -1544,7 +1546,15 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   if (sessionMarker && pane.kickoffPrompt) {
     pane.kickoffPrompt += sessionMarkerLine(sessionMarker)
   }
-  panes.value.push(pane)
+  
+  if (opts.replacePaneId) {
+    const idx = panes.value.findIndex(p => p.id === opts.replacePaneId)
+    if (idx >= 0) panes.value.splice(idx, 1, pane)
+    else panes.value.push(pane)
+  } else {
+    panes.value.push(pane)
+  }
+
   // Session detection can legitimately take forever (a fresh CLI sits at its
   // own setup dialog until the user acts), so the blocking overlay gets a hard
   // grace window; after it the pane is usable while detection continues.
@@ -1951,6 +1961,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       restoreMode: 'memory-resume',
       sessionHomeId: snap.sessionHomeId,
       resumeSessionId: sessionId,
+      replacePaneId: paneId, // Atomic swap to prevent layout shift
     })
     if (newId) {
       if (snap.origin === 'manual') {
@@ -1981,16 +1992,6 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
           session_home_id: snap.sessionHomeId || '',
           run_group_id: snap.runGroupId || '',
         })
-      }
-      const currentOrigIndex = panes.value.findIndex((p) => p.id === paneId)
-      if (currentOrigIndex >= 0) {
-        const from = panes.value.findIndex((p) => p.id === newId)
-        if (from >= 0 && from !== currentOrigIndex) {
-          const [moved] = panes.value.splice(from, 1)
-          panes.value.splice(currentOrigIndex, 1, moved) // Replace the dummy pane
-        } else {
-          panes.value = panes.value.filter((p) => p.id !== paneId)
-        }
       }
     } else {
       panes.value = panes.value.filter((p) => p.id !== paneId)
@@ -2051,6 +2052,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       origin: snap.origin,
       runGroupId: snap.runGroupId || undefined,
       isResume: false,
+      replacePaneId: paneId, // Atomic swap to prevent layout shift
     })
     if (newId) {
       if (snap.origin === 'manual') {
@@ -2079,16 +2081,6 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       const pane = panes.value.find((p) => p.id === newId)
       if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
         void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
-      }
-      const currentOrigIndex = panes.value.findIndex((p) => p.id === paneId)
-      if (currentOrigIndex >= 0) {
-        const from = panes.value.findIndex((p) => p.id === newId)
-        if (from >= 0 && from !== currentOrigIndex) {
-          const [moved] = panes.value.splice(from, 1)
-          panes.value.splice(currentOrigIndex, 1, moved)
-        } else {
-          panes.value = panes.value.filter((p) => p.id !== paneId)
-        }
       }
     } else {
       panes.value = panes.value.filter((p) => p.id !== paneId)
