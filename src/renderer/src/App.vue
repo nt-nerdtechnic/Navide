@@ -1548,9 +1548,11 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   }
   
   if (opts.replacePaneId) {
+    const wasFocused = focusPaneId.value === opts.replacePaneId
     const idx = panes.value.findIndex(p => p.id === opts.replacePaneId)
     if (idx >= 0) panes.value.splice(idx, 1, pane)
     else panes.value.push(pane)
+    if (wasFocused) focusPaneId.value = id
   } else {
     panes.value.push(pane)
   }
@@ -1958,7 +1960,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       runGroupId: snap.runGroupId || undefined,
       isResume: true,
       skipRoleInjection: true,
-      restoreMode: 'memory-resume',
+      restoreMode: 'fresh',
       sessionHomeId: snap.sessionHomeId,
       resumeSessionId: sessionId,
       replacePaneId: paneId, // Atomic swap to prevent layout shift
