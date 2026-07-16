@@ -2,7 +2,7 @@
 
 English | [繁體中文](../zh-TW/getting-started.md) | [日本語](../ja-JP/getting-started.md) | [Documentation](README.md)
 
-Navide supports macOS 13 or newer on Apple silicon. The [v0.1.45 GitHub prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.45) provides unsigned DMG and ZIP downloads. It is not signed or notarized by Apple.
+Navide supports macOS 13 or newer on Apple silicon. The [v0.1.46 GitHub prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.46) provides unsigned DMG and ZIP downloads. It is not signed or notarized by Apple.
 
 To install the preview, download the DMG, copy Navide to Applications, then Control-click the app in Finder and choose **Open**. If macOS still blocks it, use **System Settings → Privacy & Security → Open Anyway** for Navide. Do not disable Gatekeeper globally.
 

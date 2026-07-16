@@ -4,6 +4,17 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.46] — 2026-07-16 — unsigned preview
+
+### Changed
+
+- Update rebuild logic to specifically target active tab CLI panes.
+- Ensure focus continuity when marking items as seen in the UI.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.45] — 2026-07-16 — unsigned preview
 
 ### Changed
