@@ -71,6 +71,7 @@ import {
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
   SESSION_LIMIT_RE,
+  LOOP_ESTIMATE_WINDOW_MS,
   parseLimitReset,
 } from './lib/loopPrompt'
 import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
@@ -582,6 +583,9 @@ interface ActivePane {
    *  while the loop is paused waiting for the CLI quota to reset; an app
    *  restart during the window drops the pending resume (accepted). */
   loopWaitUntil?: number | null
+  /** Epoch ms of the heuristic quota-reset estimate (runtime-only): loop start
+   *  + 5h Claude session window, shown on the running badge as approximate. */
+  loopEstimateResetAt?: number | null
 }
 
 interface SpawnHistoryEntry extends HistoryTitleEntry {
@@ -958,12 +962,29 @@ function togglePaneLoop(paneId: string): void {
   if (pane.loopActive) {
     pane.loopActive = false
     pane.loopWaitUntil = null
+    pane.loopEstimateResetAt = null
     stopLoopLimitWatcher(paneId)
     return
   }
   pane.loopActive = true
+  pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
   void injectPane(paneId, settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT), 'loop-start', true)
   startLoopLimitWatcher(paneId)
+}
+
+/** Shared resume path for the scheduled (watcher expiry) and manual
+ *  (badge click) routes. Clears loopWaitUntil synchronously BEFORE injecting so
+ *  the poll loop returns to matching mode and neither route can double-inject. */
+function fireLoopResume(paneId: string, logLabel: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || !pane.loopActive || pane.loopWaitUntil == null) return
+  pane.loopWaitUntil = null
+  void injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), logLabel, true)
+}
+
+/** Waiting badge clicked: the user wants the loop resumed immediately. */
+function resumeLoopNow(paneId: string): void {
+  fireLoopResume(paneId, 'loop-resume-now')
 }
 
 // While a pane's loop is active, watch its raw PTY buffer for the CLI
@@ -1004,10 +1025,7 @@ function startLoopLimitWatcher(paneId: string): void {
     if (pane.loopWaitUntil != null) {
       // Waiting mode: matching is suspended so TUI redraws of the same limit
       // message cannot double-schedule. Resume once the quota window is due.
-      if (Date.now() >= pane.loopWaitUntil) {
-        pane.loopWaitUntil = null
-        void injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), 'loop-resume', true)
-      }
+      if (Date.now() >= pane.loopWaitUntil) fireLoopResume(paneId, 'loop-resume')
       return
     }
     const tail = (((ref.cleanBuffer as unknown as string) ?? '')).slice(-LOOP_LIMIT_TAIL_CHARS)
@@ -1021,7 +1039,20 @@ function startLoopLimitWatcher(paneId: string): void {
       return
     }
     pane.loopWaitUntil = resumeAt
+    // Make the pause visible even when the pane is unfocused — same
+    // background-gated native notification path as done/attention.
+    sysNotify.notifyPaneState(
+      paneId,
+      'attention',
+      i18n.global.t('pane.terminal.loop-paused-notify-title'),
+      i18n.global.t('pane.terminal.loop-paused-notify-body', { time: formatLoopTime(resumeAt) })
+    )
   }, LOOP_LIMIT_POLL_MS))
+}
+
+/** Local HH:mm (24h) for loop resume times shown in notifications. */
+function formatLoopTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 }
 
 // Dispatch a cloud issue into a running agent pane as a task (one-way: no
@@ -1982,6 +2013,12 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   })
   delete paneRefs[paneId]
   clearDoneNotifyTimer(paneId)
+  stopLoopLimitWatcher(paneId)
+  if (pane) {
+    pane.loopActive = false
+    pane.loopWaitUntil = null
+    pane.loopEstimateResetAt = null
+  }
   sysNotify.forgetPane(paneId)
   syncViews()
 }
@@ -4020,6 +4057,13 @@ backend.on('terminal.exit', (raw) => {
   if (!ev?.pane_id) return
   const pane = panes.value.find((p) => p.id === ev.pane_id)
   if (!pane) return
+  // A dead PTY can't loop: stop the limit watcher and drop the loop badge state.
+  if (pane.loopActive || pane.loopWaitUntil != null || pane.loopEstimateResetAt != null) {
+    stopLoopLimitWatcher(ev.pane_id)
+    pane.loopActive = false
+    pane.loopWaitUntil = null
+    pane.loopEstimateResetAt = null
+  }
   if (pane.sessionMarker && !pane.pinnedSessionId) {
     pane.sessionMarker = undefined
     if (pane.preparationStatus !== 'ready') pane.preparationStatus = 'failed'
@@ -6836,6 +6880,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :workspace-path="p.workspacePath"
           :loop-active="p.loopActive"
           :loop-wait-until="p.loopWaitUntil"
+          :loop-estimate-reset-at="p.loopEstimateResetAt"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
@@ -6845,6 +6890,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @reorder-drop="(draggedId) => reorderPane(draggedId, p.id)"
           @cli-context-drop="(sourceId) => injectPaneContext(sourceId, p.id)"
           @toggle-loop="togglePaneLoop(p.id)"
+          @loop-resume-now="resumeLoopNow(p.id)"
         />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">

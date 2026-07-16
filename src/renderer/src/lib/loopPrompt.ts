@@ -17,6 +17,10 @@ export const SESSION_LIMIT_RE =
 /** Safety margin added past the parsed reset time before resuming. */
 export const LIMIT_RESET_BUFFER_MS = 2 * 60_000
 
+/** Heuristic pre-limit estimate window: Claude's rolling 5-hour session quota,
+ *  used to show an approximate reset time while the loop is still running. */
+export const LOOP_ESTIMATE_WINDOW_MS = 5 * 60 * 60_000
+
 /** Parse a session-limit message and return the epoch ms to auto-resume at:
  *  the next occurrence of the parsed wall-clock time in the message's IANA
  *  timezone (already past today → tomorrow), plus LIMIT_RESET_BUFFER_MS.

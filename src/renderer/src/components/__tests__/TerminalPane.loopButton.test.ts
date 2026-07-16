@@ -28,11 +28,31 @@ vi.mock('../../composables/useTerminal', async () => {
   }
 })
 
+// Real locale messages for the badge-text keys so the time-rendering tests
+// assert actual visible output (incl. the "~" estimate marker); other keys
+// fall back to the key itself, matching the earlier tests' expectations.
+const badgeMessages: Record<string, string> = {
+  'pane.terminal.loop-badge-estimate': '🔁 Loop · ~{time}',
+  'pane.terminal.loop-badge-resume': '🔁 resumes {time}'
+}
+
+function tMock(key: string, params?: Record<string, unknown>): string {
+  let msg = badgeMessages[key] ?? key
+  for (const [k, v] of Object.entries(params ?? {})) msg = msg.replace(`{${k}}`, String(v))
+  return msg
+}
+
+/** Same formatting path as TerminalPane's formatLoopTime — computing the
+ *  expectation from the epoch keeps assertions timezone-independent. */
+function expectedTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+}
+
 function mountPane(props: Record<string, unknown>): VueWrapper {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return mount(TerminalPane as any, {
     props: { paneId: 'pane-1', title: 'Claude', backend: {}, ...props },
-    global: { mocks: { $t: (key: string) => key } }
+    global: { mocks: { $t: tMock } }
   })
 }
 
@@ -70,5 +90,30 @@ describe('TerminalPane – loop launch button', () => {
 
     await wrapper.setProps({ loopWaitUntil: null })
     expect(wrapper.find('.loop-inline').classes()).not.toContain('waiting')
+  })
+
+  it('renders the ~HH:mm estimate on the running badge when loopEstimateResetAt is set', () => {
+    const estimateAt = 1_800_000_000_000 // fixed epoch; expectation derived via the same formatter
+    wrapper = mountPane({ loopActive: true, loopEstimateResetAt: estimateAt })
+    const badge = wrapper.find('.loop-inline')
+    expect(badge.text()).toContain('~')
+    expect(badge.text()).toContain(expectedTime(estimateAt))
+  })
+
+  it('renders the accurate resume time on the waiting badge and emits loop-resume-now on click', async () => {
+    const waitUntil = 1_800_000_000_000
+    wrapper = mountPane({ loopActive: true, loopWaitUntil: waitUntil })
+    const badge = wrapper.find('.loop-inline')
+    expect(badge.text()).toContain(expectedTime(waitUntil))
+    expect(badge.attributes('role')).toBe('button')
+
+    await badge.trigger('click')
+    expect(wrapper.emitted('loop-resume-now')).toHaveLength(1)
+  })
+
+  it('does not emit loop-resume-now when the running (non-waiting) badge is clicked', async () => {
+    wrapper = mountPane({ loopActive: true, loopEstimateResetAt: Date.now() + 3600_000 })
+    await wrapper.find('.loop-inline').trigger('click')
+    expect(wrapper.emitted('loop-resume-now')).toBeUndefined()
   })
 })

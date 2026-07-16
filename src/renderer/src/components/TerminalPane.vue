@@ -30,6 +30,9 @@ interface Props {
   /** Epoch ms of the scheduled session-limit auto-resume; set while the loop
    *  is paused waiting for the CLI quota to reset. */
   loopWaitUntil?: number | null
+  /** Epoch ms of the heuristic quota-reset estimate (loop start + 5h Claude
+   *  session window) shown on the running badge as an approximate time. */
+  loopEstimateResetAt?: number | null
   backend: ReturnType<typeof useBackend>
   workspacePath?: string
 }
@@ -49,6 +52,9 @@ const emit = defineEmits<{
   (e: 'cli-context-drop', sourcePaneId: string): void
   /** Loop button clicked — App.vue injects the loop prompt or clears the badge. */
   (e: 'toggle-loop'): void
+  /** Waiting badge clicked — App.vue injects the resume prompt immediately
+   *  instead of waiting for the scheduled quota reset. */
+  (e: 'loop-resume-now'): void
 }>()
 const containerRef = ref<HTMLElement | null>(null)
 const isDragOver = ref(false)
@@ -219,6 +225,19 @@ function onHeaderDrop(e: DragEvent): void {
   emit('reorder-drop', draggedId)
 }
 
+/** Local HH:mm (24h) for the loop badge's resume/estimate times. */
+function formatLoopTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+}
+
+/** Waiting badge is a click-to-resume-now affordance; a running badge click
+ *  keeps bubbling to the header (set-focus) unchanged. */
+function onLoopBadgeClick(e: MouseEvent): void {
+  if (props.loopWaitUntil == null) return
+  e.stopPropagation()
+  emit('loop-resume-now')
+}
+
 onMounted(() => {
   if (containerRef.value) terminal.mount(containerRef.value)
 })
@@ -270,10 +289,18 @@ onMounted(() => {
           v-if="loopActive"
           class="loop-inline"
           :class="{ waiting: loopWaitUntil != null }"
+          :role="loopWaitUntil != null ? 'button' : undefined"
           :title="loopWaitUntil != null
-            ? $t('pane.terminal.loop-waiting-tooltip', { time: new Date(loopWaitUntil).toLocaleTimeString() })
-            : $t('pane.terminal.loop-badge-tooltip')"
-        >🔁 Loop</span>
+            ? $t('pane.terminal.loop-waiting-tooltip', { time: formatLoopTime(loopWaitUntil) })
+            : loopEstimateResetAt != null
+              ? $t('pane.terminal.loop-estimate-tooltip', { time: formatLoopTime(loopEstimateResetAt) })
+              : $t('pane.terminal.loop-badge-tooltip')"
+          @click="onLoopBadgeClick"
+        >{{ loopWaitUntil != null
+          ? $t('pane.terminal.loop-badge-resume', { time: formatLoopTime(loopWaitUntil) })
+          : loopEstimateResetAt != null
+            ? $t('pane.terminal.loop-badge-estimate', { time: formatLoopTime(loopEstimateResetAt) })
+            : '🔁 Loop' }}</span>
         <button
           v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
           class="loop-btn"
@@ -452,6 +479,11 @@ onMounted(() => {
 }
 .loop-inline.waiting {
   opacity: 0.55;
+  cursor: pointer;
+}
+.loop-inline.waiting:hover {
+  opacity: 1;
+  border-color: var(--success-fg);
 }
 .loop-btn {
   font-size: 10px;
