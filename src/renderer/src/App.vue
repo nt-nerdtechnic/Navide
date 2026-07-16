@@ -1899,13 +1899,16 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
 /** Recover a render-corrupted pane: kill it and re-spawn the same CLI session
  *  via --resume at the current size. */
 const rebuildingPanes = new Set<string>()
-const rebuildingAllPanes = ref(false)
+const rebuildingTabPanes = ref(false)
 
 function paneCanRebuild(pane: ActivePane): boolean {
   return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok'].includes(pane.agentKey)
 }
 
-const rebuildablePaneCount = computed(() => panes.value.filter(paneCanRebuild).length)
+/** Rebuildable panes in the active tab only — matches what the user can see. */
+const rebuildablePaneCount = computed(
+  () => panes.value.filter((p) => tabFilteredPaneIds.value.has(p.id) && paneCanRebuild(p)).length
+)
 
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
   if (rebuildingPanes.has(paneId)) return
@@ -2006,14 +2009,16 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   }
 }
 
-async function rebuildAllPanesViaResume(): Promise<void> {
-  if (rebuildingAllPanes.value) return
-  // Rebuild replaces pane ids, so capture the full cross-tab batch up front.
-  const ids = panes.value.filter(paneCanRebuild).map((pane) => pane.id)
+async function rebuildTabPanesViaResume(): Promise<void> {
+  if (rebuildingTabPanes.value) return
+  // Rebuild replaces pane ids, so capture the batch up front.
+  const ids = panes.value
+    .filter((p) => tabFilteredPaneIds.value.has(p.id) && paneCanRebuild(p))
+    .map((pane) => pane.id)
   if (!ids.length) return
 
-  rebuildingAllPanes.value = true
-  pipelineLog(`↻ rebuilding ${ids.length} CLI pane(s) across all tabs`)
+  rebuildingTabPanes.value = true
+  pipelineLog(`↻ rebuilding ${ids.length} CLI pane(s) in the active tab`)
   try {
     for (const id of ids) {
       try {
@@ -2024,7 +2029,7 @@ async function rebuildAllPanesViaResume(): Promise<void> {
       }
     }
   } finally {
-    rebuildingAllPanes.value = false
+    rebuildingTabPanes.value = false
   }
 }
 
@@ -6440,7 +6445,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :spawn-history="spawnHistory"
       :focus-pane-id="effectiveFocusPaneId ?? undefined"
       :can-rebuild-all="rebuildablePaneCount > 0"
-      :rebuilding-all="rebuildingAllPanes"
+      :rebuilding-all="rebuildingTabPanes"
       @spawn="onManualSpawn"
       @spawn-resume="onManualResume"
       @kill="onKill"
@@ -6448,7 +6453,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @kill-all="onKillAll"
       @reinject="onReinject"
       @rebuild="rebuildPaneViaResume"
-      @rebuild-all="rebuildAllPanesViaResume"
+      @rebuild-all="rebuildTabPanesViaResume"
       @restore="restorePane"
       @context-menu="(id, ev) => openPaneCtxMenu(ev, id)"
       @update:layout-mode="layoutMode = $event"
@@ -6645,10 +6650,10 @@ function paneIsCommander(p: ActivePane): boolean {
         :tabs="stageTabs"
         v-model="activeTab"
         :can-rebuild-all="rebuildablePaneCount > 0"
-        :rebuilding-all="rebuildingAllPanes"
-        :rebuild-all-title="$t('action.rebuild-all-cli-panes')"
+        :rebuilding-all="rebuildingTabPanes"
+        :rebuild-all-title="$t('action.rebuild-tab-cli-panes')"
         @add="createRunGroup()"
-        @rebuild-all="rebuildAllPanesViaResume()"
+        @rebuild-all="rebuildTabPanesViaResume()"
         @rename="(key, name) => renameRunGroup(key, name)"
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"

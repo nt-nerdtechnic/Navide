@@ -18,7 +18,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   canRebuildAll: false,
   rebuildingAll: false,
-  rebuildAllTitle: 'Rebuild all CLI panes'
+  rebuildAllTitle: 'Rebuild CLI panes in this tab'
 })
 const emit = defineEmits<{
   (e: 'update:modelValue', v: string): void
