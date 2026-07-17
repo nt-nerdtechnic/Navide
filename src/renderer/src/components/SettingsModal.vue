@@ -35,7 +35,7 @@ const emit = defineEmits<{
 }>()
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'general' | 'appearance' | 'accounts'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
 
 interface SettingsSearchItem {
@@ -135,10 +135,10 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   },
   {
     id: 'settings-management',
-    tab: 'appearance',
+    tab: 'general',
     section: 'settings-management',
     title: 'Settings Management / 設定管理',
-    group: 'Appearance',
+    group: 'General',
     summary: 'Export/import the full settings bundle and inspect where settings are stored.',
     keywords: 'settings management export import bundle config path location scope user workspace 設定管理 匯出 匯入 全集 位置 路徑 層級',
   },
@@ -155,17 +155,35 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     id: 'appearance-runtime',
     tab: 'appearance',
     section: 'appearance-runtime',
-    title: 'Runtime & Environment / 執行環境',
+    title: 'Restore Windows / 還原視窗',
     group: 'Appearance',
-    summary: 'Restore windows, rerun environment check, and set backend startup timeout.',
-    keywords: 'restore windows environment onboarding backend timeout health check 啟動逾時 還原視窗 環境檢測',
+    summary: 'Restore editor windows on startup.',
+    keywords: 'restore windows 還原視窗 startup 啟動',
   },
   {
-    id: 'appearance-loop-prompt',
-    tab: 'appearance',
-    section: 'appearance-loop-prompt',
+    id: 'general-environment',
+    tab: 'general',
+    section: 'general-environment',
+    title: 'Environment / 環境檢測',
+    group: 'General',
+    summary: 'Rerun the environment check (onboarding).',
+    keywords: 'environment onboarding env check rerun 環境檢測 重新檢測',
+  },
+  {
+    id: 'general-backend-timeout',
+    tab: 'general',
+    section: 'general-backend-timeout',
+    title: 'Backend Timeout / 後端啟動逾時',
+    group: 'General',
+    summary: 'Set the backend startup health-check timeout.',
+    keywords: 'backend timeout health check startup 啟動逾時 後端',
+  },
+  {
+    id: 'general-loop-prompt',
+    tab: 'general',
+    section: 'general-loop-prompt',
     title: 'Loop Prompt / Loop 提示詞',
-    group: 'Appearance',
+    group: 'General',
     summary: 'Edit the prompt sent to a CLI pane when its loop button is clicked, and the auto-resume prompt after a session-limit pause.',
     keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
   },
@@ -321,6 +339,7 @@ const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPa
   pipelines: { scope: 'User', storage: 'pipelines' },
   mcp: { scope: 'User', storage: 'mcp' },
   analyzer: { scope: 'User', storage: 'analyzer' },
+  general: { scope: 'User', storage: 'localStorage' },
   appearance: { scope: 'User', storage: 'localStorage' },
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
 }
@@ -1139,6 +1158,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'pipelines' }]" @click="activeTab = 'pipelines'">{{ $t('settings.tab.pipelines') }}</button>
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">{{ $t('settings.tab.mcp') }}</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'general' }]" @click="activeTab = 'general'">{{ $t('settings.tab.general') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
           </div>
@@ -1902,8 +1922,37 @@ async function plDelete(id: string, name: string) {
 
         </div>
 
-        <!-- ══ APPEARANCE TAB ══ -->
-        <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
+        <!-- ══ GENERAL TAB ══ -->
+        <div v-show="activeTab === 'general'" class="s-body appearance-body">
+          <section class="ap-section" data-settings-section="general-loop-prompt">
+            <h3 class="ap-title">{{ $t('settings.appearance.loop-prompt') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
+            <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
+            <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
+            <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
+          </section>
+
+          <section class="ap-section" data-settings-section="general-environment">
+            <h3 class="ap-title">{{ $t('settings.appearance.environment') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
+            <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
+          </section>
+
+          <section class="ap-section" data-settings-section="general-backend-timeout">
+            <h3 class="ap-title">{{ $t('settings.appearance.backend-timeout') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.backend-timeout-hint') }}</p>
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('settings.appearance.backend-timeout-label') }}</label>
+              <input
+                type="number"
+                min="15"
+                max="120"
+                :value="healthCheckTimeoutSec"
+                @change="onHealthTimeoutChange(($event.target as HTMLInputElement).value)"
+              />
+            </div>
+          </section>
+
           <section class="ap-section" data-settings-section="settings-management">
             <div class="ap-section-head">
               <h3 class="ap-title">{{ $t('settings.management.title') }}</h3>
@@ -1914,13 +1963,16 @@ async function plDelete(id: string, name: string) {
             </div>
             <p class="ap-hint">{{ $t('settings.management.bundle-hint') }}</p>
             <div class="settings-meta-row inline">
-              <span class="scope-badge">{{ settingsScopeNotes.appearance.scope }}</span>
-              <span class="settings-path" :title="pathForTab('appearance')">{{ pathForTab('appearance') }}</span>
+              <span class="scope-badge">{{ settingsScopeNotes.general.scope }}</span>
+              <span class="settings-path" :title="pathForTab('general')">{{ pathForTab('general') }}</span>
             </div>
             <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
             <p v-if="settingsBundleError" class="err-msg">{{ settingsBundleError }}</p>
           </section>
+        </div>
 
+        <!-- ══ APPEARANCE TAB ══ -->
+        <div v-show="activeTab === 'appearance'" class="s-body appearance-body">
           <section class="ap-section" data-settings-section="appearance-theme">
             <h3 class="ap-title">{{ $t('settings.appearance.theme') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.theme-hint') }}</p>
@@ -2007,34 +2059,6 @@ async function plDelete(id: string, name: string) {
             </div>
           </section>
 
-          <section class="ap-section" data-settings-section="appearance-runtime">
-            <h3 class="ap-title">{{ $t('settings.appearance.environment') }}</h3>
-            <p class="ap-hint">{{ $t('settings.appearance.environment-hint') }}</p>
-            <button class="ap-reset" @click="emit('reopen-onboarding')">{{ $t('settings.appearance.rerun-env-check') }}</button>
-          </section>
-
-          <section class="ap-section" data-settings-section="appearance-loop-prompt">
-            <h3 class="ap-title">{{ $t('settings.appearance.loop-prompt') }}</h3>
-            <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
-            <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
-            <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
-            <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
-          </section>
-
-          <section class="ap-section" data-settings-section="appearance-runtime">
-            <h3 class="ap-title">{{ $t('settings.appearance.backend-timeout') }}</h3>
-            <p class="ap-hint">{{ $t('settings.appearance.backend-timeout-hint') }}</p>
-            <div class="field ap-timeout-field">
-              <label class="lbl">{{ $t('settings.appearance.backend-timeout-label') }}</label>
-              <input
-                type="number"
-                min="15"
-                max="120"
-                :value="healthCheckTimeoutSec"
-                @change="onHealthTimeoutChange(($event.target as HTMLInputElement).value)"
-              />
-            </div>
-          </section>
         </div>
 
         <div v-show="activeTab === 'accounts'" class="s-body" data-settings-section="accounts">
