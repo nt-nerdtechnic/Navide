@@ -427,6 +427,21 @@ class ProjectStore:
         )
         return project
 
+    def _adopt_rename_stub(self, project: "Project", pane: "PaneRecord", pane_id: str) -> None:
+        """Fold a rename-race stub into the record that survives a spawn/re-key.
+
+        rename_pane() upserts a pending stub when a rename arrives before the
+        spawn (or before a restart re-keys the previous record onto the new
+        pane_id). Without this fold the stub duplicates the pane_id: lookups
+        and restore hit the re-keyed record first, so the user's name silently
+        disappears. The stub carries the user's latest intent, so its
+        custom_name wins — including "" (an explicit reset).
+        """
+        for stub in [p for p in project.panes
+                     if p is not pane and p.pane_id == pane_id and p.spawn_status == "pending"]:
+            pane.custom_name = stub.custom_name
+            project.panes.remove(stub)
+
     def _find_slot_pane(self, project: "Project", stage_index: int, slot_label: str) -> "PaneRecord | None":
         return next(
             (p for p in project.panes
@@ -456,6 +471,7 @@ class ProjectStore:
             pane = PaneRecord(pane_id=pane_id, origin="pipeline",
                               stage_id=stage.stage_id, stage_index=stage_index, slot_label=slot_label)
             project.panes.append(pane)
+        self._adopt_rename_stub(project, pane, pane_id)
         pane.pane_id = pane_id
         pane.spawn_status = "spawned"
         if agent: pane.agent = agent
@@ -534,6 +550,7 @@ class ProjectStore:
         if pane is None:
             pane = PaneRecord(pane_id=pane_id, origin="manual")
             project.panes.append(pane)
+        self._adopt_rename_stub(project, pane, pane_id)
         pane.pane_id = pane_id
         pane.agent = agent
         pane.role = role
@@ -612,6 +629,15 @@ class ProjectStore:
             pane = PaneRecord(pane_id=pane_id, origin="manual")
             project.panes.append(pane)
         pane.custom_name = custom_name
+        # Keep the renderer-owned history mirror consistent at the source:
+        # detached windows never persist it themselves and the renderer's
+        # debounced snapshot can be lost on quit, so patch it here too.
+        for entry in project.ui_spawn_history or []:
+            if isinstance(entry, dict) and entry.get("paneId") == pane_id:
+                if custom_name:
+                    entry["customName"] = custom_name
+                else:
+                    entry.pop("customName", None)
         self.save(project)
         return project
 

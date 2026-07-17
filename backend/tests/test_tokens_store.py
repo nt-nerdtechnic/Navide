@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend.tokens_store import TokensStore
+from agent_team_backend.tokens_store import LEGACY_EVENT_KEYS_LIMIT, TokensStore
 
 
 @pytest.fixture
@@ -194,3 +194,84 @@ def test_record_negative_tokens_clamped_to_zero(store: TokensStore, workspace: s
     assert snap["workspace"]["current_run"]["totals"] == {
         "input": 0, "output": 5, "calls": 1,
     }
+
+
+# ───────────────────────── Legacy event key bounds ─────────────────────────
+
+
+def _write_ingestion_state(
+    path: Path, keys: list[str], expires_at: str | None = None
+) -> None:
+    doc: dict = {
+        "version": 2,
+        "files": {},
+        "legacy_event_keys": keys,
+        "recent_event_keys": [],
+    }
+    if expires_at is not None:
+        doc["legacy_event_keys_expires_at"] = expires_at
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def _legacy_store(tmp_path: Path) -> TokensStore:
+    return TokensStore(
+        global_path=tmp_path / "global-tokens.json",
+        ingestion_state_path=tmp_path / "token-ingestion-state.json",
+        workspace_base_dir=tmp_path / "workspaces",
+    )
+
+
+def test_legacy_event_keys_capped_on_load(tmp_path: Path) -> None:
+    state_path = tmp_path / "token-ingestion-state.json"
+    _write_ingestion_state(
+        state_path, [f"k{i:06d}" for i in range(LEGACY_EVENT_KEYS_LIMIT + 100)]
+    )
+    store = _legacy_store(tmp_path)
+    store.flush()
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert len(saved["legacy_event_keys"]) == LEGACY_EVENT_KEYS_LIMIT
+    # Expiry gets stamped the first time keys are seen without one.
+    assert isinstance(saved["legacy_event_keys_expires_at"], str)
+    assert saved["legacy_event_keys_expires_at"] > "2026"
+
+
+def test_legacy_event_keys_cleared_after_expiry(tmp_path: Path) -> None:
+    state_path = tmp_path / "token-ingestion-state.json"
+    _write_ingestion_state(
+        state_path, ["a", "b"], expires_at="2000-01-01T00:00:00Z"
+    )
+    store = _legacy_store(tmp_path)
+    store.flush()
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["legacy_event_keys"] == []
+
+
+def test_legacy_event_keys_expiry_stamped_once(tmp_path: Path) -> None:
+    state_path = tmp_path / "token-ingestion-state.json"
+    _write_ingestion_state(state_path, ["a"])
+    store = _legacy_store(tmp_path)
+    store.flush()
+    first = json.loads(state_path.read_text(encoding="utf-8"))
+    assert first["legacy_event_keys"] == ["a"]  # under cap, not expired → kept
+    store2 = _legacy_store(tmp_path)
+    store2.flush()
+    second = json.loads(state_path.read_text(encoding="utf-8"))
+    assert second["legacy_event_keys_expires_at"] == first["legacy_event_keys_expires_at"]
+
+
+def test_legacy_event_key_still_drains_via_record(tmp_path: Path) -> None:
+    state_path = tmp_path / "token-ingestion-state.json"
+    _write_ingestion_state(state_path, ["dup1"])
+    store = _legacy_store(tmp_path)
+    # First event matching a legacy key is suppressed (already counted
+    # pre-migration) and consumes the key.
+    assert store.record(None, source="cli", vendor="claude",
+                        input_tokens=5, output_tokens=5, dedup_key="dup1")
+    assert store.snapshot(None)["global"]["all_time"]["calls"] == 0
+    # Key consumed → the same event replaying again counts normally.
+    assert store.record(None, source="cli", vendor="claude",
+                        input_tokens=5, output_tokens=5, dedup_key="dup1")
+    assert store.snapshot(None)["global"]["all_time"]["calls"] == 1
+    store.flush()
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["legacy_event_keys"] == []

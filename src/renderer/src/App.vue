@@ -6074,6 +6074,9 @@ function setPaneCustomName(paneId: string, rawName: string): void {
     sessionHomeId: pane.sessionHomeId,
   }, pane.customName)
   syncViews()
+  // No workspace → the backend has no project.json to persist into and would
+  // silently drop the rename; keep it as in-memory state only.
+  if (!pane.workspacePath) return
   backend.send('project.rename_pane', {
     workspace_path: pane.workspacePath,
     pane_id: pane.id,

@@ -395,3 +395,80 @@ def test_rename_pane_before_record_exists_upserts(
     assert panes[0].spawn_status == "spawned"
     assert panes[0].agent == "claude"
     assert panes[0].custom_name == "風格"
+
+
+def test_rename_stub_merges_when_respawn_rekeys_manual_pane(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """A rename targeting the NEW pane_id can land while the restart re-key
+    (previous_pane_id) is still in flight. The re-key must adopt the stub's
+    name instead of leaving a duplicate pane_id that shadows it."""
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="old-id", agent="codex")
+    store.rename_pane(ws, pane_id="old-id", custom_name="Old Name")
+    # User renames the restored pane before its spawn message re-keys the record.
+    store.rename_pane(ws, pane_id="new-id", custom_name="New Name")
+    store.record_manual_pane_spawn(
+        ws, pane_id="new-id", previous_pane_id="old-id", agent="codex"
+    )
+    panes = [p for p in store.peek(ws).panes if p.pane_id == "new-id"]
+    assert len(panes) == 1  # stub folded, no shadowing duplicate
+    assert panes[0].spawn_status == "spawned"
+    assert panes[0].custom_name == "New Name"
+
+
+def test_rename_stub_reset_wins_over_rekeyed_name(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """A reset (empty rename) racing the re-key is the user's latest intent and
+    must clear the name carried over from the previous record."""
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="old-id", agent="codex")
+    store.rename_pane(ws, pane_id="old-id", custom_name="Old Name")
+    store.rename_pane(ws, pane_id="new-id", custom_name="")
+    store.record_manual_pane_spawn(
+        ws, pane_id="new-id", previous_pane_id="old-id", agent="codex"
+    )
+    panes = [p for p in store.peek(ws).panes if p.pane_id == "new-id"]
+    assert len(panes) == 1
+    assert panes[0].custom_name == ""
+
+
+def test_rename_stub_merges_when_slot_respawn_rekeys(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """Same rename-vs-spawn race for pipeline slots: the slot record is matched
+    by (stage_index, slot_label), so a stub keyed to the new pane_id would
+    otherwise survive as a duplicate."""
+    store, ws = store_with_stage
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="old-id", agent="claude")
+    store.rename_pane(ws, pane_id="new-id", custom_name="Architect")
+    store.record_slot_spawn(ws, stage_index=0, slot_label="Build",
+                            pane_id="new-id", agent="claude")
+    panes = [p for p in store.peek(ws).panes if p.pane_id == "new-id"]
+    assert len(panes) == 1
+    assert panes[0].origin == "pipeline"
+    assert panes[0].custom_name == "Architect"
+
+
+def test_rename_pane_patches_history_mirror(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    """rename_pane keeps ui_spawn_history's customName in sync so the Agent
+    History list can't show a stale/missing title after a restart (detached
+    windows never persist the mirror; the renderer snapshot is debounced)."""
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="p1", agent="codex")
+    store.set_ui_state(ws, spawn_history=[
+        {"paneId": "p1", "agentLabel": "Codex", "customName": "Before"},
+        {"paneId": "p2", "agentLabel": "Claude"},
+    ])
+    store.rename_pane(ws, pane_id="p1", custom_name="After")
+    history = store.peek(ws).ui_spawn_history
+    assert history[0]["customName"] == "After"
+    assert "customName" not in history[1]  # other entries untouched
+    # Empty rename resets the mirror entry too.
+    store.rename_pane(ws, pane_id="p1", custom_name="")
+    history = store.peek(ws).ui_spawn_history
+    assert "customName" not in history[0]

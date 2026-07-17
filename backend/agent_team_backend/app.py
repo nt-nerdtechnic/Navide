@@ -1691,7 +1691,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             pane_id = payload.get("pane_id", "") or ""
             custom_name = (payload.get("custom_name", "") or "").strip()
             if pane_id:
-                project_store.rename_pane(ws_raw, pane_id=pane_id, custom_name=custom_name)
+                project = project_store.rename_pane(
+                    ws_raw, pane_id=pane_id, custom_name=custom_name
+                )
+                # rename_pane() patches the persisted history mirror; push it to
+                # peer windows so their in-memory copies (and later snapshots)
+                # don't clobber the rename with stale entries.
+                if project is not None and project.ui_spawn_history is not None:
+                    await broadcast(
+                        make_event("project.ui_state_changed", {
+                            "workspace_path": project.workspace_path,
+                            "spawn_history": project.ui_spawn_history,
+                        }),
+                        exclude=session,
+                    )
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
         elif msg_type == "project.set_theme":
             # Backup-only persistence: localStorage in the renderer is the source

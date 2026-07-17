@@ -22,7 +22,7 @@ import os
 import threading
 from collections import deque
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -40,6 +40,11 @@ PERSISTENCE_JOURNAL_FILE = "token-persistence-journal.json"
 WORKSPACES_SUBDIR = "workspaces"
 INGESTION_STATE_VERSION = 2
 RECENT_EVENT_KEYS_LIMIT = 512
+# The legacy migration dedup set must stay bounded: evicting a key only risks
+# a one-off global double count if its event ever replays, while an unbounded
+# set gets fully rewritten to disk every save interval.
+LEGACY_EVENT_KEYS_LIMIT = 4096
+LEGACY_EVENT_KEYS_TTL_DAYS = 14
 
 
 def _ws_dir_name(workspace_path: str) -> str:
@@ -53,6 +58,14 @@ def _ws_dir_name(workspace_path: str) -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _days_from_now_iso(days: int) -> str:
+    return (
+        (datetime.now(timezone.utc) + timedelta(days=days))
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def _today() -> str:
@@ -95,6 +108,7 @@ def _empty_ingestion_state() -> dict[str, Any]:
         "version": INGESTION_STATE_VERSION,
         "files": {},
         "legacy_event_keys": [],
+        "legacy_event_keys_expires_at": None,
         "recent_event_keys": [],
     }
 
@@ -159,9 +173,10 @@ class TokensStore:
         recent = [str(k) for k in self._ingestion_state.get("recent_event_keys", [])]
         self._recent_event_keys = deque(recent[-RECENT_EVENT_KEYS_LIMIT:])
         self._recent_event_key_set = set(self._recent_event_keys)
+        legacy_pruned = self._enforce_legacy_key_bounds()
 
         # Dirty flags (set inside _lock, consumed by save loop outside _lock)
-        self._dirty_ingestion_state: bool = bool(self._legacy_paths_to_remove)
+        self._dirty_ingestion_state: bool = bool(self._legacy_paths_to_remove) or legacy_pruned
         self._dirty_workspaces: set[str] = set()
         self._dirty_global: bool = False
 
@@ -375,7 +390,46 @@ class TokensStore:
         doc["legacy_event_keys"] = sorted(legacy)
         return doc
 
+    def _enforce_legacy_key_bounds(self) -> bool:
+        """Bound the one-time migration dedup set. Returns True if it changed.
+
+        Keys for events that never replay would otherwise linger forever and
+        be re-serialized on every flush. Expiry is stamped when keys are first
+        seen and checked again on every flush snapshot so long-running
+        processes drain too.
+        """
+        if not self._legacy_event_keys:
+            return False
+        changed = False
+        expires_at = str(
+            self._ingestion_state.get("legacy_event_keys_expires_at") or ""
+        )
+        if not expires_at:
+            expires_at = _days_from_now_iso(LEGACY_EVENT_KEYS_TTL_DAYS)
+            self._ingestion_state["legacy_event_keys_expires_at"] = expires_at
+            changed = True
+        if _now_iso() >= expires_at:
+            log.info(
+                "legacy event keys expired; dropping %d entries",
+                len(self._legacy_event_keys),
+            )
+            self._legacy_event_keys.clear()
+            return True
+        if len(self._legacy_event_keys) > LEGACY_EVENT_KEYS_LIMIT:
+            dropped = len(self._legacy_event_keys) - LEGACY_EVENT_KEYS_LIMIT
+            log.warning(
+                "legacy event keys over limit; dropping %d of %d entries",
+                dropped,
+                len(self._legacy_event_keys),
+            )
+            self._legacy_event_keys = set(
+                sorted(self._legacy_event_keys)[:LEGACY_EVENT_KEYS_LIMIT]
+            )
+            changed = True
+        return changed
+
     def _state_snapshot_locked(self) -> dict[str, Any]:
+        self._enforce_legacy_key_bounds()
         self._ingestion_state["legacy_event_keys"] = sorted(self._legacy_event_keys)
         self._ingestion_state["recent_event_keys"] = list(self._recent_event_keys)
         return deepcopy(self._ingestion_state)
