@@ -177,20 +177,40 @@ def _validate_ref_name(value: str, label: str = "name") -> str | None:
 
 # ─── subprocess helper ────────────────────────────────────────────────────────
 
+# Cap concurrent git subprocesses globally. Read paths (status/discover/list_*)
+# have no per-repo lock, so one git.changed broadcast can otherwise fan out into
+# an unbounded number of parallel git processes across windows and repos.
+_GIT_PROC_LIMIT = 4
+# Keyed per event loop: asyncio.Semaphore binds to the loop it is first awaited
+# on, and tests run each case on a fresh loop.
+_git_proc_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _git_proc_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _git_proc_semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(_GIT_PROC_LIMIT)
+        _git_proc_semaphores[loop] = sem
+    return sem
+
+
 async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
     """Run a git command; return (returncode, stdout, stderr)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
+        async with _git_proc_semaphore():
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
         return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
     except asyncio.TimeoutError:
         try:
             proc.kill()
+            await proc.wait()
         except Exception:
             pass
         return 128, "", "git command timed out"
@@ -203,18 +223,20 @@ async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
 async def _run_with_input(args: list[str], cwd: str, stdin_text: str) -> tuple[int, str, str]:
     """Run a git command feeding *stdin_text* to stdin; return (rc, stdout, stderr)."""
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_text.encode("utf-8")), timeout=15.0)
+        async with _git_proc_semaphore():
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=cwd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(stdin_text.encode("utf-8")), timeout=15.0)
         return proc.returncode or 0, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace")
     except asyncio.TimeoutError:
         try:
             proc.kill()
+            await proc.wait()
         except Exception:
             pass
         return 128, "", "git command timed out"

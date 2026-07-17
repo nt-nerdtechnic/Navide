@@ -1,6 +1,7 @@
 """Tests for git_service.py — all operations run in tmp_path git repos."""
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -2167,3 +2168,131 @@ class TestCommitContextMenu:
         result = await git_service.commit_file_diff(str(tmp_path), "-flag", "b.txt")
         assert result["ok"] is False
         assert result["hunks"] == []
+
+
+# ── subprocess concurrency limit / timeout reaping ────────────────────────────
+
+class TestGitProcLimit:
+    """_run/_run_with_input cap concurrent git subprocesses and reap timeouts."""
+
+    @pytest.mark.asyncio
+    async def test_run_concurrency_capped(self, monkeypatch):
+        in_flight = 0
+        peak = 0
+        release = asyncio.Event()
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                nonlocal in_flight, peak
+                in_flight += 1
+                peak = max(peak, in_flight)
+                await release.wait()
+                in_flight -= 1
+                return b"", b""
+
+            def kill(self):
+                pass
+
+            async def wait(self):
+                return 0
+
+        async def fake_exec(*args, **kwargs):
+            return FakeProc()
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+        tasks = [
+            asyncio.create_task(git_service._run(["git", "status"], "."))
+            for _ in range(8)
+        ]
+        # Let all tasks start and settle behind the semaphore.
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert peak <= git_service._GIT_PROC_LIMIT
+        # The limit is fully utilized; the other tasks are queued, not running.
+        assert in_flight == git_service._GIT_PROC_LIMIT
+
+        release.set()
+        results = await asyncio.gather(*tasks)
+        assert peak == git_service._GIT_PROC_LIMIT
+        assert all(r == (0, "", "") for r in results)
+
+    @pytest.mark.asyncio
+    async def test_run_timeout_kills_and_reaps(self, monkeypatch):
+        procs: list = []
+
+        class FakeProc:
+            returncode = None
+
+            def __init__(self):
+                self.killed = False
+                self.waited = False
+
+            async def communicate(self, input=None):
+                await asyncio.sleep(3600)  # never returns within the timeout
+
+            def kill(self):
+                self.killed = True
+
+            async def wait(self):
+                self.waited = True
+                return -9
+
+        async def fake_exec(*args, **kwargs):
+            proc = FakeProc()
+            procs.append(proc)
+            return proc
+
+        real_wait_for = asyncio.wait_for
+
+        async def fast_wait_for(awaitable, timeout=None):
+            return await real_wait_for(awaitable, timeout=0.01)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(asyncio, "wait_for", fast_wait_for)
+
+        result = await git_service._run(["git", "status"], ".")
+        assert result == (128, "", "git command timed out")
+        assert procs[0].killed is True
+        assert procs[0].waited is True  # zombie reaped, not just killed
+
+    @pytest.mark.asyncio
+    async def test_run_with_input_timeout_kills_and_reaps(self, monkeypatch):
+        procs: list = []
+
+        class FakeProc:
+            returncode = None
+
+            def __init__(self):
+                self.killed = False
+                self.waited = False
+
+            async def communicate(self, input=None):
+                await asyncio.sleep(3600)
+
+            def kill(self):
+                self.killed = True
+
+            async def wait(self):
+                self.waited = True
+                return -9
+
+        async def fake_exec(*args, **kwargs):
+            proc = FakeProc()
+            procs.append(proc)
+            return proc
+
+        real_wait_for = asyncio.wait_for
+
+        async def fast_wait_for(awaitable, timeout=None):
+            return await real_wait_for(awaitable, timeout=0.01)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(asyncio, "wait_for", fast_wait_for)
+
+        result = await git_service._run_with_input(["git", "apply"], ".", "diff")
+        assert result == (128, "", "git command timed out")
+        assert procs[0].killed is True
+        assert procs[0].waited is True

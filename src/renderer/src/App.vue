@@ -74,6 +74,7 @@ import {
   parseLimitReset,
   matchSessionLimit,
   unseenTail,
+  formatLoopTime,
 } from './lib/loopPrompt'
 import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
@@ -1134,10 +1135,6 @@ function startLoopLimitWatcher(paneId: string): void {
   loopLimitWatchers.set(paneId, watcher)
 }
 
-/** Local HH:mm (24h) for loop resume times shown in notifications. */
-function formatLoopTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-}
 
 // Dispatch a cloud issue into a running agent pane as a task (one-way: no
 // write-back to the issue). Reuses the pipeline-kickoff injection path.
@@ -2452,10 +2449,20 @@ async function refreshStatusBarGit(): Promise<void> {
 }
 
 let _gitPollTimer: number | null = null
+// Skip the poll while the window is hidden (minimized / other desktop) — each
+// tick spawns git subprocesses in the backend, and hidden windows kept polling
+// forever. Catch up once when the window becomes visible again.
+const _onGitPollVisibility = (): void => {
+  if (!document.hidden && _gitPollTimer !== null) void refreshStatusBarGit()
+}
+document.addEventListener('visibilitychange', _onGitPollVisibility)
+onUnmounted(() => document.removeEventListener('visibilitychange', _onGitPollVisibility))
 watch(workspaceSelected, (v) => {
   if (v) {
     void refreshStatusBarGit()
-    _gitPollTimer = window.setInterval(() => void refreshStatusBarGit(), 5000)
+    _gitPollTimer = window.setInterval(() => {
+      if (!document.hidden) void refreshStatusBarGit()
+    }, 5000)
   } else {
     if (_gitPollTimer !== null) { clearInterval(_gitPollTimer); _gitPollTimer = null }
     statusBarGit.value = { branch: '', ahead: 0, behind: 0, dirty: false }

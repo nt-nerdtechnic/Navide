@@ -69,9 +69,18 @@ export function useRepoDiscovery(
   const _stopWatch = watch(workspacePath, () => void refresh(), { immediate: true })
   onScopeDispose(_stopWatch)
 
-  // Re-discover on any git.changed broadcast (any workspace — discovery is cheap).
+  // Re-discover on git.changed broadcasts for this workspace (or a repo nested
+  // inside it — badge statuses register watchers under each repo's abs_path).
+  // Reacting to every workspace made each window re-scan all repos and fan out
+  // a git.status per repo on any disk change anywhere.
   let _timer: ReturnType<typeof setTimeout> | null = null
-  const _offChanged = on('git.changed', () => {
+  const _offChanged = on('git.changed', (payload: unknown) => {
+    const p = payload as { workspace_path?: string }
+    const ws = workspacePath()
+    if (p?.workspace_path && ws) {
+      const prefix = ws.endsWith('/') ? ws : ws + '/'
+      if (p.workspace_path !== ws && !p.workspace_path.startsWith(prefix)) return
+    }
     if (_timer !== null) clearTimeout(_timer)
     _timer = setTimeout(() => {
       _timer = null

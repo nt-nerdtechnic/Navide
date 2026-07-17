@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useTerminal } from '../composables/useTerminal'
 import { useTheme } from '../composables/useTheme'
 import type { useBackend } from '../composables/useBackend'
 import { extractDropPaths, shellEscape } from '../lib/drop'
 import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource, writeCliPaneDragPayload } from '../lib/cliContext'
+import { formatLoopTime } from '../lib/loopPrompt'
 import RebuildIcon from './RebuildIcon.vue'
 
 interface Props {
@@ -225,10 +226,26 @@ function onHeaderDrop(e: DragEvent): void {
   emit('reorder-drop', draggedId)
 }
 
-/** Local HH:mm (24h) for the loop badge's resume/estimate times. */
-function formatLoopTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-}
+/** Single source for the loop badge's 3-way state machine (waiting /
+ *  estimate / plain): which i18n keys to render and the formatted time they
+ *  interpolate — the template's text and tooltip both read from here. */
+const loopBadge = computed(() => {
+  if (props.loopWaitUntil != null) {
+    return {
+      textKey: 'pane.terminal.loop-badge-resume' as string | null,
+      titleKey: 'pane.terminal.loop-waiting-tooltip',
+      time: formatLoopTime(props.loopWaitUntil)
+    }
+  }
+  if (props.loopEstimateResetAt != null) {
+    return {
+      textKey: 'pane.terminal.loop-badge-estimate' as string | null,
+      titleKey: 'pane.terminal.loop-estimate-tooltip',
+      time: formatLoopTime(props.loopEstimateResetAt)
+    }
+  }
+  return { textKey: null as string | null, titleKey: 'pane.terminal.loop-badge-tooltip', time: '' }
+})
 
 /** The badge is the off-switch while the loop runs (the ∞ start button is
  *  hidden then); while waiting it is a click-to-resume-now affordance. */
@@ -290,17 +307,9 @@ onMounted(() => {
           class="loop-inline"
           :class="{ waiting: loopWaitUntil != null }"
           role="button"
-          :title="loopWaitUntil != null
-            ? $t('pane.terminal.loop-waiting-tooltip', { time: formatLoopTime(loopWaitUntil) })
-            : loopEstimateResetAt != null
-              ? $t('pane.terminal.loop-estimate-tooltip', { time: formatLoopTime(loopEstimateResetAt) })
-              : $t('pane.terminal.loop-badge-tooltip')"
+          :title="$t(loopBadge.titleKey, { time: loopBadge.time })"
           @click="onLoopBadgeClick"
-        >{{ loopWaitUntil != null
-          ? $t('pane.terminal.loop-badge-resume', { time: formatLoopTime(loopWaitUntil) })
-          : loopEstimateResetAt != null
-            ? $t('pane.terminal.loop-badge-estimate', { time: formatLoopTime(loopEstimateResetAt) })
-            : '∞ Loop' }}</span>
+        >{{ loopBadge.textKey ? $t(loopBadge.textKey, { time: loopBadge.time }) : '∞ Loop' }}</span>
         <button
           v-if="!loopActive && displayStatus !== 'exited' && displayStatus !== 'error'"
           class="loop-btn"

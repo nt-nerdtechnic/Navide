@@ -112,6 +112,108 @@ describe('useRepoDiscovery', () => {
     scope.stop()
   })
 
+  it('ignores git.changed for an unrelated workspace_path', async () => {
+    vi.useFakeTimers()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+    ]))
+    mock.setResponse('git.status', { ...EMPTY_STATUS, branch: 'main' })
+
+    const { result, scope } = withScope(() =>
+      useRepoDiscovery(() => '/ws', mock.backend),
+    )
+    await vi.runAllTimersAsync()
+    expect(result.repositories.value).toHaveLength(1)
+
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+      { rel_path: 'b', abs_path: '/ws/b', branch: 'feat' },
+    ]))
+    // '/ws2' shares the '/ws' string prefix but is NOT under '/ws/'.
+    mock.emit('git.changed', { workspace_path: '/ws2' })
+    await vi.runAllTimersAsync()
+
+    // No refresh: repository list is unchanged.
+    expect(result.repositories.value).toHaveLength(1)
+    scope.stop()
+  })
+
+  it('refreshes on git.changed for the same workspace_path', async () => {
+    vi.useFakeTimers()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+    ]))
+    mock.setResponse('git.status', { ...EMPTY_STATUS, branch: 'main' })
+
+    const { result, scope } = withScope(() =>
+      useRepoDiscovery(() => '/ws', mock.backend),
+    )
+    await vi.runAllTimersAsync()
+    expect(result.repositories.value).toHaveLength(1)
+
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+      { rel_path: 'b', abs_path: '/ws/b', branch: 'feat' },
+    ]))
+    mock.emit('git.changed', { workspace_path: '/ws' })
+    await vi.runAllTimersAsync()
+
+    expect(result.repositories.value).toHaveLength(2)
+    scope.stop()
+  })
+
+  it('refreshes on git.changed for a path nested under the workspace', async () => {
+    vi.useFakeTimers()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+    ]))
+    mock.setResponse('git.status', { ...EMPTY_STATUS, branch: 'main' })
+
+    const { result, scope } = withScope(() =>
+      useRepoDiscovery(() => '/ws', mock.backend),
+    )
+    await vi.runAllTimersAsync()
+    expect(result.repositories.value).toHaveLength(1)
+
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+      { rel_path: 'b', abs_path: '/ws/b', branch: 'feat' },
+    ]))
+    mock.emit('git.changed', { workspace_path: '/ws/a' })
+    await vi.runAllTimersAsync()
+
+    expect(result.repositories.value).toHaveLength(2)
+    scope.stop()
+  })
+
+  it('refreshes on git.changed without workspace_path (backward compat)', async () => {
+    vi.useFakeTimers()
+    const mock = createMockBackend('connected')
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+    ]))
+    mock.setResponse('git.status', { ...EMPTY_STATUS, branch: 'main' })
+
+    const { result, scope } = withScope(() =>
+      useRepoDiscovery(() => '/ws', mock.backend),
+    )
+    await vi.runAllTimersAsync()
+    expect(result.repositories.value).toHaveLength(1)
+
+    mock.setResponse('git.discover_repositories', makeDiscoverResp([
+      { rel_path: 'a', abs_path: '/ws/a', branch: 'main' },
+      { rel_path: 'b', abs_path: '/ws/b', branch: 'feat' },
+    ]))
+    mock.emit('git.changed', { some_other_field: true })
+    await vi.runAllTimersAsync()
+
+    expect(result.repositories.value).toHaveLength(2)
+    scope.stop()
+  })
+
   it('clears repositories when refresh is called with empty workspace', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('git.discover_repositories', makeDiscoverResp([

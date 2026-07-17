@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import type { Ref } from 'vue'
 import TerminalPane from '../TerminalPane.vue'
+import { formatLoopTime } from '../../lib/loopPrompt'
 
 // Coverage for the loop launch button: the LOOP badge renders only while
 // loopActive is set and doubles as the off-switch (the ∞ start button is
@@ -43,11 +44,9 @@ function tMock(key: string, params?: Record<string, unknown>): string {
   return msg
 }
 
-/** Same formatting path as TerminalPane's formatLoopTime — computing the
- *  expectation from the epoch keeps assertions timezone-independent. */
-function expectedTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-}
+/** Same formatter the component uses — computing the expectation from the
+ *  epoch keeps assertions timezone-independent. */
+const expectedTime = formatLoopTime
 
 function mountPane(props: Record<string, unknown>): VueWrapper {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

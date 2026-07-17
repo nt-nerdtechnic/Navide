@@ -40,6 +40,13 @@ export function unseenTail(
   return buffer.slice(buffer.length - unseen).slice(-maxChars)
 }
 
+/** Local HH:mm (24h) for the loop badge's resume/estimate times and the
+ *  loop-paused notification. Single source — badge and notification must
+ *  render the same clock. */
+export function formatLoopTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+}
+
 /** Safety margin added past the parsed reset time before resuming. */
 export const LIMIT_RESET_BUFFER_MS = 2 * 60_000
 
