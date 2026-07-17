@@ -5,10 +5,11 @@ import type { Ref } from 'vue'
 import TerminalPane from '../TerminalPane.vue'
 
 // Coverage for the loop launch button: the LOOP badge renders only while
-// loopActive is set, clicking the header loop button emits 'toggle-loop'
-// (App.vue owns the injection/clear logic), and the button is hidden once the
-// pane's CLI has exited. useTerminal is mocked out — no xterm instance, no
-// backend traffic (same setup as TerminalPane.cliContextDrag.test.ts).
+// loopActive is set and doubles as the off-switch (the ∞ start button is
+// hidden while the loop runs), clicking emits 'toggle-loop' (App.vue owns the
+// injection/clear logic), and the button is hidden once the pane's CLI has
+// exited. useTerminal is mocked out — no xterm instance, no backend traffic
+// (same setup as TerminalPane.cliContextDrag.test.ts).
 
 const mockTerminal = vi.hoisted(() => ({ displayStatus: null as unknown as Ref<string> }))
 
@@ -84,6 +85,12 @@ describe('TerminalPane – loop launch button', () => {
     expect(wrapper.find('.loop-btn').exists()).toBe(false)
   })
 
+  it('hides the loop button while the loop is active (the badge is the off-switch)', () => {
+    wrapper = mountPane({ loopActive: true })
+    expect(wrapper.find('.loop-btn').exists()).toBe(false)
+    expect(wrapper.find('.loop-inline').exists()).toBe(true)
+  })
+
   it('shows the dimmed waiting badge variant while a session-limit auto-resume is pending', async () => {
     wrapper = mountPane({ loopActive: true, loopWaitUntil: Date.now() + 3600_000 })
     expect(wrapper.find('.loop-inline').classes()).toContain('waiting')
@@ -109,11 +116,13 @@ describe('TerminalPane – loop launch button', () => {
 
     await badge.trigger('click')
     expect(wrapper.emitted('loop-resume-now')).toHaveLength(1)
+    expect(wrapper.emitted('toggle-loop')).toBeUndefined()
   })
 
-  it('does not emit loop-resume-now when the running (non-waiting) badge is clicked', async () => {
+  it('emits toggle-loop (off) when the running (non-waiting) badge is clicked', async () => {
     wrapper = mountPane({ loopActive: true, loopEstimateResetAt: Date.now() + 3600_000 })
     await wrapper.find('.loop-inline').trigger('click')
+    expect(wrapper.emitted('toggle-loop')).toHaveLength(1)
     expect(wrapper.emitted('loop-resume-now')).toBeUndefined()
   })
 })

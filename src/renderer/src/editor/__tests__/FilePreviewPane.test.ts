@@ -145,11 +145,11 @@ describe('FilePreviewPane – binary hex dump', () => {
   it('fetches the first 64 KB with a Range header and renders offset/hex/ascii', async () => {
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x41, 0x42, 0x43])
     fetchMock.mockImplementation(async () => fakeResponse(bytes, bytes.length))
-    const wrapper = mountPane('archive.zip')
+    const wrapper = mountPane('archive.7z')
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:8123/fs/raw?workspace=%2Fws&rel=archive.zip',
+      'http://127.0.0.1:8123/fs/raw?workspace=%2Fws&rel=archive.7z',
       { headers: { Range: 'bytes=0-65535' } },
     )
     const hex = wrapper.find('pre.fpv-hex')
@@ -174,6 +174,47 @@ describe('FilePreviewPane – binary hex dump', () => {
     const wrapper = mountPane('broken.bin')
     await flushPromises()
     expect(wrapper.find('.fpv-hex-status--error').text()).toContain('Failed to load file contents.')
+  })
+})
+
+describe('FilePreviewPane – dispatch for new kinds', () => {
+  it('routes new media extensions to the media branches (.mkv video, .aac audio, .apng image)', async () => {
+    const mkv = mountPane('movies/clip.mkv')
+    await flushPromises()
+    expect(mkv.find('video.fpv-video').exists()).toBe(true)
+
+    const aac = mountPane('sounds/tone.aac')
+    await flushPromises()
+    expect(aac.find('audio.fpv-audio').exists()).toBe(true)
+
+    const apng = mountPane('anim/loader.apng')
+    await flushPromises()
+    expect(apng.find('img.fpv-img').exists()).toBe(true)
+  })
+
+  it('mounts CsvPreview for .csv files', async () => {
+    const wrapper = mountPane('data/table.csv')
+    await flushPromises()
+    expect(wrapper.find('.csvp').exists()).toBe(true)
+    expect(wrapper.find('pre.fpv-hex').exists()).toBe(false)
+  })
+
+  it('mounts FontPreview for .ttf files instead of the hex fallback', async () => {
+    const wrapper = mountPane('fonts/custom.ttf')
+    await flushPromises()
+    expect(wrapper.find('.fontp').exists()).toBe(true)
+    expect(wrapper.find('pre.fpv-hex').exists()).toBe(false)
+  })
+
+  it('mounts ArchivePreview for .zip and .tar.gz files instead of the hex fallback', async () => {
+    const zip = mountPane('bundle/archive.zip')
+    await flushPromises()
+    expect(zip.find('.arcp').exists()).toBe(true)
+    expect(zip.find('pre.fpv-hex').exists()).toBe(false)
+
+    const targz = mountPane('bundle/site.tar.gz')
+    await flushPromises()
+    expect(targz.find('.arcp').exists()).toBe(true)
   })
 })
 

@@ -3,7 +3,7 @@ import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { settingsGet, settingsSet } from '../lib/settings'
 import { useGit } from '../composables/useGit'
-import type { IgnoreTarget } from '../composables/useGit'
+import type { IgnoreTarget, GitWorktree } from '../composables/useGit'
 import { useIssues } from '../composables/useIssues'
 import type { IssueDetail } from '../composables/useIssues'
 import { useGitAccounts } from '../composables/useGitAccounts'
@@ -67,7 +67,7 @@ const {
   fileLog, showFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
-  addWorktree, removeWorktree,
+  addWorktree, removeWorktree, pruneWorktrees, lockWorktree, unlockWorktree, moveWorktree, repairWorktrees,
   setGitConfig,
   cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
@@ -1064,14 +1064,90 @@ async function doDeleteTag(name: string): Promise<void> {
 const worktreeExpanded = ref(false), newWtPath = ref(''), newWtBranch = ref(''), newWtIsNew = ref(false), worktreeError = ref('')
 const worktreeBranchOptions = computed(() => gitBranches.value.filter((b) => !b.is_remote).map((b) => b.name))
 watch(newWtIsNew, () => { newWtBranch.value = '' })
+// per-row in-flight guard: holds the busy worktree path, or '*' for card-level ops
+const worktreeBusy = ref('')
 async function doAddWorktree(): Promise<void> {
   worktreeError.value = ''
   const r = await addWorktree(newWtPath.value.trim(), newWtBranch.value.trim(), newWtIsNew.value)
-  if (r.ok) { newWtPath.value = ''; newWtBranch.value = '' } else worktreeError.value = r.error || 'failed'
+  if (r.ok) { newWtPath.value = ''; newWtBranch.value = '' } else worktreeError.value = r.error || t('label.worktree-add-failed')
 }
-async function doRemoveWorktree(path: string): Promise<void> {
+async function doRemoveWorktree(wt: GitWorktree): Promise<void> {
   worktreeError.value = ''
-  const r = await removeWorktree(path); if (!r.ok) worktreeError.value = r.error || 'remove failed'
+  const ok = await notifyConfirm(
+    t('label.confirm-remove-worktree', { name: wt.path.split('/').at(-1) || wt.path }),
+    { title: t('label.remove-worktree-title'), confirmText: t('action.remove') }
+  )
+  if (!ok) return
+  worktreeBusy.value = wt.path
+  try {
+    const r = await removeWorktree(wt.path, false)
+    if (r.ok) return
+    // A dirty/locked worktree fails a plain remove — surface the error and offer --force.
+    const forced = await notifyConfirm(
+      t('label.force-remove-worktree', { error: r.error || t('label.worktree-remove-failed') }),
+      { title: t('label.remove-worktree-title'), confirmText: t('action.force-remove') }
+    )
+    if (!forced) { worktreeError.value = r.error || t('label.worktree-remove-failed'); return }
+    const fr = await removeWorktree(wt.path, true)
+    if (!fr.ok) worktreeError.value = fr.error || t('label.worktree-remove-failed')
+  } finally {
+    worktreeBusy.value = ''
+  }
+}
+async function doOpenWorktree(wt: GitWorktree): Promise<void> {
+  const api = (window as Window & {
+    agentTeam?: { openMainWindow?: (args?: { workspace_path?: string }) => Promise<{ ok: boolean }> }
+  }).agentTeam
+  await api?.openMainWindow?.({ workspace_path: wt.path })
+}
+async function doRevealWorktree(wt: GitWorktree): Promise<void> {
+  const r = await window.agentTeam?.revealPath?.(wt.path)
+  if (r && !r.ok) notifyToast(r.error || t('label.worktree-reveal-failed'), { type: 'error' })
+}
+async function doToggleWorktreeLock(wt: GitWorktree): Promise<void> {
+  worktreeError.value = ''
+  worktreeBusy.value = wt.path
+  try {
+    const r = wt.locked ? await unlockWorktree(wt.path) : await lockWorktree(wt.path)
+    if (!r.ok) worktreeError.value = r.error || t(wt.locked ? 'label.worktree-unlock-failed' : 'label.worktree-lock-failed')
+  } finally {
+    worktreeBusy.value = ''
+  }
+}
+async function doMoveWorktree(wt: GitWorktree): Promise<void> {
+  if (!window.agentTeam?.pickWorkspace) return
+  const dest = await window.agentTeam.pickWorkspace(wt.path)
+  if (!dest) return
+  worktreeError.value = ''
+  worktreeBusy.value = wt.path
+  try {
+    const r = await moveWorktree(wt.path, dest)
+    if (!r.ok) worktreeError.value = r.error || t('label.worktree-move-failed')
+  } finally {
+    worktreeBusy.value = ''
+  }
+}
+async function doPruneWorktrees(): Promise<void> {
+  worktreeError.value = ''
+  worktreeBusy.value = '*'
+  try {
+    const r = await pruneWorktrees()
+    if (r.ok) notifyToast(r.output?.trim() || t('label.worktree-pruned'), { type: 'success' })
+    else notifyToast(r.error || t('label.worktree-prune-failed'), { type: 'error' })
+  } finally {
+    worktreeBusy.value = ''
+  }
+}
+async function doRepairWorktrees(): Promise<void> {
+  worktreeError.value = ''
+  worktreeBusy.value = '*'
+  try {
+    const r = await repairWorktrees()
+    if (r.ok) notifyToast(r.output?.trim() || t('label.worktree-repaired'), { type: 'success' })
+    else notifyToast(r.error || t('label.worktree-repair-failed'), { type: 'error' })
+  } finally {
+    worktreeBusy.value = ''
+  }
 }
 async function pickWorktreeDir(): Promise<void> {
   if (!window.agentTeam?.pickWorkspace) return
@@ -2300,29 +2376,47 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div class="spacer" />
         </div>
         <div v-if="worktreeExpanded" class="card-body collapsible-body">
+        <div class="input-row" style="margin-bottom:6px">
+          <button class="btn-ghost sm" :disabled="worktreeBusy === '*'" :title="$t('action.prune')" @click="doPruneWorktrees">{{ $t('action.prune') }}</button>
+          <button class="btn-ghost sm" :disabled="worktreeBusy === '*'" :title="$t('action.repair')" @click="doRepairWorktrees">{{ $t('action.repair') }}</button>
+        </div>
         <div v-for="wt in gitWorktrees" :key="wt.path" class="generic-row">
           <span class="wt-icon">{{ wt.is_main ? '✦' : '○' }}</span>
           <div style="flex:1;min-width:0">
-            <div class="b-name" :title="wt.path">{{ wt.path.split('/').at(-1) }}</div>
-            <div class="b-track">{{ wt.branch || 'detached HEAD' }} · {{ wt.head }}</div>
+            <div class="wt-name-row">
+              <span class="b-name" :title="wt.path">{{ wt.path.split('/').at(-1) }}</span>
+              <span v-if="wt.bare" class="wt-badge">{{ $t('label.bare') }}</span>
+              <span v-if="wt.detached" class="wt-badge">{{ $t('label.detached') }}</span>
+              <span v-if="wt.locked" class="wt-badge warn" :title="wt.lock_reason">🔒 {{ $t('label.locked') }}</span>
+              <span v-if="wt.prunable" class="wt-badge warn" :title="wt.prune_reason">⚠ {{ $t('label.stale') }}</span>
+            </div>
+            <div class="b-track">
+              {{ wt.bare ? $t('label.bare') : (wt.branch || $t('label.detached-head')) }} · {{ wt.head
+              }}<template v-if="wt.locked && wt.lock_reason"> · {{ wt.lock_reason }}</template
+              ><template v-if="wt.prunable && wt.prune_reason"> · {{ wt.prune_reason }}</template>
+            </div>
           </div>
-          <button v-if="!wt.is_main" class="row-btn always danger" @click.stop="doRemoveWorktree(wt.path)">✕</button>
+          <button v-if="!wt.bare && wt.path !== workspacePath" class="row-btn always" :disabled="worktreeBusy === wt.path" :title="$t('action.open-in-new-window')" @click.stop="doOpenWorktree(wt)">⧉</button>
+          <button v-if="!wt.bare" class="row-btn always" :disabled="worktreeBusy === wt.path" :title="$t('action.reveal-in-finder')" @click.stop="doRevealWorktree(wt)">◱</button>
+          <button v-if="!wt.is_main" class="row-btn always" :disabled="worktreeBusy === wt.path" :title="wt.locked ? $t('action.unlock') : $t('action.lock')" @click.stop="doToggleWorktreeLock(wt)">{{ wt.locked ? '🔓' : '🔒' }}</button>
+          <button v-if="!wt.is_main && !wt.bare" class="row-btn always" :disabled="worktreeBusy === wt.path" :title="$t('action.move')" @click.stop="doMoveWorktree(wt)">⇄</button>
+          <button v-if="!wt.is_main" class="row-btn always danger" :disabled="worktreeBusy === wt.path" :title="$t('action.remove')" @click.stop="doRemoveWorktree(wt)">✕</button>
         </div>
         <div class="input-row" style="margin-top:6px; flex-direction:column; gap:4px">
           <div class="input-row">
-            <input v-model="newWtPath" class="git-input" placeholder="/path/to/worktree" style="flex:2" />
-            <button class="btn-ghost sm icon-only" title="Browse folder" @click="pickWorktreeDir">
+            <input v-model="newWtPath" class="git-input" :placeholder="$t('label.worktree-path-placeholder')" style="flex:2" />
+            <button class="btn-ghost sm icon-only" :title="$t('action.browse-folder')" @click="pickWorktreeDir">
               <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
             </button>
-            <input v-if="newWtIsNew" v-model="newWtBranch" class="git-input" placeholder="new branch" style="flex:1" />
+            <input v-if="newWtIsNew" v-model="newWtBranch" class="git-input" :placeholder="$t('label.new-branch-placeholder')" style="flex:1" />
             <select v-else v-model="newWtBranch" class="git-input" style="flex:1">
-              <option value="" disabled>branch…</option>
+              <option value="" disabled>{{ $t('label.branch-placeholder') }}</option>
               <option v-for="b in worktreeBranchOptions" :key="b" :value="b">{{ b }}</option>
             </select>
-            <button class="btn-ghost sm" :disabled="!newWtPath.trim() || !newWtBranch.trim()" @click="doAddWorktree">＋</button>
+            <button class="btn-ghost sm" :disabled="!newWtPath.trim() || !newWtBranch.trim()" :title="$t('action.add-worktree')" @click="doAddWorktree">＋</button>
           </div>
           <label class="check-label">
-            <input v-model="newWtIsNew" type="checkbox" /> Create new branch
+            <input v-model="newWtIsNew" type="checkbox" /> {{ $t('label.create-new-branch') }}
           </label>
         </div>
         <p v-if="worktreeError" class="err-text">{{ worktreeError }}</p>
@@ -3223,6 +3317,13 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .remote-name { color: var(--text-muted); font-size: 10px; flex-shrink: 0; min-width: 44px; }
 .remote-url  { color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .wt-icon { color: var(--success-bright); font-size: 11px; flex-shrink: 0; width: 14px; text-align: center; }
+.wt-name-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.wt-name-row .b-name { flex: 0 1 auto; }
+.wt-badge {
+  font-size: 9px; color: var(--text-secondary); background: var(--bg-active);
+  border-radius: 8px; padding: 0 5px; flex-shrink: 0; white-space: nowrap;
+}
+.wt-badge.warn { color: var(--danger-fg); }
 
 /* ── Issues (GitHub/GitLab) ─────────────────────────────────────────────────── */
 .issue-state-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); }

@@ -1041,6 +1041,58 @@ class TestWorktrees:
         wts = await git_service.list_worktrees(str(tmp_path))
         assert not any(w["path"] == wt_path for w in wts)
 
+    @pytest.mark.asyncio
+    async def test_list_entries_carry_state_flags(self, tmp_path):
+        init_repo(tmp_path)
+        wts = await git_service.list_worktrees(str(tmp_path))
+        for w in wts:
+            for key in ("detached", "bare", "locked", "lock_reason", "prunable", "prune_reason"):
+                assert key in w
+
+    @pytest.mark.asyncio
+    async def test_remove_worktree_rejects_flag_path(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.remove_worktree(str(tmp_path), "--force")
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_lock_unlock_worktree_round_trip(self, tmp_path):
+        init_repo(tmp_path)
+        wt_path = str(tmp_path / "wt-lock")
+        orig = (await git_service.get_status(str(tmp_path)))["branch"]
+        await git_service.add_worktree(str(tmp_path), wt_path, orig + "-lk", new_branch=True)
+
+        lock = await git_service.lock_worktree(str(tmp_path), wt_path, reason="removable disk")
+        assert lock["ok"] is True
+        wts = await git_service.list_worktrees(str(tmp_path))
+        entry = next(w for w in wts if w["path"] == wt_path)
+        assert entry["locked"] is True
+
+        unlock = await git_service.unlock_worktree(str(tmp_path), wt_path)
+        assert unlock["ok"] is True
+        wts = await git_service.list_worktrees(str(tmp_path))
+        entry = next(w for w in wts if w["path"] == wt_path)
+        assert entry["locked"] is False
+
+    @pytest.mark.asyncio
+    async def test_move_worktree(self, tmp_path):
+        init_repo(tmp_path)
+        src = str(tmp_path / "wt-src")
+        dst = str(tmp_path / "wt-dst")
+        orig = (await git_service.get_status(str(tmp_path)))["branch"]
+        await git_service.add_worktree(str(tmp_path), src, orig + "-mv", new_branch=True)
+        result = await git_service.move_worktree(str(tmp_path), src, dst)
+        assert result["ok"] is True
+        wts = await git_service.list_worktrees(str(tmp_path))
+        assert any(w["path"] == dst for w in wts)
+        assert not any(w["path"] == src for w in wts)
+
+    @pytest.mark.asyncio
+    async def test_prune_and_repair_run_ok(self, tmp_path):
+        init_repo(tmp_path)
+        assert (await git_service.prune_worktrees(str(tmp_path)))["ok"] is True
+        assert (await git_service.repair_worktree(str(tmp_path)))["ok"] is True
+
 
 # ── git_config ─────────────────────────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import functools
 import logging
 import mimetypes
@@ -775,16 +776,21 @@ async def health() -> dict[str, Any]:
     }
 
 
-@app.get("/fs/raw")
-async def fs_raw(workspace: str, rel: str) -> FileResponse:
-    """Serve a raw workspace file over HTTP (Range/206 handled by FileResponse).
+# Font mimes served inline (specimen @font-face fetch, /fs/page subresources).
+_FONT_MIMES = ("font/ttf", "font/otf", "font/woff", "font/woff2")
 
-    Same trust boundary as the ws fs.* handlers: the workspace argument is not
-    checked against a known-workspace set (fs.list_dir does not do that
-    either) — any existing directory is accepted, and path safety (escape +
-    .agent-team guard) is enforced by fs_service._resolve_safe.
 
-    Media, PDF, and (X)HTML are served inline; HTML is confined by
+def _serve_workspace_file(workspace: str, rel: str, *, allow_css: bool = False) -> FileResponse:
+    """Serve a workspace file over HTTP (Range/206 handled by FileResponse).
+
+    Shared policy for /fs/raw and /fs/page. Same trust boundary as the ws
+    fs.* handlers: the workspace argument is not checked against a
+    known-workspace set (fs.list_dir does not do that either) — any existing
+    directory is accepted, and path safety (escape + .agent-team guard) is
+    enforced by fs_service._resolve_safe.
+
+    Media, fonts, PDF, and (X)HTML are served inline (plus text/css when
+    ``allow_css`` — /fs/page relative subresources); HTML is confined by
     `Content-Security-Policy: sandbox` (opaque origin, no scripts/forms/
     plugins) for the sandboxed iframe preview. Every other type is downgraded
     to an application/octet-stream attachment.
@@ -806,6 +812,8 @@ async def fs_raw(workspace: str, rel: str) -> FileResponse:
     # sandbox because it would disable Chromium's embedded viewer.
     inline = (
         media_type in ("application/pdf", "text/html", "application/xhtml+xml")
+        or media_type in _FONT_MIMES
+        or (allow_css and media_type == "text/css")
         or media_type.startswith(("image/", "video/", "audio/"))
     )
     headers = {"X-Content-Type-Options": "nosniff"}
@@ -820,6 +828,29 @@ async def fs_raw(workspace: str, rel: str) -> FileResponse:
             headers=headers,
         )
     return FileResponse(target, media_type=media_type, headers=headers)
+
+
+@app.get("/fs/raw")
+async def fs_raw(workspace: str, rel: str) -> FileResponse:
+    """Serve a raw workspace file (query-addressed). See _serve_workspace_file."""
+    return _serve_workspace_file(workspace, rel)
+
+
+@app.get("/fs/page/{ws_b64}/{rel:path}")
+async def fs_page(ws_b64: str, rel: str) -> FileResponse:
+    """Serve a workspace file path-addressed so relative subresources resolve.
+
+    ``ws_b64`` is the URL-safe base64 of the absolute workspace path (padding
+    optional). Same policy as /fs/raw, plus text/css inline — an HTML preview
+    loaded from this route can fetch its ./style.css, images, and fonts via
+    relative URLs.
+    """
+    try:
+        padded = ws_b64 + "=" * (-len(ws_b64) % 4)
+        workspace = base64.urlsafe_b64decode(padded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="invalid workspace encoding") from exc
+    return _serve_workspace_file(workspace, rel, allow_css=True)
 
 
 @app.get("/mcp/servers")
@@ -2723,6 +2754,46 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             if result.get("ok"):
                 asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
 
+        elif msg_type == "git.prune_worktrees":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.prune_worktrees(ws_path)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.lock_worktree":
+            ws_path = payload.get("workspace_path") or ""
+            wt_path = payload.get("worktree_path") or ""
+            reason = payload.get("reason") or ""
+            result = await git_service.lock_worktree(ws_path, wt_path, reason)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.unlock_worktree":
+            ws_path = payload.get("workspace_path") or ""
+            wt_path = payload.get("worktree_path") or ""
+            result = await git_service.unlock_worktree(ws_path, wt_path)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.move_worktree":
+            ws_path = payload.get("workspace_path") or ""
+            wt_path = payload.get("worktree_path") or ""
+            new_path = payload.get("new_path") or ""
+            result = await git_service.move_worktree(ws_path, wt_path, new_path)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+        elif msg_type == "git.repair_worktrees":
+            ws_path = payload.get("workspace_path") or ""
+            result = await git_service.repair_worktree(ws_path)
+            await session.send_json(make_response(msg_id, msg_type, result))
+            if result.get("ok"):
+                asyncio.create_task(broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
         elif msg_type == "git.config_get":
             ws_path = payload.get("workspace_path") or ""
             result = await git_service.get_config(ws_path)
@@ -3003,6 +3074,20 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "fs.read_image":
             ws_path = payload.get("workspace_path") or ""
             result = await asyncio.to_thread(fs_service.read_image, ws_path, payload.get("rel_path", "") or "")
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "fs.list_archive":
+            ws_path = payload.get("workspace_path") or ""
+            result = await asyncio.to_thread(
+                fs_service.list_archive, ws_path, payload.get("rel_path", "") or ""
+            )
+            await session.send_json(make_response(msg_id, msg_type, result))
+
+        elif msg_type == "fs.convert_office":
+            ws_path = payload.get("workspace_path") or ""
+            result = await asyncio.to_thread(
+                fs_service.convert_office, ws_path, payload.get("rel_path", "") or ""
+            )
             await session.send_json(make_response(msg_id, msg_type, result))
 
         # ── Shell run (shell.run) ───────────────────────────────────────────

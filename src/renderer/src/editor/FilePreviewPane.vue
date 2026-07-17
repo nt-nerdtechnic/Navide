@@ -1,7 +1,17 @@
 <script setup lang="ts">
+// Dispatch host for all file previews: classifies the file via previewKind,
+// renders the shared toolbar, and mounts the per-kind body. Simple kinds
+// (image/video/audio/pdf/html/binary) are inline branches below; richer kinds
+// live as standalone components under ./preview/ — to add one, define the
+// kind in previewTypes.ts, create preview/<Kind>Preview.vue taking the
+// common props (workspacePath, relPath, name, backend), and add a v-else-if
+// branch in the template before the binary fallback.
 import { computed, onMounted, ref } from 'vue'
 import type { useBackend } from '../composables/useBackend'
 import { buildRawUrl, fileExt, previewKind } from './previewTypes'
+import ArchivePreview from './preview/ArchivePreview.vue'
+import CsvPreview from './preview/CsvPreview.vue'
+import FontPreview from './preview/FontPreview.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -202,6 +212,31 @@ onMounted(() => {
       <iframe class="fpv-html-frame" :src="rawUrl" :title="name" sandbox="" />
     </div>
 
+    <!-- CSV/TSV: sortable table -->
+    <div v-else-if="kind === 'csv'" class="fpv-body fpv-component-body">
+      <CsvPreview :workspace-path="workspacePath" :rel-path="relPath" :backend="backend" />
+    </div>
+
+    <!-- Font: @font-face specimen -->
+    <div v-else-if="kind === 'font'" class="fpv-body fpv-component-body">
+      <FontPreview
+        :workspace-path="workspacePath"
+        :rel-path="relPath"
+        :name="name"
+        :backend="backend"
+      />
+    </div>
+
+    <!-- Archive: entry listing via fs.list_archive -->
+    <div v-else-if="kind === 'archive'" class="fpv-body fpv-component-body">
+      <ArchivePreview
+        :workspace-path="workspacePath"
+        :rel-path="relPath"
+        :name="name"
+        :backend="backend"
+      />
+    </div>
+
     <!-- Unknown binary: info card + hex dump -->
     <div v-else class="fpv-body fpv-card-body">
       <div class="fpv-card">
@@ -329,6 +364,9 @@ onMounted(() => {
 }
 .fpv-html-body {
   display: flex;
+  overflow: hidden;
+}
+.fpv-component-body {
   overflow: hidden;
 }
 .fpv-html-frame {

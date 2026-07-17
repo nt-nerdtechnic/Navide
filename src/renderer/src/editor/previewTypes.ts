@@ -3,13 +3,21 @@
 // content is read. Files outside every list open in the text editor as before
 // (EditorPane's own binary branch covers the ones that turn out to be binary).
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'binary'
+export type PreviewKind =
+  | 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'csv' | 'font' | 'archive' | 'binary'
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'avif'])
-const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v'])
-const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg', 'flac'])
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'avif', 'apng'])
+const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'ogv'])
+const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'opus'])
 // HTML previews in a sandboxed iframe; opens raw by default like markdown.
 const HTML_EXTS = new Set(['html', 'htm'])
+// Delimited text: sortable table preview; opens raw with a Preview toggle.
+const CSV_EXTS = new Set(['csv', 'tsv'])
+// Font specimen via dynamic @font-face (checked before the binary fallback).
+const FONT_EXTS = new Set(['ttf', 'otf', 'woff', 'woff2'])
+// Archive entry listing via fs.list_archive (checked before the binary
+// fallback; .tar.gz is special-cased below since its fileExt is 'gz').
+const ARCHIVE_EXTS = new Set(['zip', 'tar', 'tgz'])
 // Known-binary extensions that get the info-card + hex-dump fallback.
 const BINARY_EXTS = new Set([
   'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'jar', 'war',
@@ -27,7 +35,9 @@ export function fileExt(relPath: string): string {
 
 // Preview kind for files the preview pane can render; null for everything
 // else (text files, markdown, unknown extensions). All kinds except 'html'
-// auto-open in preview; 'html' opens raw with a Preview toggle.
+// and 'csv' auto-open in preview; those open raw with a Preview toggle.
+// Font and archive checks run before the binary fallback so their extensions
+// win over BINARY_EXTS membership.
 export function previewKind(relPath: string): PreviewKind | null {
   const ext = fileExt(relPath)
   if (IMAGE_EXTS.has(ext)) return 'image'
@@ -35,6 +45,9 @@ export function previewKind(relPath: string): PreviewKind | null {
   if (AUDIO_EXTS.has(ext)) return 'audio'
   if (ext === 'pdf') return 'pdf'
   if (HTML_EXTS.has(ext)) return 'html'
+  if (CSV_EXTS.has(ext)) return 'csv'
+  if (FONT_EXTS.has(ext)) return 'font'
+  if (ARCHIVE_EXTS.has(ext) || relPath.toLowerCase().endsWith('.tar.gz')) return 'archive'
   if (BINARY_EXTS.has(ext)) return 'binary'
   return null
 }

@@ -13,8 +13,13 @@ import base64
 import os
 import shutil
 import stat as stat_mod
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any
+
+import mammoth
+import openpyxl
 
 try:
     import chardet as _chardet
@@ -460,6 +465,131 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
         return {"ok": True, "data_url": f"data:{mime};base64,{b64}", "mime": mime, "size": size}
     except (FsError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
+
+
+_ARCHIVE_SIZE_LIMIT = 100 * 1024 * 1024  # 100 MB — cap archive listing reads
+_ARCHIVE_MAX_ENTRIES = 2_000  # cap entries returned per archive listing
+
+
+def list_archive(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    """List entries of a .zip / .tar / .tar.gz / .tgz archive.
+
+    Returns:
+        ok=True  → {"ok": True, "entries": [{"name", "size", "is_dir"}],
+                     "total_entries": int, "truncated": bool}
+        ok=False → {"ok": False, "error": str}
+
+    At most 2000 entries are returned (truncated=True beyond that); archives
+    larger than 100 MB are rejected.
+    """
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if not target.is_file():
+            raise FsError("not a file")
+        size = target.stat().st_size
+        if size > _ARCHIVE_SIZE_LIMIT:
+            return {"ok": False, "error": f"archive too large ({size / (1024 * 1024):.1f} MB > 100 MB)"}
+
+        name = target.name.lower()
+        entries: list[dict[str, Any]] = []
+        total = 0
+        if name.endswith(".zip"):
+            with zipfile.ZipFile(target) as zf:
+                for info in zf.infolist():
+                    if info.flag_bits & 0x1:
+                        return {"ok": False, "error": "archive is encrypted"}
+                    total += 1
+                    if len(entries) < _ARCHIVE_MAX_ENTRIES:
+                        entries.append({
+                            "name": info.filename,
+                            "size": info.file_size,
+                            "is_dir": info.is_dir(),
+                        })
+        elif name.endswith((".tar", ".tar.gz", ".tgz")):
+            with tarfile.open(target, "r:*") as tf:
+                for member in tf:
+                    total += 1
+                    if len(entries) < _ARCHIVE_MAX_ENTRIES:
+                        entries.append({
+                            "name": member.name,
+                            "size": member.size,
+                            "is_dir": member.isdir(),
+                        })
+        else:
+            return {"ok": False, "error": "unsupported archive type (expected .zip, .tar, .tar.gz or .tgz)"}
+        return {
+            "ok": True,
+            "entries": entries,
+            "total_entries": total,
+            "truncated": total > len(entries),
+        }
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+    except (zipfile.BadZipFile, tarfile.TarError) as exc:
+        return {"ok": False, "error": f"corrupted archive: {exc}"}
+
+
+_OFFICE_SIZE_LIMIT = 10 * 1024 * 1024  # 10 MB — cap office conversion reads
+_XLSX_MAX_ROWS = 1_000  # per sheet
+_XLSX_MAX_COLS = 100  # per row
+
+
+def convert_office(workspace_path: str, rel_path: str) -> dict[str, Any]:
+    """Convert an office document for preview.
+
+    Returns:
+        .docx → {"ok": True, "kind": "docx", "html": str}  (mammoth)
+        .xlsx → {"ok": True, "kind": "xlsx",
+                  "sheets": [{"name", "rows": list[list[str]], "truncated"}]}
+                 (openpyxl read-only; 1000 rows × 100 cols per sheet)
+        ok=False → {"ok": False, "error": str}
+
+    Files larger than 10 MB are rejected.
+    """
+    try:
+        target = _resolve_safe(workspace_path, rel_path)
+        if not target.is_file():
+            raise FsError("not a file")
+        size = target.stat().st_size
+        if size > _OFFICE_SIZE_LIMIT:
+            return {"ok": False, "error": f"file too large ({size / (1024 * 1024):.1f} MB > 10 MB)"}
+        ext = target.suffix.lower()
+    except (FsError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+    if ext == ".docx":
+        try:
+            with target.open("rb") as fh:
+                result = mammoth.convert_to_html(fh)
+        except Exception as exc:  # noqa: BLE001 — mammoth raises many zip/xml error types
+            return {"ok": False, "error": f"cannot convert docx: {exc}"}
+        return {"ok": True, "kind": "docx", "html": result.value}
+
+    if ext == ".xlsx":
+        wb = None
+        try:
+            wb = openpyxl.load_workbook(target, read_only=True, data_only=True)
+            sheets: list[dict[str, Any]] = []
+            for sheet in wb.worksheets:
+                rows: list[list[str]] = []
+                truncated = False
+                for row in sheet.iter_rows(values_only=True):
+                    if len(rows) >= _XLSX_MAX_ROWS:
+                        truncated = True
+                        break
+                    if len(row) > _XLSX_MAX_COLS:
+                        truncated = True
+                        row = row[:_XLSX_MAX_COLS]
+                    rows.append(["" if cell is None else str(cell) for cell in row])
+                sheets.append({"name": sheet.title, "rows": rows, "truncated": truncated})
+        except Exception as exc:  # noqa: BLE001 — openpyxl raises many zip/xml error types
+            return {"ok": False, "error": f"cannot read xlsx: {exc}"}
+        finally:
+            if wb is not None:
+                wb.close()
+        return {"ok": True, "kind": "xlsx", "sheets": sheets}
+
+    return {"ok": False, "error": "unsupported office file type (expected .docx or .xlsx)"}
 
 
 _WRITE_SIZE_LIMIT = 50 * 1024 * 1024  # 50 MB — prevent disk-fill via AI tool

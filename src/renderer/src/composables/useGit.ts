@@ -77,6 +77,12 @@ export interface GitWorktree {
   head: string
   branch: string
   is_main: boolean
+  detached: boolean
+  bare: boolean
+  locked: boolean
+  lock_reason: string
+  prunable: boolean
+  prune_reason: string
 }
 
 export interface BlameEntry {
@@ -402,7 +408,7 @@ export function useGit(
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
       const resp = await send<{ ok: boolean; output: string; error: string }>(
-        'git.add_worktree', { workspace_path: ws, worktree_path, branch, new_branch }
+        'git.add_worktree', { workspace_path: ws, worktree_path, branch, new_branch }, 20_000
       )
       if (resp.ok && resp.payload?.ok) await loadWorktrees()
       return resp.payload ?? { ok: false, error: 'no response' }
@@ -417,12 +423,82 @@ export function useGit(
     const ws = workspacePath()
     if (!ws) return { ok: false, error: 'no workspace' }
     try {
-      const resp = await send<{ ok: boolean; error: string }>('git.remove_worktree', { workspace_path: ws, worktree_path, force })
+      const resp = await send<{ ok: boolean; error: string }>('git.remove_worktree', { workspace_path: ws, worktree_path, force }, 20_000)
       if (resp.ok && resp.payload?.ok) await loadWorktrees()
       return resp.payload ?? { ok: false, error: 'no response' }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `removeWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function pruneWorktrees(): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.prune_worktrees', { workspace_path: ws }, 20_000)
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `pruneWorktrees: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function lockWorktree(worktree_path: string, reason = ''): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; error: string }>('git.lock_worktree', { workspace_path: ws, worktree_path, reason }, 20_000)
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `lockWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function unlockWorktree(worktree_path: string): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; error: string }>('git.unlock_worktree', { workspace_path: ws, worktree_path }, 20_000)
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `unlockWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function moveWorktree(worktree_path: string, new_path: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.move_worktree', { workspace_path: ws, worktree_path, new_path }, 20_000)
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `moveWorktree: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function repairWorktrees(): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; output: string; error: string }>('git.repair_worktrees', { workspace_path: ws }, 20_000)
+      if (resp.ok && resp.payload?.ok) await loadWorktrees()
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `repairWorktrees: ${msg}`
       return { ok: false, error: msg }
     }
   }
@@ -1313,6 +1389,7 @@ export function useGit(
       if (s === 'connected' && workspacePath()) {
         void loadStatus()
         void loadLog()
+        void loadWorktrees()
       }
     },
   )
@@ -1502,7 +1579,7 @@ export function useGit(
     // tags
     createTag, deleteTag,
     // worktrees
-    addWorktree, removeWorktree,
+    addWorktree, removeWorktree, pruneWorktrees, lockWorktree, unlockWorktree, moveWorktree, repairWorktrees,
     // config
     gitConfigAllowedKeys, setGitConfig,
     // commit

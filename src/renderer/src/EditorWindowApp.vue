@@ -411,9 +411,13 @@ function openFile(p: { filepath: string; name?: string; line?: number }): void {
       const s = new Set(planViewFiles.value)
       s.add(relPath)
       planViewFiles.value = s
-    } else if (previewKind(relPath) !== null && previewKind(relPath) !== 'html') {
-      // Media/PDF/known-binary files auto-open in preview; markdown and HTML
-      // stay raw with a Preview toggle.
+    } else if (
+      previewKind(relPath) !== null &&
+      previewKind(relPath) !== 'html' &&
+      previewKind(relPath) !== 'csv'
+    ) {
+      // Media/PDF/font/archive/known-binary files auto-open in preview;
+      // markdown, HTML and CSV stay raw with a Preview toggle.
       const s = new Set(previewFiles.value)
       s.add(relPath)
       previewFiles.value = s

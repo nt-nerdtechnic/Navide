@@ -523,19 +523,40 @@ async def discard_changes(workspace_path: str, files: list[str]) -> dict[str, An
 
 # ─── Worktree management ──────────────────────────────────────────────────────
 
-@dataclass
-class GitWorktree:
-    path: str
-    head: str       # commit hash
-    branch: str     # branch name (empty = detached HEAD)
-    is_main: bool   # True for the main (linked-from) worktree
+def _reject_flag_path(value: str, label: str) -> str | None:
+    """Return None if *value* is a safe positional path argument, else an error.
+
+    git worktree subcommands take bare paths (no ``--`` separator in their
+    grammar), so a path starting with ``-`` would be read as a flag. Guard it,
+    matching how the rest of this module validates path arguments.
+    """
+    v = (value or "").strip()
+    if not v:
+        return f"{label} is required"
+    if v.startswith("-"):
+        return f"invalid {label}: must not start with '-'"
+    return None
 
 
 async def list_worktrees(workspace_path: str) -> list[dict[str, Any]]:
-    """Return all worktrees (including the main working tree)."""
+    """Return all worktrees (including the main working tree).
+
+    Each entry carries path/head/branch/is_main plus the porcelain state flags
+    ``detached``/``bare``/``locked``/``prunable`` (with their reasons), so the UI
+    can badge stale or locked worktrees and offer the right action.
+    """
     rc, out, _ = await _run(["git", "worktree", "list", "--porcelain"], workspace_path)
     if rc != 0 or not out.strip():
         return []
+
+    def _blank() -> dict:
+        return {
+            "path": "", "head": "", "branch": "", "is_main": False,
+            "detached": False, "bare": False,
+            "locked": False, "lock_reason": "",
+            "prunable": False, "prune_reason": "",
+        }
+
     worktrees: list[dict] = []
     current: dict = {}
     first = True
@@ -543,22 +564,35 @@ async def list_worktrees(workspace_path: str) -> list[dict[str, Any]]:
         if line.startswith("worktree "):
             if current:
                 worktrees.append(current)
-            current = {"path": line[len("worktree "):].strip(), "head": "", "branch": "", "is_main": first}
+            current = _blank()
+            current["path"] = line[len("worktree "):].strip()
+            current["is_main"] = first
             first = False
+        elif not current:
+            continue
         elif line.startswith("HEAD "):
             current["head"] = line[5:].strip()[:8]  # short hash
         elif line.startswith("branch "):
             current["branch"] = line[7:].strip().removeprefix("refs/heads/")
+        elif line.strip() == "detached":
+            current["detached"] = True
+        elif line.strip() == "bare":
+            current["bare"] = True
+        elif line == "locked" or line.startswith("locked "):
+            current["locked"] = True
+            current["lock_reason"] = line[len("locked "):].strip() if line.startswith("locked ") else ""
+        elif line == "prunable" or line.startswith("prunable "):
+            current["prunable"] = True
+            current["prune_reason"] = line[len("prunable "):].strip() if line.startswith("prunable ") else ""
         elif line.strip() == "":
-            if current:
-                worktrees.append(current)
-                current = {}
-                first = False
+            worktrees.append(current)
+            current = {}
     if current:
         worktrees.append(current)
     return worktrees
 
 
+@_serialize_write
 async def add_worktree(
     workspace_path: str, worktree_path: str, branch: str, new_branch: bool = False
 ) -> dict[str, Any]:
@@ -566,8 +600,8 @@ async def add_worktree(
 
     If *new_branch* is True, creates the branch with ``-b``.
     """
-    if not worktree_path.strip():
-        return {"ok": False, "error": "worktree path is required"}
+    if err := _reject_flag_path(worktree_path, "worktree path"):
+        return {"ok": False, "error": err}
     if err := _validate_ref_name(branch, "branch name"):
         return {"ok": False, "error": err}
     args = ["git", "worktree", "add"]
@@ -582,15 +616,64 @@ async def add_worktree(
 
 @_serialize_write
 async def remove_worktree(workspace_path: str, worktree_path: str, force: bool = False) -> dict[str, Any]:
-    """Remove an existing worktree directory."""
-    if not worktree_path.strip():
-        return {"ok": False, "error": "worktree path is required"}
+    """Remove an existing worktree directory (``--force`` for dirty/locked ones)."""
+    if err := _reject_flag_path(worktree_path, "worktree path"):
+        return {"ok": False, "error": err}
     args = ["git", "worktree", "remove"]
     if force:
         args.append("--force")
     args.append(worktree_path.strip())
     rc, _, stderr = await _run(args, workspace_path)
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+@_serialize_write
+async def prune_worktrees(workspace_path: str) -> dict[str, Any]:
+    """Prune worktree admin entries whose directories are gone (stale/prunable)."""
+    rc, out, stderr = await _run(["git", "worktree", "prune", "-v"], workspace_path)
+    return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
+
+
+@_serialize_write
+async def lock_worktree(workspace_path: str, worktree_path: str, reason: str = "") -> dict[str, Any]:
+    """Lock a worktree so prune/auto-cleanup won't remove it (e.g. on a removable disk)."""
+    if err := _reject_flag_path(worktree_path, "worktree path"):
+        return {"ok": False, "error": err}
+    args = ["git", "worktree", "lock"]
+    if reason.strip():
+        args += ["--reason", reason.strip()]
+    args.append(worktree_path.strip())
+    rc, _, stderr = await _run(args, workspace_path)
+    return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+@_serialize_write
+async def unlock_worktree(workspace_path: str, worktree_path: str) -> dict[str, Any]:
+    """Unlock a previously locked worktree."""
+    if err := _reject_flag_path(worktree_path, "worktree path"):
+        return {"ok": False, "error": err}
+    rc, _, stderr = await _run(["git", "worktree", "unlock", worktree_path.strip()], workspace_path)
+    return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+@_serialize_write
+async def move_worktree(workspace_path: str, worktree_path: str, new_path: str) -> dict[str, Any]:
+    """Move a worktree to *new_path* (updates git's admin records)."""
+    if err := _reject_flag_path(worktree_path, "worktree path"):
+        return {"ok": False, "error": err}
+    if err := _reject_flag_path(new_path, "new path"):
+        return {"ok": False, "error": err}
+    rc, out, stderr = await _run(
+        ["git", "worktree", "move", worktree_path.strip(), new_path.strip()], workspace_path
+    )
+    return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
+
+
+@_serialize_write
+async def repair_worktree(workspace_path: str) -> dict[str, Any]:
+    """Repair worktree admin files after the main repo or a worktree was moved."""
+    rc, out, stderr = await _run(["git", "worktree", "repair"], workspace_path)
+    return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
 # ─── Git config ───────────────────────────────────────────────────────────────

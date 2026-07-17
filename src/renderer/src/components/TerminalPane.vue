@@ -230,12 +230,12 @@ function formatLoopTime(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 }
 
-/** Waiting badge is a click-to-resume-now affordance; a running badge click
- *  keeps bubbling to the header (set-focus) unchanged. */
+/** The badge is the off-switch while the loop runs (the ∞ start button is
+ *  hidden then); while waiting it is a click-to-resume-now affordance. */
 function onLoopBadgeClick(e: MouseEvent): void {
-  if (props.loopWaitUntil == null) return
   e.stopPropagation()
-  emit('loop-resume-now')
+  if (props.loopWaitUntil != null) emit('loop-resume-now')
+  else emit('toggle-loop')
 }
 
 onMounted(() => {
@@ -289,7 +289,7 @@ onMounted(() => {
           v-if="loopActive"
           class="loop-inline"
           :class="{ waiting: loopWaitUntil != null }"
-          :role="loopWaitUntil != null ? 'button' : undefined"
+          role="button"
           :title="loopWaitUntil != null
             ? $t('pane.terminal.loop-waiting-tooltip', { time: formatLoopTime(loopWaitUntil) })
             : loopEstimateResetAt != null
@@ -302,9 +302,8 @@ onMounted(() => {
             ? $t('pane.terminal.loop-badge-estimate', { time: formatLoopTime(loopEstimateResetAt) })
             : '∞ Loop' }}</span>
         <button
-          v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
+          v-if="!loopActive && displayStatus !== 'exited' && displayStatus !== 'error'"
           class="loop-btn"
-          :class="{ active: loopActive }"
           @click.stop="emit('toggle-loop')"
           :title="$t('pane.terminal.loop-tooltip')"
           :aria-label="$t('pane.terminal.loop-tooltip')"
@@ -476,6 +475,10 @@ onMounted(() => {
   letter-spacing: 0.2px;
   white-space: nowrap;
   flex-shrink: 0;
+  cursor: pointer;
+}
+.loop-inline:hover {
+  border-color: var(--success-fg);
 }
 .loop-inline.waiting {
   opacity: 0.55;
@@ -500,12 +503,6 @@ onMounted(() => {
 .loop-btn:hover {
   opacity: 1;
   color: var(--success-fg);
-  border-color: var(--success-emphasis);
-}
-.loop-btn.active {
-  opacity: 1;
-  color: var(--success-fg);
-  background: var(--success-subtle);
   border-color: var(--success-emphasis);
 }
 .status {

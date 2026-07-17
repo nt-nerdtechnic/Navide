@@ -25,6 +25,7 @@ def workspace(tmp_path):
     (ws / "page.xhtml").write_text("<html xmlns='http://www.w3.org/1999/xhtml'/>")
     (ws / "script.js").write_text("alert(1)")
     (ws / "vector.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    (ws / "font.woff2").write_bytes(b"wOF2fake")
     (ws / "sub").mkdir()
     (ws / ".agent-team").mkdir()
     (ws / ".agent-team" / "secret.txt").write_text("internal")
@@ -90,6 +91,15 @@ def test_raw_svg_inline_but_sandboxed(client, workspace):
     resp = _get(client, workspace, "vector.svg")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "image/svg+xml"
+    assert resp.headers["content-security-policy"] == "sandbox"
+
+
+def test_raw_font_inline(client, workspace):
+    # Fonts are inline so the specimen preview's @font-face can fetch them.
+    resp = _get(client, workspace, "font.woff2")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "font/woff2"
+    assert "content-disposition" not in resp.headers
     assert resp.headers["content-security-policy"] == "sandbox"
 
 

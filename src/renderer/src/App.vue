@@ -6975,12 +6975,14 @@ function paneIsCommander(p: ActivePane): boolean {
               {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
             </span>
           </div>
-          <span
-            v-if="p.loopActive"
-            class="spotlight-thumb-loop"
-            :class="{ waiting: p.loopWaitUntil != null }"
-          >∞ Loop</span>
-          <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
+          <div class="spotlight-thumb-badges">
+            <span
+              v-if="p.loopActive"
+              class="spotlight-thumb-loop"
+              :class="{ waiting: p.loopWaitUntil != null }"
+            >∞ Loop</span>
+            <span class="spotlight-thumb-badge" :data-status="p.status">{{ p.status }}</span>
+          </div>
         </div>
         <div v-if="paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id)).length === 0" class="spotlight-strip-empty">
           只有一個 agent
@@ -7809,12 +7811,16 @@ function paneIsCommander(p: ActivePane): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.spotlight-thumb-badges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+}
 .spotlight-thumb-badge {
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
-  align-self: flex-start;
-  margin-top: auto;
 }
 .spotlight-thumb-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
 .spotlight-thumb-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
@@ -7825,8 +7831,6 @@ function paneIsCommander(p: ActivePane): boolean {
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
-  align-self: flex-start;
-  margin-top: auto;
   background: var(--success-subtle);
   color: var(--success-fg);
   border: 1px solid var(--success-emphasis);

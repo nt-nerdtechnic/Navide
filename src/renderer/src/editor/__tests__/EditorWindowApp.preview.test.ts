@@ -154,6 +154,38 @@ describe('EditorWindowApp – preview routing', () => {
     expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
   })
 
+  it('auto-opens font files in FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'fonts/custom.ttf')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+    expect(previewToggle(wrapper).text()).toBe('Raw')
+  })
+
+  it('auto-opens new media formats (.mkv) in FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'movies/clip.mkv')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+  })
+
+  it('opens .csv raw with a Preview toggle that mounts FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'data/table.csv')
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+    const toggle = previewToggle(wrapper)
+    expect(toggle.text()).toBe('Preview')
+
+    await toggle.trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
+  })
+
   it('keeps .plan.md routing to PlanFileView with no preview toggle', async () => {
     const wrapper = await mountApp()
     await open(wrapper, 'plans/feature.plan.md')
