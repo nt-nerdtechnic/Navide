@@ -43,7 +43,9 @@
       "loop-badge-resume": "∞ resumes {time}",
       "loop-estimate-tooltip": "Quota reset estimated around {time} (5-hour session window heuristic); replaced by the exact time if a limit message appears. Click to turn the loop off",
       "loop-paused-notify-title": "Loop paused",
-      "loop-paused-notify-body": "Session limit hit — auto-resume at {time} (click the loop badge to resume now)"
+      "loop-paused-notify-body": "Session limit hit — auto-resume at {time} (click the loop badge to resume now)",
+      "loop-unparseable-notify-title": "Loop hit a session limit",
+      "loop-unparseable-notify-body": "The reset time could not be parsed, so no auto-resume is scheduled — resume the loop manually once the quota resets"
     },
     "prep": {
       "starting": "starting CLI",
@@ -720,6 +722,13 @@
     "archive-truncated": "entry list truncated",
     "archive-col-name": "Name",
     "archive-col-size": "Size",
+    "notebook-loading": "Loading notebook…",
+    "notebook-error": "Failed to load the notebook.",
+    "notebook-invalid": "Not a valid notebook file.",
+    "notebook-truncated": "Showing the first {max} cells.",
+    "office-loading": "Converting document…",
+    "office-error": "Failed to convert the document.",
+    "office-truncated": "sheet data truncated",
     "toggle-preview": "Preview",
     "toggle-raw": "Raw",
     "switch-to-preview": "Switch to preview",

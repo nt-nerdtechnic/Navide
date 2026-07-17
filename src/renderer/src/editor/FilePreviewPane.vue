@@ -8,10 +8,12 @@
 // branch in the template before the binary fallback.
 import { computed, onMounted, ref } from 'vue'
 import type { useBackend } from '../composables/useBackend'
-import { buildRawUrl, fileExt, previewKind } from './previewTypes'
+import { buildPageUrl, buildRawUrl, fileExt, previewKind } from './previewTypes'
 import ArchivePreview from './preview/ArchivePreview.vue'
 import CsvPreview from './preview/CsvPreview.vue'
 import FontPreview from './preview/FontPreview.vue'
+import NotebookPreview from './preview/NotebookPreview.vue'
+import OfficePreview from './preview/OfficePreview.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -28,6 +30,11 @@ const kind = computed(() => previewKind(props.relPath) ?? 'binary')
 const ext = computed(() => (props.ext ?? fileExt(props.relPath)) || 'bin')
 const rawUrl = computed(() =>
   buildRawUrl(props.backend.httpUrl.value, props.workspacePath, props.relPath),
+)
+// HTML preview loads through the path-addressed /fs/page route so relative
+// subresources (./style.css, images) resolve.
+const pageUrl = computed(() =>
+  buildPageUrl(props.backend.httpUrl.value, props.workspacePath, props.relPath),
 )
 
 // ── File size ─────────────────────────────────────────────────────────────────
@@ -209,7 +216,7 @@ onMounted(() => {
          the second layer on top of the backend's CSP sandbox header — the
          document is an opaque origin with scripts/forms/plugins blocked. -->
     <div v-else-if="kind === 'html'" class="fpv-body fpv-html-body">
-      <iframe class="fpv-html-frame" :src="rawUrl" :title="name" sandbox="" />
+      <iframe class="fpv-html-frame" :src="pageUrl" :title="name" sandbox="" />
     </div>
 
     <!-- CSV/TSV: sortable table -->
@@ -230,6 +237,26 @@ onMounted(() => {
     <!-- Archive: entry listing via fs.list_archive -->
     <div v-else-if="kind === 'archive'" class="fpv-body fpv-component-body">
       <ArchivePreview
+        :workspace-path="workspacePath"
+        :rel-path="relPath"
+        :name="name"
+        :backend="backend"
+      />
+    </div>
+
+    <!-- Jupyter notebook: cells + outputs -->
+    <div v-else-if="kind === 'notebook'" class="fpv-body fpv-component-body">
+      <NotebookPreview
+        :workspace-path="workspacePath"
+        :rel-path="relPath"
+        :name="name"
+        :backend="backend"
+      />
+    </div>
+
+    <!-- Office document: backend fs.convert_office -->
+    <div v-else-if="kind === 'office'" class="fpv-body fpv-component-body">
+      <OfficePreview
         :workspace-path="workspacePath"
         :rel-path="relPath"
         :name="name"

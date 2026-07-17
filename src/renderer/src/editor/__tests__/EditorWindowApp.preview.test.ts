@@ -169,6 +169,25 @@ describe('EditorWindowApp – preview routing', () => {
     expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
   })
 
+  it('auto-opens Jupyter notebooks (.ipynb) in FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'nb/analysis.ipynb')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+    expect(previewToggle(wrapper).text()).toBe('Raw')
+  })
+
+  it('auto-opens Office documents (.docx/.xlsx) in FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'docs/report.docx')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+
+    await open(wrapper, 'docs/data.xlsx')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+  })
+
   it('opens .csv raw with a Preview toggle that mounts FilePreviewPane', async () => {
     const wrapper = await mountApp()
     await open(wrapper, 'data/table.csv')

@@ -70,9 +70,10 @@ import {
   DEFAULT_LOOP_PROMPT,
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
-  SESSION_LIMIT_RE,
   LOOP_ESTIMATE_WINDOW_MS,
   parseLimitReset,
+  matchSessionLimit,
+  unseenTail,
 } from './lib/loopPrompt'
 import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
@@ -958,7 +959,7 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
 // Loop launch button: first click injects the configurable loop prompt and
 // lights the LOOP badge; second click only clears the badge (the app cannot
 // stop the CLI-internal loop) and cancels any pending auto-resume.
-function togglePaneLoop(paneId: string): void {
+async function togglePaneLoop(paneId: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
   if (pane.loopActive) {
@@ -968,25 +969,66 @@ function togglePaneLoop(paneId: string): void {
     stopLoopLimitWatcher(paneId)
     return
   }
+  // Optimistic UI: badge + watcher arm immediately; rolled back below if the
+  // start injection doesn't land (e.g. pane still 'starting', no session yet).
   pane.loopActive = true
   pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
-  void injectPane(paneId, settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT), 'loop-start', true)
   startLoopLimitWatcher(paneId)
+  // Global injection semaphore: synchronized multi-pane loop starts must not
+  // flood the WS (same failure mode the role-injection path guards against).
+  await acquireInjectionSlot()
+  let ok: boolean
+  try {
+    ok = await injectPane(paneId, settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT), 'loop-start', true)
+  } finally {
+    releaseInjectionSlot()
+  }
+  if (!ok) {
+    console.warn(`[loop] pane ${paneId}: loop-start injection failed — loop disarmed`)
+    pane.loopActive = false
+    pane.loopEstimateResetAt = null
+    pane.loopWaitUntil = null
+    stopLoopLimitWatcher(paneId)
+  }
 }
 
 /** Shared resume path for the scheduled (watcher expiry) and manual
  *  (badge click) routes. Clears loopWaitUntil synchronously BEFORE injecting so
- *  the poll loop returns to matching mode and neither route can double-inject. */
-function fireLoopResume(paneId: string, logLabel: string): void {
+ *  the poll loop returns to matching mode and neither route can double-inject.
+ *  Injection failure re-arms loopWaitUntil 60s out so the watcher's existing
+ *  due-check retries instead of silently dropping the resume. */
+async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane || !pane.loopActive || pane.loopWaitUntil == null) return
   pane.loopWaitUntil = null
-  void injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), logLabel, true)
+  // Consume everything the pane emitted during the wait — TUI repaints keep
+  // the old limit banner in the buffer, and re-matching it right after the
+  // resume would schedule a bogus next-day wait.
+  const watcher = loopLimitWatchers.get(paneId)
+  if (watcher) watcher.baseline = paneCleanBytes(paneId)
+  // Same global injection semaphore as loop-start: synchronized multi-pane
+  // resumes (shared quota window) must not flood the WS.
+  await acquireInjectionSlot()
+  let ok: boolean
+  try {
+    ok = await injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), logLabel, true)
+  } finally {
+    releaseInjectionSlot()
+  }
+  if (!pane.loopActive) return // loop turned off while the injection was in flight
+  if (!ok) {
+    console.warn(`[loop] pane ${paneId}: resume injection failed — retrying in 60s`)
+    pane.loopWaitUntil = Date.now() + 60_000
+    return
+  }
+  // Resume landed: a fresh quota window starts now, so refresh the badge's
+  // pre-limit estimate (otherwise it reverts to the already-elapsed one).
+  pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
 }
 
 /** Waiting badge clicked: the user wants the loop resumed immediately. */
 function resumeLoopNow(paneId: string): void {
-  fireLoopResume(paneId, 'loop-resume-now')
+  void fireLoopResume(paneId, 'loop-resume-now')
 }
 
 // While a pane's loop is active, watch its raw PTY buffer for the CLI
@@ -994,23 +1036,42 @@ function resumeLoopNow(paneId: string): void {
 // self-cleans when the pane is gone, the loop was turned off, or the terminal
 // exited, so no hook into the pane-removal paths is needed. Interval-based
 // (rather than one long setTimeout) to survive background timer throttling.
-const loopLimitWatchers = new Map<string, number>()
+interface LoopLimitWatcher {
+  timer: number
+  /** Consumed-position baseline in monotonic cleanBytesSeen units: only text
+   *  appended after it is matched. Starts at the buffer end when the watcher
+   *  arms (a pre-existing limit message can never schedule a wait) and
+   *  advances whenever a match is consumed — scheduled, unparseable, or
+   *  resumed. cleanBytesSeen survives the 128KB cleanBuffer cap (the stage
+   *  watchers' scanFrom overflow problem), at worst over-scanning slightly
+   *  after a recleanBuffer() shrink. */
+  baseline: number
+  /** Last unparseable matched message — dedupes the warn/notify when TUI
+   *  repaints re-surface the same text. */
+  lastUnparseable: string | null
+}
+const loopLimitWatchers = new Map<string, LoopLimitWatcher>()
 const LOOP_LIMIT_POLL_MS = 5000
 // Tail-only matching: repainted TUI frames keep the limit message near the
 // buffer tail, and slicing avoids rescanning the capped 128KB cleanBuffer.
 const LOOP_LIMIT_TAIL_CHARS = 2000
 
 function stopLoopLimitWatcher(paneId: string): void {
-  const timer = loopLimitWatchers.get(paneId)
-  if (timer !== undefined) {
-    clearInterval(timer)
+  const watcher = loopLimitWatchers.get(paneId)
+  if (watcher !== undefined) {
+    clearInterval(watcher.timer)
     loopLimitWatchers.delete(paneId)
   }
 }
 
 function startLoopLimitWatcher(paneId: string): void {
   stopLoopLimitWatcher(paneId)
-  loopLimitWatchers.set(paneId, window.setInterval(() => {
+  const watcher: LoopLimitWatcher = {
+    timer: 0,
+    baseline: paneCleanBytes(paneId),
+    lastUnparseable: null,
+  }
+  watcher.timer = window.setInterval(() => {
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane || !pane.loopActive) {
       stopLoopLimitWatcher(paneId)
@@ -1020,24 +1081,44 @@ function startLoopLimitWatcher(paneId: string): void {
     if (!ref) return
     const status = ref.displayStatus as string | undefined
     if (status === 'exited' || status === 'error') {
+      // Dead pane: clear ALL loop state, not just the wait — a lingering
+      // loopActive keeps a stale green badge up while hiding the start
+      // button, so the user couldn't even clear it (same cleanup as onKill
+      // and terminal.exit).
+      pane.loopActive = false
       pane.loopWaitUntil = null
+      pane.loopEstimateResetAt = null
       stopLoopLimitWatcher(paneId)
       return
     }
     if (pane.loopWaitUntil != null) {
       // Waiting mode: matching is suspended so TUI redraws of the same limit
       // message cannot double-schedule. Resume once the quota window is due.
-      if (Date.now() >= pane.loopWaitUntil) fireLoopResume(paneId, 'loop-resume')
+      if (Date.now() >= pane.loopWaitUntil) void fireLoopResume(paneId, 'loop-resume')
       return
     }
-    const tail = (((ref.cleanBuffer as unknown as string) ?? '')).slice(-LOOP_LIMIT_TAIL_CHARS)
-    if (!SESSION_LIMIT_RE.test(tail)) return
-    const resumeAt = parseLimitReset(tail)
+    const buf = ((ref.cleanBuffer as unknown as string) ?? '')
+    const tail = unseenTail(buf, paneCleanBytes(paneId), watcher.baseline, LOOP_LIMIT_TAIL_CHARS)
+    const matched = matchSessionLimit(tail)
+    if (matched == null) return
+    // Consume the matched region either way so the same text can't re-match
+    // on a later poll (a stale re-match would roll the wait a full day out).
+    watcher.baseline = paneCleanBytes(paneId)
+    const resumeAt = parseLimitReset(matched)
     if (resumeAt == null) {
-      // Fail open: badge stays lit, no auto-resume. Stop watching so the
-      // unparseable message isn't re-warned every poll.
-      console.warn(`[loop] pane ${paneId}: session-limit message matched but reset time was unparseable; auto-resume not scheduled`)
-      stopLoopLimitWatcher(paneId)
+      // Fail open: badge stays lit, no auto-resume — but KEEP watching so a
+      // future parseable limit message still schedules. Warn/notify once per
+      // distinct unparseable message.
+      if (matched !== watcher.lastUnparseable) {
+        watcher.lastUnparseable = matched
+        console.warn(`[loop] pane ${paneId}: session-limit message matched but reset time was unparseable; auto-resume not scheduled`)
+        sysNotify.notifyPaneState(
+          paneId,
+          'attention',
+          i18n.global.t('pane.terminal.loop-unparseable-notify-title'),
+          i18n.global.t('pane.terminal.loop-unparseable-notify-body')
+        )
+      }
       return
     }
     pane.loopWaitUntil = resumeAt
@@ -1049,7 +1130,8 @@ function startLoopLimitWatcher(paneId: string): void {
       i18n.global.t('pane.terminal.loop-paused-notify-title'),
       i18n.global.t('pane.terminal.loop-paused-notify-body', { time: formatLoopTime(resumeAt) })
     )
-  }, LOOP_LIMIT_POLL_MS))
+  }, LOOP_LIMIT_POLL_MS)
+  loopLimitWatchers.set(paneId, watcher)
 }
 
 /** Local HH:mm (24h) for loop resume times shown in notifications. */

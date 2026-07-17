@@ -4,7 +4,8 @@
 // (EditorPane's own binary branch covers the ones that turn out to be binary).
 
 export type PreviewKind =
-  | 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'csv' | 'font' | 'archive' | 'binary'
+  | 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'csv' | 'font' | 'archive'
+  | 'notebook' | 'office' | 'binary'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'avif', 'apng'])
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v', 'mkv', 'ogv'])
@@ -18,6 +19,11 @@ const FONT_EXTS = new Set(['ttf', 'otf', 'woff', 'woff2'])
 // Archive entry listing via fs.list_archive (checked before the binary
 // fallback; .tar.gz is special-cased below since its fileExt is 'gz').
 const ARCHIVE_EXTS = new Set(['zip', 'tar', 'tgz'])
+// Jupyter notebooks: nbformat JSON rendered cell-by-cell (auto-preview).
+const NOTEBOOK_EXTS = new Set(['ipynb'])
+// Office documents converted by the backend fs.convert_office handler
+// (checked before the binary fallback since docx/xlsx are in BINARY_EXTS).
+const OFFICE_EXTS = new Set(['docx', 'xlsx'])
 // Known-binary extensions that get the info-card + hex-dump fallback.
 const BINARY_EXTS = new Set([
   'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'jar', 'war',
@@ -48,6 +54,8 @@ export function previewKind(relPath: string): PreviewKind | null {
   if (CSV_EXTS.has(ext)) return 'csv'
   if (FONT_EXTS.has(ext)) return 'font'
   if (ARCHIVE_EXTS.has(ext) || relPath.toLowerCase().endsWith('.tar.gz')) return 'archive'
+  if (NOTEBOOK_EXTS.has(ext)) return 'notebook'
+  if (OFFICE_EXTS.has(ext)) return 'office'
   if (BINARY_EXTS.has(ext)) return 'binary'
   return null
 }
@@ -61,4 +69,20 @@ export function isMarkdownFile(relPath: string): boolean {
 export function buildRawUrl(httpUrl: string, workspacePath: string, relPath: string): string {
   const base = httpUrl.replace(/\/+$/, '')
   return `${base}/fs/raw?workspace=${encodeURIComponent(workspacePath)}&rel=${encodeURIComponent(relPath)}`
+}
+
+// URL for the backend's path-addressed page endpoint
+// (GET /fs/page/{ws_b64}/{rel:path}), used by the HTML preview so relative
+// subresources (./style.css, images) resolve against the same route. ws_b64
+// is the unpadded URL-safe base64 of the UTF-8 workspace path — matching
+// Python's base64.urlsafe_b64encode (the backend re-pads before decoding).
+// Rel path segments are percent-encoded individually so slashes survive.
+export function buildPageUrl(httpUrl: string, workspacePath: string, relPath: string): string {
+  const bytes = new TextEncoder().encode(workspacePath)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  const wsB64 = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const rel = relPath.split('/').map(encodeURIComponent).join('/')
+  const base = httpUrl.replace(/\/+$/, '')
+  return `${base}/fs/page/${wsB64}/${rel}`
 }

@@ -14,6 +14,32 @@ export const DEFAULT_LOOP_RESUME = '繼續'
 export const SESSION_LIMIT_RE =
   /hit your .{0,40}limit.*?resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i
 
+/** Match the session-limit message in `text`, tolerating the TUI's hard
+ *  line-wrapping in narrow panes (cleanBuffer keeps the wrap `\n`, which the
+ *  regex `.`/`.{0,40}` gaps cannot cross). Whitespace runs are collapsed to
+ *  single spaces before matching. Returns the normalized matched message
+ *  (suitable for parseLimitReset) or null when no limit message is present. */
+export function matchSessionLimit(text: string): string | null {
+  const m = SESSION_LIMIT_RE.exec(text.replace(/\s+/g, ' '))
+  return m ? m[0] : null
+}
+
+/** Slice the not-yet-consumed portion of a rolling capped buffer, given the
+ *  monotonic total of chars ever appended (`totalSeen`) and the total that had
+ *  been appended when the caller last consumed (`baseline`). The buffer keeps
+ *  only the tail of the stream, so the unconsumed region is its last
+ *  `totalSeen - baseline` chars (clamped to the buffer), further capped to the
+ *  last `maxChars` to bound regex scanning cost. */
+export function unseenTail(
+  buffer: string,
+  totalSeen: number,
+  baseline: number,
+  maxChars: number
+): string {
+  const unseen = Math.min(Math.max(0, totalSeen - baseline), buffer.length)
+  return buffer.slice(buffer.length - unseen).slice(-maxChars)
+}
+
 /** Safety margin added past the parsed reset time before resuming. */
 export const LIMIT_RESET_BUFFER_MS = 2 * 60_000
 
@@ -32,7 +58,10 @@ export function parseLimitReset(message: string, now: number = Date.now()): numb
   const rawHour = Number(m[1])
   const minute = m[2] ? Number(m[2]) : 0
   const meridiem = m[3].toLowerCase()
-  const timeZone = m[4].trim()
+  // Drop ALL whitespace, not just edges: matchSessionLimit's normalization
+  // turns a TUI line-wrap inside the timezone parens into an inner space
+  // ("Asia/ Taipei"), and IANA names never legitimately contain spaces.
+  const timeZone = m[4].replace(/\s+/g, '')
   if (rawHour < 1 || rawHour > 12 || minute > 59) return null
   const targetHour = (rawHour % 12) + (meridiem === 'pm' ? 12 : 0)
 

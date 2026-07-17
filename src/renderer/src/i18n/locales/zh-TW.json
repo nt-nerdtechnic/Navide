@@ -43,7 +43,9 @@
       "loop-badge-resume": "∞ {time} 續跑",
       "loop-estimate-tooltip": "額度重置時間估計約 {time}（依 5 小時工作階段視窗推算）；若撞到上限訊息會換成準確時間。點擊標籤可關閉 Loop",
       "loop-paused-notify-title": "Loop 已暫停",
-      "loop-paused-notify-body": "已達工作階段上限，預計 {time} 自動續跑（點擊 Loop 標籤可立即續跑）"
+      "loop-paused-notify-body": "已達工作階段上限，預計 {time} 自動續跑（點擊 Loop 標籤可立即續跑）",
+      "loop-unparseable-notify-title": "Loop 已達工作階段上限",
+      "loop-unparseable-notify-body": "無法解析額度重置時間，因此不會排程自動續跑——請於額度重置後手動續跑"
     },
     "prep": {
       "starting": "啟動 CLI 中",
@@ -720,6 +722,13 @@
     "archive-truncated": "項目清單已截斷",
     "archive-col-name": "名稱",
     "archive-col-size": "大小",
+    "notebook-loading": "正在載入筆記本…",
+    "notebook-error": "無法載入筆記本。",
+    "notebook-invalid": "不是有效的筆記本檔案。",
+    "notebook-truncated": "僅顯示前 {max} 個 cell。",
+    "office-loading": "正在轉換文件…",
+    "office-error": "無法轉換文件。",
+    "office-truncated": "工作表資料已截斷",
     "toggle-preview": "預覽",
     "toggle-raw": "原始",
     "switch-to-preview": "切換到預覽",

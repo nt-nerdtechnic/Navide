@@ -122,14 +122,13 @@ describe('FilePreviewPane – pdf', () => {
 })
 
 describe('FilePreviewPane – html', () => {
-  it('renders a fully sandboxed iframe pointing at /fs/raw', async () => {
+  it('renders a fully sandboxed iframe pointing at the path-addressed /fs/page route', async () => {
     const wrapper = mountPane('site/index.html')
     await flushPromises()
     const frame = wrapper.find('iframe.fpv-html-frame')
     expect(frame.exists()).toBe(true)
-    expect(frame.attributes('src')).toBe(
-      'http://127.0.0.1:8123/fs/raw?workspace=%2Fws&rel=site%2Findex.html',
-    )
+    // L3dz = unpadded URL-safe base64 of '/ws'; slashes in rel survive.
+    expect(frame.attributes('src')).toBe('http://127.0.0.1:8123/fs/page/L3dz/site/index.html')
     // Empty sandbox attribute = no allow-* tokens (scripts/forms blocked).
     expect(frame.attributes('sandbox')).toBe('')
   })
@@ -215,6 +214,25 @@ describe('FilePreviewPane – dispatch for new kinds', () => {
     const targz = mountPane('bundle/site.tar.gz')
     await flushPromises()
     expect(targz.find('.arcp').exists()).toBe(true)
+  })
+
+  it('mounts NotebookPreview for .ipynb files', async () => {
+    const wrapper = mountPane('nb/analysis.ipynb')
+    await flushPromises()
+    expect(wrapper.find('.nbp').exists()).toBe(true)
+    expect(wrapper.find('pre.fpv-hex').exists()).toBe(false)
+  })
+
+  it('mounts OfficePreview for .docx and .xlsx files instead of the hex fallback', async () => {
+    const docx = mountPane('docs/report.docx')
+    await flushPromises()
+    expect(docx.find('.offp').exists()).toBe(true)
+    expect(docx.find('pre.fpv-hex').exists()).toBe(false)
+
+    const xlsx = mountPane('docs/data.xlsx')
+    await flushPromises()
+    expect(xlsx.find('.offp').exists()).toBe(true)
+    expect(xlsx.find('pre.fpv-hex').exists()).toBe(false)
   })
 })
 
