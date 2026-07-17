@@ -39,8 +39,8 @@
       "loop-tooltip": "Loop — 將設定的 Loop 提示詞送入此 pane；再按一次清除標記",
       "loop-badge-tooltip": "已對此 pane 送出 Loop 提示詞",
       "loop-waiting-tooltip": "Loop 暫停 — 已達工作階段上限；將於 {time} 自動續跑，點擊標籤可立即續跑",
-      "loop-badge-estimate": "⟳ Loop · ~{time}",
-      "loop-badge-resume": "⟳ {time} 續跑",
+      "loop-badge-estimate": "∞ Loop · ~{time}",
+      "loop-badge-resume": "∞ {time} 續跑",
       "loop-estimate-tooltip": "額度重置時間估計約 {time}（依 5 小時工作階段視窗推算）；若撞到上限訊息會換成準確時間",
       "loop-paused-notify-title": "Loop 已暫停",
       "loop-paused-notify-body": "已達工作階段上限，預計 {time} 自動續跑（點擊 Loop 標籤可立即續跑）"

@@ -32,8 +32,8 @@ vi.mock('../../composables/useTerminal', async () => {
 // assert actual visible output (incl. the "~" estimate marker); other keys
 // fall back to the key itself, matching the earlier tests' expectations.
 const badgeMessages: Record<string, string> = {
-  'pane.terminal.loop-badge-estimate': '⟳ Loop · ~{time}',
-  'pane.terminal.loop-badge-resume': '⟳ resumes {time}'
+  'pane.terminal.loop-badge-estimate': '∞ Loop · ~{time}',
+  'pane.terminal.loop-badge-resume': '∞ resumes {time}'
 }
 
 function tMock(key: string, params?: Record<string, unknown>): string {

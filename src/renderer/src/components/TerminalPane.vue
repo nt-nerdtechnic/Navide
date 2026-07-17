@@ -300,7 +300,7 @@ onMounted(() => {
           ? $t('pane.terminal.loop-badge-resume', { time: formatLoopTime(loopWaitUntil) })
           : loopEstimateResetAt != null
             ? $t('pane.terminal.loop-badge-estimate', { time: formatLoopTime(loopEstimateResetAt) })
-            : '⟳ Loop' }}</span>
+            : '∞ Loop' }}</span>
         <button
           v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
           class="loop-btn"
@@ -308,7 +308,7 @@ onMounted(() => {
           @click.stop="emit('toggle-loop')"
           :title="$t('pane.terminal.loop-tooltip')"
           :aria-label="$t('pane.terminal.loop-tooltip')"
-        >⟳</button>
+        >∞</button>
         <span
           class="status"
           :data-status="displayStatus"
