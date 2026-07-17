@@ -4,6 +4,25 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.47] — 2026-07-17 — unsigned preview
+
+### Added
+
+- Serve XHTML files through the file preview backend.
+- Loop auto-continue: loop status indicators (∞) in panes and the agent list, a configurable loop prompt in Settings, and automatic resume when a CLI session hits its usage limit.
+- "General" tab and settings group in the Settings modal.
+
+### Changed
+
+- Handle dead WebSocket sessions gracefully in the backend.
+- Handle subprocess timeouts in the terminal service.
+- Prevent default browser behavior for terminal cursor shortcuts.
+- Improve pane restore with rename stub handling.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.46] — 2026-07-16 — unsigned preview
 
 ### Changed
