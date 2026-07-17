@@ -676,6 +676,7 @@
     "hex-loading": "正在載入 hex 內容…",
     "hex-error": "無法載入檔案內容。",
     "hex-truncated": "僅顯示前 64 KB（共 {total}）。",
+    "html-scripts-disabled": "預覽中已停用腳本",
     "toggle-preview": "預覽",
     "toggle-raw": "原始",
     "switch-to-preview": "切換到預覽",

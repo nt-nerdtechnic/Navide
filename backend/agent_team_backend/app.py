@@ -783,6 +783,11 @@ async def fs_raw(workspace: str, rel: str) -> FileResponse:
     checked against a known-workspace set (fs.list_dir does not do that
     either) — any existing directory is accepted, and path safety (escape +
     .agent-team guard) is enforced by fs_service._resolve_safe.
+
+    Media, PDF, and (X)HTML are served inline; HTML is confined by
+    `Content-Security-Policy: sandbox` (opaque origin, no scripts/forms/
+    plugins) for the sandboxed iframe preview. Every other type is downgraded
+    to an application/octet-stream attachment.
     """
     try:
         target = fs_service._resolve_safe(workspace, rel)
@@ -793,13 +798,15 @@ async def fs_raw(workspace: str, rel: str) -> FileResponse:
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    # XSS hardening: only media the preview pane embeds is served inline; every
-    # other type (text/html, image/svg+xml, …) could execute script on this
-    # origin if navigated to directly, so it is downgraded to an opaque
-    # attachment. PDF is exempt from the CSP sandbox because it would disable
-    # Chromium's embedded viewer.
-    inline = media_type == "application/pdf" or media_type.startswith(
-        ("image/", "video/", "audio/")
+    # XSS hardening: only types the preview pane embeds are served inline.
+    # HTML is inline for the sandboxed iframe preview but neutralized by
+    # `Content-Security-Policy: sandbox` — the document runs in an opaque
+    # origin with scripts/forms/plugins blocked. Every other non-media type
+    # is downgraded to an opaque attachment. PDF is exempt from the CSP
+    # sandbox because it would disable Chromium's embedded viewer.
+    inline = (
+        media_type in ("application/pdf", "text/html", "application/xhtml+xml")
+        or media_type.startswith(("image/", "video/", "audio/"))
     )
     headers = {"X-Content-Type-Options": "nosniff"}
     if media_type != "application/pdf":

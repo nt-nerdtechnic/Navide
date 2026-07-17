@@ -676,6 +676,7 @@
     "hex-loading": "Loading hex dump…",
     "hex-error": "Failed to load file contents.",
     "hex-truncated": "Showing the first 64 KB of {total}.",
+    "html-scripts-disabled": "Scripts are disabled in preview",
     "toggle-preview": "Preview",
     "toggle-raw": "Raw",
     "switch-to-preview": "Switch to preview",

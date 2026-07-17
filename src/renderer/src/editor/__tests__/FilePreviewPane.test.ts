@@ -121,6 +121,26 @@ describe('FilePreviewPane – pdf', () => {
   })
 })
 
+describe('FilePreviewPane – html', () => {
+  it('renders a fully sandboxed iframe pointing at /fs/raw', async () => {
+    const wrapper = mountPane('site/index.html')
+    await flushPromises()
+    const frame = wrapper.find('iframe.fpv-html-frame')
+    expect(frame.exists()).toBe(true)
+    expect(frame.attributes('src')).toBe(
+      'http://127.0.0.1:8123/fs/raw?workspace=%2Fws&rel=site%2Findex.html',
+    )
+    // Empty sandbox attribute = no allow-* tokens (scripts/forms blocked).
+    expect(frame.attributes('sandbox')).toBe('')
+  })
+
+  it('shows the scripts-disabled hint in the toolbar', async () => {
+    const wrapper = mountPane('page.htm')
+    await flushPromises()
+    expect(wrapper.find('.fpv-hint').text()).toBe('Scripts are disabled in preview')
+  })
+})
+
 describe('FilePreviewPane – binary hex dump', () => {
   it('fetches the first 64 KB with a Range header and renders offset/hex/ascii', async () => {
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x41, 0x42, 0x43])

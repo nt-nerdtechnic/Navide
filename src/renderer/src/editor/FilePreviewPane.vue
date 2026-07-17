@@ -141,6 +141,7 @@ onMounted(() => {
     <div class="fpv-toolbar">
       <span class="fpv-name" :title="relPath">{{ name }}</span>
       <span v-if="metaText" class="fpv-meta">{{ metaText }}</span>
+      <span v-if="kind === 'html'" class="fpv-hint">{{ $t('preview.html-scripts-disabled') }}</span>
       <span class="fpv-spacer" />
       <button
         v-if="kind === 'image'"
@@ -194,6 +195,13 @@ onMounted(() => {
       </div>
     </template>
 
+    <!-- HTML: sandboxed iframe. The empty sandbox attribute (no allow-*) is
+         the second layer on top of the backend's CSP sandbox header — the
+         document is an opaque origin with scripts/forms/plugins blocked. -->
+    <div v-else-if="kind === 'html'" class="fpv-body fpv-html-body">
+      <iframe class="fpv-html-frame" :src="rawUrl" :title="name" sandbox="" />
+    </div>
+
     <!-- Unknown binary: info card + hex dump -->
     <div v-else class="fpv-body fpv-card-body">
       <div class="fpv-card">
@@ -240,6 +248,10 @@ onMounted(() => {
   white-space: nowrap;
 }
 .fpv-meta {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.fpv-hint {
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -314,6 +326,18 @@ onMounted(() => {
   flex: 1;
   width: 100%;
   border: 0;
+}
+.fpv-html-body {
+  display: flex;
+  overflow: hidden;
+}
+.fpv-html-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  /* Sandboxed documents default to a transparent background; paint white so
+     unstyled pages stay readable on dark themes. */
+  background: #fff;
 }
 .fpv-card-body {
   display: flex;

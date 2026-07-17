@@ -3,11 +3,13 @@
 // content is read. Files outside every list open in the text editor as before
 // (EditorPane's own binary branch covers the ones that turn out to be binary).
 
-export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'binary'
+export type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'binary'
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'avif'])
 const VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'm4v'])
 const AUDIO_EXTS = new Set(['mp3', 'wav', 'm4a', 'ogg', 'flac'])
+// HTML previews in a sandboxed iframe; opens raw by default like markdown.
+const HTML_EXTS = new Set(['html', 'htm'])
 // Known-binary extensions that get the info-card + hex-dump fallback.
 const BINARY_EXTS = new Set([
   'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', '7z', 'rar', 'jar', 'war',
@@ -23,14 +25,16 @@ export function fileExt(relPath: string): string {
   return idx > 0 ? name.slice(idx + 1).toLowerCase() : ''
 }
 
-// Preview kind for files that auto-open in the preview pane; null for
-// everything else (text files, markdown, unknown extensions).
+// Preview kind for files the preview pane can render; null for everything
+// else (text files, markdown, unknown extensions). All kinds except 'html'
+// auto-open in preview; 'html' opens raw with a Preview toggle.
 export function previewKind(relPath: string): PreviewKind | null {
   const ext = fileExt(relPath)
   if (IMAGE_EXTS.has(ext)) return 'image'
   if (VIDEO_EXTS.has(ext)) return 'video'
   if (AUDIO_EXTS.has(ext)) return 'audio'
   if (ext === 'pdf') return 'pdf'
+  if (HTML_EXTS.has(ext)) return 'html'
   if (BINARY_EXTS.has(ext)) return 'binary'
   return null
 }

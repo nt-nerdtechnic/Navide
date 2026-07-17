@@ -22,6 +22,8 @@ def workspace(tmp_path):
     (ws / "doc.pdf").write_bytes(b"%PDF-1.4 fake")
     (ws / "blob.zzz").write_bytes(b"\x00\x01\x02unknown")
     (ws / "page.html").write_text("<script>alert(1)</script>")
+    (ws / "page.xhtml").write_text("<html xmlns='http://www.w3.org/1999/xhtml'/>")
+    (ws / "script.js").write_text("alert(1)")
     (ws / "vector.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
     (ws / "sub").mkdir()
     (ws / ".agent-team").mkdir()
@@ -53,9 +55,29 @@ def test_raw_unknown_extension_falls_back_to_octet_stream(client, workspace):
     assert resp.headers["content-type"] == "application/octet-stream"
 
 
-def test_raw_html_downgraded_to_attachment(client, workspace):
-    # Non-media types must never render inline on the backend origin (XSS).
+def test_raw_html_inline_with_csp_sandbox(client, workspace):
+    # HTML is served inline for the sandboxed iframe preview; CSP sandbox
+    # keeps it an opaque origin with scripts/forms/plugins blocked.
     resp = _get(client, workspace, "page.html")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "content-disposition" not in resp.headers
+    assert resp.headers["content-security-policy"] == "sandbox"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+def test_raw_xhtml_inline_with_csp_sandbox(client, workspace):
+    resp = _get(client, workspace, "page.xhtml")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/xhtml+xml"
+    assert "content-disposition" not in resp.headers
+    assert resp.headers["content-security-policy"] == "sandbox"
+
+
+def test_raw_js_downgraded_to_attachment(client, workspace):
+    # Non-media, non-HTML types must never render inline on the backend
+    # origin (XSS): downgraded to an opaque attachment.
+    resp = _get(client, workspace, "script.js")
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "application/octet-stream"
     assert resp.headers["content-disposition"].startswith("attachment")

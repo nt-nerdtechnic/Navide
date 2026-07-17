@@ -136,6 +136,24 @@ describe('EditorWindowApp – preview routing', () => {
     expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
   })
 
+  it('opens .html raw with a Preview toggle that mounts FilePreviewPane', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'site/index.html')
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+    const toggle = previewToggle(wrapper)
+    expect(toggle.text()).toBe('Preview')
+
+    await toggle.trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'PlanFileView' }).exists()).toBe(false)
+
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'EditorPane' }).exists()).toBe(true)
+  })
+
   it('keeps .plan.md routing to PlanFileView with no preview toggle', async () => {
     const wrapper = await mountApp()
     await open(wrapper, 'plans/feature.plan.md')
