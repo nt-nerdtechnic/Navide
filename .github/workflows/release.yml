@@ -67,9 +67,20 @@ jobs:
         run: uv run pyinstaller agent_team_backend.spec
 
       - name: Build application (unsigned)
+        shell: bash
         run: |
           pnpm build
-          pnpm exec electron-builder --mac --arm64 --publish never -c.mac.identity=null
+          # hdiutil on shared macOS runners intermittently fails to attach the
+          # DMG staging image ("Device not configured"); retry absorbs it.
+          for attempt in 1 2 3; do
+            if pnpm exec electron-builder --mac --arm64 --publish never -c.mac.identity=null; then
+              exit 0
+            fi
+            echo "electron-builder attempt ${attempt} failed; retrying in 15s..."
+            sleep 15
+          done
+          echo "electron-builder failed after 3 attempts"
+          exit 1
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
           CSC_IDENTITY_AUTO_DISCOVERY: false
@@ -94,4 +105,10 @@ jobs:
             assets+=("${asset}")
           done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*.dmg' -o -name 'Navide-*.zip' -o -name '*.blockmap' -o -name 'latest-mac.yml' \) -print0)
           test "${#assets[@]}" -ge 4
-          gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+          # Idempotent publish: if the release already exists (e.g. published
+          # manually or by a rerun), upload/replace assets instead of failing.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --prerelease --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+          fi
