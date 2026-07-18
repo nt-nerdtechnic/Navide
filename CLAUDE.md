@@ -31,7 +31,7 @@ Read routed files on demand, not all up front.
    Grep tool to locate → Read with offset/limit → batch edits through one
    subagent. Never whole-file Read, never bash/python inline search.
 
-## Workflow (Cursor Plan Mode)
+## Workflow (Plan Documents)
 
 Plan mode is **opt-in only** — enter it solely when the user explicitly asks
 (e.g. "建立計畫", "plan 模式", invoking `cursor-plan-mode-workflow`).
@@ -40,9 +40,15 @@ state assumptions and implement directly.
 
 When a plan exists or was explicitly requested:
 
-1. Before implementation, read the latest `.plan.md` under `.cursor/plans/`.
-2. Implement by the plan's `todos` phases; update each todo's `status` in the
-   plan file as phases complete.
+1. Plans are agent-authored HTML in `.agent-team/plans/` per
+   `.agent-team/plans/_spec.md` (copy `_template.html` to start). Do not
+   publish plans as claude.ai artifacts; the user views them in the app.
+2. Updates (todo status, stage, review notes): Edit only the `plan-meta`
+   JSON block plus its matching visible markup — never rewrite the file.
+3. Approval gate: write code only when the plan's `stage` is `approved` or
+   later. The user saying "開始" means: set `stage: approved` + `approvedAt`,
+   then start.
+4. Legacy `.cursor/plans/*.plan.md` stay readable; never create new ones.
 
 ## Language
 
