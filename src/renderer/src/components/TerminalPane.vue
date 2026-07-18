@@ -396,8 +396,8 @@ onMounted(() => {
   padding: 0 3px;
   line-height: 1;
   border-radius: 3px;
-  opacity: 0;
-  transition: opacity 0.15s;
+  opacity: 1;
+  transition: color 0.15s, background-color 0.15s;
 }
 .minimize-btn {
   right: 6px;
@@ -409,15 +409,10 @@ onMounted(() => {
   width: 14px;
   height: 14px;
 }
-.pane:hover .minimize-btn,
-.pane:hover .rebuild-btn {
-  opacity: 1;
-}
 .minimize-btn:hover,
 .rebuild-btn:hover {
   color: var(--text-primary);
   background: var(--bg-muted);
-  opacity: 1;
 }
 .pane-header {
   display: flex;
