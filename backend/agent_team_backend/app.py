@@ -1013,7 +1013,7 @@ _CODEX_RESUME_RE = re.compile(r"^codex\s+resume\s+(\S+)")
 def _command_text(command: Any) -> str:
     """Actual CLI command string from a terminal.create payload.
 
-    The frontend wraps agent commands as [shell, '-lc', '<cmd>'] — the real
+    The frontend wraps agent commands as [shell, '-ilc'|'-lc', '<cmd>'] — the real
     command is the LAST element. Plain strings pass through unchanged.
     """
     if isinstance(command, list):

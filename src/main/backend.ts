@@ -33,9 +33,16 @@ function findFreePort(): Promise<number> {
 function getLoginShellEnv(): Promise<{ shell: string; path: string | null }> {
   return new Promise((resolve) => {
     const shell = process.env.SHELL ?? '/bin/zsh'
-    execFile(shell, ['-l', '-c', 'echo $PATH'], { timeout: 3000 }, (err, stdout) => {
+    // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
+    // ~/.local/bin) only in INTERACTIVE mode — a plain login shell (-l)
+    // misses it. Marker-wrap the output so shell-config chatter on stdout
+    // can't pollute the parsed PATH.
+    const flags = shell.endsWith('zsh') ? ['-il', '-c'] : ['-l', '-c']
+    const args = [...flags, 'printf "__NAVIDE_PATH__%s\\n" "$PATH"']
+    execFile(shell, args, { timeout: 3000 }, (err, stdout) => {
       if (err) { resolve({ shell, path: null }); return }
-      const p = stdout.trim()
+      const marked = stdout.split('\n').filter((l) => l.startsWith('__NAVIDE_PATH__'))
+      const p = (marked.at(-1) ?? '').slice('__NAVIDE_PATH__'.length).trim()
       resolve({ shell, path: p.length > 0 ? p : null })
     })
   })

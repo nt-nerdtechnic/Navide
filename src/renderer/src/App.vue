@@ -1806,7 +1806,9 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     pane.outputLogFile = outputLogFile
 
     await ref.spawn({
-      command: [userShell, '-lc', command],
+      // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
+      // ~/.local/bin) only in interactive mode — plain -lc misses it.
+      command: [userShell, userShell.endsWith('zsh') ? '-ilc' : '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
       metadata: {
