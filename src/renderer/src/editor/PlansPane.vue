@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { parsePlanFile, planProgress, type ParsedPlan, type PlanProgress } from '../composables/usePlanFile'
+import {
+  htmlPlanProgress,
+  parseHtmlPlanMeta,
+  type HtmlPlanMeta,
+  type PlanStage,
+} from '../composables/usePlanHtml'
 import { useNotify } from '../composables/useNotify'
 
 const props = defineProps<{
@@ -21,13 +28,18 @@ interface FsEntry {
 
 // `plan`/`progress` are null for markdown-only files without frontmatter —
 // still listed (Cursor parity) but without progress tracking.
+// `htmlMeta` is set only for `.agent-team/plans/*.html` files with a valid
+// plan-meta block; HTML files without one are listed as docs (plan/progress
+// null), same treatment as markdown fallback.
 interface PlanItem {
   relPath: string
   name: string
   plan: ParsedPlan | null
   progress: PlanProgress | null
+  htmlMeta: HtmlPlanMeta | null
 }
 
+const { t } = useI18n()
 const { toast, confirm } = useNotify()
 const loading = ref(false)
 const waitingForBackend = ref(false)
@@ -47,38 +59,70 @@ async function loadPlans(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
+    const loaded: PlanItem[] = []
+
+    // Legacy markdown plans: .cursor/plans/*.plan.md
     const list = await props.backend.send<{ ok: boolean; entries?: FsEntry[]; error?: string }>('fs.list_dir', {
       workspace_path: props.workspacePath,
       rel_path: '.cursor/plans',
       show_hidden: true,
     })
     if (!list.payload?.ok) {
-      plans.value = []
       error.value = list.payload?.error === 'not a directory'
         ? ''
         : (list.payload?.error || 'Failed to list plans')
-      return
+    } else {
+      const entries = (list.payload.entries ?? [])
+        .filter((entry) => !entry.is_dir && entry.name.endsWith('.plan.md'))
+        .sort((a, b) => a.name.localeCompare(b.name))
+
+      for (const entry of entries) {
+        const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: entry.rel_path,
+        })
+        if (!read.payload?.ok) continue
+        const parsed = parsePlanFile(read.payload.content ?? '')
+        loaded.push({
+          relPath: entry.rel_path,
+          name: entry.name,
+          plan: parsed,
+          progress: parsed ? planProgress(parsed.todos) : null,
+          htmlMeta: null,
+        })
+      }
     }
 
-    const entries = (list.payload.entries ?? [])
-      .filter((entry) => !entry.is_dir && entry.name.endsWith('.plan.md'))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    // HTML plans: .agent-team/plans/*.html (underscore-prefixed files are
+    // infrastructure — spec/template — never listed). Missing directory is
+    // simply an empty set, no error surfaced.
+    const htmlList = await props.backend.send<{ ok: boolean; entries?: FsEntry[]; error?: string }>('fs.list_dir', {
+      workspace_path: props.workspacePath,
+      rel_path: '.agent-team/plans',
+      show_hidden: true,
+    })
+    if (htmlList.payload?.ok) {
+      const htmlEntries = (htmlList.payload.entries ?? [])
+        .filter((entry) => !entry.is_dir && entry.name.endsWith('.html') && !entry.name.startsWith('_'))
+        .sort((a, b) => a.name.localeCompare(b.name))
 
-    const loaded: PlanItem[] = []
-    for (const entry of entries) {
-      const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
-        workspace_path: props.workspacePath,
-        rel_path: entry.rel_path,
-      })
-      if (!read.payload?.ok) continue
-      const parsed = parsePlanFile(read.payload.content ?? '')
-      loaded.push({
-        relPath: entry.rel_path,
-        name: entry.name,
-        plan: parsed,
-        progress: parsed ? planProgress(parsed.todos) : null,
-      })
+      for (const entry of htmlEntries) {
+        const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+          workspace_path: props.workspacePath,
+          rel_path: entry.rel_path,
+        })
+        if (!read.payload?.ok) continue
+        const parsed = parseHtmlPlanMeta(read.payload.content ?? '')
+        loaded.push({
+          relPath: entry.rel_path,
+          name: entry.name,
+          plan: null,
+          progress: null,
+          htmlMeta: parsed?.meta ?? null,
+        })
+      }
     }
+
     plans.value = loaded
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load plans'
@@ -93,23 +137,60 @@ watch(() => props.backend.status?.value, (status) => {
   if (status === 'connected' && waitingForBackend.value) void loadPlans()
 })
 
-const activePlans = computed(() => plans.value.filter((p) => !p.progress?.complete))
-const completedPlans = computed(() => plans.value.filter((p) => p.progress?.complete))
+// Legacy markdown plans and docs (markdown or HTML without valid meta) keep
+// the original Active/Completed split; HTML plans with meta group by stage.
+const legacyItems = computed(() => plans.value.filter((p) => !p.htmlMeta))
+const activePlans = computed(() => legacyItems.value.filter((p) => !p.progress?.complete))
+const completedPlans = computed(() => legacyItems.value.filter((p) => p.progress?.complete))
+
+interface HtmlPlanRow {
+  item: PlanItem
+  meta: HtmlPlanMeta
+  done: number
+  total: number
+}
+
+function htmlRows(stages: PlanStage[]): HtmlPlanRow[] {
+  return plans.value.flatMap((p) => {
+    if (!p.htmlMeta || !stages.includes(p.htmlMeta.stage)) return []
+    const progress = htmlPlanProgress(p.htmlMeta.todos)
+    return [{ item: p, meta: p.htmlMeta, done: progress.done, total: progress.total }]
+  })
+}
+
+const htmlGroups = computed(() =>
+  (
+    [
+      { key: 'in-review', label: t('pane.plans.stage-in-review'), stages: ['draft', 'in-review'], finished: false },
+      { key: 'approved', label: t('pane.plans.stage-approved'), stages: ['approved'], finished: false },
+      { key: 'in-progress', label: t('pane.plans.stage-in-progress'), stages: ['in-progress'], finished: false },
+      { key: 'done', label: t('pane.plans.stage-done'), stages: ['done'], finished: true },
+      { key: 'abandoned', label: t('pane.plans.stage-abandoned'), stages: ['abandoned'], finished: true },
+    ] as { key: string; label: string; stages: PlanStage[]; finished: boolean }[]
+  )
+    .map((group) => ({ ...group, rows: htmlRows(group.stages) }))
+    .filter((group) => group.rows.length > 0)
+)
+
+const finishedHtmlPlans = computed(() =>
+  plans.value.filter((p) => p.htmlMeta && (p.htmlMeta.stage === 'done' || p.htmlMeta.stage === 'abandoned'))
+)
+const deletablePlans = computed(() => [...completedPlans.value, ...finishedHtmlPlans.value])
 
 function openPlan(item: PlanItem): void {
   emit('open-file', { filepath: item.relPath, name: item.name })
 }
 
 async function deleteCompleted(): Promise<void> {
-  if (!completedPlans.value.length) return
-  const ok = await confirm(`Delete ${completedPlans.value.length} completed plan(s)?`, {
+  if (!deletablePlans.value.length) return
+  const ok = await confirm(`Delete ${deletablePlans.value.length} completed plan(s)?`, {
     title: 'Delete Completed Plans',
     confirmText: 'Delete',
   })
   if (!ok) return
 
   let deleted = 0
-  for (const item of completedPlans.value) {
+  for (const item of deletablePlans.value) {
     const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.delete', {
       workspace_path: props.workspacePath,
       rel_path: item.relPath,
@@ -134,7 +215,7 @@ function statusText(item: PlanItem): string {
     <header class="plans-head">
       <div>
         <div class="plans-title">Plans</div>
-        <div class="plans-subtitle">.cursor/plans</div>
+        <div class="plans-subtitle">.agent-team/plans · .cursor/plans</div>
       </div>
       <button class="plans-icon-btn" title="Refresh" @click="loadPlans">↻</button>
     </header>
@@ -160,11 +241,32 @@ function statusText(item: PlanItem): string {
           <span v-if="item.plan?.overview" class="plan-row-overview">{{ item.plan.overview }}</span>
           <span class="plan-row-meta">
             <span v-if="item.progress">{{ item.progress.done }}/{{ item.progress.total }} done</span>
-            <span v-else>markdown</span>
+            <span v-else>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
             <span class="plan-chip">{{ statusText(item) }}</span>
           </span>
         </button>
         <div v-if="!activePlans.length" class="plans-empty">No active plans.</div>
+      </section>
+
+      <section v-for="group in htmlGroups" :key="group.key" class="plans-section">
+        <div class="plans-section-head">
+          <span>{{ group.label }}</span>
+          <span>{{ group.rows.length }}</span>
+        </div>
+        <button
+          v-for="row in group.rows"
+          :key="row.item.relPath"
+          class="plan-row"
+          :class="{ 'plan-row--done': group.finished }"
+          @click="openPlan(row.item)"
+        >
+          <span class="plan-row-name">{{ row.meta.name }}</span>
+          <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
+          <span class="plan-row-meta">
+            <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+            <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
+          </span>
+        </button>
       </section>
 
       <section class="plans-section">
@@ -172,7 +274,7 @@ function statusText(item: PlanItem): string {
           <span>Completed</span>
           <button
             class="plans-link-btn"
-            :disabled="!completedPlans.length"
+            :disabled="!deletablePlans.length"
             @click="deleteCompleted"
           >Delete all</button>
         </div>

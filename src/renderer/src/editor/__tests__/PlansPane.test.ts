@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import PlansPane from '../PlansPane.vue'
+import { i18n } from '../../i18n'
+
+i18n.global.locale.value = 'en-US'
 
 const ACTIVE_PLAN = `---
 name: Active Plan
@@ -26,6 +29,40 @@ isProject: false
 ---
 `
 
+function htmlPlan(meta: Record<string, unknown>): string {
+  return `<!doctype html>
+<html><head><title>x</title>
+<script type="application/json" id="plan-meta">
+${JSON.stringify(meta, null, 2)}
+</script>
+</head><body></body></html>`
+}
+
+const HTML_REVIEW_PLAN = htmlPlan({
+  schemaVersion: 1,
+  name: 'HTML Review Plan',
+  overview: 'Awaiting review.',
+  stage: 'in-review',
+  approvedAt: null,
+  todos: [
+    { id: 'phase-a', content: 'First', status: 'done' },
+    { id: 'phase-b', content: 'Second', status: 'pending' },
+  ],
+  reviewNotes: [],
+})
+
+const HTML_DONE_PLAN = htmlPlan({
+  schemaVersion: 1,
+  name: 'HTML Done Plan',
+  overview: 'Shipped.',
+  stage: 'done',
+  approvedAt: '2026-07-01T00:00:00Z',
+  todos: [{ id: 'phase-a', content: 'All done', status: 'done' }],
+  reviewNotes: [],
+})
+
+const HTML_DOC = '<!doctype html><html><body>no meta here</body></html>'
+
 const notify = {
   toast: vi.fn(),
   confirm: vi.fn(async () => true),
@@ -35,26 +72,43 @@ vi.mock('../../composables/useNotify', () => ({
   useNotify: () => notify,
 }))
 
-function makeBackend() {
+interface MockEntry {
+  name: string
+  rel_path: string
+  is_dir: boolean
+}
+
+function makeBackend(opts?: { htmlEntries?: MockEntry[]; htmlFiles?: Record<string, string> }) {
   return {
     status: ref('connected'),
     send: vi.fn(async (channel: string, payload: Record<string, unknown>) => {
       if (channel === 'fs.list_dir') {
-        return {
-          payload: {
-            ok: true,
-            entries: [
-              { name: 'active.plan.md', rel_path: '.cursor/plans/active.plan.md', is_dir: false },
-              { name: 'done.plan.md', rel_path: '.cursor/plans/done.plan.md', is_dir: false },
-            ],
-          },
+        if (payload.rel_path === '.cursor/plans') {
+          return {
+            payload: {
+              ok: true,
+              entries: [
+                { name: 'active.plan.md', rel_path: '.cursor/plans/active.plan.md', is_dir: false },
+                { name: 'done.plan.md', rel_path: '.cursor/plans/done.plan.md', is_dir: false },
+              ],
+            },
+          }
         }
+        if (payload.rel_path === '.agent-team/plans') {
+          if (!opts?.htmlEntries) return { payload: { ok: false, error: 'not a directory' } }
+          return { payload: { ok: true, entries: opts.htmlEntries } }
+        }
+        return { payload: { ok: false, error: 'not a directory' } }
       }
       if (channel === 'fs.read_file') {
+        const rel = payload.rel_path as string
+        if (opts?.htmlFiles && rel in opts.htmlFiles) {
+          return { payload: { ok: true, content: opts.htmlFiles[rel] } }
+        }
         return {
           payload: {
             ok: true,
-            content: payload.rel_path === '.cursor/plans/done.plan.md' ? DONE_PLAN : ACTIVE_PLAN,
+            content: rel === '.cursor/plans/done.plan.md' ? DONE_PLAN : ACTIVE_PLAN,
           },
         }
       }
@@ -64,11 +118,16 @@ function makeBackend() {
   }
 }
 
+function mountPane(backend: ReturnType<typeof makeBackend>) {
+  return mount(PlansPane, {
+    props: { workspacePath: '/ws', backend: backend as never },
+    global: { plugins: [i18n] },
+  })
+}
+
 describe('PlansPane', () => {
   it('lists active and completed plans', async () => {
-    const wrapper = mount(PlansPane, {
-      props: { workspacePath: '/ws', backend: makeBackend() as never },
-    })
+    const wrapper = mountPane(makeBackend())
     await flushPromises()
     expect(wrapper.text()).toContain('Active Plan')
     expect(wrapper.text()).toContain('Done Plan')
@@ -76,9 +135,7 @@ describe('PlansPane', () => {
   })
 
   it('emits open-file when a plan is clicked', async () => {
-    const wrapper = mount(PlansPane, {
-      props: { workspacePath: '/ws', backend: makeBackend() as never },
-    })
+    const wrapper = mountPane(makeBackend())
     await flushPromises()
     await wrapper.find('.plan-row').trigger('click')
     expect(wrapper.emitted('open-file')?.[0]).toEqual([
@@ -88,15 +145,131 @@ describe('PlansPane', () => {
 
   it('deletes completed plans', async () => {
     const backend = makeBackend()
-    const wrapper = mount(PlansPane, {
-      props: { workspacePath: '/ws', backend: backend as never },
-    })
+    const wrapper = mountPane(backend)
     await flushPromises()
     await wrapper.find('.plans-link-btn').trigger('click')
     await flushPromises()
     expect(backend.send).toHaveBeenCalledWith('fs.delete', {
       workspace_path: '/ws',
       rel_path: '.cursor/plans/done.plan.md',
+    })
+  })
+
+  it('lists HTML plans grouped by stage alongside unaffected legacy plans', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+          { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+        ],
+        htmlFiles: {
+          '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+          '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN,
+        },
+      })
+    )
+    await flushPromises()
+
+    // Legacy markdown plans unaffected.
+    expect(wrapper.text()).toContain('Active Plan')
+    expect(wrapper.text()).toContain('Done Plan')
+
+    // HTML plans appear under their stage groups with progress and stage chip.
+    const sectionTexts = wrapper.findAll('.plans-section').map((s) => s.text())
+    const reviewSection = sectionTexts.find((t) => t.includes('In Review'))
+    expect(reviewSection).toBeDefined()
+    expect(reviewSection).toContain('HTML Review Plan')
+    expect(reviewSection).toContain('1/2 done')
+    expect(reviewSection).toContain('in-review')
+
+    const doneSection = sectionTexts.find((t) => t.includes('HTML Done Plan'))
+    expect(doneSection).toBeDefined()
+    expect(doneSection).toContain('Done')
+    expect(doneSection).toContain('1/1 done')
+  })
+
+  it('excludes underscore-prefixed infrastructure files', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: '_template.html', rel_path: '.agent-team/plans/_template.html', is_dir: false },
+        { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('HTML Review Plan')
+    expect(backend.send).not.toHaveBeenCalledWith('fs.read_file', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/_template.html',
+    })
+  })
+
+  it('lists an HTML file without valid meta as a doc under Active', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'notes_aaaaaa.html', rel_path: '.agent-team/plans/notes_aaaaaa.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/notes_aaaaaa.html': HTML_DOC },
+      })
+    )
+    await flushPromises()
+
+    const activeSection = wrapper.findAll('.plans-section').map((s) => s.text()).find((t) => t.includes('Active'))
+    expect(activeSection).toContain('notes_aaaaaa.html')
+    expect(activeSection).toContain('doc')
+  })
+
+  it('opens HTML plans through the open-file emit', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+      })
+    )
+    await flushPromises()
+
+    const rows = wrapper.findAll('.plan-row')
+    const htmlRow = rows.find((r) => r.text().includes('HTML Review Plan'))!
+    await htmlRow.trigger('click')
+    const emitted = wrapper.emitted('open-file')!
+    expect(emitted[emitted.length - 1]).toEqual([
+      { filepath: '.agent-team/plans/review_a1b2c3.html', name: 'review_a1b2c3.html' },
+    ])
+  })
+
+  it('batch delete covers markdown completed plus HTML done/abandoned', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+        '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN,
+      },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('.plans-link-btn').trigger('click')
+    await flushPromises()
+
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/done.plan.md',
+    })
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/shipped_d4e5f6.html',
+    })
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/review_a1b2c3.html',
     })
   })
 })

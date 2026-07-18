@@ -19,6 +19,7 @@ const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vu
 import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
 import FilePreviewPane from './editor/FilePreviewPane.vue'
+import PlanReviewToolbar from './editor/PlanReviewToolbar.vue'
 import { previewKind, isMarkdownFile } from './editor/previewTypes'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
@@ -200,6 +201,26 @@ function togglePlanView(relPath: string): void {
     s.add(relPath)
   }
   planViewFiles.value = s
+}
+
+// ── HTML plan documents ───────────────────────────────────────────────────────
+// `.agent-team/plans/*.html` (non-underscore, top-level) get a review toolbar
+// above their sandboxed preview. `_`-prefixed files are infrastructure.
+function isHtmlPlanDoc(relPath: string): boolean {
+  if (!relPath.startsWith('.agent-team/plans/')) return false
+  const name = relPath.slice('.agent-team/plans/'.length)
+  return name.endsWith('.html') && !name.startsWith('_') && !name.includes('/')
+}
+
+// Per-file counter bumped when the toolbar rewrites the plan (or detects an
+// external edit); keying FilePreviewPane on it remounts the preview iframe,
+// which revalidates against the backend and picks up the new bytes.
+const planPreviewRefresh = ref<Record<string, number>>({})
+function bumpPlanPreviewRefresh(relPath: string): void {
+  planPreviewRefresh.value = {
+    ...planPreviewRefresh.value,
+    [relPath]: (planPreviewRefresh.value[relPath] ?? 0) + 1,
+  }
 }
 
 // ── File preview mode ─────────────────────────────────────────────────────────
@@ -1852,15 +1873,28 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :backend="backend"
             @dirty="(v) => markDirty(f.relPath, v)"
           />
-          <!-- File preview: media/PDF/binary files in preview mode -->
-          <FilePreviewPane
+          <!-- File preview: media/PDF/binary files in preview mode. HTML plan
+               documents additionally get the review toolbar above the preview. -->
+          <div
             v-if="f.kind === 'file' && !isMarkdownFile(f.relPath) && !isPlanFile(f.relPath) && previewFiles.has(f.relPath)"
             v-show="f.relPath === activeRel"
-            :workspace-path="workspacePath"
-            :rel-path="f.relPath"
-            :name="f.name"
-            :backend="backend"
-          />
+            class="ide-preview-stack"
+          >
+            <PlanReviewToolbar
+              v-if="isHtmlPlanDoc(f.relPath)"
+              :workspace-path="workspacePath"
+              :rel-path="f.relPath"
+              :backend="backend"
+              @updated="bumpPlanPreviewRefresh(f.relPath)"
+            />
+            <FilePreviewPane
+              :key="f.relPath + ':' + (planPreviewRefresh[f.relPath] ?? 0)"
+              :workspace-path="workspacePath"
+              :rel-path="f.relPath"
+              :name="f.name"
+              :backend="backend"
+            />
+          </div>
           <!-- Code editor: shown for all non-plan files, and plan files in raw mode.
                Key changes when toggling plan/raw, forcing a fresh load from disk. -->
           <EditorPane
@@ -2556,6 +2590,9 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 
 .ide-editors { flex: 1; position: relative; min-height: 0; }
 .ide-editors > * { height: 100%; }
+/* Preview wrapper: optional plan review toolbar stacked above the preview. */
+.ide-preview-stack { display: flex; flex-direction: column; }
+.ide-preview-stack > :last-child { flex: 1 1 0; min-height: 0; }
 .ide-empty {
   height: 100%;
   display: flex;

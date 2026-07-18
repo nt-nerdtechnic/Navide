@@ -37,6 +37,7 @@ vi.mock('../DiffPane.vue', () => stub('DiffPane'))
 vi.mock('../ConflictPane.vue', () => stub('ConflictPane'))
 vi.mock('../BranchDiffPane.vue', () => stub('BranchDiffPane'))
 vi.mock('../FilePreviewPane.vue', () => stub('FilePreviewPane'))
+vi.mock('../PlanReviewToolbar.vue', () => stub('PlanReviewToolbar'))
 
 vi.mock('../../composables/useBackend', () => ({
   useBackend: () => ({
@@ -212,6 +213,29 @@ describe('EditorWindowApp – preview routing', () => {
     expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
     expect(previewToggle(wrapper).exists()).toBe(false)
     expect(wrapper.find('.ide-tab-act--plan-toggle').text()).toBe('Raw')
+  })
+
+  it('mounts the plan review toolbar above previews of .agent-team plan HTML', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    // HTML opens raw; no toolbar until the preview is shown.
+    expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(false)
+
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(true)
+  })
+
+  it('keeps plain and infrastructure HTML previews toolbar-free', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, 'site/index.html')
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(false)
+
+    await open(wrapper, '.agent-team/plans/_template.html')
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(false)
   })
 
   it('opens text files in EditorPane with no preview toggle', async () => {

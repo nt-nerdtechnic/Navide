@@ -28,6 +28,25 @@
       "title": "Problems",
       "tab-shortcut": "Problems (⌘⇧M)"
     },
+    "plans": {
+      "stage-in-review": "In Review",
+      "stage-approved": "Approved",
+      "stage-in-progress": "In Progress",
+      "stage-done": "Done",
+      "stage-abandoned": "Abandoned",
+      "progress-done": "{done}/{total} done",
+      "stage-draft": "Draft",
+      "review-notes": "Review Notes",
+      "review-unresolved": "{count} unresolved",
+      "review-approve": "Approve",
+      "review-approve-hint": "Requires in-review stage with all notes resolved",
+      "review-resolve": "Resolve",
+      "review-resolved": "Resolved",
+      "review-empty": "No review notes yet",
+      "review-add-placeholder": "Add a review note\u2026",
+      "review-send": "Send",
+      "review-save-failed": "Save failed"
+    },
     "terminal": {
       "rebuild-tooltip": "Rebuild (resume) ⌘⇧B — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
       "minimize-tooltip": "Minimize to sidebar",

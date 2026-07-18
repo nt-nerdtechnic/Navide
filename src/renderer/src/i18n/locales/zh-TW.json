@@ -28,6 +28,25 @@
       "title": "問題",
       "tab-shortcut": "問題 (⌘⇧M)"
     },
+    "plans": {
+      "stage-in-review": "審查中",
+      "stage-approved": "已核准",
+      "stage-in-progress": "進行中",
+      "stage-done": "已完成",
+      "stage-abandoned": "已放棄",
+      "progress-done": "{done}/{total} 已完成",
+      "stage-draft": "草稿",
+      "review-notes": "審查留言",
+      "review-unresolved": "{count} 則未解決",
+      "review-approve": "核准",
+      "review-approve-hint": "須為審查中且所有留言皆已解決",
+      "review-resolve": "解決",
+      "review-resolved": "已解決",
+      "review-empty": "尚無審查留言",
+      "review-add-placeholder": "新增審查留言\u2026",
+      "review-send": "送出",
+      "review-save-failed": "儲存失敗"
+    },
     "terminal": {
       "rebuild-tooltip": "重建 (resume) ⌘⇧B — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。",
       "minimize-tooltip": "縮到側邊欄",
