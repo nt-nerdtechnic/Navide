@@ -128,7 +128,7 @@ describe('CliHealthGuide', () => {
     ]])
   })
 
-  it('opens a confirmed package-manager removal in Terminal', async () => {
+  it('asks for in-app confirmation before opening removal in Terminal', async () => {
     const commands: string[] = []
     window.agentTeam = {
       openTerminal: async (command: string) => {
@@ -144,8 +144,53 @@ describe('CliHealthGuide', () => {
 
     await wrapper.findAll('.ch-remove-binary')[1].trigger('click')
 
+    expect(commands).toEqual([])
+    expect(wrapper.get('.ch-confirm').text()).toContain('/opt/homebrew/bin/claude')
+    expect(wrapper.get('.ch-confirm').text()).toContain('/Users/test/.nvm/bin/claude')
+
+    await wrapper.get('.ch-confirm-removal').trigger('click')
+
     expect(commands).toEqual(["printf 'remove'; npm uninstall -g @anthropic-ai/claude-code"])
     expect(wrapper.text()).toContain('confirmation prompt')
+  })
+
+  it('cancelling the in-app confirmation opens nothing in Terminal', async () => {
+    const commands: string[] = []
+    window.agentTeam = {
+      openTerminal: async (command: string) => {
+        commands.push(command)
+        return { ok: true }
+      },
+    } as typeof window.agentTeam
+    const mock = createMockBackend('connected')
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: health },
+      global: { plugins: [i18n] },
+    })
+
+    await wrapper.findAll('.ch-remove-binary')[1].trigger('click')
+    await wrapper.get('.ch-cancel-removal').trigger('click')
+
+    expect(commands).toEqual([])
+    expect(wrapper.find('.ch-confirm').exists()).toBe(false)
+  })
+
+  it('never offers removal for the only working installation', () => {
+    const soleWorking = structuredClone(health)
+    soleWorking.entries[0].candidates[0].resolved_path = '/Users/test/.nvm/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    soleWorking.entries[0].candidates[1].resolved_path = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    soleWorking.entries[0].candidates[1].status = 'failed'
+    const mock = createMockBackend('connected')
+
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: soleWorking },
+      global: { plugins: [i18n] },
+    })
+
+    // Only the broken duplicate is removable; the sole working install shows
+    // a blocked note even though the (legacy) backend supplied a command.
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(1)
+    expect(wrapper.get('.ch-blocked').text()).toContain('no other working installation')
   })
 
   it('offers removal for an older backend payload when npm ownership is clear', () => {

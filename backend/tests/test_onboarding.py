@@ -207,21 +207,43 @@ def test_cli_health_reports_distinct_duplicate_installations(
     assert len(health["fingerprint"]) == 16
 
 
-def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    prefix = tmp_path / "node"
+def _make_npm_claude_install(prefix: Path) -> tuple[Path, Path, Path]:
+    """Create an npm-owned claude install; returns (npm, binary, target)."""
     npm = _make_executable(prefix / "bin" / "npm")
     target = _make_executable(
         prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
     )
     binary = prefix / "bin" / "claude"
     binary.symlink_to(target)
-    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [{
-        "path": str(binary),
-        "resolved_path": str(target),
-        "aliases": [str(binary)],
-    }])
+    return npm, binary, target
+
+
+def _candidate_entry(path: Path, resolved: Path | None = None) -> dict:
+    return {
+        "path": str(path),
+        "resolved_path": str(resolved if resolved is not None else path),
+        "aliases": [str(path)],
+    }
+
+
+def _probe_ok(_dep: object, _path: str) -> dict:
+    return {"version": "2.1.214", "status": "ok", "exit_code": 0, "signal": "", "duration_ms": 10}
+
+
+def _probe_failed(_dep: object, _path: str) -> dict:
+    return {"version": "", "status": "failed", "exit_code": 1, "signal": "", "duration_ms": 10}
+
+
+def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    npm, binary, target = _make_npm_claude_install(tmp_path / "node")
+    other = _make_executable(tmp_path / "native" / "claude")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+        _candidate_entry(other),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
     monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
 
     health = ob.build_cli_health([_claude_status(binary)])
@@ -231,6 +253,64 @@ def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
     assert str(npm) in candidate["removal_command"]
     assert "uninstall -g @anthropic-ai/claude-code" in candidate["removal_command"]
     assert "Continue? [y/N]" in candidate["removal_command"]
+
+
+def test_cli_health_never_offers_removal_for_the_only_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, binary, target = _make_npm_claude_install(tmp_path / "node")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+    ])
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(binary)])
+    candidate = health["entries"][0]["candidates"][0]
+
+    assert candidate["removal_command"] == ""
+    assert candidate["install_manager"] == ""
+
+
+def test_cli_health_offers_removal_only_for_the_broken_duplicate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, primary_binary, primary_target = _make_npm_claude_install(tmp_path / "node_a")
+    _, broken_binary, broken_target = _make_npm_claude_install(tmp_path / "node_b")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(primary_binary, primary_target),
+        _candidate_entry(broken_binary, broken_target),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_failed)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(primary_binary)])
+    candidates = health["entries"][0]["candidates"]
+    working = next(c for c in candidates if c["status"] == "ok")
+    broken = next(c for c in candidates if c["status"] != "ok")
+
+    assert working["removal_command"] == ""
+    assert "uninstall -g @anthropic-ai/claude-code" in broken["removal_command"]
+
+
+def test_cli_health_fingerprint_ignores_removal_gating(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    npm, binary, target = _make_npm_claude_install(tmp_path / "node")
+    other = _make_executable(tmp_path / "native" / "claude")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+        _candidate_entry(other),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    with_removal = ob.build_cli_health([_claude_status(binary)])
+    npm.unlink()  # removal becomes unavailable; probes are unchanged
+    without_removal = ob.build_cli_health([_claude_status(binary)])
+
+    assert with_removal["entries"][0]["candidates"][0]["removal_command"] != ""
+    assert without_removal["entries"][0]["candidates"][0]["removal_command"] == ""
+    assert with_removal["fingerprint"] == without_removal["fingerprint"]
 
 
 def test_cli_health_collapses_aliases_to_same_physical_binary(

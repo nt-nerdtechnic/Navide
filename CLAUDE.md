@@ -33,12 +33,16 @@ Read routed files on demand, not all up front.
 
 ## Workflow (Cursor Plan Mode)
 
-Plan-driven development:
+Plan mode is **opt-in only** — enter it solely when the user explicitly asks
+(e.g. "建立計畫", "plan 模式", invoking `cursor-plan-mode-workflow`).
+Never create a plan file proactively, even for complex tasks; without a plan,
+state assumptions and implement directly.
+
+When a plan exists or was explicitly requested:
 
 1. Before implementation, read the latest `.plan.md` under `.cursor/plans/`.
 2. Implement by the plan's `todos` phases; update each todo's `status` in the
    plan file as phases complete.
-3. No plan + complex task → Discovery → Clarify → Plan Artifact first.
 
 ## Language
 

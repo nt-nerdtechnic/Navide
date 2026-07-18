@@ -41,13 +41,30 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`
 }
 
+const NPM_PACKAGES: Record<string, string> = {
+  claude: '@anthropic-ai/claude-code',
+  codex: '@openai/codex',
+}
+
+function hasOtherOk(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
+  return entry.candidates.some((item) => item !== candidate && item.status === 'ok')
+}
+
+function remainingOk(entry: CliHealthEntry, candidate: CliHealthCandidate): CliHealthCandidate | undefined {
+  return entry.candidates.find((item) => item !== candidate && item.status === 'ok')
+}
+
+function isNpmOwned(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
+  const packageName = NPM_PACKAGES[entry.agent_key]
+  return Boolean(packageName && candidate.resolved_path.includes(`/node_modules/${packageName}/`))
+}
+
 function removalCommand(entry: CliHealthEntry, candidate: CliHealthCandidate): string {
+  // Never offer removal unless another install of the same CLI probes ok; the
+  // gate also covers backend-provided commands from older, ungated backends.
+  if (!hasOtherOk(entry, candidate)) return ''
   if (candidate.removal_command) return candidate.removal_command
-  const packages: Record<string, string> = {
-    claude: '@anthropic-ai/claude-code',
-    codex: '@openai/codex',
-  }
-  const packageName = packages[entry.agent_key]
+  const packageName = NPM_PACKAGES[entry.agent_key]
   if (!packageName || !candidate.resolved_path.includes(`/node_modules/${packageName}/`)) return ''
 
   const npmPath = candidate.path.replace(/\/[^/]+$/, '/npm')
@@ -56,7 +73,25 @@ function removalCommand(entry: CliHealthEntry, candidate: CliHealthCandidate): s
   return `printf '%s\\n' ${shellQuote(description)}; printf 'Continue? [y/N] '; read -r answer; case "$answer" in [Yy]*) ${uninstall} ;; *) echo 'Cancelled.' ;; esac`
 }
 
-async function openRemoval(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
+const pendingRemoval = ref<{ entry: CliHealthEntry; candidate: CliHealthCandidate } | null>(null)
+
+function isPendingRemoval(candidate: CliHealthCandidate): boolean {
+  return pendingRemoval.value?.candidate === candidate
+}
+
+function requestRemoval(entry: CliHealthEntry, candidate: CliHealthCandidate): void {
+  message.value = ''
+  pendingRemoval.value = { entry, candidate }
+}
+
+function cancelRemoval(): void {
+  pendingRemoval.value = null
+}
+
+async function confirmRemoval(): Promise<void> {
+  if (!pendingRemoval.value) return
+  const { entry, candidate } = pendingRemoval.value
+  pendingRemoval.value = null
   const result = await window.agentTeam?.openTerminal(removalCommand(entry, candidate))
   message.value = result?.ok
     ? t('cli-health.removal-opened', { label: entry.label })
@@ -149,13 +184,27 @@ async function dismiss(): Promise<void> {
                   {{ $t('cli-health.use-version', { version: candidate.version || $t('cli-health.unknown-version') }) }}
                 </button>
                 <button
-                  v-if="removalCommand(entry, candidate)"
+                  v-if="removalCommand(entry, candidate) && !isPendingRemoval(candidate)"
                   class="ch-btn danger ch-remove-binary"
-                  @click="openRemoval(entry, candidate)"
+                  @click="requestRemoval(entry, candidate)"
                 >
                   {{ $t('cli-health.remove-installation') }}
                 </button>
               </div>
+              <div v-if="isPendingRemoval(candidate)" class="ch-confirm">
+                <strong>{{ $t('cli-health.confirm-remove-title') }}</strong>
+                <p>{{ $t('cli-health.confirm-remove-desc', { path: candidate.path, version: candidate.version || $t('cli-health.unknown-version') }) }}</p>
+                <p v-if="remainingOk(entry, candidate)">
+                  {{ $t('cli-health.confirm-remove-keep', { path: remainingOk(entry, candidate)?.path }) }}
+                </p>
+                <div class="ch-confirm-actions">
+                  <button class="ch-btn ghost ch-cancel-removal" @click="cancelRemoval">{{ $t('action.cancel') }}</button>
+                  <button class="ch-btn danger ch-confirm-removal" @click="confirmRemoval">{{ $t('cli-health.confirm-continue') }}</button>
+                </div>
+              </div>
+              <p v-if="isNpmOwned(entry, candidate) && !removalCommand(entry, candidate)" class="ch-blocked">
+                {{ $t('cli-health.removal-blocked') }}
+              </p>
             </div>
             <div class="ch-actions-note">{{ $t('cli-health.use-version-note') }}</div>
           </section>
@@ -267,6 +316,10 @@ h2 { margin: 0 0 8px; color: var(--text-bright); font-size: 22px; }
 .ch-signal { color: var(--danger-fg); font-weight: 700; }
 .ch-path { display: block; margin-top: 8px; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
 .ch-candidate-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.ch-confirm { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--danger-fg); border-radius: 8px; background: var(--bg-subtle); font-size: 13px; }
+.ch-confirm p { margin: 6px 0 0; color: var(--text-secondary); line-height: 1.5; overflow-wrap: anywhere; }
+.ch-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.ch-blocked { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .ch-actions-note { margin-top: 14px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 .ch-version-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .repair ol { color: var(--text-secondary); line-height: 1.8; }

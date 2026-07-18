@@ -330,7 +330,7 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             continue  # Missing optional CLIs are handled by normal onboarding.
         dep_status = status_by_id.get(dep.id, {})
         primary_resolved = str(dep_status.get("resolved_path") or "")
-        detailed_candidates: list[dict[str, Any]] = []
+        probed: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
         for candidate in candidates:
             is_primary = candidate["resolved_path"] == primary_resolved
             probe = {
@@ -340,7 +340,21 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
                 "signal": dep_status.get("signal", ""),
                 "duration_ms": dep_status.get("duration_ms"),
             } if is_primary else _probe_alternate(dep, candidate["resolved_path"])
-            removal = _candidate_removal(candidate, dep, str(probe.get("version") or ""))
+            probed.append((candidate, probe, is_primary))
+        detailed_candidates: list[dict[str, Any]] = []
+        for candidate, probe, is_primary in probed:
+            # Removal is only offered while another install of the same CLI probes
+            # ok, so the guide can never point at the last working binary.
+            other_ok = any(
+                other_probe.get("status") == "ok"
+                for other_candidate, other_probe, _ in probed
+                if other_candidate is not candidate
+            )
+            removal = (
+                _candidate_removal(candidate, dep, str(probe.get("version") or ""))
+                if other_ok
+                else {"manager": "", "command": ""}
+            )
             detailed_candidates.append({
                 **candidate,
                 **probe,
