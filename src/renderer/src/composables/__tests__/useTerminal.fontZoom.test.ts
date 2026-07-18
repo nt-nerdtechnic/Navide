@@ -137,7 +137,7 @@ describe('terminal font zoom — app-wide', () => {
     b.scope.stop()
   })
 
-  it('arms redraw without stable-width notification', async () => {
+  it('arms redraw for each pane', async () => {
     const a = await spawnPane('pane-a')
     const b = await spawnPane('pane-b')
     ctrl.requestResizeRedraw.mockClear()
@@ -145,7 +145,7 @@ describe('terminal font zoom — app-wide', () => {
     await press('-')
 
     expect(ctrl.requestResizeRedraw).toHaveBeenCalledTimes(2)
-    expect(ctrl.requestResizeRedraw).toHaveBeenCalledWith({ notifyStableWidth: false })
+    expect(ctrl.requestResizeRedraw).toHaveBeenCalledWith()
     a.scope.stop()
     b.scope.stop()
   })

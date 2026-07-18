@@ -458,7 +458,6 @@ function buildFileLinkProvider(
 interface UseTerminalOptions {
   workspacePath?: string
   onClear?: () => void
-  onStableWidthChange?: (cols: number) => void
 }
 
 export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: UseTerminalOptions) {
@@ -1534,7 +1533,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     dbgLog,
     () => !!pendingSpawn.value,
     () => { void createWhenMeasurable() },
-    (cols) => opts?.onStableWidthChange?.(cols),
   )
 
   // Shared zoom → this pane. A new font size means a new cell size, so refit to
@@ -1548,9 +1546,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     term.options.fontSize = size
     resizeCtrl.applyFit()
     // The container's CSS size does not change when only the xterm cell size
-    // changes, so ResizeObserver may stay silent. Redraw after settlement, but
-    // do not report a stable-width change that would auto-resume the CLI.
-    resizeCtrl.requestResizeRedraw({ notifyStableWidth: false })
+    // changes, so ResizeObserver may stay silent. Redraw after settlement.
+    resizeCtrl.requestResizeRedraw()
   })
 
   async function spawn(opts: SpawnOptions): Promise<void> {

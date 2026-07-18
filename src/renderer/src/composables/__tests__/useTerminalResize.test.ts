@@ -18,7 +18,6 @@ describe('createResizeController — requestResizeRedraw gates', () => {
   let sessionId: Ref<string>
   let lastRawActivityAt: Ref<number>
   let ctrl: ResizeController
-  let onStableWidthChange: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     // Only fake what the redraw path uses; microtasks stay real so the mocked
@@ -36,7 +35,6 @@ describe('createResizeController — requestResizeRedraw gates', () => {
     mock = createMockBackend()
     sessionId = ref('sess-1')
     lastRawActivityAt = ref(0)
-    onStableWidthChange = vi.fn()
     ctrl = createResizeController(
       term as unknown as Terminal,
       { fit: vi.fn() } as unknown as FitAddon,
@@ -46,8 +44,7 @@ describe('createResizeController — requestResizeRedraw gates', () => {
       mock.backend.send,
       () => {},
       () => false,
-      () => {},
-      onStableWidthChange
+      () => {}
     )
   })
 
@@ -113,52 +110,9 @@ describe('createResizeController — requestResizeRedraw gates', () => {
     ctrl.requestResizeRedraw()
     await vi.advanceTimersByTimeAsync(SETTLE_MS)
     expect(redrawCount()).toBe(1)
-    expect(onStableWidthChange).not.toHaveBeenCalled() // initial baseline
     ctrl.requestResizeRedraw() // e.g. explicit refit + ResizeObserver both armed
     await vi.advanceTimersByTimeAsync(MAX_WAIT_MS + SETTLE_MS)
     expect(redrawCount()).toBe(1)
-  })
-
-  it('reports only later settled width changes, not initial or row-only sizing', async () => {
-    attach()
-    await ackCurrentSize() // establish 80 cols
-    ctrl.requestResizeRedraw()
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-    expect(onStableWidthChange).not.toHaveBeenCalled()
-
-    term.rows = 30
-    await ackCurrentSize()
-    ctrl.requestResizeRedraw()
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-    expect(onStableWidthChange).not.toHaveBeenCalled()
-
-    term.cols = 96
-    await ackCurrentSize()
-    ctrl.requestResizeRedraw()
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-    expect(onStableWidthChange).toHaveBeenCalledOnce()
-    expect(onStableWidthChange).toHaveBeenCalledWith(96)
-  })
-
-  it('can redraw a font zoom without reporting stable width, while ordinary resize still reports', async () => {
-    attach()
-    await ackCurrentSize()
-    ctrl.requestResizeRedraw()
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-
-    term.cols = 96
-    await ackCurrentSize()
-    ctrl.requestResizeRedraw({ notifyStableWidth: false })
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-    expect(redrawCount()).toBe(2)
-    expect(onStableWidthChange).not.toHaveBeenCalled()
-
-    term.cols = 104
-    await ackCurrentSize()
-    ctrl.requestResizeRedraw()
-    await vi.advanceTimersByTimeAsync(SETTLE_MS)
-    expect(onStableWidthChange).toHaveBeenCalledOnce()
-    expect(onStableWidthChange).toHaveBeenCalledWith(104)
   })
 
   it('coalesces concurrent requests into a single timer/redraw', async () => {
