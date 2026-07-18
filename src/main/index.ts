@@ -32,6 +32,7 @@ import {
 } from './permissions'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import { routeEditorWindowOpen } from './editor-window-routing'
+import { PlanWindowRegistry } from './plan-windows'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -756,6 +757,40 @@ function openEditorWindow(params: Record<string, string>): void {
 
 ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
   openEditorWindow(args ?? {})
+  return { ok: true }
+})
+
+// Plan review windows: one per workspace; reopening focuses the existing one.
+const planWindows = new PlanWindowRegistry<BrowserWindow>()
+
+function openPlanWindow(workspacePath: string): void {
+  const existing = planWindows.get(workspacePath)
+  if (existing) {
+    if (existing.isMinimized()) existing.restore()
+    existing.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'Agent-Team · Plans',
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  planWindows.set(workspacePath, win)
+  win.on('closed', () => planWindows.remove(workspacePath, win))
+  loadWindow(win, { window: 'plans', workspace_path: workspacePath })
+}
+
+ipcMain.handle('window:openPlans', (_event, args: { workspace_path?: string }) => {
+  const workspacePath = (args?.workspace_path ?? '').trim()
+  if (!workspacePath) return { ok: false }
+  openPlanWindow(workspacePath)
   return { ok: true }
 })
 

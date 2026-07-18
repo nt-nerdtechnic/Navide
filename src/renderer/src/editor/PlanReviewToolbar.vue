@@ -175,6 +175,43 @@ function onNoteEnter(event: KeyboardEvent): void {
   if (event.isComposing) return
   void submitNote()
 }
+
+const sharing = ref(false)
+
+// Copy the current plan verbatim into `.plans/<filename>` — a git-tracked
+// path (`.agent-team/plans/` is gitignored by design) — so the user can
+// commit the snapshot to share it. Re-reads the file first so the snapshot
+// reflects the latest on-disk bytes; an existing snapshot is overwritten.
+// The backend's fs write creates missing parent directories itself.
+async function shareToGit(): Promise<void> {
+  if (sharing.value) return
+  sharing.value = true
+  try {
+    const readResp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
+      'fs.read_file',
+      { workspace_path: props.workspacePath, rel_path: props.relPath },
+    )
+    if (!readResp.payload?.ok || readResp.payload.content === undefined) {
+      toast(readResp.payload?.error ?? t('pane.plans.share-git-failed'))
+      return
+    }
+    const fileName = props.relPath.split('/').pop() ?? props.relPath
+    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+      workspace_path: props.workspacePath,
+      rel_path: `.plans/${fileName}`,
+      content: readResp.payload.content,
+    })
+    if (!resp.payload?.ok) {
+      toast(resp.payload?.error ?? t('pane.plans.share-git-failed'))
+      return
+    }
+    toast(t('pane.plans.share-git-success'))
+  } catch (err) {
+    toast(err instanceof Error ? err.message : t('pane.plans.share-git-failed'))
+  } finally {
+    sharing.value = false
+  }
+}
 </script>
 
 <template>
@@ -186,6 +223,12 @@ function onNoteEnter(event: KeyboardEvent): void {
       <button class="prt-notes-btn" :class="{ 'prt-notes-btn--open': notesOpen }" @click="notesOpen = !notesOpen">
         {{ t('pane.plans.review-notes') }} · {{ t('pane.plans.review-unresolved', { count: unresolvedCount }) }}
       </button>
+      <button
+        class="prt-share"
+        :disabled="sharing"
+        :title="t('pane.plans.share-git-tooltip')"
+        @click="shareToGit"
+      >{{ t('pane.plans.share-git') }}</button>
       <button
         class="prt-approve"
         :disabled="!canApprove || saving"
@@ -293,6 +336,7 @@ function onNoteEnter(event: KeyboardEvent): void {
 }
 
 .prt-notes-btn,
+.prt-share,
 .prt-approve,
 .prt-note-resolve,
 .prt-send {
@@ -306,6 +350,7 @@ function onNoteEnter(event: KeyboardEvent): void {
 }
 
 .prt-notes-btn:hover,
+.prt-share:hover:not(:disabled),
 .prt-note-resolve:hover:not(:disabled),
 .prt-send:hover:not(:disabled) {
   background: var(--bg-hover-strong);
@@ -322,6 +367,7 @@ function onNoteEnter(event: KeyboardEvent): void {
   font-weight: 600;
 }
 
+.prt-share:disabled,
 .prt-approve:disabled,
 .prt-note-resolve:disabled,
 .prt-send:disabled {

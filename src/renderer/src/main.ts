@@ -24,6 +24,7 @@ const loadRoot = (): Promise<{ default: Component }> => {
     case 'roles':  return import('./RolesManagerApp.vue')
     case 'stages': return import('./StagesEditorApp.vue')
     case 'editor': return import('./EditorWindowApp.vue')
+    case 'plans':  return import('./PlanWindowApp.vue')
     default:       return import('./App.vue')
   }
 }

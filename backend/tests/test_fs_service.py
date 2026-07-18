@@ -42,6 +42,70 @@ def test_no_workspace(tmp_path: Path) -> None:
     assert fs_service.list_dir("", "")["ok"] is False
 
 
+# ── .agent-team/plans exemption ─────────────────────────────────────────────
+def _ws_with_plans(tmp_path: Path) -> str:
+    ws = _ws(tmp_path)
+    plans = tmp_path / ".agent-team" / "plans"
+    plans.mkdir()
+    (plans / "_spec.md").write_text("spec", encoding="utf-8")
+    (plans / "my-plan.html").write_text("<h1>plan</h1>", encoding="utf-8")
+    return ws
+
+
+def test_plans_subtree_list_allowed(tmp_path: Path) -> None:
+    res = fs_service.list_dir(_ws_with_plans(tmp_path), ".agent-team/plans")
+    assert res["ok"] is True
+    names = [e["name"] for e in res["entries"]]
+    assert "my-plan.html" in names
+
+
+def test_plans_subtree_read_allowed(tmp_path: Path) -> None:
+    res = fs_service.read_file(_ws_with_plans(tmp_path), ".agent-team/plans/my-plan.html")
+    assert res["ok"] is True
+    assert res["content"] == "<h1>plan</h1>"
+
+
+def test_plans_subtree_write_allowed(tmp_path: Path) -> None:
+    ws = _ws_with_plans(tmp_path)
+    assert fs_service.write_file(ws, ".agent-team/plans/new.html", "<p>x</p>")["ok"] is True
+    assert (tmp_path / ".agent-team" / "plans" / "new.html").read_text() == "<p>x</p>"
+
+
+def test_plans_subtree_delete_allowed(tmp_path: Path) -> None:
+    ws = _ws_with_plans(tmp_path)
+    assert fs_service.delete(ws, ".agent-team/plans/my-plan.html")["ok"] is True
+    assert not (tmp_path / ".agent-team" / "plans" / "my-plan.html").exists()
+
+
+def test_agent_team_root_still_protected_with_plans(tmp_path: Path) -> None:
+    res = fs_service.list_dir(_ws_with_plans(tmp_path), ".agent-team")
+    assert res["ok"] is False
+    assert "protected" in res["error"].lower()
+
+
+def test_agent_team_sibling_still_protected(tmp_path: Path) -> None:
+    res = fs_service.read_file(_ws_with_plans(tmp_path), ".agent-team/project.json")
+    assert res["ok"] is False
+    assert "protected" in res["error"].lower()
+
+
+def test_plans_traversal_still_protected(tmp_path: Path) -> None:
+    ws = _ws_with_plans(tmp_path)
+    for op, rel in (
+        ("read", ".agent-team/plans/../project.json"),
+        ("write", ".agent-team/plans/../evil.json"),
+        ("delete", ".agent-team/plans/../project.json"),
+    ):
+        if op == "read":
+            res = fs_service.read_file(ws, rel)
+        elif op == "write":
+            res = fs_service.write_file(ws, rel, "x")
+        else:
+            res = fs_service.delete(ws, rel)
+        assert res["ok"] is False, f"{op} {rel} should be blocked"
+        assert "protected" in res["error"].lower()
+
+
 # ── list_dir + show_hidden ──────────────────────────────────────────────────
 def test_list_hides_dotfiles_by_default(tmp_path: Path) -> None:
     res = fs_service.list_dir(_ws(tmp_path), "")

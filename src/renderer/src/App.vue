@@ -57,6 +57,7 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
+import { planSpecHintBlock } from './lib/planSpecHint'
 import { quickClassify } from './lib/quick-classify'
 import {
   buildResumeCommand,
@@ -1525,7 +1526,7 @@ function scheduleInjection(pane: ActivePane): void {
     // the kickoff — the role is injected at pre-spawn, so the marker lands in
     // the session file (and gets detected) within seconds, instead of waiting
     // for this slot's stage to activate (which for late stages is much later).
-    const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + sessionMarkerLine(pane.sessionMarker)
+    const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + planHintFor(pane.workspacePath) + sessionMarkerLine(pane.sessionMarker)
     pipelineLog(`${tag} ➜ injecting role '${role.label}' (${roleContent.length} chars)`)
     pane.preparationStatus = 'injecting-role'
     syncViews()
@@ -1651,8 +1652,16 @@ function sessionMarkerLine(marker?: string): string {
   return marker ? `\n\n<!-- agent-team-session: ${marker} -->` : ''
 }
 
+/** Whether each opened workspace has a provisioned .agent-team/plans/_spec.md
+ *  (from the last project.peek). Non-reactive: only read at injection time. */
+const planSpecByWorkspace = new Map<string, boolean>()
+
+function planHintFor(workspacePath: string | undefined): string {
+  return planSpecHintBlock(!!(workspacePath && planSpecByWorkspace.get(workspacePath)))
+}
+
 async function sendSessionMarkerBootstrap(pane: ActivePane, tag: string): Promise<boolean> {
-  const markerText = sessionMarkerLine(pane.sessionMarker).trim()
+  const markerText = (sessionMarkerLine(pane.sessionMarker) + planHintFor(pane.workspacePath)).trim()
   if (!markerText) return false
   try {
     await dismissStartupDialog(pane.id, DISMISS_TIMEOUT_MS)
@@ -1905,7 +1914,11 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       })
     }
     const pane = panes.value.find((p) => p.id === paneId)
-    if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
+    if (
+      pane && pane.agentKey !== 'terminal' &&
+      (pane.sessionMarker || planHintFor(pane.workspacePath)) &&
+      !pane.roleKey && !pane.kickoffPrompt
+    ) {
       void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
     }
   }
@@ -2330,7 +2343,11 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
         })
       }
       const pane = panes.value.find((p) => p.id === newId)
-      if (pane?.sessionMarker && !pane.roleKey && !pane.kickoffPrompt) {
+      if (
+        pane && pane.agentKey !== 'terminal' &&
+        (pane.sessionMarker || planHintFor(pane.workspacePath)) &&
+        !pane.roleKey && !pane.kickoffPrompt
+      ) {
         void sendSessionMarkerBootstrap(pane, `[pane ${pane.id.slice(0, 8)}]`)
       }
     } else {
@@ -2703,6 +2720,8 @@ interface ProjectPayload {
   } | null
   paths: { dir: string; project_file: string; pipeline_log: string; backend_log: string } | null
   resume_index?: number
+  /** project.peek only: whether the workspace has a provisioned .agent-team/plans/_spec.md. */
+  plan_spec_available?: boolean
 }
 
 interface SessionExistsPayload {
@@ -2835,6 +2854,7 @@ async function onWorkspaceCheck(path: string): Promise<void> {
     }
   } else {
     workspaceCheckRetries = 0
+    planSpecByWorkspace.set(path, resp.plan_spec_available === true)
   }
   if (pipeline.state !== 'running') pipeline.workspacePath = path
   // Keep currentWorkspace in sync with the workspace being inspected so that
@@ -3511,7 +3531,7 @@ async function activateStage(index: number): Promise<void> {
         pipelineLog(`${tag} ✕ role '${pane.roleKey}' not found`)
         return
       }
-      const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + sessionMarkerLine(pane.sessionMarker)
+      const roleContent = role.system_prompt + ROLE_STANDBY_SUFFIX + planHintFor(pane.workspacePath) + sessionMarkerLine(pane.sessionMarker)
       pipelineLog(`${tag} ➜ injecting role '${role.label}' (deferred, ${roleContent.length} chars)`)
       // bracketed paste (preserveNewlines) — same as kickoff — to avoid a raw
       // keystroke burst flooding the PTY input buffer.
@@ -3943,6 +3963,12 @@ async function doCloseWorkspace(): Promise<void> {
 async function titlebarRevealWorkspace(): Promise<void> {
   if (!currentWorkspace.value || !window.agentTeam?.openPath) return
   await window.agentTeam.openPath(currentWorkspace.value)
+}
+
+// Titlebar 📋 button: open the dedicated plan window for the current workspace.
+async function openPlansWindow(): Promise<void> {
+  if (!currentWorkspace.value) return
+  await window.agentTeam?.openPlansWindow({ workspace_path: currentWorkspace.value })
 }
 
 async function onWorkspaceBrowse(path: string): Promise<void> {
@@ -6732,6 +6758,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @focus-pane="onFocusPane"
       @reorder-pane="reorderPane"
       @open-settings="showSettings = true"
+      @open-plans="openPlansWindow"
       @open-git-accounts="openSettingsAccounts"
       @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"

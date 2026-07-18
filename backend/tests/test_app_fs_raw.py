@@ -128,6 +128,22 @@ def test_raw_agent_team_dir_protected(client, workspace):
     assert resp.status_code == 400
 
 
+def test_raw_agent_team_plans_html_served(client, workspace):
+    plans = workspace / ".agent-team" / "plans"
+    plans.mkdir()
+    (plans / "plan.html").write_text("<h1>plan</h1>")
+    resp = _get(client, workspace, ".agent-team/plans/plan.html")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert resp.headers["content-security-policy"] == "sandbox"
+
+
+def test_raw_agent_team_plans_traversal_rejected(client, workspace):
+    (workspace / ".agent-team" / "plans").mkdir()
+    resp = _get(client, workspace, ".agent-team/plans/../secret.txt")
+    assert resp.status_code == 400
+
+
 def test_raw_missing_file_returns_404(client, workspace):
     resp = _get(client, workspace, "nope.bin")
     assert resp.status_code == 404

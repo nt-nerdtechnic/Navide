@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- TEMPLATE: copy this file to <kebab-slug>_<6-hex>.html and replace every
+     {{…}} placeholder. Keep the CSS token structure and section order.
+     Spec: _spec.md -->
+<title>{{PLAN_NAME}}</title>
+
+<script type="application/json" id="plan-meta">
+{
+  "schemaVersion": 1,
+  "name": "{{PLAN_NAME}}",
+  "overview": "{{ONE_SENTENCE_OVERVIEW}}",
+  "stage": "draft",
+  "approvedAt": null,
+  "todos": [
+    { "id": "phase-a", "content": "{{PHASE_A_SUMMARY}}", "status": "pending" }
+  ],
+  "reviewNotes": []
+}
+</script>
+
+<style>
+  :root {
+    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #EDEFF4;
+    --ink: #1D2530; --muted: #5D6774; --line: #DDE1E9;
+    --accent: #3B5BDB; --accent-soft: #E8EDFB;
+    --st-pending: #8B95A3; --st-pending-bg: #EDEFF4;
+    --st-progress: #C77400; --st-progress-bg: #FBF0DC;
+    --st-done: #2B8A3E; --st-done-bg: #E3F2E6;
+    --danger: #C0392B; --danger-bg: #FAE9E6;
+    --code-bg: #EEF0F5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171D; --surface: #1C2028; --surface-2: #232833;
+      --ink: #E6EAF1; --muted: #9AA4B2; --line: #2C323E;
+      --accent: #7B94F0; --accent-soft: #232C48;
+      --st-pending: #8B95A3; --st-pending-bg: #232833;
+      --st-progress: #E8A54B; --st-progress-bg: #3A2E1A;
+      --st-done: #6BC77F; --st-done-bg: #1E3324;
+      --danger: #E07060; --danger-bg: #3A2320;
+      --code-bg: #242936;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171D; --surface: #1C2028; --surface-2: #232833;
+    --ink: #E6EAF1; --muted: #9AA4B2; --line: #2C323E;
+    --accent: #7B94F0; --accent-soft: #232C48;
+    --st-pending: #8B95A3; --st-pending-bg: #232833;
+    --st-progress: #E8A54B; --st-progress-bg: #3A2E1A;
+    --st-done: #6BC77F; --st-done-bg: #1E3324;
+    --danger: #E07060; --danger-bg: #3A2320;
+    --code-bg: #242936;
+  }
+  :root[data-theme="light"] {
+    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #EDEFF4;
+    --ink: #1D2530; --muted: #5D6774; --line: #DDE1E9;
+    --accent: #3B5BDB; --accent-soft: #E8EDFB;
+    --st-pending: #8B95A3; --st-pending-bg: #EDEFF4;
+    --st-progress: #C77400; --st-progress-bg: #FBF0DC;
+    --st-done: #2B8A3E; --st-done-bg: #E3F2E6;
+    --danger: #C0392B; --danger-bg: #FAE9E6;
+    --code-bg: #EEF0F5;
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    line-height: 1.75; font-size: 15.5px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 80px; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.87em; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 13px 16px; border-radius: 8px; overflow-x: auto; line-height: 1.6; }
+  pre code { background: none; padding: 0; }
+
+  header { margin-bottom: 44px; padding-bottom: 26px; border-bottom: 2px solid var(--line); }
+  .eyebrow {
+    text-transform: uppercase; letter-spacing: 0.14em; font-size: 11.5px;
+    color: var(--accent); font-weight: 700; margin-bottom: 8px;
+  }
+  h1 { font-size: 27px; line-height: 1.35; margin-bottom: 10px; font-weight: 700; }
+  .overview { color: var(--muted); font-size: 16px; max-width: 42em; }
+
+  .pill {
+    display: inline-block; padding: 2px 11px; border-radius: 99px;
+    font-size: 12.5px; font-weight: 700; white-space: nowrap; vertical-align: 2px;
+    margin-left: 10px;
+  }
+  .pill.draft      { background: var(--surface-2); color: var(--muted); }
+  .pill.in-review  { background: var(--accent-soft); color: var(--accent); }
+  .pill.approved   { background: var(--st-done-bg); color: var(--st-done); }
+  .pill.in-progress{ background: var(--st-progress-bg); color: var(--st-progress); }
+  .pill.done       { background: var(--st-done-bg); color: var(--st-done); }
+  .pill.abandoned  { background: var(--danger-bg); color: var(--danger); }
+
+  section { margin-bottom: 48px; }
+  h2 { font-size: 20px; margin-bottom: 16px; font-weight: 700; }
+  h3 { font-size: 16px; margin: 22px 0 8px; font-weight: 700; }
+  p { margin-bottom: 12px; max-width: 44em; }
+  ul, ol { margin-bottom: 12px; padding-left: 1.4em; max-width: 42em; }
+  li { margin-bottom: 5px; }
+
+  .phase {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+    margin-bottom: 14px; overflow: hidden;
+  }
+  .phase-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 18px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line);
+    font-weight: 700; font-size: 15px; flex-wrap: wrap;
+  }
+  .phase-body { padding: 12px 18px 6px; }
+
+  ul.todos { list-style: none; padding: 0; }
+  ul.todos li {
+    display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  ul.todos li:last-child { border-bottom: none; }
+  ul.todos .st {
+    flex: none; font-size: 11.5px; font-weight: 700; border-radius: 99px;
+    padding: 1px 9px; min-width: 74px; text-align: center;
+  }
+  li[data-status="pending"]     .st { background: var(--st-pending-bg); color: var(--st-pending); }
+  li[data-status="in-progress"] .st { background: var(--st-progress-bg); color: var(--st-progress); }
+  li[data-status="done"]        .st { background: var(--st-done-bg); color: var(--st-done); }
+  li[data-status="skipped"]     .st { background: var(--danger-bg); color: var(--danger); }
+  li[data-status="done"] { color: var(--muted); }
+
+  .notes { list-style: none; padding: 0; max-width: none; }
+  .notes li {
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 10px 16px; margin-bottom: 10px;
+  }
+  .notes li[data-resolved="true"] { border-left-color: var(--st-done); opacity: 0.75; }
+  .notes .who { font-size: 12px; font-weight: 700; color: var(--accent); margin-right: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .notes .reply { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 14.5px; }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: var(--surface-2); font-weight: 700; }
+  tr:last-child td { border-bottom: none; }
+
+  .note { color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">{{WORKSPACE_NAME}} · Plan</div>
+  <!-- Keep the pill class in sync with plan-meta.stage -->
+  <h1>{{PLAN_NAME}}<span class="pill draft">draft</span></h1>
+  <p class="overview">{{ONE_SENTENCE_OVERVIEW}}</p>
+</header>
+
+<section>
+  <h2>Goals</h2>
+  <p>{{WHAT_PROBLEM_THIS_SOLVES_AND_ACCEPTANCE_SHAPE}}</p>
+</section>
+
+<section>
+  <h2>Phases</h2>
+
+  <div class="phase">
+    <div class="phase-head">Phase A · {{PHASE_A_TITLE}}</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <!-- data-status mirrors plan-meta.todos[].status; one li per todo id -->
+        <li data-status="pending" data-todo-id="phase-a">
+          <span class="st">pending</span>
+          <span>{{PHASE_A_SUMMARY}}</span>
+        </li>
+      </ul>
+      <p class="note">{{PHASE_A_DETAIL_FILES_AND_APPROACH}}</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Risks</h2>
+  <ul>
+    <li>{{RISK_1}}</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Validation</h2>
+  <!-- fill in this project's verification commands -->
+  <pre><code>{{VERIFICATION_COMMANDS}}</code></pre>
+</section>
+
+<section>
+  <h2>Review Notes</h2>
+  <!-- Mirrors plan-meta.reviewNotes; keep data-note-id and data-resolved in sync -->
+  <ul class="notes">
+    <!-- <li data-note-id="n1" data-resolved="false">
+      <span class="who">user</span>{{NOTE_TEXT}}
+      <div class="reply"><span class="who">ai</span>{{REPLY_TEXT}}</div>
+    </li> -->
+  </ul>
+  <p class="note">尚無審查留言。</p>
+</section>
+
+</div>
+</body>
+</html>

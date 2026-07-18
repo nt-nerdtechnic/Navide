@@ -29,6 +29,10 @@ except ImportError:
 
 from .projects import PROJECT_DIR_NAME
 
+# User-facing plan documents live under <workspace>/.agent-team/plans/ (see
+# plan_provisioning). This subtree is exempt from the internal-dir protection.
+_PLANS_DIR_NAME = "plans"
+
 # High-noise dirs the UI should not auto-expand (performance, NOT gitignore).
 # Mirrors git_watcher._IGNORE_SEGMENTS, plus `.git`.
 _NOISE_SEGMENTS = frozenset({
@@ -49,7 +53,7 @@ def _resolve_safe(workspace_path: str, rel_path: str) -> Path:
 
     Guards against ``..`` traversal, absolute-path escapes, symlink escapes
     (via ``resolve()``), and operations touching the internal ``.agent-team``
-    directory.
+    directory — except its user-facing ``plans/`` subtree, which is allowed.
     """
     if not workspace_path:
         raise FsError("no workspace selected")
@@ -65,7 +69,12 @@ def _resolve_safe(workspace_path: str, rel_path: str) -> Path:
 
     parts = target.relative_to(root).parts
     if parts and parts[0] == PROJECT_DIR_NAME:
-        raise FsError("the internal directory is protected")
+        # Exception: the plans subtree (the dir itself and anything below it)
+        # is user-facing and allowed. `target` is already resolve()d, so a
+        # traversal like `.agent-team/plans/../chat-threads.json` normalizes
+        # to a protected path before reaching this check.
+        if len(parts) < 2 or parts[1] != _PLANS_DIR_NAME:
+            raise FsError("the internal directory is protected")
     return target
 
 

@@ -221,6 +221,7 @@ const emit = defineEmits<{
   (e: 'reorder-pane', fromId: string, toId: string): void
   (e: 'open-settings'): void
   (e: 'open-history'): void
+  (e: 'open-plans'): void
   (e: 'switch-workspace'): void
   (e: 'workspace-browse', path: string): void
   (e: 'update:layoutMode', v: LayoutMode): void
@@ -941,7 +942,10 @@ function onPipelineDividerEnd(): void {
 
     <!-- ── Pipeline list ────────────────────────────────────────────────── -->
     <section class="block panel-section">
-      <label class="lbl">{{ $t('label.pipelines') }}</label>
+      <div class="row between">
+        <label class="lbl">{{ $t('label.pipelines') }}</label>
+        <button class="plans-btn" :title="$t('action.open-plans')" @click="emit('open-plans')">📋</button>
+      </div>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
           v-for="p in pagedPipelines"
@@ -1720,7 +1724,8 @@ button.link {
   gap: 2px;
   align-items: center;
 }
-button.history-btn {
+button.history-btn,
+button.plans-btn {
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
@@ -1764,7 +1769,8 @@ button.agent-rebuild-all-btn.busy svg {
 @keyframes agent-rebuild-spin {
   to { transform: rotate(360deg); }
 }
-button.history-btn:hover {
+button.history-btn:hover,
+button.plans-btn:hover {
   color: var(--text-bright);
   border-color: var(--accent-fg);
   background: var(--bg-subtle);

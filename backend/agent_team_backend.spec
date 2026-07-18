@@ -16,6 +16,11 @@ a = Analysis(
         # extracts modules bundled in the PYZ archive on demand as .pyc, never
         # as the loose .py file git_service.py's GIT_ASKPASS path points to.
         ('agent_team_backend/git_askpass_helper.py', 'agent_team_backend'),
+        # Plan-document infrastructure provisioned into every opened workspace
+        # (<ws>/.agent-team/plans/). Read at runtime via Path(__file__).parent,
+        # so onefile builds must ship the real files.
+        ('agent_team_backend/plan_assets/_spec.md', 'agent_team_backend/plan_assets'),
+        ('agent_team_backend/plan_assets/_template.html', 'agent_team_backend/plan_assets'),
     ],
     hiddenimports=[
         # The top-level app object (imported by name in __main__.py, but listed

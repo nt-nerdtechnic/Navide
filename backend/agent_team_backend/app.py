@@ -63,6 +63,7 @@ from .log_readers.attribution import Attribution
 from .doc_injector import fetch_stage_docs
 from .mcp_manager import MCPManager
 from .mcp_settings import MCPServersDocument, MCPSettingsStore
+from .plan_provisioning import ensure_plan_assets, plan_spec_exists
 from .chat_store import ChatStore
 from .projects import ProjectStore
 from .recent_workspaces import RecentWorkspacesStore
@@ -675,6 +676,10 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         return
     is_new = workspace_path not in attribution.known_workspaces()
     attribution.register_workspace(workspace_path)
+    # Provision plan-document infrastructure (_spec.md + _template.html) into
+    # <workspace>/.agent-team/plans/. Idempotent, never overwrites, never
+    # raises — see plan_provisioning.
+    ensure_plan_assets(workspace_path)
     if is_new and _log_watcher is not None:
         # New association → parse from this workspace's independent checkpoint
         # so cumulative populates without double-counting Global. Scope to THIS
@@ -1491,18 +1496,31 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             project = project_store.peek(ws_raw)
             if project:
                 _register_workspace_and_backfill(project.workspace_path)
+                peek_payload = _project_payload(project)
+                peek_payload["plan_spec_available"] = plan_spec_exists(
+                    project.workspace_path
+                )
                 await session.send_json(
-                    make_response(msg_id, msg_type, _project_payload(project))
+                    make_response(msg_id, msg_type, peek_payload)
                 )
             else:
                 # Even when no .agent-team/project.json exists yet, register
                 # any valid directory the user "opens" so its historic CLI
                 # sessions can show up in cumulative immediately.
                 import os as _os
-                if ws_raw and _os.path.isdir(ws_raw):
-                    _register_workspace_and_backfill(_os.path.abspath(ws_raw))
+                ws_abs = _os.path.abspath(ws_raw) if ws_raw else ""
+                if ws_abs and _os.path.isdir(ws_abs):
+                    _register_workspace_and_backfill(ws_abs)
                 await session.send_json(
-                    make_response(msg_id, msg_type, {"project": None, "paths": None})
+                    make_response(
+                        msg_id,
+                        msg_type,
+                        {
+                            "project": None,
+                            "paths": None,
+                            "plan_spec_available": plan_spec_exists(ws_abs),
+                        },
+                    )
                 )
         elif msg_type == "agent.session_exists":
             exists = _session_exists(

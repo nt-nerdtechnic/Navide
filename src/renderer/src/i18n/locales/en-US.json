@@ -45,7 +45,12 @@
       "review-empty": "No review notes yet",
       "review-add-placeholder": "Add a review note\u2026",
       "review-send": "Send",
-      "review-save-failed": "Save failed"
+      "review-save-failed": "Save failed",
+      "share-git": "Share to Git",
+      "share-git-tooltip": "Copy this plan into .plans/ (git-tracked) so it can be committed and shared",
+      "share-git-success": "Saved to .plans/ \u2014 commit to share",
+      "share-git-failed": "Share to Git failed",
+      "window-empty": "Select a plan to review"
     },
     "terminal": {
       "rebuild-tooltip": "Rebuild (resume) ⌘⇧B — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",
@@ -252,6 +257,7 @@
     "replace-in-file": "Replace in file",
     "replace-match": "Replace this match",
     "open-in-finder": "Open this folder in Finder",
+    "open-plans": "Open the plan review window",
     "clear-pipeline": "Clear pipeline state and close all agent panes",
     "remove-from-history": "Remove from history",
     "double-click-rename": "Double-click to rename",

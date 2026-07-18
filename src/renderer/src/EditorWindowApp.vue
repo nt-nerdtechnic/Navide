@@ -8,7 +8,6 @@ import EditorPane from './editor/EditorPane.vue'
 import DiffPane from './editor/DiffPane.vue'
 import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
-import PlansPane from './editor/PlansPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 // Lazy-loaded: AIChatPane statically pulls mermaid + katex (heavy). Loading it
 // async keeps the editor window's first paint off the critical path — the panel
@@ -19,7 +18,6 @@ const AIChatPane = defineAsyncComponent(() => import('./components/AIChatPane.vu
 import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
 import FilePreviewPane from './editor/FilePreviewPane.vue'
-import PlanReviewToolbar from './editor/PlanReviewToolbar.vue'
 import { previewKind, isMarkdownFile } from './editor/previewTypes'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
@@ -203,27 +201,6 @@ function togglePlanView(relPath: string): void {
   planViewFiles.value = s
 }
 
-// ── HTML plan documents ───────────────────────────────────────────────────────
-// `.agent-team/plans/*.html` (non-underscore, top-level) get a review toolbar
-// above their sandboxed preview. `_`-prefixed files are infrastructure.
-function isHtmlPlanDoc(relPath: string): boolean {
-  const normalized = relPath.replace(/\\/g, '/') // tolerate Windows separators
-  if (!normalized.startsWith('.agent-team/plans/')) return false
-  const name = normalized.slice('.agent-team/plans/'.length)
-  return name.endsWith('.html') && !name.startsWith('_') && !name.includes('/')
-}
-
-// Per-file counter bumped when the toolbar rewrites the plan (or detects an
-// external edit); keying FilePreviewPane on it remounts the preview iframe,
-// which revalidates against the backend and picks up the new bytes.
-const planPreviewRefresh = ref<Record<string, number>>({})
-function bumpPlanPreviewRefresh(relPath: string): void {
-  planPreviewRefresh.value = {
-    ...planPreviewRefresh.value,
-    [relPath]: (planPreviewRefresh.value[relPath] ?? 0) + 1,
-  }
-}
-
 // ── File preview mode ─────────────────────────────────────────────────────────
 // Tracks files shown in the preview pane (media/PDF/binary via FilePreviewPane)
 // or, for plain .md files, the rendered markdown view (PlanFileView pipeline).
@@ -243,10 +220,10 @@ function togglePreview(relPath: string): void {
   previewFiles.value = s
 }
 
-const initialSidebar = (['explorer', 'search', 'git', 'plans', 'problems'] as const).find(
+const initialSidebar = (['explorer', 'search', 'git', 'problems'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
-const sidebarView = ref<'explorer' | 'search' | 'git' | 'plans' | 'problems'>(initialSidebar)
+const sidebarView = ref<'explorer' | 'search' | 'git' | 'problems'>(initialSidebar)
 const sidebarHidden = ref(false)
 const zenMode = ref(false)
 const changesCount = ref(0)
@@ -1646,7 +1623,7 @@ onMounted(() => {
     }
   }).agentTeam
   api?.onSwitchEditorSidebar?.((sidebar) => {
-    if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git' || sidebar === 'plans') {
+    if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
       sidebarView.value = sidebar
       sidebarHidden.value = false
     }
@@ -1738,17 +1715,6 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </button>
       <button
         class="ide-act-btn"
-        :class="{ active: sidebarView === 'plans' }"
-        title="Plans"
-        @click="sidebarView = 'plans'; sidebarHidden = false"
-      >
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M2.75 2A1.75 1.75 0 0 0 1 3.75v8.5C1 13.216 1.784 14 2.75 14h10.5A1.75 1.75 0 0 0 15 12.25v-8.5A1.75 1.75 0 0 0 13.25 2H2.75Zm0 1.5h10.5a.25.25 0 0 1 .25.25v8.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-8.5a.25.25 0 0 1 .25-.25Z"/>
-          <path d="M4.25 5.25a.75.75 0 0 1 .75-.75h6a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Zm0 3A.75.75 0 0 1 5 7.5h6a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Zm0 3a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5H5a.75.75 0 0 1-.75-.75Z"/>
-        </svg>
-      </button>
-      <button
-        class="ide-act-btn"
         :class="{ active: sidebarView === 'problems' }"
         :title="$t('pane.problems.tab-shortcut')"
         @click="sidebarView = 'problems'; sidebarHidden = false"
@@ -1788,12 +1754,6 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         @open-conflict="openConflict"
         @open-branch-diff="openBranchDiff"
         @changes-count="changesCount = $event"
-      />
-      <PlansPane
-        v-show="sidebarView === 'plans'"
-        :workspace-path="workspacePath"
-        :backend="backend"
-        @open-file="openFile"
       />
       <ProblemsPane
         v-show="sidebarView === 'problems'"
@@ -1874,22 +1834,14 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :backend="backend"
             @dirty="(v) => markDirty(f.relPath, v)"
           />
-          <!-- File preview: media/PDF/binary files in preview mode. HTML plan
-               documents additionally get the review toolbar above the preview. -->
+          <!-- File preview: media/PDF/binary files in preview mode. -->
           <div
             v-if="f.kind === 'file' && !isMarkdownFile(f.relPath) && !isPlanFile(f.relPath) && previewFiles.has(f.relPath)"
             v-show="f.relPath === activeRel"
             class="ide-preview-stack"
           >
-            <PlanReviewToolbar
-              v-if="isHtmlPlanDoc(f.relPath)"
-              :workspace-path="workspacePath"
-              :rel-path="f.relPath"
-              :backend="backend"
-              @updated="bumpPlanPreviewRefresh(f.relPath)"
-            />
             <FilePreviewPane
-              :key="f.relPath + ':' + (planPreviewRefresh[f.relPath] ?? 0)"
+              :key="f.relPath"
               :workspace-path="workspacePath"
               :rel-path="f.relPath"
               :name="f.name"

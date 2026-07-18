@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
   },
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
+  openPlansWindow: (args: { workspace_path: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openPlans', { workspace_path: args.workspace_path }),
   openDiffWindow: (args: {
     workspace_path: string
     filepath: string

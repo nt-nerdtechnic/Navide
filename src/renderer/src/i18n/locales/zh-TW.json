@@ -45,7 +45,12 @@
       "review-empty": "尚無審查留言",
       "review-add-placeholder": "新增審查留言\u2026",
       "review-send": "送出",
-      "review-save-failed": "儲存失敗"
+      "review-save-failed": "儲存失敗",
+      "share-git": "分享到 Git",
+      "share-git-tooltip": "複製此計畫到 .plans/（git 追蹤範圍），可 commit 分享給其他人",
+      "share-git-success": "已存入 .plans/，可 commit 分享",
+      "share-git-failed": "分享到 Git 失敗",
+      "window-empty": "選擇要審查的計畫"
     },
     "terminal": {
       "rebuild-tooltip": "重建 (resume) ⌘⇧B — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。",
@@ -252,6 +257,7 @@
     "replace-in-file": "取代檔案中所有符合項",
     "replace-match": "取代此符合項",
     "open-in-finder": "用 Finder 開啟此資料夾",
+    "open-plans": "開啟計畫審查視窗",
     "clear-pipeline": "清除流程狀態並關閉所有 Agent 面板",
     "remove-from-history": "從歷史記錄中移除",
     "double-click-rename": "雙擊重新命名",

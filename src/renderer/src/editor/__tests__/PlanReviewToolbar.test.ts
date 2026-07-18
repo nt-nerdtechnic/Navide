@@ -13,8 +13,9 @@ import type { HtmlPlanMeta } from '../../composables/usePlanHtml'
 
 i18n.global.locale.value = 'en-US'
 
+const toastMock = vi.hoisted(() => vi.fn())
 vi.mock('../../composables/useNotify', () => ({
-  useNotify: () => ({ toast: vi.fn(), alert: vi.fn(), confirm: vi.fn() }),
+  useNotify: () => ({ toast: toastMock, alert: vi.fn(), confirm: vi.fn() }),
 }))
 
 function baseMeta(overrides: Partial<HtmlPlanMeta> = {}): HtmlPlanMeta {
@@ -48,11 +49,13 @@ function planDoc(meta: HtmlPlanMeta): string {
 interface Harness {
   wrapper: VueWrapper
   writes: string[]
+  writeCalls: { relPath: string; content: string }[]
   setContent: (c: string) => void
 }
 
-async function mountToolbar(content: string): Promise<Harness> {
+async function mountToolbar(content: string, opts: { failWrite?: string } = {}): Promise<Harness> {
   const writes: string[] = []
+  const writeCalls: { relPath: string; content: string }[] = []
   let current = content
   const backend = {
     httpUrl: ref('http://127.0.0.1:8123'),
@@ -60,8 +63,12 @@ async function mountToolbar(content: string): Promise<Harness> {
     send: vi.fn(async (type: string, payload: Record<string, unknown>) => {
       if (type === 'fs.read_file') return { payload: { ok: true, content: current } }
       if (type === 'fs.write_file') {
+        if (opts.failWrite !== undefined) return { payload: { ok: false, error: opts.failWrite } }
+        writeCalls.push({ relPath: payload.rel_path as string, content: payload.content as string })
         writes.push(payload.content as string)
-        current = payload.content as string
+        if (payload.rel_path === '.agent-team/plans/test-plan_a1b2c3.html') {
+          current = payload.content as string
+        }
         return { payload: { ok: true } }
       }
       return { payload: { ok: true } }
@@ -76,7 +83,7 @@ async function mountToolbar(content: string): Promise<Harness> {
     global: { plugins: [i18n] },
   })
   await flushPromises()
-  return { wrapper, writes, setContent: (c: string) => { current = c } }
+  return { wrapper, writes, writeCalls, setContent: (c: string) => { current = c } }
 }
 
 function lastWrittenMeta(writes: string[]): HtmlPlanMeta {
@@ -302,6 +309,38 @@ describe('PlanReviewToolbar – read-before-write', () => {
     // The UI refreshed to the fresh state instead of writing.
     expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--draft')
     expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+})
+
+describe('PlanReviewToolbar – share to git', () => {
+  it('writes the freshly-read content byte-identical to .plans/<filename>', async () => {
+    toastMock.mockClear()
+    const { wrapper, writeCalls, setContent } = await mountToolbar(planDoc(baseMeta()))
+
+    // External edit after mount: the share must snapshot the fresh bytes.
+    const freshDoc = planDoc(baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z' }))
+    setContent(freshDoc)
+
+    await wrapper.find('.prt-share').trigger('click')
+    await flushPromises()
+
+    expect(writeCalls).toHaveLength(1)
+    expect(writeCalls[0].relPath).toBe('.plans/test-plan_a1b2c3.html')
+    expect(writeCalls[0].content).toBe(freshDoc)
+    expect(toastMock).toHaveBeenCalledWith('Saved to .plans/ — commit to share')
+  })
+
+  it('shows the backend error via toast when the write fails', async () => {
+    toastMock.mockClear()
+    const { wrapper, writeCalls } = await mountToolbar(planDoc(baseMeta()), {
+      failWrite: 'disk full',
+    })
+
+    await wrapper.find('.prt-share').trigger('click')
+    await flushPromises()
+
+    expect(writeCalls).toHaveLength(0)
+    expect(toastMock).toHaveBeenCalledWith('disk full')
   })
 })
 

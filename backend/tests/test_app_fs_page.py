@@ -52,6 +52,25 @@ def test_page_html_inline_with_csp_sandbox(client, workspace):
     assert resp.headers["x-content-type-options"] == "nosniff"
 
 
+def test_page_agent_team_plans_html_served(client, workspace):
+    # Plan preview: the iframe loads plan HTML from .agent-team/plans via
+    # this route; the plans subtree is exempt from the internal-dir guard.
+    plans = workspace / ".agent-team" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "plan.html").write_text("<h1>plan</h1>")
+    resp = _get(client, workspace, ".agent-team/plans/plan.html")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert resp.headers["content-security-policy"] == "sandbox"
+
+
+def test_page_agent_team_root_still_protected(client, workspace):
+    (workspace / ".agent-team").mkdir(exist_ok=True)
+    (workspace / ".agent-team" / "secret.txt").write_text("internal")
+    resp = _get(client, workspace, ".agent-team/secret.txt")
+    assert resp.status_code == 400
+
+
 def test_page_css_inline(client, workspace):
     # /fs/page difference vs /fs/raw: stylesheets load inline so relative
     # ./style.css subresources work in the sandboxed HTML preview.
