@@ -248,6 +248,70 @@ def test_manual_pane_spawn_race_dedups_by_session(
     assert manual[0].spawn_status == "spawned"
 
 
+def test_manual_pane_resume_of_live_session_keeps_both_records(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # The user may deliberately open a second pane resuming a session that is
+    # already live in another pane (manual resume sends no previous_pane_id).
+    # The session dedup must NOT hijack the live pane's record — both panes
+    # keep their own record so both restore.
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="claude", session_id="sess-l")
+    store.record_manual_pane_spawn(ws, pane_id="pane-2", agent="claude", session_id="sess-l")
+
+    manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    assert sorted(p.pane_id for p in manual) == ["pane-1", "pane-2"]
+    assert all(p.spawn_status == "spawned" for p in manual)
+
+
+def test_manual_pane_rebuild_sweeps_legacy_duplicates(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # Projects persisted before the dedup fix may hold several spawned records
+    # sharing one session. A rebuild hop (previous_pane_id set) owns the
+    # session: it re-keys its own record and retires the stale extras so they
+    # stop restoring as ghost panes.
+    store, ws = store_with_stage
+    project = store.load_or_create(ws)
+    project.panes.append(PaneRecord(pane_id="pane-a", origin="manual",
+                                    agent="claude", spawn_status="spawned", session_id="sess-g"))
+    project.panes.append(PaneRecord(pane_id="pane-stale", origin="manual",
+                                    agent="claude", spawn_status="spawned", session_id="sess-g"))
+    store.save(project)
+
+    store.record_manual_pane_spawn(ws, pane_id="pane-b", previous_pane_id="pane-a",
+                                   agent="claude", session_id="sess-g")
+
+    manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    spawned = [p for p in manual if p.spawn_status == "spawned"]
+    assert [p.pane_id for p in spawned] == ["pane-b"]
+    assert next(p for p in manual if p.pane_id == "pane-stale").spawn_status == "removed"
+
+
+def test_manual_pane_exact_match_beats_session_only_record(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # An earlier record matching only by session must not shadow a later
+    # record that matches previous_pane_id exactly — the exact match owns the
+    # pane's identity (custom_name etc.); the session-only stale one is swept.
+    store, ws = store_with_stage
+    project = store.load_or_create(ws)
+    project.panes.append(PaneRecord(pane_id="dup-early", origin="manual",
+                                    agent="claude", spawn_status="spawned", session_id="sess-p"))
+    project.panes.append(PaneRecord(pane_id="pane-a", origin="manual", agent="claude",
+                                    spawn_status="spawned", session_id="sess-p",
+                                    custom_name="keep-me"))
+    store.save(project)
+
+    store.record_manual_pane_spawn(ws, pane_id="pane-b", previous_pane_id="pane-a",
+                                   agent="claude", session_id="sess-p")
+
+    manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    spawned = [p for p in manual if p.spawn_status == "spawned"]
+    assert [p.pane_id for p in spawned] == ["pane-b"]
+    assert spawned[0].custom_name == "keep-me"
+
+
 def test_manual_pane_unspawn_no_match_is_noop(
     store_with_stage: tuple[ProjectStore, str]
 ) -> None:

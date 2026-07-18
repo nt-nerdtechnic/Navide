@@ -2116,13 +2116,20 @@ function paneCanRebuild(pane: ActivePane): boolean {
   return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok'].includes(pane.agentKey)
 }
 
+/** Canonical pane → resume-session-id derivation, shared by the rebuild lock
+ *  and its UI state. */
+function paneResumeSessionId(pane: ActivePane): string {
+  return normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+}
+
 /** True while a rebuild is in flight for this pane — matched by pane id or by
  *  session id, so the replacement pane (new id, same session) that spawnPane
  *  swaps in mid-rebuild is covered too. Drives the rebuild buttons' disabled
  *  state. */
 function paneRebuilding(pane: ActivePane): boolean {
+  if (rebuildingPanes.size === 0) return false
   if (rebuildingPanes.has(pane.id)) return true
-  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+  const sessionId = paneResumeSessionId(pane)
   return !!sessionId && rebuildingPanes.has(sessionId)
 }
 
@@ -2134,7 +2141,7 @@ const rebuildablePaneCount = computed(
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
-  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+  const sessionId = paneResumeSessionId(pane)
   if (!sessionId) return
   // Lock synchronously, before any await: a concurrent call (double-click, or
   // overlap with the rebuild-all batch) would otherwise pass the has() check
@@ -2262,9 +2269,15 @@ async function rebuildTabPanesViaResume(): Promise<void> {
 }
 
 async function rebuildPaneClean(paneId: string): Promise<void> {
-  if (rebuildingPanes.has(paneId)) return
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
+  // Same session-aware lock as rebuildPaneViaResume: mid-resume the
+  // replacement pane (new id, same session) is already live, and its clear
+  // shortcut / respawn button route here — without the session key a clean
+  // spawn could run concurrently and clobber the in-flight resume.
+  const sessionId = paneResumeSessionId(pane)
+  const lockKeys = sessionId ? [paneId, sessionId] : [paneId]
+  if (lockKeys.some((key) => rebuildingPanes.has(key))) return
   const snap = {
     agentKey: pane.agentKey,
     customName: pane.customName,
@@ -2276,7 +2289,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     origin: pane.origin,
     runGroupId: pane.runGroupId,
   }
-  rebuildingPanes.add(paneId)
+  for (const key of lockKeys) rebuildingPanes.add(key)
   try {
     await onKill(paneId, { markRemoved: false, force: true, keepInList: true })
     const newId = await spawnPane({
@@ -2324,7 +2337,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       panes.value = panes.value.filter((p) => p.id !== paneId)
     }
   } finally {
-    rebuildingPanes.delete(paneId)
+    for (const key of lockKeys) rebuildingPanes.delete(key)
   }
 }
 

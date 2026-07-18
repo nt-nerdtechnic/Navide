@@ -528,18 +528,23 @@ class ProjectStore:
     def _find_manual_pane(
         self, project: "Project", pane_id: str, previous_pane_id: str = "", session_id: str = ""
     ) -> "PaneRecord | None":
-        # session_id is a last-resort match: racing rebuild spawns can arrive
-        # out of order, so the previous_pane_id chain breaks and only the CLI
-        # session identifies the record. Without it each racer appends a
-        # duplicate record that restores as an extra pane.
-        return next(
-            (p for p in project.panes
-             if p.origin == "manual" and (
-                 p.pane_id == pane_id
-                 or (previous_pane_id and p.pane_id == previous_pane_id)
-                 or (session_id and p.session_id == session_id))),
-            None,
-        )
+        # Exact pane_id / previous_pane_id matches take priority over the
+        # session fallback — a flat OR would let an earlier record matching
+        # only by session shadow a later exact match and hijack its identity.
+        # The session fallback itself is a last resort for rebuild hops
+        # (previous_pane_id set) whose chain broke because racing spawns
+        # crossed; it must NOT apply to plain spawns, where the user may
+        # legitimately open a second pane resuming the session of a live one.
+        manual = [p for p in project.panes if p.origin == "manual"]
+        for match in (
+            lambda p: p.pane_id == pane_id,
+            lambda p: bool(previous_pane_id) and p.pane_id == previous_pane_id,
+            lambda p: bool(previous_pane_id) and bool(session_id) and p.session_id == session_id,
+        ):
+            found = next((p for p in manual if match(p)), None)
+            if found is not None:
+                return found
+        return None
 
     def record_manual_pane_spawn(
         self,
@@ -568,6 +573,17 @@ class ProjectStore:
         if session_id: pane.session_id = session_id
         if session_home_id: pane.session_home_id = session_home_id
         if run_group_id: pane.run_group_id = run_group_id
+        # A rebuild hop owns its session: retire any OTHER spawned manual
+        # record sharing it (legacy duplicate accumulation) so restore cannot
+        # resurrect a ghost pane. Gated on previous_pane_id for the same
+        # reason as the lookup fallback — plain spawns may share a session
+        # with a live pane on purpose.
+        if previous_pane_id and session_id:
+            for other in project.panes:
+                if (other is not pane and other.origin == "manual"
+                        and other.session_id == session_id
+                        and other.spawn_status == "spawned"):
+                    other.spawn_status = "removed"
         self.save(project)
         self.append_event(
             workspace_path,
