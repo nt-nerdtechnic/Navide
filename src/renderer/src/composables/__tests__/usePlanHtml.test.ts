@@ -140,6 +140,40 @@ describe('replaceHtmlPlanMeta', () => {
     expect(written).toContain('\n  "schemaVersion": 1,')
   })
 
+  it('escapes "<" in serialized JSON so script-closing text cannot break the block', () => {
+    const closingTag = '</scr' + 'ipt>'
+    const meta: HtmlPlanMeta = {
+      ...parseHtmlPlanMeta(VALID_HTML)!.meta,
+      reviewNotes: [
+        {
+          id: 'n1',
+          author: 'user',
+          text: `Beware ${closingTag} and ${'<!' + '--'} inside notes`,
+          resolved: false,
+          reply: '',
+        },
+      ],
+    }
+    const written = replaceHtmlPlanMeta(VALID_HTML, meta)
+
+    // (a) the only closing script tag in the output is the block's own; the
+    // JSON island itself contains no raw "<" at all.
+    expect(written.split(closingTag).length - 1).toBe(1)
+    const block = written.match(
+      /<script type="application\/json" id="plan-meta">([\s\S]*?)<\/script>/,
+    )!
+    expect(block[1]).not.toContain('<')
+
+    // (b) round-trips: JSON.parse natively decodes the unicode escape.
+    const reparsed = parseHtmlPlanMeta(written)!
+    expect(reparsed.warnings).toEqual([])
+    expect(reparsed.meta).toEqual(meta)
+
+    // (c) every byte outside the block is preserved.
+    const blockRe = /<script type="application\/json" id="plan-meta">[\s\S]*?<\/script>/
+    expect(written.replace(blockRe, '@BLOCK@')).toBe(VALID_HTML.replace(blockRe, '@BLOCK@'))
+  })
+
   it('returns the content unchanged when no block exists', () => {
     const plain = '<!doctype html><html><body>no meta</body></html>'
     expect(replaceHtmlPlanMeta(plain, parseHtmlPlanMeta(VALID_HTML)!.meta)).toBe(plain)

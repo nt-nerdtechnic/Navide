@@ -209,6 +209,102 @@ describe('PlanReviewToolbar – notes', () => {
   })
 })
 
+describe('PlanReviewToolbar – IME composition', () => {
+  it('ignores Enter pressed during IME composition', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-input').setValue('中文留言')
+
+    await wrapper.find('.prt-input').trigger('keydown', { key: 'Enter', isComposing: true })
+    await flushPromises()
+
+    expect(writes).toHaveLength(0)
+    expect((wrapper.find('.prt-input').element as HTMLInputElement).value).toBe('中文留言')
+  })
+
+  it('submits on Enter when not composing', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-input').setValue('中文留言')
+
+    await wrapper.find('.prt-input').trigger('keydown', { key: 'Enter', isComposing: false })
+    await flushPromises()
+
+    expect(writes).toHaveLength(1)
+    expect(lastWrittenMeta(writes).reviewNotes[0].text).toBe('中文留言')
+  })
+})
+
+describe('PlanReviewToolbar – read-before-write', () => {
+  it('preserves concurrent external edits when resolving a note', async () => {
+    const meta = baseMeta({
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '' }],
+    })
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(meta))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+
+    // External agent flips phase-b to done after the toolbar's initial read.
+    setContent(
+      planDoc(
+        baseMeta({
+          reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '' }],
+          todos: [
+            { id: 'phase-a', content: 'Phase A', status: 'done' },
+            { id: 'phase-b', content: 'Phase B', status: 'done' },
+          ],
+        }),
+      ),
+    )
+
+    await wrapper.findAll('.prt-note-resolve')[0].trigger('click')
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    // External todo change survives, and our resolve is applied on top of it.
+    expect(written.todos[1].status).toBe('done')
+    expect(written.reviewNotes[0]).toMatchObject({ id: 'n1', resolved: true })
+  })
+
+  it('recomputes the submitted note id against fresh notes', async () => {
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+
+    // External agent appended n5 after the toolbar's initial read.
+    setContent(
+      planDoc(
+        baseMeta({
+          reviewNotes: [{ id: 'n5', author: 'ai', text: 'External', resolved: true, reply: '' }],
+        }),
+      ),
+    )
+
+    await wrapper.find('.prt-input').setValue('New note')
+    await wrapper.find('.prt-send').trigger('click')
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    expect(written.reviewNotes).toHaveLength(2)
+    expect(written.reviewNotes[0]).toMatchObject({ id: 'n5', text: 'External' })
+    expect(written.reviewNotes[1]).toMatchObject({ id: 'n6', text: 'New note', author: 'user' })
+  })
+
+  it('aborts approve without writing when the fresh file is no longer in-review', async () => {
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(baseMeta()))
+    expect(wrapper.find('.prt-approve').attributes('disabled')).toBeUndefined()
+
+    // External agent moved the plan back to draft after the toolbar's read.
+    setContent(planDoc(baseMeta({ stage: 'draft' })))
+
+    await wrapper.find('.prt-approve').trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(0)
+    // The UI refreshed to the fresh state instead of writing.
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--draft')
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+})
+
 describe('PlanReviewToolbar – external refresh', () => {
   it('re-reads the file on window focus and emits updated when it changed', async () => {
     const { wrapper, setContent } = await mountToolbar(planDoc(baseMeta()))

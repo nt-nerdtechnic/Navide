@@ -1159,6 +1159,10 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
                 "reason": "not_found",
             },
         )
+    resolved = os.path.realpath(executable)
+    executable_display = (
+        f"{executable} → {resolved}" if resolved != executable else executable
+    )
     command = [executable, *dep.check_cmd[1:]]
     started = time.monotonic()
     try:
@@ -1172,10 +1176,11 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     except subprocess.TimeoutExpired as err:
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         raise AgentCliProbeError(
-            f"{dep.label} startup probe timed out after {duration_ms}ms ({executable})",
+            f"{dep.label} startup probe timed out after {duration_ms}ms ({executable_display})",
             {
                 "agent_key": agent_key,
                 "binary_path": executable,
+                "resolved_path": resolved,
                 "probe_command": command,
                 "duration_ms": duration_ms,
                 "reason": "timeout",
@@ -1184,10 +1189,11 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     except OSError as err:
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
         raise AgentCliProbeError(
-            f"{dep.label} startup probe could not execute {executable}: {err}",
+            f"{dep.label} startup probe could not execute {executable_display}: {err}",
             {
                 "agent_key": agent_key,
                 "binary_path": executable,
+                "resolved_path": resolved,
                 "probe_command": command,
                 "duration_ms": duration_ms,
                 "reason": "exec_error",
@@ -1206,6 +1212,7 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     details = {
         "agent_key": agent_key,
         "binary_path": executable,
+        "resolved_path": resolved,
         "probe_command": command,
         "duration_ms": duration_ms,
         "exit_code": proc.returncode,
@@ -1214,10 +1221,16 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     }
     if proc.returncode != 0:
         cause = f"was terminated by {signal_name}" if signal_name else f"exited with code {proc.returncode}"
-        raise AgentCliProbeError(
-            f"{dep.label} startup probe {cause} after {duration_ms}ms ({executable})",
-            {**details, "reason": "signal" if signal_name else "nonzero_exit"},
-        )
+        message = f"{dep.label} startup probe {cause} after {duration_ms}ms ({executable_display})"
+        error_details = {**details, "reason": "signal" if signal_name else "nonzero_exit"}
+        if signal_name == "SIGKILL" and duration_ms < 500:
+            hint = (
+                "the binary may be quarantined or corrupt (e.g. a broken auto-update); "
+                f"try running '{executable} --version' in a terminal"
+            )
+            message += f" — {hint}"
+            error_details["hint"] = hint
+        raise AgentCliProbeError(message, error_details)
     return details
 
 

@@ -134,7 +134,11 @@ export function replaceHtmlPlanMeta(content: string, meta: HtmlPlanMeta): string
   const openTagLength = match[0].length - match[1].length - '</script>'.length
   const innerStart = match.index + openTagLength
   const innerEnd = innerStart + match[1].length
-  return `${content.slice(0, innerStart)}\n${JSON.stringify(meta, null, 2)}\n${content.slice(innerEnd)}`
+  // JSON-escape every "<" (unicode escape) so strings like "</script>" or
+  // "<!--" in the meta cannot terminate the script block early. JSON
+  // semantics are unchanged; JSON.parse decodes the escape back natively.
+  const json = JSON.stringify(meta, null, 2).replace(/</g, '\\u003c')
+  return `${content.slice(0, innerStart)}\n${json}\n${content.slice(innerEnd)}`
 }
 
 /** done/total counts for list display; `skipped` counts toward neither. */

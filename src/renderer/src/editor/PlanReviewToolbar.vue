@@ -39,6 +39,9 @@ function applyContent(content: string, notifyHost: boolean): void {
 }
 
 async function loadContent(notifyHost = false): Promise<void> {
+  // In-flight guard: while a write is running, a focus-triggered re-read
+  // could resolve with stale content and clobber the just-written state.
+  if (saving.value) return
   try {
     const resp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
       'fs.read_file',
@@ -76,10 +79,34 @@ const progress = computed(() => htmlPlanProgress(meta.value?.todos ?? []))
 const unresolvedCount = computed(() => (meta.value?.reviewNotes ?? []).filter((n) => !n.resolved).length)
 const canApprove = computed(() => meta.value?.stage === 'in-review' && unresolvedCount.value === 0)
 
-async function writeMeta(next: HtmlPlanMeta): Promise<boolean> {
-  const content = replaceHtmlPlanMeta(rawContent.value, next)
+// Read-before-write: re-read the file and re-apply the mutation on the fresh
+// meta so external edits made since our last read (e.g. by an AI agent) are
+// preserved instead of clobbered. `mutate` returns null to abort when its
+// precondition no longer holds against the fresh meta; the UI is then
+// refreshed from the fresh content.
+async function writeMeta(mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null): Promise<boolean> {
   saving.value = true
   try {
+    const readResp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
+      'fs.read_file',
+      { workspace_path: props.workspacePath, rel_path: props.relPath },
+    )
+    if (!readResp.payload?.ok || readResp.payload.content === undefined) {
+      toast(readResp.payload?.error ?? t('pane.plans.review-save-failed'))
+      return false
+    }
+    const freshContent = readResp.payload.content
+    const freshMeta = parseHtmlPlanMeta(freshContent)?.meta ?? null
+    if (!freshMeta) {
+      toast(t('pane.plans.review-save-failed'))
+      return false
+    }
+    const next = mutate(freshMeta)
+    if (!next) {
+      applyContent(freshContent, true)
+      return false
+    }
+    const content = replaceHtmlPlanMeta(freshContent, next)
     const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
       workspace_path: props.workspacePath,
       rel_path: props.relPath,
@@ -103,15 +130,18 @@ async function writeMeta(next: HtmlPlanMeta): Promise<boolean> {
 
 async function approve(): Promise<void> {
   if (!meta.value || !canApprove.value || saving.value) return
-  await writeMeta({ ...meta.value, stage: 'approved', approvedAt: new Date().toISOString() })
+  await writeMeta((fresh) => {
+    if (fresh.stage !== 'in-review' || fresh.reviewNotes.some((n) => !n.resolved)) return null
+    return { ...fresh, stage: 'approved', approvedAt: new Date().toISOString() }
+  })
 }
 
 async function resolveNote(id: string): Promise<void> {
   if (!meta.value || saving.value) return
-  await writeMeta({
-    ...meta.value,
-    reviewNotes: meta.value.reviewNotes.map((n) => (n.id === id ? { ...n, resolved: true } : n)),
-  })
+  await writeMeta((fresh) => ({
+    ...fresh,
+    reviewNotes: fresh.reviewNotes.map((n) => (n.id === id ? { ...n, resolved: true } : n)),
+  }))
 }
 
 function nextNoteId(notes: HtmlPlanReviewNote[]): string {
@@ -126,15 +156,24 @@ function nextNoteId(notes: HtmlPlanReviewNote[]): string {
 async function submitNote(): Promise<void> {
   const text = newNoteText.value.trim()
   if (!meta.value || !text || saving.value) return
-  const note: HtmlPlanReviewNote = {
-    id: nextNoteId(meta.value.reviewNotes),
-    author: 'user',
-    text,
-    resolved: false,
-    reply: '',
-  }
-  const ok = await writeMeta({ ...meta.value, reviewNotes: [...meta.value.reviewNotes, note] })
+  const ok = await writeMeta((fresh) => {
+    const note: HtmlPlanReviewNote = {
+      id: nextNoteId(fresh.reviewNotes),
+      author: 'user',
+      text,
+      resolved: false,
+      reply: '',
+    }
+    return { ...fresh, reviewNotes: [...fresh.reviewNotes, note] }
+  })
   if (ok) newNoteText.value = ''
+}
+
+// Guard against IME composition: pressing Enter to commit a candidate must
+// not submit the half-composed note.
+function onNoteEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void submitNote()
 }
 </script>
 
@@ -178,7 +217,7 @@ async function submitNote(): Promise<void> {
           v-model="newNoteText"
           class="prt-input"
           :placeholder="t('pane.plans.review-add-placeholder')"
-          @keydown.enter="submitNote"
+          @keydown.enter="onNoteEnter"
         />
         <button class="prt-send" :disabled="saving || !newNoteText.trim()" @click="submitNote">
           {{ t('pane.plans.review-send') }}

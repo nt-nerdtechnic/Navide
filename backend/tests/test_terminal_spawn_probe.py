@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -25,6 +26,7 @@ def test_agent_cli_probe_reports_resolved_binary_and_version(
 
     assert result is not None
     assert result["binary_path"] == "/opt/bin/claude"
+    assert result["resolved_path"] == "/opt/bin/claude"
     assert result["version"] == "2.1.210"
     assert result["exit_code"] == 0
 
@@ -46,6 +48,75 @@ def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
     assert caught.value.details["binary_path"] == "/opt/bin/claude"
     assert caught.value.details["signal"] == "SIGKILL"
     assert caught.value.details["exit_code"] == -9
+    # Fast SIGKILL death → quarantine/corruption hint.
+    assert "quarantined or corrupt" in str(caught.value)
+    assert "hint" in caught.value.details
+
+
+def test_agent_cli_probe_non_sigkill_signal_has_no_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.shutil, "which", lambda _name: "/opt/bin/claude")
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=-15, stdout="", stderr=""),
+    )
+
+    with pytest.raises(app.AgentCliProbeError) as caught:
+        app._probe_agent_cli_for_spawn("claude")
+
+    assert "SIGTERM" in str(caught.value)
+    assert "quarantined or corrupt" not in str(caught.value)
+    assert "hint" not in caught.value.details
+
+
+def test_agent_cli_probe_error_shows_symlink_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = tmp_path / "claude-real"
+    real.write_text("#!/bin/sh\n")
+    link = tmp_path / "claude"
+    link.symlink_to(real)
+    resolved = str(real.resolve())
+    monkeypatch.setattr(app.shutil, "which", lambda _name: str(link))
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=1, stdout="", stderr=""),
+    )
+
+    with pytest.raises(app.AgentCliProbeError) as caught:
+        app._probe_agent_cli_for_spawn("claude")
+
+    assert f"({link} → {resolved})" in str(caught.value)
+    assert caught.value.details["binary_path"] == str(link)
+    assert caught.value.details["resolved_path"] == resolved
+
+
+def test_agent_cli_probe_success_payload_carries_resolved_symlink_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    real = tmp_path / "claude-real"
+    real.write_text("#!/bin/sh\n")
+    link = tmp_path / "claude"
+    link.symlink_to(real)
+    monkeypatch.setattr(app.shutil, "which", lambda _name: str(link))
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="2.1.210 (Claude Code)\n",
+            stderr="",
+        ),
+    )
+
+    result = app._probe_agent_cli_for_spawn("claude")
+
+    assert result is not None
+    assert result["binary_path"] == str(link)
+    assert result["resolved_path"] == str(real.resolve())
 
 
 def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
