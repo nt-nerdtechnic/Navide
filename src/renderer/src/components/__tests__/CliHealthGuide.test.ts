@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import CliHealthGuide from '../CliHealthGuide.vue'
 import { i18n } from '../../i18n'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
@@ -208,6 +208,93 @@ describe('CliHealthGuide', () => {
       global: { plugins: [i18n] },
     })
 
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(2)
+  })
+
+  it('blocks the second removal until re-detect refreshes the data', async () => {
+    const dual = structuredClone(health)
+    dual.entries[0].candidates[0].resolved_path = '/Users/test/.nvm/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    dual.entries[0].candidates[1].resolved_path = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    const commands: string[] = []
+    window.agentTeam = {
+      openTerminal: async (command: string) => {
+        commands.push(command)
+        return { ok: true }
+      },
+    } as typeof window.agentTeam
+    const mock = createMockBackend('connected')
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: dual },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(2)
+
+    await wrapper.findAll('.ch-remove-binary')[1].trigger('click')
+    await wrapper.get('.ch-confirm-removal').trigger('click')
+    await flushPromises()
+
+    // The initiated removal consumed the only backup: no further removal is
+    // offered on the stale snapshot, and the survivor explains why.
+    expect(commands).toHaveLength(1)
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(0)
+    expect(wrapper.findAll('.ch-blocked')).toHaveLength(1)
+  })
+
+  it('keeps guided removal available for a broken sole install', () => {
+    const brokenOnly = structuredClone(health)
+    brokenOnly.entries[0].candidates = [{ ...brokenOnly.entries[0].candidates[0], status: 'failed' }]
+    const mock = createMockBackend('connected')
+
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: brokenOnly },
+      global: { plugins: [i18n] },
+    })
+
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(1)
+    expect(wrapper.find('.ch-blocked').exists()).toBe(false)
+  })
+
+  it('does not reconstruct a command the backend deliberately left empty', () => {
+    const suppressed = structuredClone(health)
+    suppressed.entries[0].candidates[0].resolved_path = '/Users/test/.nvm/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    suppressed.entries[0].candidates[1].resolved_path = '/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe'
+    suppressed.entries[0].candidates[1].removal_command = ''
+    const mock = createMockBackend('connected')
+
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: suppressed },
+      global: { plugins: [i18n] },
+    })
+
+    // Candidate 1 is allowed by the gate but the backend said "unavailable"
+    // (e.g. npm missing): no fabricated fallback button, no blocked note.
+    expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(1)
+    expect(wrapper.find('.ch-blocked').exists()).toBe(false)
+  })
+
+  it('clears an open confirmation when re-detect replaces the health data', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', { cli_health: structuredClone(health) })
+    wrapper = mount(CliHealthGuide, {
+      props: { backend: mock.backend, initialHealth: health },
+      global: { plugins: [i18n] },
+    })
+
+    await wrapper.findAll('.ch-remove-binary')[1].trigger('click')
+    expect(wrapper.find('.ch-confirm').exists()).toBe(true)
+
+    const next = () => wrapper!.findAll('button').find((button) => button.text() === 'Next')!
+    await next().trigger('click')
+    await next().trigger('click')
+    await wrapper.get('.ch-verify button').trigger('click')
+    await flushPromises()
+
+    const back = () => wrapper!.findAll('.ch-footer .ch-btn.ghost')[1]
+    await back().trigger('click')
+    await back().trigger('click')
+
+    expect(wrapper.find('.ch-confirm').exists()).toBe(false)
     expect(wrapper.findAll('.ch-remove-binary')).toHaveLength(2)
   })
 })

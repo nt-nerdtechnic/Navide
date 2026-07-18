@@ -292,6 +292,47 @@ def test_cli_health_offers_removal_only_for_the_broken_duplicate(
     assert "uninstall -g @anthropic-ai/claude-code" in broken["removal_command"]
 
 
+def test_cli_health_allows_removing_a_broken_sole_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, binary, target = _make_npm_claude_install(tmp_path / "node")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+    ])
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(binary, ok=False)])
+    candidate = health["entries"][0]["candidates"][0]
+
+    # Removing a broken install cannot lose a working CLI, so guided removal
+    # stays available even without a working backup.
+    assert "uninstall -g @anthropic-ai/claude-code" in candidate["removal_command"]
+
+
+def test_cli_health_blocks_removal_when_backup_is_same_physical_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, binary, target = _make_npm_claude_install(tmp_path / "node")
+    wrapper = _make_executable(
+        tmp_path / "node" / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "cli-wrapper.cjs"
+    )
+    alias = tmp_path / "node" / "bin" / "claude-alias"
+    alias.symlink_to(wrapper)
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+        _candidate_entry(alias, wrapper),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+
+    health = ob.build_cli_health([_claude_status(binary)])
+    candidates = health["entries"][0]["candidates"]
+
+    # Both PATH entries live in the same npm prefix: one uninstall removes
+    # both, so neither may count the other as a working backup.
+    assert [c["removal_command"] for c in candidates] == ["", ""]
+
+
 def test_cli_health_fingerprint_ignores_removal_gating(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

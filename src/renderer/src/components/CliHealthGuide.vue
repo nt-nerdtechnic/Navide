@@ -46,12 +46,32 @@ const NPM_PACKAGES: Record<string, string> = {
   codex: '@openai/codex',
 }
 
-function hasOtherOk(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
-  return entry.candidates.some((item) => item !== candidate && item.status === 'ok')
+// Paths whose removal was already opened in Terminal this session; they no
+// longer count as working backups until the next re-detect refreshes the data.
+const removedPaths = ref<Set<string>>(new Set())
+
+function sameNpmInstall(entry: CliHealthEntry, first: CliHealthCandidate, second: CliHealthCandidate): boolean {
+  const packageName = NPM_PACKAGES[entry.agent_key]
+  if (!packageName) return false
+  const marker = `/node_modules/${packageName}/`
+  if (!first.resolved_path.includes(marker) || !second.resolved_path.includes(marker)) return false
+  return first.resolved_path.split(marker)[0] === second.resolved_path.split(marker)[0]
 }
 
 function remainingOk(entry: CliHealthEntry, candidate: CliHealthCandidate): CliHealthCandidate | undefined {
-  return entry.candidates.find((item) => item !== candidate && item.status === 'ok')
+  return entry.candidates.find((item) =>
+    item !== candidate
+    && item.status === 'ok'
+    && !removedPaths.value.has(item.resolved_path)
+    && !sameNpmInstall(entry, candidate, item))
+}
+
+function removalAllowed(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
+  // Removal must never target the last working install: broken candidates are
+  // always removable, working ones only with a surviving working backup.
+  if (removedPaths.value.has(candidate.resolved_path)) return false
+  if (candidate.status !== 'ok') return true
+  return remainingOk(entry, candidate) !== undefined
 }
 
 function isNpmOwned(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
@@ -59,11 +79,18 @@ function isNpmOwned(entry: CliHealthEntry, candidate: CliHealthCandidate): boole
   return Boolean(packageName && candidate.resolved_path.includes(`/node_modules/${packageName}/`))
 }
 
+function showBlockedNote(entry: CliHealthEntry, candidate: CliHealthCandidate): boolean {
+  return candidate.status === 'ok'
+    && !removedPaths.value.has(candidate.resolved_path)
+    && isNpmOwned(entry, candidate)
+    && !removalAllowed(entry, candidate)
+}
+
 function removalCommand(entry: CliHealthEntry, candidate: CliHealthCandidate): string {
-  // Never offer removal unless another install of the same CLI probes ok; the
-  // gate also covers backend-provided commands from older, ungated backends.
-  if (!hasOtherOk(entry, candidate)) return ''
-  if (candidate.removal_command) return candidate.removal_command
+  if (!removalAllowed(entry, candidate)) return ''
+  // A removal-aware backend's verdict is final (empty string = unavailable);
+  // reconstruct locally only when the payload predates removal support.
+  if (candidate.removal_command !== undefined) return candidate.removal_command
   const packageName = NPM_PACKAGES[entry.agent_key]
   if (!packageName || !candidate.resolved_path.includes(`/node_modules/${packageName}/`)) return ''
 
@@ -93,9 +120,12 @@ async function confirmRemoval(): Promise<void> {
   const { entry, candidate } = pendingRemoval.value
   pendingRemoval.value = null
   const result = await window.agentTeam?.openTerminal(removalCommand(entry, candidate))
-  message.value = result?.ok
-    ? t('cli-health.removal-opened', { label: entry.label })
-    : t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
+  if (result?.ok) {
+    removedPaths.value = new Set(removedPaths.value).add(candidate.resolved_path)
+    message.value = t('cli-health.removal-opened', { label: entry.label })
+  } else {
+    message.value = t('cli-health.terminal-failed', { error: result?.error || 'unknown' })
+  }
 }
 
 async function useBinary(entry: CliHealthEntry, candidate: CliHealthCandidate): Promise<void> {
@@ -124,6 +154,10 @@ async function recheck(): Promise<void> {
   try {
     const resp = await props.backend.send<OnboardStatus>('onboarding.status', {})
     if (!resp.payload?.cli_health) return
+    // Fresh probe data supersedes any in-flight confirmation or session-local
+    // removal tracking (object identities change with the new payload).
+    pendingRemoval.value = null
+    removedPaths.value = new Set()
     health.value = resp.payload.cli_health
     if (!health.value.findings.length) {
       emit('resolved')
@@ -202,7 +236,7 @@ async function dismiss(): Promise<void> {
                   <button class="ch-btn danger ch-confirm-removal" @click="confirmRemoval">{{ $t('cli-health.confirm-continue') }}</button>
                 </div>
               </div>
-              <p v-if="isNpmOwned(entry, candidate) && !removalCommand(entry, candidate)" class="ch-blocked">
+              <p v-if="showBlockedNote(entry, candidate)" class="ch-blocked">
                 {{ $t('cli-health.removal-blocked') }}
               </p>
             </div>

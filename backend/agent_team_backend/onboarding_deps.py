@@ -297,6 +297,18 @@ _NPM_AGENT_PACKAGES = {
 }
 
 
+def _same_npm_install(first: dict[str, Any], second: dict[str, Any], package: str) -> bool:
+    """True when both candidates resolve into the same npm prefix of `package`."""
+    if not package:
+        return False
+    marker = f"/node_modules/{package}/"
+    first_resolved = str(first.get("resolved_path") or "")
+    second_resolved = str(second.get("resolved_path") or "")
+    if marker not in first_resolved or marker not in second_resolved:
+        return False
+    return first_resolved.split(marker, 1)[0] == second_resolved.split(marker, 1)[0]
+
+
 def _candidate_removal(candidate: dict[str, Any], dep: Dep, version: str) -> dict[str, str]:
     """Return a confirmed removal command only when ownership is unambiguous."""
     package = _NPM_AGENT_PACKAGES.get(dep.id, "")
@@ -343,16 +355,20 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             probed.append((candidate, probe, is_primary))
         detailed_candidates: list[dict[str, Any]] = []
         for candidate, probe, is_primary in probed:
-            # Removal is only offered while another install of the same CLI probes
-            # ok, so the guide can never point at the last working binary.
-            other_ok = any(
+            # Removal must never target the last working install: broken
+            # candidates are always removable (removing them cannot lose a
+            # working CLI), working ones only when a different physical
+            # install also probes ok.
+            package = _NPM_AGENT_PACKAGES.get(dep.id, "")
+            removable = probe.get("status") != "ok" or any(
                 other_probe.get("status") == "ok"
+                and not _same_npm_install(candidate, other_candidate, package)
                 for other_candidate, other_probe, _ in probed
                 if other_candidate is not candidate
             )
             removal = (
                 _candidate_removal(candidate, dep, str(probe.get("version") or ""))
-                if other_ok
+                if removable
                 else {"manager": "", "command": ""}
             )
             detailed_candidates.append({
