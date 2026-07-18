@@ -101,26 +101,34 @@ async function loadPlans(): Promise<void> {
       rel_path: '.agent-team/plans',
       show_hidden: true,
     })
-    if (htmlList.payload?.ok) {
+    if (!htmlList.payload?.ok) {
+      // Missing directory is intentional silence; real errors surface.
+      if (htmlList.payload?.error !== 'not a directory') {
+        error.value = htmlList.payload?.error || 'Failed to list plans'
+      }
+    } else {
       const htmlEntries = (htmlList.payload.entries ?? [])
         .filter((entry) => !entry.is_dir && entry.name.endsWith('.html') && !entry.name.startsWith('_'))
         .sort((a, b) => a.name.localeCompare(b.name))
 
-      for (const entry of htmlEntries) {
-        const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
-          workspace_path: props.workspacePath,
-          rel_path: entry.rel_path,
+      const htmlItems = await Promise.all(
+        htmlEntries.map(async (entry): Promise<PlanItem | null> => {
+          const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+            workspace_path: props.workspacePath,
+            rel_path: entry.rel_path,
+          })
+          if (!read.payload?.ok) return null
+          const parsed = parseHtmlPlanMeta(read.payload.content ?? '')
+          return {
+            relPath: entry.rel_path,
+            name: entry.name,
+            plan: null,
+            progress: null,
+            htmlMeta: parsed?.meta ?? null,
+          }
         })
-        if (!read.payload?.ok) continue
-        const parsed = parseHtmlPlanMeta(read.payload.content ?? '')
-        loaded.push({
-          relPath: entry.rel_path,
-          name: entry.name,
-          plan: null,
-          progress: null,
-          htmlMeta: parsed?.meta ?? null,
-        })
-      }
+      )
+      loaded.push(...htmlItems.filter((item): item is PlanItem => item !== null))
     }
 
     plans.value = loaded
@@ -161,7 +169,8 @@ function htmlRows(stages: PlanStage[]): HtmlPlanRow[] {
 const htmlGroups = computed(() =>
   (
     [
-      { key: 'in-review', label: t('pane.plans.stage-in-review'), stages: ['draft', 'in-review'], finished: false },
+      { key: 'draft', label: t('pane.plans.stage-draft'), stages: ['draft'], finished: false },
+      { key: 'in-review', label: t('pane.plans.stage-in-review'), stages: ['in-review'], finished: false },
       { key: 'approved', label: t('pane.plans.stage-approved'), stages: ['approved'], finished: false },
       { key: 'in-progress', label: t('pane.plans.stage-in-progress'), stages: ['in-progress'], finished: false },
       { key: 'done', label: t('pane.plans.stage-done'), stages: ['done'], finished: true },

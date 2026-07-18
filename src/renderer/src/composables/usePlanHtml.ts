@@ -42,8 +42,10 @@ export interface HtmlPlanProgress {
 }
 
 // Matches the single machine-readable island. Attribute order tolerant; the
-// spec guarantees exactly one such block per plan file.
-const PLAN_META_RE = /<script\b[^>]*\bid="plan-meta"[^>]*>([\s\S]*?)<\/script>/
+// spec guarantees exactly one such block per plan file. Case-insensitive and
+// quote-style tolerant; the `\s` before `id` keeps `data-id="plan-meta"`
+// from matching.
+const PLAN_META_RE = /<script\b[^>]*\s(?:id="plan-meta"|id='plan-meta')[^>]*>([\s\S]*?)<\/script>/i
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''

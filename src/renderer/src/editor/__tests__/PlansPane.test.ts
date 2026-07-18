@@ -61,6 +61,16 @@ const HTML_DONE_PLAN = htmlPlan({
   reviewNotes: [],
 })
 
+const HTML_DRAFT_PLAN = htmlPlan({
+  schemaVersion: 1,
+  name: 'HTML Draft Plan',
+  overview: 'Still being written.',
+  stage: 'draft',
+  approvedAt: null,
+  todos: [{ id: 'phase-a', content: 'First', status: 'pending' }],
+  reviewNotes: [],
+})
+
 const HTML_DOC = '<!doctype html><html><body>no meta here</body></html>'
 
 const notify = {
@@ -78,9 +88,17 @@ interface MockEntry {
   is_dir: boolean
 }
 
-function makeBackend(opts?: { htmlEntries?: MockEntry[]; htmlFiles?: Record<string, string> }) {
+function makeBackend(opts?: {
+  htmlEntries?: MockEntry[]
+  htmlFiles?: Record<string, string>
+  htmlListError?: string
+  readFailures?: string[]
+}) {
+  // Tracks concurrent .agent-team reads so tests can assert parallel fan-out.
+  const htmlReads = { inflight: 0, max: 0 }
   return {
     status: ref('connected'),
+    htmlReads,
     send: vi.fn(async (channel: string, payload: Record<string, unknown>) => {
       if (channel === 'fs.list_dir') {
         if (payload.rel_path === '.cursor/plans') {
@@ -95,6 +113,7 @@ function makeBackend(opts?: { htmlEntries?: MockEntry[]; htmlFiles?: Record<stri
           }
         }
         if (payload.rel_path === '.agent-team/plans') {
+          if (opts?.htmlListError) return { payload: { ok: false, error: opts.htmlListError } }
           if (!opts?.htmlEntries) return { payload: { ok: false, error: 'not a directory' } }
           return { payload: { ok: true, entries: opts.htmlEntries } }
         }
@@ -102,6 +121,13 @@ function makeBackend(opts?: { htmlEntries?: MockEntry[]; htmlFiles?: Record<stri
       }
       if (channel === 'fs.read_file') {
         const rel = payload.rel_path as string
+        if (rel.startsWith('.agent-team/')) {
+          htmlReads.inflight++
+          htmlReads.max = Math.max(htmlReads.max, htmlReads.inflight)
+          await Promise.resolve()
+          htmlReads.inflight--
+          if (opts?.readFailures?.includes(rel)) return { payload: { ok: false, error: 'read failed' } }
+        }
         if (opts?.htmlFiles && rel in opts.htmlFiles) {
           return { payload: { ok: true, content: opts.htmlFiles[rel] } }
         }
@@ -240,6 +266,82 @@ describe('PlansPane', () => {
     expect(emitted[emitted.length - 1]).toEqual([
       { filepath: '.agent-team/plans/review_a1b2c3.html', name: 'review_a1b2c3.html' },
     ])
+  })
+
+  it('surfaces a real .agent-team/plans list error', async () => {
+    const wrapper = mountPane(makeBackend({ htmlListError: 'permission denied' }))
+    await flushPromises()
+    expect(wrapper.find('.plans-error').exists()).toBe(true)
+    expect(wrapper.find('.plans-error').text()).toContain('permission denied')
+  })
+
+  it('stays silent when .agent-team/plans does not exist', async () => {
+    const wrapper = mountPane(makeBackend())
+    await flushPromises()
+    expect(wrapper.find('.plans-error').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Active Plan')
+  })
+
+  it('reads HTML plans in parallel and lists them all', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+        '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN,
+      },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    expect(backend.htmlReads.max).toBe(2)
+    expect(wrapper.text()).toContain('HTML Review Plan')
+    expect(wrapper.text()).toContain('HTML Done Plan')
+  })
+
+  it('keeps other HTML plans when one read fails', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+          { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN },
+        readFailures: ['.agent-team/plans/review_a1b2c3.html'],
+      })
+    )
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('HTML Review Plan')
+    expect(wrapper.text()).toContain('HTML Done Plan')
+  })
+
+  it('groups draft plans under Draft, not In Review', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'draft_aaaaaa.html', rel_path: '.agent-team/plans/draft_aaaaaa.html', is_dir: false },
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        ],
+        htmlFiles: {
+          '.agent-team/plans/draft_aaaaaa.html': HTML_DRAFT_PLAN,
+          '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+        },
+      })
+    )
+    await flushPromises()
+
+    const sectionTexts = wrapper.findAll('.plans-section').map((s) => s.text())
+    const draftSection = sectionTexts.find((t) => t.includes('HTML Draft Plan'))
+    expect(draftSection).toBeDefined()
+    expect(draftSection).toContain('Draft')
+    expect(draftSection).not.toContain('In Review')
+    const reviewSection = sectionTexts.find((t) => t.includes('In Review'))
+    expect(reviewSection).toBeDefined()
+    expect(reviewSection).toContain('HTML Review Plan')
+    expect(reviewSection).not.toContain('HTML Draft Plan')
   })
 
   it('batch delete covers markdown completed plus HTML done/abandoned', async () => {

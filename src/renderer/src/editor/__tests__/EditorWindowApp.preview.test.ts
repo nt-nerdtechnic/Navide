@@ -226,6 +226,14 @@ describe('EditorWindowApp – preview routing', () => {
     expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(true)
   })
 
+  it('treats backslash-separated plan paths as plan docs', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team\\plans\\feature_a1b2c3.html')
+    await previewToggle(wrapper).trigger('click')
+    expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(true)
+  })
+
   it('keeps plain and infrastructure HTML previews toolbar-free', async () => {
     const wrapper = await mountApp()
     await open(wrapper, 'site/index.html')

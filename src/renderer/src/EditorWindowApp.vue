@@ -207,8 +207,9 @@ function togglePlanView(relPath: string): void {
 // `.agent-team/plans/*.html` (non-underscore, top-level) get a review toolbar
 // above their sandboxed preview. `_`-prefixed files are infrastructure.
 function isHtmlPlanDoc(relPath: string): boolean {
-  if (!relPath.startsWith('.agent-team/plans/')) return false
-  const name = relPath.slice('.agent-team/plans/'.length)
+  const normalized = relPath.replace(/\\/g, '/') // tolerate Windows separators
+  if (!normalized.startsWith('.agent-team/plans/')) return false
+  const name = normalized.slice('.agent-team/plans/'.length)
   return name.endsWith('.html') && !name.startsWith('_') && !name.includes('/')
 }
 

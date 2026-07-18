@@ -110,6 +110,34 @@ describe('parseHtmlPlanMeta', () => {
   it('returns null when the JSON is malformed', () => {
     expect(parseHtmlPlanMeta(wrapHtml('{ "schemaVersion": 1, broken'))).toBeNull()
   })
+
+  it('accepts single-quoted attributes', () => {
+    const html = `<html><head><script type='application/json' id='plan-meta'>
+${JSON.stringify(VALID_META)}
+</script></head><body></body></html>`
+    expect(parseHtmlPlanMeta(html)?.meta.name).toBe('Sample Plan')
+  })
+
+  it('accepts an uppercase script tag and attributes', () => {
+    const html = `<html><head><SCRIPT TYPE="application/json" ID="plan-meta">
+${JSON.stringify(VALID_META)}
+</SCRIPT></head><body></body></html>`
+    expect(parseHtmlPlanMeta(html)?.meta.name).toBe('Sample Plan')
+  })
+
+  it('accepts id before type', () => {
+    const html = `<html><head><script id="plan-meta" type="application/json">
+${JSON.stringify(VALID_META)}
+</script></head><body></body></html>`
+    expect(parseHtmlPlanMeta(html)?.meta.name).toBe('Sample Plan')
+  })
+
+  it('does not match data-id="plan-meta"', () => {
+    const html = `<html><head><script type="application/json" data-id="plan-meta">
+${JSON.stringify(VALID_META)}
+</script></head><body></body></html>`
+    expect(parseHtmlPlanMeta(html)).toBeNull()
+  })
 })
 
 describe('replaceHtmlPlanMeta', () => {
