@@ -211,15 +211,41 @@ def test_manual_pane_unspawn_by_session_when_pane_id_drifted(
 def test_manual_pane_unspawn_clears_duplicates_sharing_session(
     store_with_stage: tuple[ProjectStore, str]
 ) -> None:
-    # Two spawned records share one session (orphan/duplicate accumulation):
-    # a single unspawn by session must clear BOTH so neither resurrects.
+    # Two spawned records share one session (legacy duplicate accumulation —
+    # spawn now dedups by session, so seed the records directly): a single
+    # unspawn by session must clear BOTH so neither resurrects.
     store, ws = store_with_stage
-    store.record_manual_pane_spawn(ws, pane_id="dup-a", agent="claude", session_id="sess-d")
-    store.record_manual_pane_spawn(ws, pane_id="dup-b", agent="claude", session_id="sess-d")
+    project = store.load_or_create(ws)
+    project.panes.append(PaneRecord(pane_id="dup-a", origin="manual",
+                                    agent="claude", spawn_status="spawned", session_id="sess-d"))
+    project.panes.append(PaneRecord(pane_id="dup-b", origin="manual",
+                                    agent="claude", spawn_status="spawned", session_id="sess-d"))
+    store.save(project)
     store.record_manual_pane_unspawn(ws, pane_id="dup-b", session_id="sess-d")
 
     manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
     assert all(p.spawn_status == "removed" for p in manual)
+
+
+def test_manual_pane_spawn_race_dedups_by_session(
+    store_with_stage: tuple[ProjectStore, str]
+) -> None:
+    # Double-click rebuild race: two overlapping rebuilds (A→B, B→C) send
+    # spawn records with no arrival-order guarantee. When the later hop
+    # (C, previous=B) lands first, neither its pane_id nor previous_pane_id
+    # matches the stored record (still A) — the shared session id must
+    # collapse all hops onto one record so restore never spawns an extra pane.
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(ws, pane_id="pane-a", agent="claude", session_id="sess-r")
+    store.record_manual_pane_spawn(ws, pane_id="pane-c", previous_pane_id="pane-b",
+                                   agent="claude", session_id="sess-r")
+    store.record_manual_pane_spawn(ws, pane_id="pane-b", previous_pane_id="pane-a",
+                                   agent="claude", session_id="sess-r")
+
+    manual = [p for p in store.peek(ws).panes if p.origin == "manual"]
+    assert len(manual) == 1
+    assert manual[0].session_id == "sess-r"
+    assert manual[0].spawn_status == "spawned"
 
 
 def test_manual_pane_unspawn_no_match_is_noop(

@@ -1454,8 +1454,12 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 import time as _t
 
                 line = str(payload.get("line", ""))
-                with open("/tmp/agent-team-resize.log", "a") as _f:
-                    _f.write(f"{_t.strftime('%H:%M:%S')} {line}\n")
+
+                def _append_debug_line() -> None:
+                    with open("/tmp/agent-team-resize.log", "a") as _f:
+                        _f.write(f"{_t.strftime('%H:%M:%S')} {line}\n")
+
+                await asyncio.to_thread(_append_debug_line)
             except Exception:
                 pass
             await session.send_json(make_response(msg_id, msg_type, {"ok": True}))

@@ -408,7 +408,10 @@ class TerminalService:
 
     async def _escalate_kill(self, session: TerminalSession, pgid: int, grace: float = 1.0) -> None:
         deadline = self._loop.time() + grace
-        while session.proc.poll() is None and self._loop.time() < deadline:
+        # ASYNC110 suppressed: bounded poll (<= grace) with awaited sleeps —
+        # the loop is never blocked, and there is no event source for
+        # child-exit here.
+        while session.proc.poll() is None and self._loop.time() < deadline:  # noqa: ASYNC110
             await asyncio.sleep(0.05)
         if session.proc.poll() is None and pgid > 0:
             try:
@@ -444,7 +447,8 @@ class TerminalService:
             except (ProcessLookupError, PermissionError):
                 pass
         deadline = self._loop.time() + grace
-        while (
+        # ASYNC110 suppressed: bounded poll with awaited sleeps, as above.
+        while (  # noqa: ASYNC110
             any(s.proc.poll() is None for s, _ in targets)
             and self._loop.time() < deadline
         ):

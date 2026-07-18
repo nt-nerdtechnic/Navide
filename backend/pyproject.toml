@@ -19,6 +19,7 @@ dev = [
     "pyinstaller>=6.20.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "ruff>=0.9",
 ]
 
 [build-system]
@@ -31,3 +32,25 @@ packages = ["agent_team_backend"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# Guardrail, not a style linter (issue #2): the backend is one asyncio event
+# loop over one WebSocket, so a single blocking call inside an async function
+# stalls every terminal in the app. ASYNC rules flag blocking calls
+# (subprocess, sleep, open, ...) inside `async def` — offload them via
+# asyncio.to_thread / run_in_executor instead.
+select = ["ASYNC"]
+ignore = [
+    # Not freeze-class: fast pathlib metadata calls and timeout-param API
+    # style. Keeping only the rules that catch event-loop stalls.
+    "ASYNC109",
+    "ASYNC240",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests block on purpose (subprocess fixtures inside async tests); each test
+# runs its own short-lived loop, so nothing user-facing can stall.
+"tests/**" = ["ASYNC"]

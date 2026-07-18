@@ -58,6 +58,9 @@ export interface ActivePaneView {
   /** Uses App's canonical resume eligibility check. The sidebar only renders a
    *  rebuild control; App remains the sole owner of the rebuild operation. */
   canRebuild?: boolean
+  /** True while App has a rebuild in flight for this pane's session — disables
+   *  the rebuild control so a double-click cannot start a second kill/spawn. */
+  rebuilding?: boolean
 }
 
 export interface SpawnPayload {
@@ -1101,6 +1104,7 @@ function onPipelineDividerEnd(): void {
             <button
               v-if="p.canRebuild && !p.isMinimized"
               class="icon-btn agent-rebuild-btn"
+              :disabled="p.rebuilding"
               :title="$t('pane.terminal.rebuild-tooltip')"
               :aria-label="$t('pane.terminal.rebuild-tooltip')"
               @click.stop="emit('rebuild', p.id)"
@@ -2254,9 +2258,13 @@ button.icon-btn.muted:hover {
   width: 14px;
   height: 14px;
 }
-.agent-rebuild-btn:hover {
+.agent-rebuild-btn:hover:not(:disabled) {
   color: var(--accent-fg);
   background: var(--accent-subtle);
+}
+.agent-rebuild-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .agent-close-btn:hover {
   color: var(--danger-fg);

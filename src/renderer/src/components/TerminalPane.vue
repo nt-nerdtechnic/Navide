@@ -24,6 +24,9 @@ interface Props {
   /** True when this pane has a resumable CLI session id — enables the rebuild
    *  button (re-spawns the pane via --resume to recover from render corruption). */
   canRebuild?: boolean
+  /** True while App has a rebuild in flight for this pane's session — disables
+   *  the rebuild button so a double-click cannot start a second kill/spawn. */
+  rebuilding?: boolean
   isPreparing?: boolean
   preparingLabel?: string
   /** Runtime-only LOOP badge state — lit after the loop prompt was injected. */
@@ -263,6 +266,7 @@ onMounted(() => {
     <button
       v-if="canRebuild"
       class="rebuild-btn"
+      :disabled="rebuilding"
       @click.stop="emit('rebuild')"
       :title="$t('pane.terminal.rebuild-tooltip')"
       :aria-label="$t('pane.terminal.rebuild-tooltip')"
@@ -408,9 +412,13 @@ onMounted(() => {
   height: 14px;
 }
 .minimize-btn:hover,
-.rebuild-btn:hover {
+.rebuild-btn:hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-muted);
+}
+.rebuild-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .pane-header {
   display: flex;

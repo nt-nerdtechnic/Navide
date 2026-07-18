@@ -737,7 +737,8 @@ function syncViews(): void {
       isMinimized: minimizedPanes.value.has(p.id),
       loopActive: p.loopActive,
       loopWaitUntil: p.loopWaitUntil,
-      canRebuild: paneCanRebuild(p)
+      canRebuild: paneCanRebuild(p),
+      rebuilding: paneRebuilding(p)
     }
   })
 }
@@ -2108,11 +2109,21 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
 
 /** Recover a render-corrupted pane: kill it and re-spawn the same CLI session
  *  via --resume at the current size. */
-const rebuildingPanes = new Set<string>()
+const rebuildingPanes = reactive(new Set<string>())
 const rebuildingTabPanes = ref(false)
 
 function paneCanRebuild(pane: ActivePane): boolean {
   return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok'].includes(pane.agentKey)
+}
+
+/** True while a rebuild is in flight for this pane — matched by pane id or by
+ *  session id, so the replacement pane (new id, same session) that spawnPane
+ *  swaps in mid-rebuild is covered too. Drives the rebuild buttons' disabled
+ *  state. */
+function paneRebuilding(pane: ActivePane): boolean {
+  if (rebuildingPanes.has(pane.id)) return true
+  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+  return !!sessionId && rebuildingPanes.has(sessionId)
 }
 
 /** Rebuildable panes in the active tab only — matches what the user can see. */
@@ -2121,16 +2132,20 @@ const rebuildablePaneCount = computed(
 )
 
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
-  if (rebuildingPanes.has(paneId)) return
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
+  if (!sessionId) return
   // Lock synchronously, before any await: a concurrent call (double-click, or
   // overlap with the rebuild-all batch) would otherwise pass the has() check
   // during canResumeSession/has_session and double kill/spawn the same pane.
-  rebuildingPanes.add(paneId)
+  // The session id is locked alongside the pane id because spawnPane swaps the
+  // replacement pane in (new pane id, same session) before the backend spawn
+  // resolves — a second click landing on the replacement must be blocked too.
+  const lockKeys = [paneId, sessionId]
+  if (lockKeys.some((key) => rebuildingPanes.has(key))) return
+  for (const key of lockKeys) rebuildingPanes.add(key)
   try {
-    const pane = panes.value.find((p) => p.id === paneId)
-    if (!pane) return
-    const sessionId = normalizeResumeSessionId(pane.agentKey, pane.pinnedSessionId ?? '')
-    if (!sessionId) return
     const ws = pane.workspacePath
     if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
       pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
@@ -2218,7 +2233,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       panes.value = panes.value.filter((p) => p.id !== paneId)
     }
   } finally {
-    rebuildingPanes.delete(paneId)
+    for (const key of lockKeys) rebuildingPanes.delete(key)
   }
 }
 
@@ -6970,6 +6985,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
           :can-rebuild="paneCanRebuild(p)"
+          :rebuilding="paneRebuilding(p)"
           :is-preparing="paneShowsPrepOverlay(p)"
           :preparing-label="panePreparationLabel(p)"
           :backend="backend"

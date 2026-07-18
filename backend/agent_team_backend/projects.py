@@ -525,10 +525,19 @@ class ProjectStore:
         )
         return project
 
-    def _find_manual_pane(self, project: "Project", pane_id: str, previous_pane_id: str = "") -> "PaneRecord | None":
+    def _find_manual_pane(
+        self, project: "Project", pane_id: str, previous_pane_id: str = "", session_id: str = ""
+    ) -> "PaneRecord | None":
+        # session_id is a last-resort match: racing rebuild spawns can arrive
+        # out of order, so the previous_pane_id chain breaks and only the CLI
+        # session identifies the record. Without it each racer appends a
+        # duplicate record that restores as an extra pane.
         return next(
             (p for p in project.panes
-             if p.origin == "manual" and (p.pane_id == pane_id or (previous_pane_id and p.pane_id == previous_pane_id))),
+             if p.origin == "manual" and (
+                 p.pane_id == pane_id
+                 or (previous_pane_id and p.pane_id == previous_pane_id)
+                 or (session_id and p.session_id == session_id))),
             None,
         )
 
@@ -546,7 +555,7 @@ class ProjectStore:
         run_group_id: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
-        pane = self._find_manual_pane(project, pane_id, previous_pane_id)
+        pane = self._find_manual_pane(project, pane_id, previous_pane_id, session_id)
         if pane is None:
             pane = PaneRecord(pane_id=pane_id, origin="manual")
             project.panes.append(pane)
