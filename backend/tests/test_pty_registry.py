@@ -46,6 +46,40 @@ def test_register_unregister_roundtrip() -> None:
         proc.wait()
 
 
+def test_scan_orphans_lists_dead_backend_children_read_only() -> None:
+    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "300"])
+        _set_owner(proc.pid, 1)  # recording backend looks dead (owner = launchd)
+
+        orphans = pty_registry.scan_orphans()
+
+        assert orphans == [proc.pid]
+        # Read-only: the process is NOT killed and the registry is untouched.
+        assert proc.poll() is None
+        assert str(proc.pid) in _registry()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_scan_orphans_empty_registry() -> None:
+    assert pty_registry.scan_orphans() == []
+
+
+def test_scan_orphans_skips_live_sibling_owned(monkeypatch) -> None:
+    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "300"])
+        _set_owner(proc.pid, 999999)  # owned by another backend pid
+        monkeypatch.setattr(pty_registry, "_backend_alive", lambda _pid: True)
+
+        assert pty_registry.scan_orphans() == []  # a live sibling owns it
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_reap_kills_recorded_orphan() -> None:
     proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
     pty_registry.register(proc.pid, ["sleep", "300"])

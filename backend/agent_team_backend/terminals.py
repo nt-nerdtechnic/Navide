@@ -131,6 +131,58 @@ _FAST_PATH_WINDOW_S = 0.1
 _FAST_PATH_MAX_CHUNKS = 5
 
 
+def _descendant_pids(root_pid: int) -> list[int]:
+    """Every PID descended from root_pid (child, grandchild, ...) from one ps
+    snapshot. killpg on the PTY child's process group misses any grandchild
+    that called setsid to start its own session/group (some CLIs do) — those
+    outlive the group kill and become orphans. Snapshot the tree while root is
+    still alive; once it dies the grandchildren reparent to launchd (ppid 1)
+    and the ancestry is gone."""
+    try:
+        out = subprocess.run(
+            ["ps", "-Ao", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        children.setdefault(ppid, []).append(pid)
+    found: list[int] = []
+    seen: set[int] = {root_pid}  # never re-list root itself if a cycle points back
+    stack = list(children.get(root_pid, []))
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue  # defends against a recycled-pid cycle in the ps table
+        seen.add(pid)
+        found.append(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def _kill_breakaway(pids: "list[int] | tuple[int, ...]") -> None:
+    """SIGKILL each pid still alive — the breakaway grandchildren a process-
+    group kill could not reach. Idempotent: pids already reaped by the group
+    kill raise ProcessLookupError and are skipped. Best-effort: a pid recycled
+    within the ~1s grace could in theory be mis-hit, but macOS/Linux recycle
+    pids slowly enough that this is negligible on a kill path."""
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 class TerminalService:
     def __init__(
         self,
@@ -400,7 +452,12 @@ class TerminalService:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
-            
+
+        # Snapshot the descendant tree BEFORE close: killpg below only reaches
+        # the child's own process group, so a grandchild that called setsid
+        # would survive. Capture the tree now — after the child dies its
+        # grandchildren reparent to launchd and can no longer be found.
+        descendants = _descendant_pids(session.proc.pid)
         try:
             pgid = os.getpgid(session.proc.pid)
             if force:
@@ -412,15 +469,23 @@ class TerminalService:
             # it often dies before the SIGTERM lands. The escalation task
             # still runs to reap it and drop its crash-recovery record.
             pgid = 0
-            
+
         self._close(session, reason="killed")
-            
+
         # A CLI that traps SIGTERM would survive the close and, being gone
         # from _sessions, escape the shutdown sweep — escalate to SIGKILL
         # after a grace period and only then drop its crash-recovery record.
-        self._loop.create_task(self._escalate_kill(session, pgid))
+        self._loop.create_task(
+            self._escalate_kill(session, pgid, descendants=descendants)
+        )
 
-    async def _escalate_kill(self, session: TerminalSession, pgid: int, grace: float = 1.0) -> None:
+    async def _escalate_kill(
+        self,
+        session: TerminalSession,
+        pgid: int,
+        grace: float = 1.0,
+        descendants: "list[int] | tuple[int, ...]" = (),
+    ) -> None:
         deadline = self._loop.time() + grace
         # ASYNC110 suppressed: bounded poll (<= grace) with awaited sleeps —
         # the loop is never blocked, and there is no event source for
@@ -437,6 +502,8 @@ class TerminalService:
                 await asyncio.to_thread(session.proc.wait, 1.0)
             except subprocess.TimeoutExpired:
                 pass
+        # Reap breakaway grandchildren that escaped the process group via setsid.
+        _kill_breakaway(descendants)
         if session.proc.poll() is not None:
             await asyncio.to_thread(pty_registry.unregister, session.proc.pid)
 
@@ -446,9 +513,12 @@ class TerminalService:
         never propagates to them — without this explicit sweep on shutdown
         they outlive the app as orphans."""
         targets: list[tuple[TerminalSession, int]] = []
+        breakaway: list[int] = []
         for session in list(self._sessions.values()):
             if session.closed:
                 continue
+            # Snapshot descendants while the child is still alive (see kill()).
+            breakaway.extend(_descendant_pids(session.proc.pid))
             try:
                 targets.append((session, os.getpgid(session.proc.pid)))
             except ProcessLookupError:
@@ -480,6 +550,8 @@ class TerminalService:
                 except subprocess.TimeoutExpired:
                     pass
             self._close(session, reason="shutdown")
+        # Reap breakaway grandchildren that escaped every process group.
+        _kill_breakaway(breakaway)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)

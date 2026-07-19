@@ -126,6 +126,26 @@ def _classify(pid: int, info: dict) -> str:
     return _GONE  # different start time (recycled pid) or unverifiable entry
 
 
+def scan_orphans() -> list[int]:
+    """Pids of live PTY children recorded by a now-dead backend run — exactly the
+    ones reap_stale would kill. Read-only: never signals a process or rewrites
+    the registry, so it is safe to poll for a "how many leftovers?" status check
+    (the pileup that silently exhausted RAM was invisible until now)."""
+    with _lock:
+        entries = _load()
+        if not entries:
+            return []
+        me = os.getpid()
+        orphans: list[int] = []
+        for pid_s, info in entries.items():
+            owner = info.get("owner")
+            if isinstance(owner, int) and owner != me and _backend_alive(owner):
+                continue  # a live sibling backend owns it — not an orphan
+            if _classify(int(pid_s), info) == _MATCH:
+                orphans.append(int(pid_s))
+        return orphans
+
+
 def reap_stale(grace: float = 1.0) -> list[int]:
     """Kill process groups recorded by a dead backend run.
 
