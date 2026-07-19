@@ -1639,6 +1639,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                 session_id=payload.get("session_id", ""),
                 session_home_id=payload.get("session_home_id", ""),
                 run_group_id=payload.get("run_group_id", ""),
+                output_log_file=payload.get("output_log_file", ""),
             )
             await session.send_json(
                 make_response(msg_id, msg_type, _project_payload(project))

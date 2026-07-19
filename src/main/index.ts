@@ -1160,8 +1160,8 @@ ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number)
     await fh.read(buf, 0, buf.length, fromByte)
     await fh.close()
     return { ok: true, content: buf.toString('utf-8'), newOffset: stat.size }
-  } catch {
-    return { ok: false, content: '', newOffset: fromByte }
+  } catch (e) {
+    return { ok: false, content: '', newOffset: fromByte, error: String((e as Error)?.message ?? e) }
   }
 })
 

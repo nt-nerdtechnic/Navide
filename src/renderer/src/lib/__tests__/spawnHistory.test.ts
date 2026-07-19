@@ -3,6 +3,7 @@ import {
   formatTerminalExit,
   historyEntryLabel,
   isTerminalCrashLoopOpen,
+  legacyHistoryLogPath,
   recordTerminalExit,
   resetTerminalCrashLoop,
   terminalCrashKey,
@@ -116,6 +117,28 @@ describe('spawn history titles', () => {
     }, 'Exact title')).toBe(true)
     expect(entries[0].customName).toBe('Exact title')
     expect(entries[1].customName).toBe('Exact title')
+  })
+})
+
+describe('legacy history log path reconstruction', () => {
+  it('builds a manual pane path from the UTC spawn date', () => {
+    expect(legacyHistoryLogPath({
+      spawnedAt: '2026-07-19T10:00:00.000Z',
+      origin: 'manual',
+      stageId: '',
+      paneId: 'abcd1234-5678',
+      agentKey: 'claude',
+    }, '/ws')).toBe('/ws/.agent-team/manual/20260719/claude-abcd1234.log')
+  })
+
+  it('builds a pipeline stage path without the date folder', () => {
+    expect(legacyHistoryLogPath({
+      spawnedAt: '2026-07-19T10:00:00.000Z',
+      origin: 'pipeline',
+      stageId: 'build',
+      paneId: 'abcd1234-5678',
+      agentKey: 'claude',
+    }, '/ws')).toBe('/ws/.agent-team/stage-build-abcd1234.log')
   })
 })
 

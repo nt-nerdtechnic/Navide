@@ -176,6 +176,34 @@ def test_manual_pane_spawn_round_trips_and_can_be_rekeyed(
     assert manual[0].session_id == "sess-1"
 
 
+def test_manual_pane_spawn_persists_output_log_file(store_with_stage: tuple[ProjectStore, str]) -> None:
+    store, ws = store_with_stage
+    store.record_manual_pane_spawn(
+        ws, pane_id="pane-1", agent="claude", output_log_file="/ws/.agent-team/manual/20260719/claude-abcd1234.log",
+    )
+    pane = next(p for p in store.peek(ws).panes if p.origin == "manual")
+    assert pane.output_log_file == "/ws/.agent-team/manual/20260719/claude-abcd1234.log"
+
+
+def test_output_log_file_round_trips_through_panes() -> None:
+    proj = Project(id="p", name="n", workspace_path="/ws", created_at="t", updated_at="t")
+    proj.panes = [PaneRecord(pane_id="x", origin="manual", output_log_file="/ws/.agent-team/manual/20260719/x.log")]
+    restored = Project.from_dict(proj.to_dict())
+    assert restored.panes[0].output_log_file == "/ws/.agent-team/manual/20260719/x.log"
+
+
+def test_old_project_json_without_output_log_file_defaults_empty() -> None:
+    """Backward compat: project.json written before output_log_file existed
+    must still deserialize without error, defaulting the field to empty."""
+    legacy = {
+        "id": "p", "name": "n", "workspace_path": "/ws",
+        "created_at": "t", "updated_at": "t",
+        "panes": [{"pane_id": "mp-1", "agent": "claude", "origin": "manual", "spawn_status": "spawned"}],
+    }
+    restored = Project.from_dict(legacy)
+    assert restored.panes[0].output_log_file == ""
+
+
 def test_manual_pane_spawn_persists_session_home_id(store_with_stage: tuple[ProjectStore, str]) -> None:
     store, ws = store_with_stage
     store.record_manual_pane_spawn(

@@ -80,7 +80,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { historyEntryLabel, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
+import { historyEntryLabel, legacyHistoryLogPath, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -572,6 +572,7 @@ interface SpawnHistoryEntry extends HistoryTitleEntry {
   restoreMode?: 'memory-resume' | 'fresh'
   sessionHomeId?: string
   runGroupId?: string
+  outputLogFile?: string
 }
 
 const panes = ref<ActivePane[]>([])
@@ -1151,6 +1152,7 @@ async function onHandleIssue(payload: {
       session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: spawnGroupId,
+      output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     })
     issueHandoffs.value.set(issue.url, { paneId, mode, state: 'handling' })
   }
@@ -1781,6 +1783,10 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         : `${opts.workspacePath}/.agent-team/manual/${ymd}/${opts.agentKey}-${id.slice(0, 8)}.log`
       : undefined
     pane.outputLogFile = outputLogFile
+    // The history entry was pushed before this path was known — back-fill it
+    // now so Agent History preview can read the real file (see below).
+    const historyEntry = spawnHistory.value.find((e) => e.paneId === id)
+    if (historyEntry) historyEntry.outputLogFile = outputLogFile
 
     await ref.spawn({
       // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
@@ -1872,6 +1878,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
       session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: spawnGroupId,
+      output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     })
     if (payload.customName) {
       await sendQuiet('project.rename_pane', {
@@ -1966,6 +1973,7 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
     session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
     session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
     run_group_id: spawnGroupId,
+    output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
   })
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return { ok: false, reason: 'pane-spawn-failed' }
@@ -2032,6 +2040,7 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
       session_id: sessionId,
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: runGroupId || spawnGroupId || undefined,
+      output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     })
     if (payload.customName) {
       await sendQuiet('project.rename_pane', {
@@ -2290,6 +2299,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
           session_id: sessionId,
           session_home_id: snap.sessionHomeId || '',
           run_group_id: snap.runGroupId || '',
+          output_log_file: panes.value.find((p) => p.id === newId)?.outputLogFile ?? '',
         })
       } else if (snap.stageIndex >= 0 && snap.slotLabel) {
         // Rebuild replaces the runtime pane id. Keep the stable pipeline slot
@@ -2386,6 +2396,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
           agent: snap.agentKey,
           role: snap.roleKey || '',
           run_group_id: snap.runGroupId || '',
+          output_log_file: panes.value.find((p) => p.id === newId)?.outputLogFile ?? '',
         })
       } else if (snap.stageIndex >= 0 && snap.slotLabel) {
         const replacement = panes.value.find((p) => p.id === newId)
@@ -2628,16 +2639,10 @@ const previewLogOpen = ref<boolean>(false)
 async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   const ws = entry.workspacePath || currentWorkspace.value
   if (!ws) return
-  let logPath = (entry as any).outputLogFile
-  if (!logPath) {
-    const ymd = new Date(entry.spawnedAt).toISOString().slice(0, 10).replace(/-/g, '')
-    if (entry.origin === 'pipeline') {
-      logPath = `${ws}/.agent-team/stage-${entry.stageId}-${entry.paneId.slice(0, 8)}.log`
-    } else {
-      logPath = `${ws}/.agent-team/manual/${ymd}/${entry.agentKey}-${entry.paneId.slice(0, 8)}.log`
-    }
-  }
-  const api = (window as Window & { agentTeam?: { readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string }> } }).agentTeam
+  // Legacy entries predate outputLogFile persistence — reconstruct their path
+  // from workspace/date as a best-effort fallback (see legacyHistoryLogPath).
+  const logPath = entry.outputLogFile || legacyHistoryLogPath(entry, ws)
+  const api = (window as Window & { agentTeam?: { readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }> } }).agentTeam
   if (api?.readFileFrom && logPath) {
     try {
       const res = await api.readFileFrom(logPath, 0)
@@ -2646,10 +2651,10 @@ async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
         previewLogContent.value = res.content
         previewLogOpen.value = true
       } else {
-        alert(`無法讀取紀錄檔：\n${logPath}\n${(res as any).error || ''}`)
+        alert(i18n.global.t('label.history-log-read-failed', { path: logPath, error: res.error || '' }))
       }
     } catch (e) {
-      alert(`讀取錯誤：\n${e}`)
+      alert(i18n.global.t('label.history-log-read-error', { error: String(e) }))
     }
   }
 }
@@ -2752,6 +2757,7 @@ interface ProjectPane {
   kickoff_status?: string
   custom_name?: string
   is_minimized?: boolean
+  output_log_file?: string
 }
 
 interface ProjectPayload {
@@ -3216,6 +3222,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         session_id: isResume ? sessionId : newPinnedId,
         session_home_id: sessionHomeId,
         run_group_id: runGroupId,
+        output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
       })
       if (sessionId && !isResume && !newPinnedId) {
         await sendQuiet('manual_pane.session', {
@@ -3257,6 +3264,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       workspacePath,
       spawnedAt: fallbackTs,
       removedAt: fallbackTs,
+      outputLogFile: saved.output_log_file || undefined,
     })
     backfilledIds.add(saved.pane_id)
   }

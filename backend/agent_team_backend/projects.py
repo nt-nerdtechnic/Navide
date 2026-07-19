@@ -107,6 +107,7 @@ class PaneRecord:
     slot_label: str = ""
     kickoff_status: str = "none"    # none / sent / failed
     custom_name: str = ""           # user-set display name; empty falls back to the default label
+    output_log_file: str = ""       # conversation log path recorded at spawn time
 
 
 @dataclass
@@ -558,6 +559,7 @@ class ProjectStore:
         session_id: str = "",
         session_home_id: str = "",
         run_group_id: str = "",
+        output_log_file: str = "",
     ) -> Project:
         project = self.load_or_create(workspace_path)
         pane = self._find_manual_pane(project, pane_id, previous_pane_id, session_id)
@@ -573,6 +575,7 @@ class ProjectStore:
         if session_id: pane.session_id = session_id
         if session_home_id: pane.session_home_id = session_home_id
         if run_group_id: pane.run_group_id = run_group_id
+        if output_log_file: pane.output_log_file = output_log_file
         # A rebuild hop owns its session: retire any OTHER spawned manual
         # record sharing it (legacy duplicate accumulation) so restore cannot
         # resurrect a ghost pane. Gated on previous_pane_id for the same

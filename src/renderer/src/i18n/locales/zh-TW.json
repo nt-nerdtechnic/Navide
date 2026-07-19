@@ -538,6 +538,8 @@
     "resume-session-id": "Session ID（或從歷史選擇）",
     "resume-session-not-found": "找不到該 Session，無法接續",
     "history-session-unavailable": "此 Session 的記憶已不存在",
+    "history-log-read-failed": "無法讀取紀錄檔：\n{path}\n{error}",
+    "history-log-read-error": "讀取錯誤：\n{error}",
     "no-roles-available": "沒有可用角色。請開啟管理員以新增。",
     "no-role-selected": "未選擇角色，Agent 將在沒有角色注入的情況下啟動。",
     "no-pipelines": "沒有載入的流程…",

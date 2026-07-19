@@ -538,6 +538,8 @@
     "resume-session-id": "Session id (or pick from history)",
     "resume-session-not-found": "Session not found — cannot resume",
     "history-session-unavailable": "Session memory is no longer available",
+    "history-log-read-failed": "Failed to read log file:\n{path}\n{error}",
+    "history-log-read-error": "Error reading log:\n{error}",
     "no-roles-available": "No roles available. Open the manager to add one.",
     "no-role-selected": "No role selected. The agent will start without role injection.",
     "no-pipelines": "No pipelines loaded…",

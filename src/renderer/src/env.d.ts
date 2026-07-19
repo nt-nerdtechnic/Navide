@@ -92,7 +92,7 @@ declare global {
       openJson: (args?: {
         title?: string
       }) => Promise<{ ok: boolean; path?: string; content?: string; canceled?: boolean; error?: string }>
-      readFileFrom: (filePath: string, fromByte: number) => Promise<{ ok: boolean; content: string; newOffset: number }>
+      readFileFrom: (filePath: string, fromByte: number) => Promise<{ ok: boolean; content: string; newOffset: number; error?: string }>
       pickFile: (args?: {
         title?: string
         filters?: Array<{ name: string; extensions: string[] }>

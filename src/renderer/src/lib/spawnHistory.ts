@@ -59,6 +59,24 @@ export function updateHistoryCustomName(
   return updated
 }
 
+export interface LegacyHistoryLogPathEntry {
+  spawnedAt: string
+  origin: 'manual' | 'pipeline'
+  stageId: string
+  paneId: string
+  agentKey: string
+}
+
+/** Reconstructs the conversation log path for spawnHistory entries persisted
+ *  before outputLogFile was recorded at spawn time. Best-effort: assumes the
+ *  workspace and UTC spawn date used at spawn time, which may drift. */
+export function legacyHistoryLogPath(entry: LegacyHistoryLogPathEntry, workspacePath: string): string {
+  const ymd = new Date(entry.spawnedAt).toISOString().slice(0, 10).replace(/-/g, '')
+  return entry.origin === 'pipeline'
+    ? `${workspacePath}/.agent-team/stage-${entry.stageId}-${entry.paneId.slice(0, 8)}.log`
+    : `${workspacePath}/.agent-team/manual/${ymd}/${entry.agentKey}-${entry.paneId.slice(0, 8)}.log`
+}
+
 export interface TerminalStartupProbe {
   binary_path?: string
   version?: string

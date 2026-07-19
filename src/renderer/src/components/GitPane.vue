@@ -161,6 +161,23 @@ function toggleDir(key: string): void {
   collapsedDirs.value = next
 }
 
+function collapseAllDirs(): void {
+  const next = new Set<string>()
+  const add = (files: GitFileEntry[], prefix: string): void => {
+    for (const f of files) {
+      const parts = f.path.split('/')
+      let dir = ''
+      for (let i = 0; i < parts.length - 1; i++) {
+        dir = dir ? `${dir}/${parts[i]}` : parts[i]
+        next.add(prefix + dir)
+      }
+    }
+  }
+  add(gitStatus.value?.staged ?? [], 's:')
+  add([...(gitStatus.value?.unstaged ?? []), ...(gitStatus.value?.untracked ?? [])], 'u:')
+  collapsedDirs.value = next
+}
+
 interface GitFileEntry { path: string; status: string }
 
 function sortFiles(files: GitFileEntry[]): GitFileEntry[] {
@@ -1620,6 +1637,14 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         >
           <svg v-if="viewMode === 'tree'" width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 2.75a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM1.5 8a.75.75 0 1 1 1.5 0A.75.75 0 0 1 1.5 8zm.75 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 3.5h9.5a.75.75 0 0 0 0-1.5h-9.5a.75.75 0 0 0 0 1.5zM4 8.75h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5zm0 5.5h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5z"/></svg>
           <svg v-else width="13" height="13" viewBox="0 0 16 16" fill="currentColor"><path d="M2 4h12v1.5H2zm0 3.5h12V9H2zm0 3.5h12v1.5H2z"/></svg>
+        </button>
+        <button
+          v-if="viewMode === 'tree'"
+          class="hdr-btn"
+          :title="$t('action.collapse-all-folders')"
+          @click.stop="collapseAllDirs"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-surface)"/><path d="M4 9.5h5"/></svg>
         </button>
         <button class="hdr-btn" :title="$t('action.refresh')" @click.stop="loadStatus">
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
