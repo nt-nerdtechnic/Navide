@@ -73,24 +73,49 @@ async def test_single_chunk_schedules_immediate_flush():
 
 
 @pytest.mark.asyncio
-async def test_sustained_stream_falls_back_to_batching():
-    svc = TerminalService(_emit)
+async def test_sustained_stream_falls_back_to_batching_end_to_end():
+    """A burst that saturates the window makes the NEXT flush cycle batch,
+    exercising the real production path with NO manual timer surgery.
+
+    Intra-burst, chunks 2..N hit the `session.id in self._out_handles` guard
+    and only accumulate timestamps — they do not re-evaluate the delay. So
+    batching can only take effect on the flush cycle *after* the window fills.
+    This test lets the real delay-0 timer fire, then checks the following
+    chunk is batched — the behaviour the old, cancel-happy version masked.
+    """
+    emitted: list[dict] = []
+
+    async def collect(event):
+        emitted.append(event)
+
+    svc = TerminalService(collect)
     r, w = os.pipe()
     _nonblocking(r)
     session = _make_session("t-stream", r)
     svc._sessions["t-stream"] = session
     try:
-        # Feed chunks back-to-back, re-arming the timer each time so every
-        # chunk gets a fresh delay decision (in production the pending timer
-        # would swallow the intermediate ones).
+        # Burst: first chunk schedules a delay-0 flush; the rest are swallowed
+        # by the pending-timer guard and just record arrival times.
         for _ in range(_FAST_PATH_MAX_CHUNKS):
             os.write(w, b"y")
-            _cancel_pending_flush(svc, "t-stream")
             svc._on_readable(session)
-        # By the Nth chunk the window is saturated: batching kicks in.
+        # Exactly one pending flush, and it is the interactive fast path.
+        assert _pending_delay(svc, "t-stream") < _OUTPUT_BATCH_MS / 1000 / 2
+
+        # Let the fast flush fire. The window is now full of recent timestamps.
+        await asyncio.sleep(0.01)
+
+        # The next chunk re-evaluates _flush_delay and now sees a saturated
+        # window → batches at _OUTPUT_BATCH_MS.
+        os.write(w, b"z")
+        svc._on_readable(session)
         assert _pending_delay(svc, "t-stream") > _OUTPUT_BATCH_MS / 1000 / 2
     finally:
         _cancel_pending_flush(svc, "t-stream")
+        try:
+            svc._loop.remove_reader(r)  # re-added by the first flush's drain task
+        except (ValueError, KeyError):
+            pass
         os.close(r)
         os.close(w)
 

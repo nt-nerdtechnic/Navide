@@ -137,6 +137,20 @@ describe('useTerminal — output flush policy', () => {
     scope.stop()
   })
 
+  it('focus without a new chunk still flushes coalesced output via the timer', async () => {
+    const { mock, scope } = await spawnedTerminal()
+
+    emitOutput(mock, 'buffered') // arrives while unfocused → coalesced, timer armed
+    captured.textarea!.dispatchEvent(new Event('focus'))
+    expect(captured.writes).toEqual([]) // focus alone does not flush
+
+    // No further output arrives — the armed 100ms timer must still fire so the
+    // buffered chunk is never stranded.
+    await new Promise((r) => setTimeout(r, 120))
+    expect(captured.writes).toEqual(['buffered'])
+    scope.stop()
+  })
+
   it('blur returns the pane to coalescing', async () => {
     const { mock, scope } = await spawnedTerminal()
     captured.textarea!.dispatchEvent(new Event('focus'))
