@@ -15,6 +15,7 @@ import struct
 import subprocess
 import termios
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import IO, Any, Awaitable, Callable
@@ -119,6 +120,16 @@ class TerminalSession:
 # the message rate by ~10-20x vs unbatched — empirically prevents the crash.
 _OUTPUT_BATCH_MS = 50
 
+# Interactive fast path: keystroke echo is a handful of tiny chunks per second,
+# and delaying it the full batch window makes typing feel laggy (worst for IME
+# input, where the wait lands on the commit).  When a session produced fewer
+# than _FAST_PATH_MAX_CHUNKS PTY chunks within _FAST_PATH_WINDOW_S, flush on
+# the next loop tick instead.  Sustained streams exceed the threshold within a
+# few chunks and fall back to _OUTPUT_BATCH_MS batching, so the flood
+# protection above still holds.
+_FAST_PATH_WINDOW_S = 0.1
+_FAST_PATH_MAX_CHUNKS = 5
+
 
 class TerminalService:
     def __init__(
@@ -141,6 +152,9 @@ class TerminalService:
         # each chunk independently turns the halves into U+FFFD, which desyncs
         # the CLI's cursor math from what xterm renders (layout corruption).
         self._decoders: dict[str, codecs.IncrementalDecoder] = {}
+        # Per-session arrival times of recent PTY chunks (monotonic loop time),
+        # used to pick the interactive fast path vs. batched flush delay.
+        self._chunk_times: dict[str, deque[float]] = {}
 
     def create(
         self,
@@ -516,6 +530,10 @@ class TerminalService:
             return  # chunk ended mid-character; bytes held until the rest arrives
         buf = self._out_buffers.setdefault(session.id, [])
         buf.append(decoded)
+        times = self._chunk_times.setdefault(
+            session.id, deque(maxlen=_FAST_PATH_MAX_CHUNKS)
+        )
+        times.append(self._loop.time())
         buf_size = sum(len(s) for s in buf)
         if buf_size >= _BUF_CAP:
             # Cancel the pending debounce timer and flush now to avoid OOM.
@@ -525,11 +543,21 @@ class TerminalService:
             self._flush_output(session)
         elif session.id not in self._out_handles:
             handle = self._loop.call_later(
-                _OUTPUT_BATCH_MS / 1000,
+                self._flush_delay(session.id),
                 self._flush_output,
                 session,
             )
             self._out_handles[session.id] = handle
+
+    def _flush_delay(self, session_id: str) -> float:
+        """Batch delay for the next flush: 0 (next loop tick) while the chunk
+        rate looks interactive, _OUTPUT_BATCH_MS once it looks like a stream."""
+        times = self._chunk_times.get(session_id)
+        if times is None or len(times) < _FAST_PATH_MAX_CHUNKS:
+            return 0.0
+        if self._loop.time() - times[0] > _FAST_PATH_WINDOW_S:
+            return 0.0
+        return _OUTPUT_BATCH_MS / 1000
 
     def _flush_output(self, session: TerminalSession) -> None:
         """Send all buffered output for this session as a single WS message.
@@ -624,6 +652,7 @@ class TerminalService:
         # fd is closed (remove_writer needs a still-valid fd).
         self._unwatch_writable(session)
         self._in_buffers.pop(session.id, None)
+        self._chunk_times.pop(session.id, None)
         try:
             os.close(session.master_fd)
         except OSError:

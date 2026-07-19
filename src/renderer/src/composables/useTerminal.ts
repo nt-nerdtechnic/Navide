@@ -607,14 +607,26 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let inputDisposer: { dispose(): void } | null = null
   let outputUnsub: (() => void) | null = null
   let exitUnsub: (() => void) | null = null
-  // Pending terminal output coalesced by requestAnimationFrame so multiple
-  // rapid WS messages are written in one term.write() per frame instead of
-  // individually — prevents the event loop from blocking on burst output.
-  // _outputTimer is a 50ms fallback: rAF is paused in packaged Electron when
-  // the window is occluded, which would leave output stuck in _pendingOutput.
+  // Pending terminal output coalescing. The focused pane flushes immediately
+  // on arrival — keystroke echo must not wait for a frame (worst for IME
+  // input, where the whole commit waits on it). Unfocused panes coalesce
+  // writes for _BACKGROUND_COALESCE_MS so a streaming background agent does
+  // not starve the pane the user is typing in of main-thread time. (A timer,
+  // not rAF: rAF is paused in packaged Electron when the window is occluded,
+  // which would leave output stuck in _pendingOutput.)
+  const _BACKGROUND_COALESCE_MS = 100
   let _pendingOutput = ''
-  let _outputRafId = 0
   let _outputTimer: ReturnType<typeof setTimeout> | null = null
+
+  function _flushPendingOutput(): void {
+    if (_outputTimer) { clearTimeout(_outputTimer); _outputTimer = null }
+    const chunk = _pendingOutput
+    _pendingOutput = ''
+    if (!chunk) return
+    term.write(chunk)
+    appendClean(chunk)
+    appendToScrollBuffer(chunk)
+  }
   let mounted = false
   let mountedEl: HTMLElement | null = null
   let _mousedownHandler: (() => void) | null = null
@@ -1181,22 +1193,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const payload = raw as { terminal_session_id: string; data: string }
       if (payload.terminal_session_id !== sessionId.value) return
       _pendingOutput += payload.data
-      if (!_outputRafId) {
-        let done = false
-        const flush = (): void => {
-          if (done) return
-          done = true
-          _outputRafId = 0
-          if (_outputTimer) { clearTimeout(_outputTimer); _outputTimer = null }
-          const chunk = _pendingOutput
-          _pendingOutput = ''
-          if (!chunk) return
-          term.write(chunk)
-          appendClean(chunk)
-          appendToScrollBuffer(chunk)
-        }
-        _outputRafId = requestAnimationFrame(flush)
-        _outputTimer = setTimeout(() => { cancelAnimationFrame(_outputRafId); flush() }, 50)
+      if (_ownsTerminalFocus) {
+        // The user is typing in this pane — render the echo now.
+        _flushPendingOutput()
+      } else if (!_outputTimer) {
+        _outputTimer = setTimeout(_flushPendingOutput, _BACKGROUND_COALESCE_MS)
       }
     })
 
@@ -1663,7 +1664,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // We only update the visual terminal, not the scroll buffer: the exit handler
     // intentionally clears rawScrollBuffer before calling us, so appending here
     // would re-populate a snapshot that should stay discarded.
-    if (_outputRafId) { cancelAnimationFrame(_outputRafId); _outputRafId = 0 }
     if (_outputTimer) { clearTimeout(_outputTimer); _outputTimer = null }
     if (_pendingOutput) {
       term.write(_pendingOutput)
