@@ -111,6 +111,23 @@ declare global {
       writeHealthCheckTimeout: (timeoutSec: number) => Promise<{ ok: boolean; error?: string }>
       notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
+      dispatchPlanExecution: (args: {
+        workspace_path: string
+        rel_path: string
+        agent_key: string
+      }) => Promise<{ delivered: boolean }>
+      onPlanExecutionDispatch: (
+        handler: (args: { workspace_path: string; rel_path: string; agent_key: string }) => void
+      ) => () => void
+      reportPlanExecutionResult: (args: {
+        workspace_path: string
+        rel_path: string
+        ok: boolean
+        reason?: string
+      }) => void
+      onPlanExecutionResult: (
+        handler: (args: { workspace_path: string; rel_path: string; ok: boolean; reason?: string }) => void
+      ) => () => void
       getCliPaneBuffer: (
         paneId: string
       ) => Promise<{

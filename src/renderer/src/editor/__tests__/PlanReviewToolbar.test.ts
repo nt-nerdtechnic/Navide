@@ -14,8 +14,9 @@ import type { HtmlPlanMeta } from '../../composables/usePlanHtml'
 i18n.global.locale.value = 'en-US'
 
 const toastMock = vi.hoisted(() => vi.fn())
+const confirmMock = vi.hoisted(() => vi.fn(async () => true))
 vi.mock('../../composables/useNotify', () => ({
-  useNotify: () => ({ toast: toastMock, alert: vi.fn(), confirm: vi.fn() }),
+  useNotify: () => ({ toast: toastMock, alert: vi.fn(), confirm: confirmMock }),
 }))
 
 function baseMeta(overrides: Partial<HtmlPlanMeta> = {}): HtmlPlanMeta {
@@ -50,26 +51,80 @@ interface Harness {
   wrapper: VueWrapper
   writes: string[]
   writeCalls: { relPath: string; content: string }[]
+  /** Every write attempt (including refused conflicts) with its expected_mtime. */
+  writeAttempts: { relPath: string; expectedMtime?: number }[]
   setContent: (c: string) => void
+  /** Simulate a backend broadcast to `on()` subscribers. */
+  emitBackend: (type: string, payload: unknown) => void
 }
 
-async function mountToolbar(content: string, opts: { failWrite?: string } = {}): Promise<Harness> {
+interface HistoryOpts {
+  entries?: { name: string; is_dir: boolean }[]
+  error?: string
+  /** Extra rel_path → content read responses (snapshot files). */
+  files?: Record<string, string>
+}
+
+const PLAN_REL_PATH = '.agent-team/plans/test-plan_a1b2c3.html'
+
+async function mountToolbar(
+  content: string,
+  opts: { failWrite?: string; conflictWrites?: number; history?: HistoryOpts } = {},
+): Promise<Harness> {
   const writes: string[] = []
   const writeCalls: { relPath: string; content: string }[] = []
+  const writeAttempts: { relPath: string; expectedMtime?: number }[] = []
   let current = content
+  // Emulated file mtime: bumped on every successful plan write and on
+  // setContent (external edit), mirroring the backend's optimistic lock.
+  let mtimeNow = 1000
+  let conflictsLeft = opts.conflictWrites ?? 0
+  const listeners = new Map<string, Set<(p: unknown) => void>>()
   const backend = {
     httpUrl: ref('http://127.0.0.1:8123'),
     status: ref('connected'),
+    on: (type: string, cb: (p: unknown) => void) => {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add(cb)
+      return () => set!.delete(cb)
+    },
     send: vi.fn(async (type: string, payload: Record<string, unknown>) => {
-      if (type === 'fs.read_file') return { payload: { ok: true, content: current } }
+      if (type === 'fs.read_file') {
+        const rel = payload.rel_path as string
+        if (opts.history?.files && rel in opts.history.files) {
+          return { payload: { ok: true, content: opts.history.files[rel], mtime: mtimeNow } }
+        }
+        return { payload: { ok: true, content: current, mtime: mtimeNow } }
+      }
+      if (type === 'fs.list_dir') {
+        if (opts.history?.error) return { payload: { ok: false, error: opts.history.error } }
+        return { payload: { ok: true, entries: opts.history?.entries ?? [] } }
+      }
       if (type === 'fs.write_file') {
+        writeAttempts.push({
+          relPath: payload.rel_path as string,
+          expectedMtime: payload.expected_mtime as number | undefined,
+        })
         if (opts.failWrite !== undefined) return { payload: { ok: false, error: opts.failWrite } }
+        const expected = payload.expected_mtime as number | undefined
+        if (
+          (conflictsLeft > 0 && payload.rel_path === PLAN_REL_PATH) ||
+          (expected !== undefined && expected !== mtimeNow)
+        ) {
+          if (conflictsLeft > 0) conflictsLeft--
+          return { payload: { ok: false, conflict: true, mtime: mtimeNow, error: 'file changed on disk' } }
+        }
         writeCalls.push({ relPath: payload.rel_path as string, content: payload.content as string })
         writes.push(payload.content as string)
-        if (payload.rel_path === '.agent-team/plans/test-plan_a1b2c3.html') {
+        if (payload.rel_path === PLAN_REL_PATH) {
           current = payload.content as string
+          mtimeNow++
         }
-        return { payload: { ok: true } }
+        return { payload: { ok: true, mtime: mtimeNow } }
       }
       return { payload: { ok: true } }
     }),
@@ -77,13 +132,24 @@ async function mountToolbar(content: string, opts: { failWrite?: string } = {}):
   const wrapper = mount(PlanReviewToolbar, {
     props: {
       workspacePath: '/ws',
-      relPath: '.agent-team/plans/test-plan_a1b2c3.html',
+      relPath: PLAN_REL_PATH,
       backend: backend as never,
     },
     global: { plugins: [i18n] },
   })
   await flushPromises()
-  return { wrapper, writes, writeCalls, setContent: (c: string) => { current = c } }
+  return {
+    wrapper,
+    writes,
+    writeCalls,
+    writeAttempts,
+    setContent: (c: string) => {
+      current = c
+      mtimeNow++
+    },
+    emitBackend: (type: string, payload: unknown) =>
+      listeners.get(type)?.forEach((cb) => cb(payload)),
+  }
 }
 
 function lastWrittenMeta(writes: string[]): HtmlPlanMeta {
@@ -110,8 +176,8 @@ describe('PlanReviewToolbar – display', () => {
   it('shows the unresolved note count and note details in the panel', async () => {
     const meta = baseMeta({
       reviewNotes: [
-        { id: 'n1', author: 'user', text: 'Fix the risk section', resolved: false, reply: '' },
-        { id: 'n2', author: 'ai', text: 'Clarified scope', resolved: true, reply: 'Done in rev 2' },
+        { id: 'n1', author: 'user', text: 'Fix the risk section', resolved: false, reply: '', anchor: '' },
+        { id: 'n2', author: 'ai', text: 'Clarified scope', resolved: true, reply: 'Done in rev 2', anchor: '' },
       ],
     })
     const { wrapper } = await mountToolbar(planDoc(meta))
@@ -132,7 +198,7 @@ describe('PlanReviewToolbar – display', () => {
 describe('PlanReviewToolbar – approve gating', () => {
   it('disables Approve while unresolved notes exist', async () => {
     const meta = baseMeta({
-      reviewNotes: [{ id: 'n1', author: 'user', text: 'Open point', resolved: false, reply: '' }],
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'Open point', resolved: false, reply: '', anchor: '' }],
     })
     const { wrapper } = await mountToolbar(planDoc(meta))
     expect(wrapper.find('.prt-approve').attributes('disabled')).toBeDefined()
@@ -146,7 +212,7 @@ describe('PlanReviewToolbar – approve gating', () => {
 
   it('approves an in-review plan with all notes resolved, writing stage and approvedAt', async () => {
     const meta = baseMeta({
-      reviewNotes: [{ id: 'n1', author: 'user', text: 'Ok now', resolved: true, reply: 'ack' }],
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'Ok now', resolved: true, reply: 'ack', anchor: '' }],
     })
     const { wrapper, writes } = await mountToolbar(planDoc(meta))
     const approve = wrapper.find('.prt-approve')
@@ -170,8 +236,8 @@ describe('PlanReviewToolbar – notes', () => {
   it('resolves a note and writes the flip through replaceHtmlPlanMeta', async () => {
     const meta = baseMeta({
       reviewNotes: [
-        { id: 'n1', author: 'user', text: 'First', resolved: false, reply: '' },
-        { id: 'n2', author: 'user', text: 'Second', resolved: false, reply: '' },
+        { id: 'n1', author: 'user', text: 'First', resolved: false, reply: '', anchor: '' },
+        { id: 'n2', author: 'user', text: 'Second', resolved: false, reply: '', anchor: '' },
       ],
     })
     const doc = planDoc(meta)
@@ -193,7 +259,7 @@ describe('PlanReviewToolbar – notes', () => {
 
   it('appends a submitted note with the next incremental id and user author', async () => {
     const meta = baseMeta({
-      reviewNotes: [{ id: 'n2', author: 'ai', text: 'Existing', resolved: true, reply: '' }],
+      reviewNotes: [{ id: 'n2', author: 'ai', text: 'Existing', resolved: true, reply: '', anchor: '' }],
     })
     const { wrapper, writes } = await mountToolbar(planDoc(meta))
     await wrapper.find('.prt-notes-btn').trigger('click')
@@ -210,6 +276,7 @@ describe('PlanReviewToolbar – notes', () => {
       text: 'Please add tests',
       resolved: false,
       reply: '',
+      anchor: '',
     })
     expect((wrapper.find('.prt-input').element as HTMLInputElement).value).toBe('')
     expect(wrapper.find('.prt-notes-btn').text()).toContain('1 unresolved')
@@ -245,7 +312,7 @@ describe('PlanReviewToolbar – IME composition', () => {
 describe('PlanReviewToolbar – read-before-write', () => {
   it('preserves concurrent external edits when resolving a note', async () => {
     const meta = baseMeta({
-      reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '' }],
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '', anchor: '' }],
     })
     const { wrapper, writes, setContent } = await mountToolbar(planDoc(meta))
     await wrapper.find('.prt-notes-btn').trigger('click')
@@ -254,7 +321,7 @@ describe('PlanReviewToolbar – read-before-write', () => {
     setContent(
       planDoc(
         baseMeta({
-          reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '' }],
+          reviewNotes: [{ id: 'n1', author: 'user', text: 'First', resolved: false, reply: '', anchor: '' }],
           todos: [
             { id: 'phase-a', content: 'Phase A', status: 'done' },
             { id: 'phase-b', content: 'Phase B', status: 'done' },
@@ -280,7 +347,7 @@ describe('PlanReviewToolbar – read-before-write', () => {
     setContent(
       planDoc(
         baseMeta({
-          reviewNotes: [{ id: 'n5', author: 'ai', text: 'External', resolved: true, reply: '' }],
+          reviewNotes: [{ id: 'n5', author: 'ai', text: 'External', resolved: true, reply: '', anchor: '' }],
         }),
       ),
     )
@@ -344,6 +411,129 @@ describe('PlanReviewToolbar – share to git', () => {
   })
 })
 
+// Fixture with visible markup (stage pill + todo list) so markup-sync on
+// write can be asserted alongside the meta change.
+function markupDoc(meta: HtmlPlanMeta): string {
+  return [
+    '<html><head><title>Test Plan</title></head><body>',
+    '<h1>Test Plan<span class="pill in-review">in-review</span></h1>',
+    '<ul class="todos">',
+    '<li data-status="done" data-todo-id="phase-a"><span class="st">done</span> <span>Phase A</span></li>',
+    '<li data-status="pending" data-todo-id="phase-b"><span class="st">pending</span> <span>Phase B</span></li>',
+    '</ul>',
+    '<script type="application/json" id="plan-meta">',
+    JSON.stringify(meta, null, 2),
+    '</scr' + 'ipt>',
+    '</body></html>',
+  ].join('\n')
+}
+
+describe('PlanReviewToolbar – todo sidebar', () => {
+  it('cycles a pending todo to in-progress and syncs the visible markup', async () => {
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    const todos = wrapper.findAll('.prt-todo')
+    expect(todos).toHaveLength(2)
+
+    await todos[1].trigger('click') // phase-b: pending → in-progress
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    expect(written.todos[1]).toMatchObject({ id: 'phase-b', status: 'in-progress' })
+    // Meta + markup written together: data-status and .st pill are synced.
+    expect(writes[0]).toContain(
+      '<li data-status="in-progress" data-todo-id="phase-b"><span class="st">in-progress</span>',
+    )
+    // Untouched todo markup stays as-is; stage pill re-synced to same stage.
+    expect(writes[0]).toContain('<li data-status="done" data-todo-id="phase-a"><span class="st">done</span>')
+    expect(writes[0]).toContain('<span class="pill in-review">in-review</span>')
+    // UI reflects the new status without a remount.
+    expect(wrapper.findAll('.prt-todo')[1].classes()).toContain('prt-todo--in-progress')
+  })
+
+  it('cycles a done todo back to pending', async () => {
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+
+    await wrapper.findAll('.prt-todo')[0].trigger('click') // phase-a: done → pending
+    await flushPromises()
+
+    expect(lastWrittenMeta(writes).todos[0]).toMatchObject({ id: 'phase-a', status: 'pending' })
+    expect(writes[0]).toContain('<li data-status="pending" data-todo-id="phase-a"><span class="st">pending</span>')
+  })
+
+  it('right-click toggles skipped and back to pending', async () => {
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+
+    await wrapper.findAll('.prt-todo')[1].trigger('contextmenu')
+    await flushPromises()
+    expect(lastWrittenMeta(writes).todos[1]).toMatchObject({ id: 'phase-b', status: 'skipped' })
+    expect(writes[0]).toContain('<li data-status="skipped" data-todo-id="phase-b"><span class="st">skipped</span>')
+
+    await wrapper.findAll('.prt-todo')[1].trigger('contextmenu')
+    await flushPromises()
+    expect(lastWrittenMeta(writes).todos[1]).toMatchObject({ id: 'phase-b', status: 'pending' })
+  })
+})
+
+describe('PlanReviewToolbar – stage controls', () => {
+  it('abandons an active plan after confirmation, syncing the stage pill', async () => {
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(true)
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+    expect(wrapper.find('.prt-reopen').exists()).toBe(false)
+
+    await wrapper.find('.prt-abandon').trigger('click')
+    await flushPromises()
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(lastWrittenMeta(writes).stage).toBe('abandoned')
+    expect(writes[0]).toContain('<span class="pill abandoned">abandoned</span>')
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--abandoned')
+  })
+
+  it('does not write when the abandon confirmation is declined', async () => {
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+
+    await wrapper.find('.prt-abandon').trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(0)
+  })
+
+  it('reopens a done plan into in-review and clears approvedAt', async () => {
+    const meta = baseMeta({ stage: 'done', approvedAt: '2026-07-01T00:00:00Z' })
+    const { wrapper, writes } = await mountToolbar(markupDoc(meta))
+    expect(wrapper.find('.prt-abandon').exists()).toBe(false)
+
+    await wrapper.find('.prt-reopen').trigger('click')
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    expect(written.stage).toBe('in-review')
+    expect(written.approvedAt).toBeNull()
+    expect(writes[0]).toContain('<span class="pill in-review">in-review</span>')
+  })
+
+  it('aborts the abandon without writing when the fresh file is already finished', async () => {
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(true)
+    const { wrapper, writes, setContent } = await mountToolbar(markupDoc(baseMeta()))
+
+    // External agent finished the plan after the toolbar's read.
+    setContent(markupDoc(baseMeta({ stage: 'done' })))
+
+    await wrapper.find('.prt-abandon').trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(0)
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--done')
+  })
+})
+
 describe('PlanReviewToolbar – external refresh', () => {
   it('re-reads the file on window focus and emits updated when it changed', async () => {
     const { wrapper, setContent } = await mountToolbar(planDoc(baseMeta()))
@@ -362,5 +552,584 @@ describe('PlanReviewToolbar – external refresh', () => {
     window.dispatchEvent(new Event('focus'))
     await flushPromises()
     expect(wrapper.emitted('updated')).toBeUndefined()
+  })
+
+  it('silently re-reads on a matching plans.changed broadcast', async () => {
+    const { wrapper, setContent, emitBackend } = await mountToolbar(planDoc(baseMeta()))
+    setContent(planDoc(baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z' })))
+
+    emitBackend('plans.changed', { workspace_path: '/ws' })
+    await flushPromises()
+
+    expect(wrapper.emitted('updated')).toHaveLength(1)
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--approved')
+  })
+
+  it('ignores plans.changed broadcasts for other workspaces', async () => {
+    const { wrapper, setContent, emitBackend } = await mountToolbar(planDoc(baseMeta()))
+    setContent(planDoc(baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z' })))
+
+    emitBackend('plans.changed', { workspace_path: '/other-ws' })
+    emitBackend('plans.changed', null)
+    await flushPromises()
+
+    expect(wrapper.emitted('updated')).toBeUndefined()
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--in-review')
+  })
+})
+
+// ── History panel (Phase C) ────────────────────────────────────────────────
+
+const HISTORY_DIR = '.agent-team/plans/.history/test-plan_a1b2c3'
+
+describe('PlanReviewToolbar – history panel', () => {
+  it('lists parseable snapshots newest first with preview and diff actions', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()), {
+      history: {
+        entries: [
+          { name: '20260601T080000_draft.html', is_dir: false },
+          { name: '20260710T120000_in-review.html', is_dir: false },
+          { name: 'not-a-snapshot.html', is_dir: false },
+          { name: 'subdir', is_dir: true },
+        ],
+      },
+    })
+
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.prt-history-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].find('.prt-history-stage').text()).toBe('in-review')
+    expect(rows[1].find('.prt-history-stage').text()).toBe('draft')
+    const actions = rows[0].findAll('.prt-history-action')
+    expect(actions.map((a) => a.text())).toEqual(['Preview', 'Diff'])
+  })
+
+  it('shows the empty state when the history directory does not exist', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()), {
+      history: { error: 'not a directory' },
+    })
+
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.prt-history-row').exists()).toBe(false)
+    expect(wrapper.find('.prt-empty').text()).toBe('No history snapshots yet')
+  })
+
+  it('emits preview-snapshot with the snapshot rel path and a stage-bearing label', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()), {
+      history: { entries: [{ name: '20260601T080000_draft.html', is_dir: false }] },
+    })
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.findAll('.prt-history-action')[0].trigger('click')
+    const emitted = wrapper.emitted('preview-snapshot')!
+    expect(emitted).toHaveLength(1)
+    const payload = emitted[0][0] as { relPath: string; label: string }
+    expect(payload.relPath).toBe(`${HISTORY_DIR}/20260601T080000_draft.html`)
+    expect(payload.label).toContain('draft')
+  })
+
+  it('renders an inline diff summary between a snapshot and the current plan', async () => {
+    const snapshot = planDoc(
+      baseMeta({
+        stage: 'draft',
+        todos: [{ id: 'phase-a', content: 'Phase A', status: 'pending' }],
+      }),
+    )
+    // Current: stage in-review, phase-a done, phase-b added, one note added.
+    const current = planDoc(
+      baseMeta({
+        todos: [
+          { id: 'phase-a', content: 'Phase A', status: 'done' },
+          { id: 'phase-b', content: 'Phase B', status: 'pending' },
+        ],
+        reviewNotes: [
+          { id: 'n1', author: 'user', text: 'note', resolved: false, reply: '', anchor: '' },
+        ],
+      }),
+    )
+    const { wrapper } = await mountToolbar(current, {
+      history: {
+        entries: [{ name: '20260601T080000_draft.html', is_dir: false }],
+        files: { [`${HISTORY_DIR}/20260601T080000_draft.html`]: snapshot },
+      },
+    })
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.findAll('.prt-history-action')[1].trigger('click')
+    await flushPromises()
+
+    const diff = wrapper.find('.prt-history-diff')
+    expect(diff.exists()).toBe(true)
+    expect(diff.text()).toContain('Stage: draft → in-review')
+    expect(diff.text()).toContain('Todo phase-a: pending → done')
+    expect(diff.text()).toContain('1 todo(s) added')
+    expect(diff.text()).toContain('Review notes: +1')
+    expect(diff.text()).toMatch(/\+\d+ \/ −\d+ lines/)
+  })
+
+  it('shows the no-differences message when the snapshot equals the current plan', async () => {
+    const doc = planDoc(baseMeta())
+    const { wrapper } = await mountToolbar(doc, {
+      history: {
+        entries: [{ name: '20260601T080000_in-review.html', is_dir: false }],
+        files: { [`${HISTORY_DIR}/20260601T080000_in-review.html`]: doc },
+      },
+    })
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+
+    await wrapper.findAll('.prt-history-action')[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.prt-history-diff').text()).toBe('No differences')
+  })
+})
+
+// Exposed methods used by the host to route validated in-document
+// interactions (Phase B) through the toolbar's existing write paths.
+interface ExposedToolbar {
+  cycleTodo: (id: string) => Promise<void>
+  toggleSkipTodo: (id: string) => Promise<void>
+  startNoteWithAnchor: (anchor: string) => void
+}
+
+function exposed(wrapper: VueWrapper): ExposedToolbar {
+  return wrapper.vm as unknown as ExposedToolbar
+}
+
+describe('PlanReviewToolbar – in-document interactions (Phase B)', () => {
+  it('exposed cycleTodo writes the next status through the normal write path', async () => {
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+
+    await exposed(wrapper).cycleTodo('phase-b') // pending → in-progress
+    await flushPromises()
+
+    expect(lastWrittenMeta(writes).todos[1]).toMatchObject({ id: 'phase-b', status: 'in-progress' })
+    expect(writes[0]).toContain(
+      '<li data-status="in-progress" data-todo-id="phase-b"><span class="st">in-progress</span>',
+    )
+  })
+
+  it('exposed toggleSkipTodo flips a todo to skipped', async () => {
+    const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta()))
+
+    await exposed(wrapper).toggleSkipTodo('phase-b')
+    await flushPromises()
+
+    expect(lastWrittenMeta(writes).todos[1]).toMatchObject({ id: 'phase-b', status: 'skipped' })
+  })
+
+  it('startNoteWithAnchor opens the notes panel and submit writes the anchored note', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    expect(wrapper.find('.prt-new').exists()).toBe(false)
+
+    exposed(wrapper).startNoteWithAnchor('Phase B · Runtime')
+    await flushPromises()
+
+    expect(wrapper.find('.prt-note-anchor--pending').text()).toContain('Phase B · Runtime')
+    await wrapper.find('.prt-input').setValue('Anchored comment')
+    await wrapper.find('.prt-send').trigger('click')
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    expect(written.reviewNotes[0]).toMatchObject({
+      text: 'Anchored comment',
+      author: 'user',
+      anchor: 'Phase B · Runtime',
+    })
+    // The pending anchor chip is cleared after a successful submit.
+    expect(wrapper.find('.prt-note-anchor--pending').exists()).toBe(false)
+  })
+
+  it('clears the pending anchor via its remove button without writing', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    exposed(wrapper).startNoteWithAnchor('Goals')
+    await flushPromises()
+
+    await wrapper.find('.prt-anchor-clear').trigger('click')
+    expect(wrapper.find('.prt-note-anchor--pending').exists()).toBe(false)
+    expect(writes).toHaveLength(0)
+  })
+
+  it('shows the anchor badge on anchored notes in the panel', async () => {
+    const meta = baseMeta({
+      reviewNotes: [
+        { id: 'n1', author: 'user', text: 'On risks', resolved: false, reply: '', anchor: 'Risks' },
+      ],
+    })
+    const { wrapper } = await mountToolbar(planDoc(meta))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    expect(wrapper.find('.prt-note .prt-note-anchor').text()).toBe('Risks')
+  })
+})
+
+// ── Execute dispatch (Phase D) ─────────────────────────────────────────────
+
+describe('PlanReviewToolbar – execute dispatch', () => {
+  const dispatchMock = vi.fn(async () => ({ delivered: true }))
+  type ExecutionResult = { workspace_path: string; rel_path: string; ok: boolean; reason?: string }
+  let executionResultHandler: ((p: ExecutionResult) => void) | null = null
+
+  function installAgentTeam(): void {
+    executionResultHandler = null
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = {
+      dispatchPlanExecution: dispatchMock,
+      onPlanExecutionResult: (h: (p: ExecutionResult) => void) => {
+        executionResultHandler = h
+        return () => {
+          executionResultHandler = null
+        }
+      },
+    }
+  }
+
+  function approvedMeta(overrides: Partial<HtmlPlanMeta> = {}): HtmlPlanMeta {
+    return baseMeta({ stage: 'approved', approvedAt: '2026-07-19T00:00:00Z', ...overrides })
+  }
+
+  it('hides the Execute button unless the stage is approved', async () => {
+    for (const stage of ['draft', 'in-review', 'in-progress', 'done', 'abandoned'] as const) {
+      const { wrapper } = await mountToolbar(planDoc(baseMeta({ stage })))
+      expect(wrapper.find('.prt-execute').exists()).toBe(false)
+    }
+    const { wrapper } = await mountToolbar(planDoc(approvedMeta()))
+    expect(wrapper.find('.prt-execute').exists()).toBe(true)
+  })
+
+  it('opens an agent picker listing CLI agents without the plain terminal', async () => {
+    const { wrapper } = await mountToolbar(planDoc(approvedMeta()))
+    expect(wrapper.find('.prt-execute-agent').exists()).toBe(false)
+
+    await wrapper.find('.prt-execute').trigger('click')
+    const labels = wrapper.findAll('.prt-execute-agent .prt-execute-agent-label').map((b) => b.text())
+    expect(labels).toContain('Claude Code')
+    expect(labels).toContain('Codex')
+    expect(labels).not.toContain('Terminal')
+  })
+
+  it('dispatching appends an execution, moves stage to in-progress, syncs markup, and sends the IPC payload', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    toastMock.mockClear()
+    const { wrapper, writes } = await mountToolbar(markupDoc(approvedMeta()))
+
+    await wrapper.find('.prt-execute').trigger('click')
+    const claude = wrapper
+      .findAll('.prt-execute-agent')
+      .find((b) => b.text().includes('Claude Code'))!
+    await claude.trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(1)
+    const written = lastWrittenMeta(writes)
+    expect(written.stage).toBe('in-progress')
+    expect(written.executions).toHaveLength(1)
+    expect(written.executions![0].agent).toBe('claude')
+    expect(Number.isNaN(Date.parse(written.executions![0].startedAt))).toBe(false)
+    // Visible stage pill synced alongside the meta write.
+    expect(writes[0]).toContain('<span class="pill in-progress">in-progress</span>')
+    // IPC payload shape.
+    expect(dispatchMock).toHaveBeenCalledTimes(1)
+    expect(dispatchMock).toHaveBeenCalledWith({
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/test-plan_a1b2c3.html',
+      agent_key: 'claude',
+    })
+    // delivered only means forwarded: no success toast until the result event.
+    expect(toastMock).not.toHaveBeenCalledWith('Plan dispatched to CLI agent')
+
+    executionResultHandler!({ workspace_path: '/ws', rel_path: PLAN_REL_PATH, ok: true })
+    await flushPromises()
+
+    expect(toastMock).toHaveBeenCalledWith('Plan dispatched to CLI agent')
+    expect(writes).toHaveLength(1) // success — no rollback write
+  })
+
+  it('rolls back the execution and reverts to approved on a failed execution result', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    toastMock.mockClear()
+    const { wrapper, writes } = await mountToolbar(markupDoc(approvedMeta()))
+
+    await wrapper.find('.prt-execute').trigger('click')
+    await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+    await flushPromises()
+    expect(writes).toHaveLength(1)
+
+    executionResultHandler!({
+      workspace_path: '/ws',
+      rel_path: PLAN_REL_PATH,
+      ok: false,
+      reason: 'inject-failed',
+    })
+    await flushPromises()
+
+    expect(writes).toHaveLength(2)
+    const rolledBack = lastWrittenMeta(writes)
+    expect(rolledBack.stage).toBe('approved')
+    expect(rolledBack.executions ?? []).toHaveLength(0)
+    // Markup synced with the rollback write.
+    expect(writes[1]).toContain('<span class="pill approved">approved</span>')
+    expect(toastMock).toHaveBeenCalledWith(
+      'Dispatch failed — the plan was reverted to approved, please retry',
+    )
+    expect(toastMock).not.toHaveBeenCalledWith('Plan dispatched to CLI agent')
+  })
+
+  it('ignores execution results addressed to another plan file', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    toastMock.mockClear()
+    const { wrapper, writes } = await mountToolbar(planDoc(approvedMeta()))
+
+    await wrapper.find('.prt-execute').trigger('click')
+    await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+    await flushPromises()
+
+    executionResultHandler!({
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/other-plan_ffffff.html',
+      ok: false,
+    })
+    await flushPromises()
+
+    expect(writes).toHaveLength(1) // no rollback
+    expect(toastMock).not.toHaveBeenCalledWith(
+      'Dispatch failed — the plan was reverted to approved, please retry',
+    )
+  })
+
+  it('rolls back locally right away when the dispatch is not delivered', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    dispatchMock.mockResolvedValueOnce({ delivered: false })
+    toastMock.mockClear()
+    const { wrapper, writes } = await mountToolbar(planDoc(approvedMeta()))
+
+    await wrapper.find('.prt-execute').trigger('click')
+    await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+    await flushPromises()
+
+    // Dispatch write + immediate rollback write: retry starts from approved.
+    expect(writes).toHaveLength(2)
+    const rolledBack = lastWrittenMeta(writes)
+    expect(rolledBack.stage).toBe('approved')
+    expect(rolledBack.executions ?? []).toHaveLength(0)
+    expect(toastMock).toHaveBeenCalledWith(
+      'No main window is open for this workspace — open it and retry',
+    )
+  })
+
+  it('rolls back when no execution result arrives before the timeout', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    toastMock.mockClear()
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const { wrapper, writes } = await mountToolbar(planDoc(approvedMeta()))
+
+      await wrapper.find('.prt-execute').trigger('click')
+      await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+      await flushPromises()
+      expect(writes).toHaveLength(1)
+
+      // Fire the 60s result-timeout guard manually.
+      const timeoutCall = timeoutSpy.mock.calls.find((c) => c[1] === 60_000)!
+      expect(timeoutCall).toBeDefined()
+      ;(timeoutCall[0] as () => void)()
+      await flushPromises()
+
+      expect(writes).toHaveLength(2)
+      const rolledBack = lastWrittenMeta(writes)
+      expect(rolledBack.stage).toBe('approved')
+      expect(rolledBack.executions ?? []).toHaveLength(0)
+      expect(toastMock).toHaveBeenCalledWith(
+        'Dispatch failed — the plan was reverted to approved, please retry',
+      )
+
+      // A late result after the timeout settles nothing further.
+      executionResultHandler?.({ workspace_path: '/ws', rel_path: PLAN_REL_PATH, ok: true })
+      await flushPromises()
+      expect(writes).toHaveLength(2)
+      expect(toastMock).not.toHaveBeenCalledWith('Plan dispatched to CLI agent')
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
+  it('requires confirmation when a dispatched execution is already in progress', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(true)
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(approvedMeta()))
+
+    // Concurrent dispatch elsewhere: on disk the plan is already in-progress
+    // with a recorded execution.
+    setContent(
+      planDoc(
+        baseMeta({
+          stage: 'in-progress',
+          approvedAt: '2026-07-19T00:00:00Z',
+          executions: [{ agent: 'codex', startedAt: '2026-07-19T01:00:00Z' }],
+        }),
+      ),
+    )
+
+    await wrapper.find('.prt-execute').trigger('click')
+    const claude = wrapper
+      .findAll('.prt-execute-agent')
+      .find((b) => b.text().includes('Claude Code'))!
+    await claude.trigger('click')
+    await flushPromises()
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(writes).toHaveLength(1)
+    const written = lastWrittenMeta(writes)
+    expect(written.executions).toHaveLength(2)
+    expect(written.executions![1].agent).toBe('claude')
+    expect(written.stage).toBe('in-progress')
+    expect(dispatchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not write or dispatch when the duplicate confirmation is declined', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    confirmMock.mockClear()
+    confirmMock.mockResolvedValueOnce(false)
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(approvedMeta()))
+
+    setContent(
+      planDoc(
+        baseMeta({
+          stage: 'in-progress',
+          approvedAt: '2026-07-19T00:00:00Z',
+          executions: [{ agent: 'codex', startedAt: '2026-07-19T01:00:00Z' }],
+        }),
+      ),
+    )
+
+    await wrapper.find('.prt-execute').trigger('click')
+    await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+    await flushPromises()
+
+    expect(confirmMock).toHaveBeenCalledTimes(1)
+    expect(writes).toHaveLength(0)
+    expect(dispatchMock).not.toHaveBeenCalled()
+  })
+
+  it('aborts silently without dispatching when the fresh stage is no longer dispatchable', async () => {
+    installAgentTeam()
+    dispatchMock.mockClear()
+    confirmMock.mockClear()
+    const { wrapper, writes, setContent } = await mountToolbar(planDoc(approvedMeta()))
+
+    // External agent finished the plan after the toolbar's read.
+    setContent(planDoc(baseMeta({ stage: 'done' })))
+
+    await wrapper.find('.prt-execute').trigger('click')
+    await wrapper.findAll('.prt-execute-agent')[0].trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(0)
+    expect(confirmMock).not.toHaveBeenCalled()
+    expect(dispatchMock).not.toHaveBeenCalled()
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--done')
+  })
+})
+
+// ── Optimistic write lock (expected_mtime) ─────────────────────────────────
+
+describe('PlanReviewToolbar – optimistic write lock', () => {
+  it('carries the read mtime as expected_mtime on plan writes', async () => {
+    const { wrapper, writeAttempts } = await mountToolbar(planDoc(baseMeta()))
+
+    await wrapper.find('.prt-approve').trigger('click')
+    await flushPromises()
+
+    expect(writeAttempts).toHaveLength(1)
+    expect(writeAttempts[0].relPath).toBe(PLAN_REL_PATH)
+    expect(writeAttempts[0].expectedMtime).toBe(1000)
+  })
+
+  it('re-reads and retries once when the write hits an mtime conflict', async () => {
+    toastMock.mockClear()
+    const { wrapper, writes, writeAttempts } = await mountToolbar(planDoc(baseMeta()), {
+      conflictWrites: 1,
+    })
+
+    await wrapper.find('.prt-approve').trigger('click')
+    await flushPromises()
+
+    expect(writeAttempts).toHaveLength(2)
+    expect(writes).toHaveLength(1)
+    expect(lastWrittenMeta(writes).stage).toBe('approved')
+    expect(toastMock).not.toHaveBeenCalledWith('Save failed')
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--approved')
+  })
+
+  it('surfaces the save-failed toast after a second consecutive conflict', async () => {
+    toastMock.mockClear()
+    const { wrapper, writes, writeAttempts } = await mountToolbar(planDoc(baseMeta()), {
+      conflictWrites: 2,
+    })
+
+    await wrapper.find('.prt-approve').trigger('click')
+    await flushPromises()
+
+    expect(writeAttempts).toHaveLength(2) // no third attempt
+    expect(writes).toHaveLength(0)
+    expect(toastMock).toHaveBeenCalledWith('Save failed')
+  })
+
+  it('share-to-git snapshots write without expected_mtime (overwrite semantics)', async () => {
+    const { wrapper, writeAttempts } = await mountToolbar(planDoc(baseMeta()))
+
+    await wrapper.find('.prt-share').trigger('click')
+    await flushPromises()
+
+    const shareAttempt = writeAttempts.find((a) => a.relPath === '.plans/test-plan_a1b2c3.html')
+    expect(shareAttempt).toBeDefined()
+    expect(shareAttempt!.expectedMtime).toBeUndefined()
+  })
+})
+
+describe('PlanReviewToolbar – outline navigation', () => {
+  function outlineDoc(meta: HtmlPlanMeta): string {
+    return [
+      '<html><head><title>Test Plan</title></head><body>',
+      '<section><h2>Goals</h2></section>',
+      '<section><h2>Phases</h2>',
+      '<div class="phase"><div class="phase-head">Phase A · Alpha<span class="size">S</span></div></div>',
+      '</section>',
+      '<script type="application/json" id="plan-meta">',
+      JSON.stringify(meta, null, 2),
+      '</scr' + 'ipt>',
+      '</body></html>',
+    ].join('\n')
+  }
+
+  it('lists section and phase anchors and emits scroll-to-anchor on pick', async () => {
+    const { wrapper } = await mountToolbar(outlineDoc(baseMeta()))
+    const select = wrapper.find('.prt-outline')
+    expect(select.exists()).toBe(true)
+    const labels = wrapper.findAll('.prt-outline option').map((o) => o.text())
+    expect(labels).toEqual(['Outline', 'Goals', 'Phases', 'Phase A · Alpha'])
+
+    await select.setValue('Phase A · Alpha')
+    expect(wrapper.emitted('scroll-to-anchor')).toEqual([['Phase A · Alpha']])
+    // The select resets so the same entry can be picked again.
+    expect((select.element as HTMLSelectElement).value).toBe('')
+  })
+
+  it('hides the outline dropdown when the document has no headings', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()))
+    expect(wrapper.find('.prt-outline').exists()).toBe(false)
   })
 })

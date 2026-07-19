@@ -4,6 +4,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import PlansPane from '../PlansPane.vue'
 import { i18n } from '../../i18n'
+import { parseHtmlPlanMeta } from '../../composables/usePlanHtml'
 
 i18n.global.locale.value = 'en-US'
 
@@ -96,9 +97,25 @@ function makeBackend(opts?: {
 }) {
   // Tracks concurrent .agent-team reads so tests can assert parallel fan-out.
   const htmlReads = { inflight: 0, max: 0 }
+  const renames: { src: string; dst: string }[] = []
+  const writes: { rel: string; content: string }[] = []
+  const listeners = new Map<string, Set<(p: unknown) => void>>()
   return {
     status: ref('connected'),
     htmlReads,
+    renames,
+    writes,
+    on: (type: string, cb: (p: unknown) => void) => {
+      let set = listeners.get(type)
+      if (!set) {
+        set = new Set()
+        listeners.set(type, set)
+      }
+      set.add(cb)
+      return () => set!.delete(cb)
+    },
+    /** Simulate a backend broadcast to `on()` subscribers. */
+    emit: (type: string, payload: unknown) => listeners.get(type)?.forEach((cb) => cb(payload)),
     send: vi.fn(async (channel: string, payload: Record<string, unknown>) => {
       if (channel === 'fs.list_dir') {
         if (payload.rel_path === '.cursor/plans') {
@@ -139,6 +156,14 @@ function makeBackend(opts?: {
         }
       }
       if (channel === 'fs.delete') return { payload: { ok: true } }
+      if (channel === 'fs.rename') {
+        renames.push({ src: payload.src_path as string, dst: payload.dst_path as string })
+        return { payload: { ok: true } }
+      }
+      if (channel === 'fs.write_file') {
+        writes.push({ rel: payload.rel_path as string, content: payload.content as string })
+        return { payload: { ok: true } }
+      }
       return { payload: { ok: false, error: 'unexpected' } }
     }),
   }
@@ -229,6 +254,24 @@ describe('PlansPane', () => {
     expect(backend.send).not.toHaveBeenCalledWith('fs.read_file', {
       workspace_path: '/ws',
       rel_path: '.agent-team/plans/_template.html',
+    })
+  })
+
+  it('excludes dot-prefixed files from the plan listing', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: '.hidden_a1b2c3.html', rel_path: '.agent-team/plans/.hidden_a1b2c3.html', is_dir: false },
+        { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('HTML Review Plan')
+    expect(backend.send).not.toHaveBeenCalledWith('fs.read_file', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/.hidden_a1b2c3.html',
     })
   })
 
@@ -373,5 +416,274 @@ describe('PlansPane', () => {
       workspace_path: '/ws',
       rel_path: '.agent-team/plans/review_a1b2c3.html',
     })
+  })
+})
+
+describe('PlansPane – plans.changed live refresh', () => {
+  it('reloads the plan list on a matching-workspace broadcast', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    const callsBefore = backend.send.mock.calls.filter(([type]) => type === 'fs.list_dir').length
+
+    backend.emit('plans.changed', { workspace_path: '/ws' })
+    await flushPromises()
+
+    const callsAfter = backend.send.mock.calls.filter(([type]) => type === 'fs.list_dir').length
+    expect(callsAfter).toBeGreaterThan(callsBefore)
+    expect(wrapper.text()).toContain('Active Plan')
+  })
+
+  it('ignores broadcasts for other workspaces and malformed payloads', async () => {
+    const backend = makeBackend()
+    mountPane(backend)
+    await flushPromises()
+    const callsBefore = backend.send.mock.calls.length
+
+    backend.emit('plans.changed', { workspace_path: '/other-ws' })
+    backend.emit('plans.changed', null)
+    backend.emit('plans.changed', 'nope')
+    await flushPromises()
+
+    expect(backend.send.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('stops listening after unmount', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    wrapper.unmount()
+    const callsBefore = backend.send.mock.calls.length
+
+    backend.emit('plans.changed', { workspace_path: '/ws' })
+    await flushPromises()
+
+    expect(backend.send.mock.calls.length).toBe(callsBefore)
+  })
+})
+
+// ── Context menu ───────────────────────────────────────────────────────────
+
+function reviewBackend() {
+  return makeBackend({
+    htmlEntries: [
+      { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+    ],
+    htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+  })
+}
+
+function docBackend() {
+  return makeBackend({
+    htmlEntries: [
+      { name: 'notes_aaaaaa.html', rel_path: '.agent-team/plans/notes_aaaaaa.html', is_dir: false },
+    ],
+    htmlFiles: { '.agent-team/plans/notes_aaaaaa.html': HTML_DOC },
+  })
+}
+
+async function openMenuOn(wrapper: ReturnType<typeof mountPane>, rowText: string) {
+  const row = wrapper.findAll('.plan-row').find((r) => r.text().includes(rowText))!
+  await row.trigger('contextmenu')
+  await flushPromises()
+}
+
+function menuItem(wrapper: ReturnType<typeof mountPane>, label: string) {
+  return wrapper.findAll('.menu-item').find((i) => i.text() === label)!
+}
+
+describe('PlansPane – context menu', () => {
+  it('opens on right-click for HTML plans with plan actions, no promote', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toEqual(['Open', 'Share to Git', 'Rename', 'Delete'])
+  })
+
+  it('adds Promote to Plan for HTML docs without meta', async () => {
+    const wrapper = mountPane(docBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'notes_aaaaaa.html')
+
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toContain('Promote to Plan')
+  })
+
+  it('does not open for legacy markdown plans', async () => {
+    const wrapper = mountPane(makeBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'Active Plan')
+    expect(wrapper.find('.ctx-menu').exists()).toBe(false)
+  })
+
+  it('Open fires the open-file emit', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    await menuItem(wrapper, 'Open').trigger('click')
+    const emitted = wrapper.emitted('open-file')!
+    expect(emitted[emitted.length - 1]).toEqual([
+      { filepath: '.agent-team/plans/review_a1b2c3.html', name: 'review_a1b2c3.html' },
+    ])
+    expect(wrapper.find('.ctx-menu').exists()).toBe(false)
+  })
+
+  it('Share to Git copies the plan verbatim into .plans/', async () => {
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    await menuItem(wrapper, 'Share to Git').trigger('click')
+    await flushPromises()
+
+    expect(backend.writes).toEqual([{ rel: '.plans/review_a1b2c3.html', content: HTML_REVIEW_PLAN }])
+  })
+})
+
+describe('PlansPane – rename', () => {
+  it('rejects a name that breaks the <slug>_<hex>.html format', async () => {
+    notify.toast.mockClear()
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+    await menuItem(wrapper, 'Rename').trigger('click')
+
+    await wrapper.find('.rename-input').setValue('Bad Name.html')
+    await wrapper.find('.rename-btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(backend.renames).toEqual([])
+    expect(notify.toast).toHaveBeenCalledWith('Invalid name — must be kebab-slug_6hex.html', {
+      type: 'error',
+    })
+    // Dialog stays open for correction.
+    expect(wrapper.find('.rename-dialog').exists()).toBe(true)
+  })
+
+  it('renames within the plans directory when the format is valid', async () => {
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+    await menuItem(wrapper, 'Rename').trigger('click')
+
+    await wrapper.find('.rename-input').setValue('renamed-plan_abc123.html')
+    await wrapper.find('.rename-btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(backend.renames).toEqual([
+      { src: '.agent-team/plans/review_a1b2c3.html', dst: '.agent-team/plans/renamed-plan_abc123.html' },
+    ])
+    expect(wrapper.find('.rename-dialog').exists()).toBe(false)
+  })
+})
+
+describe('PlansPane – delete single', () => {
+  it('deletes an in-review plan only after a second confirmation', async () => {
+    notify.confirm.mockClear()
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    await menuItem(wrapper, 'Delete').trigger('click')
+    await flushPromises()
+
+    expect(notify.confirm).toHaveBeenCalledTimes(2)
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/review_a1b2c3.html',
+    })
+  })
+
+  it('aborts when the second confirmation is declined', async () => {
+    notify.confirm.mockClear()
+    notify.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    await menuItem(wrapper, 'Delete').trigger('click')
+    await flushPromises()
+
+    expect(notify.confirm).toHaveBeenCalledTimes(2)
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/review_a1b2c3.html',
+    })
+  })
+
+  it('deletes a done plan after a single confirmation', async () => {
+    notify.confirm.mockClear()
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Done Plan')
+
+    await menuItem(wrapper, 'Delete').trigger('click')
+    await flushPromises()
+
+    expect(notify.confirm).toHaveBeenCalledTimes(1)
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/shipped_d4e5f6.html',
+    })
+  })
+})
+
+describe('PlansPane – promote doc to plan', () => {
+  it('injects a minimal draft meta the parser accepts, named after the file', async () => {
+    const backend = docBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'notes_aaaaaa.html')
+
+    await menuItem(wrapper, 'Promote to Plan').trigger('click')
+    await flushPromises()
+
+    expect(backend.writes).toHaveLength(1)
+    expect(backend.writes[0].rel).toBe('.agent-team/plans/notes_aaaaaa.html')
+    const parsed = parseHtmlPlanMeta(backend.writes[0].content)
+    expect(parsed).not.toBeNull()
+    expect(parsed!.warnings).toEqual([])
+    expect(parsed!.meta).toMatchObject({
+      schemaVersion: 1,
+      name: 'notes_aaaaaa.html', // HTML_DOC has no <title>
+      stage: 'draft',
+      approvedAt: null,
+      todos: [],
+      reviewNotes: [],
+    })
+    // Original doc content survives around the injected island.
+    expect(backend.writes[0].content).toContain('no meta here')
+  })
+
+  it('uses the <title> as the plan name when present', async () => {
+    const titledDoc = '<!doctype html><html><head><title>Titled Doc</title></head><body>x</body></html>'
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'titled_bbbbbb.html', rel_path: '.agent-team/plans/titled_bbbbbb.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/titled_bbbbbb.html': titledDoc },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'titled_bbbbbb.html')
+
+    await menuItem(wrapper, 'Promote to Plan').trigger('click')
+    await flushPromises()
+
+    expect(parseHtmlPlanMeta(backend.writes[0].content)!.meta.name).toBe('Titled Doc')
   })
 })

@@ -64,6 +64,12 @@ describe('KeyResolver – single key', () => {
     )
     expect(rule?.command).toBe('editor.action.toggleComment')
   })
+
+  it('resolves default cmd+shift+d → workbench.action.openPlans', () => {
+    const defaultResolver = new KeyResolver(defaults)
+    const rule = defaultResolver.resolve(mkEvent('D', { metaKey: true, shiftKey: true }), {})
+    expect(rule?.command).toBe('workbench.action.openPlans')
+  })
 })
 
 describe('KeyResolver – chord', () => {

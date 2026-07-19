@@ -794,6 +794,53 @@ ipcMain.handle('window:openPlans', (_event, args: { workspace_path?: string }) =
   return { ok: true }
 })
 
+// Plan execute dispatch: the plan window hands an approved plan to a CLI
+// agent. Focus the main window bound to the plan's workspace and forward the
+// payload; that renderer creates/reuses the agent pane and injects the
+// execution prompt. delivered:false when no main window is open for the
+// workspace (the renderer-side handler re-validates the workspace anyway).
+ipcMain.handle(
+  'plans:dispatch-execution',
+  (_event, args: { workspace_path?: string; rel_path?: string; agent_key?: string }): { delivered: boolean } => {
+    const workspacePath = String(args?.workspace_path ?? '').trim()
+    const relPath = String(args?.rel_path ?? '').trim()
+    const agentKey = String(args?.agent_key ?? '').trim()
+    if (!workspacePath || !relPath || !agentKey) return { delivered: false }
+    const win = findMainWindowForWorkspace(workspacePath)
+    if (!win || win.isDestroyed()) return { delivered: false }
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    win.webContents.send('plans:execute-dispatch', {
+      workspace_path: workspacePath,
+      rel_path: relPath,
+      agent_key: agentKey
+    })
+    return { delivered: true }
+  }
+)
+
+// Dispatch outcome from the main window, forwarded to the workspace's plan
+// window so it can confirm (toast) or roll back the execution record. Silently
+// dropped when the plan window is gone — the plan window's dispatch timeout
+// covers that case.
+ipcMain.on(
+  'plans:execution-result',
+  (_event, args: { workspace_path?: string; rel_path?: string; ok?: boolean; reason?: string }) => {
+    const workspacePath = String(args?.workspace_path ?? '').trim()
+    const relPath = String(args?.rel_path ?? '').trim()
+    if (!workspacePath || !relPath) return
+    const win = planWindows.get(workspacePath)
+    if (!win) return
+    win.webContents.send('plans:execution-result', {
+      workspace_path: workspacePath,
+      rel_path: relPath,
+      ok: args?.ok === true,
+      ...(args?.reason ? { reason: String(args.reason) } : {})
+    })
+  }
+)
+
 // Editor-window AI Chat fetches a CLI pane's cleaned scrollback. Panes live in
 // the main window(s), so relay the request there and await the matching reply
 // (correlation id + timeout; see cli-buffer-relay.ts).

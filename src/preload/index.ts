@@ -188,6 +188,48 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('settings:health-timeout-write', timeoutSec),
   notify: (args: { paneId?: string; title: string; body?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:notify', args),
+  // Plan execute dispatch: the plan window hands an approved plan to a CLI
+  // agent. Main focuses the workspace's main window and forwards the payload;
+  // that window creates/reuses the agent pane and injects the execution
+  // prompt. delivered:false when no main window is open for the workspace.
+  dispatchPlanExecution: (args: {
+    workspace_path: string
+    rel_path: string
+    agent_key: string
+  }): Promise<{ delivered: boolean }> =>
+    ipcRenderer.invoke('plans:dispatch-execution', args),
+  // Main-window side receiver. Returns a disposer.
+  onPlanExecutionDispatch: (
+    handler: (args: { workspace_path: string; rel_path: string; agent_key: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      args: { workspace_path: string; rel_path: string; agent_key: string }
+    ): void => handler(args)
+    ipcRenderer.on('plans:execute-dispatch', listener)
+    return () => ipcRenderer.removeListener('plans:execute-dispatch', listener)
+  },
+  // Main-window side: report the dispatch outcome so the plan window can
+  // confirm (toast) or roll back the in-progress execution record.
+  reportPlanExecutionResult: (args: {
+    workspace_path: string
+    rel_path: string
+    ok: boolean
+    reason?: string
+  }): void => {
+    ipcRenderer.send('plans:execution-result', args)
+  },
+  // Plan-window side receiver for the dispatch outcome. Returns a disposer.
+  onPlanExecutionResult: (
+    handler: (args: { workspace_path: string; rel_path: string; ok: boolean; reason?: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      args: { workspace_path: string; rel_path: string; ok: boolean; reason?: string }
+    ): void => handler(args)
+    ipcRenderer.on('plans:execution-result', listener)
+    return () => ipcRenderer.removeListener('plans:execution-result', listener)
+  },
   onFocusPane: (cb: (paneId: string) => void): void => {
     ipcRenderer.on('notify:focusPane', (_event, paneId: string) => cb(paneId))
   },

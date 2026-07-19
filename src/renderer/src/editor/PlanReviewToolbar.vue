@@ -3,12 +3,27 @@
 // `.agent-team/plans/*.html` documents. Reads/writes only the `plan-meta`
 // JSON island via usePlanHtml — every other byte of the file is preserved.
 // Renders nothing when the file has no valid plan-meta block.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { parseHtmlPlanMeta, replaceHtmlPlanMeta, htmlPlanProgress } from '../composables/usePlanHtml'
-import type { HtmlPlanMeta, HtmlPlanReviewNote } from '../composables/usePlanHtml'
+import {
+  parseHtmlPlanMeta,
+  replaceHtmlPlanMeta,
+  htmlPlanProgress,
+  syncStageMarkup,
+  syncTodoMarkup,
+} from '../composables/usePlanHtml'
+import { extractPlanOutline } from './planRuntime'
+import {
+  diffPlanContents,
+  parseSnapshotName,
+  planHistoryDirRelPath,
+  type PlanDiffSummary,
+} from './planHistory'
+import type { HtmlPlanMeta, HtmlPlanReviewNote, HtmlTodoStatus, PlanStage } from '../composables/usePlanHtml'
 import type { useBackend } from '../composables/useBackend'
+import { sharePlanToGit } from '../composables/planShare'
 import { useNotify } from '../composables/useNotify'
+import { CLI_AGENT_SPECS } from '../lib/agentSpecs'
 
 const props = defineProps<{
   workspacePath: string
@@ -16,19 +31,30 @@ const props = defineProps<{
   backend: ReturnType<typeof useBackend>
 }>()
 
-// Emitted after the file content changed (own write or external edit detected
-// on window focus) so the host can refresh the HTML preview.
+// `updated`: emitted after the file content changed (own write or external
+// edit detected on window focus) so the host can refresh the HTML preview.
+// `scroll-to-anchor`: an outline entry was picked; the host forwards it to
+// the plan preview frame.
+// `preview-snapshot`: a history snapshot's Preview action was clicked; the
+// host swaps the doc area to a read-only view of that snapshot.
 const emit = defineEmits<{
   (e: 'updated'): void
+  (e: 'scroll-to-anchor', anchor: string): void
+  (e: 'preview-snapshot', payload: { relPath: string; label: string }): void
 }>()
 
 const { t } = useI18n()
-const { toast } = useNotify()
+const { toast, confirm } = useNotify()
 
 const rawContent = ref('')
 const meta = ref<HtmlPlanMeta | null>(null)
 const notesOpen = ref(false)
+const todosOpen = ref(false)
 const newNoteText = ref('')
+// Section anchor attached to the note being composed ('' = unanchored);
+// prefilled by the in-document comment button via startNoteWithAnchor().
+const pendingAnchor = ref('')
+const noteInput = ref<HTMLInputElement | null>(null)
 const saving = ref(false)
 
 function applyContent(content: string, notifyHost: boolean): void {
@@ -61,16 +87,42 @@ function onWindowFocus(): void {
   void loadContent(true)
 }
 
+// Primary live-refresh path: the backend broadcasts plans.changed when any
+// plan document changes on disk; the focus listener stays as a last resort.
+let offPlansChanged: (() => void) | null = null
+let offExecutionResult: (() => void) | null = null
 onMounted(() => {
   void loadContent()
   window.addEventListener('focus', onWindowFocus)
+  offPlansChanged = props.backend.on('plans.changed', (payload) => {
+    const p = payload as { workspace_path?: unknown } | null
+    if (p && p.workspace_path === props.workspacePath) void loadContent(true)
+  })
+  offExecutionResult = window.agentTeam?.onPlanExecutionResult?.(onExecutionResult) ?? null
 })
-onBeforeUnmount(() => window.removeEventListener('focus', onWindowFocus))
+onBeforeUnmount(() => {
+  window.removeEventListener('focus', onWindowFocus)
+  offPlansChanged?.()
+  offPlansChanged = null
+  offExecutionResult?.()
+  offExecutionResult = null
+  clearDispatchTimer()
+  pendingDispatch = null
+})
 watch(
   () => props.relPath,
   () => {
     rawContent.value = ''
     meta.value = null
+    historyOpen.value = false
+    historyEntries.value = []
+    diffFor.value = null
+    diffSummary.value = null
+    // A dispatch pending on the previous file can no longer be settled here
+    // (results are matched against props.relPath); drop it so the timeout
+    // cannot fire a rollback against the newly opened file.
+    clearDispatchTimer()
+    pendingDispatch = null
     void loadContent()
   },
 )
@@ -78,6 +130,14 @@ watch(
 const progress = computed(() => htmlPlanProgress(meta.value?.todos ?? []))
 const unresolvedCount = computed(() => (meta.value?.reviewNotes ?? []).filter((n) => !n.resolved).length)
 const canApprove = computed(() => meta.value?.stage === 'in-review' && unresolvedCount.value === 0)
+// Outline entries (section h2 / phase-head leading text) for the nav dropdown.
+const outline = computed(() => extractPlanOutline(rawContent.value))
+
+function onOutlinePick(event: Event): void {
+  const select = event.target as HTMLSelectElement
+  if (select.value) emit('scroll-to-anchor', select.value)
+  select.value = '' // reset so re-picking the same entry fires change again
+}
 
 // Read-before-write: re-read the file and re-apply the mutation on the fresh
 // meta so external edits made since our last read (e.g. by an AI agent) are
@@ -87,39 +147,63 @@ const canApprove = computed(() => meta.value?.stage === 'in-review' && unresolve
 async function writeMeta(mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null): Promise<boolean> {
   saving.value = true
   try {
-    const readResp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
-      'fs.read_file',
-      { workspace_path: props.workspacePath, rel_path: props.relPath },
-    )
-    if (!readResp.payload?.ok || readResp.payload.content === undefined) {
-      toast(readResp.payload?.error ?? t('pane.plans.review-save-failed'))
-      return false
-    }
-    const freshContent = readResp.payload.content
-    const freshMeta = parseHtmlPlanMeta(freshContent)?.meta ?? null
-    if (!freshMeta) {
-      toast(t('pane.plans.review-save-failed'))
-      return false
-    }
-    const next = mutate(freshMeta)
-    if (!next) {
-      applyContent(freshContent, true)
-      return false
-    }
-    const content = replaceHtmlPlanMeta(freshContent, next)
-    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
-      workspace_path: props.workspacePath,
-      rel_path: props.relPath,
-      content,
-    })
-    if (!resp.payload?.ok) {
+    // Optimistic lock: the write carries the read's mtime, so a write racing
+    // an external edit is refused (conflict) instead of clobbering it. One
+    // automatic re-read + retry resolves the common single race; a second
+    // conflict surfaces the save-failed toast.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const readResp = await props.backend.send<{
+        ok: boolean
+        content?: string
+        mtime?: number
+        error?: string
+      }>('fs.read_file', { workspace_path: props.workspacePath, rel_path: props.relPath })
+      if (!readResp.payload?.ok || readResp.payload.content === undefined) {
+        toast(readResp.payload?.error ?? t('pane.plans.review-save-failed'))
+        return false
+      }
+      const freshContent = readResp.payload.content
+      const expectedMtime = readResp.payload.mtime
+      const freshMeta = parseHtmlPlanMeta(freshContent)?.meta ?? null
+      if (!freshMeta) {
+        toast(t('pane.plans.review-save-failed'))
+        return false
+      }
+      const next = mutate(freshMeta)
+      if (!next) {
+        applyContent(freshContent, true)
+        return false
+      }
+      // Meta + markup are written together: sync the stage pill and every
+      // todo's data-status/pill so the visible document cannot drift from the
+      // authoritative plan-meta block (best-effort; missing markup is skipped).
+      let content = replaceHtmlPlanMeta(freshContent, next)
+      content = syncStageMarkup(content, next.stage)
+      for (const todo of next.todos) content = syncTodoMarkup(content, todo.id, todo.status)
+      const resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>(
+        'fs.write_file',
+        {
+          workspace_path: props.workspacePath,
+          rel_path: props.relPath,
+          content,
+          ...(typeof expectedMtime === 'number' ? { expected_mtime: expectedMtime } : {}),
+        },
+      )
+      if (resp.payload?.ok) {
+        rawContent.value = content
+        meta.value = next
+        emit('updated')
+        return true
+      }
+      if (resp.payload?.conflict) {
+        if (attempt === 0) continue // file changed under us — re-read and retry once
+        toast(t('pane.plans.review-save-failed'))
+        return false
+      }
       toast(resp.payload?.error ?? t('pane.plans.review-save-failed'))
       return false
     }
-    rawContent.value = content
-    meta.value = next
-    emit('updated')
-    return true
+    return false // unreachable: both loop iterations return
   } catch (err) {
     toast(err instanceof Error ? err.message : t('pane.plans.review-save-failed'))
     return false
@@ -134,6 +218,188 @@ async function approve(): Promise<void> {
     if (fresh.stage !== 'in-review' || fresh.reviewNotes.some((n) => !n.resolved)) return null
     return { ...fresh, stage: 'approved', approvedAt: new Date().toISOString() }
   })
+}
+
+// ── Todo sidebar ──────────────────────────────────────────────────────────
+// Click cycles pending → in-progress → done → pending; right-click toggles
+// skipped (and back to pending). Every write goes through writeMeta, so the
+// visible todo markup is synced alongside the meta.
+function nextTodoStatus(status: HtmlTodoStatus): HtmlTodoStatus {
+  if (status === 'pending') return 'in-progress'
+  if (status === 'in-progress') return 'done'
+  return 'pending' // done or skipped cycle back to pending
+}
+
+async function cycleTodo(id: string): Promise<void> {
+  if (!meta.value || saving.value) return
+  await writeMeta((fresh) => {
+    const todo = fresh.todos.find((td) => td.id === id)
+    if (!todo) return null
+    const status = nextTodoStatus(todo.status)
+    return { ...fresh, todos: fresh.todos.map((td) => (td.id === id ? { ...td, status } : td)) }
+  })
+}
+
+async function toggleSkipTodo(id: string): Promise<void> {
+  if (!meta.value || saving.value) return
+  await writeMeta((fresh) => {
+    const todo = fresh.todos.find((td) => td.id === id)
+    if (!todo) return null
+    const status: HtmlTodoStatus = todo.status === 'skipped' ? 'pending' : 'skipped'
+    return { ...fresh, todos: fresh.todos.map((td) => (td.id === id ? { ...td, status } : td)) }
+  })
+}
+
+// ── Stage controls ────────────────────────────────────────────────────────
+// abandon: any active stage → abandoned (confirmed; approvedAt kept as a
+// historical record). reopen: done/abandoned → in-review (approvedAt cleared
+// — the plan is no longer approved once it is back in review).
+const ACTIVE_STAGES: readonly PlanStage[] = ['draft', 'in-review', 'approved', 'in-progress']
+const canAbandon = computed(() => !!meta.value && ACTIVE_STAGES.includes(meta.value.stage))
+const canReopen = computed(() => meta.value?.stage === 'done' || meta.value?.stage === 'abandoned')
+
+async function abandon(): Promise<void> {
+  if (!meta.value || !canAbandon.value || saving.value) return
+  const ok = await confirm(t('pane.plans.abandon-confirm', { name: meta.value.name }), {
+    title: t('pane.plans.abandon'),
+    confirmText: t('pane.plans.abandon'),
+  })
+  if (!ok) return
+  await writeMeta((fresh) => {
+    if (!ACTIVE_STAGES.includes(fresh.stage)) return null
+    return { ...fresh, stage: 'abandoned' }
+  })
+}
+
+async function reopen(): Promise<void> {
+  if (!meta.value || !canReopen.value || saving.value) return
+  await writeMeta((fresh) => {
+    if (fresh.stage !== 'done' && fresh.stage !== 'abandoned') return null
+    return { ...fresh, stage: 'in-review', approvedAt: null }
+  })
+}
+
+// ── Execute dispatch (Phase D) ────────────────────────────────────────────
+// Only an approved plan can be dispatched. Selecting an agent appends an
+// execution record + moves the stage to in-progress (through writeMeta, so
+// the write re-validates against the fresh on-disk meta), then asks the main
+// process to hand the plan to that agent's CLI pane in the workspace's main
+// window. A fresh meta that is already in-progress with a recorded execution
+// means someone else dispatched meanwhile — re-dispatch needs confirmation.
+// delivered only means the payload was forwarded: the "dispatched" toast
+// waits for the main window's plans:execution-result. ok=false,
+// delivered:false, or a silent 60s timeout rolls the execution record back
+// (stage returns to approved when it was the only execution) so a retry
+// starts from a clean approved plan.
+const executeOpen = ref(false)
+const dispatching = ref(false)
+const canExecute = computed(() => meta.value?.stage === 'approved')
+const cliAgentSpecs = CLI_AGENT_SPECS
+
+const DISPATCH_RESULT_TIMEOUT_MS = 60_000
+let pendingDispatch: { agentKey: string; startedAt: string } | null = null
+let dispatchTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearDispatchTimer(): void {
+  if (dispatchTimer !== null) {
+    clearTimeout(dispatchTimer)
+    dispatchTimer = null
+  }
+}
+
+function appendExecution(fresh: HtmlPlanMeta, agentKey: string, startedAt: string): HtmlPlanMeta {
+  return {
+    ...fresh,
+    stage: 'in-progress',
+    executions: [...(fresh.executions ?? []), { agent: agentKey, startedAt }],
+  }
+}
+
+// Roll back one dispatch: remove exactly the execution record this window
+// appended (matched by agent + startedAt; if it is already gone there is
+// nothing to write) and return to approved when no other execution keeps the
+// plan in-progress. Runs through writeMeta, so markup stays in sync.
+async function rollbackExecution(agentKey: string, startedAt: string): Promise<void> {
+  await writeMeta((fresh) => {
+    const executions = fresh.executions ?? []
+    const idx = executions.findIndex((e) => e.agent === agentKey && e.startedAt === startedAt)
+    if (idx === -1) return null
+    const remaining = executions.filter((_, i) => i !== idx)
+    const stage = fresh.stage === 'in-progress' && remaining.length === 0 ? 'approved' : fresh.stage
+    return { ...fresh, stage, executions: remaining }
+  })
+}
+
+// Settle the pending dispatch exactly once (result event or timeout).
+function settleDispatch(ok: boolean): void {
+  const pending = pendingDispatch
+  if (!pending) return
+  pendingDispatch = null
+  clearDispatchTimer()
+  if (ok) {
+    toast(t('pane.plans.execute-dispatched'))
+  } else {
+    void rollbackExecution(pending.agentKey, pending.startedAt)
+    toast(t('pane.plans.execute-failed'))
+  }
+}
+
+function onExecutionResult(payload: {
+  workspace_path: string
+  rel_path: string
+  ok: boolean
+  reason?: string
+}): void {
+  if (payload.workspace_path !== props.workspacePath || payload.rel_path !== props.relPath) return
+  settleDispatch(payload.ok)
+}
+
+async function dispatchExecution(agentKey: string): Promise<void> {
+  if (!meta.value || saving.value || dispatching.value || pendingDispatch) return
+  const planName = meta.value.name
+  const startedAt = new Date().toISOString()
+  dispatching.value = true
+  try {
+    let duplicate = false
+    let wrote = await writeMeta((fresh) => {
+      if (fresh.stage === 'in-progress' && (fresh.executions?.length ?? 0) > 0) {
+        duplicate = true
+        return null
+      }
+      if (fresh.stage !== 'approved') return null
+      return appendExecution(fresh, agentKey, startedAt)
+    })
+    if (!wrote) {
+      if (!duplicate) return
+      const ok = await confirm(t('pane.plans.execute-duplicate-confirm', { name: planName }), {
+        title: t('pane.plans.execute'),
+        confirmText: t('pane.plans.execute'),
+      })
+      if (!ok) return
+      wrote = await writeMeta((fresh) => {
+        if (fresh.stage !== 'approved' && fresh.stage !== 'in-progress') return null
+        return appendExecution(fresh, agentKey, startedAt)
+      })
+      if (!wrote) return
+    }
+    executeOpen.value = false
+    const resp = await window.agentTeam?.dispatchPlanExecution?.({
+      workspace_path: props.workspacePath,
+      rel_path: props.relPath,
+      agent_key: agentKey,
+    })
+    if (!resp?.delivered) {
+      // No main window took the dispatch: roll back immediately so the retry
+      // (after opening the main window) starts from a clean approved plan.
+      await rollbackExecution(agentKey, startedAt)
+      toast(t('pane.plans.execute-no-window'))
+      return
+    }
+    pendingDispatch = { agentKey, startedAt }
+    dispatchTimer = setTimeout(() => settleDispatch(false), DISPATCH_RESULT_TIMEOUT_MS)
+  } finally {
+    dispatching.value = false
+  }
 }
 
 async function resolveNote(id: string): Promise<void> {
@@ -156,6 +422,7 @@ function nextNoteId(notes: HtmlPlanReviewNote[]): string {
 async function submitNote(): Promise<void> {
   const text = newNoteText.value.trim()
   if (!meta.value || !text || saving.value) return
+  const anchor = pendingAnchor.value
   const ok = await writeMeta((fresh) => {
     const note: HtmlPlanReviewNote = {
       id: nextNoteId(fresh.reviewNotes),
@@ -163,10 +430,23 @@ async function submitNote(): Promise<void> {
       text,
       resolved: false,
       reply: '',
+      anchor,
     }
     return { ...fresh, reviewNotes: [...fresh.reviewNotes, note] }
   })
-  if (ok) newNoteText.value = ''
+  if (ok) {
+    newNoteText.value = ''
+    pendingAnchor.value = ''
+  }
+}
+
+// Entry point for the in-document section comment button (routed through the
+// host): open the notes panel with the anchor prefilled and focus the input.
+function startNoteWithAnchor(anchor: string): void {
+  if (!meta.value) return
+  notesOpen.value = true
+  pendingAnchor.value = anchor
+  void nextTick(() => noteInput.value?.focus())
 }
 
 // Guard against IME composition: pressing Enter to commit a candidate must
@@ -176,42 +456,122 @@ function onNoteEnter(event: KeyboardEvent): void {
   void submitNote()
 }
 
+// ── History panel ─────────────────────────────────────────────────────────
+// Stage-transition snapshots written by the backend to
+// `.agent-team/plans/.history/<stem>/`. Missing directory = empty history.
+interface HistorySnapshot {
+  relPath: string
+  ts: string
+  stage: string
+  date: Date
+}
+
+const historyOpen = ref(false)
+const historyEntries = ref<HistorySnapshot[]>([])
+// Snapshot relPath whose diff summary is shown inline (null = none).
+const diffFor = ref<string | null>(null)
+const diffSummary = ref<PlanDiffSummary | null>(null)
+
+async function toggleHistory(): Promise<void> {
+  historyOpen.value = !historyOpen.value
+  if (historyOpen.value) await loadHistory()
+}
+
+async function loadHistory(): Promise<void> {
+  diffFor.value = null
+  diffSummary.value = null
+  const dir = planHistoryDirRelPath(props.relPath)
+  try {
+    const resp = await props.backend.send<{
+      ok: boolean
+      entries?: { name: string; is_dir: boolean }[]
+      error?: string
+    }>('fs.list_dir', { workspace_path: props.workspacePath, rel_path: dir })
+    const entries = resp.payload?.ok ? (resp.payload.entries ?? []) : []
+    historyEntries.value = entries
+      .flatMap((entry) => {
+        if (entry.is_dir) return []
+        const parsed = parseSnapshotName(entry.name)
+        return parsed ? [{ relPath: `${dir}/${entry.name}`, ...parsed }] : []
+      })
+      .sort((a, b) => b.ts.localeCompare(a.ts))
+  } catch {
+    historyEntries.value = []
+  }
+}
+
+function snapshotLabel(snap: HistorySnapshot): string {
+  return `${snap.date.toLocaleString()} · ${snap.stage}`
+}
+
+async function showDiff(snap: HistorySnapshot): Promise<void> {
+  if (diffFor.value === snap.relPath) {
+    diffFor.value = null
+    diffSummary.value = null
+    return
+  }
+  try {
+    const read = (relPath: string) =>
+      props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+        workspace_path: props.workspacePath,
+        rel_path: relPath,
+      })
+    const [snapResp, currentResp] = await Promise.all([read(snap.relPath), read(props.relPath)])
+    if (
+      !snapResp.payload?.ok ||
+      snapResp.payload.content === undefined ||
+      !currentResp.payload?.ok ||
+      currentResp.payload.content === undefined
+    ) {
+      toast(t('pane.plans.history-diff-failed'))
+      return
+    }
+    diffSummary.value = diffPlanContents(snapResp.payload.content, currentResp.payload.content)
+    diffFor.value = snap.relPath
+  } catch {
+    toast(t('pane.plans.history-diff-failed'))
+  }
+}
+
+const diffIsEmpty = computed(() => {
+  const d = diffSummary.value
+  if (!d) return false
+  return (
+    d.stageFrom === d.stageTo &&
+    d.todoChanges.length === 0 &&
+    d.todosAdded === 0 &&
+    d.todosRemoved === 0 &&
+    d.notesDelta === 0 &&
+    d.linesAdded === 0 &&
+    d.linesRemoved === 0
+  )
+})
+
+function previewSnapshot(snap: HistorySnapshot): void {
+  emit('preview-snapshot', { relPath: snap.relPath, label: snapshotLabel(snap) })
+}
+
 const sharing = ref(false)
 
-// Copy the current plan verbatim into `.plans/<filename>` — a git-tracked
-// path (`.agent-team/plans/` is gitignored by design) — so the user can
-// commit the snapshot to share it. Re-reads the file first so the snapshot
-// reflects the latest on-disk bytes; an existing snapshot is overwritten.
-// The backend's fs write creates missing parent directories itself.
+// Snapshot the plan into `.plans/` (git-tracked); shared logic lives in
+// planShare.ts so the PlansPane context menu reuses the same semantics.
 async function shareToGit(): Promise<void> {
   if (sharing.value) return
   sharing.value = true
   try {
-    const readResp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
-      'fs.read_file',
-      { workspace_path: props.workspacePath, rel_path: props.relPath },
-    )
-    if (!readResp.payload?.ok || readResp.payload.content === undefined) {
-      toast(readResp.payload?.error ?? t('pane.plans.share-git-failed'))
-      return
-    }
-    const fileName = props.relPath.split('/').pop() ?? props.relPath
-    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
-      workspace_path: props.workspacePath,
-      rel_path: `.plans/${fileName}`,
-      content: readResp.payload.content,
-    })
-    if (!resp.payload?.ok) {
-      toast(resp.payload?.error ?? t('pane.plans.share-git-failed'))
-      return
-    }
-    toast(t('pane.plans.share-git-success'))
+    const result = await sharePlanToGit(props.backend, props.workspacePath, props.relPath)
+    if (result.ok) toast(t('pane.plans.share-git-success'))
+    else toast(result.error ?? t('pane.plans.share-git-failed'))
   } catch (err) {
     toast(err instanceof Error ? err.message : t('pane.plans.share-git-failed'))
   } finally {
     sharing.value = false
   }
 }
+
+// In-document interactions (validated by the host) reuse these existing
+// write paths — the injected runtime never writes to disk on its own.
+defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor })
 </script>
 
 <template>
@@ -219,10 +579,38 @@ async function shareToGit(): Promise<void> {
     <div class="prt-bar">
       <span class="prt-stage" :class="`prt-stage--${meta.stage}`">{{ t(`pane.plans.stage-${meta.stage}`) }}</span>
       <span class="prt-progress">{{ t('pane.plans.progress-done', { done: progress.done, total: progress.total }) }}</span>
+      <select v-if="outline.length" class="prt-outline" value="" @change="onOutlinePick">
+        <option value="" disabled selected>{{ t('pane.plans.outline') }}</option>
+        <option v-for="anchor in outline" :key="anchor" :value="anchor">{{ anchor }}</option>
+      </select>
       <span class="prt-spacer" />
+      <button
+        class="prt-todos-btn"
+        :class="{ 'prt-todos-btn--open': todosOpen }"
+        @click="todosOpen = !todosOpen"
+      >{{ t('pane.plans.todos') }}</button>
       <button class="prt-notes-btn" :class="{ 'prt-notes-btn--open': notesOpen }" @click="notesOpen = !notesOpen">
         {{ t('pane.plans.review-notes') }} · {{ t('pane.plans.review-unresolved', { count: unresolvedCount }) }}
       </button>
+      <button
+        class="prt-history-btn"
+        :class="{ 'prt-history-btn--open': historyOpen }"
+        @click="toggleHistory"
+      >{{ t('pane.plans.history') }}</button>
+      <button
+        v-if="canReopen"
+        class="prt-reopen"
+        :disabled="saving"
+        :title="t('pane.plans.reopen-tooltip')"
+        @click="reopen"
+      >{{ t('pane.plans.reopen') }}</button>
+      <button
+        v-if="canAbandon"
+        class="prt-abandon"
+        :disabled="saving"
+        :title="t('pane.plans.abandon-tooltip')"
+        @click="abandon"
+      >{{ t('pane.plans.abandon') }}</button>
       <button
         class="prt-share"
         :disabled="sharing"
@@ -230,11 +618,92 @@ async function shareToGit(): Promise<void> {
         @click="shareToGit"
       >{{ t('pane.plans.share-git') }}</button>
       <button
+        v-if="canExecute"
+        class="prt-execute"
+        :class="{ 'prt-execute--open': executeOpen }"
+        :disabled="saving || dispatching"
+        :title="t('pane.plans.execute-tooltip')"
+        @click="executeOpen = !executeOpen"
+      >{{ t('pane.plans.execute') }}</button>
+      <button
         class="prt-approve"
         :disabled="!canApprove || saving"
         :title="canApprove ? '' : t('pane.plans.review-approve-hint')"
         @click="approve"
       >{{ t('pane.plans.review-approve') }}</button>
+    </div>
+
+    <div v-if="executeOpen && canExecute" class="prt-panel">
+      <div class="prt-execute-pick">{{ t('pane.plans.execute-pick-agent') }}</div>
+      <button
+        v-for="spec in cliAgentSpecs"
+        :key="spec.agentKey"
+        class="prt-execute-agent"
+        :disabled="saving || dispatching"
+        @click="dispatchExecution(spec.agentKey)"
+      >
+        <span class="prt-execute-agent-label">{{ spec.label }}</span>
+        <span v-if="spec.hint" class="prt-execute-agent-hint">{{ spec.hint }}</span>
+      </button>
+    </div>
+
+    <div v-if="todosOpen" class="prt-panel">
+      <div v-if="meta.todos.length === 0" class="prt-empty">{{ t('pane.plans.todos-empty') }}</div>
+      <button
+        v-for="todo in meta.todos"
+        :key="todo.id"
+        class="prt-todo"
+        :class="`prt-todo--${todo.status}`"
+        :disabled="saving"
+        :title="t('pane.plans.todo-cycle-tooltip')"
+        @click="cycleTodo(todo.id)"
+        @contextmenu.prevent="toggleSkipTodo(todo.id)"
+      >
+        <span class="prt-todo-status">{{ todo.status }}</span>
+        <span class="prt-todo-content">{{ todo.content }}</span>
+      </button>
+    </div>
+
+    <div v-if="historyOpen" class="prt-panel">
+      <div v-if="historyEntries.length === 0" class="prt-empty">{{ t('pane.plans.history-empty') }}</div>
+      <template v-for="snap in historyEntries" :key="snap.relPath">
+        <div class="prt-history-row">
+          <span class="prt-history-time">{{ snap.date.toLocaleString() }}</span>
+          <span class="prt-history-stage">{{ snap.stage }}</span>
+          <span class="prt-spacer" />
+          <button class="prt-history-action" @click="previewSnapshot(snap)">
+            {{ t('pane.plans.history-preview') }}
+          </button>
+          <button
+            class="prt-history-action"
+            :class="{ 'prt-history-action--open': diffFor === snap.relPath }"
+            @click="showDiff(snap)"
+          >{{ t('pane.plans.history-diff') }}</button>
+        </div>
+        <div v-if="diffFor === snap.relPath && diffSummary" class="prt-history-diff">
+          <div v-if="diffIsEmpty">{{ t('pane.plans.history-no-differences') }}</div>
+          <template v-else>
+            <div v-if="diffSummary.stageFrom !== diffSummary.stageTo">
+              {{ t('pane.plans.history-diff-stage', { from: diffSummary.stageFrom ?? '—', to: diffSummary.stageTo ?? '—' }) }}
+            </div>
+            <div v-for="change in diffSummary.todoChanges" :key="change.id">
+              {{ t('pane.plans.history-diff-todo', { id: change.id, from: change.from, to: change.to }) }}
+            </div>
+            <div v-if="diffSummary.todosAdded > 0">
+              {{ t('pane.plans.history-diff-todos-added', { count: diffSummary.todosAdded }) }}
+            </div>
+            <div v-if="diffSummary.todosRemoved > 0">
+              {{ t('pane.plans.history-diff-todos-removed', { count: diffSummary.todosRemoved }) }}
+            </div>
+            <div v-if="diffSummary.notesDelta !== 0">
+              {{ t('pane.plans.history-diff-notes', { delta: (diffSummary.notesDelta > 0 ? '+' : '') + diffSummary.notesDelta }) }}
+            </div>
+            <div v-if="diffSummary.linesAdded > 0 || diffSummary.linesRemoved > 0">
+              {{ t('pane.plans.history-diff-lines', { added: diffSummary.linesAdded, removed: diffSummary.linesRemoved }) }}
+            </div>
+          </template>
+        </div>
+      </template>
     </div>
 
     <div v-if="notesOpen" class="prt-panel">
@@ -247,7 +716,9 @@ async function shareToGit(): Promise<void> {
       >
         <span class="prt-note-author">{{ note.author }}</span>
         <div class="prt-note-main">
-          <div class="prt-note-text">{{ note.text }}</div>
+          <div class="prt-note-text">
+            <span v-if="note.anchor" class="prt-note-anchor">{{ note.anchor }}</span>{{ note.text }}
+          </div>
           <div v-if="note.reply" class="prt-note-reply">{{ note.reply }}</div>
         </div>
         <span v-if="note.resolved" class="prt-note-done">{{ t('pane.plans.review-resolved') }}</span>
@@ -256,7 +727,16 @@ async function shareToGit(): Promise<void> {
         </button>
       </div>
       <div class="prt-new">
+        <span v-if="pendingAnchor" class="prt-note-anchor prt-note-anchor--pending">
+          {{ pendingAnchor }}
+          <button
+            class="prt-anchor-clear"
+            :title="t('pane.plans.note-anchor-clear')"
+            @click="pendingAnchor = ''"
+          >×</button>
+        </span>
         <input
+          ref="noteInput"
           v-model="newNoteText"
           class="prt-input"
           :placeholder="t('pane.plans.review-add-placeholder')"
@@ -331,13 +811,60 @@ async function shareToGit(): Promise<void> {
   font-size: 11px;
 }
 
+.prt-outline {
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  max-width: 200px;
+  padding: 3px 6px;
+}
+
+.prt-note-anchor {
+  background: var(--accent-subtle);
+  border-radius: 999px;
+  color: var(--accent-fg);
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 6px;
+  max-width: 180px;
+  overflow: hidden;
+  padding: 1px 8px;
+  text-overflow: ellipsis;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
+.prt-note-anchor--pending {
+  align-self: center;
+  flex-shrink: 0;
+  margin-right: 0;
+}
+
+.prt-anchor-clear {
+  background: none;
+  border: none;
+  color: var(--accent-fg);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 0 0 4px;
+}
+
 .prt-spacer {
   flex: 1;
 }
 
 .prt-notes-btn,
+.prt-todos-btn,
+.prt-history-btn,
+.prt-history-action,
 .prt-share,
 .prt-approve,
+.prt-abandon,
+.prt-reopen,
 .prt-note-resolve,
 .prt-send {
   background: var(--bg-muted);
@@ -350,14 +877,144 @@ async function shareToGit(): Promise<void> {
 }
 
 .prt-notes-btn:hover,
+.prt-todos-btn:hover,
+.prt-history-btn:hover,
+.prt-history-action:hover,
 .prt-share:hover:not(:disabled),
+.prt-reopen:hover:not(:disabled),
 .prt-note-resolve:hover:not(:disabled),
 .prt-send:hover:not(:disabled) {
   background: var(--bg-hover-strong);
 }
 
-.prt-notes-btn--open {
+.prt-notes-btn--open,
+.prt-todos-btn--open,
+.prt-history-btn--open,
+.prt-history-action--open {
   border-color: var(--accent-focus);
+}
+
+.prt-history-row {
+  align-items: center;
+  border-bottom: 1px dashed var(--border-muted);
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+}
+
+.prt-history-row:last-of-type {
+  border-bottom: none;
+}
+
+.prt-history-time {
+  color: var(--text-primary);
+}
+
+.prt-history-stage {
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 8px;
+  text-transform: uppercase;
+}
+
+.prt-history-diff {
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 2px 0 6px;
+  padding-left: 8px;
+}
+
+.prt-abandon {
+  background: var(--danger-subtle);
+  border-color: var(--danger-fg);
+  color: var(--danger-fg);
+}
+
+.prt-abandon:hover:not(:disabled) {
+  background: var(--danger-muted, var(--danger-subtle));
+}
+
+.prt-abandon:disabled,
+.prt-reopen:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prt-todo {
+  align-items: baseline;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border-muted);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  padding: 5px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.prt-todo:last-of-type {
+  border-bottom: none;
+}
+
+.prt-todo:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.prt-todo:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.prt-todo-status {
+  border-radius: 999px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 74px;
+  padding: 1px 8px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.prt-todo--pending .prt-todo-status {
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+
+.prt-todo--in-progress .prt-todo-status {
+  background: var(--attention-subtle);
+  color: var(--attention-bright);
+}
+
+.prt-todo--done .prt-todo-status {
+  background: var(--success-subtle);
+  color: var(--success-fg);
+}
+
+.prt-todo--skipped .prt-todo-status {
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.prt-todo--done .prt-todo-content,
+.prt-todo--skipped .prt-todo-content {
+  color: var(--text-secondary);
+}
+
+.prt-todo-content {
+  flex: 1;
+  line-height: 1.45;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .prt-approve {
@@ -365,6 +1022,68 @@ async function shareToGit(): Promise<void> {
   border-color: var(--success-fg);
   color: var(--success-fg);
   font-weight: 600;
+}
+
+.prt-execute {
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-fg);
+  border-radius: 6px;
+  color: var(--accent-fg);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+
+.prt-execute--open {
+  border-color: var(--accent-focus);
+}
+
+.prt-execute:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prt-execute-pick {
+  color: var(--text-secondary);
+  padding: 2px 0 6px;
+}
+
+.prt-execute-agent {
+  align-items: baseline;
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed var(--border-muted);
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  padding: 5px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.prt-execute-agent:last-of-type {
+  border-bottom: none;
+}
+
+.prt-execute-agent:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.prt-execute-agent:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.prt-execute-agent-label {
+  font-weight: 600;
+}
+
+.prt-execute-agent-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 .prt-share:disabled,

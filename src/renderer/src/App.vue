@@ -57,6 +57,9 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
+import { AGENT_SPECS } from './lib/agentSpecs'
+import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
+import { planExecutionPrompt } from './lib/planExecutePrompt'
 import { planSpecHintBlock } from './lib/planSpecHint'
 import { quickClassify } from './lib/quick-classify'
 import {
@@ -109,6 +112,8 @@ onMounted(() => {
   })
   // Clicking a system notification focuses the window on the originating pane.
   window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
+  // Plan window "execute" dispatch routed to this workspace's window.
+  window.agentTeam?.onPlanExecutionDispatch?.((payload) => { void onPlanExecutionDispatch(payload) })
   // Editor-window AI Chat fetches a CLI pane's scrollback through the main
   // process (cli:get-pane-buffer); answer from this window's paneRefs.
   window.agentTeam?.onCliPaneBufferRequest?.((paneId) => {
@@ -340,45 +345,7 @@ function roleLabel(key: string): string {
   return rolesApi.find(key)?.label ?? key
 }
 
-// skipPermissionFlag: CLI-specific flag that bypasses interactive permission /
-// trust prompts so the agent runs unattended. Appended automatically when the
-// user enables YOLO mode (default) and hasn't supplied a custom command.
-const agentSpecs: AgentSpec[] = [
-  {
-    agentKey: 'claude',
-    label: 'Claude Code',
-    defaultCommand: 'claude',
-    skipPermissionFlag: '--dangerously-skip-permissions',
-    hint: 'planner + reviewer'
-  },
-  {
-    agentKey: 'codex',
-    label: 'Codex',
-    defaultCommand: 'codex',
-    skipPermissionFlag: '--dangerously-bypass-approvals-and-sandbox',
-    hint: 'implementer'
-  },
-  {
-    agentKey: 'antigravity',
-    label: 'Antigravity CLI',
-    defaultCommand: 'agy',
-    skipPermissionFlag: '--dangerously-skip-permissions',
-    hint: 'generalist'
-  },
-  {
-    agentKey: 'grok',
-    label: 'Grok CLI',
-    defaultCommand: 'grok',
-    // no skipPermissionFlag: grok-cli has no tool-confirmation gate at all
-    hint: 'generalist'
-  },
-  {
-    agentKey: 'terminal',
-    label: 'Terminal',
-    defaultCommand: '',
-    hint: 'plain shell'
-  }
-]
+const agentSpecs: AgentSpec[] = AGENT_SPECS
 
 // Sticky toggles — defaults ON. Saved to the settings store so they survive reloads.
 function makeStickyBool(key: string, fallback: boolean) {
@@ -1924,6 +1891,98 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
   }
 }
 
+// Plan window "execute" dispatch: inject the plan-execution prompt into an
+// idle same-agent pane, or spawn a fresh manual pane for the chosen agent.
+// Every outcome past validation is reported back via plans:execution-result
+// so the plan window can confirm the dispatch or roll back its execution
+// record (validation failures stay silent — wrong window, not a failure).
+async function onPlanExecutionDispatch(payload: PlanDispatchPayload): Promise<void> {
+  const valid = validatePlanDispatch(payload, currentWorkspace.value)
+  if (!valid) return // wrong window / malformed payload — safe ignore
+  const { relPath, agentKey } = valid
+  const workspacePath = payload.workspace_path as string // validated non-empty string
+  await runReportedDispatch(
+    () => dispatchPlanToPane(relPath, agentKey),
+    (ok, reason) =>
+      window.agentTeam?.reportPlanExecutionResult?.({
+        workspace_path: workspacePath,
+        rel_path: relPath,
+        ok,
+        ...(reason ? { reason } : {}),
+      })
+  )
+}
+
+async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<PlanDispatchOutcome> {
+  const prompt = planExecutionPrompt(relPath)
+
+  const reusable = pickReusablePane(
+    panes.value.map((p) => ({
+      id: p.id,
+      agentKey: p.agentKey,
+      workspacePath: p.workspacePath,
+      status: (paneRefs[p.id]?.displayStatus as string | undefined) ?? 'starting',
+      sessionId: (paneRefs[p.id]?.sessionId as string | undefined) ?? undefined,
+    })),
+    agentKey,
+    currentWorkspace.value
+  )
+  if (reusable) {
+    onFocusPane(reusable.id)
+    const injected = await injectPane(reusable.id, prompt, 'plan-execute', true)
+    return injected ? { ok: true } : { ok: false, reason: 'inject-failed' }
+  }
+
+  // Create path. The prompt is deliberately NOT passed as spawnPane's
+  // kickoffPrompt: scheduleInjection early-returns for roleless panes
+  // (`if (!pane.roleKey)`) before its kickoff step, so a roleless manual
+  // pane's kickoffPrompt is never injected. Instead mirror onManualSpawn
+  // (same spawn + manual_pane.spawn persistence; YOLO flag applied inside
+  // spawnPane via resolveCommand), then AWAIT the session-marker bootstrap
+  // (onManualSpawn fires it void) so the marker protocol lands before —
+  // never interleaved with — the plan prompt, and finally inject the prompt.
+  const spawnGroupId =
+    activeTab.value === 'manual'
+      ? (runGroups.value[0]?.id ?? '')
+      : runGroups.value.some((g) => g.id === activeTab.value)
+        ? activeTab.value
+        : currentRunGroupId.value || (runGroups.value[0]?.id ?? '')
+  const paneId = await spawnPane({
+    agentKey,
+    roleKey: '' as RoleKey,
+    stageId: '' as StageId,
+    commandOverride: '',
+    workspacePath: currentWorkspace.value,
+    origin: 'manual',
+    runGroupId: spawnGroupId || undefined,
+  })
+  if (!paneId) return { ok: false, reason: 'pane-spawn-failed' }
+  await sendQuiet<ProjectPayload>('manual_pane.spawn', {
+    workspace_path: currentWorkspace.value,
+    pane_id: paneId,
+    agent: agentKey,
+    role: '',
+    command: '',
+    session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+    session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
+    run_group_id: spawnGroupId,
+  })
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return { ok: false, reason: 'pane-spawn-failed' }
+  onFocusPane(paneId)
+  const bootstrapped = await sendSessionMarkerBootstrap(pane, `[pane ${paneId.slice(0, 8)}]`)
+  if (!bootstrapped) {
+    // No marker/hint text to send (or the send failed): settle CLI startup
+    // ourselves with the same waits the bootstrap path uses before injecting.
+    await dismissStartupDialog(paneId, DISMISS_TIMEOUT_MS)
+    await waitForStartupActivity(paneId)
+  }
+  await waitForQuiet(paneId, 1000, 8000)
+  if (!paneAlive(paneId)) return { ok: false, reason: 'pane-exited' }
+  const injected = await injectPane(paneId, prompt, 'plan-execute', true)
+  return injected ? { ok: true } : { ok: false, reason: 'inject-failed' }
+}
+
 // Resume an existing agent session by id (Manual Spawn → Resume button). Reuses
 // the same resume path as boot-restore: validate → buildResumeCommand → spawnPane
 // with isResume/skipRoleInjection. No role is injected (the session already
@@ -2545,6 +2604,9 @@ registerCommand('workbench.action.openMiniIDE', async () => {
   if (currentWorkspace.value) {
     await window.agentTeam?.openEditorWindow({ workspace_path: currentWorkspace.value })
   }
+})
+registerCommand('workbench.action.openPlans', async () => {
+  await openPlansWindow()
 })
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)

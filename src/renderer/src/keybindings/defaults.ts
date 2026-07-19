@@ -142,6 +142,9 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+r', command: 'workbench.action.focusPipeline' },
   { key: 'cmd+shift+g', command: 'workbench.action.focusSourceControl', when: '!findOpen' },
   { key: 'cmd+shift+i', command: 'workbench.action.openMiniIDE' },
+  // cmd+shift+p is the command palette and cmd+shift+l is taken by
+  // selectHighlights/addSelectionToChat, so Plans lives on cmd+shift+d.
+  { key: 'cmd+shift+d', command: 'workbench.action.openPlans' },
   { key: 'cmd+shift+u', command: 'workbench.action.spawnAgent' },
   { key: 'cmd+shift+b', command: 'workbench.action.rebuildFocusedPane' },
 

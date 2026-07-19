@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { parsePlanFile, planProgress, type ParsedPlan, type PlanProgress } from '../composables/usePlanFile'
 import {
   htmlPlanProgress,
+  injectPlanMeta,
   parseHtmlPlanMeta,
   type HtmlPlanMeta,
   type PlanStage,
 } from '../composables/usePlanHtml'
+import { sharePlanToGit } from '../composables/planShare'
 import { useNotify } from '../composables/useNotify'
 
 const props = defineProps<{
@@ -108,7 +110,13 @@ async function loadPlans(): Promise<void> {
       }
     } else {
       const htmlEntries = (htmlList.payload.entries ?? [])
-        .filter((entry) => !entry.is_dir && entry.name.endsWith('.html') && !entry.name.startsWith('_'))
+        .filter(
+          (entry) =>
+            !entry.is_dir &&
+            entry.name.endsWith('.html') &&
+            !entry.name.startsWith('_') &&
+            !entry.name.startsWith('.'),
+        )
         .sort((a, b) => a.name.localeCompare(b.name))
 
       const htmlItems = await Promise.all(
@@ -139,7 +147,20 @@ async function loadPlans(): Promise<void> {
   }
 }
 
-onMounted(() => void loadPlans())
+// Backend broadcasts plans.changed when any plan document under
+// .agent-team/plans changes on disk (own writes or external agents).
+let offPlansChanged: (() => void) | null = null
+onMounted(() => {
+  void loadPlans()
+  offPlansChanged = props.backend.on('plans.changed', (payload) => {
+    const p = payload as { workspace_path?: unknown } | null
+    if (p && p.workspace_path === props.workspacePath) void loadPlans()
+  })
+})
+onUnmounted(() => {
+  offPlansChanged?.()
+  offPlansChanged = null
+})
 watch(() => props.workspacePath, () => void loadPlans())
 watch(() => props.backend.status?.value, (status) => {
   if (status === 'connected' && waitingForBackend.value) void loadPlans()
@@ -217,6 +238,166 @@ function statusText(item: PlanItem): string {
   if (item.progress.inProgress > 0) return 'in progress'
   return 'planned'
 }
+
+// ── Context menu (HTML plan/doc items only; legacy .plan.md are frozen) ────
+// Backdrop + absolutely-positioned menu, following the GitPane convention.
+const ctxMenu = ref<{ show: boolean; x: number; y: number; item: PlanItem | null }>({
+  show: false,
+  x: 0,
+  y: 0,
+  item: null,
+})
+
+function isHtmlItem(item: PlanItem): boolean {
+  return item.name.endsWith('.html')
+}
+
+function openCtxMenu(e: MouseEvent, item: PlanItem): void {
+  if (!isHtmlItem(item)) return
+  const x = Math.min(e.clientX, window.innerWidth - 224)
+  const y = Math.min(e.clientY, window.innerHeight - 220)
+  ctxMenu.value = { show: true, x, y, item }
+}
+
+function closeCtxMenu(): void {
+  ctxMenu.value = { ...ctxMenu.value, show: false, item: null }
+}
+
+function ctxOpen(): void {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (item) openPlan(item)
+}
+
+async function ctxShareToGit(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  const result = await sharePlanToGit(props.backend, props.workspacePath, item.relPath)
+  if (result.ok) toast(t('pane.plans.share-git-success'), { type: 'success' })
+  else toast(result.error ?? t('pane.plans.share-git-failed'), { type: 'error' })
+}
+
+// ── Rename (keeps the `<kebab-slug>_<6-hex>.html` naming contract) ────────
+const PLAN_FILENAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*_[0-9a-f]{6}\.html$/
+const renameTarget = ref<PlanItem | null>(null)
+const renameValue = ref('')
+
+function ctxRename(): void {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  renameTarget.value = item
+  renameValue.value = item.name
+}
+
+function cancelRename(): void {
+  renameTarget.value = null
+  renameValue.value = ''
+}
+
+async function submitRename(): Promise<void> {
+  const item = renameTarget.value
+  if (!item) return
+  const newName = renameValue.value.trim()
+  if (newName === item.name) {
+    cancelRename()
+    return
+  }
+  if (!PLAN_FILENAME_RE.test(newName)) {
+    toast(t('pane.plans.rename-invalid'), { type: 'error' })
+    return
+  }
+  const dir = item.relPath.slice(0, item.relPath.lastIndexOf('/'))
+  const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.rename', {
+    workspace_path: props.workspacePath,
+    src_path: item.relPath,
+    dst_path: `${dir}/${newName}`,
+  })
+  if (!resp.payload?.ok) {
+    toast(resp.payload?.error ?? t('pane.plans.rename-failed'), { type: 'error' })
+    return
+  }
+  cancelRename()
+  await loadPlans()
+}
+
+// Guard against IME composition: Enter committing a candidate must not submit.
+function onRenameEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void submitRename()
+}
+
+// ── Delete single (in-review/approved plans need a second confirmation) ───
+async function ctxDelete(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  const ok = await confirm(t('pane.plans.delete-confirm', { name: item.htmlMeta?.name ?? item.name }), {
+    title: t('pane.plans.menu-delete'),
+    confirmText: t('pane.plans.menu-delete'),
+  })
+  if (!ok) return
+  const stage = item.htmlMeta?.stage
+  if (stage === 'in-review' || stage === 'approved') {
+    const ok2 = await confirm(t('pane.plans.delete-confirm-review', { stage }), {
+      title: t('pane.plans.menu-delete'),
+      confirmText: t('pane.plans.menu-delete'),
+    })
+    if (!ok2) return
+  }
+  const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.delete', {
+    workspace_path: props.workspacePath,
+    rel_path: item.relPath,
+  })
+  if (!resp.payload?.ok) {
+    toast(resp.payload?.error ?? t('pane.plans.delete-failed'), { type: 'error' })
+    return
+  }
+  await loadPlans()
+}
+
+// ── Promote doc → plan: inject a minimal plan-meta island ─────────────────
+async function ctxUpgradeToPlan(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+    workspace_path: props.workspacePath,
+    rel_path: item.relPath,
+  })
+  if (!read.payload?.ok || read.payload.content === undefined) {
+    toast(read.payload?.error ?? t('pane.plans.upgrade-failed'), { type: 'error' })
+    return
+  }
+  const content = read.payload.content
+  if (parseHtmlPlanMeta(content)) {
+    // Already a plan (e.g. promoted externally since the last refresh).
+    await loadPlans()
+    return
+  }
+  const title = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1].trim()
+  const meta: HtmlPlanMeta = {
+    schemaVersion: 1,
+    name: title || item.name,
+    overview: '',
+    stage: 'draft',
+    approvedAt: null,
+    todos: [],
+    reviewNotes: [],
+  }
+  const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+    workspace_path: props.workspacePath,
+    rel_path: item.relPath,
+    content: injectPlanMeta(content, meta),
+  })
+  if (!resp.payload?.ok) {
+    toast(resp.payload?.error ?? t('pane.plans.upgrade-failed'), { type: 'error' })
+    return
+  }
+  toast(t('pane.plans.upgrade-success'), { type: 'success' })
+  await loadPlans()
+}
 </script>
 
 <template>
@@ -245,6 +426,7 @@ function statusText(item: PlanItem): string {
           :key="item.relPath"
           class="plan-row"
           @click="openPlan(item)"
+          @contextmenu.prevent="openCtxMenu($event, item)"
         >
           <span class="plan-row-name">{{ item.plan?.name || item.name }}</span>
           <span v-if="item.plan?.overview" class="plan-row-overview">{{ item.plan.overview }}</span>
@@ -268,6 +450,7 @@ function statusText(item: PlanItem): string {
           class="plan-row"
           :class="{ 'plan-row--done': group.finished }"
           @click="openPlan(row.item)"
+          @contextmenu.prevent="openCtxMenu($event, row.item)"
         >
           <span class="plan-row-name">{{ row.meta.name }}</span>
           <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
@@ -292,6 +475,7 @@ function statusText(item: PlanItem): string {
           :key="item.relPath"
           class="plan-row plan-row--done"
           @click="openPlan(item)"
+          @contextmenu.prevent="openCtxMenu($event, item)"
         >
           <span class="plan-row-name">{{ item.plan?.name || item.name }}</span>
           <span class="plan-row-meta">
@@ -301,6 +485,42 @@ function statusText(item: PlanItem): string {
         </button>
         <div v-if="!completedPlans.length" class="plans-empty">No completed plans.</div>
       </section>
+    </template>
+
+    <template v-if="ctxMenu.show && ctxMenu.item">
+      <div class="ctx-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
+      <div class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+        <button class="menu-item" @click="ctxOpen">{{ t('pane.plans.menu-open') }}</button>
+        <button class="menu-item" @click="ctxShareToGit">{{ t('pane.plans.share-git') }}</button>
+        <button class="menu-item" @click="ctxRename">{{ t('pane.plans.menu-rename') }}</button>
+        <template v-if="!ctxMenu.item.htmlMeta">
+          <div class="menu-sep" />
+          <button class="menu-item" @click="ctxUpgradeToPlan">{{ t('pane.plans.menu-upgrade') }}</button>
+        </template>
+        <div class="menu-sep" />
+        <button class="menu-item danger" @click="ctxDelete">{{ t('pane.plans.menu-delete') }}</button>
+      </div>
+    </template>
+
+    <template v-if="renameTarget">
+      <div class="ctx-backdrop" @click="cancelRename" />
+      <div class="rename-dialog">
+        <div class="rename-title">{{ t('pane.plans.rename-title') }}</div>
+        <input
+          v-model="renameValue"
+          class="rename-input"
+          :placeholder="t('pane.plans.rename-placeholder')"
+          @keydown.enter="onRenameEnter"
+          @keydown.escape="cancelRename"
+        />
+        <div class="rename-hint">{{ t('pane.plans.rename-hint') }}</div>
+        <div class="rename-actions">
+          <button class="rename-btn" @click="cancelRename">{{ t('pane.plans.rename-cancel') }}</button>
+          <button class="rename-btn rename-btn--primary" @click="submitRename">
+            {{ t('pane.plans.rename-confirm') }}
+          </button>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -448,5 +668,115 @@ function statusText(item: PlanItem): string {
 .plan-chip--done {
   background: var(--success-subtle);
   color: var(--success-fg);
+}
+
+.ctx-backdrop {
+  inset: 0;
+  position: fixed;
+  z-index: 40;
+}
+
+.ctx-menu {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  min-width: 180px;
+  padding: 4px;
+  position: fixed;
+  z-index: 41;
+}
+
+.ctx-menu .menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: block;
+  font-size: 12px;
+  padding: 6px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.ctx-menu .menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.ctx-menu .menu-item.danger {
+  color: var(--danger-fg);
+}
+
+.ctx-menu .menu-sep {
+  background: var(--border-subtle);
+  height: 1px;
+  margin: 4px 6px;
+}
+
+.rename-dialog {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  left: 50%;
+  padding: 14px;
+  position: fixed;
+  top: 30%;
+  transform: translateX(-50%);
+  width: min(360px, 90vw);
+  z-index: 41;
+}
+
+.rename-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.rename-input {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 5px 8px;
+  width: 100%;
+}
+
+.rename-input:focus {
+  border-color: var(--accent-focus);
+  outline: none;
+}
+
+.rename-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 6px;
+}
+
+.rename-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.rename-btn {
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 12px;
+}
+
+.rename-btn:hover {
+  background: var(--bg-hover-strong);
+}
+
+.rename-btn--primary {
+  border-color: var(--accent-focus);
 }
 </style>
