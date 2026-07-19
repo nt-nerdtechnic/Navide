@@ -1061,26 +1061,41 @@ def _claude_resume_id(command: Any) -> str:
     return m.group(1) if m else ""
 
 
+def _session_lookup_path(agent: str, workspace_path: str, session_id: str) -> str:
+    """The filesystem path the resume preflight checks for this session — logged
+    and returned so a failed resume is diagnosable (e.g. a cwd whose non-ASCII
+    chars encode to a colliding claude projects dir). '' when the vendor owns
+    the location and there is no single stable path (codex/grok)."""
+    agent = agent.strip().lower()
+    session_id = session_id.strip()
+    if not session_id:
+        return ""
+    if agent == "claude":
+        return str(_claude_session_file(workspace_path, session_id))
+    if agent == "antigravity":
+        # Antigravity stores each conversation as a SQLite db; the id is the
+        # filename stem accepted by `agy --conversation <id>`.
+        return str(
+            Path.home() / ".gemini" / "antigravity-cli" / "conversations"
+            / f"{session_id}.db"
+        )
+    return ""
+
+
 def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
     agent = agent.strip().lower()
     session_id = session_id.strip()
     if not session_id:
         return False
-    if agent == "claude":
-        return _claude_session_file(workspace_path, session_id).is_file()
-    if agent == "antigravity":
-        # Antigravity stores each conversation as a SQLite db; the id is the
-        # filename stem accepted by `agy --conversation <id>`.
-        return (
-            Path.home() / ".gemini" / "antigravity-cli" / "conversations"
-            / f"{session_id}.db"
-        ).is_file()
     if agent == "codex":
         # Agent History stores only a pointer to the vendor-owned rollout. A
         # stale pointer must not pass preflight and launch a doomed
         # `codex resume`; search both the real and isolated per-pane homes.
         return codex_home_manager.find_session_home(session_id) is not None
-    return True
+    path = _session_lookup_path(agent, workspace_path, session_id)
+    if path:
+        return Path(path).is_file()
+    return True  # unknown agent: assume resumable (unchanged behaviour)
 
 
 def _record_analyzer_tokens(result: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -1160,8 +1175,20 @@ def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
     return replaced
 
 
+# Aligned with onboarding_deps' detection probe (was 3s here — too tight, so a
+# momentarily overloaded machine timed out and made EVERY CLI unlaunchable).
+_SPAWN_PROBE_TIMEOUT_S = 8
+
+
 def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) -> dict[str, Any] | None:
-    """Resolve and smoke-test an agent CLI before allocating its PTY."""
+    """Resolve and smoke-test an agent CLI before allocating its PTY.
+
+    Environmental/transient failures (timeout, exec error) DEGRADE to a warning
+    dict and let the spawn proceed — the binary is almost certainly fine (a
+    `--version` probe is near-instant when the box is idle) and a genuinely
+    broken one still fails visibly at spawn. Only definitive failures
+    (not_found / nonzero exit / fatal signal) still raise to block the spawn.
+    """
     dep = onboarding_deps.DEPS_BY_ID.get(agent_key)
     if dep is None or dep.group != "agent_cli":
         return None
@@ -1195,35 +1222,46 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
             command,
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=_SPAWN_PROBE_TIMEOUT_S,
             env=os.environ.copy(),
         )
-    except subprocess.TimeoutExpired as err:
+    except subprocess.TimeoutExpired:
+        # Transient: the box is momentarily overloaded (fork queued behind a
+        # swap storm), not a broken binary. Degrade to a warning and let the
+        # spawn proceed instead of blocking every CLI.
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
-        raise AgentCliProbeError(
-            f"{dep.label} startup probe timed out after {duration_ms}ms ({executable_display})",
-            {
-                "agent_key": agent_key,
-                "binary_path": executable,
-                "resolved_path": resolved,
-                "probe_command": command,
-                "duration_ms": duration_ms,
-                "reason": "timeout",
-            },
-        ) from err
+        log.warning(
+            "%s startup probe timed out after %dms (%s) — spawning anyway",
+            dep.label, duration_ms, executable_display,
+        )
+        return {
+            "agent_key": agent_key,
+            "binary_path": executable,
+            "resolved_path": resolved,
+            "probe_command": command,
+            "duration_ms": duration_ms,
+            "reason": "timeout",
+            "degraded": True,
+            "version": None,
+        }
     except OSError as err:
+        # Transient: the probe's own fork/exec failed (e.g. EAGAIN under load).
+        # Degrade rather than block — a truly unrunnable binary fails at spawn.
         duration_ms = max(0, round((time.monotonic() - started) * 1000))
-        raise AgentCliProbeError(
-            f"{dep.label} startup probe could not execute {executable_display}: {err}",
-            {
-                "agent_key": agent_key,
-                "binary_path": executable,
-                "resolved_path": resolved,
-                "probe_command": command,
-                "duration_ms": duration_ms,
-                "reason": "exec_error",
-            },
-        ) from err
+        log.warning(
+            "%s startup probe could not execute %s: %s — spawning anyway",
+            dep.label, executable_display, err,
+        )
+        return {
+            "agent_key": agent_key,
+            "binary_path": executable,
+            "resolved_path": resolved,
+            "probe_command": command,
+            "duration_ms": duration_ms,
+            "reason": "exec_error",
+            "degraded": True,
+            "version": None,
+        }
 
     duration_ms = max(0, round((time.monotonic() - started) * 1000))
     output = ((proc.stdout or "") + (proc.stderr or "")).strip()
@@ -1543,13 +1581,33 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
                     )
                 )
         elif msg_type == "agent.session_exists":
-            exists = _session_exists(
-                str(payload.get("agent", "")),
-                str(payload.get("workspace_path", "")),
-                str(payload.get("session_id", "")),
-            )
+            _agent = str(payload.get("agent", ""))
+            _ws = str(payload.get("workspace_path", ""))
+            _sid = str(payload.get("session_id", ""))
+            exists = _session_exists(_agent, _ws, _sid)
+            checked_path = _session_lookup_path(_agent, _ws, _sid)
+            if not exists and _sid.strip():
+                # Diagnostic: a resume that reports "not found" logs exactly
+                # where it looked, so a colliding/encoded path is visible.
+                log.info(
+                    "resume preflight miss: agent=%s session=%s checked=%s",
+                    _agent.strip().lower(), _sid.strip(),
+                    checked_path or "(vendor-managed)",
+                )
             await session.send_json(
-                make_response(msg_id, msg_type, {"exists": exists})
+                make_response(msg_id, msg_type, {"exists": exists, "checked_path": checked_path})
+            )
+        elif msg_type == "agent.orphan_scan":
+            # Read-only leftover count (dead-backend PTY children still alive).
+            orphans = await asyncio.to_thread(pty_registry.scan_orphans)
+            await session.send_json(
+                make_response(msg_id, msg_type, {"orphans": orphans, "count": len(orphans)})
+            )
+        elif msg_type == "agent.reap_orphans":
+            # Manual cleanup: kill the leftover process groups reap_stale finds.
+            reaped = await asyncio.to_thread(pty_registry.reap_stale)
+            await session.send_json(
+                make_response(msg_id, msg_type, {"reaped": reaped, "count": len(reaped)})
             )
         elif msg_type == "pipeline.resume":
             project, resume_index = project_store.resume_pipeline(payload["workspace_path"])
