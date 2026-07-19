@@ -817,6 +817,14 @@
     "dismiss": "忽略",
     "session-not-found": "找不到 {agent} 的先前對話，已改開新對話。"
   },
+  "orphans": {
+    "title": "殘留 CLI 程序",
+    "leftover": "殘留",
+    "confirm": "偵測到 {count} 個先前殘留的 CLI 程序 — 可能耗盡記憶體。要清理嗎？",
+    "clean": "清理",
+    "cleaned": "已清理 {count} 個殘留程序",
+    "failed": "清理失敗"
+  },
   "cli-health": {
     "kicker": "CLI 健康檢查",
     "title": "Navide 發現 Agent CLI 設定問題",

@@ -4,6 +4,33 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.48] — 2026-07-20 — unsigned preview
+
+### Added
+
+- Interactive plan documents: agent-authored HTML plans with a todo sidebar, live stage and status updates, comment anchors, and one-click task dispatch from the plan into CLI panes.
+- Manual pane sessions for capturing terminal work outside a spawned agent.
+- Status bar indicator for lingering CLI processes, with scan and reap actions.
+
+### Changed
+
+- Reduce keystroke echo latency in terminals with an adaptive output-flush fast path and focus-priority scheduling.
+- Resolve CLI commands through an interactive login shell so PATH entries written by installers (for example `~/.local/bin` or Homebrew) are visible when the app is launched from Finder or the Dock.
+- Refresh PATH from the login shell before spawning so newly installed CLIs are found without restarting the app.
+- Improve npm-based dependency install detection during onboarding.
+
+### Fixed
+
+- CLI agents failing to launch in packaged builds because the backend inherited the GUI's restricted PATH.
+- Spawn probe now degrades to a warning on timeout or transient errors instead of blocking the launch.
+- Reap breakaway PTY processes that escaped group termination, preventing lingering CLI processes from accumulating.
+- Agent history log preview reading the wrong path; the real log path is now stored and older entries are matched by filename across day folders.
+- De-duplicate pane restore to avoid concurrent restore races.
+
+### Distribution note
+
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
+
 ## [0.1.47] — 2026-07-17 — unsigned preview
 
 ### Added

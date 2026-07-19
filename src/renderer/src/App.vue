@@ -230,7 +230,7 @@ watch(
   () => backend.status.value,
   (s) => {
     if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
-    if (s === 'connected') { booting.value = false; bootError.value = false }
+    if (s === 'connected') { booting.value = false; bootError.value = false; void refreshOrphanCount() }
     // On a hard failure, keep the overlay and show an error + Retry (the app is
     // non-functional without a backend anyway). 'disconnected' is transient
     // during reconnect backoff, so it's left alone.
@@ -3418,6 +3418,40 @@ async function sendQuiet<T = unknown>(
     pipelineLog(`${type} threw: ${String((err as Error).message ?? err)}`)
     return null
   }
+}
+
+// ── Leftover CLI process cleanup (status-bar indicator) ─────────────────────
+// A previous backend run that died without its shutdown sweep can leave PTY
+// children (claude/codex) alive; enough of them exhausts RAM (observed: dozens
+// of leftover `claude` eating swap, making every new CLI unlaunchable). Surface
+// the count in the status bar so it's visible BEFORE it degrades the machine;
+// click to clean up. Main window only — child windows share the same backend.
+const orphanCount = ref(0)
+
+async function refreshOrphanCount(): Promise<void> {
+  if (isDetachedWindow) return
+  const resp = await sendQuiet<{ count: number }>('agent.orphan_scan', {})
+  orphanCount.value = resp?.count ?? 0
+}
+
+async function reapOrphans(): Promise<void> {
+  if (orphanCount.value <= 0) return
+  const ok = await notifyRestore.confirm(
+    i18n.global.t('orphans.confirm', { count: orphanCount.value }),
+    {
+      title: i18n.global.t('orphans.title'),
+      confirmText: i18n.global.t('orphans.clean'),
+      cancelText: i18n.global.t('restore.dismiss'),
+    },
+  )
+  if (!ok) return
+  const resp = await sendQuiet<{ count: number }>('agent.reap_orphans', {})
+  if (resp) {
+    notifyRestore.toast(i18n.global.t('orphans.cleaned', { count: resp.count ?? 0 }), { type: 'success' })
+  } else {
+    notifyRestore.toast(i18n.global.t('orphans.failed'), { type: 'error' })
+  }
+  await refreshOrphanCount()
 }
 
 /** Fetch framework docs from Context7 via MCP. Returns "" on failure (best-effort). */
@@ -7452,6 +7486,12 @@ function paneIsCommander(p: ActivePane): boolean {
         <span v-if="panes.length > 0" class="sb-item sb-agents">
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
+        <span
+          v-if="orphanCount > 0"
+          class="sb-item sb-orphans"
+          :title="$t('orphans.title')"
+          @click="reapOrphans"
+        >⚠ {{ orphanCount }} {{ $t('orphans.leftover') }}</span>
         <span class="sb-item sb-build">{{ buildTag }}</span>
       </div>
     </div>
@@ -8667,6 +8707,8 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .sb-url { color: var(--text-muted); font-size: 10px; }
 .sb-build { color: var(--text-muted); }
+.sb-orphans { color: var(--danger, #C0392B); cursor: pointer; font-weight: 600; }
+.sb-orphans:hover { text-decoration: underline; }
 
 /* Pane right-click context menu */
 .pane-ctx-backdrop { position: fixed; inset: 0; z-index: 999; }

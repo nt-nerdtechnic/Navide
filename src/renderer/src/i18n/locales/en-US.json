@@ -817,6 +817,14 @@
     "dismiss": "Dismiss",
     "session-not-found": "Couldn't find {agent}'s previous conversation — opened a new one instead."
   },
+  "orphans": {
+    "title": "Leftover CLI processes",
+    "leftover": "leftover",
+    "confirm": "Found {count} leftover CLI process(es) from a previous run — they can exhaust memory. Clean them up?",
+    "clean": "Clean up",
+    "cleaned": "Cleaned up {count} leftover process(es)",
+    "failed": "Cleanup failed"
+  },
   "cli-health": {
     "kicker": "CLI health check",
     "title": "Navide found an agent CLI setup issue",
