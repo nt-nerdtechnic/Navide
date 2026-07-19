@@ -44,6 +44,13 @@ Field rules:
 - `todos[].id`: stable kebab-case; never renumber existing ids.
 - `reviewNotes[].author`: `user` or `ai`. `resolved` flips to `true` only after
   the note is addressed; put the response in `reply`.
+- `reviewNotes[].anchor` (optional, defaults to `""`): heading text of the
+  section the note is anchored to; empty means a document-level note.
+- `executions` (optional, absent by default): dispatch log
+  `[{ "agent": "<agent-key>", "startedAt": "<ISO-8601>" }]`, appended each
+  time the plan is dispatched to a CLI agent for execution.
+- Unknown meta fields are preserved on rewrite; never strip fields you do
+  not recognize.
 - A file without a valid `plan-meta` block still opens in preview but is
   listed as a plain doc (no progress tracking).
 

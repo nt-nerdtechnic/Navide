@@ -66,11 +66,18 @@ class _RepoHandler(FileSystemEventHandler):
     """watchdog handler bound to one repo root. Filters noise, then bridges
     meaningful events to the asyncio loop as a 'this workspace is dirty' signal."""
 
-    def __init__(self, root: Path, ws_path: str, on_dirty: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        ws_path: str,
+        on_dirty: Callable[[str], None],
+        on_plans_dirty: Callable[[str], None] | None = None,
+    ) -> None:
         super().__init__()
         self._root = root
         self._ws_path = ws_path
         self._on_dirty = on_dirty
+        self._on_plans_dirty = on_plans_dirty
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         # `closed`/`opened` events carry no state change; only react to actual
@@ -78,10 +85,30 @@ class _RepoHandler(FileSystemEventHandler):
         if event.event_type in ("opened", "closed"):
             return
         src = str(event.src_path)
-        if self._is_relevant(src) or (
-            getattr(event, "dest_path", "") and self._is_relevant(str(event.dest_path))
+        dest = str(event.dest_path) if getattr(event, "dest_path", "") else ""
+        # Plan documents live under .agent-team/, which the git filter ignores
+        # wholesale — check them on a separate channel before that filter.
+        if self._on_plans_dirty is not None and (
+            self._is_plan_doc(src) or (dest and self._is_plan_doc(dest))
         ):
+            self._on_plans_dirty(self._ws_path)
+        if self._is_relevant(src) or (dest and self._is_relevant(dest)):
             self._on_dirty(self._ws_path)
+
+    def _is_plan_doc(self, src: str) -> bool:
+        """True for a user-facing plan document directly under
+        `.agent-team/plans/` — infra files (`_` prefix), hidden files and
+        `.history/` snapshots are excluded, so snapshot writes triggered by a
+        plans event can never re-trigger it."""
+        try:
+            rel = Path(src).resolve().relative_to(self._root)
+        except (ValueError, OSError):
+            return False
+        parts = rel.parts
+        if len(parts) != 3 or parts[0] != ".agent-team" or parts[1] != "plans":
+            return False
+        name = parts[2]
+        return name.endswith(".html") and not name.startswith(("_", "."))
 
     def _is_relevant(self, src: str) -> bool:
         try:
@@ -113,13 +140,21 @@ class GitWatcher:
     """One Observer, many repos. Lazily `watch()` a workspace the first time the
     GitPane looks at it; debounced `on_change(ws_path)` fires on disk changes."""
 
-    def __init__(self, on_change: ChangeSink, *, debounce_s: float = 0.4) -> None:
+    def __init__(
+        self,
+        on_change: ChangeSink,
+        *,
+        on_plans_change: ChangeSink | None = None,
+        debounce_s: float = 0.4,
+    ) -> None:
         self._on_change = on_change
+        self._on_plans_change = on_plans_change
         self._debounce_s = debounce_s
         self._loop: asyncio.AbstractEventLoop | None = None
         self._observer: Observer | None = None
         self._roots: dict[str, Path] = {}  # ws_path -> resolved root
         self._pending: dict[str, asyncio.TimerHandle] = {}
+        self._pending_plans: dict[str, asyncio.TimerHandle] = {}
         self._started = False
 
     def start(self) -> None:
@@ -138,6 +173,9 @@ class GitWatcher:
         for th in self._pending.values():
             th.cancel()
         self._pending.clear()
+        for th in self._pending_plans.values():
+            th.cancel()
+        self._pending_plans.clear()
         if self._observer:
             self._observer.stop()
             try:
@@ -159,7 +197,12 @@ class GitWatcher:
             return
         if not root.is_dir():
             return
-        handler = _RepoHandler(root, ws_path, self._mark_dirty_threadsafe)
+        handler = _RepoHandler(
+            root,
+            ws_path,
+            self._mark_dirty_threadsafe,
+            self._mark_plans_dirty_threadsafe if self._on_plans_change else None,
+        )
         try:
             self._observer.schedule(handler, str(root), recursive=True)
         except Exception as err:  # noqa: BLE001
@@ -194,3 +237,30 @@ class GitWatcher:
     def _fire(self, ws_path: str) -> None:
         self._pending.pop(ws_path, None)
         asyncio.create_task(self._on_change(ws_path))
+
+    # ─────────────────── plans channel (same debounce model) ──────────────
+
+    def _mark_plans_dirty_threadsafe(self, ws_path: str) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(self._schedule_fire_plans, ws_path)
+        except RuntimeError:
+            pass  # loop closed mid-flight
+
+    def _schedule_fire_plans(self, ws_path: str) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+        existing = self._pending_plans.get(ws_path)
+        if existing is not None:
+            existing.cancel()
+        self._pending_plans[ws_path] = loop.call_later(
+            self._debounce_s, self._fire_plans, ws_path
+        )
+
+    def _fire_plans(self, ws_path: str) -> None:
+        self._pending_plans.pop(ws_path, None)
+        if self._on_plans_change is not None:
+            asyncio.create_task(self._on_plans_change(ws_path))

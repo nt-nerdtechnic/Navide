@@ -80,6 +80,7 @@ from . import pty_registry
 from . import search_service
 from . import editor_service
 from . import onboarding_deps
+from . import plan_history
 from .git_watcher import GitWatcher
 
 log = logging.getLogger("agent_team_backend")
@@ -358,6 +359,25 @@ class Session:
 async def _broadcast_git_changed(ws_path: str) -> None:
     """GitWatcher sink: a repo's working tree / .git changed on disk."""
     await broadcast(make_event("git.changed", {"workspace_path": ws_path}))
+
+
+async def _broadcast_plans_changed(ws_path: str) -> None:
+    """GitWatcher plans sink: a plan document under `.agent-team/plans/`
+    changed on disk (any writer — App write path or an agent CLI editing the
+    file directly). Record stage-transition snapshots first so subscribers
+    refreshing on the event see up-to-date history, then notify."""
+    try:
+        await asyncio.to_thread(plan_history.snapshot_plans, ws_path)
+    except Exception as err:  # noqa: BLE001
+        log.warning("plan snapshot scan failed for %s: %s", ws_path, err)
+    await broadcast(make_event("plans.changed", {"workspace_path": ws_path}))
+
+
+def _watch_plans_workspace(ws_path: str, rel_path: str) -> None:
+    """A plans-subtree fs access means a plan surface is open — start watching
+    that workspace (idempotent) so plan edits push `plans.changed`."""
+    if _git_watcher is not None and rel_path.startswith(".agent-team/plans"):
+        _git_watcher.watch(ws_path)
 
 
 _ASKPASS_PROMPT_URL_RE = re.compile(r"for '([^']+)'")
@@ -730,7 +750,7 @@ async def _start_log_watcher() -> None:
     # terminal running git). Workspaces are registered lazily on first
     # git.status — see the WebSocket handler.
     global _git_watcher
-    _git_watcher = GitWatcher(_broadcast_git_changed)
+    _git_watcher = GitWatcher(_broadcast_git_changed, on_plans_change=_broadcast_plans_changed)
     _git_watcher.start()
 
     # Start MCP servers in the background so they're ready for the first pipeline run.
@@ -3040,6 +3060,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         elif msg_type == "fs.list_dir":
             ws_path = payload.get("workspace_path") or ""
             rel = payload.get("rel_path", "") or ""
+            _watch_plans_workspace(ws_path, rel)
             show_hidden = bool(payload.get("show_hidden", False))
             result = await asyncio.to_thread(fs_service.list_dir, ws_path, rel, show_hidden=show_hidden)
             await session.send_json(make_response(msg_id, msg_type, result))
@@ -3096,6 +3117,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.write_file":
             ws_path = payload.get("workspace_path") or ""
+            _watch_plans_workspace(ws_path, payload.get("rel_path", "") or "")
             expected_mtime = payload.get("expected_mtime")
             result = await asyncio.to_thread(
                 fs_service.write_file,
@@ -3109,6 +3131,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
 
         elif msg_type == "fs.read_file":
             ws_path = payload.get("workspace_path") or ""
+            _watch_plans_workspace(ws_path, payload.get("rel_path", "") or "")
             enc_override = payload.get("encoding_override") or None
             result = await asyncio.to_thread(
                 fs_service.read_file, ws_path, payload.get("rel_path", "") or "", encoding_override=enc_override
