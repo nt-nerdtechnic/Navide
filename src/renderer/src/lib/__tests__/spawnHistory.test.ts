@@ -4,6 +4,7 @@ import {
   historyEntryLabel,
   isTerminalCrashLoopOpen,
   legacyHistoryLogPath,
+  manualLogFileName,
   recordTerminalExit,
   resetTerminalCrashLoop,
   terminalCrashKey,
@@ -117,6 +118,12 @@ describe('spawn history titles', () => {
     }, 'Exact title')).toBe(true)
     expect(entries[0].customName).toBe('Exact title')
     expect(entries[1].customName).toBe('Exact title')
+  })
+})
+
+describe('manualLogFileName', () => {
+  it('joins the agent key with the first 8 chars of the pane id', () => {
+    expect(manualLogFileName('claude', 'abcd1234-5678')).toBe('claude-abcd1234.log')
   })
 })
 

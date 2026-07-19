@@ -814,7 +814,8 @@
     "dialog-title": "恢復上次的工作階段？",
     "dialog-message": "偵測到上次未正常關閉。要重新開啟 {count} 個 workspace 嗎？",
     "apply": "恢復",
-    "dismiss": "忽略"
+    "dismiss": "忽略",
+    "session-not-found": "找不到 {agent} 的先前對話，已改開新對話。"
   },
   "cli-health": {
     "kicker": "CLI 健康檢查",

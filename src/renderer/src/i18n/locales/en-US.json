@@ -814,7 +814,8 @@
     "dialog-title": "Restore previous session?",
     "dialog-message": "The app didn't close properly last time. Reopen {count} workspace(s)?",
     "apply": "Restore",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "session-not-found": "Couldn't find {agent}'s previous conversation — opened a new one instead."
   },
   "cli-health": {
     "kicker": "CLI health check",

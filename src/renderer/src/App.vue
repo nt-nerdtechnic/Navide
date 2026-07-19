@@ -64,8 +64,10 @@ import { planSpecHintBlock } from './lib/planSpecHint'
 import { quickClassify } from './lib/quick-classify'
 import {
   buildResumeCommand,
+  dedupeRestorablePanes,
   normalizeResumeSessionId,
   shouldPreserveMissingSessionOnRestore,
+  shouldWarnMissingResume,
 } from './lib/resume-command'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
@@ -80,7 +82,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { historyEntryLabel, legacyHistoryLogPath, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
+import { historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -2597,7 +2599,8 @@ registerCommand('workbench.action.newWindow', async () => {
 })
 registerCommand('workbench.action.openSettings', () => { showSettings.value = true })
 registerCommand('workbench.action.closeModal', () => {
-  if (showSettings.value) showSettings.value = false
+  if (previewLogOpen.value) previewLogOpen.value = false
+  else if (showSettings.value) showSettings.value = false
   else if (showKbPanel.value) showKbPanel.value = false
   else if (showCompletionModal.value) showCompletionModal.value = false
 })
@@ -2622,7 +2625,7 @@ registerCommand('workbench.action.openPlans', async () => {
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
-watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c))
+watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c || previewLogOpen.value))
 
 function onFocusPane(paneId: string): void {
   focusPaneId.value = paneId
@@ -2635,14 +2638,34 @@ function onFocusPane(paneId: string): void {
 const previewLogContent = ref<string>('')
 const previewLogTitle = ref<string>('')
 const previewLogOpen = ref<boolean>(false)
+watch(previewLogOpen, (open) => {
+  setContext('modalOpen', open || showSettings.value || showKbPanel.value || showCompletionModal.value)
+  if (!open) {
+    // Drop the (possibly multi-MB) log text once the preview closes so it
+    // doesn't linger in memory and doesn't flash stale content on reopen.
+    previewLogContent.value = ''
+    previewLogTitle.value = ''
+  }
+})
 
 async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
   const ws = entry.workspacePath || currentWorkspace.value
   if (!ws) return
-  // Legacy entries predate outputLogFile persistence — reconstruct their path
-  // from workspace/date as a best-effort fallback (see legacyHistoryLogPath).
-  const logPath = entry.outputLogFile || legacyHistoryLogPath(entry, ws)
-  const api = (window as Window & { agentTeam?: { readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }> } }).agentTeam
+  const api = (window as Window & { agentTeam?: {
+    readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }>
+    findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }>
+  } }).agentTeam
+  // Legacy entries predate outputLogFile persistence. Manual sessions: search
+  // by filename (unique — includes paneId) since spawnedAt can drift from the
+  // log's actual date folder after restore/re-record. Pipeline entries (and
+  // manual entries the search doesn't find) fall back to the existing
+  // best-effort date reconstruction (see legacyHistoryLogPath).
+  let logPath = entry.outputLogFile
+  if (!logPath && entry.origin === 'manual' && api?.findManualLog) {
+    const found = await api.findManualLog(ws, manualLogFileName(entry.agentKey, entry.paneId))
+    logPath = found.ok ? found.path ?? undefined : undefined
+  }
+  if (!logPath) logPath = legacyHistoryLogPath(entry, ws)
   if (api?.readFileFrom && logPath) {
     try {
       const res = await api.readFileFrom(logPath, 0)
@@ -3103,6 +3126,14 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   if (isDetachedWindow) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === detachedGroupId)
   // Main-window reattach after a child closes: restore just the returning group.
   else if (onlyGroupId !== undefined) toRestore = toRestore.filter((p) => (p.run_group_id ?? '') === onlyGroupId)
+  // Collapse duplicate records that resume the SAME conversation: spawning
+  // several `--resume <same id>` concurrently makes the CLI fork/conflict and
+  // leak processes (a source of the leftover-agent pileup).
+  const beforeDedupe = toRestore.length
+  toRestore = dedupeRestorablePanes(toRestore)
+  if (toRestore.length < beforeDedupe) {
+    pipelineLog(`↩ Skipped ${beforeDedupe - toRestore.length} duplicate resume record(s)`)
+  }
   if (toRestore.length > 0) pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
   pipeline.workspacePath = workspacePath
 
@@ -3163,6 +3194,23 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       return
     }
     const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+    // A pane that was continuing a conversation but whose transcript is gone
+    // falls back to a fresh pane below. Surface that instead of silently
+    // swapping in a new conversation (a resume that can't find its jsonl —
+    // moved home, deleted, or a transient failure under load — otherwise looks
+    // like the app lost the conversation).
+    if (shouldWarnMissingResume(
+      saved.agent, rawSessionId, canResume,
+      looksLikeResumeCommand(saved.agent, saved.command || '')
+    )) {
+      pipelineLog(
+        `⚠ ${saved.agent}: previous conversation ${sessionId} not found at ${workspacePath}; opened a fresh one`
+      )
+      notifyRestore.toast(
+        i18n.global.t('restore.session-not-found', { agent: saved.agent }),
+        { type: 'error', duration: 8000 }
+      )
+    }
     const fallbackCommand = saved.command && !looksLikeResumeCommand(saved.agent, saved.command)
       ? saved.command : ''
     const commandOverride = resumeCmd || fallbackCommand || ''
@@ -8678,7 +8726,7 @@ body,
   z-index: 10000;
 }
 .log-preview-modal {
-  background: var(--bg-primary);
+  background: var(--bg-base);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   width: 80vw;
@@ -8694,7 +8742,7 @@ body,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: var(--bg-secondary);
+  background: var(--bg-subtle);
 }
 .log-preview-header h3 {
   margin: 0;
@@ -8717,11 +8765,11 @@ body,
   flex: 1;
   overflow: auto;
   padding: 16px;
-  background: var(--bg-default);
+  background: var(--bg-base);
 }
 .log-preview-body pre {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 12px;
   color: var(--text-primary);
   white-space: pre-wrap;

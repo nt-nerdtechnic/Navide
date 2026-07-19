@@ -37,6 +37,57 @@ export function shouldPreserveMissingSessionOnRestore(
   return agentKey === 'codex' && !!savedSessionId.trim() && !canResume
 }
 
+/** A pane that was continuing a conversation (its last command resumed a
+ * session) but whose session file is now gone falls back to a fresh pane on
+ * restore. Return true to warn the user instead of silently swapping in a new
+ * conversation — a resume that can't find its transcript (moved home, deleted,
+ * or a transient failure under load) otherwise looks like the app lost it.
+ *
+ * Requires `lastCommandWasResume` so a genuinely new pane (last launched with a
+ * pinned --session-id, no transcript yet) is NOT flagged. Codex is excluded:
+ * it is preserved untouched (see shouldPreserveMissingSessionOnRestore), never
+ * silently replaced, so it needs no warning here.
+ */
+export function shouldWarnMissingResume(
+  agentKey: string,
+  savedSessionId: string,
+  canResume: boolean,
+  lastCommandWasResume: boolean,
+): boolean {
+  return (
+    agentKey !== 'codex' &&
+    !!savedSessionId.trim() &&
+    !canResume &&
+    lastCommandWasResume
+  )
+}
+
+/** Collapse restorable panes that point at the SAME conversation. Legacy
+ * project.json accumulation can persist several 'spawned' records sharing one
+ * session_id; restoring them concurrently spawns multiple `--resume <id>` for a
+ * single conversation, which the CLI cannot share — it forks/conflicts and
+ * leaks processes. Keep the first record per (agent, session_id). Panes with no
+ * session_id (genuinely fresh) are independent and always kept. Order preserved.
+ */
+export function dedupeRestorablePanes<T extends { agent?: string; session_id?: string }>(
+  panes: T[],
+): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const p of panes) {
+    const id = normalizeResumeSessionId(p.agent ?? '', (p.session_id ?? '').trim())
+    if (!id) {
+      out.push(p) // no session → independent fresh pane, never merged
+      continue
+    }
+    const key = `${p.agent ?? ''} ${id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(p)
+  }
+  return out
+}
+
 export function buildResumeCommand(
   agentKey: string,
   sessionId: string,

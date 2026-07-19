@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildResumeCommand,
+  dedupeRestorablePanes,
   normalizeResumeSessionId,
   shouldPreserveMissingSessionOnRestore,
+  shouldWarnMissingResume,
 } from '../resume-command'
 
 describe('normalizeResumeSessionId', () => {
@@ -44,6 +46,78 @@ describe('shouldPreserveMissingSessionOnRestore', () => {
 
   it('does not change the existing restore policy for other agents', () => {
     expect(shouldPreserveMissingSessionOnRestore('claude', 'missing-id', false)).toBe(false)
+  })
+})
+
+describe('shouldWarnMissingResume', () => {
+  it('warns when a resuming claude pane loses its transcript', () => {
+    // was continuing a conversation (last cmd resumed), now the file is gone
+    expect(shouldWarnMissingResume('claude', 'sess-1', false, true)).toBe(true)
+  })
+
+  it('does not warn a genuinely fresh pane (last command was not a resume)', () => {
+    expect(shouldWarnMissingResume('claude', 'sess-1', false, false)).toBe(false)
+  })
+
+  it('does not warn when the session is resumable', () => {
+    expect(shouldWarnMissingResume('claude', 'sess-1', true, true)).toBe(false)
+  })
+
+  it('does not warn without a saved session id', () => {
+    expect(shouldWarnMissingResume('claude', '', false, true)).toBe(false)
+    expect(shouldWarnMissingResume('claude', '   ', false, true)).toBe(false)
+  })
+
+  it('excludes codex (preserved untouched, never silently replaced)', () => {
+    expect(shouldWarnMissingResume('codex', 'sess-1', false, true)).toBe(false)
+  })
+})
+
+describe('dedupeRestorablePanes', () => {
+  const uuid = '019f6155-a2ae-72a2-a455-bf454b8f9f90'
+
+  it('keeps only the first record per (agent, session_id)', () => {
+    const panes = [
+      { agent: 'claude', session_id: 's1', pane_id: 'a' },
+      { agent: 'claude', session_id: 's1', pane_id: 'b' },
+      { agent: 'claude', session_id: 's1', pane_id: 'c' },
+    ]
+    expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a'])
+  })
+
+  it('does not merge the same id across different agents', () => {
+    const panes = [
+      { agent: 'claude', session_id: 's1', pane_id: 'a' },
+      { agent: 'grok', session_id: 's1', pane_id: 'b' },
+    ]
+    expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a', 'b'])
+  })
+
+  it('always keeps panes without a session id (fresh, independent)', () => {
+    const panes = [
+      { agent: 'claude', session_id: '', pane_id: 'a' },
+      { agent: 'claude', session_id: '', pane_id: 'b' },
+      { agent: 'claude', pane_id: 'c' },
+    ]
+    expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('dedupes codex records that normalize to the same rollout id', () => {
+    const panes = [
+      { agent: 'codex', session_id: uuid, pane_id: 'a' },
+      { agent: 'codex', session_id: `rollout-2026-07-14T23-53-50-${uuid}.jsonl`, pane_id: 'b' },
+    ]
+    expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a'])
+  })
+
+  it('preserves order and mixes deduped + fresh correctly', () => {
+    const panes = [
+      { agent: 'claude', session_id: 's1', pane_id: 'a' },
+      { agent: 'claude', session_id: '', pane_id: 'b' },
+      { agent: 'claude', session_id: 's1', pane_id: 'c' }, // dup of a
+      { agent: 'claude', session_id: 's2', pane_id: 'd' },
+    ]
+    expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a', 'b', 'd'])
   })
 })
 

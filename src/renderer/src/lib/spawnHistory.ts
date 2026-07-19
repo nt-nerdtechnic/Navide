@@ -67,6 +67,13 @@ export interface LegacyHistoryLogPathEntry {
   agentKey: string
 }
 
+/** Filename used for a manual-session conversation log:
+ *  `<agentKey>-<first 8 chars of paneId>.log`. Shared by legacyHistoryLogPath
+ *  and the outputLogFile-less search fallback so both stay in sync. */
+export function manualLogFileName(agentKey: string, paneId: string): string {
+  return `${agentKey}-${paneId.slice(0, 8)}.log`
+}
+
 /** Reconstructs the conversation log path for spawnHistory entries persisted
  *  before outputLogFile was recorded at spawn time. Best-effort: assumes the
  *  workspace and UTC spawn date used at spawn time, which may drift. */
@@ -74,7 +81,7 @@ export function legacyHistoryLogPath(entry: LegacyHistoryLogPathEntry, workspace
   const ymd = new Date(entry.spawnedAt).toISOString().slice(0, 10).replace(/-/g, '')
   return entry.origin === 'pipeline'
     ? `${workspacePath}/.agent-team/stage-${entry.stageId}-${entry.paneId.slice(0, 8)}.log`
-    : `${workspacePath}/.agent-team/manual/${ymd}/${entry.agentKey}-${entry.paneId.slice(0, 8)}.log`
+    : `${workspacePath}/.agent-team/manual/${ymd}/${manualLogFileName(entry.agentKey, entry.paneId)}`
 }
 
 export interface TerminalStartupProbe {

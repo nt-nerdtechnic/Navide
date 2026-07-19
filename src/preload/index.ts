@@ -153,6 +153,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('dialog:openJson', args),
   readFileFrom: (filePath: string, fromByte: number): Promise<{ ok: boolean; content: string; newOffset: number; error?: string }> =>
     ipcRenderer.invoke('fs:readFrom', filePath, fromByte),
+  findManualLog: (workspacePath: string, filename: string): Promise<{ ok: boolean; path: string | null; error?: string }> =>
+    ipcRenderer.invoke('logs:findManualLog', workspacePath, filename),
   pickFile: (args?: {
     title?: string
     filters?: Array<{ name: string; extensions: string[] }>

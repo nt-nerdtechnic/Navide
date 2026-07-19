@@ -24,6 +24,7 @@ import {
   type DropCandidate
 } from './cross-window-drag'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
+import { findManualLogFile } from './manual-log-search'
 import {
   getPermissionStatuses,
   requestPermission,
@@ -1162,6 +1163,18 @@ ipcMain.handle('fs:readFrom', async (_event, filePath: string, fromByte: number)
     return { ok: true, content: buf.toString('utf-8'), newOffset: stat.size }
   } catch (e) {
     return { ok: false, content: '', newOffset: fromByte, error: String((e as Error)?.message ?? e) }
+  }
+})
+
+// Legacy spawnHistory fallback: find a manual-session log by filename when
+// outputLogFile wasn't recorded at spawn time (see manual-log-search.ts).
+ipcMain.handle('logs:findManualLog', async (_event, workspacePath: string, filename: string) => {
+  if (!workspacePath || typeof workspacePath !== 'string') return { ok: false, path: null }
+  try {
+    const path = await findManualLogFile(workspacePath, filename)
+    return { ok: true, path }
+  } catch (e) {
+    return { ok: false, path: null, error: String((e as Error)?.message ?? e) }
   }
 })
 
