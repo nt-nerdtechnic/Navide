@@ -95,6 +95,27 @@ describe('PlanMarkdownBody – rendering', () => {
     expect(wrapper.find('.pmb-section').exists()).toBe(false)
     expect(wrapper.find('.pmb-btn').exists()).toBe(false)
   })
+
+  it('shows frontmatter todos in the body when a plan has no prose sections', async () => {
+    const todoOnly = `---
+name: Todo Only
+overview: ov
+todos:
+  - id: t1
+    content: Ship the thing
+    status: pending
+stage: draft
+---
+`
+    const { wrapper } = mountBody(todoOnly)
+    await flushPromises()
+    // Not the empty state — the todo is rendered read-only in the body.
+    expect(wrapper.text()).not.toContain('No content yet')
+    expect(wrapper.find('.pmb-todos-section').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Ship the thing')
+    // No prose sections, so the section CRUD controls are absent here.
+    expect(wrapper.find('.pmb-section').exists()).toBe(false)
+  })
 })
 
 describe('PlanMarkdownBody – section edit/delete via store', () => {

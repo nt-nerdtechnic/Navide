@@ -77,6 +77,9 @@ const parsed = computed(() => (rawContent.value ? parsePlanFile(rawContent.value
 const sections = computed<PlanSection[]>(() =>
   parsed.value?.sections.filter((sec) => sec.body.trim()) ?? [],
 )
+// Frontmatter todos, shown read-only in the body so a todo-only plan is not
+// blank; full CRUD lives in the toolbar's Todos panel.
+const todos = computed(() => parsed.value?.todos ?? [])
 // No parseable frontmatter → render the whole file as read-only markdown.
 const fallbackLines = computed(() =>
   !parsed.value && rawContent.value.trim() ? renderLines(rawContent.value) : [],
@@ -239,7 +242,20 @@ defineExpose({ isEditing, cancelEdit, scrollToAnchor })
         </div>
       </div>
 
-      <div v-if="sections.length === 0" class="pmb-state">No document sections yet.</div>
+      <!-- Read-only frontmatter todos (edit them in the toolbar's Todos panel). -->
+      <div v-if="todos.length" class="pmb-todos-section">
+        <div class="pmb-section-head">
+          <div class="pmb-section-title">{{ t('pane.plans.todos') }}</div>
+        </div>
+        <ul class="pmb-todos">
+          <li v-for="todo in todos" :key="todo.id" class="pmb-todo" :data-status="todo.status">
+            <span class="pmb-todo-status">{{ todo.status }}</span>
+            <span class="pmb-todo-content">{{ todo.content }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <div v-if="sections.length === 0 && todos.length === 0" class="pmb-state">No content yet.</div>
     </div>
 
     <!-- Fallback: no frontmatter — render the whole file as read-only markdown. -->
@@ -289,7 +305,8 @@ defineExpose({ isEditing, cancelEdit, scrollToAnchor })
   max-width: 860px;
 }
 
-.pmb-section {
+.pmb-section,
+.pmb-todos-section {
   border-bottom: 1px solid var(--border-default);
   margin-bottom: 18px;
   padding-bottom: 16px;
@@ -307,6 +324,40 @@ defineExpose({ isEditing, cancelEdit, scrollToAnchor })
   font-size: 15px;
   font-weight: 650;
   margin-bottom: 10px;
+}
+
+.pmb-todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pmb-todo {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--border, rgba(128, 128, 128, 0.2));
+}
+.pmb-todo:last-child {
+  border-bottom: none;
+}
+.pmb-todo-status {
+  flex: none;
+  min-width: 82px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #8b95a3);
+}
+.pmb-todo[data-status='done'] .pmb-todo-status {
+  color: var(--success, #2b8a3e);
+}
+.pmb-todo[data-status='in-progress'] .pmb-todo-status {
+  color: var(--warning, #c77400);
+}
+.pmb-todo[data-status='done'] .pmb-todo-content {
+  color: var(--text-muted, #8b95a3);
 }
 
 .pmb-section-actions {
