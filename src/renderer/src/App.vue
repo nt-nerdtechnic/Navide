@@ -57,7 +57,6 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
-import { resolvePaneStatus } from './lib/paneStatus'
 import { AGENT_SPECS } from './lib/agentSpecs'
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
@@ -712,11 +711,7 @@ function syncViews(): void {
       roleLabel: roleLabel(p.roleKey),
       stageId: p.stageId,
       command: p.command,
-      status: resolvePaneStatus(
-        (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
-        paneTurnCompleteAt.get(p.id) ?? 0,
-        paneLastActiveAt.get(p.id) ?? 0,
-      ),
+      status: (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
       error: ref?.error as string | undefined,
       injectionStatus: p.injectionStatus,
       preparationStatus: p.preparationStatus,
