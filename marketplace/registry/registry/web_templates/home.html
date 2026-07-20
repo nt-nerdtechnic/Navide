@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Navide Marketplace — discover extensions{% endblock %}
+
+{% macro card(e) %}
+<a class="card" href="/extensions/{{ e.namespace }}/{{ e.name }}">
+  <div class="card-head">
+    <h3 class="card-title">{{ e.display_name }}</h3>
+    {% if e.trust_tier == 'signed-verified' %}
+      <span class="badge badge-signed" title="Signature verified against publisher key">✓ signed</span>
+    {% else %}
+      <span class="badge badge-unsigned" title="No verified signature">unsigned</span>
+    {% endif %}
+  </div>
+  <div class="card-pub">{{ e.namespace }}{% if e.latest_version %} · v{{ e.latest_version }}{% endif %}</div>
+  <p class="card-desc">{{ e.description }}</p>
+  <div class="card-cats">
+    {% for c in e.categories %}<span class="chip">{{ c }}</span>{% endfor %}
+  </div>
+  {% if e.sensitive_capabilities %}
+  <div class="warn" title="Requests filesystem/terminal access">
+    ⚠ sensitive: {{ e.sensitive_capabilities|join(', ') }}
+  </div>
+  {% endif %}
+  <div class="card-meta">
+    <span title="Downloads">⬇ {{ e.download_count }}</span>
+    {% if e.rating_count %}
+      <span title="{{ e.rating_count }} ratings">★ {{ '%.1f'|format(e.rating_average) }} ({{ e.rating_count }})</span>
+    {% else %}
+      <span class="muted">★ unrated</span>
+    {% endif %}
+  </div>
+</a>
+{% endmacro %}
+
+{% block content %}
+{% if featured %}
+<section class="featured">
+  <h2 class="section-title">Featured</h2>
+  <div class="grid">
+    {% for e in featured %}{{ card(e) }}{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="browse">
+  <div class="browse-head">
+    <h2 class="section-title">Browse{% if query %} — “{{ query }}”{% endif %}</h2>
+    <form class="filters" action="/" method="get">
+      <input type="hidden" name="q" value="{{ query }}">
+      <label>Category
+        <select name="category" onchange="this.form.submit()">
+          <option value="">All</option>
+          {% for c in categories %}
+          <option value="{{ c }}" {% if c == active_category %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Sort
+        <select name="sort" onchange="this.form.submit()">
+          <option value="updated" {% if sort == 'updated' %}selected{% endif %}>Recently updated</option>
+          <option value="downloads" {% if sort == 'downloads' %}selected{% endif %}>Most downloaded</option>
+          <option value="rating" {% if sort == 'rating' %}selected{% endif %}>Top rated</option>
+        </select>
+      </label>
+      <noscript><button type="submit">Apply</button></noscript>
+    </form>
+  </div>
+
+  <p class="result-count">{{ total }} extension{{ '' if total == 1 else 's' }}</p>
+
+  {% if items %}
+  <div class="grid">
+    {% for e in items %}{{ card(e) }}{% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No extensions match your filters.</p>
+  {% endif %}
+</section>
+{% endblock %}

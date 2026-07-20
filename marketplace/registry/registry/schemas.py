@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VersionInfo(BaseModel):
@@ -18,6 +18,8 @@ class VersionInfo(BaseModel):
     """Declared `manifest.requires` capability allowlist."""
     sensitive_capabilities: list[str]
     """Subset of `capabilities` flagged for elevated scrutiny (fs/terminal)."""
+    download_count: int
+    """Downloads recorded for this specific version."""
 
 
 class ExtensionSummary(BaseModel):
@@ -29,6 +31,12 @@ class ExtensionSummary(BaseModel):
     categories: list[str]
     latest_version: str | None
     updated_at: datetime
+    download_count: int
+    """Aggregate downloads across all versions."""
+    rating_average: float
+    """Mean rating (0.0 when unrated)."""
+    rating_count: int
+    featured: bool
 
 
 class ExtensionDetail(ExtensionSummary):
@@ -70,6 +78,28 @@ class PublisherRegisterResponse(BaseModel):
     display_name: str | None
     has_public_key: bool
     has_token: bool
+
+
+class RatingRequest(BaseModel):
+    score: int = Field(ge=1, le=5)
+    """A 1-5 rating. Per-user auth/dedup is deferred (see README)."""
+
+
+class RatingResponse(BaseModel):
+    namespace: str
+    name: str
+    rating_average: float
+    rating_count: int
+
+
+class FeaturedRequest(BaseModel):
+    featured: bool = True
+
+
+class FeaturedResponse(BaseModel):
+    namespace: str
+    name: str
+    featured: bool
 
 
 class HealthResponse(BaseModel):

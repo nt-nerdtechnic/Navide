@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ ext.display_name }} — Navide Marketplace{% endblock %}
+
+{% block content %}
+<nav class="crumbs"><a href="/">← Marketplace</a></nav>
+
+<article class="detail">
+  <header class="detail-head">
+    {% if icon_path and latest_version %}
+    <img class="detail-icon"
+         src="/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ icon_path }}"
+         alt="{{ ext.display_name }} icon">
+    {% endif %}
+    <div class="detail-head-text">
+      <h1>{{ ext.display_name }}</h1>
+      <div class="detail-sub">
+        <span class="pub">{{ publisher }}</span>
+        {% if latest_version %}<span class="ver">v{{ latest_version }}</span>{% endif %}
+        {% if ext.trust_tier == 'signed-verified' %}
+          <span class="badge badge-signed">✓ signed-verified</span>
+        {% else %}
+          <span class="badge badge-unsigned">unsigned</span>
+        {% endif %}
+      </div>
+      <div class="detail-stats">
+        <span title="Total downloads">⬇ {{ download_count }} downloads</span>
+        {% if rating_count %}
+          <span>★ {{ '%.1f'|format(rating_average) }} ({{ rating_count }} ratings)</span>
+        {% else %}
+          <span class="muted">★ unrated</span>
+        {% endif %}
+      </div>
+      <div class="detail-cats">
+        {% for c in ext.categories %}<span class="chip">{{ c }}</span>{% endfor %}
+      </div>
+    </div>
+  </header>
+
+  {% if ext.sensitive_capabilities %}
+  <div class="warn warn-block">
+    ⚠ This extension requests sensitive capabilities:
+    <strong>{{ ext.sensitive_capabilities|join(', ') }}</strong>
+    (filesystem / terminal reach). Review before installing.
+  </div>
+  {% endif %}
+
+  {% if latest_version %}
+  <section class="install">
+    <h2 class="section-title">Install</h2>
+    <p>Fetch with the registry CLI:</p>
+    <pre class="code">navide-plugin install {{ ext.identity }}</pre>
+    <p>Or download the package directly:</p>
+    <pre class="code">GET /api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download</pre>
+  </section>
+  {% endif %}
+
+  {% if screenshots %}
+  <section class="screenshots">
+    <h2 class="section-title">Screenshots</h2>
+    <div class="shots">
+      {% for s in screenshots %}
+      <img src="/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ s }}"
+           alt="screenshot" loading="lazy">
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="readme">
+    <h2 class="section-title">README</h2>
+    {% if readme_html %}
+    <div class="markdown">{{ readme_html|safe }}</div>
+    {% else %}
+    <p class="empty">No README provided.</p>
+    {% endif %}
+  </section>
+
+  <section class="versions">
+    <h2 class="section-title">Versions</h2>
+    <table class="version-table">
+      <thead>
+        <tr><th>Version</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
+      </thead>
+      <tbody>
+        {% for v in versions %}
+        <tr class="{% if v.yanked %}yanked{% endif %}">
+          <td>{{ v.version }}{% if v.yanked %} <span class="tag">yanked</span>{% endif %}</td>
+          <td>
+            {% if v.trust_tier == 'signed-verified' %}
+              <span class="badge badge-signed">✓ signed</span>
+            {% else %}
+              <span class="badge badge-unsigned">unsigned</span>
+            {% endif %}
+          </td>
+          <td>
+            {% for c in v.capabilities %}
+              <span class="chip {% if c in v.sensitive_capabilities %}chip-warn{% endif %}">{{ c }}</span>
+            {% endfor %}
+          </td>
+          <td>{{ v.download_count }}</td>
+          <td>{{ v.published_at.strftime('%Y-%m-%d') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</article>
+{% endblock %}

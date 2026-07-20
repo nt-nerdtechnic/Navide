@@ -35,8 +35,41 @@ uv --project marketplace/registry run pytest marketplace/registry/tests
 | POST | `/api/publish` | Upload a `.vsix` package (multipart field `package`); requires a `Bearer` publisher token and (in strict mode) a valid `signature`. Validates manifest, verifies signature, stores blob + assets, appends a version with a trust tier. 409 on duplicate, 403 on cross-namespace/bad-signature, 401 on bad/missing token. |
 | GET | `/api/extensions` | Search (`q`) over name/description/categories, newest first, paginated (`offset`, `limit`). |
 | GET | `/api/extensions/{namespace}/{name}` | Extension detail + full version list + publisher. |
-| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream the package blob. |
+| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream the package blob **and increment** the per-version + aggregate download counters. |
 | POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version (excluded from latest resolution, still downloadable by exact version). |
+| POST | `/api/extensions/{namespace}/{name}/rating` | Add a `{ "score": 1..5 }` rating; returns the new average + count. Per-user auth/dedup is deferred (see below). |
+| POST | `/api/extensions/{namespace}/{name}/featured` | Set the curation flag `{ "featured": bool }`. Admin-gated by `X-Admin-Token` (same gate as `/api/publishers`). |
+
+`GET /api/extensions` also accepts `category` (exact category filter) and
+`sort` (`updated` default, `downloads`, `rating`). Each summary now carries
+`download_count`, `rating_average`, `rating_count`, `featured`; each version
+carries `download_count`.
+
+## Discovery website (p3-discovery)
+
+A dependency-light, server-rendered marketplace site is mounted on the **same**
+FastAPI app (Jinja2 templates + self-hosted CSS in `registry/web_templates/`
+and `registry/web_static/`; no JS build, no CDN assets). The `/api/*` JSON API
+is untouched.
+
+| Method | Path | Renders |
+|---|---|---|
+| GET | `/` | Home: Featured section, browse grid, keyword search, category filter, sort (downloads/rating/updated). Cards show displayName, publisher, description, categories, downloads, rating, trust badge, sensitive-capability warning. |
+| GET | `/extensions/{namespace}/{name}` | Detail: rendered README, screenshots, rating, downloads, per-version trust tier + declared capabilities, install hint, publisher. |
+| GET | `/extensions/{namespace}/{name}/{version}/assets/{path}` | Serve an image/asset extracted from the package blob (allow-listed against the version's recorded assets). |
+| — | `/static/*` | Self-hosted CSS. |
+
+**README rendering + sanitization.** READMEs are extracted from the stored
+`.vsix` blob and rendered with `markdown-it-py` configured with raw HTML
+**disabled** (`MarkdownIt("commonmark", {"html": False})`). Any `<script>` /
+`<img onerror=…>` in a README is escaped to inert text, and dangerous link
+schemes (`javascript:` etc.) are dropped by the built-in link validator, so no
+user-authored active markup is ever emitted (`tests/test_web.py`).
+
+**Ratings limitation.** Ratings are stored as `rating_sum` + `rating_count`
+(average is derived); the submit endpoint has **no per-user auth or dedup** —
+this is a deliberate p3-discovery simplification. Real per-user rating auth is
+deferred.
 
 ## Security model (p3-security + p3-publish)
 
@@ -90,11 +123,16 @@ Ed25519 primitives in `registry/signing.py`.
 
 ## Seams left for later Phase 3 todos
 
-- **Discovery frontend** (`p3-discovery`): consumes `GET /api/extensions`
-  (search) and `GET /api/extensions/{ns}/{name}` — each version now carries
-  `trust_tier`, `capabilities`, `sensitive_capabilities` for badges/warnings.
-- **Extensions view** (`p3-lifecycle`): install/update/remove drives off the
-  version list + `download` endpoint; `latest_version` resolves updates.
+- **Discovery frontend** (`p3-discovery`): ✅ built — the server-rendered
+  website above. Consumes the same repository layer as `GET /api/extensions`
+  (search/category/sort) and `GET /api/extensions/{ns}/{name}`.
+- **Extensions view** (`p3-lifecycle`): the in-app view install/update/remove
+  drives off the version list + `download` endpoint. It needs, per version:
+  `download` URL (streams the blob) and the `X-Package-Digest` response header
+  for integrity verification; `latest_version` (summary/detail) resolves
+  updates; and the trust fields already exposed — `trust_tier`, `capabilities`,
+  `sensitive_capabilities`, `signed` — to gate/warn on install. Download counts
+  and ratings are now also available for in-app display.
 - **CDN storage** (real storage): `registry/storage.py` — `StorageBackend`
   protocol; only `LocalStorageBackend` is implemented. Drop in S3/CDN behind
   the same protocol.

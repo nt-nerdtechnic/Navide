@@ -2,12 +2,17 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createMockBackend, withScope } from './mockBackend'
 
-// The RUNNING/idle badge is driven by useTerminal's byte-quiescence heuristic:
-// a sustained burst of PTY output (>MIN_BURST_MS ~2s) shows RUNNING. A repaint
-// WE trigger ourselves (focusing/clicking a pane, or a refit) also emits bytes,
-// which must NOT count as agent activity — otherwise the badge flips to RUNNING
-// on a mere click. This test pins that: identical byte streams resolve to
-// RUNNING normally, but stay non-running while a focus / refit grace is active.
+// The RUNNING/idle badge is driven by useTerminal's clean-content quiescence
+// heuristic: a sustained burst of CLEANED PTY output (>MIN_BURST_MS ~2s) shows
+// RUNNING. Two things must NOT count as agent activity:
+//   1. A repaint WE trigger (focusing/clicking a pane, or a refit) — otherwise
+//      the badge flips to RUNNING on a mere click.
+//   2. An idle CLI's own footer/cursor repaints — raw bytes that are empty
+//      after ANSI/noise stripping. This is why the badge tracks CLEANED
+//      content, not raw bytes: an idle Claude repainting its prompt must read
+//      as idle, not RUNNING.
+// These tests pin all three: real clean output → RUNNING; a focus/refit grace
+// → non-running; and a pure-ANSI repaint stream → non-running.
 //
 // (Note: spawn() focuses the pane, so a fresh pane is graced for FOCUS_GRACE_MS;
 // the control streams long enough to outlast that initial grace.)
@@ -121,6 +126,21 @@ describe('useTerminal — RUNNING badge vs self-triggered repaints', () => {
   it('stays non-running while a refit-triggered redraw grace is active', async () => {
     const { result, mock, scope } = await spawned()
     await stream(mock, 6000, () => result.fitTerminal({ redrawAfterSettle: true }))
+    expect(result.displayStatus.value).not.toBe('running')
+    scope.stop()
+  }, 12_000)
+
+  it('stays non-running while the CLI only emits idle TUI repaints (no clean content)', async () => {
+    const { result, mock, scope } = await spawned()
+    // A pure erase-line + cursor-home repaint. stripAnsi removes it entirely, so
+    // it carries no clean content — exactly what an idle Claude emits when it
+    // repaints its prompt/cursor while waiting for input. Raw bytes keep
+    // arriving (liveness stays alive) but no RUNNING burst may form.
+    const deadline = Date.now() + 6000
+    do {
+      mock.emit('terminal.output', { terminal_session_id: 'sess-1', data: '\x1b[2K\x1b[1G' })
+      await sleep(250)
+    } while (Date.now() < deadline)
     expect(result.displayStatus.value).not.toBe('running')
     scope.stop()
   }, 12_000)

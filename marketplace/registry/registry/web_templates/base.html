@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Navide Marketplace{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">◆</span>
+        <span class="brand-name">Navide Marketplace</span>
+      </a>
+      <form class="search" action="/" method="get" role="search">
+        <input type="search" name="q" value="{{ query|default('') }}"
+               placeholder="Search extensions…" aria-label="Search extensions">
+        <button type="submit">Search</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      Self-hosted plugin registry · packages served from the same service that
+      renders this page.
+    </div>
+  </footer>
+</body>
+</html>

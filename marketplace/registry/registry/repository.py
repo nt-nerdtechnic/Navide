@@ -118,26 +118,74 @@ class RegistryRepository:
         self,
         *,
         query: str | None = None,
+        category: str | None = None,
+        sort: str = "updated",
         offset: int = 0,
         limit: int = 20,
     ) -> tuple[list[Extension], int]:
-        """Keyword search over name/description/categories, newest first.
+        """Keyword search over name/description/categories with filter + sort.
+
+        - `query`: substring match over name/displayName/description/categories.
+        - `category`: keep only extensions carrying this category.
+        - `sort`: one of `updated` (newest first, default), `downloads`,
+          `rating` (average, then count as tiebreak).
 
         Returns (page, total_matches).
         """
-        stmt = select(Extension)
+        rows = list(self.session.exec(select(Extension)).all())
         if query:
-            like = f"%{query.lower()}%"
-            candidates = self.session.exec(stmt).all()
-            matched = [e for e in candidates if _matches(e, like)]
-            matched.sort(key=lambda e: e.updated_at, reverse=True)
-            total = len(matched)
-            return matched[offset : offset + limit], total
+            needle = query.lower()
+            rows = [e for e in rows if _matches(e, needle)]
+        if category:
+            wanted = category.lower()
+            rows = [e for e in rows if wanted in [c.lower() for c in e.categories]]
+        rows.sort(key=_sort_key(sort))
+        total = len(rows)
+        return rows[offset : offset + limit], total
 
-        all_rows = self.session.exec(stmt).all()
-        all_rows.sort(key=lambda e: e.updated_at, reverse=True)
-        total = len(all_rows)
-        return all_rows[offset : offset + limit], total
+    def list_featured(self, *, limit: int = 12) -> list[Extension]:
+        """Featured (curated) extensions, most downloaded first."""
+        rows = list(
+            self.session.exec(
+                select(Extension).where(Extension.featured == True)  # noqa: E712
+            ).all()
+        )
+        rows.sort(key=_sort_key("downloads"))
+        return rows[:limit]
+
+    def set_featured(self, extension: Extension, featured: bool) -> Extension:
+        extension.featured = featured
+        self.session.add(extension)
+        self.session.commit()
+        self.session.refresh(extension)
+        return extension
+
+    def all_categories(self) -> list[str]:
+        """Distinct categories across all extensions, alphabetically."""
+        seen: set[str] = set()
+        for e in self.session.exec(select(Extension)).all():
+            seen.update(e.categories)
+        return sorted(seen)
+
+    # -- downloads + ratings -------------------------------------------
+    def increment_download(
+        self, extension: Extension, version_row: ExtensionVersion
+    ) -> None:
+        """Bump the per-version and aggregate per-extension download counts."""
+        version_row.download_count += 1
+        extension.download_count += 1
+        self.session.add(version_row)
+        self.session.add(extension)
+        self.session.commit()
+
+    def add_rating(self, extension: Extension, score: int) -> Extension:
+        """Record a rating score (1-5); no per-user dedup (see schemas/docs)."""
+        extension.rating_sum += score
+        extension.rating_count += 1
+        self.session.add(extension)
+        self.session.commit()
+        self.session.refresh(extension)
+        return extension
 
     # -- versions -------------------------------------------------------
     def get_version(
@@ -213,8 +261,28 @@ class RegistryRepository:
         )
 
 
-def _matches(extension: Extension, like: str) -> bool:
-    needle = like.strip("%")
+def rating_average(extension: Extension) -> float:
+    """Mean rating rounded to 2dp, or 0.0 when there are no ratings."""
+    if extension.rating_count == 0:
+        return 0.0
+    return round(extension.rating_sum / extension.rating_count, 2)
+
+
+def _sort_key(sort: str):
+    """Sort key (with reverse baked in) for the search result ordering."""
+    if sort == "downloads":
+        return lambda e: (-e.download_count, e.name)
+    if sort == "rating":
+        return lambda e: (-rating_average(e), -e.rating_count, e.name)
+    # Default: newest-updated first.
+    return lambda e: (_neg_time(e.updated_at), e.name)
+
+
+def _neg_time(value: datetime) -> float:
+    return -value.timestamp()
+
+
+def _matches(extension: Extension, needle: str) -> bool:
     haystack = " ".join(
         [
             extension.name.lower(),

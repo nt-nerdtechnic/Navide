@@ -549,6 +549,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const MIN_BURST_MS   = 2_000   // burst must last this long to show RUNNING
   const STALE_MS       = 2_000   // no output for this long → not running
   const activityBurstStartAt = ref<number>(0)
+  // Clean-content activity clock for the RUNNING badge (see appendClean). Kept
+  // separate from lastRawActivityAt so an idle CLI that only repaints its
+  // footer/cursor (raw bytes, but empty after noise-stripping) can't keep the
+  // badge stuck on RUNNING.
+  const lastCleanBurstAt = ref<number>(0)
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 1_000)
@@ -562,29 +567,37 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     if (status.value !== 'running') return status.value
     // Spawned but not a single byte of output yet — the CLI is still booting
     // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
+    // Any byte (even a pure TUI repaint) means the CLI is up, so this gates
+    // "booting" only.
     if (lastRawActivityAt.value === 0) return 'starting'
-    if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
+    // RUNNING/idle is judged on CLEANED activity, not raw bytes: an idle CLI
+    // repainting its footer/cursor emits raw bytes but no clean content, so it
+    // goes idle after STALE_MS instead of sticking on RUNNING.
+    if (nowTick.value - lastCleanBurstAt.value > STALE_MS) return 'idle'
     return (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
   })
   const BUFFER_CAP = 128 * 1024
 
   function appendClean(chunk: string): void {
-    // ANY byte counts as "process still alive" — spinners included.
-    if (chunk.length > 0) {
-      const now = Date.now()
-      // A focus- or refit-triggered redraw emits bytes but is not agent work.
-      // Resetting the burst start on each such chunk keeps it below MIN_BURST_MS
-      // so the badge can't flip to RUNNING on a mere click/focus/resize. We
-      // still bump lastRawActivityAt so liveness/stall detection is unchanged.
-      const inRedrawGrace =
-        now - lastFocusAt.value < FOCUS_GRACE_MS ||
-        now - lastSelfRedrawAt.value < FOCUS_GRACE_MS
-      // If the gap since last output exceeds BURST_GAP_MS, this is a new burst.
-      if (inRedrawGrace || now - lastRawActivityAt.value > BURST_GAP_MS) activityBurstStartAt.value = now
-      lastRawActivityAt.value = now
-    }
+    // ANY byte counts as "process still alive" — spinners included. This feeds
+    // liveness/stall detection (App.vue safety net, resize-quiet gate) ONLY. It
+    // deliberately does NOT drive the RUNNING badge: an idle CLI that merely
+    // repaints its footer/cursor emits raw bytes too, and those must not look
+    // like work. The badge burst is built from CLEANED content below.
+    if (chunk.length > 0) lastRawActivityAt.value = Date.now()
     const cleaned = dropTuiNoise(stripAnsi(chunk))
     if (!cleaned) return
+    // Badge burst tracking, driven by CLEANED content only. A focus- or
+    // refit-triggered redraw that still yields clean bytes is graced so a mere
+    // click/resize can't flip the badge to RUNNING. Resetting the burst start
+    // inside the grace keeps it below MIN_BURST_MS.
+    const now = Date.now()
+    const inRedrawGrace =
+      now - lastFocusAt.value < FOCUS_GRACE_MS ||
+      now - lastSelfRedrawAt.value < FOCUS_GRACE_MS
+    // A gap > BURST_GAP_MS in clean output starts a new burst.
+    if (inRedrawGrace || now - lastCleanBurstAt.value > BURST_GAP_MS) activityBurstStartAt.value = now
+    lastCleanBurstAt.value = now
     // Monotonic total — unlike cleanBuffer.length, this keeps growing after
     // the buffer hits BUFFER_CAP, so quiet-detection (waitForQuiet etc.) can
     // tell "still streaming" from "quiet" during large session replays.
@@ -595,8 +608,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // grace window — those bytes are very likely a focus-triggered TUI
     // redraw, not real agent output. Buffer content is still kept so any
     // genuine output isn't lost; only the timestamp is held back.
-    const inFocusGrace = Date.now() - lastFocusAt.value < FOCUS_GRACE_MS
-    if (!inFocusGrace) lastActivityAt.value = Date.now()
+    const inFocusGrace = now - lastFocusAt.value < FOCUS_GRACE_MS
+    if (!inFocusGrace) lastActivityAt.value = now
   }
 
   function markBufferPosition(): number {

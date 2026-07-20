@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 from sqlmodel import Session
 
@@ -15,15 +17,19 @@ from .config import VERIFIER_ACCEPTING, Settings, load_settings
 from .db import create_db_engine
 from .models import Extension, ExtensionVersion, Publisher
 from .package import PackageError, read_package
-from .repository import RegistryRepository
+from .repository import RegistryRepository, rating_average
 from .schemas import (
     ExtensionDetail,
     ExtensionListResponse,
     ExtensionSummary,
+    FeaturedRequest,
+    FeaturedResponse,
     HealthResponse,
     PublisherRegisterRequest,
     PublisherRegisterResponse,
     PublishResponse,
+    RatingRequest,
+    RatingResponse,
     VersionInfo,
     YankResponse,
 )
@@ -64,6 +70,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = state
 
     _register_routes(app)
+
+    # Discovery website (p3-discovery): server-rendered pages + self-hosted
+    # static assets, mounted alongside the /api/* JSON API on the same app.
+    from .web import create_web_router
+
+    static_dir = Path(__file__).parent / "web_static"
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.include_router(create_web_router())
     return app
 
 
@@ -97,6 +111,7 @@ def _version_info(row: ExtensionVersion) -> VersionInfo:
         trust_tier=row.trust_tier,
         capabilities=capabilities,
         sensitive_capabilities=sensitive_capabilities(capabilities),
+        download_count=row.download_count,
     )
 
 
@@ -111,6 +126,10 @@ def _summary(extension: Extension, versions: list[ExtensionVersion]) -> Extensio
         categories=extension.categories,
         latest_version=latest_version(active),
         updated_at=extension.updated_at,
+        download_count=extension.download_count,
+        rating_average=rating_average(extension),
+        rating_count=extension.rating_count,
+        featured=extension.featured,
     )
 
 
@@ -246,13 +265,19 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/api/extensions", response_model=ExtensionListResponse)
     def list_extensions(
         q: str | None = None,
+        category: str | None = None,
+        sort: str = "updated",
         offset: int = 0,
         limit: int = 20,
         repo: RegistryRepository = Depends(_repo),
     ) -> ExtensionListResponse:
         limit = max(1, min(limit, 100))
         offset = max(0, offset)
-        rows, total = repo.search_extensions(query=q, offset=offset, limit=limit)
+        if sort not in {"updated", "downloads", "rating"}:
+            sort = "updated"
+        rows, total = repo.search_extensions(
+            query=q, category=category, sort=sort, offset=offset, limit=limit
+        )
         items = [_summary(e, repo.list_versions(e.id)) for e in rows]
         return ExtensionListResponse(
             items=items, total=total, offset=offset, limit=limit
@@ -300,6 +325,7 @@ def _register_routes(app: FastAPI) -> None:
             stream = state.storage.open_stream(row.package_key)
         except StorageError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        repo.increment_download(extension, row)
         filename = f"{namespace}.{name}-{version}.vsix"
         return StreamingResponse(
             stream,
@@ -340,6 +366,52 @@ def _register_routes(app: FastAPI) -> None:
         row = repo.yank_version(row)
         return YankResponse(
             namespace=namespace, name=name, version=version, yanked=row.yanked
+        )
+
+    @app.post(
+        "/api/extensions/{namespace}/{name}/rating",
+        response_model=RatingResponse,
+    )
+    def submit_rating(
+        namespace: str,
+        name: str,
+        body: RatingRequest,
+        repo: RegistryRepository = Depends(_repo),
+    ) -> RatingResponse:
+        """Add a 1-5 rating. Per-user auth/dedup is deferred (see README)."""
+        extension = repo.get_extension(namespace, name)
+        if extension is None:
+            raise HTTPException(status_code=404, detail="extension not found")
+        extension = repo.add_rating(extension, body.score)
+        return RatingResponse(
+            namespace=namespace,
+            name=name,
+            rating_average=rating_average(extension),
+            rating_count=extension.rating_count,
+        )
+
+    @app.post(
+        "/api/extensions/{namespace}/{name}/featured",
+        response_model=FeaturedResponse,
+    )
+    def set_featured(
+        request: Request,
+        namespace: str,
+        name: str,
+        body: FeaturedRequest,
+        x_admin_token: str | None = Header(default=None),
+        repo: RegistryRepository = Depends(_repo),
+    ) -> FeaturedResponse:
+        """Admin-gated curation flag (same `X-Admin-Token` gate as publishers)."""
+        settings: Settings = request.app.state.registry.settings
+        if settings.admin_token is not None and x_admin_token != settings.admin_token:
+            raise HTTPException(status_code=401, detail="invalid admin token")
+        extension = repo.get_extension(namespace, name)
+        if extension is None:
+            raise HTTPException(status_code=404, detail="extension not found")
+        extension = repo.set_featured(extension, body.featured)
+        return FeaturedResponse(
+            namespace=namespace, name=name, featured=extension.featured
         )
 
 

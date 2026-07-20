@@ -43,6 +43,14 @@ class Extension(SQLModel, table=True):
     display_name: str | None = None
     description: str | None = None
     categories: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    featured: bool = Field(default=False, index=True)
+    """Curation flag surfaced in the marketplace Featured section (admin-set)."""
+    download_count: int = Field(default=0)
+    """Aggregate downloads across all versions of this extension."""
+    rating_sum: int = Field(default=0)
+    """Sum of submitted rating scores; average = rating_sum / rating_count."""
+    rating_count: int = Field(default=0)
+    """Number of submitted ratings."""
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -66,6 +74,8 @@ class ExtensionVersion(SQLModel, table=True):
     """Detached Ed25519 signature (base64) over the package digest, if signed."""
     trust_tier: str = Field(default="unsigned", index=True)
     """Trust tier computed at publish: 'signed-verified' or 'unsigned' (see trust.py)."""
+    download_count: int = Field(default=0)
+    """Number of times this specific version's package was downloaded."""
     yanked: bool = Field(default=False, index=True)
     published_at: datetime = Field(default_factory=_now)
 
