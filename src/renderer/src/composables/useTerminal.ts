@@ -132,9 +132,9 @@ export interface SpawnOptions {
 export function encodeShiftEnter(agentKey?: string): string {
   const key = agentKey?.toLowerCase()
   if (key === 'codex') return '\x1b[13;2u'
-  // Claude, Grok, and Antigravity all support bracketed paste.
+  // Claude, Grok, Antigravity, and Kimi all support bracketed paste.
   // Using bracketed paste LF guarantees a literal newline insertion without submitting.
-  if (key === 'claude' || key === 'claude-code' || key === 'agy' || key === 'antigravity' || key === 'grok') {
+  if (key === 'claude' || key === 'claude-code' || key === 'agy' || key === 'antigravity' || key === 'grok' || key === 'kimi') {
     return '\x1b[200~\n\x1b[201~'
   }
   // Plain shells (bash/zsh) treat \x1b\r as Enter and do not always have bracketed paste enabled.

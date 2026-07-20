@@ -319,7 +319,7 @@ class Attribution:
         """
         if usage.vendor == "grok":
             return self._bind_grok_by_marker(usage)
-        if usage.vendor not in ("codex", "antigravity"):
+        if usage.vendor not in ("codex", "antigravity", "kimi"):
             return None
 
         try:
@@ -380,7 +380,7 @@ class Attribution:
         unowned session — once bound, the session_owner short-circuit means no
         further reads. The file read happens outside the lock.
         """
-        if usage.vendor not in ("codex", "antigravity"):
+        if usage.vendor not in ("codex", "antigravity", "kimi"):
             return None
         sid = usage.session_id
         with self._lock:
@@ -616,6 +616,10 @@ class Attribution:
                 # canonical cwd of the session's workspace).
                 if usage.cwd and usage.cwd == ws_path:
                     return ws_path
+            elif usage.vendor == "kimi":
+                # Kimi reader emits cwd = the session state.json workDir.
+                if usage.cwd and usage.cwd == ws_path:
+                    return ws_path
         return None
 
     def _lookup_pane_for(self, usage: TokenUsage) -> tuple[str | None, str | None, str | None]:
@@ -664,7 +668,7 @@ class Attribution:
         if usage.vendor == "claude":
             expected_dir = _encode_claude_cwd(pane_cwd)
             return f"/{expected_dir}/" in file_path
-        if usage.vendor in ("codex", "antigravity", "grok"):
+        if usage.vendor in ("codex", "antigravity", "grok", "kimi"):
             return usage.cwd == pane_cwd
         return False
 

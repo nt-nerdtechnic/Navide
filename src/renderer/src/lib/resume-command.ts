@@ -7,6 +7,7 @@
 //   • codex resume <id>      ← subcommand, NOT a --flag
 //   • agy --conversation <id>
 //   • grok -s <id>           ← short flag (12-hex session id)
+//   • kimi --session <id>    ← id is the `session_<uuid>` dir name
 //
 // `skipFlag` is the vendor's permission-bypass flag (or "" when YOLO is off),
 // appended verbatim — same flags resolveCommand() uses for a fresh launch.
@@ -102,6 +103,8 @@ export function buildResumeCommand(
         ? `agy --conversation ${id}`
         : agentKey === 'grok'
           ? `grok -s ${id}`
+          : agentKey === 'kimi'
+            ? `kimi --session ${id}`
       : `${agentKey} --resume ${id}`
   const flag = skipFlag.trim()
   return flag ? `${base} ${flag}` : base

@@ -48,6 +48,13 @@ export const AGENT_SPECS: AgentSpec[] = [
     hint: 'generalist'
   },
   {
+    agentKey: 'kimi',
+    label: 'Kimi Code',
+    defaultCommand: 'kimi',
+    skipPermissionFlag: '--yolo',
+    hint: 'generalist'
+  },
+  {
     agentKey: 'terminal',
     label: 'Terminal',
     defaultCommand: '',

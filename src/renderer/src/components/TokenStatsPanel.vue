@@ -78,9 +78,10 @@ const VENDOR_LABELS: Record<string, string> = {
   codex: 'Codex',
   antigravity: 'Antigravity',
   grok: 'Grok',
+  kimi: 'Kimi',
   analyzer: 'Local analyzer'
 }
-const KNOWN_VENDORS = ['claude', 'codex', 'antigravity', 'grok', 'analyzer']
+const KNOWN_VENDORS = ['claude', 'codex', 'antigravity', 'grok', 'kimi', 'analyzer']
 
 // Vendor / Stage breakdowns come from workspace CUMULATIVE (not just current run)
 // so they remain visible even when no pipeline is actively running. The current

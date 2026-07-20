@@ -1697,9 +1697,11 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   // at launch (`agy --conversation` only resumes existing ids), so the marker
   // is its ONLY session-binding path. Grok likewise can't pin an id (`grok -s`
   // only resumes existing ids) — marker-based binding via ~/.grok/grok.db.
+  // Kimi likewise can't pin an id (`kimi --session` only resumes existing ids);
+  // its session id is captured from the wire.jsonl containing the marker.
   const sessionMarker =
     !opts.isResume &&
-    (opts.agentKey === 'codex' || opts.agentKey === 'antigravity' || opts.agentKey === 'grok')
+    (opts.agentKey === 'codex' || opts.agentKey === 'antigravity' || opts.agentKey === 'grok' || opts.agentKey === 'kimi')
       ? `at-pane:${id}`
       : ''
   const pane: ActivePane = {
@@ -2196,7 +2198,7 @@ const rebuildingPanes = reactive(new Set<string>())
 const rebuildingTabPanes = ref(false)
 
 function paneCanRebuild(pane: ActivePane): boolean {
-  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok'].includes(pane.agentKey)
+  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok', 'kimi'].includes(pane.agentKey)
 }
 
 /** Canonical pane → resume-session-id derivation, shared by the rebuild lock
@@ -6763,7 +6765,7 @@ function panePreparationLabel(p: ActivePane): string {
 }
 
 function paneWaitingForSessionId(p: ActivePane): boolean {
-  return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity', 'grok'].includes(p.agentKey)
+  return !!p.sessionMarker && !p.pinnedSessionId && ['codex', 'antigravity', 'grok', 'kimi'].includes(p.agentKey)
 }
 
 // Session detection has PRECONDITIONS the user may have to satisfy in the

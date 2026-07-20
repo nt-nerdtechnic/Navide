@@ -55,6 +55,7 @@ from .log_readers import (
     ClaudeLogReader,
     CodexLogReader,
     GrokLogReader,
+    KimiLogReader,
     LogWatcher,
     TokenSinkResult,
     TokenUsage,
@@ -275,7 +276,7 @@ async def analyzer_benchmark(progress_cb=None) -> list:
     return await _llama_benchmark(progress_cb=progress_cb)
 
 # Log readers: one per vendor. Attribution maps log session files to panes.
-_readers = [ClaudeLogReader(), CodexLogReader(), AntigravityLogReader(), GrokLogReader()]
+_readers = [ClaudeLogReader(), CodexLogReader(), AntigravityLogReader(), GrokLogReader(), KimiLogReader()]
 attribution = Attribution(_readers)
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
@@ -1355,7 +1356,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
             _PTY_OWNERS[term.id] = session
             # Register the pane with the log-attribution layer so any session
             # file appearing after this point can be attributed back to us.
-            if agent_key in ("claude", "codex", "antigravity", "grok"):
+            if agent_key in ("claude", "codex", "antigravity", "grok", "kimi"):
                 ws_for_pane = str(metadata.get("workspace_path") or payload["cwd"])
                 # Workspace registration via helper triggers a force-rescan
                 # if the workspace is newly known — so historic CLI sessions

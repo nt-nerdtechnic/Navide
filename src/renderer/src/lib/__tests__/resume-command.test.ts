@@ -142,6 +142,12 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('grok', '  ')).toBe('')
   })
 
+  it('uses kimi --session for kimi (id keeps its session_ prefix)', () => {
+    expect(buildResumeCommand('kimi', 'session_4d4a11fe-b08a-46df-9f86-685589531e65')).toBe(
+      'kimi --session session_4d4a11fe-b08a-46df-9f86-685589531e65'
+    )
+  })
+
   it('appends the permission-bypass flag when given', () => {
     expect(buildResumeCommand('claude', 'abc', '--dangerously-skip-permissions')).toBe(
       'claude --resume abc --dangerously-skip-permissions'

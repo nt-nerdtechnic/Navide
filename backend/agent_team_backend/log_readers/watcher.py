@@ -318,7 +318,7 @@ class LogWatcher:
         # independent of token parsing so it works even for session-file formats
         # the token reader doesn't (yet) understand — it only needs the file to
         # exist + contain the pane marker.
-        if self._session_sink is not None and reader.vendor in ("codex", "antigravity", "grok"):
+        if self._session_sink is not None and reader.vendor in ("codex", "antigravity", "grok", "kimi"):
             try:
                 await self._session_sink(reader.vendor, path)
             except Exception as err:  # noqa: BLE001

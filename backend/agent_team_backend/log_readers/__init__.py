@@ -16,6 +16,7 @@ from .base import (
 from .claude import ClaudeLogReader
 from .codex import CodexLogReader
 from .grok import GrokLogReader
+from .kimi import KimiLogReader
 from .watcher import LogWatcher
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "ClaudeLogReader",
     "CodexLogReader",
     "GrokLogReader",
+    "KimiLogReader",
     "LogWatcher",
 ]
