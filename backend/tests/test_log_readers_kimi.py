@@ -179,6 +179,22 @@ def test_incremental_parse_reads_only_the_tail(fake_kimi_home: Path) -> None:
     assert parsed2.events == []
 
 
+def test_session_id_from_path_uses_dir_name_not_stem(fake_kimi_home: Path) -> None:
+    """The resume id must be the session_<uuid> dir name, never the filename
+    stem ("wire") — and sibling files (state.json, logs) are not session files
+    so they return '' and the resume sink skips them (regression for the
+    `kimi --session wire` / `--session state` resume failures)."""
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")
+    _write_jsonl(wire, [_usage(10, 0, 5)])
+    assert reader.session_id_from_path(wire) == _SID
+    # sibling files in the same session dir are NOT session files
+    state = wire.parent.parent.parent / "state.json"
+    assert reader.session_id_from_path(state) == ""
+    log_file = wire.parent / "kimi-code.log"
+    assert reader.session_id_from_path(log_file) == ""
+
+
 def test_parse_activity_emits_turn_complete_on_usage(fake_kimi_home: Path) -> None:
     reader = KimiLogReader()
     wire = _session(fake_kimi_home, "/x")

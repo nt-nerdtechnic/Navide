@@ -93,6 +93,15 @@ class KimiLogReader(LogReader):
     def cwd_from_file(self, path: Path) -> str:
         return self._workdir_from_state(path)
 
+    def session_id_from_path(self, path: Path) -> str:
+        """Id is the `session_<uuid>` dir name, NOT the stem (every session
+        file is wire.jsonl). Sibling files in the session dir (state.json,
+        logs/) are not session files → '' so the resume sink skips them
+        instead of coining ids like "state" or "wire"."""
+        if path.name != "wire.jsonl":
+            return ""
+        return self._session_id(path)
+
     def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
         """Only sessions whose state.json workDir matches this workspace."""
         return [

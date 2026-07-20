@@ -176,6 +176,18 @@ class LogReader(ABC):
         """
         return ""
 
+    def session_id_from_path(self, path: Path) -> str:
+        """The resume session id for a discovered session file.
+
+        Default: the filename stem — Codex/Grok/Antigravity name each session
+        file after its id. Readers whose id lives elsewhere (e.g. Kimi, in the
+        `session_<uuid>` grandparent dir; every file is named wire.jsonl)
+        override. Return '' for a path that is not a real session file so the
+        resume-binding sink skips sibling files (state.json, logs) instead of
+        coining bogus ids from their stems.
+        """
+        return path.stem
+
     def session_files_for_workspace(self, workspace_path: str) -> list[Path] | None:
         """Return only the session files belonging to `workspace_path`.
 
