@@ -57,6 +57,7 @@ const {
   gitStatus, loadStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
   logScope, canLoadMoreLog, loadMoreLog, logSearch, setLogScope, isLoadingLog,
+  logOrder, setLogOrder, resetToCommit,
   isCommitting, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
@@ -2632,9 +2633,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       :workspace-path="workspacePath"
       :git-log="gitLog"
       :log-scope="logScope"
+      :log-order="logOrder"
       :is-loading-log="isLoadingLog"
       :can-load-more-log="canLoadMoreLog"
       :set-log-scope="setLogScope"
+      :set-log-order="setLogOrder"
       :load-more-log="loadMoreLog"
       :log-search="logSearch"
       :show-commit="showCommit"
@@ -2644,6 +2647,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       :checkout-commit="checkoutCommit"
       :create-branch="createBranch"
       :create-tag="createTag"
+      :merge-into-current="mergeBranch"
+      :reset-to-commit="resetToCommit"
       @close="showHistoryModal = false"
     />
   </div>
