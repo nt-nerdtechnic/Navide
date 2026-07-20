@@ -213,3 +213,53 @@ describe('PlanMarkdownBody – ESC integration surface', () => {
     expect(wrapper.find('.pmb-textarea').exists()).toBe(false)
   })
 })
+
+describe('PlanMarkdownBody – inline todo editing via store', () => {
+  it('cycles a todo status through store.writeMeta', async () => {
+    const store = resolvePlanStore(REL)
+    const spy = vi.spyOn(store, 'writeMeta')
+    try {
+      const { wrapper, state } = mountBody(MD_PLAN)
+      await flushPromises()
+
+      const statusBtn = wrapper.find('.pmb-todos-section .pmb-todo-status')
+      expect(statusBtn.text()).toBe('pending')
+      await statusBtn.trigger('click')
+      await flushPromises()
+
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(state.writes).toHaveLength(1)
+      expect(state.writes[0]).toContain('in_progress')
+      expect(wrapper.emitted('updated')).toBeTruthy()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('edits todo text inline and writes it through the store', async () => {
+    const store = resolvePlanStore(REL)
+    const spy = vi.spyOn(store, 'writeMeta')
+    try {
+      const { wrapper, state } = mountBody(MD_PLAN)
+      await flushPromises()
+
+      const editBtn = wrapper
+        .find('.pmb-todos-section')
+        .findAll('.pmb-btn')
+        .find((b) => b.text() === 'Edit')!
+      await editBtn.trigger('click')
+      const input = wrapper.find('.pmb-todo-input')
+      expect(input.exists()).toBe(true)
+      await input.setValue('Reworded todo')
+      await wrapper.find('.pmb-todos-section .pmb-btn--primary').trigger('click')
+      await flushPromises()
+
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(state.writes).toHaveLength(1)
+      expect(state.writes[0]).toContain('Reworded todo')
+      expect(wrapper.find('.pmb-todo-input').exists()).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

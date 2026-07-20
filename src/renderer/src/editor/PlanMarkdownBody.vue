@@ -168,15 +168,70 @@ async function deleteSection(heading: string): Promise<void> {
   }
 }
 
-// ── Host integration (ESC overlay priority + outline nav) ──────────────────
-/** True while a section textarea is open, so the host cancels edit before close. */
-function isEditing(): boolean {
-  return editingSection.value !== null
+// ── Inline todo editing — writes to frontmatter via the store ──────────────
+const TODO_NEXT: Record<string, 'pending' | 'in-progress' | 'done'> = {
+  pending: 'in-progress',
+  'in-progress': 'done',
+  done: 'pending',
+  skipped: 'pending',
+}
+const editingTodoId = ref<string | null>(null)
+const editTodoText = ref('')
+
+async function cycleTodo(id: string): Promise<void> {
+  if (saving.value) return
+  saving.value = true
+  const result = await store.value.writeMeta(ctx.value, (fresh) => ({
+    ...fresh,
+    todos: fresh.todos.map((t) =>
+      t.id === id ? { ...t, status: TODO_NEXT[String(t.status)] ?? 'pending' } : t,
+    ),
+  }))
+  saving.value = false
+  if (reportResult(result)) {
+    await loadContent()
+    emit('updated')
+  }
 }
 
-/** Ask to discard the in-progress section edit (ESC from the host). */
+function startEditTodo(id: string, content: string): void {
+  editingTodoId.value = id
+  editTodoText.value = content
+}
+function cancelEditTodo(): void {
+  editingTodoId.value = null
+  editTodoText.value = ''
+}
+function onEditTodoEnter(e: KeyboardEvent): void {
+  if (!e.isComposing) void saveEditTodo()
+}
+async function saveEditTodo(): Promise<void> {
+  const id = editingTodoId.value
+  const text = editTodoText.value.trim()
+  if (saving.value || !id || !text) return
+  saving.value = true
+  const result = await store.value.writeMeta(ctx.value, (fresh) => ({
+    ...fresh,
+    todos: fresh.todos.map((t) => (t.id === id ? { ...t, content: text } : t)),
+  }))
+  saving.value = false
+  if (reportResult(result)) {
+    cancelEditTodo()
+    await loadContent()
+    emit('updated')
+  }
+}
+
+// ── Host integration (ESC overlay priority + outline nav) ──────────────────
+/** True while a section OR todo textarea is open, so the host cancels edit before close. */
+function isEditing(): boolean {
+  return editingSection.value !== null || editingTodoId.value !== null
+}
+
+/** Ask to discard the in-progress section or todo edit (ESC from the host). */
 function cancelEdit(): void {
   cancelEditSection()
+  cancelEditTodo()
 }
 
 /** Outline navigation: scroll the section card with this heading into view. */
@@ -242,15 +297,38 @@ defineExpose({ isEditing, cancelEdit, scrollToAnchor })
         </div>
       </div>
 
-      <!-- Read-only frontmatter todos (edit them in the toolbar's Todos panel). -->
+      <!-- Frontmatter todos, editable in place (status click cycles, text edits). -->
       <div v-if="todos.length" class="pmb-todos-section">
         <div class="pmb-section-head">
           <div class="pmb-section-title">{{ t('pane.plans.todos') }}</div>
         </div>
         <ul class="pmb-todos">
           <li v-for="todo in todos" :key="todo.id" class="pmb-todo" :data-status="todo.status">
-            <span class="pmb-todo-status">{{ todo.status }}</span>
-            <span class="pmb-todo-content">{{ todo.content }}</span>
+            <template v-if="editingTodoId === todo.id">
+              <input
+                v-model="editTodoText"
+                class="pmb-todo-input"
+                :disabled="saving"
+                @keydown.enter="onEditTodoEnter"
+                @keydown.escape="cancelEditTodo"
+              />
+              <button class="pmb-btn pmb-btn--primary" :disabled="saving || !editTodoText.trim()" @click="saveEditTodo">
+                {{ t('pane.plans.save') }}
+              </button>
+              <button class="pmb-btn" :disabled="saving" @click="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+            </template>
+            <template v-else>
+              <button
+                class="pmb-todo-status"
+                :disabled="saving"
+                :title="t('pane.plans.todo-cycle-tooltip')"
+                @click="cycleTodo(todo.id)"
+              >{{ todo.status }}</button>
+              <span class="pmb-todo-content" @click="startEditTodo(todo.id, todo.content)">{{ todo.content }}</span>
+              <button class="pmb-btn" :disabled="saving" @click="startEditTodo(todo.id, todo.content)">
+                {{ t('pane.plans.edit') }}
+              </button>
+            </template>
           </li>
         </ul>
       </div>
@@ -344,11 +422,32 @@ defineExpose({ isEditing, cancelEdit, scrollToAnchor })
 .pmb-todo-status {
   flex: none;
   min-width: 82px;
+  text-align: left;
   font-size: 11.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted, #8b95a3);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.pmb-todo-status:hover {
+  text-decoration: underline;
+}
+.pmb-todo-content {
+  cursor: text;
+}
+.pmb-todo-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 3px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-input, transparent);
+  color: inherit;
 }
 .pmb-todo[data-status='done'] .pmb-todo-status {
   color: var(--success, #2b8a3e);
