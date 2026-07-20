@@ -195,6 +195,20 @@ def test_session_id_from_path_uses_dir_name_not_stem(fake_kimi_home: Path) -> No
     assert reader.session_id_from_path(log_file) == ""
 
 
+def test_has_session_accepts_real_id_rejects_bogus(fake_kimi_home: Path) -> None:
+    """Resume preflight guard: a real session_<uuid> dir resolves True; bogus
+    ids (the "wire"/"state" that a pre-fix record could carry) resolve False so
+    they never launch a doomed `kimi --session <id>`."""
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")  # creates the session dir for _SID
+    _write_jsonl(wire, [_usage(10, 0, 5)])
+    assert reader.has_session(_SID) is True
+    assert reader.has_session("wire") is False
+    assert reader.has_session("state") is False
+    assert reader.has_session("") is False
+    assert reader.has_session("session_does-not-exist") is False
+
+
 def test_parse_activity_emits_turn_complete_on_usage(fake_kimi_home: Path) -> None:
     reader = KimiLogReader()
     wire = _session(fake_kimi_home, "/x")

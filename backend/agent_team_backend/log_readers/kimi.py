@@ -74,6 +74,22 @@ class KimiLogReader(LogReader):
                 log.debug("glob %s failed: %s", root, err)
         return out
 
+    def has_session(self, session_id: str) -> bool:
+        """True if a session dir named `session_id` exists under any workspace
+        root (`~/.kimi-code/sessions/wd_*/<session_id>/`). The resume preflight
+        uses this to reject bogus ids (e.g. a pre-fix "wire"/"state" history
+        record) before they reach a doomed `kimi --session <id>`."""
+        session_id = session_id.strip()
+        if not session_id.startswith("session_"):
+            return False
+        root = self._sessions_root()
+        if not root.is_dir():
+            return False
+        try:
+            return any((wd / session_id).is_dir() for wd in root.glob("wd_*"))
+        except OSError:
+            return False
+
     def _session_dir(self, path: Path) -> Path:
         # wire.jsonl → agents/main → agents → session_<uuid>
         return path.parent.parent.parent

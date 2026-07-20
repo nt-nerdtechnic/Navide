@@ -1097,6 +1097,13 @@ def _session_exists(agent: str, workspace_path: str, session_id: str) -> bool:
         # stale pointer must not pass preflight and launch a doomed
         # `codex resume`; search both the real and isolated per-pane homes.
         return codex_home_manager.find_session_home(session_id) is not None
+    if agent == "kimi":
+        # Kimi stores each session at ~/.kimi-code/sessions/wd_*/<id>/. Verify
+        # the id really exists so a bogus record (e.g. a pre-fix "wire"/"state"
+        # history entry) fails preflight instead of launching a doomed
+        # `kimi --session <id>` that dead-ends the pane at startup.
+        reader = next((r for r in _readers if r.vendor == "kimi"), None)
+        return reader.has_session(session_id) if isinstance(reader, KimiLogReader) else False
     path = _session_lookup_path(agent, workspace_path, session_id)
     if path:
         return Path(path).is_file()
