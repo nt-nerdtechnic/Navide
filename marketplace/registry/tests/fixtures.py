@@ -1,0 +1,61 @@
+"""Helpers to build `.vsix`-style packages programmatically (no committed binary)."""
+
+from __future__ import annotations
+
+import io
+import json
+import zipfile
+
+
+def valid_manifest(
+    *,
+    id: str = "acme.hello",
+    version: str = "1.0.0",
+    publisher: str = "acme",
+    **overrides: object,
+) -> dict:
+    data: dict = {
+        "id": id,
+        "name": "Hello",
+        "version": version,
+        "publisher": publisher,
+        "engines": {"navide": "^0.1.0"},
+        "entry": "dist/hello.js",
+        "contributes": {
+            "views": [{"id": "hello.view", "title": "Hello"}],
+            "commands": [{"id": "hello.run", "title": "Run"}],
+        },
+        "requires": ["fs", "ui"],
+        "activationEvents": ["onStartup"],
+        "displayName": "Hello World",
+        "description": "A friendly greeter extension",
+        "categories": ["productivity", "demo"],
+        "icon": "icon.png",
+    }
+    data.update(overrides)
+    return data
+
+
+def build_package(
+    *,
+    manifest: dict | None = None,
+    include_icon: bool = True,
+    extra_files: dict[str, bytes] | None = None,
+    omit_manifest: bool = False,
+    manifest_bytes: bytes | None = None,
+) -> bytes:
+    """Return the bytes of a `.vsix`-style ZIP archive."""
+    manifest = manifest if manifest is not None else valid_manifest()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        if not omit_manifest:
+            if manifest_bytes is not None:
+                zf.writestr("manifest.json", manifest_bytes)
+            else:
+                zf.writestr("manifest.json", json.dumps(manifest))
+        zf.writestr("README.md", b"# Hello\n\nDemo extension.\n")
+        if include_icon:
+            zf.writestr("icon.png", b"\x89PNG\r\n\x1a\n-fake-icon-bytes")
+        for path, content in (extra_files or {}).items():
+            zf.writestr(path, content)
+    return buffer.getvalue()

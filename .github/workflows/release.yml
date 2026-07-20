@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Manual trigger to dry-run the signing & notarization chain without
+  # publishing a release (build + sign + notarize + verify only).
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -54,6 +57,7 @@ jobs:
           uv --project backend sync --locked
 
       - name: Verify tag and version sources
+        if: github.event_name == 'push'
         run: pnpm release:check "${GITHUB_REF_NAME}"
 
       - name: Run release gates
@@ -66,14 +70,14 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller agent_team_backend.spec
 
-      - name: Build application (unsigned)
+      - name: Build, sign & notarize application
         shell: bash
         run: |
           pnpm build
           # hdiutil on shared macOS runners intermittently fails to attach the
           # DMG staging image ("Device not configured"); retry absorbs it.
           for attempt in 1 2 3; do
-            if pnpm exec electron-builder --mac --arm64 --publish never -c.mac.identity=null; then
+            if pnpm exec electron-builder --mac --arm64 --publish never; then
               exit 0
             fi
             echo "electron-builder attempt ${attempt} failed; retrying in 15s..."
@@ -83,7 +87,27 @@ jobs:
           exit 1
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Developer ID signing (electron-builder imports the base64 .p12).
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Notarization credentials (mac.notarize: true in package.json).
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify signature & notarization
+        shell: bash
+        run: |
+          app_path="$(find dist-release -maxdepth 2 -name '*.app' -type d -print -quit)"
+          test -n "${app_path}"
+          echo "Verifying ${app_path}"
+          # Signed with a valid Developer ID and the seal is intact.
+          codesign --verify --deep --strict --verbose=2 "${app_path}"
+          codesign --display --verbose=2 "${app_path}"
+          # Gatekeeper accepts it for execution (requires notarization).
+          spctl --assess --type execute --verbose=2 "${app_path}"
+          # The notarization ticket is stapled to the app.
+          stapler validate "${app_path}"
 
       - name: Validate update artifacts
         shell: bash
@@ -96,6 +120,8 @@ jobs:
           test -n "${app_path}"
 
       - name: Publish GitHub Release
+        # Manual (workflow_dispatch) runs dry-run the signing chain only.
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,5 +136,5 @@ jobs:
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --prerelease --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
           fi

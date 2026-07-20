@@ -67,6 +67,8 @@
       "icon": "resources/icon.icns",
       "minimumSystemVersion": "13.0",
       "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "notarize": true,
       "extendInfo": {
         "CFBundleDocumentTypes": [

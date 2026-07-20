@@ -1,0 +1,75 @@
+"""SQLModel data model for the registry.
+
+Persistence is SQLite for the local/dev slice; all access goes through
+`repository.RegistryRepository` so a different store can replace it later.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy import JSON, Column, UniqueConstraint
+from sqlmodel import Field, SQLModel
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class Publisher(SQLModel, table=True):
+    __tablename__ = "publisher"
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    """The publisher namespace (lowercase)."""
+    display_name: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+
+
+class Extension(SQLModel, table=True):
+    __tablename__ = "extension"
+    __table_args__ = (UniqueConstraint("namespace", "name", name="uq_extension_identity"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    publisher_id: int = Field(foreign_key="publisher.id", index=True)
+    namespace: str = Field(index=True)
+    name: str = Field(index=True)
+    identity: str = Field(index=True, unique=True)
+    """`namespace.name`."""
+    display_name: str | None = None
+    description: str | None = None
+    categories: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ExtensionVersion(SQLModel, table=True):
+    __tablename__ = "extension_version"
+    __table_args__ = (
+        UniqueConstraint("extension_id", "version", name="uq_version_identity"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    extension_id: int = Field(foreign_key="extension.id", index=True)
+    version: str = Field(index=True)
+    manifest: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    """Frozen snapshot of the manifest at publish time."""
+    package_digest: str
+    """sha256 hex of the uploaded package."""
+    package_key: str
+    """Storage key for the package blob."""
+    signature: str | None = None
+    """Detached signature; verification is p3-security."""
+    yanked: bool = Field(default=False, index=True)
+    published_at: datetime = Field(default_factory=_now)
+
+
+class ExtensionAsset(SQLModel, table=True):
+    __tablename__ = "extension_asset"
+
+    id: int | None = Field(default=None, primary_key=True)
+    version_id: int = Field(foreign_key="extension_version.id", index=True)
+    path: str
+    """Archive-relative path."""
+    size: int
+    content_type: str
