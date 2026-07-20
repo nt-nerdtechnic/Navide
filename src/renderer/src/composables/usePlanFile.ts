@@ -1,8 +1,18 @@
 /**
  * usePlanFile.ts
  *
- * Parses and writes `.plan.md` files with YAML frontmatter.
- * No external YAML library required — the format is simple enough to handle inline.
+ * Parses and writes `.plan.md` files with YAML frontmatter. The frontmatter
+ * block is parsed/serialized with the `yaml` library (robust for the nested
+ * `reviewNotes` / `executions` arrays); the markdown body after the closing
+ * `---` is preserved byte-for-byte via `splitFrontmatter`.
+ *
+ * Two surfaces:
+ *   - `parsePlanFile` / `writePlanFile` — the legacy `ParsedPlan` shape used by
+ *     PlanFileView. Its todo status stays the 3-value set (`skipped` collapses
+ *     to `pending` on read) so the existing UI keeps compiling unchanged.
+ *   - `parsePlanMeta` / `writePlanMeta` — the unified `PlanMeta` model, which
+ *     carries the full 4-value todo status set (including `skipped`) plus
+ *     stage / approvedAt / reviewNotes / executions.
  *
  * Frontmatter schema:
  *   name: string
@@ -10,10 +20,28 @@
  *   todos:
  *     - id: string
  *       content: string
- *       status: 'pending' | 'in-progress' | 'done'
+ *       status: 'pending' | 'in-progress' | 'done' | 'skipped'
  *   isProject: boolean
+ *   stage: PlanStage
+ *   approvedAt: string | null
+ *   reviewNotes: ReviewNote[]
+ *   executions?: PlanExecution[]
  */
 
+import { parse as yamlParse, stringify as yamlStringify } from 'yaml'
+import { PLAN_STAGES } from './planModel'
+import type {
+  PlanStage,
+  PlanMeta,
+  ReviewNote,
+  PlanExecution,
+  PlanTodo as ModelPlanTodo,
+  TodoStatus as ModelTodoStatus,
+} from './planModel'
+
+export type { PlanStage, PlanMeta, ReviewNote, PlanExecution } from './planModel'
+
+/** Legacy 3-value status carried by `ParsedPlan` (the shape PlanFileView uses). */
 export type TodoStatus = 'pending' | 'in-progress' | 'done'
 export type RawTodoStatus = TodoStatus | 'completed' | 'in_progress' | 'complete' | 'finished'
 
@@ -34,6 +62,10 @@ export interface ParsedPlan {
   todos: PlanTodo[]
   sections: PlanSection[]
   isProject: boolean
+  stage: PlanStage
+  approvedAt: string | null
+  reviewNotes: ReviewNote[]
+  executions?: PlanExecution[]
 }
 
 export interface PlanProgress {
@@ -44,10 +76,12 @@ export interface PlanProgress {
   complete: boolean
 }
 
-export function normalizeTodoStatus(value: string): TodoStatus {
+/** Normalize any raw status string to the unified 4-value set; unknown → pending. */
+export function normalizeTodoStatus(value: string): ModelTodoStatus {
   const v = value.trim().toLowerCase().replace(/_/g, '-')
   if (v === 'done' || v === 'completed' || v === 'complete' || v === 'finished') return 'done'
   if (v === 'in-progress' || v === 'inprogress' || v === 'active') return 'in-progress'
+  if (v === 'skipped' || v === 'skip') return 'skipped'
   return 'pending'
 }
 
@@ -65,18 +99,11 @@ export function planProgress(todos: PlanTodo[]): PlanProgress {
 }
 
 /** Serialize a status back to the Cursor-compatible alias used on disk. */
-function serializeStatus(status: TodoStatus): string {
+function serializeStatus(status: ModelTodoStatus): string {
   if (status === 'done') return 'completed'
   if (status === 'in-progress') return 'in_progress'
+  if (status === 'skipped') return 'skipped'
   return 'pending'
-}
-
-function unquoteYamlScalar(value: string): string {
-  const v = value.trim()
-  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-    return v.slice(1, -1)
-  }
-  return v
 }
 
 /**
@@ -96,56 +123,82 @@ function splitFrontmatter(raw: string): { yaml: string; body: string } | null {
 }
 
 /**
- * Parse the YAML frontmatter into a structured object.
- * Handles only the specific subset of YAML used in plan files.
+ * Parse the frontmatter YAML block into a plain object with the `yaml` library.
+ * Returns null when the block is empty or is not a mapping.
  */
-function parseYaml(yaml: string): { name: string; overview: string; todos: PlanTodo[]; isProject: boolean } | null {
-  const lines = yaml.split('\n')
-  let name = ''
-  let overview = ''
-  let isProject = false
-  const todos: PlanTodo[] = []
-
-  let inTodos = false
-  let currentTodo: Partial<PlanTodo> | null = null
-
-  function flushTodo(): void {
-    if (currentTodo?.id && currentTodo.content !== undefined && currentTodo.status) {
-      todos.push(currentTodo as PlanTodo)
-    }
-    currentTodo = null
+function parseFrontmatterObject(yaml: string): Record<string, unknown> | null {
+  let doc: unknown
+  try {
+    doc = yamlParse(yaml)
+  } catch {
+    return null
   }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return null
+  return doc as Record<string, unknown>
+}
 
-  for (const line of lines) {
-    if (line.match(/^name:\s*/)) {
-      name = unquoteYamlScalar(line.replace(/^name:\s*/, ''))
-      inTodos = false
-    } else if (line.match(/^overview:\s*/)) {
-      overview = unquoteYamlScalar(line.replace(/^overview:\s*/, ''))
-      inTodos = false
-    } else if (line.match(/^isProject:\s*/)) {
-      isProject = line.replace(/^isProject:\s*/, '').trim() === 'true'
-      inTodos = false
-    } else if (line.match(/^todos:\s*$/)) {
-      inTodos = true
-    } else if (inTodos && line.match(/^\s+-\s+id:\s*/)) {
-      flushTodo()
-      currentTodo = { id: unquoteYamlScalar(line.replace(/^\s+-\s+id:\s*/, '')), status: 'pending' }
-    } else if (inTodos && currentTodo && line.match(/^\s+content:\s*/)) {
-      currentTodo.content = unquoteYamlScalar(line.replace(/^\s+content:\s*/, ''))
-    } else if (inTodos && currentTodo && line.match(/^\s+status:\s*/)) {
-      const val = line.replace(/^\s+status:\s*/, '').trim()
-      currentTodo.status = normalizeTodoStatus(val)
-    } else if (line.match(/^\w/) && !line.match(/^todos:/)) {
-      // Non-indented line means we've left the todos block.
-      flushTodo()
-      inTodos = false
-    }
+/** Read the `todos` array into the unified 4-value model (skipped preserved). */
+function readTodos(obj: Record<string, unknown>): ModelPlanTodo[] {
+  const out: ModelPlanTodo[] = []
+  if (!Array.isArray(obj.todos)) return out
+  for (const entry of obj.todos) {
+    if (entry === null || typeof entry !== 'object') continue
+    const t = entry as Record<string, unknown>
+    if (typeof t.id !== 'string') continue
+    out.push({
+      id: t.id,
+      content: typeof t.content === 'string' ? t.content : '',
+      status: normalizeTodoStatus(typeof t.status === 'string' ? t.status : ''),
+    })
   }
-  flushTodo()
+  return out
+}
 
-  if (!name) return null
-  return { name, overview, todos, isProject }
+/**
+ * Resolve the plan stage. A valid explicit `stage` wins; otherwise derive from
+ * todo completion — a non-empty, fully-done todo list means `done`, else `draft`.
+ */
+function readStage(obj: Record<string, unknown>, todos: ModelPlanTodo[]): PlanStage {
+  if (typeof obj.stage === 'string' && (PLAN_STAGES as readonly string[]).includes(obj.stage)) {
+    return obj.stage as PlanStage
+  }
+  return todos.length > 0 && todos.every((t) => t.status === 'done') ? 'done' : 'draft'
+}
+
+/** Read the `reviewNotes` array, defaulting to `[]`; unknown fields preserved. */
+function readReviewNotes(obj: Record<string, unknown>): ReviewNote[] {
+  const out: ReviewNote[] = []
+  if (!Array.isArray(obj.reviewNotes)) return out
+  for (const entry of obj.reviewNotes) {
+    if (entry === null || typeof entry !== 'object') continue
+    const n = entry as Record<string, unknown>
+    out.push({
+      ...n,
+      id: typeof n.id === 'string' ? n.id : '',
+      author: n.author === 'ai' ? 'ai' : 'user',
+      text: typeof n.text === 'string' ? n.text : '',
+      resolved: n.resolved === true,
+      reply: typeof n.reply === 'string' ? n.reply : '',
+      anchor: typeof n.anchor === 'string' ? n.anchor : '',
+    })
+  }
+  return out
+}
+
+/** Read the optional `executions` array; `undefined` when the key is absent. */
+function readExecutions(obj: Record<string, unknown>): PlanExecution[] | undefined {
+  if (obj.executions === undefined || !Array.isArray(obj.executions)) return undefined
+  const out: PlanExecution[] = []
+  for (const entry of obj.executions) {
+    if (entry === null || typeof entry !== 'object') continue
+    const e = entry as Record<string, unknown>
+    out.push({
+      ...e,
+      agent: typeof e.agent === 'string' ? e.agent : '',
+      startedAt: typeof e.startedAt === 'string' ? e.startedAt : '',
+    })
+  }
+  return out
 }
 
 /**
@@ -181,24 +234,121 @@ export function parsePlanFile(raw: string): ParsedPlan | null {
   const parts = splitFrontmatter(raw)
   if (!parts) return null
 
-  const yamlData = parseYaml(parts.yaml)
-  if (!yamlData) return null
+  const obj = parseFrontmatterObject(parts.yaml)
+  if (!obj) return null
+  const name = typeof obj.name === 'string' ? obj.name : ''
+  if (!name) return null
 
-  const sections = parseSections(parts.body)
+  const todos4 = readTodos(obj)
+  // ParsedPlan keeps the legacy 3-value status; `skipped` collapses to `pending`.
+  const todos: PlanTodo[] = todos4.map((t) => ({
+    id: t.id,
+    content: t.content,
+    status: t.status === 'skipped' ? 'pending' : t.status,
+  }))
 
-  return {
-    name: yamlData.name,
-    overview: yamlData.overview,
-    todos: yamlData.todos,
-    sections,
-    isProject: yamlData.isProject,
+  const result: ParsedPlan = {
+    name,
+    overview: typeof obj.overview === 'string' ? obj.overview : '',
+    todos,
+    sections: parseSections(parts.body),
+    isProject: obj.isProject === true,
+    stage: readStage(obj, todos4),
+    approvedAt: typeof obj.approvedAt === 'string' ? obj.approvedAt : null,
+    reviewNotes: readReviewNotes(obj),
   }
+  const executions = readExecutions(obj)
+  if (executions !== undefined) result.executions = executions
+  return result
 }
 
 /**
- * Serialize `todos` back into the original raw file, replacing only the
- * frontmatter block. The markdown body (everything after the second `---`)
- * is preserved character-for-character.
+ * Parse a raw `.plan.md` string into the unified `PlanMeta` model. Unlike
+ * `parsePlanFile`, this preserves the full 4-value todo status set (including
+ * `skipped`). Returns `null` under the same conditions as `parsePlanFile`.
+ */
+export function parsePlanMeta(raw: string): PlanMeta | null {
+  const parts = splitFrontmatter(raw)
+  if (!parts) return null
+
+  const obj = parseFrontmatterObject(parts.yaml)
+  if (!obj) return null
+  const name = typeof obj.name === 'string' ? obj.name : ''
+  if (!name) return null
+
+  const todos = readTodos(obj)
+  const meta: PlanMeta = {
+    schemaVersion: 1,
+    format: 'markdown',
+    name,
+    overview: typeof obj.overview === 'string' ? obj.overview : '',
+    stage: readStage(obj, todos),
+    approvedAt: typeof obj.approvedAt === 'string' ? obj.approvedAt : null,
+    todos,
+    reviewNotes: readReviewNotes(obj),
+    isProject: obj.isProject === true,
+  }
+  const executions = readExecutions(obj)
+  if (executions !== undefined) meta.executions = executions
+  return meta
+}
+
+/** Bridge a legacy `ParsedPlan` into the unified `PlanMeta` (format 'markdown'). */
+export function toPlanMeta(parsed: ParsedPlan): PlanMeta {
+  const meta: PlanMeta = {
+    schemaVersion: 1,
+    format: 'markdown',
+    name: parsed.name,
+    overview: parsed.overview,
+    stage: parsed.stage,
+    approvedAt: parsed.approvedAt,
+    todos: parsed.todos.map((t) => ({ id: t.id, content: t.content, status: t.status })),
+    reviewNotes: parsed.reviewNotes.map((n) => ({ ...n })),
+    isProject: parsed.isProject,
+  }
+  if (parsed.executions !== undefined) meta.executions = parsed.executions.map((e) => ({ ...e }))
+  return meta
+}
+
+/** Fields that `serializeFrontmatter` renders (todo status pre-serialized). */
+interface FrontmatterFields {
+  name: string
+  overview: string
+  todos: { id: string; content: string; status: string }[]
+  isProject: boolean
+  stage: PlanStage
+  approvedAt: string | null
+  reviewNotes: ReviewNote[]
+  executions?: PlanExecution[]
+}
+
+/**
+ * Rebuild the frontmatter YAML from `fields`. Unknown top-level keys present in
+ * the original block are preserved; the memory-only `format` / `schemaVersion`
+ * keys are never persisted; `executions` is omitted when empty/undefined. YAML
+ * string escaping (colons, quotes in note text/reply) is handled by the lib.
+ */
+function serializeFrontmatter(originalYaml: string, fields: FrontmatterFields): string {
+  const base = parseFrontmatterObject(originalYaml) ?? {}
+  base.name = fields.name
+  base.overview = fields.overview
+  base.todos = fields.todos
+  base.isProject = fields.isProject
+  base.stage = fields.stage
+  base.approvedAt = fields.approvedAt
+  base.reviewNotes = fields.reviewNotes
+  if (fields.executions && fields.executions.length > 0) base.executions = fields.executions
+  else delete base.executions
+  delete base.format
+  delete base.schemaVersion
+  return yamlStringify(base).trimEnd()
+}
+
+/**
+ * Serialize a legacy `ParsedPlan` back into the original raw file, replacing the
+ * frontmatter block (now including stage / approvedAt / reviewNotes /
+ * executions). The markdown body after the second `---` is preserved
+ * character-for-character.
  *
  * Also synchronises `- [ ]` / `- [x]` body checkboxes to match each todo's status.
  */
@@ -206,49 +356,16 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
   const parts = splitFrontmatter(originalRaw)
   if (!parts) return originalRaw
 
-  // Rebuild the YAML frontmatter preserving non-todos lines, replacing todos block.
-  const originalYamlLines = parts.yaml.split('\n')
-  const newYamlLines: string[] = []
-
-  let inTodos = false
-  let todosWritten = false
-  let currentItemIdx = -1
-
-  for (const line of originalYamlLines) {
-    if (line.match(/^todos:\s*$/)) {
-      inTodos = true
-      todosWritten = false
-      newYamlLines.push(line)
-      // Write all updated todos immediately after the `todos:` header.
-      for (const todo of parsed.todos) {
-        newYamlLines.push(`  - id: ${todo.id}`)
-        newYamlLines.push(`    content: ${todo.content}`)
-        newYamlLines.push(`    status: ${serializeStatus(todo.status)}`)
-      }
-      todosWritten = true
-    } else if (inTodos && (line.match(/^\s+-\s+id:/) || line.match(/^\s+(content|status):/))) {
-      // Skip original todo lines — we've already written the updated ones.
-      continue
-    } else {
-      if (inTodos && !line.match(/^\s/) && !line.match(/^$/)) {
-        // First non-indented, non-empty line after todos — done with todos block.
-        inTodos = false
-        void currentItemIdx
-        void todosWritten
-      }
-      newYamlLines.push(line)
-    }
-  }
-
-  // Frontmatter without a `todos:` block: append one so newly added todos persist.
-  if (!todosWritten && parsed.todos.length > 0) {
-    newYamlLines.push('todos:')
-    for (const todo of parsed.todos) {
-      newYamlLines.push(`  - id: ${todo.id}`)
-      newYamlLines.push(`    content: ${todo.content}`)
-      newYamlLines.push(`    status: ${serializeStatus(todo.status)}`)
-    }
-  }
+  const yaml = serializeFrontmatter(parts.yaml, {
+    name: parsed.name,
+    overview: parsed.overview,
+    todos: parsed.todos.map((t) => ({ id: t.id, content: t.content, status: serializeStatus(t.status) })),
+    isProject: parsed.isProject,
+    stage: parsed.stage,
+    approvedAt: parsed.approvedAt,
+    reviewNotes: parsed.reviewNotes,
+    executions: parsed.executions,
+  })
 
   // Sync body checkboxes only when they map 1:1 onto the frontmatter todos.
   // Plans whose Detailed Todos are finer-grained than the phase-level todos
@@ -269,7 +386,30 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
   }
 
   // body already starts with `\n` (e.g. `\n\n# Goals...`), so no extra separator needed.
-  return `---\n${newYamlLines.join('\n')}\n---${body}`
+  return `---\n${yaml}\n---${body}`
+}
+
+/**
+ * Serialize a unified `PlanMeta` back into the original raw file, preserving the
+ * markdown body byte-for-byte. This is the reverse of `parsePlanMeta` and the
+ * on-disk writer adapters use; it carries the full 4-value todo status set
+ * (`skipped` persists as `skipped`). The memory-only `format` field is dropped.
+ */
+export function writePlanMeta(meta: PlanMeta, originalRaw: string): string {
+  const parts = splitFrontmatter(originalRaw)
+  if (!parts) return originalRaw
+
+  const yaml = serializeFrontmatter(parts.yaml, {
+    name: meta.name,
+    overview: meta.overview,
+    todos: meta.todos.map((t) => ({ id: t.id, content: t.content, status: serializeStatus(t.status) })),
+    isProject: meta.isProject === true,
+    stage: meta.stage,
+    approvedAt: meta.approvedAt,
+    reviewNotes: meta.reviewNotes,
+    executions: meta.executions,
+  })
+  return `---\n${yaml}\n---${parts.body}`
 }
 
 /**
@@ -321,5 +461,49 @@ export function replacePlanSectionBody(raw: string, heading: string, newBody: st
   const normalizedBody = newBody.replace(/^\n+/, '').replace(/\n+$/, '')
   const rebuilt = [lines[headingIdx], '', ...(normalizedBody ? normalizedBody.split('\n') : []), '']
   const merged = [...lines.slice(0, headingIdx), ...rebuilt, ...lines.slice(nextIdx)]
+  return prefix + merged.join('\n')
+}
+
+/**
+ * Delete a whole `## Heading` section (the heading line plus its body up to the
+ * next `## ` heading or end of file) from a raw `.plan.md` string. The
+ * frontmatter and every other section are preserved byte-for-byte. Symmetric
+ * to `replacePlanSectionBody`: when `heading` is not found the input is
+ * returned unchanged, and duplicate headings resolve to the first occurrence.
+ */
+export function deleteSection(raw: string, heading: string): string {
+  // Skip the frontmatter so `##` scanning never touches the YAML block.
+  let bodyStart = 0
+  if (raw.startsWith('---')) {
+    const after = raw.slice(3)
+    const end = after.indexOf('\n---')
+    if (end !== -1) bodyStart = 3 + end + 4
+  }
+  const prefix = raw.slice(0, bodyStart)
+  const body = raw.slice(bodyStart)
+
+  const lines = body.split('\n')
+  const target = heading.trim()
+
+  let headingIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(.+?)\s*$/)
+    if (m && m[1].trim() === target) {
+      headingIdx = i
+      break
+    }
+  }
+  if (headingIdx === -1) return raw
+
+  // Boundary: the next `## ` heading after this one (or end of file).
+  let nextIdx = lines.length
+  for (let i = headingIdx + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i])) {
+      nextIdx = i
+      break
+    }
+  }
+
+  const merged = [...lines.slice(0, headingIdx), ...lines.slice(nextIdx)]
   return prefix + merged.join('\n')
 }

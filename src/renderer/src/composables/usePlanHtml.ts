@@ -6,39 +6,20 @@
  * Legacy `.plan.md` handling lives in usePlanFile.ts and is intentionally untouched.
  */
 
-export const PLAN_STAGES = ['draft', 'in-review', 'approved', 'in-progress', 'done', 'abandoned'] as const
-export type PlanStage = (typeof PLAN_STAGES)[number]
+// The unified plan model is the source of truth for these shared shapes;
+// the Html* names are kept as aliases so existing importers stay unchanged.
+// Only the type/const declarations are re-exports — the parse/serialize logic
+// below is untouched.
+import { PLAN_STAGES, TODO_STATUSES } from './planModel'
+import type { PlanStage, TodoStatus, PlanTodo, ReviewNote, PlanExecution } from './planModel'
 
-export const HTML_TODO_STATUSES = ['pending', 'in-progress', 'done', 'skipped'] as const
-export type HtmlTodoStatus = (typeof HTML_TODO_STATUSES)[number]
+export { PLAN_STAGES }
+export type { PlanStage, PlanExecution }
 
-export interface HtmlPlanTodo {
-  id: string
-  content: string
-  status: HtmlTodoStatus
-  /** Unknown fields are preserved verbatim for forward compatibility. */
-  [key: string]: unknown
-}
-
-export interface HtmlPlanReviewNote {
-  id: string
-  author: 'user' | 'ai'
-  text: string
-  resolved: boolean
-  reply: string
-  /** Optional section anchor (outline heading text); '' when not anchored. */
-  anchor: string
-  /** Unknown fields are preserved verbatim for forward compatibility. */
-  [key: string]: unknown
-}
-
-/** One dispatch record: which agent was sent to execute the plan, and when. */
-export interface PlanExecution {
-  agent: string
-  startedAt: string
-  /** Unknown fields are preserved verbatim for forward compatibility. */
-  [key: string]: unknown
-}
+export const HTML_TODO_STATUSES = TODO_STATUSES
+export type HtmlTodoStatus = TodoStatus
+export type HtmlPlanTodo = PlanTodo
+export type HtmlPlanReviewNote = ReviewNote
 
 export interface HtmlPlanMeta {
   schemaVersion: 1
