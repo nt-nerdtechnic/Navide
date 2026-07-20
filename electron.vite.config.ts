@@ -30,7 +30,13 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/main/index.ts')
+        input: resolve(__dirname, 'src/main/index.ts'),
+        // `ws` (pulled in by the plugin WebSocket client) does an optional
+        // `require('bufferutil')` / `require('utf-8-validate')` for native
+        // speedups. They aren't installed and ws falls back to JS at runtime,
+        // but the bundler still tries to resolve them at build time and fails.
+        // Externalize so the optional requires are left alone.
+        external: ['bufferutil', 'utf-8-validate']
       }
     }
   },
