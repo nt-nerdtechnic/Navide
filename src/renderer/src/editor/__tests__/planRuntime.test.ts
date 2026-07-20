@@ -3,18 +3,28 @@
 // including escaping safety for document-controlled anchor data), and the
 // host-side postMessage validation — non-whitelisted events are ignored and
 // malformed payloads never reach the write hooks.
+// @vitest-environment happy-dom
 import { describe, it, expect, vi } from 'vitest'
 import {
   MAX_ANCHOR_LENGTH,
   MAX_OPEN_CODE_LINE,
   MAX_OPEN_CODE_PATH_LENGTH,
+  MAX_SECTION_HTML_LENGTH,
   buildPlanRuntimeScript,
   createPlanRuntimeMessageHandler,
   extractPlanOutline,
   preparePlanDocHtml,
+  sanitizePlanSectionHtml,
   stripExecutableScripts,
   type PlanRuntimeHostHooks,
+  type PlanRuntimeInit,
 } from '../planRuntime'
+
+// Labels required by PlanRuntimeInit for the inline edit/delete affordances.
+const LABELS = { editLabel: 'Edit', deleteLabel: 'Delete', saveLabel: 'Save', cancelLabel: 'Cancel' }
+function initOf(over: Partial<PlanRuntimeInit> = {}): PlanRuntimeInit {
+  return { anchors: {}, commentLabel: 'Comment', scrollY: 0, ...LABELS, ...over }
+}
 
 const DOC = [
   '<!doctype html><html><head><title>t</title>',
@@ -52,23 +62,21 @@ describe('extractPlanOutline', () => {
 
 describe('buildPlanRuntimeScript', () => {
   it('embeds the init data with "<" escaped so anchors cannot break out of the script', () => {
-    const script = buildPlanRuntimeScript({
-      anchors: { '</script><img src=x onerror=alert(1)>': 2 },
-      commentLabel: '<b>Comment</b>',
-      scrollY: 0,
-    })
+    const script = buildPlanRuntimeScript(
+      initOf({ anchors: { '</script><img src=x onerror=alert(1)>': 2 }, commentLabel: '<b>Comment</b>' }),
+    )
     expect(script).not.toContain('</script')
     expect(script).toContain('\\u003c')
   })
 
   it('embeds the scroll offset and comment label', () => {
-    const script = buildPlanRuntimeScript({ anchors: {}, commentLabel: 'Comment', scrollY: 420 })
+    const script = buildPlanRuntimeScript(initOf({ scrollY: 420 }))
     expect(script).toContain('"scrollY":420')
     expect(script).toContain('"commentLabel":"Comment"')
   })
 
   it('binds file:line references in code elements to the open-code event', () => {
-    const script = buildPlanRuntimeScript({ anchors: {}, commentLabel: 'Comment', scrollY: 0 })
+    const script = buildPlanRuntimeScript(initOf())
     expect(script).toContain("querySelectorAll('code')")
     expect(script).toContain("type: 'open-code'")
     // The embedded reference regex survives template-literal escaping intact.
@@ -78,7 +86,7 @@ describe('buildPlanRuntimeScript', () => {
 })
 
 describe('stripExecutableScripts / preparePlanDocHtml', () => {
-  const init = { anchors: {}, commentLabel: 'Comment', scrollY: 0 }
+  const init = initOf()
 
   it('strips executable scripts but keeps the JSON plan-meta island', () => {
     const html = [
@@ -142,6 +150,9 @@ describe('createPlanRuntimeMessageHandler', () => {
       onSectionComment: vi.fn(),
       onScrollPos: vi.fn(),
       onOpenCode: vi.fn(),
+      onSectionEdit: vi.fn(),
+      onSectionDelete: vi.fn(),
+      onSectionEditing: vi.fn(),
       ...overrides,
     }
     const handler = createPlanRuntimeMessageHandler(hooks)
@@ -248,5 +259,98 @@ describe('createPlanRuntimeMessageHandler', () => {
     send({ type: 'open-code', path: 'src/app.ts', line: '42' })
     send({ type: 'open-code', path: 'src/app.ts' })
     expect(hooks.onOpenCode).not.toHaveBeenCalled()
+  })
+
+  it('accepts a valid section-edit with a known anchor and bounded html', () => {
+    const { hooks, send } = harness()
+    send({ type: 'section-edit', anchor: 'Goals', html: '<p>new</p>' })
+    expect(hooks.onSectionEdit).toHaveBeenCalledWith('Goals', '<p>new</p>')
+  })
+
+  it('rejects section-edit with unknown anchor, bad anchor, or oversized/non-string html', () => {
+    const { hooks, send } = harness()
+    send({ type: 'section-edit', anchor: 'Nope', html: '<p>x</p>' })
+    send({ type: 'section-edit', anchor: 42, html: '<p>x</p>' })
+    send({ type: 'section-edit', anchor: '', html: '<p>x</p>' })
+    send({ type: 'section-edit', anchor: 'Goals', html: 42 })
+    send({ type: 'section-edit', anchor: 'Goals', html: 'x'.repeat(MAX_SECTION_HTML_LENGTH + 1) })
+    send({ type: 'section-edit', anchor: 'Goals' })
+    expect(hooks.onSectionEdit).not.toHaveBeenCalled()
+  })
+
+  it('accepts a valid section-delete and rejects unknown/bad anchors', () => {
+    const { hooks, send } = harness()
+    send({ type: 'section-delete', anchor: 'Risks' })
+    send({ type: 'section-delete', anchor: 'Unknown' })
+    send({ type: 'section-delete', anchor: 99 })
+    send({ type: 'section-delete', anchor: '' })
+    expect(hooks.onSectionDelete).toHaveBeenCalledTimes(1)
+    expect(hooks.onSectionDelete).toHaveBeenCalledWith('Risks')
+  })
+
+  it('accepts section-editing only with a boolean active flag', () => {
+    const { hooks, send } = harness()
+    send({ type: 'section-editing', active: true })
+    send({ type: 'section-editing', active: false })
+    send({ type: 'section-editing', active: 'yes' })
+    send({ type: 'section-editing' })
+    expect(hooks.onSectionEditing).toHaveBeenNthCalledWith(1, true)
+    expect(hooks.onSectionEditing).toHaveBeenNthCalledWith(2, false)
+    expect(hooks.onSectionEditing).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('sanitizePlanSectionHtml', () => {
+  it('keeps whitelisted tags and safe href, dropping other attributes', () => {
+    const out = sanitizePlanSectionHtml(
+      '<p class="x" onclick="alert(1)">hi <strong>bold</strong> <a href="https://a.example" target="_blank">l</a></p>',
+    )
+    expect(out).toContain('<p>hi <strong>bold</strong>')
+    expect(out).toContain('<a href="https://a.example">l</a>')
+    expect(out).not.toContain('onclick')
+    expect(out).not.toContain('class=')
+    expect(out).not.toContain('target=')
+  })
+
+  it('strips script/style entirely and unwraps non-whitelisted tags keeping their text', () => {
+    const out = sanitizePlanSectionHtml(
+      '<div><script>alert(1)</scr' + 'ipt><style>*{}</style><span>kept</span><p>para</p></div>',
+    )
+    expect(out).not.toContain('<script')
+    expect(out).not.toContain('alert(1)')
+    expect(out).not.toContain('<style')
+    expect(out).not.toContain('<div')
+    expect(out).not.toContain('<span')
+    expect(out).toContain('kept')
+    expect(out).toContain('<p>para</p>')
+  })
+
+  it('drops javascript:/data:/vbscript: hrefs on anchors', () => {
+    expect(sanitizePlanSectionHtml('<a href="javascript:alert(1)">x</a>')).toBe('<a>x</a>')
+    expect(sanitizePlanSectionHtml('<a href="data:text/html,x">x</a>')).toBe('<a>x</a>')
+    expect(sanitizePlanSectionHtml('<a href="vbscript:x">x</a>')).toBe('<a>x</a>')
+  })
+
+  it('drops hrefs that smuggle a dangerous scheme past embedded tab/control chars', () => {
+    // Browsers strip embedded tab and leading control chars before resolving the
+    // scheme, so these still run as javascript: — the href must be dropped.
+    const tab = String.fromCharCode(9)
+    expect(sanitizePlanSectionHtml(`<a href="java${tab}script:alert(1)">x</a>`)).toBe('<a>x</a>')
+    const ctrl = String.fromCharCode(1)
+    expect(sanitizePlanSectionHtml(`<a href="${ctrl}javascript:alert(1)">x</a>`)).toBe('<a>x</a>')
+    // A benign https href with no control chars is not over-stripped.
+    expect(sanitizePlanSectionHtml('<a href="https://example.com">x</a>')).toBe(
+      '<a href="https://example.com">x</a>',
+    )
+  })
+
+  it('preserves whitelisted table and list structure', () => {
+    const out = sanitizePlanSectionHtml(
+      '<table><thead><tr><th>H</th></tr></thead><tbody><tr><td>C</td></tr></tbody></table><ul><li>a</li></ul>',
+    )
+    expect(out).toContain('<table>')
+    expect(out).toContain('<th>H</th>')
+    expect(out).toContain('<td>C</td>')
+    expect(out).toContain('<li>a</li>')
   })
 })

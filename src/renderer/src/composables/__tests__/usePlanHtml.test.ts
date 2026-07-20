@@ -6,6 +6,13 @@ import {
   replaceHtmlPlanMeta,
   syncStageMarkup,
   syncTodoMarkup,
+  addTodoMarkup,
+  removeTodoMarkup,
+  setTodoContentMarkup,
+  setNoteTextMarkup,
+  removeNoteMarkup,
+  replaceSectionBody,
+  deleteSection,
   type HtmlPlanMeta,
 } from '../usePlanHtml'
 
@@ -426,5 +433,185 @@ describe('injectPlanMeta', () => {
     const block = out.match(/<script type="application\/json" id="plan-meta">([\s\S]*?)<\/script>/)!
     expect(block[1]).not.toContain('<')
     expect(parseHtmlPlanMeta(out)?.meta.name).toBe('Has </scr' + 'ipt> inside')
+  })
+})
+
+// A body-realistic plan document (template-shaped) for the structured-content
+// and section edit/delete helpers.
+const BODY_DOC = [
+  '<!doctype html><html><head>',
+  '<script type="application/json" id="plan-meta">',
+  '{"schemaVersion":1,"name":"P"}',
+  '</scr' + 'ipt>',
+  '</head><body>',
+  '<header><h1>P<span class="pill draft">draft</span></h1></header>',
+  '<section>',
+  '  <h2>Goals</h2>',
+  '  <p>Original goal text.</p>',
+  '</section>',
+  '<section>',
+  '  <h2>Phases</h2>',
+  '  <div class="phase">',
+  '    <div class="phase-head">Phase A · Alpha</div>',
+  '    <div class="phase-body">',
+  '      <ul class="todos">',
+  '        <li data-status="pending" data-todo-id="phase-a">',
+  '          <span class="st">pending</span>',
+  '          <span>First phase</span>',
+  '        </li>',
+  '      </ul>',
+  '      <p class="note">Phase detail.</p>',
+  '    </div>',
+  '  </div>',
+  '</section>',
+  '<section>',
+  '  <h2>Risks</h2>',
+  '  <ul><li>risk one</li></ul>',
+  '</section>',
+  '<section>',
+  '  <h2>Review Notes</h2>',
+  '  <ul class="notes">',
+  '    <li data-note-id="n1" data-resolved="false"><span class="who">user</span>Needs work<div class="reply"><span class="who">ai</span>ok</div></li>',
+  '    <li data-note-id="n2" data-resolved="true"><span class="who">user</span>Second note</li>',
+  '  </ul>',
+  '</section>',
+  '</body></html>',
+].join('\n')
+
+describe('addTodoMarkup', () => {
+  it('inserts a new <li data-todo-id> into the last todos list before its </ul>', () => {
+    const { content, warning } = addTodoMarkup(BODY_DOC, {
+      id: 'phase-c',
+      content: 'Third phase',
+      status: 'pending',
+    })
+    expect(warning).toBeNull()
+    expect(content).toContain('data-todo-id="phase-c"')
+    // Inserted after the existing todo and before the list close.
+    expect(content.indexOf('data-todo-id="phase-a"')).toBeLessThan(content.indexOf('data-todo-id="phase-c"'))
+    expect(content.indexOf('data-todo-id="phase-c"')).toBeLessThan(content.indexOf('</ul>'))
+  })
+
+  it('HTML-escapes content so it cannot inject markup', () => {
+    const { content } = addTodoMarkup(BODY_DOC, {
+      id: 'x',
+      content: '<script>alert(1)</scr' + 'ipt>',
+      status: 'pending',
+    })
+    expect(content).toContain('&lt;script&gt;')
+    expect(content).not.toContain('<script>alert(1)')
+  })
+
+  it('warns and leaves content unchanged when there is no todos list', () => {
+    const doc = '<html><body><section><h2>Goals</h2><p>x</p></section></body></html>'
+    const { content, warning } = addTodoMarkup(doc, { id: 'a', content: 'x', status: 'pending' })
+    expect(content).toBe(doc)
+    expect(warning).toMatch(/no <ul class="todos">/)
+  })
+})
+
+describe('removeTodoMarkup', () => {
+  it('removes the matching todo <li> and nothing else', () => {
+    const out = removeTodoMarkup(BODY_DOC, 'phase-a')
+    expect(out).not.toContain('data-todo-id="phase-a"')
+    expect(out).not.toContain('First phase')
+    expect(out).toContain('Phase detail.')
+  })
+
+  it('is a no-op when the id is absent', () => {
+    expect(removeTodoMarkup(BODY_DOC, 'nope')).toBe(BODY_DOC)
+  })
+})
+
+describe('setTodoContentMarkup', () => {
+  it('updates the visible content span text, escaped, leaving the status pill', () => {
+    const out = setTodoContentMarkup(BODY_DOC, 'phase-a', 'Renamed <b>')
+    expect(out).toContain('Renamed &lt;b&gt;')
+    expect(out).not.toContain('First phase')
+    expect(out).toContain('<span class="st">pending</span>')
+  })
+
+  it('is a no-op when the id is absent', () => {
+    expect(setTodoContentMarkup(BODY_DOC, 'nope', 'x')).toBe(BODY_DOC)
+  })
+})
+
+describe('setNoteTextMarkup', () => {
+  it('updates a note text before the reply block, keeping the reply', () => {
+    const out = setNoteTextMarkup(BODY_DOC, 'n1', 'Updated text')
+    expect(out).toContain('<span class="who">user</span>Updated text<div class="reply">')
+    expect(out).toContain('<span class="who">ai</span>ok')
+    expect(out).not.toContain('Needs work')
+  })
+
+  it('updates a note without a reply, up to </li>, escaping the text', () => {
+    const out = setNoteTextMarkup(BODY_DOC, 'n2', 'New <i>')
+    expect(out).toContain('<span class="who">user</span>New &lt;i&gt;</li>')
+    expect(out).not.toContain('Second note')
+  })
+
+  it('is a no-op when the id is absent', () => {
+    expect(setNoteTextMarkup(BODY_DOC, 'n9', 'x')).toBe(BODY_DOC)
+  })
+})
+
+describe('removeNoteMarkup', () => {
+  it('removes the whole note <li> including its reply', () => {
+    const out = removeNoteMarkup(BODY_DOC, 'n1')
+    expect(out).not.toContain('data-note-id="n1"')
+    expect(out).not.toContain('Needs work')
+    expect(out).toContain('data-note-id="n2"')
+  })
+
+  it('is a no-op when the id is absent', () => {
+    expect(removeNoteMarkup(BODY_DOC, 'n9')).toBe(BODY_DOC)
+  })
+})
+
+describe('replaceSectionBody', () => {
+  it('replaces only the prose body of a section, preserving all other bytes', () => {
+    const out = replaceSectionBody(BODY_DOC, 'Goals', '<p>Rewritten goal.</p>')
+    expect(out).toContain('<h2>Goals</h2>')
+    expect(out).toContain('<p>Rewritten goal.</p>')
+    expect(out).not.toContain('Original goal text.')
+    // Everything after the Goals section is byte-identical.
+    const tail = BODY_DOC.slice(BODY_DOC.indexOf('<section>\n  <h2>Phases'))
+    expect(out).toContain(tail)
+    // The plan-meta island and header are untouched.
+    expect(out).toContain('{"schemaVersion":1,"name":"P"}')
+    expect(out).toContain('<h1>P<span class="pill draft">draft</span></h1>')
+  })
+
+  it('refuses a section that carries a todo list (Phases)', () => {
+    expect(replaceSectionBody(BODY_DOC, 'Phases', '<p>x</p>')).toBe(BODY_DOC)
+  })
+
+  it('refuses a phase whose body carries a todo list', () => {
+    expect(replaceSectionBody(BODY_DOC, 'Phase A · Alpha', '<p>x</p>')).toBe(BODY_DOC)
+  })
+
+  it('never matches the header (h1) or plan-meta, and is a no-op for unknown anchors', () => {
+    expect(replaceSectionBody(BODY_DOC, 'P', '<p>x</p>')).toBe(BODY_DOC)
+    expect(replaceSectionBody(BODY_DOC, 'Nonexistent', '<p>x</p>')).toBe(BODY_DOC)
+  })
+})
+
+describe('deleteSection', () => {
+  it('removes the whole prose section', () => {
+    const out = deleteSection(BODY_DOC, 'Risks')
+    expect(out).not.toContain('<h2>Risks</h2>')
+    expect(out).not.toContain('risk one')
+    expect(out).toContain('<h2>Goals</h2>')
+    expect(out).toContain('<h2>Review Notes</h2>')
+  })
+
+  it('refuses to delete a todo-bearing region', () => {
+    expect(deleteSection(BODY_DOC, 'Phases')).toBe(BODY_DOC)
+    expect(deleteSection(BODY_DOC, 'Phase A · Alpha')).toBe(BODY_DOC)
+  })
+
+  it('is a no-op for the header and unknown anchors', () => {
+    expect(deleteSection(BODY_DOC, 'P')).toBe(BODY_DOC)
+    expect(deleteSection(BODY_DOC, 'Nope')).toBe(BODY_DOC)
   })
 })

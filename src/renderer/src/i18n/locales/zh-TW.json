@@ -99,7 +99,17 @@
       "execute-duplicate-confirm": "「{name}」已有進行中的派工，仍要再次派工嗎？",
       "execute-dispatched": "已派工給 CLI agent",
       "execute-no-window": "此 workspace 沒有開啟中的主視窗，請開啟後再試",
-      "execute-failed": "派工失敗，計畫已回復為已核准，請再試一次"
+      "execute-failed": "派工失敗，計畫已回復為已核准，請再試一次",
+      "edit": "編輯",
+      "delete": "刪除",
+      "save": "儲存",
+      "cancel": "取消",
+      "todo-add": "新增",
+      "todo-add-placeholder": "新增待辦…",
+      "todo-delete-confirm": "要刪除待辦「{content}」嗎？",
+      "note-delete-confirm": "要刪除這則審查留言嗎？",
+      "doc-edit-placeholder": "編輯區段文字…",
+      "doc-delete-confirm": "要從文件刪除這個區段嗎？"
     },
     "terminal": {
       "rebuild-tooltip": "重建 (resume) ⌘⇧B — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。",

@@ -27,6 +27,8 @@ const emit = defineEmits<{
   (e: 'todo-clicked', payload: { todoId: string; alt: boolean }): void
   (e: 'section-comment', anchor: string): void
   (e: 'open-code', payload: { path: string; line: number }): void
+  (e: 'section-edit', payload: { anchor: string; html: string }): void
+  (e: 'section-delete', anchor: string): void
 }>()
 
 const { t } = useI18n()
@@ -34,6 +36,9 @@ const { t } = useI18n()
 const frame = ref<HTMLIFrameElement | null>(null)
 const docHtml = ref('')
 const loadError = ref(false)
+// True while the frame reports an in-progress inline section edit; the host
+// (PlanWindowApp) checks this so ESC cancels the edit before closing the window.
+const editing = ref(false)
 // Last position reported by the runtime; re-injected on reload so a meta
 // write does not jump the document back to the top.
 const scrollY = ref(0)
@@ -42,6 +47,11 @@ let todoIds: string[] = []
 let anchors: string[] = []
 
 async function loadDoc(): Promise<void> {
+  // A reload (external plans.changed / meta write) swaps in a fresh iframe whose
+  // runtime never sends section-editing:false, so clear stale edit state here —
+  // otherwise `editing` sticks true and ESC keeps calling cancelEdit() instead
+  // of closing the window.
+  editing.value = false
   try {
     const resp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
       'fs.read_file',
@@ -62,6 +72,10 @@ async function loadDoc(): Promise<void> {
     docHtml.value = preparePlanDocHtml(content, {
       anchors: counts,
       commentLabel: t('pane.plans.doc-comment'),
+      editLabel: t('pane.plans.edit'),
+      deleteLabel: t('pane.plans.delete'),
+      saveLabel: t('pane.plans.save'),
+      cancelLabel: t('pane.plans.cancel'),
       scrollY: scrollY.value,
     })
     loadError.value = false
@@ -77,6 +91,11 @@ const onMessage = createPlanRuntimeMessageHandler({
   onTodoClicked: (todoId, alt) => emit('todo-clicked', { todoId, alt }),
   onSectionComment: (anchor) => emit('section-comment', anchor),
   onOpenCode: (path, line) => emit('open-code', { path, line }),
+  onSectionEdit: (anchor, html) => emit('section-edit', { anchor, html }),
+  onSectionDelete: (anchor) => emit('section-delete', anchor),
+  onSectionEditing: (active) => {
+    editing.value = active
+  },
   onScrollPos: (y) => {
     scrollY.value = y
   },
@@ -100,7 +119,17 @@ function scrollToAnchor(anchor: string): void {
   frame.value?.contentWindow?.postMessage({ type: 'scroll-to', anchor }, '*')
 }
 
-defineExpose({ scrollToAnchor })
+/** ESC overlay support: whether an inline section edit is in progress. */
+function isEditing(): boolean {
+  return editing.value
+}
+
+/** Ask the frame to cancel an in-progress inline section edit. */
+function cancelEdit(): void {
+  frame.value?.contentWindow?.postMessage({ type: 'cancel-edit' }, '*')
+}
+
+defineExpose({ scrollToAnchor, isEditing, cancelEdit })
 </script>
 
 <template>

@@ -99,7 +99,17 @@
       "execute-duplicate-confirm": "\"{name}\" already has a dispatched execution in progress. Dispatch again?",
       "execute-dispatched": "Plan dispatched to CLI agent",
       "execute-no-window": "No main window is open for this workspace — open it and retry",
-      "execute-failed": "Dispatch failed — the plan was reverted to approved, please retry"
+      "execute-failed": "Dispatch failed — the plan was reverted to approved, please retry",
+      "edit": "Edit",
+      "delete": "Delete",
+      "save": "Save",
+      "cancel": "Cancel",
+      "todo-add": "Add",
+      "todo-add-placeholder": "Add a todo…",
+      "todo-delete-confirm": "Delete todo \"{content}\"?",
+      "note-delete-confirm": "Delete this review note?",
+      "doc-edit-placeholder": "Edit section text…",
+      "doc-delete-confirm": "Delete this section from the document?"
     },
     "terminal": {
       "rebuild-tooltip": "Rebuild (resume) ⌘⇧B — kill and re-spawn via --resume at the current size to clear ghosting/overlap that can't be repainted. Interrupts the in-progress turn and reprints the conversation.",

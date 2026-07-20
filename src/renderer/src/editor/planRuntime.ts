@@ -28,16 +28,27 @@ export const PLAN_RUNTIME_EVENTS = [
   'section-comment',
   'scroll-pos',
   'open-code',
+  'section-edit',
+  'section-delete',
+  'section-editing',
 ] as const
 
 /** Upper bound for a section anchor; longer payloads are rejected. */
 export const MAX_ANCHOR_LENGTH = 200
+
+/** Upper bound for an inline section-edit HTML payload; longer is rejected. */
+export const MAX_SECTION_HTML_LENGTH = 20_000
 
 export interface PlanRuntimeInit {
   /** Unresolved review-note count per anchor, rendered as heading badges. */
   anchors: Record<string, number>
   /** Localized label for the injected section comment button. */
   commentLabel: string
+  /** Localized labels for the inline section edit/delete affordances. */
+  editLabel: string
+  deleteLabel: string
+  saveLabel: string
+  cancelLabel: string
   /** Scroll offset restored after a reload triggered by a meta write. */
   scrollY: number
 }
@@ -47,6 +58,9 @@ export type PlanRuntimeMessage =
   | { type: 'section-comment'; anchor: string }
   | { type: 'scroll-pos'; y: number }
   | { type: 'open-code'; path: string; line: number }
+  | { type: 'section-edit'; anchor: string; html: string }
+  | { type: 'section-delete'; anchor: string }
+  | { type: 'section-editing'; active: boolean }
 
 // Anchors are the leading text of section `<h2>`s and `.phase-head`s (text up
 // to the first child element), whitespace-collapsed — the runtime computes the
@@ -78,6 +92,12 @@ export interface PlanRuntimeHostHooks {
   onSectionComment: (anchor: string) => void
   onScrollPos: (y: number) => void
   onOpenCode: (path: string, line: number) => void
+  /** Inline edit submitted for an anchored section; `html` is raw and must be sanitized host-side. */
+  onSectionEdit: (anchor: string, html: string) => void
+  /** Inline delete requested for an anchored section. */
+  onSectionDelete: (anchor: string) => void
+  /** Frame entered/left inline section editing (drives ESC overlay priority). */
+  onSectionEditing: (active: boolean) => void
 }
 
 /** Upper bounds for open-code payloads; anything beyond is rejected. */
@@ -134,10 +154,89 @@ export function createPlanRuntimeMessageHandler(
         hooks.onOpenCode(path, line)
         return
       }
+      case 'section-edit': {
+        const anchor = msg.anchor
+        const html = msg.html
+        if (typeof anchor !== 'string' || anchor.length === 0 || anchor.length > MAX_ANCHOR_LENGTH)
+          return
+        if (!hooks.getAnchors().includes(anchor)) return
+        if (typeof html !== 'string' || html.length > MAX_SECTION_HTML_LENGTH) return
+        hooks.onSectionEdit(anchor, html)
+        return
+      }
+      case 'section-delete': {
+        const anchor = msg.anchor
+        if (typeof anchor !== 'string' || anchor.length === 0 || anchor.length > MAX_ANCHOR_LENGTH)
+          return
+        if (!hooks.getAnchors().includes(anchor)) return
+        hooks.onSectionDelete(anchor)
+        return
+      }
+      case 'section-editing': {
+        if (typeof msg.active !== 'boolean') return
+        hooks.onSectionEditing(msg.active)
+        return
+      }
       default:
         return // non-whitelisted event — ignored
     }
   }
+}
+
+// ── Host-side HTML sanitizer for inline section edits ──────────────────────
+// The frame is untrusted: its section-edit payload is parsed in a detached
+// document (no script execution, no network) and rebuilt from a tag/attribute
+// whitelist. Disallowed elements are unwrapped (children kept); script/style
+// are dropped whole; only `href` (non-javascript:/data:) survives on `<a>`.
+const SECTION_ALLOWED_TAGS = new Set([
+  'p', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'a', 'br', 'h3',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
+])
+
+function isSafeHref(href: string): boolean {
+  // Browsers strip embedded tab/newline and leading control chars from a URL
+  // before resolving its scheme, so `java\tscript:` and `\x01javascript:` run
+  // as javascript:. Strip all C0 controls + space for the scheme test only —
+  // the stored href keeps its original form.
+  const v = href.replace(/[\u0000-\u0020]/g, '').toLowerCase()
+  return !v.startsWith('javascript:') && !v.startsWith('data:') && !v.startsWith('vbscript:')
+}
+
+function sanitizeInto(src: Node, dst: Node, doc: Document): void {
+  src.childNodes.forEach((node) => {
+    if (node.nodeType === 3 /* text */) {
+      dst.appendChild(doc.createTextNode(node.nodeValue ?? ''))
+      return
+    }
+    if (node.nodeType !== 1 /* element */) return // drop comments / others
+    const el = node as Element
+    const tag = el.tagName.toLowerCase()
+    if (tag === 'script' || tag === 'style') return // drop entirely, no recurse
+    if (!SECTION_ALLOWED_TAGS.has(tag)) {
+      sanitizeInto(el, dst, doc) // unwrap: keep sanitized children only
+      return
+    }
+    const clean = doc.createElement(tag)
+    if (tag === 'a') {
+      const href = el.getAttribute('href') ?? ''
+      if (href && isSafeHref(href)) clean.setAttribute('href', href)
+    }
+    sanitizeInto(el, clean, doc)
+    dst.appendChild(clean)
+  })
+}
+
+/**
+ * Sanitize untrusted section-edit HTML from the frame against the whitelist.
+ * Runs in the host (renderer) using a detached document — never in the iframe.
+ */
+export function sanitizePlanSectionHtml(html: string): string {
+  const doc = document.implementation.createHTMLDocument('')
+  const container = doc.createElement('div')
+  container.innerHTML = html
+  const out = doc.createElement('div')
+  sanitizeInto(container, out, doc)
+  return out.innerHTML
 }
 
 /**
@@ -163,7 +262,13 @@ export function buildPlanRuntimeScript(init: PlanRuntimeInit): string {
     '.plan-rt-comment{position:absolute;z-index:9;padding:2px 10px;border-radius:99px;' +
     'border:1px solid var(--accent,#3B5BDB);background:var(--surface,#FFFFFF);' +
     'color:var(--accent,#3B5BDB);font-size:12px;cursor:pointer}' +
-    '.plan-rt-comment:hover{background:var(--accent-soft,#E8EDFB)}';
+    '.plan-rt-comment:hover{background:var(--accent-soft,#E8EDFB)}' +
+    '.plan-rt-secbar{position:absolute;z-index:9;display:flex;gap:6px}' +
+    '.plan-rt-secbar button{padding:2px 10px;border-radius:99px;' +
+    'border:1px solid var(--line,#DDE1E9);background:var(--surface,#FFFFFF);' +
+    'color:var(--ink,#1D2530);font-size:12px;cursor:pointer;font-family:inherit}' +
+    '.plan-rt-secbar button:hover{background:var(--surface-2,#EDEFF4)}' +
+    '.plan-rt-secdel{color:var(--danger,#C0392B) !important;border-color:var(--danger,#C0392B) !important}';
   (document.head || document.documentElement).appendChild(style);
 
   // Leading text (up to the first child element), whitespace-collapsed —
@@ -179,17 +284,20 @@ export function buildPlanRuntimeScript(init: PlanRuntimeInit): string {
 
   var targets = [];
   var seen = {};
-  function addTarget(head, region) {
+  function addTarget(head, region, kind, body) {
     var anchor = leadText(head);
     if (!anchor || seen[anchor] === true) return;
     seen[anchor] = true;
-    targets.push({ anchor: anchor, head: head, region: region });
+    targets.push({ anchor: anchor, head: head, region: region, kind: kind, body: body || region });
   }
   var h2s = document.querySelectorAll('h2');
-  for (var i = 0; i < h2s.length; i++) addTarget(h2s[i], h2s[i].closest('section') || h2s[i]);
+  for (var i = 0; i < h2s.length; i++)
+    addTarget(h2s[i], h2s[i].closest('section') || h2s[i], 'section', null);
   var phaseHeads = document.querySelectorAll('.phase-head');
-  for (var j = 0; j < phaseHeads.length; j++)
-    addTarget(phaseHeads[j], phaseHeads[j].closest('.phase') || phaseHeads[j]);
+  for (var j = 0; j < phaseHeads.length; j++) {
+    var phase = phaseHeads[j].closest('.phase') || phaseHeads[j];
+    addTarget(phaseHeads[j], phase, 'phase', phase.querySelector('.phase-body') || phase);
+  }
 
   // Unresolved-comment badges next to anchored headings.
   for (var k = 0; k < targets.length; k++) {
@@ -252,19 +360,142 @@ export function buildPlanRuntimeScript(init: PlanRuntimeInit): string {
 
   // file:line references in <code> elements become clickable and ask the
   // host to open the editor at that line. Workspace-relative paths only.
+  // Extracted so a cancelled section edit can rebind links in the restored
+  // subtree (contenteditable restore replaces the original bound elements).
   var CODE_REF_RE = /^([A-Za-z0-9_\\-./]+\\.[A-Za-z0-9]+):(\\d{1,7})$/;
-  var codeEls = document.querySelectorAll('code');
-  codeEls.forEach(function (el) {
-    var m = CODE_REF_RE.exec((el.textContent || '').trim());
-    if (!m) return;
-    var path = m[1];
-    if (path.charAt(0) === '/' || path.indexOf('..') !== -1) return;
-    var line = parseInt(m[2], 10);
-    el.style.cursor = 'pointer';
-    el.style.textDecoration = 'underline';
-    el.addEventListener('click', function () {
-      post({ type: 'open-code', path: path, line: line });
+  function bindCodeLinks(root) {
+    var codeEls = root.querySelectorAll('code');
+    codeEls.forEach(function (el) {
+      if (el.getAttribute('data-rt-code') === '1') return;
+      var m = CODE_REF_RE.exec((el.textContent || '').trim());
+      if (!m) return;
+      var path = m[1];
+      if (path.charAt(0) === '/' || path.indexOf('..') !== -1) return;
+      var line = parseInt(m[2], 10);
+      el.setAttribute('data-rt-code', '1');
+      el.style.cursor = 'pointer';
+      el.style.textDecoration = 'underline';
+      el.addEventListener('click', function () {
+        post({ type: 'open-code', path: path, line: line });
+      });
     });
+  }
+  bindCodeLinks(document);
+
+  // In-document section editing: an inline Edit/Delete bar floats over each
+  // editable region (an outline target that carries no todo list — todos are
+  // managed by the toolbar and must never pass through the host sanitizer).
+  // Edit turns the region body contenteditable (its heading stays locked);
+  // Save posts the raw body HTML for host sanitization + write; Delete asks
+  // the host (which confirms) to remove the whole region. The document on
+  // disk stays plain HTML — the frame never writes.
+  var secbar = document.createElement('div');
+  secbar.className = 'plan-rt-secbar';
+  secbar.style.display = 'none';
+  document.body.appendChild(secbar);
+  var editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.textContent = INIT.editLabel;
+  var delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'plan-rt-secdel';
+  delBtn.textContent = INIT.deleteLabel;
+  var saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = INIT.saveLabel;
+  var cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.textContent = INIT.cancelLabel;
+  var editing = null;
+  var secHideTimer = null;
+  function secCancelHide() { if (secHideTimer) { clearTimeout(secHideTimer); secHideTimer = null; } }
+  function secScheduleHide() {
+    secCancelHide();
+    if (editing) return;
+    secHideTimer = setTimeout(function () { if (!editing) secbar.style.display = 'none'; }, 250);
+  }
+  function placeSecbar(region) {
+    var rect = region.getBoundingClientRect();
+    secbar.style.top = (rect.top + window.scrollY + 6) + 'px';
+    secbar.style.left = (rect.left + window.scrollX + 6) + 'px';
+  }
+  function setSecbar() {
+    secbar.innerHTML = '';
+    for (var a = 0; a < arguments.length; a++) secbar.appendChild(arguments[a]);
+  }
+  function editableEl(t) { return t.kind === 'phase' ? t.body : t.region; }
+  function serializeBody(t) {
+    var container = editableEl(t);
+    var html = '';
+    var kids = container.childNodes;
+    for (var i = 0; i < kids.length; i++) {
+      var n = kids[i];
+      if (n === t.head) continue;
+      if (n.nodeType === 1) {
+        if (n.classList && (n.classList.contains('plan-rt-secbar') ||
+          n.classList.contains('plan-rt-comment') || n.classList.contains('todos'))) continue;
+        html += n.outerHTML;
+      } else if (n.nodeType === 3) {
+        html += n.data;
+      }
+    }
+    return html;
+  }
+  function enterEdit(t) {
+    if (editing) return;
+    editing = t;
+    var el = editableEl(t);
+    t._snap = el.innerHTML;
+    el.setAttribute('contenteditable', 'true');
+    el.style.outline = '2px solid var(--accent,#3B5BDB)';
+    if (t.head !== el) t.head.setAttribute('contenteditable', 'false');
+    setSecbar(saveBtn, cancelBtn);
+    placeSecbar(t.region);
+    secbar.style.display = 'flex';
+    secCancelHide();
+    btn.style.display = 'none';
+    post({ type: 'section-editing', active: true });
+    el.focus();
+  }
+  function exitEdit(t) {
+    var el = editableEl(t);
+    el.removeAttribute('contenteditable');
+    el.style.outline = '';
+    if (t.head !== el) t.head.removeAttribute('contenteditable');
+    editing = null;
+    secbar.style.display = 'none';
+    post({ type: 'section-editing', active: false });
+  }
+  function saveEdit(t) {
+    post({ type: 'section-edit', anchor: t.anchor, html: serializeBody(t) });
+    exitEdit(t);
+  }
+  function cancelEdit(t) {
+    editableEl(t).innerHTML = t._snap;
+    bindCodeLinks(editableEl(t));
+    exitEdit(t);
+  }
+  editBtn.addEventListener('click', function () { if (secbar._t) enterEdit(secbar._t); });
+  delBtn.addEventListener('click', function () {
+    if (secbar._t) post({ type: 'section-delete', anchor: secbar._t.anchor });
+  });
+  saveBtn.addEventListener('click', function () { if (editing) saveEdit(editing); });
+  cancelBtn.addEventListener('click', function () { if (editing) cancelEdit(editing); });
+  secbar.addEventListener('mouseenter', secCancelHide);
+  secbar.addEventListener('mouseleave', secScheduleHide);
+  targets.forEach(function (t) {
+    // Editable = outline region with no todo list (prose section / prose phase).
+    if (editableEl(t).querySelector && editableEl(t).querySelector('ul.todos')) return;
+    if (t.region.querySelector && t.region.querySelector('ul.todos')) return;
+    t.region.addEventListener('mouseenter', function () {
+      if (editing) return;
+      secCancelHide();
+      secbar._t = t;
+      setSecbar(editBtn, delBtn);
+      placeSecbar(t.region);
+      secbar.style.display = 'flex';
+    });
+    t.region.addEventListener('mouseleave', secScheduleHide);
   });
 
   // Throttled scroll reporting so the host can restore position after the
@@ -279,10 +510,26 @@ export function buildPlanRuntimeScript(init: PlanRuntimeInit): string {
   }, { passive: true });
   if (INIT.scrollY > 0) window.scrollTo(0, INIT.scrollY);
 
-  // Host -> frame: outline navigation (the only inbound message handled).
+  // Escape while editing cancels the inline edit (focus is inside the frame,
+  // so the host's window-level ESC never sees it); other ESC keys pass through.
+  window.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && editing) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      cancelEdit(editing);
+    }
+  });
+
+  // Host -> frame inbound messages: outline navigation, and cancel-edit (the
+  // host's ESC priority layer when focus is outside the frame).
   window.addEventListener('message', function (ev) {
     var d = ev.data;
-    if (!d || d.type !== 'scroll-to' || typeof d.anchor !== 'string') return;
+    if (!d) return;
+    if (d.type === 'cancel-edit') {
+      if (editing) cancelEdit(editing);
+      return;
+    }
+    if (d.type !== 'scroll-to' || typeof d.anchor !== 'string') return;
     for (var m = 0; m < targets.length; m++) {
       if (targets[m].anchor === d.anchor) {
         targets[m].head.scrollIntoView({ behavior: 'smooth', block: 'start' });

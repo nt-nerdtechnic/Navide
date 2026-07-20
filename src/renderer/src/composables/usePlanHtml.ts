@@ -228,6 +228,261 @@ export function syncStageMarkup(content: string, stage: PlanStage): string {
   )
 }
 
+// ── Structured content markup sync (todos + review notes) ──────────────────
+// Companions to syncTodoMarkup for meta-level CRUD: keep the visible document
+// markup in step with meta changes. All are best-effort — when the target
+// markup is absent the content is returned unchanged (meta stays
+// authoritative). Inserted text is HTML-escaped so plan content can never
+// inject markup, break out of an attribute, or terminate the document.
+
+/** Escape a value for safe insertion as an HTML text node. */
+function escapeHtmlText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Escape a value for safe use inside a double-quoted HTML attribute. */
+function escapeHtmlAttr(value: string): string {
+  return escapeHtmlText(value).replace(/"/g, '&quot;')
+}
+
+// A `<ul class="... todos ...">…</ul>` block. Non-greedy: todo lists never nest.
+const TODOS_UL_RE = /<ul\b[^>]*\bclass=["'][^"']*\btodos\b[^"']*["'][^>]*>[\s\S]*?<\/ul>/gi
+
+/**
+ * Insert a `<li data-todo-id>` for a newly added todo into the document's last
+ * `<ul class="todos">` (best fit when a plan has several phase lists and the
+ * caller has no explicit phase). Returns a `warning` and leaves the content
+ * untouched when the document has no todos list — the meta write still
+ * proceeds, only the body sync is skipped.
+ */
+export function addTodoMarkup(
+  content: string,
+  todo: { id: string; content: string; status: HtmlTodoStatus },
+): { content: string; warning: string | null } {
+  let last: RegExpMatchArray | null = null
+  for (const m of content.matchAll(TODOS_UL_RE)) last = m
+  if (!last || last.index === undefined) {
+    return { content, warning: `no <ul class="todos"> found to sync new todo "${todo.id}"` }
+  }
+  const insertAt = last.index + last[0].lastIndexOf('</ul>')
+  const li =
+    `      <li data-status="${escapeHtmlAttr(todo.status)}" data-todo-id="${escapeHtmlAttr(todo.id)}">\n` +
+    `        <span class="st">${escapeHtmlText(todo.status)}</span>\n` +
+    `        <span>${escapeHtmlText(todo.content)}</span>\n` +
+    `      </li>\n`
+  return { content: content.slice(0, insertAt) + li + content.slice(insertAt), warning: null }
+}
+
+/** Remove the `<li data-todo-id>` of a deleted todo. No-op when absent. */
+export function removeTodoMarkup(content: string, todoId: string): string {
+  const re = new RegExp(
+    `[^\\S\\n]*<li\\b[^>]*data-todo-id=["']${escapeRegExp(todoId)}["'][\\s\\S]*?<\\/li>[^\\S\\n]*\\n?`,
+    'i',
+  )
+  return content.replace(re, '')
+}
+
+/**
+ * Update the visible content text of an existing todo's `<li>` — the first
+ * `<span>` inside the row that is not the `class="st"` status pill.
+ */
+export function setTodoContentMarkup(content: string, todoId: string, todoContent: string): string {
+  const liRe = new RegExp(`<li\\b[^>]*data-todo-id=["']${escapeRegExp(todoId)}["'][^>]*>`, 'i')
+  const match = content.match(liRe)
+  if (!match || match.index === undefined) return content
+  const afterTag = match.index + match[0].length
+  const closeIdx = content.indexOf('</li>', afterTag)
+  const scopeEnd = closeIdx === -1 ? content.length : closeIdx
+  const scope = content
+    .slice(afterTag, scopeEnd)
+    .replace(/(<span\b(?![^>]*\bclass=)[^>]*>)[\s\S]*?(<\/span>)/i, `$1${escapeHtmlText(todoContent)}$2`)
+  return content.slice(0, afterTag) + scope + content.slice(scopeEnd)
+}
+
+/**
+ * Update the visible text of an existing review note's `<li data-note-id>` —
+ * the text node between the `class="who"` author span and the optional
+ * `.reply` block (or the row's `</li>`). No-op when the markup is absent.
+ */
+export function setNoteTextMarkup(content: string, noteId: string, text: string): string {
+  const re = new RegExp(
+    `(<li\\b[^>]*data-note-id=["']${escapeRegExp(noteId)}["'][^>]*>[\\s\\S]*?<span\\b[^>]*\\bclass=["']who["'][^>]*>[\\s\\S]*?<\\/span>)([\\s\\S]*?)(<div\\b[^>]*\\bclass=["']reply|<\\/li>)`,
+    'i',
+  )
+  return content.replace(re, (_full, pre: string, _mid: string, tail: string) => `${pre}${escapeHtmlText(text)}${tail}`)
+}
+
+/** Remove a review note's `<li data-note-id>`. No-op when absent. */
+export function removeNoteMarkup(content: string, noteId: string): string {
+  const re = new RegExp(
+    `[^\\S\\n]*<li\\b[^>]*data-note-id=["']${escapeRegExp(noteId)}["'][\\s\\S]*?<\\/li>[^\\S\\n]*\\n?`,
+    'i',
+  )
+  return content.replace(re, '')
+}
+
+// ── Body section edit / delete ─────────────────────────────────────────────
+// Anchor = the leading text of a section heading (h2/h3) or a `.phase-head`,
+// whitespace-collapsed — the identity planRuntime derives on both frame and
+// host. These operate on the document BODY, never the plan-meta island or the
+// header, and refuse any region carrying a `<ul class="todos">` (todos are
+// managed via the toolbar, and their data-* wiring must never be sanitized).
+
+const HEADING_LEAD_RE =
+  /<(h2|h3)\b[^>]*>|<div\b[^>]*\bclass=["'][^"']*\bphase-head\b[^"']*["'][^>]*>/gi
+const SECTION_OPEN_RE = /<section\b[^>]*>/gi
+// The `.phase` container only (token "phase"; not "phase-head"/"phase-body").
+const PHASE_OPEN_RE = /<div\b[^>]*\bclass=["'](?:[^"']*\s)?phase(?:\s[^"']*)?["'][^>]*>/gi
+const PHASE_BODY_OPEN_RE = /<div\b[^>]*\bclass=["'][^"']*\bphase-body\b[^"']*["'][^>]*>/gi
+
+interface SectionLoc {
+  kind: 'section' | 'phase' | 'heading'
+  regionStart: number
+  regionEnd: number
+  bodyStart: number
+  bodyEnd: number
+}
+
+function collapseWs(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
+
+/** Leading text (open tag end → next `<`), whitespace-collapsed. */
+function leadTextAt(content: string, openTagEnd: number): string {
+  const lt = content.indexOf('<', openTagEnd)
+  return collapseWs(content.slice(openTagEnd, lt === -1 ? content.length : lt))
+}
+
+/** Index just past the tag's `>`; -1 when unterminated. */
+function openTagEndIndex(content: string, startIdx: number): number {
+  const gt = content.indexOf('>', startIdx)
+  return gt === -1 ? -1 : gt + 1
+}
+
+/** End index (just past `</tag>`) of the element opening at `startIdx`, depth-counted. */
+function elementRangeEnd(content: string, startIdx: number, tag: string): number {
+  const re = new RegExp(`<${tag}\\b|<\\/${tag}\\s*>`, 'gi')
+  re.lastIndex = startIdx
+  let depth = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content))) {
+    if (m[0].charAt(1) === '/') {
+      depth -= 1
+      if (depth === 0) return re.lastIndex
+    } else {
+      depth += 1
+    }
+  }
+  return -1
+}
+
+/** Innermost element (of `tag`, matched by `openRe`) whose range covers `pos`. */
+function enclosingElement(
+  content: string,
+  pos: number,
+  tag: string,
+  openRe: RegExp,
+): { start: number; end: number } | null {
+  let best: { start: number; end: number } | null = null
+  openRe.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = openRe.exec(content))) {
+    if (m.index > pos) break
+    const end = elementRangeEnd(content, m.index, tag)
+    if (end === -1 || end <= pos) continue
+    if (!best || m.index > best.start) best = { start: m.index, end }
+  }
+  return best
+}
+
+/** Next same-or-higher heading (`<h2`/`<h3`) or section close after `from`. */
+function nextHeadingBoundary(content: string, from: number): number {
+  const re = /<h2\b|<h3\b|<\/section\s*>/gi
+  re.lastIndex = from
+  const m = re.exec(content)
+  return m ? m.index : content.length
+}
+
+function locateSection(content: string, anchor: string): SectionLoc | null {
+  const target = collapseWs(anchor)
+  if (!target) return null
+  HEADING_LEAD_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = HEADING_LEAD_RE.exec(content))) {
+    const openStart = m.index
+    const openEnd = openStart + m[0].length
+    if (leadTextAt(content, openEnd) !== target) continue
+
+    if (m[0].toLowerCase().includes('phase-head')) {
+      const phase = enclosingElement(content, openStart, 'div', PHASE_OPEN_RE)
+      if (!phase) return null
+      PHASE_BODY_OPEN_RE.lastIndex = phase.start
+      const body = PHASE_BODY_OPEN_RE.exec(content)
+      if (!body || body.index >= phase.end) return null
+      const bodyStart = openTagEndIndex(content, body.index)
+      const bodyRangeEnd = elementRangeEnd(content, body.index, 'div')
+      if (bodyStart === -1 || bodyRangeEnd === -1) return null
+      const bodyEnd = content.lastIndexOf('</div', bodyRangeEnd)
+      return { kind: 'phase', regionStart: phase.start, regionEnd: phase.end, bodyStart, bodyEnd }
+    }
+
+    const tag = (m[1] ?? 'h2').toLowerCase()
+    const closeMarker = `</${tag}>`
+    const closeIdx = content.toLowerCase().indexOf(closeMarker, openEnd)
+    const bodyStart = closeIdx === -1 ? openEnd : closeIdx + closeMarker.length
+    if (tag === 'h2') {
+      const section = enclosingElement(content, openStart, 'section', SECTION_OPEN_RE)
+      if (section) {
+        const bodyEnd = content.lastIndexOf('</section', section.end)
+        return { kind: 'section', regionStart: section.start, regionEnd: section.end, bodyStart, bodyEnd }
+      }
+    }
+    const bodyEnd = nextHeadingBoundary(content, bodyStart)
+    return { kind: 'heading', regionStart: openStart, regionEnd: bodyEnd, bodyStart, bodyEnd }
+  }
+  return null
+}
+
+function rangeHasTodos(content: string, start: number, end: number): boolean {
+  return /<ul\b[^>]*\bclass=["'][^"']*\btodos\b/i.test(content.slice(start, end))
+}
+
+function rangeIsProtected(content: string, start: number, end: number): boolean {
+  const slice = content.slice(start, end)
+  return /id=["']plan-meta["']/i.test(slice) || /<h1\b/i.test(slice) || /<header\b/i.test(slice)
+}
+
+/**
+ * Replace the prose body of the section/phase identified by `anchor` with
+ * host-sanitized HTML, touching no other byte. Returns the content unchanged
+ * when the anchor is not found, the region is protected (plan-meta / header /
+ * h1), or the body carries a todo list.
+ */
+export function replaceSectionBody(content: string, anchor: string, sanitizedHtml: string): string {
+  const loc = locateSection(content, anchor)
+  if (!loc) return content
+  if (rangeIsProtected(content, loc.regionStart, loc.regionEnd)) return content
+  if (rangeHasTodos(content, loc.bodyStart, loc.bodyEnd)) return content
+  return `${content.slice(0, loc.bodyStart)}\n${sanitizedHtml}\n${content.slice(loc.bodyEnd)}`
+}
+
+/**
+ * Remove the whole section/phase identified by `anchor`. Same refusals as
+ * replaceSectionBody (never touches plan-meta / header / a todo-bearing
+ * region); no-op when the anchor is not found.
+ */
+export function deleteSection(content: string, anchor: string): string {
+  const loc = locateSection(content, anchor)
+  if (!loc) return content
+  if (rangeIsProtected(content, loc.regionStart, loc.regionEnd)) return content
+  if (rangeHasTodos(content, loc.regionStart, loc.regionEnd)) return content
+  let start = loc.regionStart
+  while (start > 0 && (content[start - 1] === ' ' || content[start - 1] === '\t')) start -= 1
+  let end = loc.regionEnd
+  if (content[end] === '\n') end += 1
+  return content.slice(0, start) + content.slice(end)
+}
+
 /**
  * Inject a `plan-meta` JSON island into a plain HTML doc, promoting it to a
  * plan. Inserted before `</head>` when present, otherwise right after the

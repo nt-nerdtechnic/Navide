@@ -1133,3 +1133,100 @@ describe('PlanReviewToolbar – outline navigation', () => {
     expect(wrapper.find('.prt-outline').exists()).toBe(false)
   })
 })
+
+describe('PlanReviewToolbar – todo CRUD', () => {
+  it('adds a todo with a stable kebab id and pending status', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta({ todos: [] })))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    await wrapper.find('.prt-new .prt-input').setValue('Write the docs')
+    await wrapper.find('.prt-new .prt-send').trigger('click')
+    await flushPromises()
+    const meta = lastWrittenMeta(writes)
+    const added = meta.todos.find((t) => t.id === 'write-the-docs')
+    expect(added).toBeDefined()
+    expect(added!.content).toBe('Write the docs')
+    expect(added!.status).toBe('pending')
+  })
+
+  it('edits a todo content inline through writeMeta', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    // First .prt-ghost of the first row is Edit.
+    await wrapper.findAll('.prt-todo-row')[0].find('.prt-ghost').trigger('click')
+    await wrapper.find('.prt-todo-row .prt-input').setValue('Phase A renamed')
+    await wrapper.find('.prt-todo-row .prt-send').trigger('click')
+    await flushPromises()
+    expect(lastWrittenMeta(writes).todos.find((t) => t.id === 'phase-a')!.content).toBe('Phase A renamed')
+  })
+
+  it('deletes a todo only after confirmation', async () => {
+    confirmMock.mockResolvedValueOnce(false)
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    // Decline first: no write.
+    await wrapper.find('.prt-todo-row .prt-ghost--danger').trigger('click')
+    await flushPromises()
+    expect(writes).toHaveLength(0)
+    // Accept second: phase-a removed from meta.
+    await wrapper.find('.prt-todo-row .prt-ghost--danger').trigger('click')
+    await flushPromises()
+    expect(lastWrittenMeta(writes).todos.some((t) => t.id === 'phase-a')).toBe(false)
+  })
+})
+
+describe('PlanReviewToolbar – review note CRUD', () => {
+  it('edits a user note text and preserves its resolved state', async () => {
+    const meta0 = baseMeta({
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'old', resolved: true, reply: '', anchor: '' }],
+    })
+    const { wrapper, writes } = await mountToolbar(planDoc(meta0))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-note .prt-ghost').trigger('click') // Edit
+    await wrapper.find('.prt-note .prt-input').setValue('new text')
+    await wrapper.find('.prt-note .prt-send').trigger('click')
+    await flushPromises()
+    const note = lastWrittenMeta(writes).reviewNotes[0]
+    expect(note.text).toBe('new text')
+    expect(note.resolved).toBe(true)
+  })
+
+  it('does not offer edit for ai-authored notes', async () => {
+    const meta0 = baseMeta({
+      reviewNotes: [{ id: 'n1', author: 'ai', text: 'x', resolved: false, reply: '', anchor: '' }],
+    })
+    const { wrapper } = await mountToolbar(planDoc(meta0))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    const ghosts = wrapper.find('.prt-note').findAll('.prt-ghost')
+    // Only the danger (delete) ghost, no edit ghost.
+    expect(ghosts).toHaveLength(1)
+    expect(ghosts[0].classes()).toContain('prt-ghost--danger')
+  })
+
+  it('deletes a note after confirmation', async () => {
+    const meta0 = baseMeta({
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'x', resolved: false, reply: '', anchor: '' }],
+    })
+    const { wrapper, writes } = await mountToolbar(planDoc(meta0))
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-note .prt-ghost--danger').trigger('click')
+    await flushPromises()
+    expect(lastWrittenMeta(writes).reviewNotes).toHaveLength(0)
+  })
+})
+
+describe('PlanReviewToolbar – ESC overlay query', () => {
+  it('reports and cancels an unsent note input, then an inline todo edit', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()))
+    const vm = wrapper.vm as unknown as { closeActiveOverlay: () => boolean }
+    expect(vm.closeActiveOverlay()).toBe(false)
+    // Unsent note text is an overlay.
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-new .prt-input').setValue('draft note')
+    expect(vm.closeActiveOverlay()).toBe(true)
+    expect(vm.closeActiveOverlay()).toBe(false)
+    // An open inline todo editor is an overlay.
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    await wrapper.findAll('.prt-todo-row')[0].find('.prt-ghost').trigger('click')
+    expect(vm.closeActiveOverlay()).toBe(true)
+  })
+})

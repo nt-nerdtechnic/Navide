@@ -115,4 +115,61 @@ describe('PlanDocPreview', () => {
     ;(wrapper.vm as unknown as { scrollToAnchor: (a: string) => void }).scrollToAnchor('Goals')
     expect(postSpy).toHaveBeenCalledWith({ type: 'scroll-to', anchor: 'Goals' }, '*')
   })
+
+  it('passes the inline edit/delete labels into the injected runtime', async () => {
+    const { wrapper } = await mountPreview()
+    const srcdoc = wrapper.find('iframe').attributes('srcdoc') ?? ''
+    expect(srcdoc).toContain('"editLabel":"Edit"')
+    expect(srcdoc).toContain('"deleteLabel":"Delete"')
+    expect(srcdoc).toContain('"saveLabel":"Save"')
+    expect(srcdoc).toContain('"cancelLabel":"Cancel"')
+  })
+
+  it('cancelEdit posts a cancel-edit message into the frame; isEditing starts false', async () => {
+    const { wrapper } = await mountPreview()
+    const vm = wrapper.vm as unknown as { isEditing: () => boolean; cancelEdit: () => void }
+    expect(vm.isEditing()).toBe(false)
+    const frameWindow = (wrapper.find('iframe').element as HTMLIFrameElement).contentWindow
+    if (!frameWindow) return
+    const postSpy = vi.spyOn(frameWindow, 'postMessage')
+    vm.cancelEdit()
+    expect(postSpy).toHaveBeenCalledWith({ type: 'cancel-edit' }, '*')
+  })
+
+  it('clears editing state when an external reload (loadDoc) runs', async () => {
+    const { wrapper } = await mountPreview()
+    const frameWindow = (wrapper.find('iframe').element as HTMLIFrameElement).contentWindow
+    if (!frameWindow) return // covered by planRuntime message-handler unit tests
+    const vm = wrapper.vm as unknown as { isEditing: () => boolean }
+    // Enter editing state from the frame.
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'section-editing', active: true },
+        source: frameWindow,
+      }),
+    )
+    await flushPromises()
+    expect(vm.isEditing()).toBe(true)
+    // An external refresh reloads the doc and must clear the stuck edit state.
+    await wrapper.setProps({ refresh: 1 })
+    await flushPromises()
+    expect(vm.isEditing()).toBe(false)
+  })
+
+  it('emits validated section-edit/section-delete and tracks editing state from the frame', async () => {
+    const { wrapper } = await mountPreview()
+    const frameWindow = (wrapper.find('iframe').element as HTMLIFrameElement).contentWindow
+    if (!frameWindow) return // covered by planRuntime message-handler unit tests
+    const vm = wrapper.vm as unknown as { isEditing: () => boolean }
+    const fire = (data: unknown): void => {
+      window.dispatchEvent(new MessageEvent('message', { data, source: frameWindow }))
+    }
+    fire({ type: 'section-edit', anchor: 'Goals', html: '<p>x</p>' })
+    fire({ type: 'section-delete', anchor: 'Goals' })
+    fire({ type: 'section-editing', active: true })
+    await flushPromises()
+    expect(wrapper.emitted('section-edit')?.[0]).toEqual([{ anchor: 'Goals', html: '<p>x</p>' }])
+    expect(wrapper.emitted('section-delete')?.[0]).toEqual(['Goals'])
+    expect(vm.isEditing()).toBe(true)
+  })
 })

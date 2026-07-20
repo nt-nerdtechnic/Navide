@@ -11,6 +11,11 @@ import {
   htmlPlanProgress,
   syncStageMarkup,
   syncTodoMarkup,
+  addTodoMarkup,
+  removeTodoMarkup,
+  setTodoContentMarkup,
+  setNoteTextMarkup,
+  removeNoteMarkup,
 } from '../composables/usePlanHtml'
 import { extractPlanOutline } from './planRuntime'
 import {
@@ -19,7 +24,7 @@ import {
   planHistoryDirRelPath,
   type PlanDiffSummary,
 } from './planHistory'
-import type { HtmlPlanMeta, HtmlPlanReviewNote, HtmlTodoStatus, PlanStage } from '../composables/usePlanHtml'
+import type { HtmlPlanMeta, HtmlPlanReviewNote, HtmlPlanTodo, HtmlTodoStatus, PlanStage } from '../composables/usePlanHtml'
 import type { useBackend } from '../composables/useBackend'
 import { sharePlanToGit } from '../composables/planShare'
 import { useNotify } from '../composables/useNotify'
@@ -144,7 +149,14 @@ function onOutlinePick(event: Event): void {
 // preserved instead of clobbered. `mutate` returns null to abort when its
 // precondition no longer holds against the fresh meta; the UI is then
 // refreshed from the fresh content.
-async function writeMeta(mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null): Promise<boolean> {
+// `syncBody` runs after the standard stage/todo-status markup sync to apply
+// structural body edits that the status sync cannot (inserting/removing a
+// todo `<li>`, editing todo/note visible text). It receives the already
+// meta-synced content and the fresh next meta, and returns the final content.
+async function writeMeta(
+  mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null,
+  syncBody?: (content: string, next: HtmlPlanMeta) => string,
+): Promise<boolean> {
   saving.value = true
   try {
     // Optimistic lock: the write carries the read's mtime, so a write racing
@@ -180,6 +192,7 @@ async function writeMeta(mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null): 
       let content = replaceHtmlPlanMeta(freshContent, next)
       content = syncStageMarkup(content, next.stage)
       for (const todo of next.todos) content = syncTodoMarkup(content, todo.id, todo.status)
+      if (syncBody) content = syncBody(content, next)
       const resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>(
         'fs.write_file',
         {
@@ -248,6 +261,100 @@ async function toggleSkipTodo(id: string): Promise<void> {
     const status: HtmlTodoStatus = todo.status === 'skipped' ? 'pending' : 'skipped'
     return { ...fresh, todos: fresh.todos.map((td) => (td.id === id ? { ...td, status } : td)) }
   })
+}
+
+// ── Todo CRUD ──────────────────────────────────────────────────────────────
+// Add (content → stable kebab id), inline-edit content, delete (confirmed).
+// All go through writeMeta with a syncBody step so the document's visible
+// `<li data-todo-id>` markup is inserted/updated/removed alongside the meta.
+const newTodoText = ref('')
+const editingTodoId = ref<string | null>(null)
+const editTodoText = ref('')
+
+/** Derive a stable kebab-case id from content, de-duplicated against existing ids. */
+function slugTodoId(content: string, existing: HtmlPlanTodo[]): string {
+  const base =
+    content
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 48) || 'todo'
+  const ids = new Set(existing.map((t) => t.id))
+  if (!ids.has(base)) return base
+  let n = 2
+  while (ids.has(`${base}-${n}`)) n += 1
+  return `${base}-${n}`
+}
+
+async function addTodo(): Promise<void> {
+  const text = newTodoText.value.trim()
+  if (!meta.value || !text || saving.value) return
+  let added: HtmlPlanTodo | null = null
+  const ok = await writeMeta(
+    (fresh) => {
+      added = { id: slugTodoId(text, fresh.todos), content: text, status: 'pending' }
+      return { ...fresh, todos: [...fresh.todos, added] }
+    },
+    (content) => {
+      if (!added) return content
+      const result = addTodoMarkup(content, added)
+      if (result.warning) console.warn(`[plan] ${result.warning}`)
+      return result.content
+    },
+  )
+  if (ok) newTodoText.value = ''
+}
+
+function onNewTodoEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void addTodo()
+}
+
+function startEditTodo(todo: HtmlPlanTodo): void {
+  editingTodoId.value = todo.id
+  editTodoText.value = todo.content
+}
+
+function cancelEditTodo(): void {
+  editingTodoId.value = null
+  editTodoText.value = ''
+}
+
+async function submitEditTodo(): Promise<void> {
+  const id = editingTodoId.value
+  const text = editTodoText.value.trim()
+  if (!id || !text || saving.value) return
+  const ok = await writeMeta(
+    (fresh) => {
+      if (!fresh.todos.some((td) => td.id === id)) return null
+      return { ...fresh, todos: fresh.todos.map((td) => (td.id === id ? { ...td, content: text } : td)) }
+    },
+    (content) => setTodoContentMarkup(content, id, text),
+  )
+  if (ok) cancelEditTodo()
+}
+
+function onEditTodoEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void submitEditTodo()
+}
+
+async function deleteTodo(id: string): Promise<void> {
+  if (!meta.value || saving.value) return
+  const todo = meta.value.todos.find((td) => td.id === id)
+  const ok = await confirm(t('pane.plans.todo-delete-confirm', { content: todo?.content ?? id }), {
+    title: t('pane.plans.delete'),
+    confirmText: t('pane.plans.delete'),
+  })
+  if (!ok) return
+  await writeMeta(
+    (fresh) => {
+      if (!fresh.todos.some((td) => td.id === id)) return null
+      return { ...fresh, todos: fresh.todos.filter((td) => td.id !== id) }
+    },
+    (content) => removeTodoMarkup(content, id),
+  )
+  if (editingTodoId.value === id) cancelEditTodo()
 }
 
 // ── Stage controls ────────────────────────────────────────────────────────
@@ -456,6 +563,85 @@ function onNoteEnter(event: KeyboardEvent): void {
   void submitNote()
 }
 
+// ── Review note CRUD ───────────────────────────────────────────────────────
+// Edit text (user-authored notes only; a resolved note keeps its resolved
+// state) and delete (confirmed). Both sync the visible `<li data-note-id>`
+// markup when present via writeMeta's syncBody.
+const editingNoteId = ref<string | null>(null)
+const editNoteText = ref('')
+
+function startEditNote(note: HtmlPlanReviewNote): void {
+  if (note.author !== 'user') return
+  editingNoteId.value = note.id
+  editNoteText.value = note.text
+}
+
+function cancelEditNote(): void {
+  editingNoteId.value = null
+  editNoteText.value = ''
+}
+
+async function submitEditNote(): Promise<void> {
+  const id = editingNoteId.value
+  const text = editNoteText.value.trim()
+  if (!id || !text || saving.value) return
+  const ok = await writeMeta(
+    (fresh) => {
+      const note = fresh.reviewNotes.find((n) => n.id === id)
+      if (!note || note.author !== 'user') return null
+      // Resolved state is preserved verbatim; only the text changes.
+      return { ...fresh, reviewNotes: fresh.reviewNotes.map((n) => (n.id === id ? { ...n, text } : n)) }
+    },
+    (content) => setNoteTextMarkup(content, id, text),
+  )
+  if (ok) cancelEditNote()
+}
+
+function onEditNoteEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void submitEditNote()
+}
+
+async function deleteNote(id: string): Promise<void> {
+  if (!meta.value || saving.value) return
+  const ok = await confirm(t('pane.plans.note-delete-confirm'), {
+    title: t('pane.plans.delete'),
+    confirmText: t('pane.plans.delete'),
+  })
+  if (!ok) return
+  await writeMeta(
+    (fresh) => {
+      if (!fresh.reviewNotes.some((n) => n.id === id)) return null
+      return { ...fresh, reviewNotes: fresh.reviewNotes.filter((n) => n.id !== id) }
+    },
+    (content) => removeNoteMarkup(content, id),
+  )
+  if (editingNoteId.value === id) cancelEditNote()
+}
+
+// ESC overlay support (queried by PlanWindowApp): cancel an in-progress inline
+// edit, or clear a non-empty unsent composer, topmost-first. Returns whether
+// something was actually closed so the host stops before closing the window.
+function closeActiveOverlay(): boolean {
+  if (editingTodoId.value) {
+    cancelEditTodo()
+    return true
+  }
+  if (editingNoteId.value) {
+    cancelEditNote()
+    return true
+  }
+  if (newTodoText.value.trim()) {
+    newTodoText.value = ''
+    return true
+  }
+  if (notesOpen.value && newNoteText.value.trim()) {
+    newNoteText.value = ''
+    return true
+  }
+  return false
+}
+
 // ── History panel ─────────────────────────────────────────────────────────
 // Stage-transition snapshots written by the backend to
 // `.agent-team/plans/.history/<stem>/`. Missing directory = empty history.
@@ -571,7 +757,7 @@ async function shareToGit(): Promise<void> {
 
 // In-document interactions (validated by the host) reuse these existing
 // write paths — the injected runtime never writes to disk on its own.
-defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor })
+defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverlay })
 </script>
 
 <template>
@@ -649,19 +835,55 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor })
 
     <div v-if="todosOpen" class="prt-panel">
       <div v-if="meta.todos.length === 0" class="prt-empty">{{ t('pane.plans.todos-empty') }}</div>
-      <button
-        v-for="todo in meta.todos"
-        :key="todo.id"
-        class="prt-todo"
-        :class="`prt-todo--${todo.status}`"
-        :disabled="saving"
-        :title="t('pane.plans.todo-cycle-tooltip')"
-        @click="cycleTodo(todo.id)"
-        @contextmenu.prevent="toggleSkipTodo(todo.id)"
-      >
-        <span class="prt-todo-status">{{ todo.status }}</span>
-        <span class="prt-todo-content">{{ todo.content }}</span>
-      </button>
+      <div v-for="todo in meta.todos" :key="todo.id" class="prt-todo-row">
+        <template v-if="editingTodoId === todo.id">
+          <input
+            v-model="editTodoText"
+            class="prt-input"
+            :disabled="saving"
+            @keydown.enter="onEditTodoEnter"
+            @keydown.escape="cancelEditTodo"
+          />
+          <button class="prt-send" :disabled="saving || !editTodoText.trim()" @click="submitEditTodo">
+            {{ t('pane.plans.save') }}
+          </button>
+          <button class="prt-ghost" :disabled="saving" @click="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+        </template>
+        <template v-else>
+          <button
+            class="prt-todo"
+            :class="`prt-todo--${todo.status}`"
+            :disabled="saving"
+            :title="t('pane.plans.todo-cycle-tooltip')"
+            @click="cycleTodo(todo.id)"
+            @contextmenu.prevent="toggleSkipTodo(todo.id)"
+          >
+            <span class="prt-todo-status">{{ todo.status }}</span>
+            <span class="prt-todo-content">{{ todo.content }}</span>
+          </button>
+          <button class="prt-ghost" :disabled="saving" :title="t('pane.plans.edit')" @click="startEditTodo(todo)">
+            {{ t('pane.plans.edit') }}
+          </button>
+          <button
+            class="prt-ghost prt-ghost--danger"
+            :disabled="saving"
+            :title="t('pane.plans.delete')"
+            @click="deleteTodo(todo.id)"
+          >{{ t('pane.plans.delete') }}</button>
+        </template>
+      </div>
+      <div class="prt-new">
+        <input
+          v-model="newTodoText"
+          class="prt-input"
+          :placeholder="t('pane.plans.todo-add-placeholder')"
+          :disabled="saving"
+          @keydown.enter="onNewTodoEnter"
+        />
+        <button class="prt-send" :disabled="saving || !newTodoText.trim()" @click="addTodo">
+          {{ t('pane.plans.todo-add') }}
+        </button>
+      </div>
     </div>
 
     <div v-if="historyOpen" class="prt-panel">
@@ -716,15 +938,47 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor })
       >
         <span class="prt-note-author">{{ note.author }}</span>
         <div class="prt-note-main">
-          <div class="prt-note-text">
-            <span v-if="note.anchor" class="prt-note-anchor">{{ note.anchor }}</span>{{ note.text }}
-          </div>
-          <div v-if="note.reply" class="prt-note-reply">{{ note.reply }}</div>
+          <template v-if="editingNoteId === note.id">
+            <input
+              v-model="editNoteText"
+              class="prt-input"
+              :disabled="saving"
+              @keydown.enter="onEditNoteEnter"
+              @keydown.escape="cancelEditNote"
+            />
+            <div class="prt-note-editbar">
+              <button class="prt-send" :disabled="saving || !editNoteText.trim()" @click="submitEditNote">
+                {{ t('pane.plans.save') }}
+              </button>
+              <button class="prt-ghost" :disabled="saving" @click="cancelEditNote">{{ t('pane.plans.cancel') }}</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="prt-note-text">
+              <span v-if="note.anchor" class="prt-note-anchor">{{ note.anchor }}</span>{{ note.text }}
+            </div>
+            <div v-if="note.reply" class="prt-note-reply">{{ note.reply }}</div>
+          </template>
         </div>
-        <span v-if="note.resolved" class="prt-note-done">{{ t('pane.plans.review-resolved') }}</span>
-        <button v-else class="prt-note-resolve" :disabled="saving" @click="resolveNote(note.id)">
-          {{ t('pane.plans.review-resolve') }}
-        </button>
+        <template v-if="editingNoteId !== note.id">
+          <button
+            v-if="note.author === 'user'"
+            class="prt-ghost"
+            :disabled="saving"
+            :title="t('pane.plans.edit')"
+            @click="startEditNote(note)"
+          >{{ t('pane.plans.edit') }}</button>
+          <button
+            class="prt-ghost prt-ghost--danger"
+            :disabled="saving"
+            :title="t('pane.plans.delete')"
+            @click="deleteNote(note.id)"
+          >{{ t('pane.plans.delete') }}</button>
+          <span v-if="note.resolved" class="prt-note-done">{{ t('pane.plans.review-resolved') }}</span>
+          <button v-else class="prt-note-resolve" :disabled="saving" @click="resolveNote(note.id)">
+            {{ t('pane.plans.review-resolve') }}
+          </button>
+        </template>
       </div>
       <div class="prt-new">
         <span v-if="pendingAnchor" class="prt-note-anchor prt-note-anchor--pending">
@@ -945,23 +1199,61 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor })
   opacity: 0.45;
 }
 
+.prt-todo-row {
+  align-items: center;
+  border-bottom: 1px dashed var(--border-muted);
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.prt-todo-row:last-of-type {
+  border-bottom: none;
+}
+
+.prt-ghost {
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 2px 8px;
+}
+
+.prt-ghost:hover:not(:disabled) {
+  background: var(--bg-hover-strong);
+}
+
+.prt-ghost:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prt-ghost--danger {
+  color: var(--danger-fg);
+}
+
+.prt-note-editbar {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .prt-todo {
   align-items: baseline;
   background: transparent;
   border: none;
-  border-bottom: 1px dashed var(--border-muted);
   color: var(--text-primary);
   cursor: pointer;
   display: flex;
+  flex: 1;
   font-size: 12px;
   gap: 8px;
+  min-width: 0;
   padding: 5px 0;
   text-align: left;
-  width: 100%;
-}
-
-.prt-todo:last-of-type {
-  border-bottom: none;
 }
 
 .prt-todo:hover:not(:disabled) {

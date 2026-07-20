@@ -296,6 +296,23 @@ function cancelRename(): void {
   renameValue.value = ''
 }
 
+// ESC overlay support (queried by PlanWindowApp): close the topmost open
+// overlay — the context menu first, then the rename dialog. Returns whether
+// one was actually closed so the host knows to stop there.
+function closeActiveOverlay(): boolean {
+  if (ctxMenu.value.show) {
+    closeCtxMenu()
+    return true
+  }
+  if (renameTarget.value) {
+    cancelRename()
+    return true
+  }
+  return false
+}
+
+defineExpose({ closeActiveOverlay })
+
 async function submitRename(): Promise<void> {
   const item = renameTarget.value
   if (!item) return

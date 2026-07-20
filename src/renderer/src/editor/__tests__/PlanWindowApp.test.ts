@@ -4,7 +4,7 @@
 // review toolbar above the interactive srcdoc preview (PlanDocPreview),
 // in-document interactions route into the toolbar's exposed write paths, and
 // legacy markdown plans fall back to PlanFileView.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import { ref } from 'vue'
@@ -33,8 +33,24 @@ const toolbarSpies = vi.hoisted(() => ({
   cycleTodo: vi.fn(),
   toggleSkipTodo: vi.fn(),
   startNoteWithAnchor: vi.fn(),
+  closeActiveOverlay: vi.fn(() => false),
 }))
-const previewSpies = vi.hoisted(() => ({ scrollToAnchor: vi.fn() }))
+const previewSpies = vi.hoisted(() => ({
+  scrollToAnchor: vi.fn(),
+  isEditing: vi.fn(() => false),
+  cancelEdit: vi.fn(),
+}))
+const plansPaneSpies = vi.hoisted(() => ({ closeActiveOverlay: vi.fn(() => false) }))
+
+// Notify mock: section-delete confirms host-side; default accept.
+const toastMock = vi.hoisted(() => vi.fn())
+const confirmMock = vi.hoisted(() => vi.fn(async () => true))
+vi.mock('../../composables/useNotify', () => ({
+  useNotify: () => ({ toast: toastMock, alert: vi.fn(), confirm: confirmMock }),
+}))
+
+// Backing file state for the body write path (section edit/delete).
+const fsState = vi.hoisted(() => ({ content: '', writes: [] as string[] }))
 
 // Listener bus backing the useBackend mock's on(); lets tests simulate
 // backend server-push broadcasts (plans.changed).
@@ -57,7 +73,18 @@ const backendBus = vi.hoisted(() => {
   }
 })
 
-vi.mock('../PlansPane.vue', () => stub('PlansPane', ['workspacePath', 'backend']))
+vi.mock('../PlansPane.vue', () => ({
+  __esModule: true,
+  default: defineComponent({
+    name: 'PlansPane',
+    props: ['workspacePath', 'backend'],
+    inheritAttrs: false,
+    setup(_, { expose }) {
+      expose(plansPaneSpies)
+      return () => h('div', { class: 'stub-PlansPane' })
+    },
+  }),
+}))
 vi.mock('../PlanReviewToolbar.vue', () => ({
   __esModule: true,
   default: defineComponent({
@@ -90,7 +117,15 @@ beforeEach(() => {
   toolbarSpies.cycleTodo.mockClear()
   toolbarSpies.toggleSkipTodo.mockClear()
   toolbarSpies.startNoteWithAnchor.mockClear()
+  toolbarSpies.closeActiveOverlay.mockReset().mockReturnValue(false)
   previewSpies.scrollToAnchor.mockClear()
+  previewSpies.isEditing.mockReset().mockReturnValue(false)
+  previewSpies.cancelEdit.mockClear()
+  plansPaneSpies.closeActiveOverlay.mockReset().mockReturnValue(false)
+  toastMock.mockClear()
+  confirmMock.mockReset().mockResolvedValue(true)
+  fsState.content = ''
+  fsState.writes.length = 0
   backendBus.listeners.clear()
 })
 
@@ -103,7 +138,14 @@ vi.mock('../../composables/useBackend', () => ({
     port: ref(0),
     pid: ref(0),
     lastError: ref(''),
-    send: vi.fn(async () => ({ payload: { ok: true } })),
+    send: vi.fn(async (type: string, payload: Record<string, unknown>) => {
+      if (type === 'fs.read_file') return { payload: { ok: true, content: fsState.content, mtime: 1 } }
+      if (type === 'fs.write_file') {
+        fsState.writes.push(payload.content as string)
+        return { payload: { ok: true, mtime: 2 } }
+      }
+      return { payload: { ok: true } }
+    }),
     on: backendBus.on,
     restart: vi.fn(async () => undefined),
     stop: vi.fn(async () => undefined),
@@ -121,11 +163,20 @@ vi.mock('../../composables/useTheme', () => ({
   useTheme: () => ({ theme: ref('dark'), setTheme: vi.fn(), loadTheme: vi.fn() }),
 }))
 
+// Track mounted apps so each is unmounted after its test — PlanWindowApp
+// registers a window keydown listener (ESC), which would otherwise leak across
+// tests and fire stale handlers.
+const mountedApps: VueWrapper[] = []
 async function mountApp(): Promise<VueWrapper> {
   const wrapper = mount(PlanWindowApp, { global: { plugins: [i18n] } })
+  mountedApps.push(wrapper)
   await flushPromises()
   return wrapper
 }
+
+afterEach(() => {
+  while (mountedApps.length) mountedApps.pop()!.unmount()
+})
 
 async function open(wrapper: VueWrapper, filepath: string): Promise<void> {
   wrapper
@@ -291,5 +342,105 @@ describe('PlanWindowApp', () => {
     expect(view.props('relPath')).toBe('.cursor/plans/legacy-feature.plan.md')
     expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+  })
+})
+
+const BODY_DOC = [
+  '<html><head>',
+  '<script type="application/json" id="plan-meta">',
+  '{"schemaVersion":1,"name":"F"}',
+  '</scr' + 'ipt>',
+  '</head><body>',
+  '<header><h1>F</h1></header>',
+  '<section><h2>Goals</h2><p>old goal</p></section>',
+  '<section><h2>Risks</h2><ul><li>r1</li></ul></section>',
+  '</body></html>',
+].join('\n')
+
+describe('PlanWindowApp – inline section edit/delete', () => {
+  it('sanitizes untrusted section-edit html and writes only the section body', async () => {
+    fsState.content = BODY_DOC
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    wrapper.findComponent({ name: 'PlanDocPreview' }).vm.$emit('section-edit', {
+      anchor: 'Goals',
+      html: '<p onclick="steal()">clean</p><script>bad()</scr' + 'ipt>',
+    })
+    await flushPromises()
+    expect(fsState.writes).toHaveLength(1)
+    const written = fsState.writes[0]
+    expect(written).toContain('<p>clean</p>')
+    expect(written).not.toContain('onclick')
+    expect(written).not.toContain('bad()')
+    expect(written).not.toContain('old goal')
+    // plan-meta and other sections are untouched.
+    expect(written).toContain('{"schemaVersion":1,"name":"F"}')
+    expect(written).toContain('<h2>Risks</h2>')
+  })
+
+  it('confirms a section-delete before writing, and writes nothing when declined', async () => {
+    fsState.content = BODY_DOC
+    confirmMock.mockResolvedValueOnce(false)
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const preview = wrapper.findComponent({ name: 'PlanDocPreview' })
+
+    preview.vm.$emit('section-delete', 'Risks')
+    await flushPromises()
+    expect(fsState.writes).toHaveLength(0)
+
+    preview.vm.$emit('section-delete', 'Risks')
+    await flushPromises()
+    expect(fsState.writes).toHaveLength(1)
+    expect(fsState.writes[0]).not.toContain('<h2>Risks</h2>')
+    expect(fsState.writes[0]).toContain('<h2>Goals</h2>')
+  })
+})
+
+describe('PlanWindowApp – ESC overlay priority', () => {
+  function pressEsc(): void {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+  }
+
+  it('cancels an in-frame section edit before closing the window', async () => {
+    previewSpies.isEditing.mockReturnValue(true)
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+    pressEsc()
+    expect(previewSpies.cancelEdit).toHaveBeenCalled()
+    expect(closeSpy).not.toHaveBeenCalled()
+    closeSpy.mockRestore()
+  })
+
+  it('closes the plan-list overlay before the window', async () => {
+    plansPaneSpies.closeActiveOverlay.mockReturnValue(true)
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+    pressEsc()
+    expect(plansPaneSpies.closeActiveOverlay).toHaveBeenCalled()
+    expect(closeSpy).not.toHaveBeenCalled()
+    closeSpy.mockRestore()
+  })
+
+  it('closes an unsent toolbar overlay before the window', async () => {
+    toolbarSpies.closeActiveOverlay.mockReturnValue(true)
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+    pressEsc()
+    expect(toolbarSpies.closeActiveOverlay).toHaveBeenCalled()
+    expect(closeSpy).not.toHaveBeenCalled()
+    closeSpy.mockRestore()
+  })
+
+  it('closes the window when no overlay is active', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+    pressEsc()
+    expect(closeSpy).toHaveBeenCalled()
+    closeSpy.mockRestore()
   })
 })
