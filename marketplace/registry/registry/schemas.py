@@ -13,6 +13,11 @@ class VersionInfo(BaseModel):
     yanked: bool
     published_at: datetime
     signed: bool
+    trust_tier: str
+    capabilities: list[str]
+    """Declared `manifest.requires` capability allowlist."""
+    sensitive_capabilities: list[str]
+    """Subset of `capabilities` flagged for elevated scrutiny (fs/terminal)."""
 
 
 class ExtensionSummary(BaseModel):
@@ -51,6 +56,20 @@ class YankResponse(BaseModel):
     name: str
     version: str
     yanked: bool
+
+
+class PublisherRegisterRequest(BaseModel):
+    name: str
+    public_key: str | None = None
+    token: str | None = None
+    display_name: str | None = None
+
+
+class PublisherRegisterResponse(BaseModel):
+    name: str
+    display_name: str | None
+    has_public_key: bool
+    has_token: bool
 
 
 class HealthResponse(BaseModel):

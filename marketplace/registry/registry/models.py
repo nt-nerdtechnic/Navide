@@ -23,6 +23,10 @@ class Publisher(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     """The publisher namespace (lowercase)."""
     display_name: str | None = None
+    public_key: str | None = None
+    """Registered Ed25519 public key (PEM); used to verify package signatures."""
+    token_hash: str | None = Field(default=None, index=True)
+    """sha256 of the publisher's bearer token; None until a token is issued."""
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -59,7 +63,9 @@ class ExtensionVersion(SQLModel, table=True):
     package_key: str
     """Storage key for the package blob."""
     signature: str | None = None
-    """Detached signature; verification is p3-security."""
+    """Detached Ed25519 signature (base64) over the package digest, if signed."""
+    trust_tier: str = Field(default="unsigned", index=True)
+    """Trust tier computed at publish: 'signed-verified' or 'unsigned' (see trust.py)."""
     yanked: bool = Field(default=False, index=True)
     published_at: datetime = Field(default_factory=_now)
 

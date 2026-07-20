@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import Engine
 from sqlmodel import Session
 
 from .auth import PublisherIdentity, get_publisher_identity
-from .config import Settings, load_settings
+from .config import VERIFIER_ACCEPTING, Settings, load_settings
 from .db import create_db_engine
 from .models import Extension, ExtensionVersion, Publisher
 from .package import PackageError, read_package
@@ -21,12 +21,19 @@ from .schemas import (
     ExtensionListResponse,
     ExtensionSummary,
     HealthResponse,
+    PublisherRegisterRequest,
+    PublisherRegisterResponse,
     PublishResponse,
     VersionInfo,
     YankResponse,
 )
-from .signing import AcceptingSignatureVerifier, SignatureVerifier
+from .signing import (
+    AcceptingSignatureVerifier,
+    Ed25519SignatureVerifier,
+    SignatureVerifier,
+)
 from .storage import LocalStorageBackend, StorageBackend, StorageError
+from .trust import compute_trust_tier, sensitive_capabilities
 from .versions import latest_version
 
 
@@ -35,6 +42,13 @@ class RegistryState:
     engine: Engine
     storage: StorageBackend
     verifier: SignatureVerifier
+    settings: Settings
+
+
+def _make_verifier(settings: Settings) -> SignatureVerifier:
+    if settings.verifier_kind == VERIFIER_ACCEPTING:
+        return AcceptingSignatureVerifier()
+    return Ed25519SignatureVerifier()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -42,7 +56,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     state = RegistryState(
         engine=create_db_engine(settings.db_path),
         storage=LocalStorageBackend(settings.storage_root),
-        verifier=AcceptingSignatureVerifier(),
+        verifier=_make_verifier(settings),
+        settings=settings,
     )
 
     app = FastAPI(title="Navide Marketplace Registry", version="0.1.0")
@@ -72,12 +87,16 @@ def _package_key(namespace: str, name: str, version: str) -> str:
 
 
 def _version_info(row: ExtensionVersion) -> VersionInfo:
+    capabilities = list(row.manifest.get("requires", []))
     return VersionInfo(
         version=row.version,
         package_digest=row.package_digest,
         yanked=row.yanked,
         published_at=row.published_at,
         signed=row.signature is not None,
+        trust_tier=row.trust_tier,
+        capabilities=capabilities,
+        sensitive_capabilities=sensitive_capabilities(capabilities),
     )
 
 
@@ -100,6 +119,38 @@ def _register_routes(app: FastAPI) -> None:
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
+    @app.post(
+        "/api/publishers",
+        response_model=PublisherRegisterResponse,
+        status_code=201,
+    )
+    def register_publisher(
+        request: Request,
+        body: PublisherRegisterRequest,
+        x_admin_token: str | None = Header(default=None),
+        repo: RegistryRepository = Depends(_repo),
+    ) -> PublisherRegisterResponse:
+        """Register/update a publisher's Ed25519 public key and bearer token.
+
+        Admin-gated: when `admin_token` is configured it must be presented via
+        `X-Admin-Token`; left unset the endpoint is open (dev).
+        """
+        settings: Settings = request.app.state.registry.settings
+        if settings.admin_token is not None and x_admin_token != settings.admin_token:
+            raise HTTPException(status_code=401, detail="invalid admin token")
+        publisher = repo.register_publisher(
+            name=body.name,
+            public_key=body.public_key,
+            token=body.token,
+            display_name=body.display_name,
+        )
+        return PublisherRegisterResponse(
+            name=publisher.name,
+            display_name=publisher.display_name,
+            has_public_key=publisher.public_key is not None,
+            has_token=publisher.token_hash is not None,
+        )
+
     @app.post("/api/publish", response_model=PublishResponse, status_code=201)
     async def publish(
         request: Request,
@@ -109,21 +160,51 @@ def _register_routes(app: FastAPI) -> None:
         repo: RegistryRepository = Depends(_repo),
     ) -> PublishResponse:
         state: RegistryState = request.app.state.registry
+        settings = state.settings
         data = await package.read()
         try:
             loaded = read_package(data)
         except PackageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        # Signature seam: recorded now, real verification is p3-security.
-        if not state.verifier.verify(data, signature):
-            raise HTTPException(status_code=400, detail="invalid package signature")
-
         manifest = loaded.manifest
         namespace = manifest.namespace
         name = manifest.extension_name
 
-        publisher = repo.get_or_create_publisher(manifest.publisher)
+        # Namespace entitlement: an authenticated publisher may only publish
+        # under its own namespace (p3-publish).
+        if identity.authenticated and identity.publisher != namespace:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"publisher '{identity.publisher}' is not entitled to "
+                    f"namespace '{namespace}'"
+                ),
+            )
+
+        publisher_name = (
+            identity.publisher if identity.authenticated else manifest.publisher
+        )
+        publisher = repo.get_or_create_publisher(publisher_name)
+
+        # Signature gate (p3-security): reject a bad signature; allow unsigned
+        # only when the config explicitly permits it (dev).
+        if signature is None:
+            if settings.require_signature:
+                raise HTTPException(
+                    status_code=403, detail="package signature is required"
+                )
+        elif not state.verifier.verify(
+            digest=loaded.digest,
+            signature=signature,
+            public_key=publisher.public_key,
+        ):
+            raise HTTPException(
+                status_code=403, detail="invalid package signature"
+            )
+
+        trust_tier = compute_trust_tier(signed=signature is not None)
+
         extension = repo.get_or_create_extension(
             publisher=publisher,
             namespace=namespace,
@@ -151,6 +232,7 @@ def _register_routes(app: FastAPI) -> None:
             package_digest=loaded.digest,
             package_key=key,
             signature=signature,
+            trust_tier=trust_tier,
             assets=[(a.path, a.size, a.content_type) for a in loaded.assets],
         )
         return PublishResponse(
@@ -239,6 +321,16 @@ def _register_routes(app: FastAPI) -> None:
         identity: PublisherIdentity = Depends(get_publisher_identity),
         repo: RegistryRepository = Depends(_repo),
     ) -> YankResponse:
+        # Only the owning publisher may yank (p3-publish); dev/anonymous is
+        # allowed when auth is not required.
+        if identity.authenticated and identity.publisher != namespace:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"publisher '{identity.publisher}' cannot yank in "
+                    f"namespace '{namespace}'"
+                ),
+            )
         extension = repo.get_extension(namespace, name)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")

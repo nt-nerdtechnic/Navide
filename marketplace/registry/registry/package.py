@@ -8,6 +8,7 @@ import mimetypes
 import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
+from pathlib import Path
 
 from .manifest import Manifest, ManifestError, parse_manifest
 
@@ -95,3 +96,27 @@ def read_package(data: bytes) -> LoadedPackage:
         assets=sorted(assets, key=lambda a: a.path),
         raw=data,
     )
+
+
+def build_package(src_dir: Path | str) -> bytes:
+    """Build a `.vsix`-style ZIP from a plugin source directory.
+
+    Zips `manifest.json` (required, at root) plus every other file under
+    `src_dir`, then validates the result via `read_package` so a build that the
+    reader would reject fails here instead. Returns the archive bytes.
+    """
+    root = Path(src_dir)
+    manifest_path = root / MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise PackageError(f"{MANIFEST_NAME} not found in {root}")
+
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in files:
+            arcname = path.relative_to(root).as_posix()
+            zf.write(path, arcname)
+    data = buffer.getvalue()
+    # Validate the built archive (also surfaces a bad manifest early).
+    read_package(data)
+    return data

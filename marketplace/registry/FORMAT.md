@@ -54,7 +54,12 @@ needed for discovery — these are an additive superset, not a divergent schema.
 
 ## Signing
 
-A package MAY carry a detached `signature` (see the registry data model's
-`ExtensionVersion.signature` and the `SignatureVerifier` seam in
-`registry/signing.py`). Full verification is deferred to the `p3-security`
-todo; the current slice records the field and always accepts.
+A package carries a **detached signature** supplied to `POST /api/publish` as
+the `signature` query param (not stored inside the ZIP). It is the **base64
+encoding of an Ed25519 signature over the package's sha256 digest** (the same
+digest the registry computes from the uploaded bytes). The registry verifies it
+against the publisher's registered Ed25519 public key
+(`registry/signing.py :: Ed25519SignatureVerifier`) and records the result as a
+trust tier (`signed-verified` / `unsigned`, see `registry/trust.py`). Produce
+the signature with `navide-plugin sign <package> --key <privkey>`. See the
+README "Security model" section for the publish gate and policy config.

@@ -6,6 +6,7 @@ strategy can evolve without touching the API layer.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 
 from sqlmodel import Session, select
@@ -15,6 +16,11 @@ from .models import Extension, ExtensionAsset, ExtensionVersion, Publisher
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def hash_token(token: str) -> str:
+    """Stable sha256 hash of a bearer token (we never store it in the clear)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 class RegistryRepository:
@@ -33,6 +39,36 @@ class RegistryRepository:
             self.session.add(publisher)
             self.session.commit()
             self.session.refresh(publisher)
+        return publisher
+
+    def get_publisher_by_token(self, token: str) -> Publisher | None:
+        return self.session.exec(
+            select(Publisher).where(Publisher.token_hash == hash_token(token))
+        ).first()
+
+    def register_publisher(
+        self,
+        *,
+        name: str,
+        public_key: str | None = None,
+        token: str | None = None,
+        display_name: str | None = None,
+    ) -> Publisher:
+        """Create or update a publisher's registered key / bearer token."""
+        publisher = self.session.exec(
+            select(Publisher).where(Publisher.name == name)
+        ).first()
+        if publisher is None:
+            publisher = Publisher(name=name)
+        if display_name is not None:
+            publisher.display_name = display_name
+        if public_key is not None:
+            publisher.public_key = public_key
+        if token is not None:
+            publisher.token_hash = hash_token(token)
+        self.session.add(publisher)
+        self.session.commit()
+        self.session.refresh(publisher)
         return publisher
 
     # -- extensions -----------------------------------------------------
@@ -132,6 +168,7 @@ class RegistryRepository:
         package_digest: str,
         package_key: str,
         signature: str | None,
+        trust_tier: str,
         assets: list[tuple[str, int, str]],
     ) -> ExtensionVersion:
         record = ExtensionVersion(
@@ -141,6 +178,7 @@ class RegistryRepository:
             package_digest=package_digest,
             package_key=package_key,
             signature=signature,
+            trust_tier=trust_tier,
         )
         self.session.add(record)
         self.session.commit()

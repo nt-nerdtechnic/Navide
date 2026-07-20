@@ -11,12 +11,16 @@ version = "0.1.0"
 description = "Self-hosted plugin marketplace registry for the Navide / Agent-Team project"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=42.0",
     "fastapi>=0.115",
     "packaging>=24.0",
     "python-multipart>=0.0.9",
     "sqlmodel>=0.0.22",
     "uvicorn[standard]>=0.32",
 ]
+
+[project.scripts]
+navide-plugin = "registry.cli:main"
 
 [dependency-groups]
 dev = [
