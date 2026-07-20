@@ -10,11 +10,13 @@
  * engine).
  */
 import { parseHtmlPlanMeta } from '../composables/usePlanHtml'
+import { parsePlanMeta } from '../composables/usePlanFile'
+import type { PlanMeta } from '../composables/planModel'
 
 /** History directory for a plan: `.agent-team/plans/.history/<stem>`. */
 export function planHistoryDirRelPath(planRelPath: string): string {
   const name = planRelPath.slice(planRelPath.lastIndexOf('/') + 1)
-  const stem = name.replace(/\.html$/, '')
+  const stem = name.replace(/\.plan\.md$/, '').replace(/\.html$/, '')
   return `.agent-team/plans/.history/${stem}`
 }
 
@@ -25,9 +27,9 @@ export interface PlanSnapshotName {
   date: Date
 }
 
-const SNAPSHOT_NAME_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})_([a-z-]+)\.html$/
+const SNAPSHOT_NAME_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})_([a-z-]+)\.(?:html|plan\.md)$/
 
-/** Parse a `<YYYYMMDDTHHMMSS>_<stage>.html` snapshot filename; null if not one. */
+/** Parse a `<YYYYMMDDTHHMMSS>_<stage>.(html|plan.md)` snapshot filename; null if not one. */
 export function parseSnapshotName(name: string): PlanSnapshotName | null {
   const m = SNAPSHOT_NAME_RE.exec(name)
   if (!m) return null
@@ -60,13 +62,25 @@ export interface PlanDiffSummary {
 }
 
 /**
+ * Parse plan meta from either format: an HTML `plan-meta` island or a `.plan.md`
+ * YAML frontmatter. Detection is by content (HTML island first, markdown
+ * fallback), so the diff works for both formats without a path hint.
+ */
+function parseAnyPlanMeta(content: string): PlanMeta | null {
+  const html = parseHtmlPlanMeta(content)
+  if (html) return { ...html.meta, format: 'html' } as PlanMeta
+  return parsePlanMeta(content)
+}
+
+/**
  * Summary diff between two plan documents: stage/todo/note changes come from
  * the plan-meta blocks (null-safe when either side has none); line counts use
- * a simple per-line multiset comparison.
+ * a simple per-line multiset comparison. Both HTML and markdown plans are
+ * supported — meta is extracted via the unified `parseAnyPlanMeta`.
  */
 export function diffPlanContents(oldContent: string, newContent: string): PlanDiffSummary {
-  const oldMeta = parseHtmlPlanMeta(oldContent)?.meta ?? null
-  const newMeta = parseHtmlPlanMeta(newContent)?.meta ?? null
+  const oldMeta = parseAnyPlanMeta(oldContent)
+  const newMeta = parseAnyPlanMeta(newContent)
 
   const oldTodos = new Map((oldMeta?.todos ?? []).map((todo) => [todo.id, todo.status]))
   const newTodos = new Map((newMeta?.todos ?? []).map((todo) => [todo.id, todo.status]))

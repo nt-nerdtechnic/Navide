@@ -315,24 +315,43 @@ onUnmounted(() => {
              the legacy read-only PlanFileView with no meta-driven toolbar. -->
         <template v-else>
           <div v-if="mdKind === 'plan'" class="plan-window-doc">
-            <PlanReviewToolbar
-              ref="toolbarRef"
-              :workspace-path="workspacePath"
-              :rel-path="openDoc.relPath"
-              :backend="backend"
-              :store="planStore"
-              @updated="planPreviewRefresh++"
-              @scroll-to-anchor="onOutlineScroll"
-            />
-            <PlanMarkdownBody
-              ref="mdBodyRef"
-              :key="openDoc.relPath"
-              :workspace-path="workspacePath"
-              :rel-path="openDoc.relPath"
-              :backend="backend"
-              :refresh="planPreviewRefresh"
-              @updated="planPreviewRefresh++"
-            />
+            <!-- Read-only markdown snapshot view: no toolbar, edits ignored. -->
+            <template v-if="snapshotPreview">
+              <div class="plan-snapshot-banner">
+                <span class="plan-snapshot-label">{{ snapshotPreview.label }}</span>
+                <span class="plan-snapshot-note">{{ t('pane.plans.snapshot-readonly') }}</span>
+                <button class="plan-snapshot-close" @click="closeSnapshotPreview">
+                  {{ t('pane.plans.snapshot-close') }}
+                </button>
+              </div>
+              <PlanFileView
+                :key="snapshotPreview.relPath"
+                :workspace-path="workspacePath"
+                :rel-path="snapshotPreview.relPath"
+                :backend="backend"
+              />
+            </template>
+            <template v-else>
+              <PlanReviewToolbar
+                ref="toolbarRef"
+                :workspace-path="workspacePath"
+                :rel-path="openDoc.relPath"
+                :backend="backend"
+                :store="planStore"
+                @updated="planPreviewRefresh++"
+                @scroll-to-anchor="onOutlineScroll"
+                @preview-snapshot="onPreviewSnapshot"
+              />
+              <PlanMarkdownBody
+                ref="mdBodyRef"
+                :key="openDoc.relPath"
+                :workspace-path="workspacePath"
+                :rel-path="openDoc.relPath"
+                :backend="backend"
+                :refresh="planPreviewRefresh"
+                @updated="planPreviewRefresh++"
+              />
+            </template>
           </div>
           <PlanFileView
             v-else-if="mdKind === 'doc'"

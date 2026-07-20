@@ -96,8 +96,8 @@ class _RepoHandler(FileSystemEventHandler):
             self._on_dirty(self._ws_path)
 
     def _is_plan_doc(self, src: str) -> bool:
-        """True for a user-facing plan document directly under
-        `.agent-team/plans/` — infra files (`_` prefix), hidden files and
+        """True for a user-facing plan document (HTML or markdown) directly
+        under `.agent-team/plans/` — infra files (`_` prefix), hidden files and
         `.history/` snapshots are excluded, so snapshot writes triggered by a
         plans event can never re-trigger it."""
         try:
@@ -108,7 +108,7 @@ class _RepoHandler(FileSystemEventHandler):
         if len(parts) != 3 or parts[0] != ".agent-team" or parts[1] != "plans":
             return False
         name = parts[2]
-        return name.endswith(".html") and not name.startswith(("_", "."))
+        return name.endswith((".html", ".plan.md")) and not name.startswith(("_", "."))
 
     def _is_relevant(self, src: str) -> bool:
         try:

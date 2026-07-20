@@ -25,6 +25,14 @@ def _plan_html(stage: str) -> str:
     return f"<!doctype html><html><head>{_meta_island(stage)}</head><body>x</body></html>"
 
 
+def _plan_md(stage: str | None) -> str:
+    lines = ["---", "name: Test Plan", "overview: ''"]
+    if stage is not None:
+        lines.append(f"stage: {stage}")
+    lines += ["todos: []", "reviewNotes: []", "---", "", "# Body", "x", ""]
+    return "\n".join(lines)
+
+
 def _plans_dir(ws: Path) -> Path:
     d = ws / ".agent-team" / "plans"
     d.mkdir(parents=True, exist_ok=True)
@@ -130,3 +138,119 @@ def test_retention_prunes_oldest_beyond_cap(tmp_path: Path) -> None:
 
 def test_missing_plans_dir_is_noop(tmp_path: Path) -> None:
     assert plan_history.snapshot_plans(str(tmp_path)) == []
+
+
+# ── parse_plan_stage_md ──────────────────────────────────────────────────
+
+
+def test_parse_stage_md_valid() -> None:
+    assert plan_history.parse_plan_stage_md(_plan_md("approved")) == "approved"
+
+
+def test_parse_stage_md_quoted_value() -> None:
+    md = _plan_md("draft").replace("stage: draft", 'stage: "in-review"')
+    assert plan_history.parse_plan_stage_md(md) == "in-review"
+
+
+def test_parse_stage_md_no_frontmatter() -> None:
+    assert plan_history.parse_plan_stage_md("# Just markdown\n\nno frontmatter") is None
+
+
+def test_parse_stage_md_missing_stage_key() -> None:
+    assert plan_history.parse_plan_stage_md(_plan_md(None)) is None
+
+
+def test_parse_stage_md_unknown_stage_value() -> None:
+    assert plan_history.parse_plan_stage_md(_plan_md("shipped")) is None
+
+
+def test_parse_stage_md_ignores_indented_stage() -> None:
+    # A nested (indented) `stage:` must not be mistaken for the document stage.
+    md = "\n".join(["---", "name: T", "meta:", "  stage: approved", "---", "", "body"])
+    assert plan_history.parse_plan_stage_md(md) is None
+
+
+# ── snapshot_plans: markdown (.plan.md) ──────────────────────────────────
+
+
+def test_md_first_sight_creates_baseline_snapshot(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "my-plan_ab12cd.plan.md").write_text(_plan_md("in-review"), encoding="utf-8")
+
+    created = plan_history.snapshot_plans(str(tmp_path))
+
+    assert len(created) == 1
+    assert created[0].startswith(".agent-team/plans/.history/my-plan_ab12cd/")
+    assert created[0].endswith("_in-review.plan.md")
+    snap = tmp_path / created[0]
+    assert snap.read_text(encoding="utf-8") == _plan_md("in-review")
+
+
+def test_md_stage_transition_creates_snapshot(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    plan = plans / "my-plan_ab12cd.plan.md"
+    plan.write_text(_plan_md("in-review"), encoding="utf-8")
+    plan_history.snapshot_plans(str(tmp_path))
+    plan.write_text(_plan_md("approved"), encoding="utf-8")
+
+    created = plan_history.snapshot_plans(str(tmp_path))
+
+    assert len(created) == 1
+    assert created[0].endswith("_approved.plan.md")
+    history = plans / ".history" / "my-plan_ab12cd"
+    assert len(list(history.glob("*.plan.md"))) == 2
+
+
+def test_md_same_stage_creates_no_new_snapshot(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    plan = plans / "my-plan_ab12cd.plan.md"
+    plan.write_text(_plan_md("draft"), encoding="utf-8")
+    assert len(plan_history.snapshot_plans(str(tmp_path))) == 1
+    # Body edit without a stage change must not snapshot again.
+    plan.write_text(_plan_md("draft").replace("# Body", "# Body edited"), encoding="utf-8")
+    assert plan_history.snapshot_plans(str(tmp_path)) == []
+
+
+def test_md_without_stage_is_not_snapshotted(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "legacy_ab12cd.plan.md").write_text(_plan_md(None), encoding="utf-8")
+    assert plan_history.snapshot_plans(str(tmp_path)) == []
+    assert not (plans / ".history").exists()
+
+
+def test_md_infra_and_hidden_files_skipped(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "_template.plan.md").write_text(_plan_md("draft"), encoding="utf-8")
+    (plans / ".hidden.plan.md").write_text(_plan_md("draft"), encoding="utf-8")
+    assert plan_history.snapshot_plans(str(tmp_path)) == []
+    assert not (plans / ".history").exists()
+
+
+def test_md_retention_prunes_oldest_beyond_cap(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    plan = plans / "my-plan_ab12cd.plan.md"
+    plan.write_text(_plan_md("approved"), encoding="utf-8")
+    history = plans / ".history" / "my-plan_ab12cd"
+    history.mkdir(parents=True)
+    for i in range(25):
+        (history / f"20000101T0000{i:02d}_draft.plan.md").write_text("old", encoding="utf-8")
+
+    created = plan_history.snapshot_plans(str(tmp_path))
+
+    assert len(created) == 1
+    remaining = sorted(p.name for p in history.glob("*.plan.md"))
+    assert len(remaining) == plan_history.MAX_SNAPSHOTS_PER_PLAN
+    assert "20000101T000000_draft.plan.md" not in remaining
+    assert remaining[-1].endswith("_approved.plan.md")
+
+
+def test_html_and_md_plans_snapshot_independently(tmp_path: Path) -> None:
+    plans = _plans_dir(tmp_path)
+    (plans / "html-plan_ab12cd.html").write_text(_plan_html("approved"), encoding="utf-8")
+    (plans / "md-plan_ef34gh.plan.md").write_text(_plan_md("in-review"), encoding="utf-8")
+
+    created = plan_history.snapshot_plans(str(tmp_path))
+
+    assert len(created) == 2
+    assert any(c.endswith("_approved.html") for c in created)
+    assert any(c.endswith("_in-review.plan.md") for c in created)

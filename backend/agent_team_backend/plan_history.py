@@ -1,12 +1,19 @@
 """Plan version history: snapshot plan documents on stage transitions.
 
 Snapshots live in ``<workspace>/.agent-team/plans/.history/<plan-stem>/`` and
-are named ``<YYYYMMDDTHHMMSS>_<stage>.html``. The stage recorded in the newest
-snapshot filename is the last-seen stage for that plan; a new snapshot is
-taken whenever the stage currently on disk differs (or when the plan has no
-history yet — the baseline). Detection is filesystem-driven (see the plans
-sink wired to GitWatcher in app.py), so it works for every writer: App-side
-``fs.write_file`` calls and agent CLIs editing the file directly.
+are named ``<YYYYMMDDTHHMMSS>_<stage><suffix>`` where the suffix follows the
+source document: ``.html`` for HTML plans and ``.plan.md`` for markdown plans.
+The stage recorded in the newest snapshot filename is the last-seen stage for
+that plan; a new snapshot is taken whenever the stage currently on disk differs
+(or when the plan has no history yet — the baseline). Detection is
+filesystem-driven (see the plans sink wired to GitWatcher in app.py), so it
+works for every writer: App-side ``fs.write_file`` calls and agent CLIs editing
+the file directly.
+
+Only ``.agent-team/plans/`` is scanned; ``.cursor/plans`` stays frozen legacy
+per ``_spec.md`` and is intentionally out of scope (new plans land in
+``.agent-team/plans``). Both HTML and markdown snapshots gate on "has a stage",
+so stage-less legacy docs are never snapshotted regardless of location.
 
 The ``.history`` directory starts with a dot, so ``fs_service.list_dir``
 hides it from default listings and the PlansPane never shows it as a plan.
@@ -41,7 +48,14 @@ _PLAN_META_RE = re.compile(
 _STAGES = frozenset({"draft", "in-review", "approved", "in-progress", "done", "abandoned"})
 
 _TS_FORMAT = "%Y%m%dT%H%M%S"
-_SNAPSHOT_SUFFIX = ".html"
+_HTML_SUFFIX = ".html"
+_MD_SUFFIX = ".plan.md"
+
+# Top-level `stage:` line inside YAML frontmatter. Anchored at line start
+# (MULTILINE) so an indented `stage:` nested under some other key can never
+# match — only the document-level stage counts.
+_MD_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+_MD_STAGE_LINE_RE = re.compile(r"^stage:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
 
 
 def parse_plan_stage(content: str) -> str | None:
@@ -66,11 +80,33 @@ def parse_plan_stage(content: str) -> str | None:
     return None
 
 
-def _snapshot_stage(name: str) -> str | None:
-    """Stage encoded in a snapshot filename ``<ts>_<stage>.html``."""
-    if not name.endswith(_SNAPSHOT_SUFFIX) or "_" not in name:
+def parse_plan_stage_md(content: str) -> str | None:
+    """Extract the ``stage`` from a ``.plan.md`` file's YAML frontmatter.
+
+    Robust line parse (no yaml dependency): the frontmatter is the block
+    between the leading ``---`` and the next ``---`` line, and the stage is the
+    value of the top-level ``stage:`` key. Returns ``None`` when there is no
+    frontmatter, no ``stage`` key, or the value is not a spec stage — the
+    markdown analogue of "no stage → no snapshot", keeping legacy ``.plan.md``
+    files (which carry no stage) safe.
+    """
+    if not content.startswith("---"):
         return None
-    return name[: -len(_SNAPSHOT_SUFFIX)].split("_", 1)[1]
+    fm = _MD_FRONTMATTER_RE.match(content)
+    if fm is None:
+        return None
+    line = _MD_STAGE_LINE_RE.search(fm.group(1))
+    if line is None:
+        return None
+    stage = line.group(1).strip().strip("\"'")
+    return stage if stage in _STAGES else None
+
+
+def _snapshot_stage(name: str, suffix: str) -> str | None:
+    """Stage encoded in a snapshot filename ``<ts>_<stage><suffix>``."""
+    if not name.endswith(suffix) or "_" not in name:
+        return None
+    return name[: -len(suffix)].split("_", 1)[1]
 
 
 def snapshot_plans(workspace_path: str) -> list[str]:
@@ -84,7 +120,13 @@ def snapshot_plans(workspace_path: str) -> list[str]:
     if not plans_dir.is_dir():
         return []
     created: list[str] = []
-    for plan in sorted(plans_dir.glob("*.html")):
+    # (path, suffix, stage-parser) for both plan formats, ordered by filename so
+    # snapshot creation is deterministic. `.plan.md` files never match `*.html`
+    # and vice-versa, so the two globs are disjoint.
+    plans: list[tuple[Path, str]] = [
+        (p, _HTML_SUFFIX) for p in plans_dir.glob("*.html")
+    ] + [(p, _MD_SUFFIX) for p in plans_dir.glob("*.plan.md")]
+    for plan, suffix in sorted(plans, key=lambda t: t[0].name):
         name = plan.name
         if name.startswith(("_", ".")) or not plan.is_file():
             continue
@@ -92,15 +134,16 @@ def snapshot_plans(workspace_path: str) -> list[str]:
             content = plan.read_bytes().decode("utf-8", errors="replace")
         except OSError:
             continue
-        stage = parse_plan_stage(content)
+        stage = parse_plan_stage(content) if suffix == _HTML_SUFFIX else parse_plan_stage_md(content)
         if stage is None:
             continue
-        history_dir = plans_dir / HISTORY_DIR_NAME / plan.stem
-        snapshots = sorted(p.name for p in history_dir.glob(f"*{_SNAPSHOT_SUFFIX}")) if history_dir.is_dir() else []
-        if snapshots and _snapshot_stage(snapshots[-1]) == stage:
+        stem = name[: -len(suffix)]
+        history_dir = plans_dir / HISTORY_DIR_NAME / stem
+        snapshots = sorted(p.name for p in history_dir.glob(f"*{suffix}")) if history_dir.is_dir() else []
+        if snapshots and _snapshot_stage(snapshots[-1], suffix) == stage:
             continue
         ts = datetime.now().astimezone().strftime(_TS_FORMAT)
-        target = history_dir / f"{ts}_{stage}{_SNAPSHOT_SUFFIX}"
+        target = history_dir / f"{ts}_{stage}{suffix}"
         try:
             history_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(plan, target)
@@ -108,13 +151,14 @@ def snapshot_plans(workspace_path: str) -> list[str]:
             log.warning("plan snapshot failed for %s: %s", plan, err)
             continue
         created.append(target.relative_to(Path(workspace_path)).as_posix())
-        _prune(history_dir)
+        _prune(history_dir, suffix)
     return created
 
 
-def _prune(history_dir: Path) -> None:
-    """Keep at most MAX_SNAPSHOTS_PER_PLAN snapshots, dropping the oldest."""
-    snapshots = sorted(history_dir.glob(f"*{_SNAPSHOT_SUFFIX}"))
+def _prune(history_dir: Path, suffix: str) -> None:
+    """Keep at most MAX_SNAPSHOTS_PER_PLAN snapshots (of this format) in the
+    history dir, dropping the oldest."""
+    snapshots = sorted(history_dir.glob(f"*{suffix}"))
     for stale in snapshots[: max(0, len(snapshots) - MAX_SNAPSHOTS_PER_PLAN)]:
         try:
             stale.unlink()

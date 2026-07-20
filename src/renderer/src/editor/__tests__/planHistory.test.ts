@@ -1,12 +1,19 @@
 // Unit tests for the Phase C plan-history helpers: history dir mapping,
 // snapshot filename parsing, and the meta-level + line-count summary diff.
 import { describe, it, expect } from 'vitest'
+import { stringify as yamlStringify } from 'yaml'
 import { diffPlanContents, parseSnapshotName, planHistoryDirRelPath } from '../planHistory'
 import type { HtmlPlanMeta } from '../../composables/usePlanHtml'
 
 describe('planHistoryDirRelPath', () => {
   it('maps a plan rel path to its .history stem directory', () => {
     expect(planHistoryDirRelPath('.agent-team/plans/feature_a1b2c3.html')).toBe(
+      '.agent-team/plans/.history/feature_a1b2c3',
+    )
+  })
+
+  it('strips the .plan.md suffix for markdown plans', () => {
+    expect(planHistoryDirRelPath('.agent-team/plans/feature_a1b2c3.plan.md')).toBe(
       '.agent-team/plans/.history/feature_a1b2c3',
     )
   })
@@ -41,6 +48,18 @@ describe('parseSnapshotName', () => {
     expect(parseSnapshotName('20260718T243015_draft.html')).toBeNull() // hour 24
     expect(parseSnapshotName('20260718T096015_draft.html')).toBeNull() // minute 60
     expect(parseSnapshotName('20260718T093060_draft.html')).toBeNull() // second 60
+  })
+
+  it('parses a .plan.md snapshot name (markdown format)', () => {
+    const parsed = parseSnapshotName('20260718T093015_in-review.plan.md')
+    expect(parsed).not.toBeNull()
+    expect(parsed!.ts).toBe('20260718T093015')
+    expect(parsed!.stage).toBe('in-review')
+    expect(parsed!.date.getFullYear()).toBe(2026)
+  })
+
+  it('rejects a bare .md snapshot name (not .plan.md)', () => {
+    expect(parseSnapshotName('20260718T093015_in-review.md')).toBeNull()
   })
 })
 
@@ -158,5 +177,56 @@ describe('diffPlanContents', () => {
     expect(diff.todosRemoved).toBe(0)
     expect(diff.notesDelta).toBe(0)
     expect(diff.linesAdded).toBeGreaterThan(0)
+  })
+})
+
+// Markdown (.plan.md) plans carry meta in YAML frontmatter; the diff extracts
+// it via the unified parser, so stage/todo/note deltas work symmetrically.
+interface MdFields {
+  stage?: string
+  todos?: Array<{ id: string; content: string; status: string }>
+  reviewNotes?: unknown[]
+}
+
+function mdDoc(fields: MdFields = {}): string {
+  const obj = {
+    name: 'Plan',
+    overview: '',
+    stage: fields.stage ?? 'draft',
+    approvedAt: null,
+    todos: fields.todos ?? [
+      { id: 'phase-a', content: 'Phase A', status: 'pending' },
+      { id: 'phase-b', content: 'Phase B', status: 'pending' },
+    ],
+    reviewNotes: fields.reviewNotes ?? [],
+    isProject: false,
+  }
+  return `---\n${yamlStringify(obj)}---\n\n# Body\n`
+}
+
+describe('diffPlanContents (markdown)', () => {
+  it('reports a stage change between two markdown metas', () => {
+    const diff = diffPlanContents(mdDoc({ stage: 'draft' }), mdDoc({ stage: 'in-review' }))
+    expect(diff.stageFrom).toBe('draft')
+    expect(diff.stageTo).toBe('in-review')
+  })
+
+  it('reports per-todo status changes for markdown plans', () => {
+    const diff = diffPlanContents(
+      mdDoc(),
+      mdDoc({
+        todos: [
+          { id: 'phase-a', content: 'Phase A', status: 'done' },
+          { id: 'phase-b', content: 'Phase B', status: 'pending' },
+        ],
+      }),
+    )
+    expect(diff.todoChanges).toEqual([{ id: 'phase-a', from: 'pending', to: 'done' }])
+  })
+
+  it('reports the signed review-note delta for markdown plans', () => {
+    const note = { id: 'n1', author: 'user', text: 'x', resolved: false, reply: '', anchor: '' }
+    const diff = diffPlanContents(mdDoc(), mdDoc({ reviewNotes: [note, { ...note, id: 'n2' }] }))
+    expect(diff.notesDelta).toBe(2)
   })
 })

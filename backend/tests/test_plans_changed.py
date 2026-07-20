@@ -62,11 +62,33 @@ def test_plan_infra_hidden_and_history_do_not_fire(tmp_path: Path) -> None:
         plans / ".hidden.html",
         plans / "my-plan_ab12cd.html.tmp",
         plans / ".history" / "my-plan_ab12cd" / "20260101T000000_draft.html",
+        plans / "_template.plan.md",
+        plans / ".hidden.plan.md",
+        plans / "my-plan_ab12cd.plan.md.tmp",
+        plans / ".history" / "my-plan_ab12cd" / "20260101T000000_draft.plan.md",
         tmp_path / ".agent-team" / "runs" / "x.log",
         tmp_path / "src" / "main.py",
     ):
         h.on_any_event(_FakeEvent(str(p)))
     assert plans_hits == []
+
+
+def test_markdown_plan_doc_event_fires_plans_channel(tmp_path: Path) -> None:
+    h, git_hits, plans_hits = _handlers(tmp_path)
+    h.on_any_event(_FakeEvent(str(tmp_path / ".agent-team" / "plans" / "my-plan_ab12cd.plan.md")))
+    assert plans_hits == [str(tmp_path)]
+    assert git_hits == []  # .agent-team stays excluded from the git channel
+
+
+def test_markdown_atomic_replace_dest_counts_as_plan_event(tmp_path: Path) -> None:
+    h, _git_hits, plans_hits = _handlers(tmp_path)
+    plans = tmp_path / ".agent-team" / "plans"
+    h.on_any_event(_FakeEvent(
+        str(plans / "my-plan_ab12cd.plan.md.tmp"),
+        event_type="moved",
+        dest_path=str(plans / "my-plan_ab12cd.plan.md"),
+    ))
+    assert plans_hits == [str(tmp_path)]
 
 
 def test_atomic_replace_dest_path_counts_as_plan_event(tmp_path: Path) -> None:
