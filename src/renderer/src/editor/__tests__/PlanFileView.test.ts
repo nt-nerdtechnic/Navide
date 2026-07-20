@@ -370,3 +370,36 @@ describe('PlanFileView – section body editing', () => {
     expect(calls.slice(0, writeIdx)).toContain('fs.read_file')
   })
 })
+
+describe('PlanFileView – readonly (snapshot preview)', () => {
+  it('never writes when a todo is clicked in readonly mode', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'snap.plan.md', backend: backend as never, readonly: true },
+    })
+    await flushPromises()
+
+    const todos = wrapper.findAll('.pfv-todo')
+    expect(todos.length).toBeGreaterThan(0)
+    await todos[0].trigger('click')
+    await flushPromises()
+
+    const wrote = (backend.send as ReturnType<typeof vi.fn>).mock.calls.some(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(wrote).toBe(false)
+  })
+
+  it('hides the + New and section Edit controls in readonly mode', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'snap.plan.md', backend: backend as never, readonly: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.pfv-new-btn').exists()).toBe(false)
+    expect(wrapper.find('.pfv-doc-section .pfv-inline-btn').exists()).toBe(false)
+    // Content still renders read-only.
+    expect(wrapper.findAll('.pfv-todo').length).toBeGreaterThan(0)
+  })
+})
