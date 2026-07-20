@@ -142,6 +142,39 @@ def test_asset_route_rejects_non_asset(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
+def test_asset_route_rejects_active_mime_types(client: TestClient) -> None:
+    # A package asset's Content-Type is attacker-controlled (guessed from the
+    # filename). text/html and image/svg+xml served on this origin would be a
+    # stored-XSS vector, so the asset route must refuse them, not sniff them.
+    manifest = valid_manifest(id="acme.evil", publisher="acme", icon="icon.png")
+    pkg = _package_with_files(
+        manifest,
+        {
+            "README.md": b"# Evil\n",
+            "icon.png": b"\x89PNG\r\n\x1a\n-fake",
+            "payload.html": b"<script>window.__pwned=1</script>",
+            "payload.svg": b"<svg xmlns='http://www.w3.org/2000/svg'>"
+            b"<script>window.__pwned=1</script></svg>",
+        },
+    )
+    assert _publish(client, pkg).status_code == 201
+    for bad in ("payload.html", "payload.svg"):
+        resp = client.get(f"/extensions/acme/evil/1.0.0/assets/{bad}")
+        assert resp.status_code == 415, bad
+
+
+def test_image_asset_is_hardened(client: TestClient) -> None:
+    manifest = valid_manifest(id="acme.img", publisher="acme", icon="icon.png")
+    png = b"\x89PNG\r\n\x1a\n-fake"
+    pkg = _package_with_files(manifest, {"README.md": b"# I\n", "icon.png": png})
+    assert _publish(client, pkg).status_code == 201
+    resp = client.get("/extensions/acme/img/1.0.0/assets/icon.png")
+    assert resp.status_code == 200
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in resp.headers["content-security-policy"]
+    assert resp.headers["content-disposition"].startswith("inline")
+
+
 def test_download_count_shows_on_home_card(client: TestClient) -> None:
     _publish_ext(client, "acme.hello")
     client.get("/api/extensions/acme/hello/1.0.0/download")

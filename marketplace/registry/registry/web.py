@@ -9,6 +9,9 @@ Security: README markdown is rendered with `markdown-it-py` configured with
 raw-HTML disabled (`html=False`), so any `<script>`/`<img onerror=...>` in a
 README is escaped to inert text and dangerous link schemes are dropped by the
 built-in link validator. No user-authored HTML is ever emitted verbatim.
+Package assets (icons/screenshots) are served only for a raster-image
+Content-Type allowlist (`SAFE_ASSET_TYPES`) with `nosniff` + a locked-down CSP,
+so a package cannot serve active `text/html`/`image/svg+xml` on this origin.
 """
 
 from __future__ import annotations
@@ -28,6 +31,14 @@ from .repository import RegistryRepository, rating_average
 from .storage import StorageError
 from .trust import sensitive_capabilities
 from .versions import version_key
+
+# Package assets are third-party uploads served on the marketplace origin, so a
+# stored `text/html` or `image/svg+xml` Content-Type would be a stored-XSS
+# vector. Assets are only ever icons/screenshots, so restrict to raster images
+# and harden the response; anything else is rejected rather than sniffed.
+SAFE_ASSET_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
 
 _TEMPLATES_DIR = Path(__file__).parent / "web_templates"
 
@@ -219,10 +230,20 @@ def create_web_router() -> APIRouter:
                     raise HTTPException(
                         status_code=404, detail="asset not found"
                     ) from exc
-            media = allowed[asset_path] or "application/octet-stream"
+            media = allowed[asset_path]
         finally:
             session.close()
-        return Response(content=blob, media_type=media)
+        if media not in SAFE_ASSET_TYPES:
+            raise HTTPException(status_code=415, detail="unsupported asset type")
+        return Response(
+            content=blob,
+            media_type=media,
+            headers={
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": f'inline; filename="{Path(asset_path).name}"',
+            },
+        )
 
     return router
 
