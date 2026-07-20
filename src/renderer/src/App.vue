@@ -57,6 +57,7 @@ import {
 } from './lib/cliContext'
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
+import { resolvePaneStatus } from './lib/paneStatus'
 import { AGENT_SPECS } from './lib/agentSpecs'
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
@@ -685,6 +686,21 @@ function setPaneRef(id: string, el: unknown): void {
 
 const paneViews = ref<ActivePaneView[]>([])
 
+// ── Per-pane turn-complete signal (CLI lifecycle, not a buffer guess) ────────
+// The backend broadcasts `agent.activity` with event_type "turn_complete" when
+// a CLI ends its turn (Claude Stop hook = 100% reliable, or JSONL turn-end for
+// Codex/Antigravity). We record the wall-clock time per pane. A pane only counts as
+// "turn complete for the current stage" when this timestamp is AFTER the
+// watcher armed (see slotFinished), so a stale signal from a prior stage/turn
+// is never reused — no explicit reset needed.
+const paneTurnCompleteAt = new Map<string, number>()
+
+// Per-pane wall-clock of the latest `agent_active` (CLI is producing output or
+// running a tool). Compared against turnCompleteAt to tell whether the CLI's
+// MOST RECENT signal was "working" vs "turn ended" — the core of the CLI-state
+// model that replaces buffer-guessing.
+const paneLastActiveAt = new Map<string, number>()
+
 function syncViews(): void {
   paneViews.value = panes.value.map((p) => {
     const ref = paneRefs[p.id]
@@ -696,7 +712,11 @@ function syncViews(): void {
       roleLabel: roleLabel(p.roleKey),
       stageId: p.stageId,
       command: p.command,
-      status: (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
+      status: resolvePaneStatus(
+        (ref?.displayStatus as string | undefined) ?? (ref?.status as string | undefined) ?? 'starting',
+        paneTurnCompleteAt.get(p.id) ?? 0,
+        paneLastActiveAt.get(p.id) ?? 0,
+      ),
       error: ref?.error as string | undefined,
       injectionStatus: p.injectionStatus,
       preparationStatus: p.preparationStatus,
@@ -4203,21 +4223,6 @@ const watchers = new Map<string, StageWatcher>()
 // Tracks how many parallel agent slots each stage has and how many have
 // already completed, so we only advance the pipeline when ALL are done.
 const stageCompletions = new Map<number, { expected: number; done: Set<string> }>()
-
-// ── Per-pane turn-complete signal (CLI lifecycle, not a buffer guess) ────────
-// The backend broadcasts `agent.activity` with event_type "turn_complete" when
-// a CLI ends its turn (Claude Stop hook = 100% reliable, or JSONL turn-end for
-// Codex/Antigravity). We record the wall-clock time per pane. A pane only counts as
-// "turn complete for the current stage" when this timestamp is AFTER the
-// watcher armed (see slotFinished), so a stale signal from a prior stage/turn
-// is never reused — no explicit reset needed.
-const paneTurnCompleteAt = new Map<string, number>()
-
-// Per-pane wall-clock of the latest `agent_active` (CLI is producing output or
-// running a tool). Compared against turnCompleteAt to tell whether the CLI's
-// MOST RECENT signal was "working" vs "turn ended" — the core of the CLI-state
-// model that replaces buffer-guessing.
-const paneLastActiveAt = new Map<string, number>()
 
 // When each pane's watcher armed (start of its current stage). Kept in its own
 // Map — NOT on the watcher — so it survives cancelWatcher(), letting the stall
