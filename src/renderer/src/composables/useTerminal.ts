@@ -5,6 +5,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
+import { resolvePaneStatus } from '../lib/paneStatus'
 import { createResizeController, type ResizeController } from './useTerminalResize'
 import { installTerminalZoomShortcuts, terminalFontSize } from './useTerminalFontSize'
 import { setContext } from '../keybindings/contextService'
@@ -544,6 +545,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   const MIN_BURST_MS   = 2_000   // burst must last this long to show RUNNING
   const STALE_MS       = 2_000   // no output for this long → not running
   const activityBurstStartAt = ref<number>(0)
+  // CLI lifecycle signals (backend `agent.activity`) — the authoritative
+  // "is the agent working" signal. Focus, a window-resize refit, or a finished
+  // TUI redrawing its footer all emit PTY bytes but NO lifecycle event, so the
+  // raw-byte heuristic alone cannot tell them from real work. displayStatus only
+  // confirms 'running' when agent_active is the latest lifecycle event.
+  const lifecycleActiveAt = ref<number>(0)
+  const lifecycleCompleteAt = ref<number>(0)
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const tickInterval = window.setInterval(() => { nowTick.value = Date.now() }, 1_000)
@@ -559,7 +567,10 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
     if (lastRawActivityAt.value === 0) return 'starting'
     if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
-    return (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
+    const heuristic = (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
+    // Byte activity may only VETO to idle; 'running' is confirmed by the CLI
+    // lifecycle signal, so self-inflicted repaints (focus/resize) can't fake it.
+    return resolvePaneStatus(heuristic, lifecycleCompleteAt.value, lifecycleActiveAt.value)
   })
   const BUFFER_CAP = 128 * 1024
 
@@ -607,6 +618,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   let inputDisposer: { dispose(): void } | null = null
   let outputUnsub: (() => void) | null = null
   let exitUnsub: (() => void) | null = null
+  let activityUnsub: (() => void) | null = null
   // Pending terminal output coalescing. The focused pane flushes immediately
   // on arrival — keystroke echo must not wait for a frame (worst for IME
   // input, where the whole commit waits on it). Unfocused panes coalesce
@@ -1201,6 +1213,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       }
     })
 
+    // Authoritative CLI-execution signal for the status badge. Filter by this
+    // pane's id (agent.activity is keyed by pane_id, not the PTY session id).
+    activityUnsub = backend.on('agent.activity', (raw) => {
+      const ev = raw as { event_type?: string; pane_id?: string }
+      if (ev.pane_id !== paneId) return
+      if (ev.event_type === 'turn_complete') lifecycleCompleteAt.value = Date.now()
+      else if (ev.event_type === 'agent_active') lifecycleActiveAt.value = Date.now()
+    })
+
     exitUnsub = backend.on('terminal.exit', (raw) => {
       const payload = raw as TerminalExitDetails & { terminal_session_id: string }
       if (payload.terminal_session_id !== sessionId.value) return
@@ -1660,6 +1681,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     outputUnsub = null
     exitUnsub?.()
     exitUnsub = null
+    activityUnsub?.()
+    activityUnsub = null
     // Flush any coalesced output that hadn't been written yet.
     // We only update the visual terminal, not the scroll buffer: the exit handler
     // intentionally clears rawScrollBuffer before calling us, so appending here

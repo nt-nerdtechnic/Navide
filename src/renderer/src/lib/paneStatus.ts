@@ -1,14 +1,28 @@
 /** Reconcile the buffer-based pane badge status with the authoritative CLI
- *  lifecycle signal. `displayStatus` is derived purely from raw PTY-byte
- *  quiescence, so a finished TUI that keeps repainting its footer stays pinned
- *  at 'running'. When `turn_complete` is the pane's latest lifecycle event
- *  (it ended its turn and has not gone active since), the pane is idle. Only a
- *  stuck 'running' is downgraded; every other status passes through unchanged. */
+ *  lifecycle signal.
+ *
+ *  `displayStatus` (the caller's `rawStatus`) is derived purely from raw
+ *  PTY-byte quiescence, so it cannot tell a repaint we triggered ourselves
+ *  (focus, a window-resize refit, a finished TUI redrawing its footer) from the
+ *  agent actually working — any of those keep it pinned at 'running'.
+ *
+ *  The CLI lifecycle events are authoritative: the backend emits `agent_active`
+ *  (JSONL shows a new tool_use / text chunk) and `turn_complete` (assistant turn
+ *  ended). We treat the byte heuristic as a veto-only signal: it may keep a pane
+ *  idle, but it can NOT assert 'running' on its own. 'running' is confirmed only
+ *  when `agent_active` is the pane's latest lifecycle event (lastActiveAt beats
+ *  turnCompleteAt). This makes focus/resize repaints — which produce no
+ *  lifecycle event — unable to flip the badge.
+ *
+ *  Panes with no lifecycle signal yet (both timestamps 0, e.g. an idle resumed
+ *  session right after app start) resolve to 'idle' rather than a repaint-faked
+ *  'running'. Every non-'running' rawStatus (idle / starting / exited / …)
+ *  passes through untouched. */
 export function resolvePaneStatus(
   rawStatus: string,
   turnCompleteAt: number,
   lastActiveAt: number,
 ): string {
-  const turnEnded = turnCompleteAt > 0 && lastActiveAt <= turnCompleteAt
-  return turnEnded && rawStatus === 'running' ? 'idle' : rawStatus
+  if (rawStatus !== 'running') return rawStatus
+  return lastActiveAt > turnCompleteAt ? 'running' : 'idle'
 }
