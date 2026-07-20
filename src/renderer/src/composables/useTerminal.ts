@@ -527,6 +527,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
   // short window after a focus event so the badge stays honest.
   const lastFocusAt = ref<number>(0)
   const FOCUS_GRACE_MS = 3_000
+  // A refit/redraw WE trigger (window focus, layout switch, resize safety net)
+  // makes the CLI repaint. Those bytes must not build a RUNNING burst, so we
+  // grace them like focus. Kept separate from lastFocusAt so it does not also
+  // gate lastActivityAt, which stage quiet-detection relies on.
+  const lastSelfRedrawAt = ref<number>(0)
 
   // ── RUNNING vs IDLE ──────────────────────────────────────────────────────────
   // We want RUNNING only when the CLI is genuinely executing — not for brief
@@ -567,8 +572,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // ANY byte counts as "process still alive" — spinners included.
     if (chunk.length > 0) {
       const now = Date.now()
+      // A focus- or refit-triggered redraw emits bytes but is not agent work.
+      // Resetting the burst start on each such chunk keeps it below MIN_BURST_MS
+      // so the badge can't flip to RUNNING on a mere click/focus/resize. We
+      // still bump lastRawActivityAt so liveness/stall detection is unchanged.
+      const inRedrawGrace =
+        now - lastFocusAt.value < FOCUS_GRACE_MS ||
+        now - lastSelfRedrawAt.value < FOCUS_GRACE_MS
       // If the gap since last output exceeds BURST_GAP_MS, this is a new burst.
-      if (now - lastRawActivityAt.value > BURST_GAP_MS) activityBurstStartAt.value = now
+      if (inRedrawGrace || now - lastRawActivityAt.value > BURST_GAP_MS) activityBurstStartAt.value = now
       lastRawActivityAt.value = now
     }
     const cleaned = dropTuiNoise(stripAnsi(chunk))
@@ -1615,7 +1627,12 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // the pane is hidden/occluded — so when a caller opts in, arm the same
     // gated once-per-settle redraw the observer path uses. Default (no flag)
     // keeps spawn/reconciler call sites byte-for-byte unchanged.
-    if (opts?.redrawAfterSettle) resizeCtrl.requestResizeRedraw()
+    if (opts?.redrawAfterSettle) {
+      // Grace the impending self-triggered repaint so its bytes don't register
+      // as agent activity on the status badge.
+      lastSelfRedrawAt.value = Date.now()
+      resizeCtrl.requestResizeRedraw()
+    }
   }
 
   /**
@@ -1632,6 +1649,8 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
    */
   function redraw(): void {
     if (!sessionId.value) return
+    // Grace this manual repaint so it doesn't register as agent activity.
+    lastSelfRedrawAt.value = Date.now()
     void backend.send('terminal.redraw', {
       terminal_session_id: sessionId.value,
       cols: term.cols,
