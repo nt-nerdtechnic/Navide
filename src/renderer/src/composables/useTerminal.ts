@@ -563,13 +563,17 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     // their brief parked window keeps the normal status.)
     if (pendingSpawn.value?.isResume) return 'idle'
     if (status.value !== 'running') return status.value
-    // Spawned but not a single byte of output yet — the CLI is still booting
-    // (Gemini stays silent ~5s during auth/init). Show "starting", not "idle".
-    if (lastRawActivityAt.value === 0) return 'starting'
-    if (nowTick.value - lastRawActivityAt.value > STALE_MS) return 'idle'
-    const heuristic = (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
-    // Byte activity may only VETO to idle; 'running' is confirmed by the CLI
-    // lifecycle signal, so self-inflicted repaints (focus/resize) can't fake it.
+    // Byte-quiescence heuristic — used only as a fallback until the first CLI
+    // lifecycle signal arrives. 'starting' = spawned but not a byte of output
+    // yet (Gemini stays silent ~5s during auth/init).
+    let heuristic: string
+    if (lastRawActivityAt.value === 0) heuristic = 'starting'
+    else if (nowTick.value - lastRawActivityAt.value > STALE_MS) heuristic = 'idle'
+    else heuristic = (nowTick.value - activityBurstStartAt.value) >= MIN_BURST_MS ? 'running' : 'idle'
+    // Lifecycle is authoritative once seen: agent_active latest → running even
+    // while a tool runs with the output quiet; turn_complete latest → idle;
+    // self-inflicted repaints (focus/resize) emit no lifecycle event so they
+    // can't fake running.
     return resolvePaneStatus(heuristic, lifecycleCompleteAt.value, lifecycleActiveAt.value)
   })
   const BUFFER_CAP = 128 * 1024
