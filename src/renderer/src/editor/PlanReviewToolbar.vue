@@ -7,24 +7,21 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   parseHtmlPlanMeta,
-  replaceHtmlPlanMeta,
   htmlPlanProgress,
-  syncStageMarkup,
-  syncTodoMarkup,
   addTodoMarkup,
   removeTodoMarkup,
   setTodoContentMarkup,
   setNoteTextMarkup,
   removeNoteMarkup,
 } from '../composables/usePlanHtml'
-import { extractPlanOutline } from './planRuntime'
 import {
   diffPlanContents,
   parseSnapshotName,
   planHistoryDirRelPath,
   type PlanDiffSummary,
 } from './planHistory'
-import type { HtmlPlanMeta, HtmlPlanReviewNote, HtmlPlanTodo, HtmlTodoStatus, PlanStage } from '../composables/usePlanHtml'
+import type { PlanMeta, ReviewNote, PlanTodo, TodoStatus, PlanStage } from '../composables/planModel'
+import type { PlanStore, PlanCtx } from '../composables/planStore'
 import type { useBackend } from '../composables/useBackend'
 import { sharePlanToGit } from '../composables/planShare'
 import { useNotify } from '../composables/useNotify'
@@ -34,7 +31,16 @@ const props = defineProps<{
   workspacePath: string
   relPath: string
   backend: ReturnType<typeof useBackend>
+  store: PlanStore
 }>()
+
+// Persistence context assembled from the transport props; passed to every
+// store call so the toolbar never talks to the backend directly for meta I/O.
+const ctx = computed<PlanCtx>(() => ({
+  backend: props.backend,
+  workspacePath: props.workspacePath,
+  relPath: props.relPath,
+}))
 
 // `updated`: emitted after the file content changed (own write or external
 // edit detected on window focus) so the host can refresh the HTML preview.
@@ -52,7 +58,7 @@ const { t } = useI18n()
 const { toast, confirm } = useNotify()
 
 const rawContent = ref('')
-const meta = ref<HtmlPlanMeta | null>(null)
+const meta = ref<PlanMeta | null>(null)
 const notesOpen = ref(false)
 const todosOpen = ref(false)
 const newNoteText = ref('')
@@ -65,7 +71,8 @@ const saving = ref(false)
 function applyContent(content: string, notifyHost: boolean): void {
   const changed = content !== rawContent.value
   rawContent.value = content
-  meta.value = parseHtmlPlanMeta(content)?.meta ?? null
+  const parsed = parseHtmlPlanMeta(content)?.meta
+  meta.value = parsed ? ({ ...parsed, format: 'html' } as PlanMeta) : null
   if (notifyHost && changed) emit('updated')
 }
 
@@ -74,13 +81,8 @@ async function loadContent(notifyHost = false): Promise<void> {
   // could resolve with stale content and clobber the just-written state.
   if (saving.value) return
   try {
-    const resp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
-      'fs.read_file',
-      { workspace_path: props.workspacePath, rel_path: props.relPath },
-    )
-    if (resp.payload?.ok && resp.payload.content !== undefined) {
-      applyContent(resp.payload.content, notifyHost)
-    }
+    const result = await props.store.readMeta(ctx.value)
+    if (result) applyContent(result.raw, notifyHost)
   } catch {
     // Toolbar simply stays hidden when the file cannot be read.
   }
@@ -136,7 +138,7 @@ const progress = computed(() => htmlPlanProgress(meta.value?.todos ?? []))
 const unresolvedCount = computed(() => (meta.value?.reviewNotes ?? []).filter((n) => !n.resolved).length)
 const canApprove = computed(() => meta.value?.stage === 'in-review' && unresolvedCount.value === 0)
 // Outline entries (section h2 / phase-head leading text) for the nav dropdown.
-const outline = computed(() => extractPlanOutline(rawContent.value))
+const outline = computed(() => props.store.outline(rawContent.value))
 
 function onOutlinePick(event: Event): void {
   const select = event.target as HTMLSelectElement
@@ -144,79 +146,42 @@ function onOutlinePick(event: Event): void {
   select.value = '' // reset so re-picking the same entry fires change again
 }
 
-// Read-before-write: re-read the file and re-apply the mutation on the fresh
-// meta so external edits made since our last read (e.g. by an AI agent) are
-// preserved instead of clobbered. `mutate` returns null to abort when its
-// precondition no longer holds against the fresh meta; the UI is then
-// refreshed from the fresh content.
-// `syncBody` runs after the standard stage/todo-status markup sync to apply
-// structural body edits that the status sync cannot (inserting/removing a
-// todo `<li>`, editing todo/note visible text). It receives the already
-// meta-synced content and the fresh next meta, and returns the final content.
+// Read-before-write, delegated to the store: it re-reads the file and applies
+// `mutate` to the fresh meta so external edits made since our last read (e.g.
+// by an AI agent) are preserved instead of clobbered, syncs the stage/todo
+// markup, carries the optimistic lock (expected_mtime + one re-read/retry on
+// conflict), and writes. `mutate` returns null to abort when its precondition
+// no longer holds against the fresh meta; the UI is then refreshed from the
+// fresh content. `syncBody` runs (inside the store, after the standard
+// stage/todo-status markup sync) to apply structural body edits that the
+// status sync cannot (inserting/removing a todo `<li>`, editing todo/note
+// visible text) and returns the final content.
 async function writeMeta(
-  mutate: (fresh: HtmlPlanMeta) => HtmlPlanMeta | null,
-  syncBody?: (content: string, next: HtmlPlanMeta) => string,
+  mutate: (fresh: PlanMeta) => PlanMeta | null,
+  syncBody?: (content: string) => string,
 ): Promise<boolean> {
   saving.value = true
   try {
-    // Optimistic lock: the write carries the read's mtime, so a write racing
-    // an external edit is refused (conflict) instead of clobbering it. One
-    // automatic re-read + retry resolves the common single race; a second
-    // conflict surfaces the save-failed toast.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const readResp = await props.backend.send<{
-        ok: boolean
-        content?: string
-        mtime?: number
-        error?: string
-      }>('fs.read_file', { workspace_path: props.workspacePath, rel_path: props.relPath })
-      if (!readResp.payload?.ok || readResp.payload.content === undefined) {
-        toast(readResp.payload?.error ?? t('pane.plans.review-save-failed'))
-        return false
-      }
-      const freshContent = readResp.payload.content
-      const expectedMtime = readResp.payload.mtime
-      const freshMeta = parseHtmlPlanMeta(freshContent)?.meta ?? null
-      if (!freshMeta) {
-        toast(t('pane.plans.review-save-failed'))
-        return false
-      }
-      const next = mutate(freshMeta)
-      if (!next) {
-        applyContent(freshContent, true)
-        return false
-      }
-      // Meta + markup are written together: sync the stage pill and every
-      // todo's data-status/pill so the visible document cannot drift from the
-      // authoritative plan-meta block (best-effort; missing markup is skipped).
-      let content = replaceHtmlPlanMeta(freshContent, next)
-      content = syncStageMarkup(content, next.stage)
-      for (const todo of next.todos) content = syncTodoMarkup(content, todo.id, todo.status)
-      if (syncBody) content = syncBody(content, next)
-      const resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>(
-        'fs.write_file',
-        {
-          workspace_path: props.workspacePath,
-          rel_path: props.relPath,
-          content,
-          ...(typeof expectedMtime === 'number' ? { expected_mtime: expectedMtime } : {}),
-        },
-      )
-      if (resp.payload?.ok) {
-        rawContent.value = content
-        meta.value = next
-        emit('updated')
-        return true
-      }
-      if (resp.payload?.conflict) {
-        if (attempt === 0) continue // file changed under us — re-read and retry once
-        toast(t('pane.plans.review-save-failed'))
-        return false
-      }
-      toast(resp.payload?.error ?? t('pane.plans.review-save-failed'))
+    const result = await props.store.writeMeta(ctx.value, mutate, syncBody)
+    if (result.ok) {
+      applyContent(result.raw ?? rawContent.value, false)
+      emit('updated')
+      return true
+    }
+    // A refused conflict (both attempts lost the race) surfaces the generic
+    // save-failed toast, matching the pre-store behavior.
+    if (result.conflict) {
+      toast(t('pane.plans.review-save-failed'))
       return false
     }
-    return false // unreachable: both loop iterations return
+    // Mutation abandoned against the fresh meta: refresh the UI to the fresh
+    // on-disk state instead of writing.
+    if (result.raw !== undefined) {
+      applyContent(result.raw, true)
+      return false
+    }
+    toast(result.error ?? t('pane.plans.review-save-failed'))
+    return false
   } catch (err) {
     toast(err instanceof Error ? err.message : t('pane.plans.review-save-failed'))
     return false
@@ -237,7 +202,7 @@ async function approve(): Promise<void> {
 // Click cycles pending → in-progress → done → pending; right-click toggles
 // skipped (and back to pending). Every write goes through writeMeta, so the
 // visible todo markup is synced alongside the meta.
-function nextTodoStatus(status: HtmlTodoStatus): HtmlTodoStatus {
+function nextTodoStatus(status: TodoStatus): TodoStatus {
   if (status === 'pending') return 'in-progress'
   if (status === 'in-progress') return 'done'
   return 'pending' // done or skipped cycle back to pending
@@ -258,7 +223,7 @@ async function toggleSkipTodo(id: string): Promise<void> {
   await writeMeta((fresh) => {
     const todo = fresh.todos.find((td) => td.id === id)
     if (!todo) return null
-    const status: HtmlTodoStatus = todo.status === 'skipped' ? 'pending' : 'skipped'
+    const status: TodoStatus = todo.status === 'skipped' ? 'pending' : 'skipped'
     return { ...fresh, todos: fresh.todos.map((td) => (td.id === id ? { ...td, status } : td)) }
   })
 }
@@ -272,7 +237,7 @@ const editingTodoId = ref<string | null>(null)
 const editTodoText = ref('')
 
 /** Derive a stable kebab-case id from content, de-duplicated against existing ids. */
-function slugTodoId(content: string, existing: HtmlPlanTodo[]): string {
+function slugTodoId(content: string, existing: PlanTodo[]): string {
   const base =
     content
       .toLowerCase()
@@ -289,7 +254,7 @@ function slugTodoId(content: string, existing: HtmlPlanTodo[]): string {
 async function addTodo(): Promise<void> {
   const text = newTodoText.value.trim()
   if (!meta.value || !text || saving.value) return
-  let added: HtmlPlanTodo | null = null
+  let added: PlanTodo | null = null
   const ok = await writeMeta(
     (fresh) => {
       added = { id: slugTodoId(text, fresh.todos), content: text, status: 'pending' }
@@ -310,7 +275,7 @@ function onNewTodoEnter(event: KeyboardEvent): void {
   void addTodo()
 }
 
-function startEditTodo(todo: HtmlPlanTodo): void {
+function startEditTodo(todo: PlanTodo): void {
   editingTodoId.value = todo.id
   editTodoText.value = todo.content
 }
@@ -414,7 +379,7 @@ function clearDispatchTimer(): void {
   }
 }
 
-function appendExecution(fresh: HtmlPlanMeta, agentKey: string, startedAt: string): HtmlPlanMeta {
+function appendExecution(fresh: PlanMeta, agentKey: string, startedAt: string): PlanMeta {
   return {
     ...fresh,
     stage: 'in-progress',
@@ -517,7 +482,7 @@ async function resolveNote(id: string): Promise<void> {
   }))
 }
 
-function nextNoteId(notes: HtmlPlanReviewNote[]): string {
+function nextNoteId(notes: ReviewNote[]): string {
   let max = 0
   for (const note of notes) {
     const m = note.id.match(/^n(\d+)$/)
@@ -531,7 +496,7 @@ async function submitNote(): Promise<void> {
   if (!meta.value || !text || saving.value) return
   const anchor = pendingAnchor.value
   const ok = await writeMeta((fresh) => {
-    const note: HtmlPlanReviewNote = {
+    const note: ReviewNote = {
       id: nextNoteId(fresh.reviewNotes),
       author: 'user',
       text,
@@ -570,7 +535,7 @@ function onNoteEnter(event: KeyboardEvent): void {
 const editingNoteId = ref<string | null>(null)
 const editNoteText = ref('')
 
-function startEditNote(note: HtmlPlanReviewNote): void {
+function startEditNote(note: ReviewNote): void {
   if (note.author !== 'user') return
   editingNoteId.value = note.id
   editNoteText.value = note.text

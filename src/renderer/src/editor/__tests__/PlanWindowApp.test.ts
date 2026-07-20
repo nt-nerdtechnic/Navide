@@ -10,6 +10,7 @@ import { defineComponent, h } from 'vue'
 import { ref } from 'vue'
 import PlanWindowApp from '../../PlanWindowApp.vue'
 import { i18n } from '../../i18n'
+import { resolvePlanStore } from '../../composables/planStore'
 
 i18n.global.locale.value = 'en-US'
 
@@ -376,6 +377,30 @@ describe('PlanWindowApp – inline section edit/delete', () => {
     // plan-meta and other sections are untouched.
     expect(written).toContain('{"schemaVersion":1,"name":"F"}')
     expect(written).toContain('<h2>Risks</h2>')
+  })
+
+  it('routes a section-edit through the store with host-sanitized html', async () => {
+    fsState.content = BODY_DOC
+    const store = resolvePlanStore('.agent-team/plans/feature_a1b2c3.html')
+    const spy = vi.spyOn(store, 'replaceSectionBody')
+    try {
+      const wrapper = await mountApp()
+      await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+      wrapper.findComponent({ name: 'PlanDocPreview' }).vm.$emit('section-edit', {
+        anchor: 'Goals',
+        html: '<p onclick="steal()">clean</p>',
+      })
+      await flushPromises()
+
+      expect(spy).toHaveBeenCalledTimes(1)
+      const [, anchor, body] = spy.mock.calls[0]
+      expect(anchor).toBe('Goals')
+      // The host sanitizes before handing the body to the store: no onclick.
+      expect(body).toEqual({ kind: 'html', sanitized: '<p>clean</p>' })
+      expect(fsState.writes).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('confirms a section-delete before writing, and writes nothing when declined', async () => {

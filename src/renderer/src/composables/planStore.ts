@@ -64,7 +64,18 @@ export interface PlanStore {
   readonly format: 'markdown' | 'html'
   canHandle(relPath: string): boolean
   readMeta(ctx: PlanCtx): Promise<ReadResult | null>
-  writeMeta(ctx: PlanCtx, mutate: (fresh: PlanMeta) => PlanMeta | null): Promise<WriteResult>
+  writeMeta(
+    ctx: PlanCtx,
+    mutate: (fresh: PlanMeta) => PlanMeta | null,
+    /**
+     * Optional structural body-markup sync applied to the already
+     * meta+status-synced content, immediately before the write (same read,
+     * same expected_mtime). Mirrors the toolbar's original `syncBody` step for
+     * todo/note CRUD (insert/remove/retext `<li>`); status-only markup is
+     * handled internally, so callers pass this only for structural edits.
+     */
+    syncBody?: (content: string) => string,
+  ): Promise<WriteResult>
   replaceSectionBody(ctx: PlanCtx, anchor: string, body: SectionBody): Promise<WriteResult>
   deleteSection(ctx: PlanCtx, anchor: string): Promise<WriteResult>
   outline(raw: string): string[]
@@ -156,9 +167,14 @@ class HtmlPlanStore implements PlanStore {
    * Optimistic-lock meta write, mirroring `PlanReviewToolbar.writeMeta` byte for
    * byte: re-read fresh content + mtime → parseHtmlPlanMeta → mutate → on null,
    * abandon → replaceHtmlPlanMeta → syncStageMarkup → syncTodoMarkup per todo
-   * (same timing/order) → write with expected_mtime → retry once on conflict.
+   * (same timing/order) → optional syncBody → write with expected_mtime →
+   * retry once on conflict.
    */
-  async writeMeta(ctx: PlanCtx, mutate: (fresh: PlanMeta) => PlanMeta | null): Promise<WriteResult> {
+  async writeMeta(
+    ctx: PlanCtx,
+    mutate: (fresh: PlanMeta) => PlanMeta | null,
+    syncBody?: (content: string) => string,
+  ): Promise<WriteResult> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const readResp = await readFile(ctx)
       if (!readResp.payload?.ok || readResp.payload.content === undefined) {
@@ -174,6 +190,7 @@ class HtmlPlanStore implements PlanStore {
       let content = replaceHtmlPlanMeta(freshContent, nextHtml)
       content = syncStageMarkup(content, nextHtml.stage)
       for (const todo of nextHtml.todos) content = syncTodoMarkup(content, todo.id, todo.status)
+      if (syncBody) content = syncBody(content)
       const resp = await writeFile(ctx, content, expectedMtime)
       if (resp.payload?.ok) return { ok: true, raw: content }
       if (resp.payload?.conflict) {
@@ -216,7 +233,11 @@ class MarkdownPlanStore implements PlanStore {
     return { meta, raw, mtime: readResp.payload.mtime, warnings: [] }
   }
 
-  async writeMeta(ctx: PlanCtx, mutate: (fresh: PlanMeta) => PlanMeta | null): Promise<WriteResult> {
+  async writeMeta(
+    ctx: PlanCtx,
+    mutate: (fresh: PlanMeta) => PlanMeta | null,
+    syncBody?: (content: string) => string,
+  ): Promise<WriteResult> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const readResp = await readFile(ctx)
       if (!readResp.payload?.ok || readResp.payload.content === undefined) {
@@ -228,7 +249,8 @@ class MarkdownPlanStore implements PlanStore {
       if (!freshMeta) return { ok: false, error: 'not a plan file' }
       const next = mutate(freshMeta)
       if (!next) return { ok: false, raw: freshContent } // mutation abandoned
-      const content = writePlanMeta(next, freshContent)
+      let content = writePlanMeta(next, freshContent)
+      if (syncBody) content = syncBody(content)
       const resp = await writeFile(ctx, content, expectedMtime)
       if (resp.payload?.ok) return { ok: true, raw: content }
       if (resp.payload?.conflict) {

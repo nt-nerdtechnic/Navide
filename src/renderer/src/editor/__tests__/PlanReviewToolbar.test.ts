@@ -10,6 +10,7 @@ import PlanReviewToolbar from '../PlanReviewToolbar.vue'
 import { i18n } from '../../i18n'
 import { parseHtmlPlanMeta, replaceHtmlPlanMeta } from '../../composables/usePlanHtml'
 import type { HtmlPlanMeta } from '../../composables/usePlanHtml'
+import { resolvePlanStore, type PlanStore } from '../../composables/planStore'
 
 i18n.global.locale.value = 'en-US'
 
@@ -53,6 +54,8 @@ interface Harness {
   writeCalls: { relPath: string; content: string }[]
   /** Every write attempt (including refused conflicts) with its expected_mtime. */
   writeAttempts: { relPath: string; expectedMtime?: number }[]
+  /** The store instance the toolbar was mounted with (real HtmlPlanStore by default). */
+  store: PlanStore
   setContent: (c: string) => void
   /** Simulate a backend broadcast to `on()` subscribers. */
   emitBackend: (type: string, payload: unknown) => void
@@ -69,7 +72,7 @@ const PLAN_REL_PATH = '.agent-team/plans/test-plan_a1b2c3.html'
 
 async function mountToolbar(
   content: string,
-  opts: { failWrite?: string; conflictWrites?: number; history?: HistoryOpts } = {},
+  opts: { failWrite?: string; conflictWrites?: number; history?: HistoryOpts; store?: PlanStore } = {},
 ): Promise<Harness> {
   const writes: string[] = []
   const writeCalls: { relPath: string; content: string }[] = []
@@ -129,11 +132,16 @@ async function mountToolbar(
       return { payload: { ok: true } }
     }),
   }
+  // Inject a real HtmlPlanStore (resolved from the .html rel path) so the same
+  // fs mock above continues to drive the read/write flow; the store performs
+  // the parse/serialize/markup-sync the toolbar used to do inline.
+  const store = opts.store ?? resolvePlanStore(PLAN_REL_PATH)
   const wrapper = mount(PlanReviewToolbar, {
     props: {
       workspacePath: '/ws',
       relPath: PLAN_REL_PATH,
       backend: backend as never,
+      store,
     },
     global: { plugins: [i18n] },
   })
@@ -143,6 +151,7 @@ async function mountToolbar(
     writes,
     writeCalls,
     writeAttempts,
+    store,
     setContent: (c: string) => {
       current = c
       mtimeNow++
@@ -1211,6 +1220,52 @@ describe('PlanReviewToolbar – review note CRUD', () => {
     await wrapper.find('.prt-note .prt-ghost--danger').trigger('click')
     await flushPromises()
     expect(lastWrittenMeta(writes).reviewNotes).toHaveLength(0)
+  })
+})
+
+describe('PlanReviewToolbar – store delegation', () => {
+  it('routes an approve write through the injected store.writeMeta', async () => {
+    const store = resolvePlanStore(PLAN_REL_PATH)
+    const spy = vi.spyOn(store, 'writeMeta')
+    try {
+      const meta = baseMeta({
+        reviewNotes: [{ id: 'n1', author: 'user', text: 'Ok', resolved: true, reply: 'ack', anchor: '' }],
+      })
+      const { wrapper, writes } = await mountToolbar(planDoc(meta), { store })
+      await wrapper.find('.prt-approve').trigger('click')
+      await flushPromises()
+
+      // Delegation: the toolbar no longer reads/writes fs itself for meta —
+      // the store owns the read-before-write + optimistic-lock flow.
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(writes).toHaveLength(1)
+      expect(lastWrittenMeta(writes).stage).toBe('approved')
+      expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--approved')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('passes a syncBody to the store for a todo add so the visible <li> is synced', async () => {
+    const store = resolvePlanStore(PLAN_REL_PATH)
+    const spy = vi.spyOn(store, 'writeMeta')
+    try {
+      const { wrapper, writes } = await mountToolbar(markupDoc(baseMeta({ todos: [] })), { store })
+      await wrapper.find('.prt-todos-btn').trigger('click')
+      await wrapper.find('.prt-new .prt-input').setValue('Write the docs')
+      await wrapper.find('.prt-new .prt-send').trigger('click')
+      await flushPromises()
+
+      // syncBody argument is present (3rd param) — body-markup sync moved with
+      // the write into the store, not dropped.
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(typeof spy.mock.calls[0][2]).toBe('function')
+      // The added todo lands in meta and its <li> lands in the document body.
+      expect(lastWrittenMeta(writes).todos.some((t) => t.id === 'write-the-docs')).toBe(true)
+      expect(writes[0]).toContain('data-todo-id="write-the-docs"')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 

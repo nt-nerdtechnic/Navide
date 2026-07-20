@@ -5,13 +5,13 @@
 // with the review toolbar stacked above; other HTML docs keep the plain
 // sandboxed FilePreviewPane; legacy markdown plans reuse PlanFileView.
 // Plans only — no file tree, terminal, or git.
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBackend } from './composables/useBackend'
 import { initSettingsBackend, onSettingsChanged } from './lib/settings'
 import { useTheme } from './composables/useTheme'
 import { useNotify } from './composables/useNotify'
-import { replaceSectionBody, deleteSection } from './composables/usePlanHtml'
+import { resolvePlanStore, type PlanCtx, type WriteResult } from './composables/planStore'
 import { sanitizePlanSectionHtml } from './editor/planRuntime'
 import PlansPane from './editor/PlansPane.vue'
 import PlanReviewToolbar from './editor/PlanReviewToolbar.vue'
@@ -48,6 +48,12 @@ function isHtmlPlanDoc(relPath: string): boolean {
 // Bumped after a plan-meta write; PlanDocPreview reloads in place (keeping
 // the reported scroll position) instead of remounting.
 const planPreviewRefresh = ref(0)
+
+// Format-agnostic persistence adapter for the open doc; the review toolbar and
+// the body write-back below both go through it instead of the backend directly.
+// `.html` plans resolve to the HTML store (the only branch that mounts the
+// toolbar / interactive preview in this stage).
+const planStore = computed(() => resolvePlanStore(openDoc.value?.relPath ?? ''))
 
 const toolbarRef = ref<InstanceType<typeof PlanReviewToolbar> | null>(null)
 const previewRef = ref<InstanceType<typeof PlanDocPreview> | null>(null)
@@ -104,61 +110,51 @@ function onOutlineScroll(anchor: string): void {
   previewRef.value?.scrollToAnchor(anchor)
 }
 
-// Body write-back for inline section edit/delete. Mirrors the toolbar's
-// optimistic lock: re-read fresh content + mtime, apply the byte-surgical
-// mutation to the fresh bytes (preserving concurrent agent edits), write with
-// expected_mtime, retry once on a conflict. A mutation that leaves the content
-// unchanged (anchor gone / refused region) is a silent no-op.
-async function writePlanBody(mutate: (fresh: string) => string): Promise<void> {
-  const relPath = openDoc.value?.relPath
-  if (!relPath) return
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const readResp = await backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>(
-      'fs.read_file',
-      { workspace_path: workspacePath, rel_path: relPath },
-    )
-    if (!readResp.payload?.ok || readResp.payload.content === undefined) {
-      toast(readResp.payload?.error ?? t('pane.plans.review-save-failed'))
-      return
-    }
-    const fresh = readResp.payload.content
-    const expectedMtime = readResp.payload.mtime
-    const next = mutate(fresh)
-    if (next === fresh) return // no-op: anchor not found or region refused
-    const resp = await backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
-      workspace_path: workspacePath,
-      rel_path: relPath,
-      content: next,
-      ...(typeof expectedMtime === 'number' ? { expected_mtime: expectedMtime } : {}),
-    })
-    if (resp.payload?.ok) {
-      planPreviewRefresh.value++
-      return
-    }
-    if (resp.payload?.conflict) {
-      if (attempt === 0) continue // re-read and retry once
-      toast(t('pane.plans.review-save-failed'))
-      return
-    }
-    toast(resp.payload?.error ?? t('pane.plans.review-save-failed'))
+// Body write-back for inline section edit/delete now goes through the store's
+// replaceSectionBody / deleteSection, which mirror the toolbar's optimistic
+// lock (re-read fresh content + mtime, apply the byte-surgical mutation to the
+// fresh bytes preserving concurrent agent edits, write with expected_mtime,
+// retry once on a conflict; a mutation that leaves the content unchanged is a
+// silent no-op success). The host still sanitizes untrusted frame HTML first.
+function planCtx(relPath: string): PlanCtx {
+  return { backend, workspacePath, relPath }
+}
+
+function applyBodyWriteResult(result: WriteResult): void {
+  if (result.ok) {
+    planPreviewRefresh.value++
     return
   }
+  if (result.conflict) {
+    toast(t('pane.plans.review-save-failed'))
+    return
+  }
+  toast(result.error ?? t('pane.plans.review-save-failed'))
 }
 
 // Inline section edit: sanitize the untrusted frame HTML host-side, then
 // replace only that section's prose body (never plan-meta/header/todos).
 async function onSectionEdit(payload: { anchor: string; html: string }): Promise<void> {
+  const relPath = openDoc.value?.relPath
+  if (!relPath) return
   const sanitized = sanitizePlanSectionHtml(payload.html)
-  await writePlanBody((fresh) => replaceSectionBody(fresh, payload.anchor, sanitized))
+  const result = await planStore.value.replaceSectionBody(planCtx(relPath), payload.anchor, {
+    kind: 'html',
+    sanitized,
+  })
+  applyBodyWriteResult(result)
 }
 
 async function onSectionDelete(anchor: string): Promise<void> {
+  const relPath = openDoc.value?.relPath
+  if (!relPath) return
   const ok = await confirm(t('pane.plans.doc-delete-confirm'), {
     title: t('pane.plans.delete'),
     confirmText: t('pane.plans.delete'),
   })
   if (!ok) return
-  await writePlanBody((fresh) => deleteSection(fresh, anchor))
+  const result = await planStore.value.deleteSection(planCtx(relPath), anchor)
+  applyBodyWriteResult(result)
 }
 
 // ESC overlay priority: cancel/close the innermost active overlay before
@@ -249,6 +245,7 @@ onUnmounted(() => {
                 :workspace-path="workspacePath"
                 :rel-path="openDoc.relPath"
                 :backend="backend"
+                :store="planStore"
                 @updated="planPreviewRefresh++"
                 @scroll-to-anchor="onOutlineScroll"
                 @preview-snapshot="onPreviewSnapshot"
