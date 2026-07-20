@@ -642,6 +642,64 @@ describe('PlansPane – delete single', () => {
   })
 })
 
+describe('PlansPane – visible row delete button', () => {
+  it('deletes a legacy plan from its always-visible button and notifies the host', async () => {
+    notify.confirm.mockClear()
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const delBtn = wrapper.find('.plan-row-delete')
+    expect(delBtn.exists()).toBe(true)
+    await delBtn.trigger('click')
+    await flushPromises()
+
+    expect(notify.confirm).toHaveBeenCalledTimes(1)
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+    // Delete must not also open the plan (click.stop on the row button).
+    expect(wrapper.emitted('open-file')).toBeUndefined()
+    // Host is told which file was removed so it can clear the right pane.
+    expect(wrapper.emitted('deleted')?.[0]).toEqual(['.cursor/plans/active.plan.md'])
+  })
+
+  it('does not delete when the confirmation is declined', async () => {
+    notify.confirm.mockClear()
+    notify.confirm.mockResolvedValueOnce(false)
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('.plan-row-delete').trigger('click')
+    await flushPromises()
+
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+    expect(wrapper.emitted('deleted')).toBeUndefined()
+  })
+
+  it('requires a second confirmation for an in-review plan via the row button', async () => {
+    notify.confirm.mockClear()
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const row = wrapper.findAll('.plan-row').find((r) => r.text().includes('HTML Review Plan'))!
+    await row.find('.plan-row-delete').trigger('click')
+    await flushPromises()
+
+    expect(notify.confirm).toHaveBeenCalledTimes(2)
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/review_a1b2c3.html',
+    })
+  })
+})
+
 describe('PlansPane – promote doc to plan', () => {
   it('injects a minimal draft meta the parser accepts, named after the file', async () => {
     const backend = docBackend()

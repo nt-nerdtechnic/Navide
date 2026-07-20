@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePlanFile, planProgress, writePlanFile } from '../usePlanFile'
+import { parsePlanFile, planProgress, writePlanFile, replacePlanSectionBody } from '../usePlanFile'
 
 const SAMPLE_PLAN = `---
 name: Test Plan
@@ -237,5 +237,98 @@ isProject: false
     expect(written).toContain('- [ ] status: pending | fine-grained one')
     expect(written).toContain('- [ ] status: pending | fine-grained two')
     expect(written).toContain('    status: completed')
+  })
+})
+
+describe('replacePlanSectionBody', () => {
+  const RAW = `---
+name: Doc Plan
+overview: O
+todos:
+  - id: t1
+    content: A
+    status: pending
+isProject: false
+---
+
+## Overview
+
+Original overview body.
+
+## Details
+
+Detail one.
+Detail two.
+
+## Notes
+
+Keep me.
+`
+
+  it('replaces only the targeted section body', () => {
+    const out = replacePlanSectionBody(RAW, 'Details', 'Brand new detail.')
+    expect(out).toContain('## Details\n\nBrand new detail.')
+    expect(out).not.toContain('Detail one.')
+    expect(out).not.toContain('Detail two.')
+    // Neighbouring sections and their bodies stay intact.
+    expect(out).toContain('## Overview\n\nOriginal overview body.')
+    expect(out).toContain('## Notes\n\nKeep me.')
+  })
+
+  it('preserves the frontmatter byte-for-byte', () => {
+    const out = replacePlanSectionBody(RAW, 'Overview', 'New overview.')
+    const frontmatter = RAW.slice(0, RAW.indexOf('\n---', 3) + 4)
+    expect(out.startsWith(frontmatter)).toBe(true)
+  })
+
+  it('replaces the last section up to end of file', () => {
+    const out = replacePlanSectionBody(RAW, 'Notes', 'Replaced tail.')
+    expect(out).toContain('## Notes\n\nReplaced tail.')
+    expect(out).not.toContain('Keep me.')
+    expect(out).toContain('## Details\n\nDetail one.\nDetail two.')
+  })
+
+  it('returns the input unchanged when the heading is not found', () => {
+    const out = replacePlanSectionBody(RAW, 'Nonexistent', 'x')
+    expect(out).toBe(RAW)
+  })
+
+  it('targets the first occurrence when a heading is duplicated', () => {
+    const dup = `---
+name: D
+---
+
+## Dup
+
+first body.
+
+## Dup
+
+second body.
+`
+    const out = replacePlanSectionBody(dup, 'Dup', 'edited first.')
+    expect(out).toContain('## Dup\n\nedited first.')
+    expect(out).toContain('## Dup\n\nsecond body.')
+    expect(out).not.toContain('first body.')
+  })
+
+  it('does not treat frontmatter lines as headings', () => {
+    const withHashInFm = `---
+name: P
+overview: "## not a heading"
+---
+
+## Real
+
+body.
+`
+    const out = replacePlanSectionBody(withHashInFm, 'Real', 'edited.')
+    expect(out).toContain('overview: "## not a heading"')
+    expect(out).toContain('## Real\n\nedited.')
+  })
+
+  it('normalises surrounding blank lines from the new body', () => {
+    const out = replacePlanSectionBody(RAW, 'Details', '\n\nSpaced body.\n\n')
+    expect(out).toContain('## Details\n\nSpaced body.\n\n## Notes')
   })
 })

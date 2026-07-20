@@ -1,8 +1,14 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, config } from '@vue/test-utils'
 import { ref, nextTick } from 'vue'
 import PlanFileView from '../PlanFileView.vue'
+import { i18n } from '../../i18n'
+
+// PlanFileView now uses vue-i18n for its inline edit controls; install it for
+// every mount in this file (vitest isolates modules per file, so no leak).
+i18n.global.locale.value = 'en-US'
+config.global.plugins = [i18n]
 
 const PLAN_RAW = `---
 name: My Feature Plan
@@ -246,5 +252,121 @@ describe('PlanFileView – checkbox interaction', () => {
     )
     const writtenContent: string = writeCall![1].content
     expect(writtenContent).toContain('status: pending')
+  })
+})
+
+describe('PlanFileView – todo text editing', () => {
+  it('edits a todo\'s text and saves the new content', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.pfv-todo-edit')[0].trigger('click')
+    const input = wrapper.find('.pfv-todo-edit-input')
+    expect(input.exists()).toBe(true)
+    await input.setValue('Rewritten task text')
+    await input.trigger('keydown', { key: 'Enter', isComposing: false })
+    await flushPromises()
+
+    const writeCall = (backend.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(writeCall).toBeDefined()
+    const writtenContent: string = writeCall![1].content
+    expect(writtenContent).toContain('content: Rewritten task text')
+    // The original body/heading and the untouched todo remain.
+    expect(writtenContent).toContain('content: Build the component.')
+  })
+
+  it('does not submit a todo edit while the IME is composing', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.pfv-todo-edit')[0].trigger('click')
+    const input = wrapper.find('.pfv-todo-edit-input')
+    await input.setValue('Composing text')
+    await input.trigger('keydown', { key: 'Enter', isComposing: true })
+    await flushPromises()
+
+    const writeCall = (backend.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(writeCall).toBeUndefined()
+  })
+
+  it('does not save an empty todo edit', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    await wrapper.findAll('.pfv-todo-edit')[0].trigger('click')
+    const input = wrapper.find('.pfv-todo-edit-input')
+    await input.setValue('   ')
+    await input.trigger('keydown', { key: 'Enter', isComposing: false })
+    await flushPromises()
+
+    const writeCall = (backend.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(writeCall).toBeUndefined()
+  })
+})
+
+describe('PlanFileView – section body editing', () => {
+  it('edits a document section and writes it back, preserving the rest', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    // The only non-phase document section is "修改檔案清單".
+    const section = wrapper.find('.pfv-doc-section')
+    expect(section.exists()).toBe(true)
+    await section.find('.pfv-inline-btn').trigger('click') // Edit
+    const textarea = wrapper.find('.pfv-section-textarea')
+    expect(textarea.exists()).toBe(true)
+    await textarea.setValue('Replaced section body line.')
+    await wrapper.find('.pfv-inline-btn--primary').trigger('click') // Save
+    await flushPromises()
+
+    const writeCall = (backend.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(writeCall).toBeDefined()
+    const content: string = writeCall![1].content
+    // New body present under its heading; frontmatter + other sections intact.
+    expect(content).toContain('## 修改檔案清單')
+    expect(content).toContain('Replaced section body line.')
+    expect(content).toContain('name: My Feature Plan')
+    expect(content).toContain('Description of phase A.')
+    // Old file-list content is gone from that section.
+    expect(content).not.toContain('update main process.')
+  })
+
+  it('sends an optimistic-lock read before writing a section', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    await wrapper.find('.pfv-doc-section .pfv-inline-btn').trigger('click')
+    await wrapper.find('.pfv-section-textarea').setValue('Fresh body.')
+    await wrapper.find('.pfv-inline-btn--primary').trigger('click')
+    await flushPromises()
+
+    // A read precedes the write so the section merge runs against fresh content.
+    const calls = (backend.send as ReturnType<typeof vi.fn>).mock.calls.map((c: string[]) => c[0])
+    const writeIdx = calls.lastIndexOf('fs.write_file')
+    expect(writeIdx).toBeGreaterThan(0)
+    expect(calls.slice(0, writeIdx)).toContain('fs.read_file')
   })
 })

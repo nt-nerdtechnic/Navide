@@ -37,6 +37,10 @@
   --accent-emphasis: #2ea043;
   --accent-muted: #1f5e34;
   --accent-subtle: #0d2818;
+  --status-starting-subtle: #0d1d3d;
+  --status-starting-muted: #1e3a6b;
+  --status-starting-fg: #6cb0ff;
+  --status-starting-emphasis: #2563eb;
 
   /* Success */
   --success-fg: #56d364;

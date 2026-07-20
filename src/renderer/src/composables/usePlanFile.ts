@@ -271,3 +271,55 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
   // body already starts with `\n` (e.g. `\n\n# Goals...`), so no extra separator needed.
   return `---\n${newYamlLines.join('\n')}\n---${body}`
 }
+
+/**
+ * Replace the body of a single `## Heading` section in a raw `.plan.md` string,
+ * leaving the frontmatter, the heading line itself, and every other section
+ * byte-for-byte intact.
+ *
+ * The section spans from just after its `## Heading` line up to the next
+ * `## ` heading (matching `parsePlanFile`'s section splitting) or end of file.
+ * `newBody` is normalised (surrounding blank lines trimmed) and re-inserted
+ * with a single blank line separating it from the heading and the next section.
+ *
+ * Pure string manipulation — no markdown parser. When `heading` is not found
+ * the input is returned unchanged. Duplicate headings resolve to the first.
+ */
+export function replacePlanSectionBody(raw: string, heading: string, newBody: string): string {
+  // Skip the frontmatter so `##` scanning never touches the YAML block.
+  let bodyStart = 0
+  if (raw.startsWith('---')) {
+    const after = raw.slice(3)
+    const end = after.indexOf('\n---')
+    if (end !== -1) bodyStart = 3 + end + 4
+  }
+  const prefix = raw.slice(0, bodyStart)
+  const body = raw.slice(bodyStart)
+
+  const lines = body.split('\n')
+  const target = heading.trim()
+
+  let headingIdx = -1
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(.+?)\s*$/)
+    if (m && m[1].trim() === target) {
+      headingIdx = i
+      break
+    }
+  }
+  if (headingIdx === -1) return raw
+
+  // Boundary: the next `## ` heading after this one (or end of file).
+  let nextIdx = lines.length
+  for (let i = headingIdx + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i])) {
+      nextIdx = i
+      break
+    }
+  }
+
+  const normalizedBody = newBody.replace(/^\n+/, '').replace(/\n+$/, '')
+  const rebuilt = [lines[headingIdx], '', ...(normalizedBody ? normalizedBody.split('\n') : []), '']
+  const merged = [...lines.slice(0, headingIdx), ...rebuilt, ...lines.slice(nextIdx)]
+  return prefix + merged.join('\n')
+}

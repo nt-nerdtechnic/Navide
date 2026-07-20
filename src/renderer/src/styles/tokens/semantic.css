@@ -50,6 +50,10 @@
   --accent-emphasis: var(--blue-5);   /* #1f6feb — primary button */
   --accent-muted: var(--blue-6);      /* #1f3a5f — borders */
   --accent-subtle: var(--blue-7);     /* #0d2845 — tinted backgrounds */
+  --status-starting-subtle: var(--accent-subtle);
+  --status-starting-muted: var(--accent-muted);
+  --status-starting-fg: var(--accent-fg);
+  --status-starting-emphasis: var(--accent-emphasis);
 
   /* ── Success (green) ──────────────────────────────────────── */
   --success-fg: var(--green-2);       /* #3fb950 */

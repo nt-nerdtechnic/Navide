@@ -20,6 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open-file', payload: { filepath: string; name: string }): void
+  (e: 'deleted', relPath: string): void
 }>()
 
 interface FsEntry {
@@ -346,10 +347,8 @@ function onRenameEnter(event: KeyboardEvent): void {
 }
 
 // ── Delete single (in-review/approved plans need a second confirmation) ───
-async function ctxDelete(): Promise<void> {
-  const item = ctxMenu.value.item
-  closeCtxMenu()
-  if (!item) return
+// Shared by the context menu and the always-visible per-row delete button.
+async function deletePlan(item: PlanItem): Promise<void> {
   const ok = await confirm(t('pane.plans.delete-confirm', { name: item.htmlMeta?.name ?? item.name }), {
     title: t('pane.plans.menu-delete'),
     confirmText: t('pane.plans.menu-delete'),
@@ -371,7 +370,14 @@ async function ctxDelete(): Promise<void> {
     toast(resp.payload?.error ?? t('pane.plans.delete-failed'), { type: 'error' })
     return
   }
+  emit('deleted', item.relPath)
   await loadPlans()
+}
+
+async function ctxDelete(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (item) await deletePlan(item)
 }
 
 // ── Promote doc → plan: inject a minimal plan-meta island ─────────────────
@@ -452,6 +458,12 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span v-else>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
             <span class="plan-chip">{{ statusText(item) }}</span>
           </span>
+          <span
+            class="plan-row-delete"
+            role="button"
+            :title="t('pane.plans.menu-delete')"
+            @click.stop="deletePlan(item)"
+          >✕</span>
         </button>
         <div v-if="!activePlans.length" class="plans-empty">No active plans.</div>
       </section>
@@ -475,6 +487,12 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
             <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
           </span>
+          <span
+            class="plan-row-delete"
+            role="button"
+            :title="t('pane.plans.menu-delete')"
+            @click.stop="deletePlan(row.item)"
+          >✕</span>
         </button>
       </section>
 
@@ -499,6 +517,12 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span v-if="item.progress">{{ item.progress.done }}/{{ item.progress.total }} done</span>
             <span class="plan-chip plan-chip--done">completed</span>
           </span>
+          <span
+            class="plan-row-delete"
+            role="button"
+            :title="t('pane.plans.menu-delete')"
+            @click.stop="deletePlan(item)"
+          >✕</span>
         </button>
         <div v-if="!completedPlans.length" class="plans-empty">No completed plans.</div>
       </section>
@@ -637,6 +661,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
   display: grid;
   gap: 5px;
   padding: 8px;
+  position: relative;
   text-align: left;
   width: 100%;
 }
@@ -644,6 +669,31 @@ async function ctxUpgradeToPlan(): Promise<void> {
 .plan-row:hover {
   background: var(--bg-hover);
   border-color: var(--border-subtle);
+}
+
+.plan-row-delete {
+  align-items: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 12px;
+  height: 20px;
+  justify-content: center;
+  opacity: 0;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 20px;
+}
+
+.plan-row:hover .plan-row-delete {
+  opacity: 1;
+}
+
+.plan-row-delete:hover {
+  background: var(--bg-hover-strong);
+  color: var(--danger-fg);
 }
 
 .plan-row-name {

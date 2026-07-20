@@ -58,6 +58,14 @@ function onOpenFile(payload: { filepath: string; name: string }): void {
   snapshotPreview.value = null
 }
 
+// A plan deleted from the list clears the right pane when it's the open one.
+function onPlanDeleted(relPath: string): void {
+  if (openDoc.value?.relPath === relPath) {
+    openDoc.value = null
+    snapshotPreview.value = null
+  }
+}
+
 function onPreviewSnapshot(payload: { relPath: string; label: string }): void {
   snapshotPreview.value = payload
 }
@@ -211,7 +219,7 @@ onUnmounted(() => {
 <template>
   <div class="plan-window">
     <aside class="plan-window-side">
-      <PlansPane ref="plansPaneRef" :workspace-path="workspacePath" :backend="backend" @open-file="onOpenFile" />
+      <PlansPane ref="plansPaneRef" :workspace-path="workspacePath" :backend="backend" @open-file="onOpenFile" @deleted="onPlanDeleted" />
     </aside>
     <main class="plan-window-main">
       <template v-if="openDoc">

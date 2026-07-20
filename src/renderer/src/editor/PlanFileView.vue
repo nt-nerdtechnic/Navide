@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, ref, watch, onMounted } from 'vue'
-import { parsePlanFile, writePlanFile, planProgress } from '../composables/usePlanFile'
+import { useI18n } from 'vue-i18n'
+import { parsePlanFile, writePlanFile, planProgress, replacePlanSectionBody } from '../composables/usePlanFile'
 import type { PlanTodo, PlanSection, TodoStatus } from '../composables/usePlanFile'
 import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 }>()
 
 const { toast } = useNotify()
+const { t } = useI18n()
 
 const rawContent = ref('')
 const loading = ref(true)
@@ -243,6 +245,113 @@ async function removeTodo(todoId: string): Promise<void> {
   await saveTodos(plan.todos.filter((t) => t.id !== todoId))
 }
 
+// Shared in-flight guard for the inline edit flows below.
+const saving = ref(false)
+
+// ── Inline todo text editing ──────────────────────────────────────────────
+const editingTodoId = ref<string | null>(null)
+const editTodoText = ref('')
+
+function startEditTodo(todo: PlanTodo): void {
+  editingTodoId.value = todo.id
+  editTodoText.value = todo.content
+}
+
+function cancelEditTodo(): void {
+  editingTodoId.value = null
+  editTodoText.value = ''
+}
+
+async function saveEditTodo(todoId: string): Promise<void> {
+  const plan = parsed.value
+  const content = editTodoText.value.trim()
+  if (!plan || !content || saving.value) return
+  saving.value = true
+  const ok = await saveTodos(plan.todos.map((t) => (t.id === todoId ? { ...t, content } : t)))
+  saving.value = false
+  if (ok) cancelEditTodo()
+}
+
+// Guard against IME composition: Enter committing a candidate must not submit.
+function onEditTodoEnter(event: KeyboardEvent, todoId: string): void {
+  if (event.isComposing) return
+  void saveEditTodo(todoId)
+}
+
+// ── Inline section body editing ───────────────────────────────────────────
+const editingSection = ref<string | null>(null)
+const editSectionText = ref('')
+
+function startEditSection(section: PlanSection): void {
+  editingSection.value = section.heading
+  editSectionText.value = section.body
+}
+
+function cancelEditSection(): void {
+  editingSection.value = null
+  editSectionText.value = ''
+}
+
+// Re-read the file immediately before writing and use the backend's optimistic
+// lock (expected_mtime). On a conflict, re-read once and retry so a concurrent
+// todo toggle or external edit doesn't clobber the untouched sections.
+async function writeSectionBody(heading: string, edited: string): Promise<boolean> {
+  async function readFresh(): Promise<{ content: string; mtime: number | undefined } | null> {
+    const resp = await props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>(
+      'fs.read_file',
+      { workspace_path: props.workspacePath, rel_path: props.relPath },
+    )
+    if (!resp.payload?.ok || resp.payload.content === undefined) {
+      toast(resp.payload?.error ?? 'Save failed')
+      return null
+    }
+    return { content: resp.payload.content, mtime: resp.payload.mtime }
+  }
+
+  try {
+    let fresh = await readFresh()
+    if (!fresh) return false
+    let newRaw = replacePlanSectionBody(fresh.content, heading, edited)
+    let resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
+      workspace_path: props.workspacePath,
+      rel_path: props.relPath,
+      content: newRaw,
+      expected_mtime: fresh.mtime,
+    })
+    if (resp.payload?.conflict) {
+      fresh = await readFresh()
+      if (!fresh) return false
+      newRaw = replacePlanSectionBody(fresh.content, heading, edited)
+      resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
+        workspace_path: props.workspacePath,
+        rel_path: props.relPath,
+        content: newRaw,
+        expected_mtime: fresh.mtime,
+      })
+    }
+    if (!resp.payload?.ok) {
+      toast(resp.payload?.error ?? 'Save failed')
+      return false
+    }
+    toast('Saved', { type: 'success' })
+    return true
+  } catch (err) {
+    toast(err instanceof Error ? err.message : 'Save failed')
+    return false
+  }
+}
+
+async function saveEditSection(heading: string): Promise<void> {
+  if (saving.value) return
+  saving.value = true
+  const ok = await writeSectionBody(heading, editSectionText.value)
+  saving.value = false
+  if (ok) {
+    cancelEditSection()
+    await loadContent()
+  }
+}
+
 function checkboxGlyph(status: TodoStatus): string {
   if (status === 'done') return '●'
   if (status === 'in-progress') return '◐'
@@ -290,8 +399,33 @@ function badgeClass(status: TodoStatus): string {
       </div>
 
       <div v-for="section in documentSections" :key="section.heading" class="pfv-card pfv-doc-section">
-        <div class="pfv-card-title">{{ section.heading }}</div>
-        <div class="pfv-doc-body">
+        <div class="pfv-card-title-row">
+          <div class="pfv-card-title">{{ section.heading }}</div>
+          <button
+            v-if="editingSection !== section.heading"
+            class="pfv-inline-btn"
+            @click="startEditSection(section)"
+          >{{ t('pane.plans.edit') }}</button>
+        </div>
+        <div v-if="editingSection === section.heading" class="pfv-section-edit">
+          <textarea
+            v-model="editSectionText"
+            class="pfv-section-textarea"
+            :placeholder="t('pane.plans.doc-edit-placeholder')"
+            @keydown.esc="cancelEditSection"
+          />
+          <div class="pfv-edit-actions">
+            <button class="pfv-inline-btn" :disabled="saving" @click="cancelEditSection">
+              {{ t('pane.plans.cancel') }}
+            </button>
+            <button
+              class="pfv-inline-btn pfv-inline-btn--primary"
+              :disabled="saving"
+              @click="saveEditSection(section.heading)"
+            >{{ t('pane.plans.save') }}</button>
+          </div>
+        </div>
+        <div v-else class="pfv-doc-body">
           <template v-for="(line, idx) in renderLines(section.body)" :key="section.heading + ':' + idx">
             <div v-if="line.kind === 'blank'" class="pfv-line pfv-line--blank" />
             <div v-else-if="line.kind === 'heading'" :class="['pfv-line', 'pfv-line--heading', 'pfv-line--h' + line.level]"><InlineText :text="line.text" /></div>
@@ -346,9 +480,27 @@ function badgeClass(status: TodoStatus): string {
           <span class="pfv-checkbox" :class="{ 'pfv-checkbox--checked': todo.status === 'done' || todo.status === 'in-progress' }">
             {{ checkboxGlyph(todo.status) }}
           </span>
-          <span class="pfv-todo-content">{{ todo.content }}</span>
-          <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
-          <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+          <template v-if="editingTodoId === todo.id">
+            <input
+              v-model="editTodoText"
+              class="pfv-todo-edit-input"
+              @click.stop
+              @keydown.enter="onEditTodoEnter($event, todo.id)"
+              @keydown.esc.stop="cancelEditTodo"
+            />
+            <button class="pfv-inline-btn" :disabled="saving" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+            <button
+              class="pfv-inline-btn pfv-inline-btn--primary"
+              :disabled="saving || !editTodoText.trim()"
+              @click.stop="saveEditTodo(todo.id)"
+            >{{ t('pane.plans.save') }}</button>
+          </template>
+          <template v-else>
+            <span class="pfv-todo-content">{{ todo.content }}</span>
+            <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
+            <button class="pfv-todo-edit" :title="t('pane.plans.edit')" @click.stop="startEditTodo(todo)">✎</button>
+            <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+          </template>
         </div>
       </div>
 
@@ -370,9 +522,27 @@ function badgeClass(status: TodoStatus): string {
           <span class="pfv-checkbox" :class="{ 'pfv-checkbox--checked': todo.status === 'done' || todo.status === 'in-progress' }">
             {{ checkboxGlyph(todo.status) }}
           </span>
-          <span class="pfv-todo-content">{{ todo.content }}</span>
-          <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
-          <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+          <template v-if="editingTodoId === todo.id">
+            <input
+              v-model="editTodoText"
+              class="pfv-todo-edit-input"
+              @click.stop
+              @keydown.enter="onEditTodoEnter($event, todo.id)"
+              @keydown.esc.stop="cancelEditTodo"
+            />
+            <button class="pfv-inline-btn" :disabled="saving" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+            <button
+              class="pfv-inline-btn pfv-inline-btn--primary"
+              :disabled="saving || !editTodoText.trim()"
+              @click.stop="saveEditTodo(todo.id)"
+            >{{ t('pane.plans.save') }}</button>
+          </template>
+          <template v-else>
+            <span class="pfv-todo-content">{{ todo.content }}</span>
+            <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
+            <button class="pfv-todo-edit" :title="t('pane.plans.edit')" @click.stop="startEditTodo(todo)">✎</button>
+            <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+          </template>
         </div>
       </div>
 
@@ -641,6 +811,103 @@ function badgeClass(status: TodoStatus): string {
 
 .pfv-todo-remove:hover {
   color: var(--danger-fg);
+}
+
+.pfv-card-title-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.pfv-inline-btn {
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 2px 9px;
+}
+
+.pfv-inline-btn:hover:not(:disabled) {
+  background: var(--bg-hover-strong);
+}
+
+.pfv-inline-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.pfv-inline-btn--primary {
+  border-color: var(--accent-focus);
+}
+
+.pfv-section-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pfv-section-textarea {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 120px;
+  padding: 8px;
+  resize: vertical;
+  width: 100%;
+}
+
+.pfv-section-textarea:focus {
+  border-color: var(--accent-focus);
+  outline: none;
+}
+
+.pfv-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.pfv-todo-edit-input {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-primary);
+  flex: 1;
+  font-size: 13px;
+  padding: 3px 7px;
+}
+
+.pfv-todo-edit-input:focus {
+  border-color: var(--accent-focus);
+  outline: none;
+}
+
+.pfv-todo-edit {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  opacity: 0;
+  padding: 2px 4px;
+}
+
+.pfv-todo:hover .pfv-todo-edit {
+  opacity: 1;
+}
+
+.pfv-todo-edit:hover {
+  color: var(--accent-fg);
 }
 
 .pfv-line--ordered {
