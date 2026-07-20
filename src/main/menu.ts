@@ -16,7 +16,18 @@ import { app, Menu, type MenuItemConstructorOptions } from 'electron'
  * work when a menu item declares them — `setApplicationMenu(null)` would break
  * copy/paste and quit.
  */
-export function installApplicationMenu(): void {
+export interface AppMenuHooks {
+  // When provided, a dev-only "Developer" submenu with an entry that opens the
+  // no-op plugin view is appended. Omit it (the default) and the menu is
+  // byte-for-byte the shipping menu. Gated by the caller behind a dev flag.
+  onOpenNoopPlugin?: () => void
+  /** Same dev-only submenu: opens the M2 fs-probe plugin view. */
+  onOpenFsProbePlugin?: () => void
+  /** Same dev-only submenu: opens the M4 mini-IDE plugin view. */
+  onOpenMiniIdePlugin?: () => void
+}
+
+export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
   const isMac = process.platform === 'darwin'
 
   const template: MenuItemConstructorOptions[] = [
@@ -91,6 +102,23 @@ export function installApplicationMenu(): void {
       ]
     }
   ]
+
+  // Dev-only, flag-gated: a Developer submenu to launch the M1 plugin view.
+  // Never present unless the caller passes the hook (see index.ts gating), so
+  // the default UI is untouched.
+  if (hooks.onOpenNoopPlugin || hooks.onOpenFsProbePlugin || hooks.onOpenMiniIdePlugin) {
+    const submenu: MenuItemConstructorOptions[] = []
+    if (hooks.onOpenNoopPlugin) {
+      submenu.push({ label: 'Open no-op plugin view', click: () => hooks.onOpenNoopPlugin?.() })
+    }
+    if (hooks.onOpenFsProbePlugin) {
+      submenu.push({ label: 'Open fs-probe plugin view', click: () => hooks.onOpenFsProbePlugin?.() })
+    }
+    if (hooks.onOpenMiniIdePlugin) {
+      submenu.push({ label: 'Open mini-IDE plugin view', click: () => hooks.onOpenMiniIdePlugin?.() })
+    }
+    template.push({ label: 'Developer', submenu })
+  }
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }

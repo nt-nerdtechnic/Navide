@@ -1,0 +1,11 @@
+{
+  "id": "navide.fs-reader",
+  "name": "FS Reader Plugin",
+  "version": "0.1.0",
+  "publisher": "navide",
+  "engines": {
+    "navide": "^0.1.0"
+  },
+  "requires": ["fs"],
+  "activationEvents": ["onStartup"]
+}

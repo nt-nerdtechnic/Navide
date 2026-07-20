@@ -1,0 +1,26 @@
+{
+  "id": "navide.mini-ide",
+  "name": "Mini IDE",
+  "version": "0.1.0",
+  "publisher": "navide",
+  "engines": {
+    "navide": "^0.1.0"
+  },
+  "entry": "dist/mini-ide.js",
+  "contributes": {
+    "views": [
+      {
+        "id": "mini-ide.explorer",
+        "title": "Explorer"
+      }
+    ],
+    "commands": [
+      {
+        "id": "mini-ide.openFile",
+        "title": "Open File"
+      }
+    ]
+  },
+  "requires": ["fs", "git", "terminal", "search", "chat", "ui"],
+  "activationEvents": ["onStartup"]
+}

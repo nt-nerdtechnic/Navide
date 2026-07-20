@@ -43,7 +43,11 @@ export default defineConfig({
   preload: {
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/preload/index.ts')
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // Dedicated minimal preload for plugin WebContentsViews (Phase 2 M1).
+          'plugin-preload': resolve(__dirname, 'src/preload/plugin-preload.ts')
+        }
       }
     },
     define: {
@@ -57,7 +61,16 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/renderer/index.html')
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // No-op plugin entry (Phase 2 M1). Lives under the renderer root so the
+          // dev server serves it and the build emits it to out/renderer/plugins/
+          // noop/ without shifting the main index.html output path.
+          'noop-plugin': resolve(__dirname, 'src/renderer/plugins/noop/index.html'),
+          // FS probe plugin entry (Phase 2 M2): exercises a real brokered
+          // capability call + server-push event over the backend WS.
+          'fs-probe-plugin': resolve(__dirname, 'src/renderer/plugins/fs_probe/index.html')
+        }
       }
     },
     define: {

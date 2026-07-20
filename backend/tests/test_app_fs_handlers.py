@@ -103,6 +103,37 @@ async def test_fs_write_file_handler_passes_encoding(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fs_write_file_success_broadcasts_git_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful fs.write_file must broadcast git.changed so the frontend
+    Explorer/Git panes stay in sync. This behaviour contract is load-bearing."""
+    events: list[dict[str, Any]] = []
+
+    async def fake_broadcast(event: dict[str, Any], **kwargs: Any) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", fake_broadcast)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "w3",
+        "type": "fs.write_file",
+        "payload": {
+            "workspace_path": str(tmp_path),
+            "rel_path": "c.txt",
+            "content": "hello",
+        },
+    })
+
+    assert session.websocket.sent[0]["payload"]["ok"] is True  # type: ignore[attr-defined]
+    await asyncio.sleep(0)  # let the git.changed broadcast task run
+    assert len(events) == 1
+    assert events[0]["type"] == "git.changed"
+    assert events[0]["payload"]["workspace_path"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
 async def test_new_search_cancels_previous_in_flight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

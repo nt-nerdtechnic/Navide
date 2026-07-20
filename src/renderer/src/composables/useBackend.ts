@@ -1,6 +1,11 @@
-import { onScopeDispose, ref, shallowRef } from 'vue'
+import { onScopeDispose, ref } from 'vue'
+import { createWsClient, type WsRequest, type WsResponse } from '../../../shared/wsClient'
 
 export type BackendStatus = 'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'
+
+// Re-exported so the many call sites importing these from `useBackend` keep
+// working; the canonical definitions now live with the shared transport.
+export type { WsRequest, WsResponse }
 
 interface BackendInfo {
   status: 'starting' | 'ready' | 'error'
@@ -13,30 +18,6 @@ interface BackendInfo {
   error?: string
 }
 
-export interface WsRequest<TPayload = Record<string, unknown>> {
-  id: string
-  type: string
-  payload: TPayload
-  timestamp: string
-}
-
-export interface WsResponse<TPayload = unknown> {
-  id: string
-  type: string
-  ok: boolean
-  payload: TPayload | null
-  error: { code: string; message: string; details?: Record<string, unknown> } | null
-  timestamp: string
-}
-
-function nowIso(): string {
-  return new Date().toISOString()
-}
-
-function uuid(): string {
-  return crypto.randomUUID()
-}
-
 export function useBackend() {
   const status = ref<BackendStatus>('starting')
   const wsUrl = ref<string>('')
@@ -45,185 +26,23 @@ export function useBackend() {
   const port = ref<number>(0)
   const pid = ref<number>(0)
   const lastError = ref<string>('')
-  const ws = shallowRef<WebSocket | null>(null)
-  interface PendingEntry { resolve: (resp: WsResponse) => void; reject: (err: Error) => void }
-  const pending = new Map<string, PendingEntry>()
-  const listeners = new Map<string, Set<(payload: unknown) => void>>()
 
-  let pingTimer: number | null = null
-  let reconnectTimer: number | null = null
-  let reconnectAttempts = 0
-  let disposed = false
-
-  function emit(type: string, payload: unknown): void {
-    const set = listeners.get(type)
-    if (!set) return
-    for (const cb of set) {
-      try {
-        cb(payload)
-      } catch (err) {
-        console.error('[useBackend] listener error', err)
-      }
-    }
-  }
-
-  function on(type: string, cb: (payload: unknown) => void): () => void {
-    let set = listeners.get(type)
-    if (!set) {
-      set = new Set()
-      listeners.set(type, set)
-    }
-    set.add(cb)
-    return () => {
-      set!.delete(cb)
-    }
-  }
-
-  // Requests issued while the socket is mid-reconnect are parked here and
-  // flushed once it reopens, instead of hard-failing with 'ws not open'. Each
-  // keeps the caller's timeout (started in send) so a reconnect that never
-  // lands still rejects it. Bounded so a long outage can't grow it without limit.
-  const MAX_SEND_QUEUE = 200
-  interface QueuedRequest { req: WsRequest; settle: PendingEntry }
-  const sendQueue: QueuedRequest[] = []
-
-  function writeToSocket(socket: WebSocket, req: WsRequest, settle: PendingEntry): void {
-    pending.set(req.id, settle)
-    socket.send(JSON.stringify(req))
-  }
-
-  function flushSendQueue(socket: WebSocket): void {
-    const items = sendQueue.splice(0)
-    for (const { req, settle } of items) writeToSocket(socket, req, settle)
-  }
-
-  function rejectSendQueue(err: Error): void {
-    const items = sendQueue.splice(0)
-    for (const { settle } of items) settle.reject(err)
-  }
-
-  function send<T = unknown>(type: string, payload: Record<string, unknown> = {}, timeoutMs = 10_000): Promise<WsResponse<T>> {
-    return new Promise((resolve, reject) => {
-      const req: WsRequest = { id: uuid(), type, payload, timestamp: nowIso() }
-      let timerId: ReturnType<typeof setTimeout>
-      const settle: PendingEntry = {
-        resolve: (resp: WsResponse) => { clearTimeout(timerId); resolve(resp as WsResponse<T>) },
-        reject: (err: Error) => { clearTimeout(timerId); reject(err) },
-      }
-      const socket = ws.value
-      const canSend = socket !== null && socket.readyState === WebSocket.OPEN
-
-      // Ping is the liveness probe and must observe a closed socket as failure,
-      // never queue. Once disposed or the backend errored for good there is no
-      // reconnect to wait for, so fail fast too.
-      if (!canSend && (type === 'ping' || disposed || status.value === 'error')) {
-        reject(new Error('ws not open'))
-        return
-      }
-
-      // One timer covers queue-wait plus in-flight; on fire, drop the request
-      // from wherever it sits so a later reconnect can't replay it.
-      timerId = setTimeout(() => {
-        pending.delete(req.id)
-        const qi = sendQueue.findIndex((q) => q.req.id === req.id)
-        if (qi !== -1) sendQueue.splice(qi, 1)
-        reject(new Error(`request ${type} timeout`))
-      }, timeoutMs)
-
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        writeToSocket(socket, req, settle)
-      } else if (sendQueue.length >= MAX_SEND_QUEUE) {
-        clearTimeout(timerId)
-        reject(new Error('ws not open'))
-      } else {
-        sendQueue.push({ req, settle })
-      }
-    })
-  }
-
-  function connect(): void {
-    if (!wsUrl.value || disposed) return
-    status.value = 'connecting'
-    const socket = new WebSocket(wsUrl.value)
-    ws.value = socket
-
-    socket.addEventListener('open', () => {
-      if (ws.value !== socket) return // superseded by a restart swap
-      status.value = 'connected'
-      lastError.value = ''
-      reconnectAttempts = 0
-      flushSendQueue(socket)
-      if (pingTimer !== null) window.clearInterval(pingTimer)
-      // A wedged backend connection can stay TCP-open for minutes while every
-      // frame fails. Pings are the liveness probe: three consecutive failures
-      // force a close so the reconnect path takes over immediately instead of
-      // waiting for the server to abort the socket. The ping timeout stays
-      // below the interval (and the threshold above 2) so a busy-but-alive
-      // connection with late-arriving pongs isn't misread as wedged and killed
-      // mid-request — the "git.stage_all: WebSocket closed" false positive.
-      let pingFailures = 0
-      pingTimer = window.setInterval(() => {
-        send('ping', { t: Date.now() }, 8_000)
-          .then(() => {
-            pingFailures = 0
-          })
-          .catch((err) => {
-            console.warn('[useBackend] ping failed', err)
-            if (++pingFailures >= 3) {
-              pingFailures = 0
-              try { socket.close() } catch { /* close handler reconnects */ }
-            }
-          })
-      }, 15_000)
-    })
-
-    socket.addEventListener('message', (ev) => {
-      let msg: WsResponse | (WsRequest & { ok?: undefined })
-      try {
-        msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '') as WsResponse
-      } catch (err) {
-        console.error('[useBackend] bad message', err)
-        return
-      }
-      if ('ok' in msg && msg.ok !== undefined && pending.has(msg.id)) {
-        const entry = pending.get(msg.id)!
-        pending.delete(msg.id)
-        entry.resolve(msg)
-        return
-      }
-      emit(msg.type, (msg as WsRequest).payload)
-    })
-
-    socket.addEventListener('close', () => {
-      // A restart/stop swap reassigns ws.value before closing this socket and
-      // tears down its own state; if we're no longer the active socket, ignore
-      // the close so it can't schedule a competing reconnect.
-      if (ws.value !== socket) return
-      ws.value = null
-      if (pingTimer !== null) {
-        window.clearInterval(pingTimer)
-        pingTimer = null
-      }
-      // Immediately reject all pending requests so callers aren't left hanging.
-      for (const [, entry] of pending) {
-        entry.reject(new Error('WebSocket closed'))
-      }
-      pending.clear()
-      if (!disposed) {
-        status.value = 'disconnected'
-        // Exponential backoff: 1.5 s → 3 s → 6 s → … capped at 30 s.
-        const delay = Math.min(1500 * Math.pow(2, reconnectAttempts), 30_000)
-        reconnectAttempts++
-        reconnectTimer = window.setTimeout(connect, delay)
-      }
-    })
-
-    socket.addEventListener('error', () => {
-      if (ws.value !== socket) return // superseded by a restart swap
-      status.value = 'error'
+  // All WebSocket transport — request/response correlation, the send queue,
+  // reconnect backoff, and the ping liveness probe — lives in the shared
+  // client. This composable owns only the Vue-reactive surface and the
+  // main-process backend-lifecycle glue (init poll + backend:changed handling).
+  const client = createWsClient({
+    onStatus: (s) => {
+      status.value = s
+      if (s === 'connected') lastError.value = ''
+    },
+    onError: () => {
       lastError.value = 'WebSocket error'
-    })
-  }
+    },
+  })
+
+  const send = client.send
+  const on = client.on
 
   // Applied when the main process restarts/stops the backend: the port changes
   // on restart, so tear down the old socket and reconnect to the new wsUrl (or
@@ -234,46 +53,35 @@ export function useBackend() {
     // after init()'s poll had already connected): keep the healthy socket.
     // Tearing it down here rejects every in-flight request with 'backend
     // changed' — the packaged-launch CLI spawn failure.
-    if (
-      info.status === 'ready' &&
-      info.wsUrl === wsUrl.value &&
-      ws.value !== null &&
-      (ws.value.readyState === WebSocket.OPEN || ws.value.readyState === WebSocket.CONNECTING)
-    ) {
+    if (info.status === 'ready' && info.wsUrl && client.isHealthyFor(info.wsUrl)) {
       httpUrl.value = info.httpUrl ?? httpUrl.value
       shell.value = info.shell ?? shell.value
       port.value = info.port ?? port.value
       pid.value = info.pid ?? pid.value
       return
     }
-    if (reconnectTimer !== null) { window.clearTimeout(reconnectTimer); reconnectTimer = null }
-    if (pingTimer !== null) { window.clearInterval(pingTimer); pingTimer = null }
-    reconnectAttempts = 0
-    const old = ws.value
-    ws.value = null
-    if (old) { try { old.close() } catch { /* close handler is a no-op now */ } }
-    for (const [, entry] of pending) entry.reject(new Error('backend changed'))
-    pending.clear()
-    // Queued requests targeted the old backend/port — don't replay them on the
-    // new socket.
-    rejectSendQueue(new Error('backend changed'))
+    // Old socket + any queued/in-flight requests targeted the old backend/port
+    // — reject them rather than replay on the new socket.
+    client.reset('backend changed')
     if (info.status === 'ready' && info.wsUrl) {
       wsUrl.value = info.wsUrl
       httpUrl.value = info.httpUrl ?? ''
       shell.value = info.shell ?? shell.value
       port.value = info.port ?? 0
       pid.value = info.pid ?? 0
-      connect()
+      client.connect(info.wsUrl)
     } else if (info.status === 'error') {
       // A start/restart attempt gave up for good (e.g. the packaged binary
       // never came up) — surface it instead of leaving the UI silently
-      // "disconnected" with a spinner that never resolves.
+      // "disconnected" with a spinner that never resolves. Fail-fast future
+      // sends so they don't queue against a backend that isn't coming back.
       wsUrl.value = ''
       httpUrl.value = ''
       port.value = 0
       pid.value = 0
       status.value = 'error'
       lastError.value = info.error ?? 'backend failed to start'
+      client.markErrored()
     } else {
       wsUrl.value = ''
       httpUrl.value = ''
@@ -315,13 +123,14 @@ export function useBackend() {
     if (info.status !== 'ready' || !info.wsUrl) {
       status.value = 'error'
       lastError.value = info.error ?? 'backend did not start'
-      rejectSendQueue(new Error('backend did not start'))
+      client.reset('backend did not start')
+      client.markErrored()
       return
     }
     wsUrl.value = info.wsUrl
     httpUrl.value = info.httpUrl ?? ''
     shell.value = info.shell ?? ''
-    connect()
+    client.connect(info.wsUrl)
   }
 
   void init()
@@ -329,11 +138,7 @@ export function useBackend() {
   window.agentTeam?.onBackendChanged?.((info) => applyBackendChanged(info))
 
   onScopeDispose(() => {
-    disposed = true
-    if (pingTimer !== null) window.clearInterval(pingTimer)
-    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
-    rejectSendQueue(new Error('ws not open'))
-    ws.value?.close()
+    client.dispose('ws not open')
   })
 
   return { status, wsUrl, httpUrl, shell, port, pid, lastError, send, on, restart, stop }

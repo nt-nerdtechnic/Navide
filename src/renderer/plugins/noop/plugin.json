@@ -1,0 +1,12 @@
+{
+  "id": "navide.noop",
+  "name": "No-op Plugin",
+  "version": "0.1.0",
+  "publisher": "navide",
+  "engines": {
+    "navide": "^0.1.0"
+  },
+  "entry": "index.html",
+  "requires": [],
+  "activationEvents": ["onStartup"]
+}

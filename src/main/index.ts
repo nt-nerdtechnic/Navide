@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 import { installApplicationMenu } from './menu'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, frontendPluginManager } from './plugins/frontendPluginManager'
+import { miniIdePluginEnabled } from './plugins/pluginFlags'
 import { lockPageZoom } from './web-contents-zoom'
 import { initUpdater } from './updater'
 import { WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
@@ -305,6 +307,10 @@ const backendBroadcastTracker = new BackendBroadcastTracker<ReturnType<typeof ba
 
 function broadcastBackendChanged(): void {
   const payload = backendInfoPayload()
+  // The plugin capability broker connects to the backend directly from main
+  // (it must not proxy through a renderer), so it needs the wsUrl the same way
+  // the renderers do — pushed on every backend transition.
+  frontendPluginManager.setBackendWsUrl(payload.status === 'ready' ? payload.wsUrl : null)
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue
     const { immediate } = backendBroadcastTracker.dispatch(win.id, win.isFocused(), payload)
@@ -756,8 +762,26 @@ function openEditorWindow(params: Record<string, string>): void {
   loadWindow(win, search)
 }
 
-ipcMain.handle('window:openEditor', (_event, args: Record<string, string>) => {
-  openEditorWindow(args ?? {})
+ipcMain.handle('window:openEditor', (event, args: Record<string, string>) => {
+  const params = args ?? {}
+  // M5 (flag-gated, default OFF): open the mini-IDE as an isolated plugin
+  // WebContentsView instead of the legacy editor BrowserWindow. Both paths
+  // coexist; AGENT_TEAM_MINI_IDE_PLUGIN=1 opts in. The legacy path below stays
+  // the default and is deliberately NOT removed until the user validates the
+  // plugin path in the running app.
+  // TODO(post-M5-validation): once the plugin path is accepted, retire
+  // openEditorWindow + this branch, and route plan-file opens to openPlanWindow
+  // (PlanFileView delegation, deferred — see M6 notes: it also powers plain .md
+  // preview, so a clean split needs a plugin-mode branch in EditorWindowApp).
+  if (miniIdePluginEnabled()) {
+    const host = BrowserWindow.fromWebContents(event.sender) ?? mainWindow
+    if (host) {
+      const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
+      openMiniIdePluginView(host, params.workspace_path ?? '', httpUrl)
+      return { ok: true }
+    }
+  }
+  openEditorWindow(params)
   return { ok: true }
 })
 
@@ -1438,7 +1462,31 @@ app.on('web-contents-created', (_e, contents) => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
-  installApplicationMenu()
+  // The plugin-view dev entry is opt-in via AGENT_TEAM_PLUGIN_DEV=1 so the
+  // default menu / UI is unchanged for every normal launch (dev or packaged).
+  const pluginDevEnabled = process.env['AGENT_TEAM_PLUGIN_DEV'] === '1'
+  installApplicationMenu(
+    pluginDevEnabled
+      ? {
+          onOpenNoopPlugin: () => {
+            const host = BrowserWindow.getFocusedWindow() ?? mainWindow
+            if (host) openNoopPluginView(host)
+          },
+          onOpenFsProbePlugin: () => {
+            const host = BrowserWindow.getFocusedWindow() ?? mainWindow
+            if (host) openFsProbePluginView(host)
+          },
+          onOpenMiniIdePlugin: () => {
+            const host = BrowserWindow.getFocusedWindow() ?? mainWindow
+            // Dev-only: workspace via AGENT_TEAM_PLUGIN_WORKSPACE, else empty.
+            if (host) {
+              const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
+              openMiniIdePluginView(host, process.env['AGENT_TEAM_PLUGIN_WORKSPACE'] ?? '', httpUrl)
+            }
+          }
+        }
+      : {}
+  )
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
   initUpdater({

@@ -13,7 +13,12 @@ export default defineConfig({
   test: {
     environment: 'node',
     // Renderer tests plus electron-free main-process modules (e.g. window-registry).
-    include: ['src/renderer/src/**/*.{test,spec}.ts', 'src/main/**/*.{test,spec}.ts'],
+    include: [
+      'src/renderer/src/**/*.{test,spec}.ts',
+      'src/renderer/plugins/**/*.{test,spec}.ts',
+      'src/main/**/*.{test,spec}.ts',
+      'src/shared/**/*.{test,spec}.ts'
+    ],
     // Playwright E2E lives in e2e/ and is run by `test:e2e`, not Vitest.
     exclude: ['e2e/**', 'node_modules/**'],
     globals: false
