@@ -127,6 +127,22 @@ class TestGetLog:
         assert len(commits) == 3
         assert commits[0]["message"] == "fix bug"
 
+    @pytest.mark.asyncio
+    async def test_order_date_returns_commits(self, tmp_path):
+        init_repo(tmp_path)
+        self._commit(tmp_path, "second")
+        self._commit(tmp_path, "third")
+        commits = await git_service.get_log(str(tmp_path), n=50, order="date")
+        assert [c["message"] for c in commits] == ["third", "second", "init"]
+
+    @pytest.mark.asyncio
+    async def test_order_invalid_falls_back_to_ancestor(self, tmp_path):
+        init_repo(tmp_path)
+        self._commit(tmp_path, "second")
+        default = await git_service.get_log(str(tmp_path), n=50)
+        bogus = await git_service.get_log(str(tmp_path), n=50, order="; rm -rf")
+        assert [c["hash"] for c in bogus] == [c["hash"] for c in default]
+
 
 # ── stage / unstage ────────────────────────────────────────────────────────────
 
@@ -590,6 +606,79 @@ class TestRevertCommit:
         assert result["ok"] is True
         commits_after = await git_service.get_log(str(tmp_path))
         assert len(commits_after) == len(commits_before) + 1
+
+
+# ── reset_to_commit ───────────────────────────────────────────────────────────
+
+class TestResetToCommit:
+    @staticmethod
+    def _head(path: Path) -> str:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=path, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    @staticmethod
+    def _three_commits(path: Path) -> str:
+        """init + two more commits; return the *first* (init) commit hash."""
+        init_repo(path)
+        base = TestResetToCommit._head(path)
+        (path / "b.txt").write_text("b")
+        subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add b"], cwd=path, check=True, capture_output=True)
+        (path / "c.txt").write_text("c")
+        subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "add c"], cwd=path, check=True, capture_output=True)
+        return base
+
+    @pytest.mark.asyncio
+    async def test_reset_soft_keeps_index_and_worktree(self, tmp_path):
+        base = self._three_commits(tmp_path)
+        result = await git_service.reset_to_commit(str(tmp_path), base, "soft")
+        assert result["ok"] is True
+        assert self._head(tmp_path) == base
+        status = await git_service.get_status(str(tmp_path))
+        staged = {f["path"] for f in status["staged"]}
+        assert {"b.txt", "c.txt"} <= staged
+        assert (tmp_path / "b.txt").exists() and (tmp_path / "c.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_reset_mixed_resets_index_keeps_worktree(self, tmp_path):
+        base = self._three_commits(tmp_path)
+        result = await git_service.reset_to_commit(str(tmp_path), base, "mixed")
+        assert result["ok"] is True
+        assert self._head(tmp_path) == base
+        status = await git_service.get_status(str(tmp_path))
+        assert status["staged"] == []
+        untracked = {f["path"] for f in status["untracked"]}
+        assert {"b.txt", "c.txt"} <= untracked
+        assert (tmp_path / "b.txt").exists() and (tmp_path / "c.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_reset_hard_discards_index_and_worktree(self, tmp_path):
+        base = self._three_commits(tmp_path)
+        result = await git_service.reset_to_commit(str(tmp_path), base, "hard")
+        assert result["ok"] is True
+        assert self._head(tmp_path) == base
+        status = await git_service.get_status(str(tmp_path))
+        assert status["staged"] == []
+        assert status["unstaged"] == []
+        assert status["untracked"] == []
+        assert not (tmp_path / "b.txt").exists()
+        assert not (tmp_path / "c.txt").exists()
+
+    @pytest.mark.asyncio
+    async def test_reset_invalid_mode_rejected(self, tmp_path):
+        base = self._three_commits(tmp_path)
+        head_before = self._head(tmp_path)
+        result = await git_service.reset_to_commit(str(tmp_path), base, "bogus")
+        assert result["ok"] is False
+        assert self._head(tmp_path) == head_before
+
+    @pytest.mark.asyncio
+    async def test_reset_rejects_flag_commit(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.reset_to_commit(str(tmp_path), "--hard", "soft")
+        assert result["ok"] is False
 
 
 # ── remotes ───────────────────────────────────────────────────────────────────

@@ -41,15 +41,16 @@ import type {
 
 export type { PlanStage, PlanMeta, ReviewNote, PlanExecution } from './planModel'
 
-/** Legacy 3-value status carried by `ParsedPlan` (the shape PlanFileView uses). */
-export type TodoStatus = 'pending' | 'in-progress' | 'done'
+/**
+ * Todo status carried by `ParsedPlan` — the full 4-value model set (`skipped`
+ * preserved). PlanFileView reads/writes this directly, so a `skipped` todo set
+ * elsewhere (e.g. the review toolbar) survives a PlanFileView save.
+ */
+export type TodoStatus = ModelTodoStatus
 export type RawTodoStatus = TodoStatus | 'completed' | 'in_progress' | 'complete' | 'finished'
 
-export interface PlanTodo {
-  id: string
-  content: string
-  status: TodoStatus
-}
+/** Alias to the unified model todo (4-value status + preserved unknown fields). */
+export type PlanTodo = ModelPlanTodo
 
 export interface PlanSection {
   heading: string
@@ -145,7 +146,10 @@ function readTodos(obj: Record<string, unknown>): ModelPlanTodo[] {
     if (entry === null || typeof entry !== 'object') continue
     const t = entry as Record<string, unknown>
     if (typeof t.id !== 'string') continue
+    // Spread the raw entry first so unknown fields (e.g. `priority`) survive a
+    // parse → serialize round-trip; the known fields are then normalised.
     out.push({
+      ...t,
       id: t.id,
       content: typeof t.content === 'string' ? t.content : '',
       status: normalizeTodoStatus(typeof t.status === 'string' ? t.status : ''),
@@ -239,13 +243,10 @@ export function parsePlanFile(raw: string): ParsedPlan | null {
   const name = typeof obj.name === 'string' ? obj.name : ''
   if (!name) return null
 
-  const todos4 = readTodos(obj)
-  // ParsedPlan keeps the legacy 3-value status; `skipped` collapses to `pending`.
-  const todos: PlanTodo[] = todos4.map((t) => ({
-    id: t.id,
-    content: t.content,
-    status: t.status === 'skipped' ? 'pending' : t.status,
-  }))
+  // ParsedPlan carries the full 4-value status (skipped preserved), so a
+  // PlanFileView save re-serializes skipped todos verbatim instead of dropping
+  // them back to pending.
+  const todos = readTodos(obj)
 
   const result: ParsedPlan = {
     name,
@@ -253,7 +254,7 @@ export function parsePlanFile(raw: string): ParsedPlan | null {
     todos,
     sections: parseSections(parts.body),
     isProject: obj.isProject === true,
-    stage: readStage(obj, todos4),
+    stage: readStage(obj, todos),
     approvedAt: typeof obj.approvedAt === 'string' ? obj.approvedAt : null,
     reviewNotes: readReviewNotes(obj),
   }
@@ -314,7 +315,7 @@ export function toPlanMeta(parsed: ParsedPlan): PlanMeta {
 interface FrontmatterFields {
   name: string
   overview: string
-  todos: { id: string; content: string; status: string }[]
+  todos: { id: string; content: string; status: string; [k: string]: unknown }[]
   isProject: boolean
   stage: PlanStage
   approvedAt: string | null
@@ -359,7 +360,7 @@ export function writePlanFile(parsed: ParsedPlan, originalRaw: string): string {
   const yaml = serializeFrontmatter(parts.yaml, {
     name: parsed.name,
     overview: parsed.overview,
-    todos: parsed.todos.map((t) => ({ id: t.id, content: t.content, status: serializeStatus(t.status) })),
+    todos: parsed.todos.map((t) => ({ ...t, id: t.id, content: t.content, status: serializeStatus(t.status) })),
     isProject: parsed.isProject,
     stage: parsed.stage,
     approvedAt: parsed.approvedAt,
@@ -402,7 +403,7 @@ export function writePlanMeta(meta: PlanMeta, originalRaw: string): string {
   const yaml = serializeFrontmatter(parts.yaml, {
     name: meta.name,
     overview: meta.overview,
-    todos: meta.todos.map((t) => ({ id: t.id, content: t.content, status: serializeStatus(t.status) })),
+    todos: meta.todos.map((t) => ({ ...t, id: t.id, content: t.content, status: serializeStatus(t.status) })),
     isProject: meta.isProject === true,
     stage: meta.stage,
     approvedAt: meta.approvedAt,

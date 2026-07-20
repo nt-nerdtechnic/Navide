@@ -608,6 +608,15 @@ function closeActiveOverlay(): boolean {
     newNoteText.value = ''
     return true
   }
+  // A panel open with no active edit / composer text still counts as an overlay:
+  // collapse it before ESC falls through to closing the window.
+  if (todosOpen.value || notesOpen.value || historyOpen.value || executeOpen.value) {
+    todosOpen.value = false
+    notesOpen.value = false
+    historyOpen.value = false
+    executeOpen.value = false
+    return true
+  }
   return false
 }
 
@@ -643,9 +652,14 @@ async function loadHistory(): Promise<void> {
       error?: string
     }>('fs.list_dir', { workspace_path: props.workspacePath, rel_path: dir })
     const entries = resp.payload?.ok ? (resp.payload.entries ?? []) : []
+    // A history dir can hold snapshots of both an `.html` and a same-stem
+    // `.plan.md` plan; only show the ones matching the open plan's format so
+    // parseSnapshotName / diff never mix formats.
+    const isHtml = props.relPath.endsWith('.html')
     historyEntries.value = entries
       .flatMap((entry) => {
         if (entry.is_dir) return []
+        if (entry.name.endsWith('.html') !== isHtml) return []
         const parsed = parseSnapshotName(entry.name)
         return parsed ? [{ relPath: `${dir}/${entry.name}`, ...parsed }] : []
       })

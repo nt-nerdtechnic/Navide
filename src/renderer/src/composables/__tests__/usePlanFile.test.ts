@@ -225,6 +225,56 @@ isProject: false
     expect(written).toContain('- [ ] status: pending | Second')
   })
 
+  it('parsePlanFile preserves a skipped todo status (no collapse to pending)', () => {
+    const raw = `---
+name: Skips
+overview: O
+todos:
+  - id: t1
+    content: Skip me
+    status: skipped
+  - id: t2
+    content: Keep me
+    status: pending
+isProject: false
+---
+
+# Body
+`
+    const parsed = parsePlanFile(raw)!
+    expect(parsed.todos[0].status).toBe('skipped')
+  })
+
+  it('preserves an untouched skipped todo when another todo is changed (PlanFileView save path)', () => {
+    // Mirrors: review toolbar sets t1 skipped → PlanFileView (which reads
+    // ParsedPlan and re-writes parsed.todos) toggles t2 → t1 stays skipped.
+    const raw = `---
+name: Cross-surface
+overview: O
+todos:
+  - id: t1
+    content: Skipped by toolbar
+    status: skipped
+  - id: t2
+    content: Toggled in mini-IDE
+    status: pending
+isProject: false
+---
+
+# Body
+`
+    const plan = parsePlanFile(raw)!
+    const updated = {
+      ...plan,
+      todos: plan.todos.map((t) => (t.id === 't2' ? { ...t, status: 'done' as const } : t)),
+    }
+    const written = writePlanFile(updated, raw)
+    expect(written).toContain('status: skipped')
+    const reparsed = parsePlanFile(written)!
+    expect(reparsed.todos.find((t) => t.id === 't1')!.status).toBe('skipped')
+    expect(reparsed.todos.find((t) => t.id === 't2')!.status).toBe('done')
+  })
+
   it('leaves body checkboxes untouched when counts do not match the todos', () => {
     const raw = `---
 name: P
@@ -482,6 +532,26 @@ todos:
     const written = writePlanMeta(meta, raw)
     expect(written).toContain('status: skipped')
     expect(parsePlanMeta(written)!.todos[0].status).toBe('skipped')
+  })
+
+  it('preserves unknown todo fields (e.g. priority) across a writeMeta round-trip', () => {
+    const raw = `---
+name: Forward Compat
+overview: O
+todos:
+  - id: t1
+    content: Task
+    status: pending
+    priority: high
+---
+
+# Body
+`
+    const meta = parsePlanMeta(raw)!
+    expect(meta.todos[0].priority).toBe('high')
+    const written = writePlanMeta(meta, raw)
+    expect(written).toContain('priority: high')
+    expect(parsePlanMeta(written)!.todos[0].priority).toBe('high')
   })
 
   it('omits the executions block entirely when empty or undefined', () => {

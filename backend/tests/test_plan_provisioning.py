@@ -21,7 +21,7 @@ def test_fresh_workspace_provisions_spec_and_template(tmp_path):
     template = _plans_dir(tmp_path) / TEMPLATE_FILENAME
     assert spec.is_file()
     assert template.is_file()
-    assert "provisioned by Navide, spec-version: 1" in spec.read_text(encoding="utf-8")
+    assert "provisioned by Navide, spec-version: 2" in spec.read_text(encoding="utf-8")
 
     tpl_text = template.read_text(encoding="utf-8")
     # Workspace name substituted into the eyebrow; placeholder gone.

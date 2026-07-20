@@ -288,7 +288,9 @@ class MarkdownPlanStore implements PlanStore {
   }
 
   outline(raw: string): string[] {
-    return parsePlanFile(raw)?.sections.map((s) => s.heading) ?? []
+    // Only sections PlanMarkdownBody actually renders (non-empty body); an empty
+    // `##` heading has no anchor to scroll to, so listing it dead-ends the nav.
+    return parsePlanFile(raw)?.sections.filter((s) => s.body.trim()).map((s) => s.heading) ?? []
   }
 }
 

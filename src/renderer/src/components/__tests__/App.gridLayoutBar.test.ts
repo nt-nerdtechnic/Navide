@@ -1,0 +1,45 @@
+// @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+// Mounting App starts backend, terminal, settings, and onboarding lifecycles;
+// keep these checks narrow source-text assertions like the other App tests.
+const appSource = readFileSync(
+  resolve(process.cwd(), 'src/renderer/src/App.vue'),
+  'utf8'
+)
+
+describe('App grid layout preset bar', () => {
+  it('renders the preset bar only in grid mode with multiple panes', () => {
+    const barAt = appSource.indexOf('class="grid-layout-bar"')
+    expect(barAt).toBeGreaterThan(-1)
+    const start = appSource.lastIndexOf('<div', barAt)
+    const end = appSource.indexOf('>', barAt)
+    const openingTag = appSource.slice(start, end + 1)
+    expect(openingTag).toContain(
+      'v-if="effectiveLayoutMode === \'grid\' && tabVisiblePanes.length > 1"'
+    )
+  })
+
+  it('wires preset buttons to gridPreset', () => {
+    const barAt = appSource.indexOf('class="grid-layout-bar"')
+    const sectionEnd = appSource.indexOf('Sidebar/auto mode vertical handle', barAt)
+    const section = appSource.slice(barAt, sectionEnd)
+    expect(section).toContain('v-for="opt in gridPresetOptions"')
+    expect(section).toContain('@click="gridPreset = opt.key"')
+    expect(section).toContain('@click="gridPage--"')
+    expect(section).toContain('@click="gridPage++"')
+  })
+
+  it('hides paged-out panes via v-show without unmounting terminals', () => {
+    expect(appSource).toContain(
+      "!(effectiveLayoutMode === 'grid' && !gridPagePaneIds.has(p.id))"
+    )
+  })
+
+  it('persists the preset under agentTeam.gridPreset', () => {
+    expect(appSource).toContain("settingsGet('agentTeam.gridPreset', 'auto')")
+    expect(appSource).toContain("settingsSet('agentTeam.gridPreset', v)")
+  })
+})

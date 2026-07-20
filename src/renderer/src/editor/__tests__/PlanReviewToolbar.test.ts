@@ -5,7 +5,7 @@
 // plan-meta block changes; all other bytes are preserved).
 import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import PlanReviewToolbar from '../PlanReviewToolbar.vue'
 import { i18n } from '../../i18n'
 import { parseHtmlPlanMeta, replaceHtmlPlanMeta } from '../../composables/usePlanHtml'
@@ -1278,12 +1278,25 @@ describe('PlanReviewToolbar – ESC overlay query', () => {
     // Unsent note text is an overlay.
     await wrapper.find('.prt-notes-btn').trigger('click')
     await wrapper.find('.prt-new .prt-input').setValue('draft note')
-    expect(vm.closeActiveOverlay()).toBe(true)
-    expect(vm.closeActiveOverlay()).toBe(false)
+    expect(vm.closeActiveOverlay()).toBe(true) // clears the composer text first
+    expect(vm.closeActiveOverlay()).toBe(true) // then collapses the still-open notes panel
+    expect(vm.closeActiveOverlay()).toBe(false) // nothing left open
     // An open inline todo editor is an overlay.
     await wrapper.find('.prt-todos-btn').trigger('click')
     await wrapper.findAll('.prt-todo-row')[0].find('.prt-ghost').trigger('click')
     expect(vm.closeActiveOverlay()).toBe(true)
+  })
+
+  it('collapses an open panel (no active edit) before falling through to window close', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()))
+    const vm = wrapper.vm as unknown as { closeActiveOverlay: () => boolean }
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    expect(wrapper.find('.prt-todo-row').exists()).toBe(true)
+    // First ESC collapses the panel (consumed); a second reports nothing open.
+    expect(vm.closeActiveOverlay()).toBe(true)
+    await nextTick()
+    expect(wrapper.find('.prt-todo-row').exists()).toBe(false)
+    expect(vm.closeActiveOverlay()).toBe(false)
   })
 })
 
@@ -1360,5 +1373,40 @@ describe('PlanReviewToolbar – markdown plans', () => {
     expect(written).toContain('Body A.')
     // No HTML todo markup was injected into a markdown document.
     expect(written).not.toContain('data-todo-id')
+  })
+
+  it('history panel shows only same-format (.plan.md) snapshots, hiding .html ones', async () => {
+    const backend = {
+      httpUrl: ref('http://127.0.0.1:8123'),
+      status: ref('connected'),
+      on: () => () => {},
+      send: vi.fn(async (type: string) => {
+        if (type === 'fs.read_file') return { payload: { ok: true, content: MD_CONTENT, mtime: 1 } }
+        if (type === 'fs.list_dir') {
+          return {
+            payload: {
+              ok: true,
+              entries: [
+                { name: '20260601T080000_draft.plan.md', is_dir: false },
+                { name: '20260710T120000_in-review.plan.md', is_dir: false },
+                // Same-stem HTML snapshots must not leak into a markdown plan's history.
+                { name: '20260711T090000_approved.html', is_dir: false },
+              ],
+            },
+          }
+        }
+        return { payload: { ok: true } }
+      }),
+    }
+    const wrapper = mount(PlanReviewToolbar, {
+      props: { workspacePath: '/ws', relPath: MD_REL_PATH, backend: backend as never, store: resolvePlanStore(MD_REL_PATH) },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+    await wrapper.find('.prt-history-btn').trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('.prt-history-row')
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.find('.prt-history-stage').text())).toEqual(['in-review', 'draft'])
   })
 })

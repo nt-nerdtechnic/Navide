@@ -45,8 +45,8 @@ const confirmBeforeCloseModel = computed({
 
 // ── Tab order ──────────────────────────────────────────────────────────────────
 // Only real RunGroup tabs (type 'stage') are reorderable; the synthetic "手動"
-// tab is always last and is excluded. The Cmd+Shift+N badge mirrors the actual
-// switchToTabN handler: ⌘⇧1–8 map to positions 1–8, and ⌘⇧9 always jumps to the
+// tab is always last and is excluded. The Cmd+Alt+N badge mirrors the actual
+// switchToTabN handler: ⌘⌥1–8 map to positions 1–8, and ⌘⌥9 always jumps to the
 // LAST tab. Positions between 9 and the last have no shortcut.
 const tabOrderRows = computed(() => {
   const all = props.stageTabs ?? []
@@ -57,8 +57,8 @@ const tabOrderRows = computed(() => {
     .map(({ tab, idx }) => {
       const isLast = idx === total - 1
       let badge: string | null = null
-      if (isLast) badge = '⌘⇧9'
-      else if (idx + 1 <= 8) badge = `⌘⇧${idx + 1}`
+      if (isLast) badge = '⌘⌥9'
+      else if (idx + 1 <= 8) badge = `⌘⌥${idx + 1}`
       return { key: tab.key, label: tab.label, count: tab.count, badge, isLast }
     })
 })
@@ -233,7 +233,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     section: 'tab-order',
     title: 'Tab Shortcut Order / 分頁快捷鍵排序',
     group: 'General',
-    summary: 'Drag to reorder the main window Run Group tabs and see each tab\'s Cmd+Shift+N shortcut.',
+    summary: 'Drag to reorder the main window Run Group tabs and see each tab\'s Cmd+Alt+N shortcut.',
     keywords: 'tab order tabs reorder drag run group 分頁 排序 拖曳 拖拉 快捷鍵 shortcut cmd shift command switch tab',
   },
   {

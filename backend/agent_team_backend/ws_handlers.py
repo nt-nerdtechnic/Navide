@@ -353,7 +353,8 @@ async def git_log(session: "Session", msg_id: str, msg_type: str, payload: dict)
     n = min(int(payload.get("n", 20)), 500)
     all_branches = bool(payload.get("all", False))
     query = payload.get("query") or None
-    result = await app.git_service.get_log(ws_path, n, all_branches, query)
+    order = payload.get("order") or "ancestor"
+    result = await app.git_service.get_log(ws_path, n, all_branches, query, order)
     await session.send_json(make_response(msg_id, msg_type, {"commits": result}))
 
 
@@ -562,6 +563,19 @@ async def git_checkout_commit(session: "Session", msg_id: str, msg_type: str, pa
     ws_path = payload.get("workspace_path") or ""
     commit_hash = payload.get("commit_hash") or ""
     result = await app.git_service.checkout_commit(ws_path, commit_hash)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        asyncio.create_task(app.broadcast(make_event("git.changed", {"workspace_path": ws_path})))
+
+
+@handler("git.reset")
+async def git_reset(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    ws_path = payload.get("workspace_path") or ""
+    commit_hash = payload.get("commit") or ""
+    mode = payload.get("mode") or ""
+    result = await app.git_service.reset_to_commit(ws_path, commit_hash, mode)
     await session.send_json(make_response(msg_id, msg_type, result))
     if result.get("ok"):
         asyncio.create_task(app.broadcast(make_event("git.changed", {"workspace_path": ws_path})))

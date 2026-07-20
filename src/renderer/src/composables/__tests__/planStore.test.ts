@@ -305,4 +305,24 @@ describe('MarkdownPlanStore', () => {
   it('outline lists ## headings from the markdown body', () => {
     expect(store.outline(MD_PLAN)).toEqual(['Phase A', 'Phase B'])
   })
+
+  it('outline omits empty-body ## sections (no anchor to scroll to)', () => {
+    const withEmpty = `---
+name: MD Plan
+overview: ov
+todos: []
+---
+
+## Filled
+
+Has a body.
+
+## Empty
+
+## Also Filled
+
+Body here.
+`
+    expect(store.outline(withEmpty)).toEqual(['Filled', 'Also Filled'])
+  })
 })

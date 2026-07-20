@@ -44,6 +44,8 @@ export interface GitCommit {
   message: string
   branches: string[]
   parents: string[]
+  author?: string
+  date?: string
 }
 
 export interface GitBranch {
@@ -163,6 +165,12 @@ export function useGit(
   const loadLogScope = (): 'all' | 'current' =>
     settingsGet<string | null>(LOG_SCOPE_KEY, null) === 'current' ? 'current' : 'all'
   const logScope = ref<'all' | 'current'>(loadLogScope())
+  // Sort order for the history graph (SourceTree-style): 'ancestor' = topo order
+  // (default, matches the lane layout), 'date' = strict date order.
+  const LOG_ORDER_KEY = 'agentTeam.git.logOrder'
+  const loadLogOrder = (): 'ancestor' | 'date' =>
+    settingsGet<string | null>(LOG_ORDER_KEY, null) === 'date' ? 'date' : 'ancestor'
+  const logOrder = ref<'ancestor' | 'date'>(loadLogOrder())
   const logLimit = ref(LOG_PAGE)
   const gitBranches = ref<GitBranch[]>([])
   const gitStashes = ref<GitStashEntry[]>([])
@@ -263,6 +271,7 @@ export function useGit(
         workspace_path: ws,
         n: logLimit.value,
         all: scope === 'all',
+        order: logOrder.value,
       })
       if (resp.ok && resp.payload && workspacePath() === ws && logScope.value === scope) {
         gitLog.value = resp.payload.commits ?? []
@@ -291,7 +300,7 @@ export function useGit(
   // separate state so the main panel keeps showing the latest page.
   async function logSearch(
     query: string,
-    opts?: { scope?: 'all' | 'current'; limit?: number },
+    opts?: { scope?: 'all' | 'current'; limit?: number; order?: 'ancestor' | 'date' },
   ): Promise<GitCommit[]> {
     const ws = workspacePath()
     if (!ws) return []
@@ -300,6 +309,7 @@ export function useGit(
         workspace_path: ws,
         n: opts?.limit ?? 50,
         all: (opts?.scope ?? logScope.value) === 'all',
+        order: opts?.order ?? logOrder.value,
         query,
       })
       if (resp.ok && resp.payload) return resp.payload.commits ?? []
@@ -315,6 +325,13 @@ export function useGit(
     logScope.value = scope
     logLimit.value = LOG_PAGE
     settingsSet(LOG_SCOPE_KEY, scope)
+    await loadLog()
+  }
+
+  async function setLogOrder(order: 'ancestor' | 'date'): Promise<void> {
+    if (logOrder.value === order) return
+    logOrder.value = order
+    settingsSet(LOG_ORDER_KEY, order)
     await loadLog()
   }
 
@@ -740,6 +757,20 @@ export function useGit(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       gitError.value = `revertCommit: ${msg}`
+      return { ok: false, error: msg }
+    }
+  }
+
+  async function resetToCommit(commit: string, mode: 'soft' | 'mixed' | 'hard'): Promise<{ ok: boolean; error?: string }> {
+    const ws = workspacePath()
+    if (!ws) return { ok: false, error: 'no workspace' }
+    try {
+      const resp = await send<{ ok: boolean; error?: string }>('git.reset', { workspace_path: ws, commit, mode }, 20_000)
+      if (resp.ok && resp.payload?.ok) { await loadStatus(); await loadBranches(); await loadLog() }
+      return resp.payload ?? { ok: false, error: 'no response' }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      gitError.value = `resetToCommit: ${msg}`
       return { ok: false, error: msg }
     }
   }
@@ -1577,13 +1608,13 @@ export function useGit(
     // state
     gitStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
     gitWorktrees, gitConfig,
-    logScope, logLimit, canLoadMoreLog,
+    logScope, logOrder, logLimit, canLoadMoreLog,
     isLoadingStatus, isLoadingLog, isInitializing,
     isCommitting, isSyncing, isFetching, isGenerating,
     syncOutput, syncError,
     gitError, clearGitError,
     // loaders
-    loadStatus, discoverRepositories, loadLog, loadMoreLog, logSearch, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
+    loadStatus, discoverRepositories, loadLog, loadMoreLog, logSearch, setLogScope, setLogOrder, loadBranches, loadStashes, loadRemotes, loadTags,
     loadWorktrees, loadGitConfig,
     // init
     initRepo,
@@ -1607,7 +1638,7 @@ export function useGit(
     // config
     gitConfigAllowedKeys, setGitConfig,
     // commit
-    commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage,
+    commit, amendCommit, undoLastCommit, revertCommit, resetToCommit, cherryPick, generateMessage,
     checkStaged,
     showCommit,
     // vscode-parity additions

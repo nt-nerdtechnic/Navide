@@ -422,7 +422,7 @@
       "loop-prompt-hint": "Prompt sent to a CLI pane when its loop button is clicked.",
       "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets.",
       "tab-order": "Tab Shortcut Order",
-      "tab-order-hint": "Drag to reorder the main window Run Group tabs; the badge shows each tab's Cmd+Shift+N shortcut.",
+      "tab-order-hint": "Drag to reorder the main window Run Group tabs; the badge shows each tab's Cmd+Alt+N shortcut.",
       "tab-order-empty": "No tabs yet.",
       "tab-order-last": "Last"
     },

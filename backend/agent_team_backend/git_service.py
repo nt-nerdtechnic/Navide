@@ -74,6 +74,8 @@ class GitCommit:
     message: str
     branches: list[str] = field(default_factory=list)
     parents: list[str] = field(default_factory=list)
+    author: str = ""
+    date: str = ""
 
 
 @dataclass
@@ -368,14 +370,23 @@ async def discover_repositories(
 
 
 async def get_log(
-    workspace_path: str, n: int = 20, all_branches: bool = False, query: str | None = None
+    workspace_path: str,
+    n: int = 20,
+    all_branches: bool = False,
+    query: str | None = None,
+    order: str = "ancestor",
 ) -> list[dict[str, Any]]:
     """Return the last *n* commits as serialisable dicts.
 
     *all_branches* mirrors SourceTree's default view: ``--all`` includes commits
     from every branch/remote/tag (not just HEAD's ancestry) so the frontend can
-    render a true multi-lane DAG. ``--topo-order`` keeps children above their
-    parents in both modes, which is what the lane layout assumes.
+    render a true multi-lane DAG.
+
+    *order* picks the sort passed to git: ``"ancestor"`` (default) keeps children
+    above their parents via ``--topo-order`` — the ordering the lane layout
+    assumes — while ``"date"`` uses ``--date-order`` (SourceTree's "Date Order").
+    Any other value falls back to ``"ancestor"`` so callers can never inject a raw
+    flag.
 
     *query*, when non-empty, filters commits whose message matches it via
     ``--grep`` with case-insensitive matching. The query is passed as the single
@@ -384,9 +395,11 @@ async def get_log(
     if not workspace_path or not Path(workspace_path).is_dir():
         return []
 
-    # %H=full hash, %h=short, %s=subject, %D=ref names, %P=parent hashes
-    fmt = "%H%x00%h%x00%s%x00%D%x00%P"
-    args = ["git", "log", "--topo-order", f"--pretty=format:{fmt}", f"-n{n}"]
+    order_flag = "--date-order" if order == "date" else "--topo-order"
+    # %H=full hash, %h=short, %s=subject, %D=ref names, %P=parent hashes,
+    # %an=author name, %ad=author date (short YYYY-MM-DD)
+    fmt = "%H%x00%h%x00%s%x00%D%x00%P%x00%an%x00%ad"
+    args = ["git", "log", order_flag, "--date=short", f"--pretty=format:{fmt}", f"-n{n}"]
     if all_branches:
         args.append("--all")
     if query:
@@ -402,6 +415,8 @@ async def get_log(
             continue
         full_hash, short_hash, message, refs = parts[0], parts[1], parts[2], parts[3]
         parent_str = parts[4] if len(parts) > 4 else ""
+        author = parts[5] if len(parts) > 5 else ""
+        date = parts[6] if len(parts) > 6 else ""
         branches = [r.strip() for r in refs.split(",") if r.strip()] if refs.strip() else []
         parents = [p for p in parent_str.split() if p]
         commits.append(asdict(GitCommit(
@@ -410,6 +425,8 @@ async def get_log(
             message=message,
             branches=branches,
             parents=parents,
+            author=author,
+            date=date,
         )))
     return commits
 
@@ -1672,6 +1689,27 @@ async def checkout_commit(workspace_path: str, commit_hash: str) -> dict[str, An
     if err := _validate_commit_hash(commit_hash):
         return {"ok": False, "error": err}
     rc, _, stderr = await _run(["git", "checkout", "--detach", commit_hash.strip()], workspace_path)
+    return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
+
+
+_RESET_MODES = frozenset({"soft", "mixed", "hard"})
+
+
+@_serialize_write
+async def reset_to_commit(workspace_path: str, commit_hash: str, mode: str) -> dict[str, Any]:
+    """Move the current branch to *commit_hash* via ``git reset --<mode>``.
+
+    *mode* is restricted to soft/mixed/hard so the value is never a raw flag:
+    soft keeps index and worktree, mixed (git's default) resets the index only,
+    hard discards both.
+    """
+    if mode not in _RESET_MODES:
+        return {"ok": False, "error": "invalid reset mode (expected soft/mixed/hard)"}
+    if err := _validate_commit_hash(commit_hash):
+        return {"ok": False, "error": err}
+    rc, _, stderr = await _run(
+        ["git", "reset", f"--{mode}", commit_hash.strip()], workspace_path
+    )
     return {"ok": rc == 0, "error": stderr.strip() if rc != 0 else ""}
 
 

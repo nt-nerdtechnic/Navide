@@ -69,6 +69,7 @@ import {
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
 } from './lib/resume-command'
+import { gridPageCount, gridPageSlice, gridPresetDims, parseGridPreset, type GridPreset } from './lib/gridLayout'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
 import {
@@ -2663,7 +2664,7 @@ registerCommand('workbench.action.openPlans', async () => {
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
-// Cmd+Shift+<n> → jump to the Nth stage tab. Browser convention: the 9th
+// Cmd+Alt+<n> → jump to the Nth stage tab. Browser convention: the 9th
 // shortcut always lands on the LAST tab, so tabs beyond 8 stay reachable even
 // when there are more than 9 of them. Slots past the tab count are no-ops.
 for (let i = 1; i <= 9; i++) {
@@ -6281,18 +6282,20 @@ function startRenamePane(paneId: string): void {
 
 const inlineRenamingId = ref<string | null>(null)
 const inlineRenameDraft = ref('')
-const inlineRenameInputs = ref<HTMLInputElement[]>([])
+// Autofocus + select the inline rename input the moment it mounts. Replaces a
+// shared array template ref whose `.find()` could resolve to a stale (already
+// unmounted) input on the second edit, leaving the real input unfocused so
+// keystrokes were silently dropped ("rename works once, then does nothing").
+const vFocus = {
+  mounted(el: HTMLInputElement): void {
+    el.focus()
+    el.select()
+  },
+}
 
 function startInlineRename(p: { id: string; customName?: string; agentLabel?: string }): void {
   inlineRenameDraft.value = p.customName || p.agentLabel || ''
   inlineRenamingId.value = p.id
-  void nextTick(() => {
-    const el = inlineRenameInputs.value.find(el => el?.dataset?.paneId === p.id)
-    if (el) {
-      el.focus()
-      el.select()
-    }
-  })
 }
 
 function commitInlineRename(): void {
@@ -6396,7 +6399,9 @@ const floatPipWidth = ref<number>(
 )
 watch(floatPipPos, (v) => { settingsSet('agentTeam.floatPipPos', JSON.stringify(v)) }, { deep: true })
 watch(floatPipWidth, (v) => { settingsSet('agentTeam.floatPipWidth', String(v)) })
-const floatPipListMaxHeight = ref(320)
+// Fixed list height — the PiP window never grows with pane count; overflowing
+// panes are picked by scrolling. The corner handle resizes this fixed height.
+const floatPipListHeight = ref(320)
 
 function _pipStageSize(): { sw: number; sh: number } {
   const el = document.querySelector('.stage') as HTMLElement
@@ -6418,7 +6423,7 @@ function clampPipPos(): void {
 watch(effectiveLayoutMode, (mode) => {
   if (mode === 'fullscreen') {
     floatPipWidth.value = 220
-    floatPipListMaxHeight.value = 320
+    floatPipListHeight.value = 320
     floatPipExpanded.value = true
     nextTick(() => {
       const pip = document.querySelector('.float-pip') as HTMLElement
@@ -6465,7 +6470,7 @@ function onPipResizeStart(e: MouseEvent): void {
   _resStartX = e.clientX
   _resStartY = e.clientY
   _resStartW = floatPipWidth.value
-  _resStartH = floatPipListMaxHeight.value
+  _resStartH = floatPipListHeight.value
   document.addEventListener('mousemove', onPipResizeMove)
   document.addEventListener('mouseup', onPipResizeEnd)
   e.preventDefault()
@@ -6477,7 +6482,7 @@ function onPipResizeMove(e: MouseEvent): void {
   const dy = e.clientY - _resStartY
   const { sw } = _pipStageSize()
   floatPipWidth.value = Math.max(160, Math.min(sw - 32, _resStartW + dx))
-  floatPipListMaxHeight.value = Math.max(80, Math.min(600, _resStartH + dy))
+  floatPipListHeight.value = Math.max(80, Math.min(600, _resStartH + dy))
 }
 
 function onPipResizeEnd(): void {
@@ -6511,13 +6516,33 @@ watch(rowHeights, (v) => { settingsSet('agentTeam.rowHeights', JSON.stringify(v)
 watch(sidebarLeftPx, (v) => { settingsSet('agentTeam.sidebarLeftPx', String(v)) })
 watch(dualFocusSplitPx, (v) => { settingsSet('agentTeam.dualFocusSplitPx', String(v)) })
 
+// ── Grid layout preset + paging ──────────────────────────────────────────────
+// 'auto' shows every visible pane at once; fixed presets (2x1/2x2/3x3) cap the
+// panes per page and page through the rest. Paged-out panes are only hidden
+// (v-show) so their terminals stay alive.
+const gridPreset = ref<GridPreset>(parseGridPreset(settingsGet('agentTeam.gridPreset', 'auto')))
+const gridPage = ref(0)
+watch(gridPreset, (v) => { settingsSet('agentTeam.gridPreset', v); gridPage.value = 0 })
+const gridPageTotal = computed(() => gridPageCount(tabVisiblePanes.value.length, gridPreset.value))
+watch(gridPageTotal, (n) => { if (gridPage.value > n - 1) gridPage.value = Math.max(0, n - 1) })
+const gridPagePanes = computed(() => gridPageSlice(tabVisiblePanes.value, gridPreset.value, gridPage.value))
+const gridPagePaneIds = computed(() => new Set(gridPagePanes.value.map((p) => p.id)))
+const gridPresetOptions: { key: GridPreset; label: string; title: string }[] = [
+  { key: 'auto', label: '∞', title: 'Auto — fit all panes' },
+  { key: '2x1', label: '2×1', title: '2×1 layout — pages of 2 panes' },
+  { key: '2x2', label: '2×2', title: '2×2 layout — pages of 4 panes' },
+  { key: '3x3', label: '3×3', title: '3×3 layout — pages of 9 panes' },
+]
+
 const numCols = computed(() => {
+  const d = gridPresetDims(gridPreset.value)
+  if (d) return Math.max(1, Math.min(d.cols, gridPagePanes.value.length))
   const n = tabVisiblePanes.value.length
   if (n <= 1) return 1
   if (n <= 4) return 2
   return 3
 })
-const numRows = computed(() => Math.max(1, Math.ceil(tabVisiblePanes.value.length / numCols.value)))
+const numRows = computed(() => Math.max(1, Math.ceil(gridPagePanes.value.length / numCols.value)))
 
 watch(numCols, (n) => { colWidths.value = Array(n).fill(1) }, { immediate: true })
 watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true })
@@ -7187,6 +7212,23 @@ function paneIsCommander(p: ActivePane): boolean {
           :style="{ top: pos }"
           @mousedown.prevent="onGridHandleStart($event, 'row', i)"
         />
+        <!-- Grid layout preset picker + pager (grid mode only) -->
+        <div v-if="effectiveLayoutMode === 'grid' && tabVisiblePanes.length > 1" class="grid-layout-bar" role="toolbar" aria-label="Grid layout">
+          <button
+            v-for="opt in gridPresetOptions"
+            :key="opt.key"
+            :class="['grid-preset-btn', { active: gridPreset === opt.key }]"
+            :title="opt.title"
+            :aria-pressed="gridPreset === opt.key"
+            @click="gridPreset = opt.key"
+          >{{ opt.label }}</button>
+          <template v-if="gridPageTotal > 1">
+            <span class="grid-page-sep" />
+            <button class="grid-page-btn" :disabled="gridPage <= 0" title="Previous page" @click="gridPage--">‹</button>
+            <span class="grid-page-label">{{ gridPage + 1 }}/{{ gridPageTotal }}</span>
+            <button class="grid-page-btn" :disabled="gridPage >= gridPageTotal - 1" title="Next page" @click="gridPage++">›</button>
+          </template>
+        </div>
         <!-- Sidebar/auto mode vertical handle -->
         <div
           v-if="effectiveLayoutMode === 'sidebar'"
@@ -7204,7 +7246,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <TerminalPane
           v-for="p in panes"
           :key="p.id"
-          v-show="tabFilteredPaneIds.has(p.id) && !minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId)"
+          v-show="tabFilteredPaneIds.has(p.id) && !minimizedPanes.has(p.id) && !(effectiveLayoutMode === 'grid' && !gridPagePaneIds.has(p.id)) && !(effectiveLayoutMode === 'sidebar' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId) && !(effectiveLayoutMode === 'spotlight' && p.id !== effectiveFocusPaneId && p.id !== dualFocusSecondaryId)"
           :style="{ ...floatPaneStyle(p.id), ...dualFocusStyle(p.id) }"
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
@@ -7262,8 +7304,7 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
                 <input
                   v-if="inlineRenamingId === p.id"
-                  ref="inlineRenameInputs"
-                  :data-pane-id="p.id"
+                  v-focus
                   v-model="inlineRenameDraft"
                   class="inline-rename-input"
                   @keydown="onInlineRenameKeydown"
@@ -7315,8 +7356,7 @@ function paneIsCommander(p: ActivePane): boolean {
               <span v-if="p.origin === 'pipeline' && p.stageId" class="spotlight-thumb-pipe-tag">P{{ p.stageId }}</span>
               <input
                 v-if="inlineRenamingId === p.id"
-                ref="inlineRenameInputs"
-                :data-pane-id="p.id"
+                v-focus
                 v-model="inlineRenameDraft"
                 class="inline-rename-input"
                 @keydown="onInlineRenameKeydown"
@@ -7362,7 +7402,7 @@ function paneIsCommander(p: ActivePane): boolean {
             {{ floatPipExpanded ? '▾' : '▸' }}
           </button>
         </div>
-        <div v-if="floatPipExpanded" class="float-pip-list" :style="{ maxHeight: floatPipListMaxHeight + 'px' }">
+        <div v-if="floatPipExpanded" class="float-pip-list" :style="{ height: floatPipListHeight + 'px' }">
           <div
             v-for="p in paneViews.filter(v => !v.isMinimized && tabFilteredPaneIds.has(v.id))"
             :key="p.id"
@@ -7385,8 +7425,7 @@ function paneIsCommander(p: ActivePane): boolean {
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
                 <input
                   v-if="inlineRenamingId === p.id"
-                  ref="inlineRenameInputs"
-                  :data-pane-id="p.id"
+                  v-focus
                   v-model="inlineRenameDraft"
                   class="inline-rename-input"
                   @keydown="onInlineRenameKeydown"
@@ -8070,6 +8109,58 @@ function paneIsCommander(p: ActivePane): boolean {
 .grid-handle-h::after {
   inset: 3px 0;
 }
+/* Grid layout preset picker + pager */
+.grid-layout-bar {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
+}
+.grid-preset-btn,
+.grid-page-btn {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.grid-preset-btn:hover,
+.grid-page-btn:hover:not(:disabled) {
+  background: var(--bg-muted);
+  color: var(--text-primary);
+}
+.grid-preset-btn.active {
+  background: color-mix(in srgb, var(--accent-emphasis) 20%, transparent);
+  color: var(--accent-bright);
+}
+.grid-page-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.grid-page-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--border-default);
+  margin: 0 3px;
+}
+.grid-page-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 0 2px;
+}
 /* Spotlight: stage as flex column — grid on top, scroll strip on bottom */
 .stage[data-layout="spotlight"] {
   display: flex;
@@ -8407,7 +8498,7 @@ function paneIsCommander(p: ActivePane): boolean {
   flex-direction: column;
   gap: 4px;
   padding: 6px;
-  max-height: 320px;
+  height: 320px;
   overflow-y: auto;
 }
 .empty {

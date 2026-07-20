@@ -123,21 +123,21 @@ describe('matchesEvent', () => {
     expect(matchesEvent(parsed, e)).toBe(false)
   })
 
-  it('matches cmd+shift+1 by physical digit when macOS reports the shifted symbol', () => {
-    const parsed = parseKey('cmd+shift+1')
-    const e = mkEvent('!', { metaKey: true, shiftKey: true, code: 'Digit1' })
+  it('matches cmd+alt+1 by physical digit when macOS reports the option symbol', () => {
+    const parsed = parseKey('cmd+alt+1')
+    const e = mkEvent('¡', { metaKey: true, altKey: true, code: 'Digit1' })
     expect(matchesEvent(parsed, e)).toBe(true)
   })
 
   it('matches a numpad digit by physical key for numeric shortcuts', () => {
-    const parsed = parseKey('cmd+shift+3')
-    const e = mkEvent('#', { metaKey: true, shiftKey: true, code: 'Numpad3' })
+    const parsed = parseKey('cmd+alt+3')
+    const e = mkEvent('£', { metaKey: true, altKey: true, code: 'Numpad3' })
     expect(matchesEvent(parsed, e)).toBe(true)
   })
 
   it('does not match a different physical digit', () => {
-    const parsed = parseKey('cmd+shift+1')
-    const e = mkEvent('@', { metaKey: true, shiftKey: true, code: 'Digit2' })
+    const parsed = parseKey('cmd+alt+1')
+    const e = mkEvent('™', { metaKey: true, altKey: true, code: 'Digit2' })
     expect(matchesEvent(parsed, e)).toBe(false)
   })
 })

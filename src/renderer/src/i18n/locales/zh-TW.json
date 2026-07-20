@@ -422,7 +422,7 @@
       "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。",
       "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。",
       "tab-order": "分頁快捷鍵排序",
-      "tab-order-hint": "拖曳重新排列主視窗的 Run Group 分頁；右側徽章是該分頁對應的 Cmd+Shift+N 快捷鍵。",
+      "tab-order-hint": "拖曳重新排列主視窗的 Run Group 分頁；右側徽章是該分頁對應的 Cmd+Alt+N 快捷鍵。",
       "tab-order-empty": "尚無分頁。",
       "tab-order-last": "最後"
     },

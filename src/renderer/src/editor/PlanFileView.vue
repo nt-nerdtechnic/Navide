@@ -185,11 +185,14 @@ function doneCount(group: PhaseGroup): number {
   return group.todos.filter((t) => t.status === 'done').length
 }
 
-// Cycle status on click: pending → in-progress → done → pending
+// Cycle status on click: pending → in-progress → done → pending. A skipped todo
+// (set elsewhere, e.g. the review toolbar) re-joins the cycle at pending on
+// click; every other todo's skipped status is preserved on save.
 const STATUS_CYCLE: Record<TodoStatus, TodoStatus> = {
   pending: 'in-progress',
   'in-progress': 'done',
   done: 'pending',
+  skipped: 'pending',
 }
 
 async function saveTodos(updatedTodos: PlanTodo[]): Promise<boolean> {
@@ -361,6 +364,7 @@ async function saveEditSection(heading: string): Promise<void> {
 function checkboxGlyph(status: TodoStatus): string {
   if (status === 'done') return '●'
   if (status === 'in-progress') return '◐'
+  if (status === 'skipped') return '⊘'
   return '○'
 }
 
@@ -371,6 +375,7 @@ function badgeLabel(status: TodoStatus): string {
 function badgeClass(status: TodoStatus): string {
   if (status === 'done') return 'pfv-badge pfv-badge--done'
   if (status === 'in-progress') return 'pfv-badge pfv-badge--in-progress'
+  if (status === 'skipped') return 'pfv-badge pfv-badge--skipped'
   return 'pfv-badge pfv-badge--pending'
 }
 </script>
@@ -1032,6 +1037,12 @@ function badgeClass(status: TodoStatus): string {
 .pfv-badge--done {
   background: var(--success-subtle);
   color: var(--success-fg);
+}
+
+.pfv-badge--skipped {
+  background: var(--bg-muted);
+  color: var(--text-muted);
+  text-decoration: line-through;
 }
 
 .pfv-empty {
