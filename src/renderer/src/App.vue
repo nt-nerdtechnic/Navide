@@ -2642,6 +2642,13 @@ registerCommand('workbench.action.openPlans', async () => {
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
+// Cmd+Shift+<n> → jump to the Nth stage tab (no-op when that slot is empty).
+for (let i = 1; i <= 9; i++) {
+  registerCommand(`workbench.action.switchToTab${i}`, () => {
+    const tab = stageTabs.value[i - 1]
+    if (tab) activeTab.value = tab.key
+  })
+}
 watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c || previewLogOpen.value))
 
 function onFocusPane(paneId: string): void {
@@ -7220,7 +7227,23 @@ function paneIsCommander(p: ActivePane): boolean {
             <div class="meeting-info">
               <div class="meeting-name-row">
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
-                <span class="meeting-name">{{ p.agentLabel }}</span>
+                <input
+                  v-if="inlineRenamingId === p.id"
+                  ref="inlineRenameInputs"
+                  :data-pane-id="p.id"
+                  v-model="inlineRenameDraft"
+                  class="inline-rename-input"
+                  @keydown="onInlineRenameKeydown"
+                  @blur="commitInlineRename"
+                  @click.stop
+                  @mousedown.stop
+                />
+                <span
+                  v-else
+                  class="meeting-name"
+                  :title="$t('action.rename')"
+                  @dblclick.stop="startInlineRename(p)"
+                >{{ p.agentLabel }}</span>
               </div>
               <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
             </div>

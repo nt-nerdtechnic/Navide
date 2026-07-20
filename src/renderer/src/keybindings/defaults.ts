@@ -148,6 +148,20 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+u', command: 'workbench.action.spawnAgent' },
   { key: 'cmd+shift+b', command: 'workbench.action.rebuildFocusedPane' },
 
+  // ── Run-group tabs (main window) ──────────────────────────────────────────────
+  // Cmd+Shift+<n> jumps to the Nth stage tab. Bound on the shifted digits (not
+  // plain cmd+<n>, which is the editor-window "open editor at index"). The
+  // matcher falls back to e.code=Digit<n> since macOS emits symbols for Shift+digit.
+  { key: 'cmd+shift+1', command: 'workbench.action.switchToTab1' },
+  { key: 'cmd+shift+2', command: 'workbench.action.switchToTab2' },
+  { key: 'cmd+shift+3', command: 'workbench.action.switchToTab3' },
+  { key: 'cmd+shift+4', command: 'workbench.action.switchToTab4' },
+  { key: 'cmd+shift+5', command: 'workbench.action.switchToTab5' },
+  { key: 'cmd+shift+6', command: 'workbench.action.switchToTab6' },
+  { key: 'cmd+shift+7', command: 'workbench.action.switchToTab7' },
+  { key: 'cmd+shift+8', command: 'workbench.action.switchToTab8' },
+  { key: 'cmd+shift+9', command: 'workbench.action.switchToTab9' },
+
   // ── Editor tabs ──────────────────────────────────────────────────────────────
   { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },
   { key: 'ctrl+shift+tab', command: 'workbench.action.openPreviousEditor' },
