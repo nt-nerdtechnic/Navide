@@ -8134,7 +8134,7 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 .spotlight-thumb-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
 .spotlight-thumb-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
-.spotlight-thumb-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
+.spotlight-thumb-badge[data-status="starting"] { background: var(--status-starting-subtle); color: var(--status-starting-fg); border: 1px solid var(--status-starting-emphasis); }
 .spotlight-thumb-badge[data-status="error"],
 .spotlight-thumb-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
 .spotlight-thumb-loop {
@@ -8267,7 +8267,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-badge[data-status="running"]  { background: var(--success-subtle); color: var(--success-fg); border: 1px solid var(--success-emphasis); }
 .meeting-badge[data-status="idle"]     { background: var(--attention-subtle); color: var(--attention-bright); border: 1px solid var(--attention-emphasis); }
 .meeting-badge[data-status="stopped"]  { background: var(--danger-subtle); color: var(--danger-fg); border: 1px solid var(--danger-emphasis); }
-.meeting-badge[data-status="starting"] { background: var(--accent-subtle); color: var(--accent-fg); border: 1px solid var(--accent-emphasis); }
+.meeting-badge[data-status="starting"] { background: var(--status-starting-subtle); color: var(--status-starting-fg); border: 1px solid var(--status-starting-emphasis); }
 .meeting-badge[data-status="error"]    { background: var(--danger-subtle); color: var(--danger-bright); border: 1px solid var(--danger-emphasis); }
 .meeting-loop {
   font-size: 10px;

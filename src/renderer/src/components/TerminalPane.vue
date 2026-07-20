@@ -529,8 +529,8 @@ onMounted(() => {
   color: var(--success-fg);
 }
 .status[data-status='starting'] {
-  background: var(--attention-muted);
-  color: var(--attention-fg);
+  background: var(--status-starting-muted);
+  color: var(--status-starting-fg);
 }
 .status[data-status='error'] {
   background: var(--danger-deep);

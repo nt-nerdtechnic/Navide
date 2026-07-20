@@ -386,6 +386,10 @@ button.icon-btn:hover {
   color: var(--success-fg);
 }
 .state[data-state='starting'] {
+  background: var(--status-starting-muted);
+  color: var(--status-starting-fg);
+}
+.state[data-state='idle'] {
   background: var(--attention-muted);
   color: var(--attention-fg);
 }
