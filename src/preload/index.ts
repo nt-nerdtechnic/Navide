@@ -184,6 +184,19 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onLanguageChanged: (cb: (locale: string) => void): void => {
     ipcRenderer.on('settings:language-changed', (_event, locale: string) => cb(locale))
   },
+  setQuitConfirm: (cfg: {
+    enabled: boolean
+    message: string
+    detail: string
+    quitLabel: string
+    cancelLabel: string
+    dontShowLabel: string
+  }): void => ipcRenderer.send('app:setQuitConfirm', cfg),
+  onQuitConfirmDisabled: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('app:quitConfirmDisabled', listener)
+    return () => ipcRenderer.removeListener('app:quitConfirmDisabled', listener)
+  },
   readHealthCheckTimeout: (): Promise<{ ok: boolean; timeoutSec?: number }> =>
     ipcRenderer.invoke('settings:health-timeout-read'),
   writeHealthCheckTimeout: (timeoutSec: number): Promise<{ ok: boolean; error?: string }> =>

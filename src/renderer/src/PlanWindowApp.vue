@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // Plan review window (?window=plans&workspace_path=…): plan list on the left,
-// the opened plan document on the right. Plan HTML docs render in the
-// interactive srcdoc preview (PlanDocPreview, render-time injected runtime)
-// with the review toolbar stacked above; other HTML docs keep the plain
-// sandboxed FilePreviewPane; legacy markdown plans reuse PlanFileView.
+// the opened plan document on the right. Plan docs stack the shared review
+// toolbar (PlanReviewToolbar, format-agnostic via PlanStore) above a body that
+// switches on format: HTML plans render in the interactive srcdoc preview
+// (PlanDocPreview, render-time injected runtime); markdown plans render in
+// PlanMarkdownBody. Other HTML docs keep the plain sandboxed FilePreviewPane;
+// plain markdown (no frontmatter meta) falls back to the read-only PlanFileView.
 // Plans only — no file tree, terminal, or git.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -16,6 +18,7 @@ import { sanitizePlanSectionHtml } from './editor/planRuntime'
 import PlansPane from './editor/PlansPane.vue'
 import PlanReviewToolbar from './editor/PlanReviewToolbar.vue'
 import PlanFileView from './editor/PlanFileView.vue'
+import PlanMarkdownBody from './editor/PlanMarkdownBody.vue'
 import FilePreviewPane from './editor/FilePreviewPane.vue'
 import PlanDocPreview from './editor/PlanDocPreview.vue'
 import NotificationHost from './components/NotificationHost.vue'
@@ -57,11 +60,34 @@ const planStore = computed(() => resolvePlanStore(openDoc.value?.relPath ?? ''))
 
 const toolbarRef = ref<InstanceType<typeof PlanReviewToolbar> | null>(null)
 const previewRef = ref<InstanceType<typeof PlanDocPreview> | null>(null)
+const mdBodyRef = ref<InstanceType<typeof PlanMarkdownBody> | null>(null)
 const plansPaneRef = ref<InstanceType<typeof PlansPane> | null>(null)
+
+// For an open markdown doc: 'loading' while probing frontmatter, then 'plan'
+// (carries valid plan meta → shared review toolbar + PlanMarkdownBody) or 'doc'
+// (plain markdown with no meta → legacy read-only PlanFileView, no toolbar).
+// HTML docs route by path (isHtmlPlanDoc) and never consult this.
+const mdKind = ref<'loading' | 'plan' | 'doc'>('loading')
+
+function isMarkdownDoc(relPath: string): boolean {
+  return !relPath.endsWith('.html')
+}
+
+// Probe the markdown doc's meta once per open: a valid frontmatter plan mounts
+// the toolbar, a plain markdown file stays a read-only doc. Re-probing is not
+// needed on live refresh — a plain .md does not gain frontmatter from in-window
+// actions, and legacy .plan.md already carry frontmatter from the first read.
+async function probeMarkdownKind(relPath: string): Promise<void> {
+  mdKind.value = 'loading'
+  const result = await resolvePlanStore(relPath).readMeta(planCtx(relPath))
+  if (openDoc.value?.relPath !== relPath) return // superseded by a newer open
+  mdKind.value = result ? 'plan' : 'doc'
+}
 
 function onOpenFile(payload: { filepath: string; name: string }): void {
   openDoc.value = { relPath: payload.filepath, name: payload.name }
   snapshotPreview.value = null
+  if (isMarkdownDoc(payload.filepath)) void probeMarkdownKind(payload.filepath)
 }
 
 // A plan deleted from the list clears the right pane when it's the open one.
@@ -106,8 +132,11 @@ function onDocSectionComment(anchor: string): void {
   toolbarRef.value?.startNoteWithAnchor(anchor)
 }
 
+// Only one body is mounted per doc (HTML preview or markdown body); scrolling
+// the null one is a no-op, so route the toolbar's outline pick to both.
 function onOutlineScroll(anchor: string): void {
   previewRef.value?.scrollToAnchor(anchor)
+  mdBodyRef.value?.scrollToAnchor(anchor)
 }
 
 // Body write-back for inline section edit/delete now goes through the store's
@@ -166,6 +195,13 @@ function onWindowKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   if (previewRef.value?.isEditing?.()) {
     previewRef.value.cancelEdit()
+    event.preventDefault()
+    return
+  }
+  // Markdown body's inline section edit — same priority as the HTML preview's
+  // in-frame edit (only one body is ever mounted).
+  if (mdBodyRef.value?.isEditing?.()) {
+    mdBodyRef.value.cancelEdit()
     event.preventDefault()
     return
   }
@@ -274,13 +310,39 @@ onUnmounted(() => {
             :backend="backend"
           />
         </div>
-        <PlanFileView
-          v-else
-          :key="openDoc.relPath"
-          :workspace-path="workspacePath"
-          :rel-path="openDoc.relPath"
-          :backend="backend"
-        />
+        <!-- Markdown plan: the shared review toolbar + PlanMarkdownBody when the
+             file carries valid frontmatter meta; plain markdown (no meta) keeps
+             the legacy read-only PlanFileView with no meta-driven toolbar. -->
+        <template v-else>
+          <div v-if="mdKind === 'plan'" class="plan-window-doc">
+            <PlanReviewToolbar
+              ref="toolbarRef"
+              :workspace-path="workspacePath"
+              :rel-path="openDoc.relPath"
+              :backend="backend"
+              :store="planStore"
+              @updated="planPreviewRefresh++"
+              @scroll-to-anchor="onOutlineScroll"
+            />
+            <PlanMarkdownBody
+              ref="mdBodyRef"
+              :key="openDoc.relPath"
+              :workspace-path="workspacePath"
+              :rel-path="openDoc.relPath"
+              :backend="backend"
+              :refresh="planPreviewRefresh"
+              @updated="planPreviewRefresh++"
+            />
+          </div>
+          <PlanFileView
+            v-else-if="mdKind === 'doc'"
+            :key="openDoc.relPath"
+            :workspace-path="workspacePath"
+            :rel-path="openDoc.relPath"
+            :backend="backend"
+          />
+          <div v-else class="plan-window-doc" />
+        </template>
       </template>
       <div v-else class="plan-window-empty">{{ t('pane.plans.window-empty') }}</div>
     </main>

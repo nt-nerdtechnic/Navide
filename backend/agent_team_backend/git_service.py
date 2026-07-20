@@ -368,7 +368,7 @@ async def discover_repositories(
 
 
 async def get_log(
-    workspace_path: str, n: int = 20, all_branches: bool = False
+    workspace_path: str, n: int = 20, all_branches: bool = False, query: str | None = None
 ) -> list[dict[str, Any]]:
     """Return the last *n* commits as serialisable dicts.
 
@@ -376,6 +376,10 @@ async def get_log(
     from every branch/remote/tag (not just HEAD's ancestry) so the frontend can
     render a true multi-lane DAG. ``--topo-order`` keeps children above their
     parents in both modes, which is what the lane layout assumes.
+
+    *query*, when non-empty, filters commits whose message matches it via
+    ``--grep`` with case-insensitive matching. The query is passed as the single
+    ``--grep=<query>`` argv element so a leading ``-`` is never parsed as a flag.
     """
     if not workspace_path or not Path(workspace_path).is_dir():
         return []
@@ -385,6 +389,8 @@ async def get_log(
     args = ["git", "log", "--topo-order", f"--pretty=format:{fmt}", f"-n{n}"]
     if all_branches:
         args.append("--all")
+    if query:
+        args.extend([f"--grep={query}", "--regexp-ignore-case"])
     rc, out, _ = await _run(args, workspace_path)
     if rc != 0:
         return []

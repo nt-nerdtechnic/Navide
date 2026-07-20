@@ -95,6 +95,38 @@ class TestGetLog:
         assert len(commits) == 2
         assert commits[0]["message"] == "second"
 
+    @staticmethod
+    def _commit(path: Path, message: str) -> None:
+        (path / f"{message.replace(' ', '_')}.txt").write_text(message)
+        subprocess.run(["git", "add", "-A"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", message], cwd=path, check=True, capture_output=True)
+
+    @pytest.mark.asyncio
+    async def test_query_filters_by_message(self, tmp_path):
+        init_repo(tmp_path)
+        self._commit(tmp_path, "add feature")
+        self._commit(tmp_path, "fix bug")
+        self._commit(tmp_path, "add docs")
+        commits = await git_service.get_log(str(tmp_path), n=50, query="feature")
+        assert [c["message"] for c in commits] == ["add feature"]
+
+    @pytest.mark.asyncio
+    async def test_query_is_case_insensitive(self, tmp_path):
+        init_repo(tmp_path)
+        self._commit(tmp_path, "add feature")
+        self._commit(tmp_path, "fix bug")
+        commits = await git_service.get_log(str(tmp_path), n=50, query="FEATURE")
+        assert [c["message"] for c in commits] == ["add feature"]
+
+    @pytest.mark.asyncio
+    async def test_query_none_returns_all(self, tmp_path):
+        init_repo(tmp_path)
+        self._commit(tmp_path, "add feature")
+        self._commit(tmp_path, "fix bug")
+        commits = await git_service.get_log(str(tmp_path), n=50, query=None)
+        assert len(commits) == 3
+        assert commits[0]["message"] == "fix bug"
+
 
 # ── stage / unstage ────────────────────────────────────────────────────────────
 

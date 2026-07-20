@@ -111,7 +111,12 @@ onMounted(() => {
   void settingsApi.loadHealthCheckTimeoutSec()
   window.agentTeam?.onLanguageChanged?.((locale) => {
     settingsApi.setLanguage(locale)
+    pushQuitConfirmConfig()
   })
+  // Seed main with the current confirm-before-quit config, and react to the
+  // user disabling it from the native quit dialog's "don't show again".
+  pushQuitConfirmConfig()
+  window.agentTeam?.onQuitConfirmDisabled?.(() => { confirmBeforeClose.value = false })
   // Clicking a system notification focuses the window on the originating pane.
   window.agentTeam?.onFocusPane?.((paneId) => { onFocusPane(paneId) })
   // Plan window "execute" dispatch routed to this workspace's window.
@@ -365,6 +370,22 @@ function makeStickyBool(key: string, fallback: boolean) {
 
 const yoloEnabled = makeStickyBool('agentTeam.yolo', true)
 const autoAnswerEnabled = makeStickyBool('agentTeam.autoAnswer', false)
+// Confirm before closing a workspace or quitting the app. Default ON.
+const confirmBeforeClose = makeStickyBool('agentTeam.confirmClose', true)
+const dontConfirmCloseAgain = ref<boolean>(false)
+// Push the "confirm before quit" config to main so the native dialog stays in
+// sync with the shared setting and the current locale.
+function pushQuitConfirmConfig(): void {
+  window.agentTeam?.setQuitConfirm?.({
+    enabled: confirmBeforeClose.value,
+    message: i18n.global.t('confirm-close.quit-title'),
+    detail: i18n.global.t('confirm-close.quit-body'),
+    quitLabel: i18n.global.t('confirm-close.quit'),
+    cancelLabel: i18n.global.t('action.cancel'),
+    dontShowLabel: i18n.global.t('confirm-close.dont-show-again'),
+  })
+}
+watch(confirmBeforeClose, pushQuitConfirmConfig)
 // Strict completion: when ON, idle/cap timeouts do NOT auto-advance — instead they
 // prompt the user (or, if Full auto is also on, an LLM-styled 5-sec auto-advance).
 // Drives the third grid column width on .app. TokenStatsPanel persists its
@@ -2642,10 +2663,13 @@ registerCommand('workbench.action.openPlans', async () => {
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
-// Cmd+Shift+<n> → jump to the Nth stage tab (no-op when that slot is empty).
+// Cmd+Shift+<n> → jump to the Nth stage tab. Browser convention: the 9th
+// shortcut always lands on the LAST tab, so tabs beyond 8 stay reachable even
+// when there are more than 9 of them. Slots past the tab count are no-ops.
 for (let i = 1; i <= 9; i++) {
   registerCommand(`workbench.action.switchToTab${i}`, () => {
-    const tab = stageTabs.value[i - 1]
+    const tabs = stageTabs.value
+    const tab = i === 9 ? tabs[tabs.length - 1] : tabs[i - 1]
     if (tab) activeTab.value = tab.key
   })
 }
@@ -4098,11 +4122,17 @@ async function onPipelineReset(): Promise<void> {
 const confirmCloseWorkspace = ref<boolean>(false)
 
 function onSwitchWorkspace(): void {
-  if (pipeline.state === 'running') {
+  if (confirmBeforeClose.value || pipeline.state === 'running') {
+    dontConfirmCloseAgain.value = false
     confirmCloseWorkspace.value = true
     return
   }
   void doCloseWorkspace()
+}
+
+function onConfirmCloseWorkspace(): void {
+  if (dontConfirmCloseAgain.value) confirmBeforeClose.value = false
+  void doCloseWorkspace() // doCloseWorkspace sets confirmCloseWorkspace = false
 }
 
 async function doCloseWorkspace(): Promise<void> {
@@ -6985,6 +7015,9 @@ function paneIsCommander(p: ActivePane): boolean {
       :analyzer-api="analyzerApi"
       :pipelines-api="pipelinesApi"
       :initial-tab="settingsInitialTab"
+      :stage-tabs="stageTabs"
+      v-model:confirm-before-close="confirmBeforeClose"
+      @reorder-tab="(fromKey, toKey) => reorderRunGroupTab(fromKey, toKey)"
       @close="showSettings = false; settingsInitialTab = 'roles'"
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
@@ -7405,17 +7438,21 @@ function paneIsCommander(p: ActivePane): boolean {
         <div class="stall-card">
           <header>
             <span class="stall-dot"></span>
-            <strong>Pipeline 進行中</strong>
+            <strong>{{ $t('confirm-close.ws-title') }}</strong>
           </header>
           <div class="stall-body">
             <p class="stall-hint">
-              切換 workspace 會<strong>中止目前 pipeline</strong>並關閉所有 CLI pane。
-              pipeline 紀錄會保留在磁碟，稍後重開此 workspace 可 resume。確定要切換嗎？
+              {{ $t('confirm-close.ws-body') }}
+              <template v-if="pipeline.state === 'running'"> {{ $t('confirm-close.ws-running-extra') }}</template>
             </p>
+            <label class="check-row confirm-dont-show">
+              <input type="checkbox" v-model="dontConfirmCloseAgain" />
+              <span>{{ $t('confirm-close.dont-show-again') }}</span>
+            </label>
           </div>
           <footer>
             <button class="stall-btn primary" @click="confirmCloseWorkspace = false">{{ $t('action.cancel') }}</button>
-            <button class="stall-btn danger" @click="doCloseWorkspace">{{ $t('action.abort-and-switch') }}</button>
+            <button class="stall-btn danger" @click="onConfirmCloseWorkspace">{{ $t('confirm-close.confirm') }}</button>
           </footer>
         </div>
       </div>
@@ -8691,6 +8728,9 @@ function paneIsCommander(p: ActivePane): boolean {
 .stall-hint strong {
   color: var(--text-bright);
 }
+.check-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none; }
+.check-row input[type='checkbox'] { width: 14px; height: 14px; accent-color: var(--accent-fg); }
+.confirm-dont-show { margin-top: 10px; }
 .stall-auto {
   font-size: 12px;
   color: var(--accent-bright);

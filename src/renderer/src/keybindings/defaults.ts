@@ -149,7 +149,8 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+b', command: 'workbench.action.rebuildFocusedPane' },
 
   // ── Run-group tabs (main window) ──────────────────────────────────────────────
-  // Cmd+Shift+<n> jumps to the Nth stage tab. Bound on the shifted digits (not
+  // Cmd+Shift+<n> jumps to the Nth stage tab; Cmd+Shift+9 always lands on the
+  // LAST tab so tabs beyond 8 stay reachable. Bound on the shifted digits (not
   // plain cmd+<n>, which is the editor-window "open editor at index"). The
   // matcher falls back to e.code=Digit<n> since macOS emits symbols for Shift+digit.
   { key: 'cmd+shift+1', command: 'workbench.action.switchToTab1' },

@@ -1,4 +1,17 @@
 {
+  "confirm-close": {
+    "ws-title": "關閉工作區？",
+    "ws-body": "確定要關閉目前工作區並返回歡迎頁嗎？",
+    "ws-running-extra": "這會中止進行中的 pipeline（紀錄會保留在磁碟，稍後可 resume）。",
+    "confirm": "關閉",
+    "dont-show-again": "不再顯示此提醒",
+    "quit-title": "結束 Agent-Team？",
+    "quit-body": "確定要結束整個應用程式嗎？",
+    "quit": "結束",
+    "setting-title": "關閉前確認",
+    "setting-hint": "關閉工作區或結束應用程式前，先跳出確認視窗。",
+    "setting-label": "關閉前顯示確認提醒"
+  },
   "git": {
     "account": {
       "selector-title": "此工作區使用的帳號",
@@ -407,7 +420,11 @@
       "backend-timeout-label": "逾時秒數",
       "loop-prompt": "Loop 提示詞",
       "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。",
-      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。"
+      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。",
+      "tab-order": "分頁快捷鍵排序",
+      "tab-order-hint": "拖曳重新排列主視窗的 Run Group 分頁；右側徽章是該分頁對應的 Cmd+Shift+N 快捷鍵。",
+      "tab-order-empty": "尚無分頁。",
+      "tab-order-last": "最後"
     },
     "roles": {
       "title": "角色",
@@ -705,6 +722,7 @@
     "all-branches": "所有分支",
     "no-matches": "沒有符合項目",
     "no-commits-yet": "尚無提交",
+    "view-full-history": "查看完整歷史",
     "push-to-remote": "推送到遠端",
     "draft": "草稿",
     "remotes": "遠端",

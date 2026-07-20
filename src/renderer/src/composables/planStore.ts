@@ -63,6 +63,13 @@ export interface PlanCtx {
 export interface PlanStore {
   readonly format: 'markdown' | 'html'
   canHandle(relPath: string): boolean
+  /**
+   * Pure, synchronous meta parse of already-read content (no I/O). The review
+   * toolbar uses it to refresh its local `meta` state from freshly written
+   * bytes without re-branching on format. Returns null when the content is not
+   * a valid plan of this store's format.
+   */
+  parseMeta(raw: string): PlanMeta | null
   readMeta(ctx: PlanCtx): Promise<ReadResult | null>
   writeMeta(
     ctx: PlanCtx,
@@ -153,6 +160,11 @@ class HtmlPlanStore implements PlanStore {
     return relPath.endsWith('.html')
   }
 
+  parseMeta(raw: string): PlanMeta | null {
+    const parsed = parseHtmlPlanMeta(raw)
+    return parsed ? ({ ...parsed.meta, format: 'html' } as PlanMeta) : null
+  }
+
   async readMeta(ctx: PlanCtx): Promise<ReadResult | null> {
     const readResp = await readFile(ctx)
     if (!readResp.payload?.ok || readResp.payload.content === undefined) return null
@@ -222,6 +234,10 @@ class MarkdownPlanStore implements PlanStore {
 
   canHandle(relPath: string): boolean {
     return relPath.endsWith('.plan.md') || relPath.endsWith('.md')
+  }
+
+  parseMeta(raw: string): PlanMeta | null {
+    return parsePlanMeta(raw)
   }
 
   async readMeta(ctx: PlanCtx): Promise<ReadResult | null> {

@@ -1,4 +1,17 @@
 {
+  "confirm-close": {
+    "ws-title": "Close workspace?",
+    "ws-body": "Return to the welcome screen and close the current workspace?",
+    "ws-running-extra": "This aborts the running pipeline (its record is kept on disk and can be resumed later).",
+    "confirm": "Close",
+    "dont-show-again": "Don't show this reminder again",
+    "quit-title": "Quit Agent-Team?",
+    "quit-body": "Are you sure you want to quit the entire app?",
+    "quit": "Quit",
+    "setting-title": "Confirm before closing",
+    "setting-hint": "Show a confirmation dialog before closing a workspace or quitting the app.",
+    "setting-label": "Show a confirmation reminder before closing"
+  },
   "git": {
     "account": {
       "selector-title": "Account for this workspace",
@@ -407,7 +420,11 @@
       "backend-timeout-label": "Timeout (seconds)",
       "loop-prompt": "Loop Prompt",
       "loop-prompt-hint": "Prompt sent to a CLI pane when its loop button is clicked.",
-      "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets."
+      "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets.",
+      "tab-order": "Tab Shortcut Order",
+      "tab-order-hint": "Drag to reorder the main window Run Group tabs; the badge shows each tab's Cmd+Shift+N shortcut.",
+      "tab-order-empty": "No tabs yet.",
+      "tab-order-last": "Last"
     },
     "roles": {
       "title": "Roles",
@@ -705,6 +722,7 @@
     "all-branches": "All branches",
     "no-matches": "No matches",
     "no-commits-yet": "No commits yet",
+    "view-full-history": "View full history",
     "push-to-remote": "Push to remote",
     "draft": "Draft",
     "remotes": "Remotes",

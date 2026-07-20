@@ -6,7 +6,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  parseHtmlPlanMeta,
   htmlPlanProgress,
   addTodoMarkup,
   removeTodoMarkup,
@@ -71,8 +70,9 @@ const saving = ref(false)
 function applyContent(content: string, notifyHost: boolean): void {
   const changed = content !== rawContent.value
   rawContent.value = content
-  const parsed = parseHtmlPlanMeta(content)?.meta
-  meta.value = parsed ? ({ ...parsed, format: 'html' } as PlanMeta) : null
+  // Format-agnostic: the store parses HTML `plan-meta` islands or `.plan.md`
+  // frontmatter, so the same toolbar drives markdown and HTML plans alike.
+  meta.value = props.store.parseMeta(content)
   if (notifyHost && changed) emit('updated')
 }
 
@@ -162,7 +162,11 @@ async function writeMeta(
 ): Promise<boolean> {
   saving.value = true
   try {
-    const result = await props.store.writeMeta(ctx.value, mutate, syncBody)
+    // `syncBody` only patches HTML plans' visible `<li>` markup. Markdown plans
+    // keep todos/notes solely in frontmatter (written by the store's meta
+    // serialize), so there is no body markup to sync — skip it entirely.
+    const bodySync = props.store.format === 'html' ? syncBody : undefined
+    const result = await props.store.writeMeta(ctx.value, mutate, bodySync)
     if (result.ok) {
       applyContent(result.raw ?? rawContent.value, false)
       emit('updated')

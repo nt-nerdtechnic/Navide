@@ -352,7 +352,8 @@ async def git_log(session: "Session", msg_id: str, msg_type: str, payload: dict)
     ws_path = payload.get("workspace_path") or ""
     n = min(int(payload.get("n", 20)), 500)
     all_branches = bool(payload.get("all", False))
-    result = await app.git_service.get_log(ws_path, n, all_branches)
+    query = payload.get("query") or None
+    result = await app.git_service.get_log(ws_path, n, all_branches, query)
     await session.send_json(make_response(msg_id, msg_type, {"commits": result}))
 
 

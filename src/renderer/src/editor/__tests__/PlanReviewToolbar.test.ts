@@ -10,6 +10,7 @@ import PlanReviewToolbar from '../PlanReviewToolbar.vue'
 import { i18n } from '../../i18n'
 import { parseHtmlPlanMeta, replaceHtmlPlanMeta } from '../../composables/usePlanHtml'
 import type { HtmlPlanMeta } from '../../composables/usePlanHtml'
+import { parsePlanMeta } from '../../composables/usePlanFile'
 import { resolvePlanStore, type PlanStore } from '../../composables/planStore'
 
 i18n.global.locale.value = 'en-US'
@@ -1283,5 +1284,81 @@ describe('PlanReviewToolbar – ESC overlay query', () => {
     await wrapper.find('.prt-todos-btn').trigger('click')
     await wrapper.findAll('.prt-todo-row')[0].find('.prt-ghost').trigger('click')
     expect(vm.closeActiveOverlay()).toBe(true)
+  })
+})
+
+// The same toolbar drives markdown (.plan.md) plans via the markdown PlanStore:
+// meta comes from YAML frontmatter (not an HTML plan-meta island), and todo CRUD
+// writes back into the frontmatter with no body markup to sync.
+const MD_REL_PATH = '.cursor/plans/md-plan.plan.md'
+const MD_CONTENT = `---
+name: MD Plan
+overview: ov
+todos:
+  - id: t1
+    content: First
+    status: pending
+stage: in-review
+approvedAt: null
+reviewNotes: []
+---
+
+## Phase A
+
+Body A.
+`
+
+async function mountMarkdownToolbar(content: string): Promise<{ wrapper: VueWrapper; writes: string[] }> {
+  let current = content
+  let mtime = 1
+  const writes: string[] = []
+  const backend = {
+    httpUrl: ref('http://127.0.0.1:8123'),
+    status: ref('connected'),
+    on: () => () => {},
+    send: vi.fn(async (type: string, payload: Record<string, unknown>) => {
+      if (type === 'fs.read_file') return { payload: { ok: true, content: current, mtime } }
+      if (type === 'fs.write_file') {
+        writes.push(payload.content as string)
+        current = payload.content as string
+        mtime++
+        return { payload: { ok: true, mtime } }
+      }
+      return { payload: { ok: true } }
+    }),
+  }
+  const wrapper = mount(PlanReviewToolbar, {
+    props: { workspacePath: '/ws', relPath: MD_REL_PATH, backend: backend as never, store: resolvePlanStore(MD_REL_PATH) },
+    global: { plugins: [i18n] },
+  })
+  await flushPromises()
+  return { wrapper, writes }
+}
+
+describe('PlanReviewToolbar – markdown plans', () => {
+  it('renders the stage badge and progress from .plan.md frontmatter', async () => {
+    const { wrapper } = await mountMarkdownToolbar(MD_CONTENT)
+    const badge = wrapper.find('.prt-stage')
+    expect(badge.exists()).toBe(true)
+    expect(badge.classes()).toContain('prt-stage--in-review')
+    expect(badge.text()).toBe('In Review')
+    expect(wrapper.find('.prt-progress').text()).toBe('0/1 done')
+  })
+
+  it('adds a todo into the frontmatter (no HTML body markup to sync)', async () => {
+    const { wrapper, writes } = await mountMarkdownToolbar(MD_CONTENT)
+    await wrapper.find('.prt-todos-btn').trigger('click')
+    await wrapper.find('.prt-new .prt-input').setValue('Write the docs')
+    await wrapper.find('.prt-new .prt-send').trigger('click')
+    await flushPromises()
+    expect(writes).toHaveLength(1)
+    const written = writes[0]
+    // Todo landed in frontmatter; the markdown body is preserved verbatim.
+    const meta = parsePlanMeta(written)
+    expect(meta!.todos.map((t) => t.content)).toContain('Write the docs')
+    expect(written).toContain('## Phase A')
+    expect(written).toContain('Body A.')
+    // No HTML todo markup was injected into a markdown document.
+    expect(written).not.toContain('data-todo-id')
   })
 })

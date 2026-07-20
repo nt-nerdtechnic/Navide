@@ -62,6 +62,17 @@ let backendStarting: Promise<void> | null = null
 // can show a real error instead of sitting in "starting" forever after a
 // retry also fails. Cleared as soon as a start attempt succeeds.
 let backendLastError: string | null = null
+// Confirm-before-quit config, driven from the renderer (shared "confirm before
+// close" setting). Localized strings are supplied by the renderer.
+let quitConfirm = {
+  enabled: true,
+  message: 'Quit?',
+  detail: '',
+  quitLabel: 'Quit',
+  cancelLabel: 'Cancel',
+  dontShowLabel: "Don't show this again",
+}
+let quitConfirmed = false
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -1202,6 +1213,10 @@ ipcMain.handle('logs:findManualLog', async (_event, workspacePath: string, filen
   }
 })
 
+ipcMain.on('app:setQuitConfirm', (_event, cfg: Partial<typeof quitConfirm>) => {
+  if (cfg && typeof cfg === 'object') quitConfirm = { ...quitConfirm, ...cfg }
+})
+
 ipcMain.on('settings:language-changed', (_event, locale: string) => {
   for (const win of [mainWindow, rolesWindow, stagesWindow, editorWindow]) {
     if (win && !win.isDestroyed()) {
@@ -1578,12 +1593,9 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', async (e) => {
+async function teardownBackendAndQuit(): Promise<void> {
   // A user-initiated quit is a clean exit — nothing to restore next launch.
-  // Must run before the early return below (backend may already be gone).
   windowRegistry.markCleanExit()
-  if (!backend && !backendStarting) return
-  e.preventDefault()
   // Never let a wedged/slow backend block quit: cap every wait below.
   const forced = new Promise<void>((r) => setTimeout(r, 3000))
   // If the backend is still spawning (quit mid-startup), wait for it (capped) so
@@ -1594,4 +1606,40 @@ app.on('before-quit', async (e) => {
   backendStarting = null
   if (b) await Promise.race([b.stop(), forced])
   app.quit()
+}
+
+app.on('before-quit', async (e) => {
+  // Confirmation gate — shared "confirm before close" setting, driven by renderer.
+  if (quitConfirm.enabled && !quitConfirmed) {
+    e.preventDefault()
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const opts = {
+      type: 'question' as const,
+      buttons: [quitConfirm.quitLabel, quitConfirm.cancelLabel],
+      defaultId: 0,
+      cancelId: 1,
+      message: quitConfirm.message,
+      detail: quitConfirm.detail,
+      checkboxLabel: quitConfirm.dontShowLabel,
+      checkboxChecked: false,
+    }
+    const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    if (res.response === 1) return // cancelled — stay open (default already prevented)
+    if (res.checkboxChecked) {
+      quitConfirm.enabled = false
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed()) w.webContents.send('app:quitConfirmDisabled')
+      }
+    }
+    quitConfirmed = true
+    void teardownBackendAndQuit() // default prevented → drive quit ourselves
+    return
+  }
+  // Non-dialog path (disabled, or re-entrant after quitConfirmed).
+  // A user-initiated quit is a clean exit — nothing to restore next launch.
+  // Must run before the early return below (backend may already be gone).
+  windowRegistry.markCleanExit()
+  if (!backend && !backendStarting) return
+  e.preventDefault()
+  void teardownBackendAndQuit()
 })

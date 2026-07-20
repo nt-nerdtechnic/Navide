@@ -12,6 +12,7 @@ import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
 import { guardedDiscard } from '../lib/discardConfirm'
 import GitCredentialModal from './GitCredentialModal.vue'
+import GitHistoryModal from './GitHistoryModal.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -55,7 +56,7 @@ function openBranchDiffTab(base = 'main'): void {
 const {
   gitStatus, loadStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
-  logScope, canLoadMoreLog, loadMoreLog, setLogScope, isLoadingLog,
+  logScope, canLoadMoreLog, loadMoreLog, logSearch, setLogScope, isLoadingLog,
   isCommitting, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
@@ -266,19 +267,6 @@ function openFolderCtxMenu(e: MouseEvent, dir: string, staged: boolean): void {
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 304)
   ctxMenu.value = { show: true, x, y, kind: 'folder', file: null, dir, branch: '', hash: '', staged }
-  showViewMenu.value = false
-  showCommitMenu.value = false
-}
-// Cherry-pick / Revert are low-frequency, unconfirmed, history-rewriting
-// actions — reach them by right-clicking a commit rather than always-on
-// buttons, so they can't be fat-fingered while scanning the log.
-function openCommitCtxMenu(e: MouseEvent, hash: string): void {
-  e.preventDefault()
-  e.stopPropagation()
-  // Ten-item menu with separators (~330px tall) — clamp so it stays on-screen.
-  const x = Math.min(e.clientX, window.innerWidth - 224)
-  const y = Math.min(e.clientY, window.innerHeight - 330)
-  ctxMenu.value = { show: true, x, y, kind: 'commit', file: null, dir: '', branch: '', hash, staged: false }
   showViewMenu.value = false
   showCommitMenu.value = false
 }
@@ -536,7 +524,7 @@ watch(allConflictsResolved, async (val) => {
 // ── commit graph (DAG lane layout) ───────────────────────────────────────────────
 const GRAPH_LANE_W = 14 // px per lane column
 const graphLayout = computed(() =>
-  computeGraph(filteredLog.value.map((c) => ({ hash: c.hash, parents: c.parents ?? [] }))),
+  computeGraph(latestLog.value.map((c) => ({ hash: c.hash, parents: c.parents ?? [] }))),
 )
 const graphWidth = computed(() => Math.max(graphLayout.value.width * GRAPH_LANE_W, GRAPH_LANE_W))
 function laneX(lane: number): number { return lane * GRAPH_LANE_W + GRAPH_LANE_W / 2 }
@@ -1410,73 +1398,12 @@ async function toggleCommitFileDiff(hash: string, file: string): Promise<void> {
   }
 }
 
-// ── cherry-pick / revert ──────────────────────────────────────────────────────
-async function doCherryPick(hash: string): Promise<void> {
-  const r = await cherryPick(hash); if (!r.ok) notifyToast(r.error || 'cherry-pick failed', { type: 'error' })
-}
-async function doRevert(hash: string): Promise<void> {
-  const r = await revertCommit(hash); if (!r.ok) notifyToast(r.error || 'revert failed', { type: 'error' })
-}
-
-// ── commit context-menu actions (VS Code / Cursor parity) ──────────────────────
-async function doOpenChanges(hash: string): Promise<void> {
-  // Expand the commit detail (per-file inline diffs live there).
-  if (expandedCommitHash.value !== hash) await toggleCommitDetail(hash)
-}
-async function doCheckoutCommit(hash: string): Promise<void> {
-  const r = await checkoutCommit(hash); if (!r.ok) notifyToast(r.error || 'checkout failed', { type: 'error' })
-}
-function copyCommitId(hash: string): void {
-  void navigator.clipboard.writeText(hash)
-  notifyToast('Commit ID copied', { type: 'info' })
-}
-function copyCommitMessage(hash: string): void {
-  const c = gitLog.value.find((x) => x.hash === hash)
-  void navigator.clipboard.writeText(c?.message ?? '')
-  notifyToast('Commit message copied', { type: 'info' })
-}
-
-// Name-input modal shared by "Create Branch…" / "Create Tag…" from a commit.
-const commitRefModal = ref<{ kind: 'branch' | 'tag'; hash: string; name: string; message: string; error: string } | null>(null)
-function startCreateBranchFromCommit(hash: string): void {
-  commitRefModal.value = { kind: 'branch', hash, name: '', message: '', error: '' }
-  closeCtxMenu()
-}
-function startCreateTagFromCommit(hash: string): void {
-  commitRefModal.value = { kind: 'tag', hash, name: '', message: '', error: '' }
-  closeCtxMenu()
-}
-async function submitCommitRef(): Promise<void> {
-  const m = commitRefModal.value; if (!m) return
-  const name = m.name.trim(); if (!name) { m.error = 'name required'; return }
-  const r = m.kind === 'branch'
-    ? await createBranch(name, m.hash)
-    : await createTag(name, m.message.trim(), m.hash)
-  if (r.ok) commitRefModal.value = null; else m.error = r.error || 'failed'
-}
-
 // ── history ───────────────────────────────────────────────────────────────────
-const historyExpanded = ref(true), historySearch = ref('')
-const filteredLog = computed(() => {
-  if (!historySearch.value.trim()) return gitLog.value
-  const q = historySearch.value.toLowerCase()
-  return gitLog.value.filter(c =>
-    c.message.toLowerCase().includes(q) || c.short_hash.toLowerCase().includes(q) ||
-    (c.branches ?? []).some(b => b.toLowerCase().includes(q))
-  )
-})
-
-// History pagination (mirrors the pipeline list). Each item carries its global
-// index `gi` so the commit graph / HEAD / revert logic stays aligned with the
-// full filteredLog regardless of the current page.
-const HISTORY_PAGE_SIZE = 15
-const historyPage = ref(0)
-const historyPageCount = computed(() => Math.ceil(filteredLog.value.length / HISTORY_PAGE_SIZE))
-const pagedLog = computed(() => {
-  const start = historyPage.value * HISTORY_PAGE_SIZE
-  return filteredLog.value.slice(start, start + HISTORY_PAGE_SIZE).map((c, k) => ({ c, gi: start + k }))
-})
-watch(() => filteredLog.value.length, () => { historyPage.value = 0 })
+// The main panel shows only the latest page (read-only expand). Search, scope
+// toggle, pagination and commit actions live in the GitHistoryModal dialog.
+const historyExpanded = ref(true)
+const showHistoryModal = ref(false)
+const latestLog = computed(() => gitLog.value.slice(0, 15))
 
 // ── section expand states ─────────────────────────────────────────────────────
 const stagedExpanded = ref(true)
@@ -2235,18 +2162,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <div class="spacer" />
         </div>
         <div v-if="historyExpanded" class="card-body">
-        <div class="history-search-row">
-          <svg width="11" height="11" viewBox="0 0 16 16" fill="var(--text-muted)" style="flex-shrink:0"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
-          <input v-model="historySearch" class="search-input" :placeholder="$t('label.search-commits')" @click.stop />
-        </div>
-        <div class="history-scope-row" @click.stop>
-          <button class="scope-btn" :class="{ active: logScope === 'all' }" :disabled="isLoadingLog" @click="setLogScope('all')">{{ $t('label.all-branches') }}</button>
-          <button class="scope-btn" :class="{ active: logScope === 'current' }" :disabled="isLoadingLog" @click="setLogScope('current')">{{ $t('label.current') }}</button>
-        </div>
-        <div v-if="!filteredLog.length" class="empty-msg">{{ historySearch ? $t('label.no-matches') : $t('label.no-commits-yet') }}</div>
+        <div v-if="!latestLog.length" class="empty-msg">{{ $t('label.no-commits-yet') }}</div>
         <div v-else class="commit-list">
-          <div v-for="{ c, gi } in pagedLog" :key="c.hash">
-            <div class="commit-row" @click="toggleCommitDetail(c.hash)" @contextmenu.prevent="openCommitCtxMenu($event, c.hash)">
+          <div v-for="(c, gi) in latestLog" :key="c.hash">
+            <div class="commit-row" @click="toggleCommitDetail(c.hash)">
               <div class="graph-col" :style="{ width: graphWidth + 'px' }">
                 <svg class="graph-svg" :viewBox="`0 0 ${graphWidth} 100`" preserveAspectRatio="none">
                   <line
@@ -2306,15 +2225,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             </div>
           </div>
         </div>
-        <div v-if="historyPageCount > 1" class="history-pagination">
-          <button class="pg-btn" :disabled="historyPage === 0" @click="historyPage--">‹</button>
-          <span class="pg-info">{{ historyPage + 1 }} / {{ historyPageCount }}</span>
-          <button class="pg-btn" :disabled="historyPage >= historyPageCount - 1" @click="historyPage++">›</button>
-        </div>
-        <div v-if="canLoadMoreLog && historyPage >= historyPageCount - 1" class="history-load-more">
-          <button class="load-more-btn" :disabled="isLoadingLog" @click="loadMoreLog">
-            {{ isLoadingLog ? 'Loading…' : 'Load more' }}
-          </button>
+        <div class="history-load-more">
+          <button class="load-more-btn" @click.stop="showHistoryModal = true">{{ $t('label.view-full-history') }}</button>
         </div>
         </div>
       </div>
@@ -2692,36 +2604,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <button class="menu-item danger" @click="ctxDeleteBranch">{{ $t('action.delete-branch') }}</button>
       </div>
 
-      <div v-else-if="ctxMenu.show && ctxMenu.kind === 'commit'" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
-        <button class="menu-item" @click="doOpenChanges(ctxMenu.hash); closeCtxMenu()">⇄ {{ $t('action.open-changes') }}</button>
-        <div class="menu-sep" />
-        <button class="menu-item" @click="doCheckoutCommit(ctxMenu.hash); closeCtxMenu()">⎇ {{ $t('action.checkout-detached') }}</button>
-        <button class="menu-item" @click="startCreateBranchFromCommit(ctxMenu.hash)">＋ {{ $t('action.create-branch') }}</button>
-        <button class="menu-item" @click="startCreateTagFromCommit(ctxMenu.hash)">🏷 {{ $t('action.create-tag') }}</button>
-        <div class="menu-sep" />
-        <button class="menu-item" @click="doCherryPick(ctxMenu.hash); closeCtxMenu()">🍒 {{ $t('action.cherry-pick') }}</button>
-        <button class="menu-item" @click="doRevert(ctxMenu.hash); closeCtxMenu()">↺ {{ $t('action.revert') }}</button>
-        <div class="menu-sep" />
-        <button class="menu-item" @click="copyCommitId(ctxMenu.hash); closeCtxMenu()">⧉ {{ $t('action.copy-commit-id') }}</button>
-        <button class="menu-item" @click="copyCommitMessage(ctxMenu.hash); closeCtxMenu()">⧉ {{ $t('action.copy-commit-message') }}</button>
-      </div>
-    </Teleport>
-
-    <!-- ── Create branch / tag from a commit ────────────────────────────── -->
-    <Teleport to="body">
-      <div v-if="commitRefModal" class="tp-backdrop" @click="commitRefModal = null" />
-      <div v-if="commitRefModal" class="ignore-modal" @click.stop>
-        <div class="ignore-modal-path">
-          {{ commitRefModal.kind === 'branch' ? $t('label.create-branch-from') : $t('label.create-tag-at') }} {{ commitRefModal.hash.slice(0, 7) }}
-        </div>
-        <input v-model="commitRefModal.name" class="git-input" :placeholder="commitRefModal.kind === 'branch' ? $t('label.branch-name-placeholder') : 'v1.0.0'" @keydown.enter="submitCommitRef" />
-        <input v-if="commitRefModal.kind === 'tag'" v-model="commitRefModal.message" class="git-input" :placeholder="$t('label.message-optional')" @keydown.enter="submitCommitRef" />
-        <p v-if="commitRefModal.error" class="err-text">{{ commitRefModal.error }}</p>
-        <div style="display:flex; gap:6px; justify-content:flex-end">
-          <button class="btn-ghost sm" @click="commitRefModal = null">{{ $t('action.cancel') }}</button>
-          <button class="btn-ghost sm" @click="submitCommitRef">{{ $t('action.create') }}</button>
-        </div>
-      </div>
     </Teleport>
 
     <!-- ── "Why is this ignored?" verdict ───────────────────────────────── -->
@@ -2741,6 +2623,28 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       :workspace-path="workspacePath"
       @submit="submitCredential"
       @cancel="cancelCredential"
+    />
+
+    <!-- ── Full history dialog ──────────────────────────────────────────── -->
+    <GitHistoryModal
+      :show="showHistoryModal"
+      :backend="backend"
+      :workspace-path="workspacePath"
+      :git-log="gitLog"
+      :log-scope="logScope"
+      :is-loading-log="isLoadingLog"
+      :can-load-more-log="canLoadMoreLog"
+      :set-log-scope="setLogScope"
+      :load-more-log="loadMoreLog"
+      :log-search="logSearch"
+      :show-commit="showCommit"
+      :commit-file-diff="commitFileDiff"
+      :cherry-pick="cherryPick"
+      :revert-commit="revertCommit"
+      :checkout-commit="checkoutCommit"
+      :create-branch="createBranch"
+      :create-tag="createTag"
+      @close="showHistoryModal = false"
     />
   </div>
 </template>

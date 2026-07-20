@@ -41,6 +41,11 @@ const previewSpies = vi.hoisted(() => ({
   isEditing: vi.fn(() => false),
   cancelEdit: vi.fn(),
 }))
+const mdBodySpies = vi.hoisted(() => ({
+  scrollToAnchor: vi.fn(),
+  isEditing: vi.fn(() => false),
+  cancelEdit: vi.fn(),
+}))
 const plansPaneSpies = vi.hoisted(() => ({ closeActiveOverlay: vi.fn(() => false) }))
 
 // Notify mock: section-delete confirms host-side; default accept.
@@ -110,6 +115,18 @@ vi.mock('../PlanDocPreview.vue', () => ({
     },
   }),
 }))
+vi.mock('../PlanMarkdownBody.vue', () => ({
+  __esModule: true,
+  default: defineComponent({
+    name: 'PlanMarkdownBody',
+    props: ['workspacePath', 'relPath', 'backend', 'refresh'],
+    inheritAttrs: false,
+    setup(_, { expose }) {
+      expose(mdBodySpies)
+      return () => h('div', { class: 'stub-PlanMarkdownBody' })
+    },
+  }),
+}))
 vi.mock('../PlanFileView.vue', () => stub('PlanFileView', ['workspacePath', 'relPath', 'backend']))
 vi.mock('../FilePreviewPane.vue', () => stub('FilePreviewPane', ['workspacePath', 'relPath', 'name', 'backend']))
 vi.mock('../../components/NotificationHost.vue', () => stub('NotificationHost'))
@@ -122,6 +139,9 @@ beforeEach(() => {
   previewSpies.scrollToAnchor.mockClear()
   previewSpies.isEditing.mockReset().mockReturnValue(false)
   previewSpies.cancelEdit.mockClear()
+  mdBodySpies.scrollToAnchor.mockClear()
+  mdBodySpies.isEditing.mockReset().mockReturnValue(false)
+  mdBodySpies.cancelEdit.mockClear()
   plansPaneSpies.closeActiveOverlay.mockReset().mockReturnValue(false)
   toastMock.mockClear()
   confirmMock.mockReset().mockResolvedValue(true)
@@ -185,6 +205,23 @@ async function open(wrapper: VueWrapper, filepath: string): Promise<void> {
     .vm.$emit('open-file', { filepath, name: filepath.split('/').pop() ?? filepath })
   await flushPromises()
 }
+
+// A valid markdown plan (frontmatter meta) — the routing probe reads this via
+// the store and mounts the shared toolbar + PlanMarkdownBody.
+const MD_PLAN = `---
+name: MD Plan
+overview: ov
+todos:
+  - id: t1
+    content: First
+    status: pending
+stage: in-review
+---
+
+## Phase A
+
+Body A.
+`
 
 describe('PlanWindowApp', () => {
   it('mounts PlansPane for the workspace and starts on the empty state', async () => {
@@ -335,14 +372,49 @@ describe('PlanWindowApp', () => {
     )
   })
 
-  it('falls back to PlanFileView for legacy markdown plans', async () => {
+  it('falls back to PlanFileView for plain markdown with no frontmatter meta', async () => {
+    fsState.content = '# Plain doc\n\nNo frontmatter here.\n'
     const wrapper = await mountApp()
     await open(wrapper, '.cursor/plans/legacy-feature.plan.md')
     const view = wrapper.findComponent({ name: 'PlanFileView' })
     expect(view.exists()).toBe(true)
     expect(view.props('relPath')).toBe('.cursor/plans/legacy-feature.plan.md')
     expect(wrapper.findComponent({ name: 'PlanReviewToolbar' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'PlanMarkdownBody' }).exists()).toBe(false)
     expect(wrapper.findComponent({ name: 'FilePreviewPane' }).exists()).toBe(false)
+  })
+
+  it('opens a markdown plan (valid meta) with the shared toolbar above the markdown body', async () => {
+    fsState.content = MD_PLAN
+    const wrapper = await mountApp()
+    await open(wrapper, '.cursor/plans/feature.plan.md')
+    const toolbar = wrapper.findComponent({ name: 'PlanReviewToolbar' })
+    expect(toolbar.exists()).toBe(true)
+    expect(toolbar.props('relPath')).toBe('.cursor/plans/feature.plan.md')
+    const body = wrapper.findComponent({ name: 'PlanMarkdownBody' })
+    expect(body.exists()).toBe(true)
+    expect(body.props('relPath')).toBe('.cursor/plans/feature.plan.md')
+    // Not the HTML preview, not the legacy fallback.
+    expect(wrapper.findComponent({ name: 'PlanDocPreview' }).exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'PlanFileView' }).exists()).toBe(false)
+  })
+
+  it('forwards the toolbar outline pick to the markdown body scroller', async () => {
+    fsState.content = MD_PLAN
+    const wrapper = await mountApp()
+    await open(wrapper, '.cursor/plans/feature.plan.md')
+    wrapper.findComponent({ name: 'PlanReviewToolbar' }).vm.$emit('scroll-to-anchor', 'Phase A')
+    expect(mdBodySpies.scrollToAnchor).toHaveBeenCalledWith('Phase A')
+  })
+
+  it('bumps the markdown body refresh when the toolbar reports a meta update', async () => {
+    fsState.content = MD_PLAN
+    const wrapper = await mountApp()
+    await open(wrapper, '.cursor/plans/feature.plan.md')
+    expect(wrapper.findComponent({ name: 'PlanMarkdownBody' }).props('refresh')).toBe(0)
+    wrapper.findComponent({ name: 'PlanReviewToolbar' }).vm.$emit('updated')
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'PlanMarkdownBody' }).props('refresh')).toBe(1)
   })
 })
 
@@ -434,6 +506,18 @@ describe('PlanWindowApp – ESC overlay priority', () => {
     const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
     pressEsc()
     expect(previewSpies.cancelEdit).toHaveBeenCalled()
+    expect(closeSpy).not.toHaveBeenCalled()
+    closeSpy.mockRestore()
+  })
+
+  it('cancels a markdown section edit before closing the window', async () => {
+    fsState.content = MD_PLAN
+    mdBodySpies.isEditing.mockReturnValue(true)
+    const wrapper = await mountApp()
+    await open(wrapper, '.cursor/plans/feature.plan.md')
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {})
+    pressEsc()
+    expect(mdBodySpies.cancelEdit).toHaveBeenCalled()
     expect(closeSpy).not.toHaveBeenCalled()
     closeSpy.mockRestore()
   })

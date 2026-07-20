@@ -286,6 +286,30 @@ export function useGit(
     if (!(await loadLog())) logLimit.value = prev
   }
 
+  // Search the full history on the backend (via git log --grep). Returns the
+  // matching commits WITHOUT touching gitLog — the history dialog owns a
+  // separate state so the main panel keeps showing the latest page.
+  async function logSearch(
+    query: string,
+    opts?: { scope?: 'all' | 'current'; limit?: number },
+  ): Promise<GitCommit[]> {
+    const ws = workspacePath()
+    if (!ws) return []
+    try {
+      const resp = await send<{ commits: GitCommit[] }>('git.log', {
+        workspace_path: ws,
+        n: opts?.limit ?? 50,
+        all: (opts?.scope ?? logScope.value) === 'all',
+        query,
+      })
+      if (resp.ok && resp.payload) return resp.payload.commits ?? []
+      return []
+    } catch {
+      // transient WS error — return empty, don't disturb the main panel
+      return []
+    }
+  }
+
   async function setLogScope(scope: 'all' | 'current'): Promise<void> {
     if (logScope.value === scope) return
     logScope.value = scope
@@ -1559,7 +1583,7 @@ export function useGit(
     syncOutput, syncError,
     gitError, clearGitError,
     // loaders
-    loadStatus, discoverRepositories, loadLog, loadMoreLog, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
+    loadStatus, discoverRepositories, loadLog, loadMoreLog, logSearch, setLogScope, loadBranches, loadStashes, loadRemotes, loadTags,
     loadWorktrees, loadGitConfig,
     // init
     initRepo,
