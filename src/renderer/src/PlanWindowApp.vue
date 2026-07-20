@@ -329,6 +329,7 @@ onUnmounted(() => {
                 :workspace-path="workspacePath"
                 :rel-path="snapshotPreview.relPath"
                 :backend="backend"
+                :readonly="true"
               />
             </template>
             <template v-else>

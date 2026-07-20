@@ -1,17 +1,31 @@
-<!-- provisioned by Navide, spec-version: 1 -->
-# Plan Document Spec (v1)
+<!-- provisioned by Navide, spec-version: 2 -->
+# Plan Document Spec (v2)
 
 Rules for agent-authored plan documents. Navide is the browser; this file is
 the contract. Read once, then copy `_template.html` to start a plan.
 
+## Two carriers, one model
+
+A plan carries the same fields (`name`, `overview`, `stage`, `approvedAt`,
+`todos`, `reviewNotes`, `executions`) and gets the same features (stage
+lifecycle, approval gate, review notes, section edit, dispatch, history) in
+either carrier — the app reads/writes both through one store:
+
+- **HTML** — a `<script type="application/json" id="plan-meta">` block (below).
+  Body is HTML, rendered in a sandboxed iframe. Preferred for new plans.
+- **Markdown** — a `.plan.md` file whose YAML frontmatter carries the same
+  fields; body is markdown `## sections`. Legacy `.cursor/plans/*.plan.md` and
+  new `.agent-team/plans/*.plan.md` both work; a file with no `stage` defaults
+  to `done` if every todo is done, else `draft` (written back only when you
+  act on it — legacy files stay byte-identical until then).
+
 ## Directory & naming
 
 - Location: `.agent-team/plans/`
-- Filename: `<kebab-slug>_<6-hex>.html` (e.g. `cli-health-removal_a1b2c3.html`)
+- Filename: `<kebab-slug>_<6-hex>.html` (HTML) or `<kebab-slug>.plan.md` (markdown)
 - Files starting with `_` are infrastructure (spec, template) — viewers must
   not list them as plans.
-- Legacy `.cursor/plans/*.plan.md` remain readable but frozen: never create
-  new ones.
+- Legacy `.cursor/plans/*.plan.md` remain readable; don't create new ones there.
 
 ## The one hard rule: the `plan-meta` block
 

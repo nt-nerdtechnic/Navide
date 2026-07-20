@@ -11,6 +11,10 @@ const props = defineProps<{
   workspacePath: string
   relPath: string
   backend: ReturnType<typeof useBackend>
+  // When true (e.g. history snapshot preview), render read-only: all write
+  // interactions are hidden and the write paths early-return, so a snapshot
+  // file is never mutated.
+  readonly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -189,6 +193,7 @@ const STATUS_CYCLE: Record<TodoStatus, TodoStatus> = {
 }
 
 async function saveTodos(updatedTodos: PlanTodo[]): Promise<boolean> {
+  if (props.readonly) return false
   const plan = parsed.value
   if (!plan) return false
   const newRaw = writePlanFile({ ...plan, todos: updatedTodos }, rawContent.value)
@@ -296,6 +301,7 @@ function cancelEditSection(): void {
 // lock (expected_mtime). On a conflict, re-read once and retry so a concurrent
 // todo toggle or external edit doesn't clobber the untouched sections.
 async function writeSectionBody(heading: string, edited: string): Promise<boolean> {
+  if (props.readonly) return false
   async function readFresh(): Promise<{ content: string; mtime: number | undefined } | null> {
     const resp = await props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>(
       'fs.read_file',
@@ -402,7 +408,7 @@ function badgeClass(status: TodoStatus): string {
         <div class="pfv-card-title-row">
           <div class="pfv-card-title">{{ section.heading }}</div>
           <button
-            v-if="editingSection !== section.heading"
+            v-if="!readonly && editingSection !== section.heading"
             class="pfv-inline-btn"
             @click="startEditSection(section)"
           >{{ t('pane.plans.edit') }}</button>
@@ -444,7 +450,7 @@ function badgeClass(status: TodoStatus): string {
       <!-- To-dos header: count + Cursor-style "+ New" -->
       <div class="pfv-todos-head">
         <span class="pfv-todos-count">{{ parsed.todos.length }} To-dos</span>
-        <button class="pfv-new-btn" @click="addingTodo = !addingTodo">+ New</button>
+        <button v-if="!readonly" class="pfv-new-btn" @click="addingTodo = !addingTodo">+ New</button>
       </div>
       <div v-if="addingTodo" class="pfv-new-row">
         <input
