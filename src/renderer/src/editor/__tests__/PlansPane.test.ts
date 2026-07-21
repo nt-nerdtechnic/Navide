@@ -5,8 +5,35 @@ import { ref } from 'vue'
 import PlansPane from '../PlansPane.vue'
 import { i18n } from '../../i18n'
 import { parseHtmlPlanMeta } from '../../composables/usePlanHtml'
+import { parsePlanMeta } from '../../composables/usePlanFile'
 
 i18n.global.locale.value = 'en-US'
+
+// Markdown plan carrying an explicit stage (unified list groups it by stage,
+// same as HTML plans — not the legacy Active/Completed split).
+const MD_REVIEW_PLAN = `---
+name: MD Review Plan
+overview: Awaiting review.
+stage: in-review
+todos:
+  - id: phase-a
+    content: First
+    status: done
+  - id: phase-b
+    content: Second
+    status: pending
+---
+
+# MD Review Plan
+`
+
+// Markdown doc with no frontmatter — listed as a doc, promotable to a plan.
+const MD_DOC = `# Email Attachments
+
+Support attaching files to outgoing email.
+
+More detail here.
+`
 
 const ACTIVE_PLAN = `---
 name: Active Plan
@@ -743,5 +770,78 @@ describe('PlansPane – promote doc to plan', () => {
     await flushPromises()
 
     expect(parseHtmlPlanMeta(backend.writes[0].content)!.meta.name).toBe('Titled Doc')
+  })
+})
+
+// ── Unified markdown list (stage grouping + doc + promote) ───────────────────
+
+describe('PlansPane – markdown plans use unified meta', () => {
+  it('groups a markdown plan by its stage with a stage badge, not the legacy split', async () => {
+    // active.plan.md serves an explicit-stage markdown plan; done.plan.md stays done.
+    const backend = makeBackend({
+      htmlFiles: { '.cursor/plans/active.plan.md': MD_REVIEW_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const sectionTexts = wrapper.findAll('.plans-section').map((s) => s.text())
+    const reviewSection = sectionTexts.find((t) => t.includes('In Review'))
+    expect(reviewSection).toBeDefined()
+    expect(reviewSection).toContain('MD Review Plan')
+    expect(reviewSection).toContain('1/2 done')
+    expect(reviewSection).toContain('in-review')
+
+    // Its stage-grouped row carries no legacy 'planned'/'markdown' doc badge.
+    const activeSection = sectionTexts.find((t) => t.includes('Active'))
+    expect(activeSection).not.toContain('MD Review Plan')
+  })
+
+  it('lists a frontmatter-less markdown file as a doc with no context menu freeze on plans', async () => {
+    const backend = makeBackend({
+      htmlFiles: { '.cursor/plans/active.plan.md': MD_DOC },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const activeSection = wrapper.findAll('.plans-section').map((s) => s.text()).find((t) => t.includes('Active'))
+    expect(activeSection).toContain('active.plan.md')
+    expect(activeSection).toContain('doc')
+
+    // A markdown doc opens the context menu (to allow Promote); a markdown plan does not.
+    await openMenuOn(wrapper, 'active.plan.md')
+    expect(wrapper.find('.ctx-menu').exists()).toBe(true)
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toContain('Promote to Plan')
+    // HTML-only actions are hidden for markdown docs.
+    expect(labels).not.toContain('Rename')
+    expect(labels).not.toContain('Share to Git')
+  })
+
+  it('promotes a markdown doc by prepending parseable frontmatter, body preserved', async () => {
+    const backend = makeBackend({
+      htmlFiles: { '.cursor/plans/active.plan.md': MD_DOC },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'active.plan.md')
+
+    await menuItem(wrapper, 'Promote to Plan').trigger('click')
+    await flushPromises()
+
+    expect(backend.writes).toHaveLength(1)
+    expect(backend.writes[0].rel).toBe('.cursor/plans/active.plan.md')
+    const written = backend.writes[0].content
+    const meta = parsePlanMeta(written)
+    expect(meta).not.toBeNull()
+    expect(meta!).toMatchObject({
+      name: 'Email Attachments',
+      overview: 'Support attaching files to outgoing email.',
+      stage: 'draft',
+      todos: [],
+      reviewNotes: [],
+    })
+    // Original body survives verbatim after the frontmatter.
+    expect(written).toContain('# Email Attachments')
+    expect(written).toContain('More detail here.')
   })
 })

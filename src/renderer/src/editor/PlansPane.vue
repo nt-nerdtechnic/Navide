@@ -2,7 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
-import { parsePlanFile, planProgress, type ParsedPlan, type PlanProgress } from '../composables/usePlanFile'
+import { parsePlanMeta, writePlanMeta } from '../composables/usePlanFile'
+import { resolvePlanStore } from '../composables/planStore'
+import type { PlanMeta } from '../composables/planModel'
 import {
   htmlPlanProgress,
   injectPlanMeta,
@@ -29,17 +31,15 @@ interface FsEntry {
   is_dir: boolean
 }
 
-// `plan`/`progress` are null for markdown-only files without frontmatter —
-// still listed (Cursor parity) but without progress tracking.
-// `htmlMeta` is set only for `.agent-team/plans/*.html` files with a valid
-// plan-meta block; HTML files without one are listed as docs (plan/progress
-// null), same treatment as markdown fallback.
+// `meta` carries the unified plan model for BOTH formats: HTML plans parse
+// their `plan-meta` island, markdown plans parse their YAML frontmatter
+// (`resolvePlanStore(relPath).parseMeta`). It is null for files with no valid
+// plan meta of their format — those are listed as plain docs (badge 'doc', no
+// progress, no stage group), the same treatment for markdown and HTML.
 interface PlanItem {
   relPath: string
   name: string
-  plan: ParsedPlan | null
-  progress: PlanProgress | null
-  htmlMeta: HtmlPlanMeta | null
+  meta: PlanMeta | null
 }
 
 const { t } = useI18n()
@@ -85,13 +85,10 @@ async function loadPlans(): Promise<void> {
           rel_path: entry.rel_path,
         })
         if (!read.payload?.ok) continue
-        const parsed = parsePlanFile(read.payload.content ?? '')
         loaded.push({
           relPath: entry.rel_path,
           name: entry.name,
-          plan: parsed,
-          progress: parsed ? planProgress(parsed.todos) : null,
-          htmlMeta: null,
+          meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
         })
       }
     }
@@ -127,13 +124,10 @@ async function loadPlans(): Promise<void> {
             rel_path: entry.rel_path,
           })
           if (!read.payload?.ok) return null
-          const parsed = parseHtmlPlanMeta(read.payload.content ?? '')
           return {
             relPath: entry.rel_path,
             name: entry.name,
-            plan: null,
-            progress: null,
-            htmlMeta: parsed?.meta ?? null,
+            meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
           }
         })
       )
@@ -167,28 +161,29 @@ watch(() => props.backend.status?.value, (status) => {
   if (status === 'connected' && waitingForBackend.value) void loadPlans()
 })
 
-// Legacy markdown plans and docs (markdown or HTML without valid meta) keep
-// the original Active/Completed split; HTML plans with meta group by stage.
-const legacyItems = computed(() => plans.value.filter((p) => !p.htmlMeta))
-const activePlans = computed(() => legacyItems.value.filter((p) => !p.progress?.complete))
-const completedPlans = computed(() => legacyItems.value.filter((p) => p.progress?.complete))
+// Files without valid plan meta (markdown or HTML) are plain docs — listed
+// under Active with a 'doc' badge, no progress, never stage-grouped.
+const docItems = computed(() => plans.value.filter((p) => !p.meta))
 
-interface HtmlPlanRow {
+interface PlanStageRow {
   item: PlanItem
-  meta: HtmlPlanMeta
+  meta: PlanMeta
   done: number
   total: number
 }
 
-function htmlRows(stages: PlanStage[]): HtmlPlanRow[] {
+// Both formats group by `meta.stage`; progress uses `htmlPlanProgress`
+// (skipped counts toward neither done nor total-done), consistent across
+// markdown and HTML.
+function stageRows(stages: PlanStage[]): PlanStageRow[] {
   return plans.value.flatMap((p) => {
-    if (!p.htmlMeta || !stages.includes(p.htmlMeta.stage)) return []
-    const progress = htmlPlanProgress(p.htmlMeta.todos)
-    return [{ item: p, meta: p.htmlMeta, done: progress.done, total: progress.total }]
+    if (!p.meta || !stages.includes(p.meta.stage)) return []
+    const progress = htmlPlanProgress(p.meta.todos)
+    return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
   })
 }
 
-const htmlGroups = computed(() =>
+const stageGroups = computed(() =>
   (
     [
       { key: 'draft', label: t('pane.plans.stage-draft'), stages: ['draft'], finished: false },
@@ -199,14 +194,14 @@ const htmlGroups = computed(() =>
       { key: 'abandoned', label: t('pane.plans.stage-abandoned'), stages: ['abandoned'], finished: true },
     ] as { key: string; label: string; stages: PlanStage[]; finished: boolean }[]
   )
-    .map((group) => ({ ...group, rows: htmlRows(group.stages) }))
+    .map((group) => ({ ...group, rows: stageRows(group.stages) }))
     .filter((group) => group.rows.length > 0)
 )
 
-const finishedHtmlPlans = computed(() =>
-  plans.value.filter((p) => p.htmlMeta && (p.htmlMeta.stage === 'done' || p.htmlMeta.stage === 'abandoned'))
+// Batch-deletable = finished stages (done/abandoned), markdown and HTML alike.
+const deletablePlans = computed(() =>
+  plans.value.filter((p) => p.meta && (p.meta.stage === 'done' || p.meta.stage === 'abandoned'))
 )
-const deletablePlans = computed(() => [...completedPlans.value, ...finishedHtmlPlans.value])
 
 function openPlan(item: PlanItem): void {
   emit('open-file', { filepath: item.relPath, name: item.name })
@@ -233,14 +228,9 @@ async function deleteCompleted(): Promise<void> {
   await loadPlans()
 }
 
-function statusText(item: PlanItem): string {
-  if (!item.progress) return 'doc'
-  if (item.progress.complete) return 'completed'
-  if (item.progress.inProgress > 0) return 'in progress'
-  return 'planned'
-}
-
-// ── Context menu (HTML plan/doc items only; legacy .plan.md are frozen) ────
+// ── Context menu ──────────────────────────────────────────────────────────
+// Opens for HTML items (plans and docs) and for meta-less markdown docs (so
+// they can be promoted). Legacy markdown plans (with meta) stay frozen.
 // Backdrop + absolutely-positioned menu, following the GitPane convention.
 const ctxMenu = ref<{ show: boolean; x: number; y: number; item: PlanItem | null }>({
   show: false,
@@ -254,7 +244,8 @@ function isHtmlItem(item: PlanItem): boolean {
 }
 
 function openCtxMenu(e: MouseEvent, item: PlanItem): void {
-  if (!isHtmlItem(item)) return
+  // Frozen: legacy markdown plans (non-HTML with meta) get no menu.
+  if (!isHtmlItem(item) && item.meta) return
   const x = Math.min(e.clientX, window.innerWidth - 224)
   const y = Math.min(e.clientY, window.innerHeight - 220)
   ctxMenu.value = { show: true, x, y, item }
@@ -349,12 +340,12 @@ function onRenameEnter(event: KeyboardEvent): void {
 // ── Delete single (in-review/approved plans need a second confirmation) ───
 // Shared by the context menu and the always-visible per-row delete button.
 async function deletePlan(item: PlanItem): Promise<void> {
-  const ok = await confirm(t('pane.plans.delete-confirm', { name: item.htmlMeta?.name ?? item.name }), {
+  const ok = await confirm(t('pane.plans.delete-confirm', { name: item.meta?.name ?? item.name }), {
     title: t('pane.plans.menu-delete'),
     confirmText: t('pane.plans.menu-delete'),
   })
   if (!ok) return
-  const stage = item.htmlMeta?.stage
+  const stage = item.meta?.stage
   if (stage === 'in-review' || stage === 'approved') {
     const ok2 = await confirm(t('pane.plans.delete-confirm-review', { stage }), {
       title: t('pane.plans.menu-delete'),
@@ -380,7 +371,56 @@ async function ctxDelete(): Promise<void> {
   if (item) await deletePlan(item)
 }
 
-// ── Promote doc → plan: inject a minimal plan-meta island ─────────────────
+// ── Promote doc → plan ────────────────────────────────────────────────────
+// HTML docs get a `plan-meta` island injected; markdown docs get a YAML
+// frontmatter block prepended (body preserved byte-for-byte). Both start at
+// `stage: draft` with empty todos/reviewNotes.
+
+/** First non-heading paragraph of a markdown doc, whitespace-collapsed, or ''. */
+function firstMarkdownParagraph(md: string): string {
+  for (const block of md.split(/\n\s*\n/)) {
+    const text = block.trim()
+    if (!text || text.startsWith('#')) continue
+    return text.replace(/\s+/g, ' ')
+  }
+  return ''
+}
+
+/** Build the upgraded content for a doc, or null when it is already a plan. */
+function upgradedContent(relPath: string, name: string, content: string): string | null {
+  if (relPath.endsWith('.html')) {
+    if (parseHtmlPlanMeta(content)) return null // already a plan
+    const title = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1].trim()
+    const meta: HtmlPlanMeta = {
+      schemaVersion: 1,
+      name: title || name,
+      overview: '',
+      stage: 'draft',
+      approvedAt: null,
+      todos: [],
+      reviewNotes: [],
+    }
+    return injectPlanMeta(content, meta)
+  }
+  // Markdown doc: prepend frontmatter, keeping the original body verbatim.
+  if (parsePlanMeta(content)) return null // already has frontmatter
+  const title = content.match(/^#\s+(.+)$/m)?.[1].trim() || name.replace(/\.(?:plan\.md|md)$/, '')
+  const meta: PlanMeta = {
+    schemaVersion: 1,
+    format: 'markdown',
+    name: title,
+    overview: firstMarkdownParagraph(content),
+    stage: 'draft',
+    approvedAt: null,
+    todos: [],
+    reviewNotes: [],
+    isProject: false,
+  }
+  // writePlanMeta needs an existing frontmatter block; a synthetic empty one
+  // makes it serialize our meta and keep `content` as the preserved body.
+  return writePlanMeta(meta, `---\n---\n${content}`)
+}
+
 async function ctxUpgradeToPlan(): Promise<void> {
   const item = ctxMenu.value.item
   closeCtxMenu()
@@ -393,26 +433,16 @@ async function ctxUpgradeToPlan(): Promise<void> {
     toast(read.payload?.error ?? t('pane.plans.upgrade-failed'), { type: 'error' })
     return
   }
-  const content = read.payload.content
-  if (parseHtmlPlanMeta(content)) {
+  const next = upgradedContent(item.relPath, item.name, read.payload.content)
+  if (next === null) {
     // Already a plan (e.g. promoted externally since the last refresh).
     await loadPlans()
     return
   }
-  const title = content.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1].trim()
-  const meta: HtmlPlanMeta = {
-    schemaVersion: 1,
-    name: title || item.name,
-    overview: '',
-    stage: 'draft',
-    approvedAt: null,
-    todos: [],
-    reviewNotes: [],
-  }
   const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
     workspace_path: props.workspacePath,
     rel_path: item.relPath,
-    content: injectPlanMeta(content, meta),
+    content: next,
   })
   if (!resp.payload?.ok) {
     toast(resp.payload?.error ?? t('pane.plans.upgrade-failed'), { type: 'error' })
@@ -442,21 +472,19 @@ async function ctxUpgradeToPlan(): Promise<void> {
       <section class="plans-section">
         <div class="plans-section-head">
           <span>Active</span>
-          <span>{{ activePlans.length }}</span>
+          <span>{{ docItems.length }}</span>
         </div>
         <button
-          v-for="item in activePlans"
+          v-for="item in docItems"
           :key="item.relPath"
           class="plan-row"
           @click="openPlan(item)"
           @contextmenu.prevent="openCtxMenu($event, item)"
         >
-          <span class="plan-row-name">{{ item.plan?.name || item.name }}</span>
-          <span v-if="item.plan?.overview" class="plan-row-overview">{{ item.plan.overview }}</span>
+          <span class="plan-row-name">{{ item.name }}</span>
           <span class="plan-row-meta">
-            <span v-if="item.progress">{{ item.progress.done }}/{{ item.progress.total }} done</span>
-            <span v-else>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
-            <span class="plan-chip">{{ statusText(item) }}</span>
+            <span>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
+            <span class="plan-chip">doc</span>
           </span>
           <span
             class="plan-row-delete"
@@ -465,10 +493,10 @@ async function ctxUpgradeToPlan(): Promise<void> {
             @click.stop="deletePlan(item)"
           >✕</span>
         </button>
-        <div v-if="!activePlans.length" class="plans-empty">No active plans.</div>
+        <div v-if="!docItems.length" class="plans-empty">No active plans.</div>
       </section>
 
-      <section v-for="group in htmlGroups" :key="group.key" class="plans-section">
+      <section v-for="group in stageGroups" :key="group.key" class="plans-section">
         <div class="plans-section-head">
           <span>{{ group.label }}</span>
           <span>{{ group.rows.length }}</span>
@@ -505,26 +533,6 @@ async function ctxUpgradeToPlan(): Promise<void> {
             @click="deleteCompleted"
           >Delete all</button>
         </div>
-        <button
-          v-for="item in completedPlans"
-          :key="item.relPath"
-          class="plan-row plan-row--done"
-          @click="openPlan(item)"
-          @contextmenu.prevent="openCtxMenu($event, item)"
-        >
-          <span class="plan-row-name">{{ item.plan?.name || item.name }}</span>
-          <span class="plan-row-meta">
-            <span v-if="item.progress">{{ item.progress.done }}/{{ item.progress.total }} done</span>
-            <span class="plan-chip plan-chip--done">completed</span>
-          </span>
-          <span
-            class="plan-row-delete"
-            role="button"
-            :title="t('pane.plans.menu-delete')"
-            @click.stop="deletePlan(item)"
-          >✕</span>
-        </button>
-        <div v-if="!completedPlans.length" class="plans-empty">No completed plans.</div>
       </section>
     </template>
 
@@ -532,9 +540,11 @@ async function ctxUpgradeToPlan(): Promise<void> {
       <div class="ctx-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
       <div class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpen">{{ t('pane.plans.menu-open') }}</button>
-        <button class="menu-item" @click="ctxShareToGit">{{ t('pane.plans.share-git') }}</button>
-        <button class="menu-item" @click="ctxRename">{{ t('pane.plans.menu-rename') }}</button>
-        <template v-if="!ctxMenu.item.htmlMeta">
+        <template v-if="isHtmlItem(ctxMenu.item)">
+          <button class="menu-item" @click="ctxShareToGit">{{ t('pane.plans.share-git') }}</button>
+          <button class="menu-item" @click="ctxRename">{{ t('pane.plans.menu-rename') }}</button>
+        </template>
+        <template v-if="!ctxMenu.item.meta">
           <div class="menu-sep" />
           <button class="menu-item" @click="ctxUpgradeToPlan">{{ t('pane.plans.menu-upgrade') }}</button>
         </template>

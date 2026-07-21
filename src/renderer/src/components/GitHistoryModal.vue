@@ -467,7 +467,7 @@ watch(() => props.show, (visible) => {
   display: flex; flex-direction: column; overflow: hidden;
 }
 .hm-hdr {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
   border-bottom: 1px solid var(--border-muted); flex-shrink: 0;
 }
 .hm-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
@@ -481,7 +481,7 @@ watch(() => props.show, (visible) => {
 
 /* ── Filter bar ──────────────────────────────────────────────────────────── */
 .hm-filterbar {
-  display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 14px;
   border-bottom: 1px solid var(--border-muted); flex-shrink: 0;
 }
 .hm-select {
@@ -508,23 +508,23 @@ watch(() => props.show, (visible) => {
   font-size: 12px; line-height: 1;
 }
 .tbl-head {
-  flex-shrink: 0; height: 24px; padding: 0 8px 0 0;
+  flex-shrink: 0; height: 24px; padding: 0 14px;
   border-bottom: 1px solid var(--border-muted); background: var(--bg-subtle);
   color: var(--text-muted); font-size: 11px; font-weight: 600; user-select: none;
 }
 .tbl-body { flex: 1; overflow-y: auto; }
-.tbl-row { height: 24px; padding: 0 8px 0 0; cursor: pointer; color: var(--text-primary); transition: background-color 0.1s ease, color 0.1s ease; }
+.tbl-row { height: 24px; padding: 0 14px; cursor: pointer; color: var(--text-primary); transition: background-color 0.1s ease, color 0.1s ease; }
 .tbl-row:hover { background: var(--bg-hover-faint); }
 .tbl-row.selected { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
 .tbl-row.selected .chash,
 .tbl-row.selected .desc-msg,
 .tbl-row.selected .cell-ellip { color: var(--text-on-emphasis); }
 
-.col-graph { flex-shrink: 0; }
-.col-desc { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; padding-left: 4px; }
-.col-author { width: 150px; flex-shrink: 0; padding: 0 8px; }
-.col-date { width: 92px; flex-shrink: 0; padding: 0 8px; }
-.col-commit { width: 74px; flex-shrink: 0; padding: 0 4px; }
+.col-graph { flex-shrink: 0; min-width: 44px; }
+.col-desc { flex: 1; min-width: 0; max-width: 640px; display: flex; align-items: center; gap: 4px; padding-left: 10px; }
+.col-author { width: 160px; flex-shrink: 0; padding: 0 8px; }
+.col-date { width: 120px; flex-shrink: 0; padding: 0 8px; }
+.col-commit { width: 88px; flex-shrink: 0; padding: 0 8px; }
 .cell-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 /* Thin column dividers on the header only — keeps the dense ledger legible
    without cluttering every body row (or fighting the selected-row fill). */
@@ -568,7 +568,7 @@ watch(() => props.show, (visible) => {
   color: var(--text-muted); font-size: 11px; font-style: italic; padding: 12px;
 }
 .detail-left {
-  width: 42%; flex-shrink: 0; overflow-y: auto; padding: 8px 10px;
+  width: 42%; flex-shrink: 0; overflow-y: auto; padding: 8px 14px;
   border-right: 1px solid var(--border-default); font-size: 11px;
 }
 .dl-msg { font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; white-space: pre-wrap; }
@@ -602,7 +602,7 @@ watch(() => props.show, (visible) => {
 .db-line.db-del .db-code, .db-line.db-del .db-sign { color: var(--danger-fg); }
 .db-line.db-ctx .db-code { color: var(--text-primary); }
 
-.empty-msg { color: var(--text-muted); font-size: 11px; font-style: italic; padding: 8px 12px; }
+.empty-msg { color: var(--text-muted); font-size: 11px; font-style: italic; padding: 8px 14px; }
 .loading-text { color: var(--text-muted); font-size: 10px; padding: 6px 10px; }
 .err-text { color: var(--danger-fg); font-size: 11px; margin: 0; }
 
