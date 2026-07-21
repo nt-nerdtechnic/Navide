@@ -85,8 +85,18 @@ contextBridge.exposeInMainWorld('agentTeam', {
   },
   openRolesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openRoles'),
   openStagesWindow: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:openStages'),
-  openPlansWindow: (args: { workspace_path: string }): Promise<{ ok: boolean }> =>
-    ipcRenderer.invoke('window:openPlans', { workspace_path: args.workspace_path }),
+  openPlansWindow: (args: { workspace_path: string; rel_path?: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openPlans', {
+      workspace_path: args.workspace_path,
+      ...(args.rel_path ? { rel_path: args.rel_path } : {}),
+    }),
+  // Plan-window side receiver: main asks an already-open plan window to switch
+  // to a newly clicked plan instead of reopening the window. Returns a disposer.
+  onPlanOpenDoc: (handler: (relPath: string) => void): (() => void) => {
+    const listener = (_event: unknown, relPath: string): void => handler(relPath)
+    ipcRenderer.on('plan:open-doc', listener)
+    return () => ipcRenderer.removeListener('plan:open-doc', listener)
+  },
   openDiffWindow: (args: {
     workspace_path: string
     filepath: string

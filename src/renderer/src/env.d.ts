@@ -69,7 +69,8 @@ declare global {
       onGroupReattached: (cb: (groupId: string) => void) => void
       openRolesWindow: () => Promise<{ ok: boolean }>
       openStagesWindow: () => Promise<{ ok: boolean }>
-      openPlansWindow: (args: { workspace_path: string }) => Promise<{ ok: boolean }>
+      openPlansWindow: (args: { workspace_path: string; rel_path?: string }) => Promise<{ ok: boolean }>
+      onPlanOpenDoc: (handler: (relPath: string) => void) => () => void
       openDiffWindow: (args: {
         workspace_path: string
         filepath: string

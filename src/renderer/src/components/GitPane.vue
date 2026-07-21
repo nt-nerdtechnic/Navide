@@ -1042,6 +1042,9 @@ async function doAddRemote(): Promise<void> {
   const r = await addRemote(newRemoteName.value.trim(), newRemoteUrl.value.trim())
   if (r.ok) { newRemoteName.value = ''; newRemoteUrl.value = '' } else remotesMgrError.value = r.error || 'failed'
 }
+function doOpenRemote(url: string): void {
+  if (url) void window.agentTeam?.openExternal(url)
+}
 async function doRemoveRemote(name: string): Promise<void> {
   remotesMgrError.value = ''
   const r = await removeRemote(name); if (!r.ok) remotesMgrError.value = r.error || 'failed'
@@ -2268,6 +2271,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
         <div v-for="r in gitRemotes" :key="r.name" class="generic-row">
           <span class="remote-name">{{ r.name }}</span>
           <span class="remote-url" :title="r.fetch_url">{{ r.fetch_url }}</span>
+          <button class="row-btn always" :title="$t('action.open-remote-url')" @click.stop="doOpenRemote(r.fetch_url)">↗</button>
           <button class="row-btn always danger" @click.stop="doRemoveRemote(r.name)">✕</button>
         </div>
         <div class="input-row" style="margin-top:6px">

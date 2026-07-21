@@ -26,6 +26,9 @@ import NotificationHost from './components/NotificationHost.vue'
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
+// Plan to auto-open on mount: the sidebar list clicked a plan, which opened
+// this window with the plan carried in the query string.
+const initialRelPath = params.get('rel_path') ?? ''
 
 const backend = useBackend()
 // Hook the settings cache to this window's own ws connection so theme changes
@@ -88,6 +91,13 @@ function onOpenFile(payload: { filepath: string; name: string }): void {
   openDoc.value = { relPath: payload.filepath, name: payload.name }
   snapshotPreview.value = null
   if (isMarkdownDoc(payload.filepath)) void probeMarkdownKind(payload.filepath)
+}
+
+// Open a plan by its workspace-relative path (auto-open on mount, or when an
+// already-open window is asked to switch plans via the plan:open-doc IPC).
+function openRelPath(relPath: string): void {
+  if (!relPath) return
+  onOpenFile({ filepath: relPath, name: relPath.split('/').pop() ?? relPath })
 }
 
 // A plan deleted from the list clears the right pane when it's the open one.
@@ -224,6 +234,7 @@ function onWindowKeydown(event: KeyboardEvent): void {
 
 let offThemeSettingsChange: (() => void) | null = null
 let offPlansChanged: (() => void) | null = null
+let offPlanOpenDoc: (() => void) | null = null
 
 onMounted(() => {
   document.title = `Plans · ${workspaceBaseName}`
@@ -240,10 +251,16 @@ onMounted(() => {
     if (p && p.workspace_path === workspacePath) planPreviewRefresh.value++
   })
   window.addEventListener('keydown', onWindowKeydown)
+  // Auto-open the plan this window was launched for.
+  openRelPath(initialRelPath)
+  // While the window stays open, the sidebar clicking another plan focuses this
+  // window and asks it to switch (no reopen).
+  offPlanOpenDoc = window.agentTeam?.onPlanOpenDoc?.((relPath) => openRelPath(relPath)) ?? null
 })
 onUnmounted(() => {
   offThemeSettingsChange?.()
   offPlansChanged?.()
+  offPlanOpenDoc?.()
   window.removeEventListener('keydown', onWindowKeydown)
 })
 </script>

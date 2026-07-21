@@ -553,3 +553,45 @@ describe('PlanWindowApp – ESC overlay priority', () => {
     closeSpy.mockRestore()
   })
 })
+
+describe('PlanWindowApp – auto-open + live switch', () => {
+  afterEach(() => {
+    // Restore the shared query string (no rel_path) for the other suites.
+    window.history.replaceState({}, '', '/?window=plans&workspace_path=/tmp/demo-ws')
+    delete (window as unknown as { agentTeam?: unknown }).agentTeam
+  })
+
+  it('auto-opens the plan carried in the rel_path query on mount', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?window=plans&workspace_path=/tmp/demo-ws&rel_path=.agent-team/plans/feature_a1b2c3.html',
+    )
+    const wrapper = await mountApp()
+    const preview = wrapper.findComponent({ name: 'PlanDocPreview' })
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('relPath')).toBe('.agent-team/plans/feature_a1b2c3.html')
+    expect(wrapper.find('.plan-window-empty').exists()).toBe(false)
+  })
+
+  it('switches to a plan pushed via plan:open-doc while the window stays open', async () => {
+    // No rel_path in the query → starts on the empty state; the IPC then
+    // switches the open plan without a reopen.
+    let handler: ((relPath: string) => void) | null = null
+    const onPlanOpenDoc = vi.fn((cb: (relPath: string) => void) => {
+      handler = cb
+      return () => {}
+    })
+    ;(window as unknown as { agentTeam?: unknown }).agentTeam = { onPlanOpenDoc }
+
+    const wrapper = await mountApp()
+    expect(onPlanOpenDoc).toHaveBeenCalled()
+    expect(wrapper.find('.plan-window-empty').exists()).toBe(true)
+
+    handler!('.agent-team/plans/feature_a1b2c3.html')
+    await flushPromises()
+    const preview = wrapper.findComponent({ name: 'PlanDocPreview' })
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('relPath')).toBe('.agent-team/plans/feature_a1b2c3.html')
+  })
+})

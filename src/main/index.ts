@@ -799,11 +799,15 @@ ipcMain.handle('window:openEditor', (event, args: Record<string, string>) => {
 // Plan review windows: one per workspace; reopening focuses the existing one.
 const planWindows = new PlanWindowRegistry<BrowserWindow>()
 
-function openPlanWindow(workspacePath: string): void {
+function openPlanWindow(workspacePath: string, relPath?: string): void {
   const existing = planWindows.get(workspacePath)
   if (existing) {
+    // Already open for this workspace: focus it and, when a plan was clicked,
+    // ask the live window to switch to it instead of reopening a new window.
     if (existing.isMinimized()) existing.restore()
+    existing.show()
     existing.focus()
+    if (relPath) existing.webContents.send('plan:open-doc', relPath)
     return
   }
   const win = new BrowserWindow({
@@ -820,13 +824,18 @@ function openPlanWindow(workspacePath: string): void {
   })
   planWindows.set(workspacePath, win)
   win.on('closed', () => planWindows.remove(workspacePath, win))
-  loadWindow(win, { window: 'plans', workspace_path: workspacePath })
+  loadWindow(win, {
+    window: 'plans',
+    workspace_path: workspacePath,
+    ...(relPath ? { rel_path: relPath } : {})
+  })
 }
 
-ipcMain.handle('window:openPlans', (_event, args: { workspace_path?: string }) => {
+ipcMain.handle('window:openPlans', (_event, args: { workspace_path?: string; rel_path?: string }) => {
   const workspacePath = (args?.workspace_path ?? '').trim()
   if (!workspacePath) return { ok: false }
-  openPlanWindow(workspacePath)
+  const relPath = (args?.rel_path ?? '').trim()
+  openPlanWindow(workspacePath, relPath || undefined)
   return { ok: true }
 })
 
