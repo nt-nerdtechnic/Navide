@@ -17,8 +17,9 @@ concurrency:
 
 jobs:
   release-macos-arm64:
-    # v0.1.40 and v0.1.41 are manually published unsigned previews.
-    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41'
+    # v0.1.40, v0.1.41, and v0.1.49 are manually published unsigned previews
+    # (v0.1.49: signing private key unavailable at release time).
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
     name: Test, sign, notarize, and release macOS arm64
     runs-on: macos-14
     timeout-minutes: 60

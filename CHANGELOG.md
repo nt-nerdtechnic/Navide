@@ -4,7 +4,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
-## [0.1.49] — 2026-07-21 — signed release
+## [0.1.49] — 2026-07-21 — unsigned preview
 
 ### Added
 
@@ -31,7 +31,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Distribution note
 
-- This release is signed with a Developer ID and notarized by Apple, and is published as a stable release eligible for the in-app update channel.
+- This release is an unsigned, non-notarized Apple silicon preview. It is published as a prerelease and is not part of the stable in-app update channel.
 
 ## [0.1.48] — 2026-07-20 — unsigned preview
 
