@@ -108,6 +108,7 @@ def _version_info(row: ExtensionVersion) -> VersionInfo:
         yanked=row.yanked,
         published_at=row.published_at,
         signed=row.signature is not None,
+        signature=row.signature,
         trust_tier=row.trust_tier,
         capabilities=capabilities,
         sensitive_capabilities=sensitive_capabilities(capabilities),
@@ -296,13 +297,16 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="extension not found")
         versions = repo.list_versions(extension.id)
         summary = _summary(extension, versions)
-        publisher_name = _publisher_name(repo, extension)
+        publisher = repo.session.get(Publisher, extension.publisher_id)
+        publisher_name = publisher.name if publisher else extension.namespace
+        publisher_key = publisher.public_key if publisher else None
         ordered = sorted(
             versions, key=lambda v: v.published_at, reverse=True
         )
         return ExtensionDetail(
             **summary.model_dump(),
             publisher=publisher_name,
+            public_key=publisher_key,
             versions=[_version_info(v) for v in ordered],
         )
 
@@ -413,11 +417,6 @@ def _register_routes(app: FastAPI) -> None:
         return FeaturedResponse(
             namespace=namespace, name=name, featured=extension.featured
         )
-
-
-def _publisher_name(repo: RegistryRepository, extension: Extension) -> str:
-    publisher = repo.session.get(Publisher, extension.publisher_id)
-    return publisher.name if publisher else extension.namespace
 
 
 # Module-level app for `uvicorn registry.app:app`.

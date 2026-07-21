@@ -36,6 +36,10 @@ def test_signed_publish_accepted_and_trusted(signed_env: SignedEnv) -> None:
     assert version["trust_tier"] == "signed-verified"
     assert version["capabilities"] == ["fs", "ui"]
     assert version["sensitive_capabilities"] == ["fs"]
+    # The detail API must expose the signing material so the client can
+    # re-verify and reach `signed-verified` itself (not just trust the tier).
+    assert version["signature"] == sig
+    assert detail["public_key"] == signed_env.public_pem
 
 
 def test_unsigned_publish_rejected_when_required(signed_env: SignedEnv) -> None:

@@ -22,6 +22,16 @@ def _publish_ext(client: TestClient, ident: str, **manifest_kw):
     return _publish(client, build_package(manifest=manifest))
 
 
+def test_detail_omits_signing_material_when_unsigned(client: TestClient) -> None:
+    # An unsigned publish (no signature, publisher has no registered key) must
+    # surface null signing material — the client then resolves it to `unsigned`.
+    _publish(client, build_package())
+    detail = client.get("/api/extensions/acme/hello").json()
+    assert detail["public_key"] is None
+    assert detail["versions"][0]["signature"] is None
+    assert detail["versions"][0]["signed"] is False
+
+
 def test_download_increments_per_version_and_aggregate(client: TestClient) -> None:
     _publish(client, build_package())
     for _ in range(3):
