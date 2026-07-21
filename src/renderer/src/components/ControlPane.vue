@@ -17,6 +17,10 @@ import { useUpdater } from '../composables/useUpdater'
 // Kept v-show (not v-if) so its changes-count badge stays live while Explorer tab is showing.
 const MultiRepoGit = defineAsyncComponent(() => import('./MultiRepoGit.vue'))
 
+// PlanPane: the plan review surface (drill-down list → preview) embedded in the
+// Plans sidebar tab. Async-loaded (off first-paint path, pulls in plan machinery).
+const PlanPane = defineAsyncComponent(() => import('../editor/PlanPane.vue'))
+
 export interface AgentSpec {
   agentKey: string
   label: string
@@ -221,7 +225,7 @@ const emit = defineEmits<{
   (e: 'reorder-pane', fromId: string, toId: string): void
   (e: 'open-settings'): void
   (e: 'open-history'): void
-  (e: 'open-plans'): void
+  (e: 'update:sidebar-tab', tab: SidebarTab): void
   (e: 'switch-workspace'): void
   (e: 'workspace-browse', path: string): void
   (e: 'update:layoutMode', v: LayoutMode): void
@@ -382,7 +386,7 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', onPipelineDividerEnd)
 })
 
-defineExpose({ openPipelineDetail, showResumeError })
+defineExpose({ openPipelineDetail, showResumeError, selectSidebarTab })
 
 const manualAgentSpecs = computed(() =>
   props.agentSpecs.filter((spec) => spec.agentKey !== 'terminal')
@@ -437,22 +441,22 @@ watch(
   { immediate: true }
 )
 
-// ── Top-level tab: pipeline | git ─────────────────────────────────────────────
+// ── Top-level tab: explorer | pipeline | git | plans ──────────────────────────
 const _TAB_KEY = 'agentTeam.sidebarTab'
-type SidebarTab = 'explorer' | 'pipeline' | 'git'
+type SidebarTab = 'explorer' | 'pipeline' | 'git' | 'plans'
 const sidebarTab = ref<SidebarTab>(
   (() => {
     try {
       const v = sessionStorage.getItem(_TAB_KEY) as SidebarTab | null
       // Backward-compat: unknown / legacy values fall back to 'pipeline'.
-      return v === 'explorer' || v === 'pipeline' || v === 'git' ? v : 'pipeline'
+      return v === 'explorer' || v === 'pipeline' || v === 'git' || v === 'plans' ? v : 'pipeline'
     } catch { return 'pipeline' }
   })()
 )
 watch(sidebarTab, (v) => { try { sessionStorage.setItem(_TAB_KEY, v) } catch { /* ignore */ } })
 
-// Cmd+1/2/3 → switch sidebar tab (Explorer / Pipeline / Git)
-const SIDEBAR_TABS: SidebarTab[] = ['explorer', 'pipeline', 'git']
+// Cmd+1/2/3/4 → switch sidebar tab (Explorer / Pipeline / Git / Plans)
+const SIDEBAR_TABS: SidebarTab[] = ['explorer', 'pipeline', 'git', 'plans']
 function onSidebarTabShortcut(e: KeyboardEvent): void {
   if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
   // e.key is 'Meta' on the bare Cmd keydown — parseInt → NaN, which slips past
@@ -468,7 +472,12 @@ function onSidebarTabShortcut(e: KeyboardEvent): void {
   e.preventDefault()
   selectSidebarTab(SIDEBAR_TABS[idx])
 }
-onMounted(() => document.addEventListener('keydown', onSidebarTabShortcut))
+onMounted(() => {
+  document.addEventListener('keydown', onSidebarTabShortcut)
+  // Sync App.vue to the restored/initial tab so the main stage area matches
+  // (e.g. reopening on the Plans tab renders the Plans pane, not the terminals).
+  emit('update:sidebar-tab', sidebarTab.value)
+})
 onUnmounted(() => document.removeEventListener('keydown', onSidebarTabShortcut))
 
 // VS Code-style sidebar shortcuts routed through the keybinding system (more
@@ -480,6 +489,18 @@ registerCommand('workbench.action.focusSourceControl', () => selectSidebarTab('g
 // Cmd+Shift+U → spawn an agent with the currently picked CLI/role (the green
 // "Open Agent" button); spawn() itself no-ops when canSpawn is false.
 registerCommand('workbench.action.spawnAgent', () => spawn())
+// Ctrl+<n> → pick the Nth manual CLI type for the next spawn. Only sets
+// pickedAgent (does not touch existing panes); expands the Manual Spawn card so
+// the changed dropdown is visible. Slots past the list are no-ops.
+for (let i = 1; i <= 9; i++) {
+  registerCommand(`controlPane.selectCliType${i}`, () => {
+    const spec = manualAgentSpecs.value[i - 1]
+    if (spec) {
+      pickedAgent.value = spec.agentKey
+      manualSpawnOpen.value = true
+    }
+  })
+}
 
 // Git tab badge — updated by GitPane via changes-count event
 const gitChangesCount = ref(0)
@@ -508,6 +529,9 @@ function backToList(): void {
 function selectSidebarTab(tab: SidebarTab): void {
   sidebarTab.value = tab
   if (tab === 'pipeline') sidebarView.value = 'list'
+  // Surface the active tab so App.vue can render the Plans pane in the main
+  // stage area (and keep the terminal grid mounted but hidden) for 'plans'.
+  emit('update:sidebar-tab', tab)
 }
 
 function isPipelineRunning(pipelineId: string): boolean {
@@ -870,6 +894,9 @@ function onPipelineDividerEnd(): void {
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
         <span v-if="gitChangesCount > 0" class="git-badge">{{ gitChangesCount > 99 ? '99+' : gitChangesCount }}</span>
       </button>
+      <button :class="['tab-btn', { active: sidebarTab === 'plans' }]" title="Plans (⌘4)" @click="selectSidebarTab('plans')">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z"/></svg>
+      </button>
 
       <div
         v-if="['available', 'downloading', 'downloaded', 'installing'].includes(updateState.status)"
@@ -944,7 +971,6 @@ function onPipelineDividerEnd(): void {
     <section class="block panel-section">
       <div class="row between">
         <label class="lbl">{{ $t('label.pipelines') }}</label>
-        <button class="plans-btn" :title="$t('action.open-plans')" @click="emit('open-plans')">📋</button>
       </div>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
@@ -1369,6 +1395,14 @@ function onPipelineDividerEnd(): void {
 
     </div><!-- end sidebarTab === 'pipeline' / pipeline-split -->
 
+    <!-- ── Plans tab (self-contained drill-down: list → preview, fits the narrow sidebar) ── -->
+    <PlanPane
+      v-if="backend && sidebarTab === 'plans'"
+      class="plans-split"
+      :workspace-path="workspace ?? ''"
+      :backend="backend"
+    />
+
     <Teleport to="body">
       <div v-if="confirmingRestart" class="restart-modal" @click.self="confirmingRestart = false">
         <div class="restart-card">
@@ -1724,8 +1758,7 @@ button.link {
   gap: 2px;
   align-items: center;
 }
-button.history-btn,
-button.plans-btn {
+button.history-btn {
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
@@ -1769,8 +1802,7 @@ button.agent-rebuild-all-btn.busy svg {
 @keyframes agent-rebuild-spin {
   to { transform: rotate(360deg); }
 }
-button.history-btn:hover,
-button.plans-btn:hover {
+button.history-btn:hover {
   color: var(--text-bright);
   border-color: var(--accent-fg);
   background: var(--bg-subtle);
@@ -2466,6 +2498,12 @@ button.icon-btn.muted:hover {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  margin: 0 -14px -14px; /* compensate sidebar padding */
+}
+/* Plans tab fills the sidebar edge-to-edge like the explorer/git splits. */
+.plans-split {
+  flex: 1;
+  min-height: 0;
   margin: 0 -14px -14px; /* compensate sidebar padding */
 }
 .pane-split .part-top,

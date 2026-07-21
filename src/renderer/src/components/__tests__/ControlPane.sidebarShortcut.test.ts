@@ -33,9 +33,9 @@ function keydown(init: KeyboardEventInit): void {
   document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init }))
 }
 
-/** Active sidebar tab read off the nav: 0=explorer, 1=pipeline, 2=git. */
-function activeTab(wrapper: VueWrapper): 'explorer' | 'pipeline' | 'git' | null {
-  const order = ['explorer', 'pipeline', 'git'] as const
+/** Active sidebar tab read off the nav: 0=explorer, 1=pipeline, 2=git, 3=plans. */
+function activeTab(wrapper: VueWrapper): 'explorer' | 'pipeline' | 'git' | 'plans' | null {
+  const order = ['explorer', 'pipeline', 'git', 'plans'] as const
   const btns = wrapper.findAll('.sidebar-tabs .tab-btn')
   const idx = btns.findIndex((b) => b.classes().includes('active'))
   return idx >= 0 ? order[idx] : null
@@ -70,6 +70,14 @@ describe('ControlPane – Cmd+number sidebar shortcut', () => {
     keydown({ key: '3', metaKey: true })
     await wrapper.vm.$nextTick()
     expect(activeTab(wrapper)).toBe('git')
+  })
+
+  it('Cmd+4 switches to the plans tab and emits update:sidebar-tab', async () => {
+    keydown({ key: '4', metaKey: true })
+    await wrapper.vm.$nextTick()
+    expect(activeTab(wrapper)).toBe('plans')
+    const emitted = wrapper.emitted('update:sidebar-tab') as unknown[][] | undefined
+    expect(emitted?.at(-1)).toEqual(['plans'])
   })
 
   it('Cmd+1 switches back to the explorer tab', async () => {

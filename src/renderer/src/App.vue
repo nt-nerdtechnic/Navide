@@ -2664,16 +2664,6 @@ registerCommand('workbench.action.openPlans', async () => {
 registerCommand('workbench.action.rebuildFocusedPane', async () => {
   if (effectiveFocusPaneId.value) await rebuildPaneViaResume(effectiveFocusPaneId.value)
 })
-// Cmd+Alt+<n> → jump to the Nth stage tab. Browser convention: the 9th
-// shortcut always lands on the LAST tab, so tabs beyond 8 stay reachable even
-// when there are more than 9 of them. Slots past the tab count are no-ops.
-for (let i = 1; i <= 9; i++) {
-  registerCommand(`workbench.action.switchToTab${i}`, () => {
-    const tabs = stageTabs.value
-    const tab = i === 9 ? tabs[tabs.length - 1] : tabs[i - 1]
-    if (tab) activeTab.value = tab.key
-  })
-}
 watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c || previewLogOpen.value))
 
 function onFocusPane(paneId: string): void {
@@ -4173,9 +4163,14 @@ async function titlebarRevealWorkspace(): Promise<void> {
 }
 
 // Titlebar 📋 button: open the dedicated plan window for the current workspace.
-async function openPlansWindow(): Promise<void> {
+// Plans now live in the main-window Plans tab (embedded PlanPane), not a
+// detached window: switch the sidebar tab through ControlPane (the owner of
+// sidebarTab), which forwards the change back via `update:sidebar-tab`. The
+// legacy openPlansWindow IPC bridge stays in preload/main but is no longer
+// wired here.
+function openPlansWindow(): void {
   if (!currentWorkspace.value) return
-  await window.agentTeam?.openPlansWindow({ workspace_path: currentWorkspace.value })
+  controlPaneRef.value?.selectSidebarTab('plans')
 }
 
 async function onWorkspaceBrowse(path: string): Promise<void> {
@@ -6993,7 +6988,6 @@ function paneIsCommander(p: ActivePane): boolean {
       @focus-pane="onFocusPane"
       @reorder-pane="reorderPane"
       @open-settings="showSettings = true"
-      @open-plans="openPlansWindow"
       @open-git-accounts="openSettingsAccounts"
       @open-history="showHistory = true"
       @switch-workspace="onSwitchWorkspace"
@@ -7059,9 +7053,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :analyzer-api="analyzerApi"
       :pipelines-api="pipelinesApi"
       :initial-tab="settingsInitialTab"
-      :stage-tabs="stageTabs"
       v-model:confirm-before-close="confirmBeforeClose"
-      @reorder-tab="(fromKey, toKey) => reorderRunGroupTab(fromKey, toKey)"
       @close="showSettings = false; settingsInitialTab = 'roles'"
       @open-pipeline="(id) => { showSettings = false; controlPaneRef?.openPipelineDetail(id) }"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"

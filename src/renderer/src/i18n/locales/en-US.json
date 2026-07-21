@@ -64,6 +64,7 @@
       "share-git-success": "Saved to .plans/ \u2014 commit to share",
       "share-git-failed": "Share to Git failed",
       "window-empty": "Select a plan to review",
+      "back-to-list": "Plans",
       "todos": "Todos",
       "todos-empty": "No todos yet",
       "todo-cycle-tooltip": "Click to cycle status; right-click to toggle skipped",
@@ -188,6 +189,7 @@
     "copy-paths": "Copy paths",
     "open-diff": "Open Diff",
     "open-in-editor": "Open in editor",
+    "open-remote-url": "Open remote URL",
     "ask-ai-about-file": "Ask AI about this file",
     "reveal-in-finder": "Reveal in Finder",
     "open-in-new-window": "Open in New Window",
@@ -330,7 +332,6 @@
     "replace-in-file": "Replace in file",
     "replace-match": "Replace this match",
     "open-in-finder": "Open this folder in Finder",
-    "open-plans": "Open the plan review window",
     "clear-pipeline": "Clear pipeline state and close all agent panes",
     "remove-from-history": "Remove from history",
     "double-click-rename": "Double-click to rename",
@@ -421,11 +422,7 @@
       "backend-timeout-label": "Timeout (seconds)",
       "loop-prompt": "Loop Prompt",
       "loop-prompt-hint": "Prompt sent to a CLI pane when its loop button is clicked.",
-      "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets.",
-      "tab-order": "Tab Shortcut Order",
-      "tab-order-hint": "Drag to reorder the main window Run Group tabs; the badge shows each tab's Cmd+Alt+N shortcut.",
-      "tab-order-empty": "No tabs yet.",
-      "tab-order-last": "Last"
+      "loop-resume-hint": "Resume prompt sent automatically after a session-limit pause once the quota resets."
     },
     "roles": {
       "title": "Roles",
@@ -451,7 +448,49 @@
       "analyzer": "🧠 Analyzer",
       "general": "⚙️ General",
       "appearance": "🎨 Appearance",
-      "accounts": "🔑 Accounts"
+      "accounts": "🔑 Accounts",
+      "shortcuts": "⌨️ Keyboard Shortcuts"
+    },
+    "shortcuts": {
+      "intro": "Read-only reference of every keyboard shortcut the app currently supports. Most bindings are defined in the central keybinding system, but the handlers live across different windows and components, so some keys only take effect in specific contexts.",
+      "callout": {
+        "title": "Workflow: pick type → spawn",
+        "pick": "Set the CLI type to spawn next: claude / codex / antigravity / grok / kimi (and expand the Manual Spawn card)",
+        "spawn": "Immediately spawn a pane using the selected type"
+      },
+      "col": {
+        "keys": "Keys",
+        "desc": "Action",
+        "context": "Context"
+      },
+      "ctx": {
+        "editorText": "Focus in editor text area",
+        "editorOpen": "A file is open in the editor",
+        "findOpen": "Find panel is open",
+        "terminal": "Terminal focused",
+        "modal": "A dialog is open",
+        "global": "Available everywhere",
+        "native": "Electron native menu"
+      },
+      "section": {
+        "workbench": "Workbench · Windows / Panels / Navigation",
+        "ai": "AI Chat (AI pane focused)",
+        "aiInput": "AI Chat input box",
+        "editorFind": "Editor · File / Find / Save",
+        "editorAi": "Editor · AI-assisted editing",
+        "editorEdit": "Editor · Editing / Cursor / Folding",
+        "editorTabs": "Editor · Tabs & Navigation",
+        "terminal": "Terminal (xterm)",
+        "native": "Electron native menu"
+      },
+      "note": {
+        "workbench": "Workbench-level shortcuts from central defaults.ts. Ones marked editorOpen only apply in the editor window; the rest are mostly global.",
+        "ai": "Toggling the panel is a central rule; in-panel actions are intercepted by the AI chat panel itself and override the same keys when it is focused.",
+        "aiInput": "Apply when focus is in the AI chat input box.",
+        "editor": "Almost all of these only fully apply in the editor window; in the main window they are mostly no-ops. This is a selection — the full set is ~180, matching VS Code.",
+        "terminal": "When the terminal is focused, useTerminal intercepts these and turns them into terminal control sequences; everything else is sent to the CLI, and keys are always passed through during IME composition.",
+        "native": "These fire before the renderer and shadow the app's own handling of the same keys. The View menu deliberately drops window zoom on ⌘0 / ⌘+ / ⌘-, yielding those keys to content zoom."
+      }
     },
     "accounts": {
       "title": "Git Accounts",

@@ -64,6 +64,7 @@
       "share-git-success": "已存入 .plans/，可 commit 分享",
       "share-git-failed": "分享到 Git 失敗",
       "window-empty": "選擇要審查的計畫",
+      "back-to-list": "計畫清單",
       "todos": "待辦",
       "todos-empty": "尚無待辦",
       "todo-cycle-tooltip": "點擊循環狀態；右鍵切換略過",
@@ -188,6 +189,7 @@
     "copy-paths": "複製路徑",
     "open-diff": "開啟差異比對",
     "open-in-editor": "在編輯器中開啟",
+    "open-remote-url": "開啟遠端網址",
     "ask-ai-about-file": "詢問 AI 關於此檔案",
     "reveal-in-finder": "在 Finder 中顯示",
     "open-in-new-window": "在新視窗開啟",
@@ -330,7 +332,6 @@
     "replace-in-file": "取代檔案中所有符合項",
     "replace-match": "取代此符合項",
     "open-in-finder": "用 Finder 開啟此資料夾",
-    "open-plans": "開啟計畫審查視窗",
     "clear-pipeline": "清除流程狀態並關閉所有 Agent 面板",
     "remove-from-history": "從歷史記錄中移除",
     "double-click-rename": "雙擊重新命名",
@@ -421,11 +422,7 @@
       "backend-timeout-label": "逾時秒數",
       "loop-prompt": "Loop 提示詞",
       "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。",
-      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。",
-      "tab-order": "分頁快捷鍵排序",
-      "tab-order-hint": "拖曳重新排列主視窗的 Run Group 分頁；右側徽章是該分頁對應的 Cmd+Alt+N 快捷鍵。",
-      "tab-order-empty": "尚無分頁。",
-      "tab-order-last": "最後"
+      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。"
     },
     "roles": {
       "title": "角色",
@@ -451,7 +448,49 @@
       "analyzer": "🧠 分析器",
       "general": "⚙️ 一般",
       "appearance": "🎨 外觀",
-      "accounts": "🔑 帳號"
+      "accounts": "🔑 帳號",
+      "shortcuts": "⌨️ 快捷鍵"
+    },
+    "shortcuts": {
+      "intro": "整個 app 目前支援的鍵盤操作對照表（唯讀）。多數快捷鍵集中定義在中央 keybinding 系統，但真正掛上動作的位置分佈在不同視窗與元件，因此有些鍵只在特定情境生效。",
+      "callout": {
+        "title": "工作流：選類型 → 啟動",
+        "pick": "把下次要開的 CLI 種類切成 claude / codex / antigravity / grok / kimi（並展開 Manual Spawn 卡片）",
+        "spawn": "用選定類型立刻開一個 pane（spawn）"
+      },
+      "col": {
+        "keys": "按鍵",
+        "desc": "功能",
+        "context": "情境"
+      },
+      "ctx": {
+        "editorText": "焦點在編輯器文字區",
+        "editorOpen": "編輯器有開檔",
+        "findOpen": "尋找面板開啟",
+        "terminal": "終端機焦點",
+        "modal": "對話框開啟",
+        "global": "全域皆可",
+        "native": "Electron 原生選單"
+      },
+      "section": {
+        "workbench": "Workbench · 視窗 / 面板 / 導覽",
+        "ai": "AI 對話（AI pane 焦點）",
+        "aiInput": "AI 輸入框內",
+        "editorFind": "編輯器 · 檔案 / 尋找 / 存檔",
+        "editorAi": "編輯器 · AI 輔助編輯",
+        "editorEdit": "編輯器 · 編輯 / 游標 / 折疊",
+        "editorTabs": "編輯器 · 分頁與導覽",
+        "terminal": "終端機（xterm）",
+        "native": "Electron 原生選單"
+      },
+      "note": {
+        "workbench": "中央 defaults.ts 的工作臺級快捷鍵；標 editorOpen 的只在編輯器視窗生效，其餘多為全域。",
+        "ai": "切換面板為中央規則；面板內操作由 AI 對話面板自己攔截，焦點在此時會覆蓋同鍵的中央行為。",
+        "aiInput": "焦點在 AI 對話輸入框時生效。",
+        "editor": "以下幾乎全部只在編輯器視窗完整生效，主視窗多為 no-op；此為精選，完整約 180 條同 VS Code。",
+        "terminal": "終端有焦點時由 useTerminal 攔截並轉成終端控制序列；其餘照送給 CLI，組字（IME）中一律放行。",
+        "native": "這些在 renderer 之前觸發，會蓋過同鍵的 app 行為。View 選單刻意移除了 ⌘0 / ⌘+ / ⌘- 的視窗縮放，把這些鍵讓給內容縮放。"
+      }
     },
     "accounts": {
       "title": "Git 帳號",
