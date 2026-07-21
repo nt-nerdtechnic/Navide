@@ -12,6 +12,7 @@ from agent_team_backend.plugins.capabilities import (
     ChatCapability,
     FsCapability,
     GitCapability,
+    IssuesCapability,
     SearchCapability,
     TerminalCapability,
     UiCapability,
@@ -69,8 +70,35 @@ def test_build_unknown_capability_rejected() -> None:
 
 def test_known_capabilities_is_full_set() -> None:
     assert KNOWN_CAPABILITIES == frozenset(
-        {"fs", "git", "terminal", "search", "chat", "ui"}
+        {"fs", "git", "terminal", "search", "chat", "ui", "issues"}
     )
+
+
+def test_build_issues_capability() -> None:
+    caps = build_capabilities(["issues"])
+
+    assert set(caps) == {"issues"}
+    assert isinstance(caps["issues"], IssuesCapability)
+
+
+def test_issues_capability_delegates_to_issue_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple] = []
+    sentinel = {"issues": []}
+
+    async def fake_list_issues(workspace_path, limit):
+        calls.append((workspace_path, limit))
+        return sentinel
+
+    monkeypatch.setattr(app.issue_service, "list_issues", fake_list_issues)
+
+    import asyncio
+
+    result = asyncio.run(IssuesCapability().list("/ws", limit=15))
+
+    assert result is sentinel
+    assert calls == [("/ws", 15)]
 
 
 def test_build_new_capabilities() -> None:
@@ -218,7 +246,7 @@ def test_mini_ide_manifest_parses_with_expanded_whitelist() -> None:
     data = json.loads(MINI_IDE_MANIFEST.read_text(encoding="utf-8"))
     manifest = parse_manifest(data)
 
-    assert manifest.requires == ["fs", "git", "terminal", "search", "chat", "ui"]
+    assert manifest.requires == ["fs", "git", "terminal", "search", "chat", "ui", "issues"]
     assert all(cap in KNOWN_CAPABILITIES for cap in manifest.requires)
 
 

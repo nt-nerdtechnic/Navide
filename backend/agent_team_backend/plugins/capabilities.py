@@ -419,6 +419,52 @@ class ChatCapability:
         )
 
 
+class IssuesCapability:
+    """Scoped cloud-issues access, delegating to ``app.issue_service``.
+
+    Interface shell mirroring :class:`GitCapability`: drives the gh/glab cloud
+    issue surface GitPane's ``useIssues`` uses. The underlying service functions
+    are async, so these façade methods return the awaitable the caller awaits.
+    Signatures are provisional -- Phase 2 settles them alongside the WS handlers.
+    """
+
+    def provider(self, workspace_path: str) -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.detect_provider(workspace_path)
+
+    def list(self, workspace_path: str, limit: int = 30) -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.list_issues(workspace_path, limit)
+
+    def get(self, workspace_path: str, number: int) -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.get_issue(workspace_path, number)
+
+    def create(self, workspace_path: str, title: str, body: str = "") -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.create_issue(workspace_path, title, body)
+
+    def comment(self, workspace_path: str, number: int, body: str) -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.comment_issue(workspace_path, number, body)
+
+    def set_state(self, workspace_path: str, number: int, state: str) -> Any:
+        # Signature provisional -- interface shell, filled in during Phase 2.
+        from .. import app
+
+        return app.issue_service.set_issue_state(workspace_path, number, state)
+
+
 class UiCapability:
     """Host-side UI capability -- registered for authorization only.
 
@@ -463,6 +509,7 @@ _CAPABILITY_CLASSES: dict[str, type] = {
     "search": SearchCapability,
     "chat": ChatCapability,
     "ui": UiCapability,
+    "issues": IssuesCapability,
 }
 
 

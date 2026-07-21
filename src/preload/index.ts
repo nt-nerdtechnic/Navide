@@ -35,6 +35,40 @@ export interface GitCredential {
 export type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
 export type PermissionStatus = 'granted' | 'denied' | 'unknown' | 'not-applicable'
 
+export interface InstalledPluginSummary {
+  id: string
+  requires: string[]
+  sensitive: string[]
+}
+
+export interface MarketplaceExtension {
+  namespace: string
+  name: string
+  identity: string
+  display_name: string | null
+  description: string | null
+  categories: string[]
+  latest_version: string | null
+  download_count: number
+  rating_average: number
+  featured: boolean
+}
+
+export interface MarketplaceListResponse {
+  items: MarketplaceExtension[]
+  total: number
+  offset: number
+  limit: number
+}
+
+export interface PreparedInstallSummary {
+  id: string
+  version: string
+  trustTier: 'signed-verified' | 'unsigned'
+  sensitive: string[]
+  requiresConfirmation: boolean
+}
+
 const pendingEditorOpenFiles: Record<string, string>[] = []
 let editorOpenFileCallback: ((params: Record<string, string>) => void) | null = null
 ipcRenderer.on('editor:openFile', (_event, params: Record<string, string>) => {
@@ -366,5 +400,20 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ): Promise<PermissionStatus> => ipcRenderer.invoke('permissions:request', key, payload),
     openSettings: (key: PermissionKey): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('permissions:open-settings', key),
+  },
+  plugins: {
+    listInstalled: (): Promise<InstalledPluginSummary[]> =>
+      ipcRenderer.invoke('plugins:listInstalled'),
+    marketplaceSearch: (query?: string): Promise<MarketplaceListResponse> =>
+      ipcRenderer.invoke('plugins:marketplaceSearch', query),
+    prepareInstall: (args: {
+      namespace: string
+      name: string
+      version?: string
+    }): Promise<PreparedInstallSummary> => ipcRenderer.invoke('plugins:prepareInstall', args),
+    commitInstall: (id: string): Promise<{ id: string; requires: string[] }> =>
+      ipcRenderer.invoke('plugins:commitInstall', { id }),
+    remove: (id: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('plugins:remove', { id }),
   },
 })

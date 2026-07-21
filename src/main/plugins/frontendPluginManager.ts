@@ -20,6 +20,7 @@ import {
   type CapabilityResponse,
 } from './pluginCapabilityBroker'
 import { CAP_EVENTS, eventNamespace } from './capabilityMap'
+import { scanInstalledPlugins } from './installedPlugins'
 import { createWsClient, type WsClient, type WsConstructor } from '../../shared/wsClient'
 
 /** Everything the manager needs to launch one plugin view. */
@@ -69,6 +70,10 @@ export class FrontendPluginManager {
   private readonly running = new Map<string, RunningPlugin>()
   /** webContents.id → pluginId, so a call's origin can be trusted, not the payload. */
   private readonly bySender = new Map<number, string>()
+  /** Installed/available plugin descriptors keyed by id (loader registry). The
+   *  mini-IDE is registered here as the first built-in; third-party installs are
+   *  added by {@link loadInstalledPlugins} / {@link registerDescriptor}. */
+  private readonly descriptors = new Map<string, PluginLaunchDescriptor>()
   private ipcReady = false
   /** Backend WS url as last reported by main, or null when no backend is up. */
   private backendWsUrl: string | null = null
@@ -279,6 +284,50 @@ export class FrontendPluginManager {
     } catch {
       // View/window already torn down by Electron — nothing to release.
     }
+  }
+
+  // -- loader registry (installed / available descriptors) ----------------
+
+  /** Register (or replace) an available plugin descriptor. */
+  registerDescriptor(descriptor: PluginLaunchDescriptor): void {
+    this.descriptors.set(descriptor.id, descriptor)
+  }
+
+  /** Look up a registered descriptor by id. */
+  getDescriptor(id: string): PluginLaunchDescriptor | undefined {
+    return this.descriptors.get(id)
+  }
+
+  /** All registered (installed + built-in) descriptors. */
+  listDescriptors(): PluginLaunchDescriptor[] {
+    return [...this.descriptors.values()]
+  }
+
+  /**
+   * Scan an installed-plugins root and register a descriptor for every valid
+   * plugin found. A directory with an invalid manifest is skipped and returned
+   * in `errors` rather than aborting the scan. Pure parse/validation lives in
+   * `installedPlugins`; this only wires it to the registry.
+   */
+  loadInstalledPlugins(root: string): { loaded: string[]; errors: string[] } {
+    const loaded: string[] = []
+    const errors: string[] = []
+    for (const scanned of scanInstalledPlugins(root)) {
+      if (scanned.descriptor) {
+        this.registerDescriptor(scanned.descriptor)
+        loaded.push(scanned.descriptor.id)
+      } else if (scanned.error) {
+        errors.push(`${scanned.dir}: ${scanned.error}`)
+      }
+    }
+    return { loaded, errors }
+  }
+
+  /** Unregister a descriptor and tear down its view if it is open. Used by the
+   *  remove/update flow so a removed plugin's window does not linger. */
+  removeInstalledPlugin(id: string): void {
+    this.destroy(id)
+    this.descriptors.delete(id)
   }
 
   /** Push an event to a plugin view (M1 has no producers; wired for M2). */

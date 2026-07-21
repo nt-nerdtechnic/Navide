@@ -206,7 +206,52 @@ declare global {
         ) => Promise<TccPermissionStatus>
         openSettings: (key: TccPermissionKey) => Promise<{ ok: boolean; error?: string }>
       }
+      plugins?: {
+        listInstalled: () => Promise<InstalledPluginSummary[]>
+        marketplaceSearch: (query?: string) => Promise<MarketplaceListResponse>
+        prepareInstall: (args: {
+          namespace: string
+          name: string
+          version?: string
+        }) => Promise<PreparedInstallSummary>
+        commitInstall: (id: string) => Promise<{ id: string; requires: string[] }>
+        remove: (id: string) => Promise<{ ok: boolean }>
+      }
     }
+  }
+
+  interface InstalledPluginSummary {
+    id: string
+    requires: string[]
+    sensitive: string[]
+  }
+
+  interface MarketplaceExtension {
+    namespace: string
+    name: string
+    identity: string
+    display_name: string | null
+    description: string | null
+    categories: string[]
+    latest_version: string | null
+    download_count: number
+    rating_average: number
+    featured: boolean
+  }
+
+  interface MarketplaceListResponse {
+    items: MarketplaceExtension[]
+    total: number
+    offset: number
+    limit: number
+  }
+
+  interface PreparedInstallSummary {
+    id: string
+    version: string
+    trustTier: 'signed-verified' | 'unsigned'
+    sensitive: string[]
+    requiresConfirmation: boolean
   }
 }
 

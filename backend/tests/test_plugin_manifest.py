@@ -47,7 +47,7 @@ def test_example_manifest_parses_with_expected_fields() -> None:
     assert manifest.publisher == "navide"
     assert manifest.engines == {"navide": "^0.1.0"}
     assert manifest.entry == "dist/mini-ide.js"
-    assert manifest.requires == ["fs", "git", "terminal", "search", "chat", "ui"]
+    assert manifest.requires == ["fs", "git", "terminal", "search", "chat", "ui", "issues"]
     assert manifest.activationEvents == ["onStartup"]
     assert manifest.contributes is not None
     assert manifest.contributes.views[0].id == "mini-ide.explorer"

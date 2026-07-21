@@ -21,6 +21,6 @@
       }
     ]
   },
-  "requires": ["fs", "git", "terminal", "search", "chat", "ui"],
+  "requires": ["fs", "git", "terminal", "search", "chat", "ui", "issues"],
   "activationEvents": ["onStartup"]
 }

@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
 import { installApplicationMenu } from './menu'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, frontendPluginManager } from './plugins/frontendPluginManager'
+import { registerPluginIpc } from './plugins/pluginIpc'
 import { miniIdePluginEnabled } from './plugins/pluginFlags'
 import { lockPageZoom } from './web-contents-zoom'
 import { initUpdater } from './updater'
@@ -339,6 +340,12 @@ app.on('browser-window-created', (_event, win) => {
   })
   win.on('closed', () => backendBroadcastTracker.forget(win.id))
 })
+
+// Extensions view: install/update/remove third-party plugins. Verified packages
+// are written under userData/plugins and scanned back on next launch.
+const pluginsRoot = (): string => join(app.getPath('userData'), 'plugins')
+registerPluginIpc(frontendPluginManager, pluginsRoot())
+frontendPluginManager.loadInstalledPlugins(pluginsRoot())
 
 ipcMain.handle('backend:info', () => backendInfoPayload())
 
