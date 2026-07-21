@@ -10,7 +10,7 @@ It is not another chat panel inside the traditional IDE. Navide is being built a
 
 English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
-[Download v0.1.47 preview](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.47) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
+[Download v0.1.50](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.50) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
@@ -113,13 +113,12 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 ## Try Navide
 
-Navide supports macOS 13+ on Apple silicon. The v0.1.47 preview is available as an unsigned build:
+Navide supports macOS 13+ on Apple silicon. The v0.1.50 release is signed with a Developer ID certificate and notarized by Apple:
 
-- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.47/Navide-0.1.47-arm64.dmg)
-- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.47/Navide-0.1.47-arm64.zip)
-- [Verify SHA-256 checksums](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.47/SHA256SUMS.txt)
+- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.50/Navide-0.1.50-arm64.dmg)
+- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.1.50/Navide-0.1.50-arm64.zip)
 
-This preview is not signed or notarized by Apple. After copying Navide to Applications, Control-click the app in Finder and choose **Open**. If macOS still blocks it, go to **System Settings → Privacy & Security** and choose **Open Anyway** for Navide. Do not bypass Gatekeeper globally.
+Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
 
 For a development checkout, install from source instead.
 
