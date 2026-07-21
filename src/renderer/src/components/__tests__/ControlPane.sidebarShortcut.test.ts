@@ -72,12 +72,10 @@ describe('ControlPane – Cmd+number sidebar shortcut', () => {
     expect(activeTab(wrapper)).toBe('git')
   })
 
-  it('Cmd+4 switches to the plans tab and emits update:sidebar-tab', async () => {
+  it('Cmd+4 switches to the plans tab', async () => {
     keydown({ key: '4', metaKey: true })
     await wrapper.vm.$nextTick()
     expect(activeTab(wrapper)).toBe('plans')
-    const emitted = wrapper.emitted('update:sidebar-tab') as unknown[][] | undefined
-    expect(emitted?.at(-1)).toEqual(['plans'])
   })
 
   it('Cmd+1 switches back to the explorer tab', async () => {

@@ -58,13 +58,13 @@ describe('ControlPane – Plans sidebar tab', () => {
     expect(btns[3].attributes('title')).toContain('Plans')
   })
 
-  it('mounts PlanPane in the sidebar and forwards update:sidebar-tab when the Plans tab is picked', async () => {
+  it('mounts PlanPane in the sidebar when the Plans tab is picked', async () => {
     // Pipeline tab: no PlanPane yet.
     expect(wrapper.find('.plans-split').exists()).toBe(false)
     await wrapper.findAll('.sidebar-tabs .tab-btn')[3].trigger('click')
     await wrapper.vm.$nextTick()
+    // Plans now live in-sidebar; the mounted PlanPane is the observable effect
+    // (the tab no longer emits update:sidebar-tab — App.vue does not consume it).
     expect(wrapper.find('.plans-split').exists()).toBe(true)
-    const emitted = wrapper.emitted('update:sidebar-tab') as unknown[][] | undefined
-    expect(emitted?.at(-1)).toEqual(['plans'])
   })
 })

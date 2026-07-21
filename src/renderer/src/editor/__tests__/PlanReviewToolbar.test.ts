@@ -205,6 +205,26 @@ describe('PlanReviewToolbar – display', () => {
   })
 })
 
+describe('PlanReviewToolbar – switching plans clears in-progress state', () => {
+  it('resets an open panel + in-flight note edit when relPath changes', async () => {
+    const meta = baseMeta({
+      reviewNotes: [{ id: 'n1', author: 'user', text: 'A-note', resolved: false, reply: '', anchor: '' }],
+    })
+    const { wrapper } = await mountToolbar(planDoc(meta))
+    // Open the notes panel and enter edit mode on the user-authored note.
+    await wrapper.find('.prt-notes-btn').trigger('click')
+    await wrapper.find('.prt-note .prt-ghost').trigger('click')
+    expect(wrapper.find('.prt-input').exists()).toBe(true)
+    // Switch to another plan in the same live window. The parent keys the
+    // toolbar per relPath, but the watch must also self-clear so a draft/edit
+    // (note ids collide across plans) can't leak into — or be written to — B.
+    await wrapper.setProps({ relPath: '.agent-team/plans/other_d4e5f6.html' })
+    await flushPromises()
+    expect(wrapper.find('.prt-input').exists()).toBe(false)
+    expect(wrapper.find('.prt-panel').exists()).toBe(false)
+  })
+})
+
 describe('PlanReviewToolbar – approve gating', () => {
   it('disables Approve while unresolved notes exist', async () => {
     const meta = baseMeta({

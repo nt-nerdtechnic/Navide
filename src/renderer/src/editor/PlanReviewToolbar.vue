@@ -125,6 +125,19 @@ watch(
     historyEntries.value = []
     diffFor.value = null
     diffSummary.value = null
+    // Reset composer/editing state so a draft or edit-in-progress on the
+    // previous plan cannot leak into — or be written against — the new one
+    // (note/todo ids can collide across plans). Defensive: the parent also
+    // keys the toolbar per relPath, but this keeps the watch safe on its own.
+    notesOpen.value = false
+    todosOpen.value = false
+    newTodoText.value = ''
+    newNoteText.value = ''
+    editingTodoId.value = null
+    editTodoText.value = ''
+    editingNoteId.value = null
+    editNoteText.value = ''
+    pendingAnchor.value = ''
     // A dispatch pending on the previous file can no longer be settled here
     // (results are matched against props.relPath); drop it so the timeout
     // cannot fire a rollback against the newly opened file.

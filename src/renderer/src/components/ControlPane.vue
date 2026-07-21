@@ -225,7 +225,6 @@ const emit = defineEmits<{
   (e: 'reorder-pane', fromId: string, toId: string): void
   (e: 'open-settings'): void
   (e: 'open-history'): void
-  (e: 'update:sidebar-tab', tab: SidebarTab): void
   (e: 'switch-workspace'): void
   (e: 'workspace-browse', path: string): void
   (e: 'update:layoutMode', v: LayoutMode): void
@@ -474,9 +473,6 @@ function onSidebarTabShortcut(e: KeyboardEvent): void {
 }
 onMounted(() => {
   document.addEventListener('keydown', onSidebarTabShortcut)
-  // Sync App.vue to the restored/initial tab so the main stage area matches
-  // (e.g. reopening on the Plans tab renders the Plans pane, not the terminals).
-  emit('update:sidebar-tab', sidebarTab.value)
 })
 onUnmounted(() => document.removeEventListener('keydown', onSidebarTabShortcut))
 
@@ -529,9 +525,6 @@ function backToList(): void {
 function selectSidebarTab(tab: SidebarTab): void {
   sidebarTab.value = tab
   if (tab === 'pipeline') sidebarView.value = 'list'
-  // Surface the active tab so App.vue can render the Plans pane in the main
-  // stage area (and keep the terminal grid mounted but hidden) for 'plans'.
-  emit('update:sidebar-tab', tab)
 }
 
 function isPipelineRunning(pipelineId: string): boolean {
@@ -1395,7 +1388,7 @@ function onPipelineDividerEnd(): void {
 
     </div><!-- end sidebarTab === 'pipeline' / pipeline-split -->
 
-    <!-- ── Plans tab (self-contained drill-down: list → preview, fits the narrow sidebar) ── -->
+    <!-- ── Plans tab (embedded PlanPane, fits the narrow sidebar) ── -->
     <PlanPane
       v-if="backend && sidebarTab === 'plans'"
       class="plans-split"

@@ -798,6 +798,10 @@ ipcMain.handle('window:openEditor', (event, args: Record<string, string>) => {
 
 // Plan review windows: one per workspace; reopening focuses the existing one.
 const planWindows = new PlanWindowRegistry<BrowserWindow>()
+// Plan windows whose renderer has not yet subscribed to plan:open-doc. Maps the
+// window to the most recently requested plan; flushed on did-finish-load so a
+// click made during load (before the subscription exists) is never lost.
+const planWindowPending = new Map<BrowserWindow, string>()
 
 function openPlanWindow(workspacePath: string, relPath?: string): void {
   const existing = planWindows.get(workspacePath)
@@ -807,7 +811,15 @@ function openPlanWindow(workspacePath: string, relPath?: string): void {
     if (existing.isMinimized()) existing.restore()
     existing.show()
     existing.focus()
-    if (relPath) existing.webContents.send('plan:open-doc', relPath)
+    if (relPath) {
+      if (planWindowPending.has(existing)) {
+        // Renderer still loading and not yet subscribed: remember the latest
+        // request; did-finish-load flushes the final choice.
+        planWindowPending.set(existing, relPath)
+      } else {
+        existing.webContents.send('plan:open-doc', relPath)
+      }
+    }
     return
   }
   const win = new BrowserWindow({
@@ -823,7 +835,22 @@ function openPlanWindow(workspacePath: string, relPath?: string): void {
     }
   })
   planWindows.set(workspacePath, win)
-  win.on('closed', () => planWindows.remove(workspacePath, win))
+  // Registered before the renderer subscribes to plan:open-doc. Track the plan
+  // this window was launched for; a click on a different plan during load
+  // overwrites it, and did-finish-load re-sends the final choice if it differs.
+  const initialRelPath = relPath ?? ''
+  planWindowPending.set(win, initialRelPath)
+  win.webContents.once('did-finish-load', () => {
+    const pending = planWindowPending.get(win)
+    planWindowPending.delete(win)
+    if (pending && pending !== initialRelPath) {
+      win.webContents.send('plan:open-doc', pending)
+    }
+  })
+  win.on('closed', () => {
+    planWindowPending.delete(win)
+    planWindows.remove(workspacePath, win)
+  })
   loadWindow(win, {
     window: 'plans',
     workspace_path: workspacePath,

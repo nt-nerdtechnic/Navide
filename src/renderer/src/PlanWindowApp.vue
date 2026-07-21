@@ -295,6 +295,7 @@ onUnmounted(() => {
             <template v-else>
               <PlanReviewToolbar
                 ref="toolbarRef"
+                :key="openDoc.relPath"
                 :workspace-path="workspacePath"
                 :rel-path="openDoc.relPath"
                 :backend="backend"
@@ -352,6 +353,7 @@ onUnmounted(() => {
             <template v-else>
               <PlanReviewToolbar
                 ref="toolbarRef"
+                :key="openDoc.relPath"
                 :workspace-path="workspacePath"
                 :rel-path="openDoc.relPath"
                 :backend="backend"

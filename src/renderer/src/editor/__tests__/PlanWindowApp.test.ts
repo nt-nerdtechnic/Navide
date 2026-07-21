@@ -247,6 +247,19 @@ describe('PlanWindowApp', () => {
     expect(wrapper.find('.plan-window-empty').exists()).toBe(false)
   })
 
+  it('remounts the review toolbar when switching between HTML plans (no stale edit state leaks)', async () => {
+    const wrapper = await mountApp()
+    await open(wrapper, '.agent-team/plans/feature_a1b2c3.html')
+    const before = wrapper.findComponent({ name: 'PlanReviewToolbar' }).element
+    // Same window, same format → without the per-relPath :key the toolbar would
+    // patch in place and carry A's composer/edit state into B (ids can collide).
+    await open(wrapper, '.agent-team/plans/other_d4e5f6.html')
+    const toolbar = wrapper.findComponent({ name: 'PlanReviewToolbar' })
+    expect(toolbar.props('relPath')).toBe('.agent-team/plans/other_d4e5f6.html')
+    // A fresh DOM element proves the :key forced a remount (state fully cleared).
+    expect(toolbar.element).not.toBe(before)
+  })
+
   it('keeps non-plan HTML docs on the plain sandboxed FilePreviewPane', async () => {
     const wrapper = await mountApp()
     await open(wrapper, '.agent-team/plans/_template.html')

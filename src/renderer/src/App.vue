@@ -4162,12 +4162,11 @@ async function titlebarRevealWorkspace(): Promise<void> {
   await window.agentTeam.openPath(currentWorkspace.value)
 }
 
-// Titlebar 📋 button: open the dedicated plan window for the current workspace.
-// Plans now live in the main-window Plans tab (embedded PlanPane), not a
-// detached window: switch the sidebar tab through ControlPane (the owner of
-// sidebarTab), which forwards the change back via `update:sidebar-tab`. The
-// legacy openPlansWindow IPC bridge stays in preload/main but is no longer
-// wired here.
+// Titlebar 📋 button: reveal the current workspace's plans. Plans now live in
+// the main-window left sidebar as their own tab (embedded PlanPane), not a
+// detached window — so this just switches ControlPane's sidebar tab to 'plans'
+// (ControlPane owns sidebarTab). The legacy openPlansWindow IPC bridge stays in
+// preload/main but is no longer wired here.
 function openPlansWindow(): void {
   if (!currentWorkspace.value) return
   controlPaneRef.value?.selectSidebarTab('plans')
