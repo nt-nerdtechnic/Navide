@@ -474,3 +474,16 @@ onUnmounted(() => {
   justify-content: center;
 }
 </style>
+
+<!-- Global reset (non-scoped): scoped styles cannot target html/body/#app, so
+     without this the window's dark backgroundColor shows through body's default
+     8px margin as a thick frame around the content (App.vue/EditorWindowApp do
+     the same reset for their windows). -->
+<style>
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+}
+</style>
