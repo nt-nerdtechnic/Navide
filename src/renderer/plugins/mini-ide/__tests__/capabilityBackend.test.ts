@@ -50,6 +50,9 @@ const MINI_IDE_SENT_TYPES = [
   'ai.chat.notes.get', 'ai.chat.notes.set', 'ai.chat.threads.get', 'ai.chat.threads.set',
   // ui / settings
   'ui.settings.set',
+  // issues (GitPane → useIssues, gh/glab CRUD)
+  'issues.provider', 'issues.list', 'issues.get', 'issues.create', 'issues.comment',
+  'issues.set_state',
 ] as const
 
 describe('TYPE_TO_CAP coverage', () => {
@@ -58,8 +61,8 @@ describe('TYPE_TO_CAP coverage', () => {
     expect(unmapped).toEqual([])
   })
 
-  it('maps only into the six M3 capability namespaces', () => {
-    const allowed = new Set(['fs', 'git', 'terminal', 'search', 'chat', 'ui'])
+  it('maps only into the granted capability namespaces', () => {
+    const allowed = new Set(['fs', 'git', 'terminal', 'search', 'chat', 'ui', 'issues'])
     for (const ref of Object.values(TYPE_TO_CAP)) {
       expect(allowed.has(ref.ns)).toBe(true)
     }
@@ -83,9 +86,13 @@ describe('TYPE_TO_CAP coverage', () => {
     expect(resolveCapability('ui.settings.set')).toEqual({ ns: 'ui', method: 'settings_set' })
   })
 
-  it('returns null for unmapped types (issues.* has no M3 capability)', () => {
-    expect(resolveCapability('issues.list')).toBeNull()
-    expect(resolveCapability('issues.create')).toBeNull()
+  it('splits the uniform issues namespace on the dotted method', () => {
+    expect(resolveCapability('issues.list')).toEqual({ ns: 'issues', method: 'list' })
+    expect(resolveCapability('issues.set_state')).toEqual({ ns: 'issues', method: 'set_state' })
+  })
+
+  it('returns null for unmapped types', () => {
+    expect(resolveCapability('issues.nope')).toBeNull()
     expect(resolveCapability('terminal.input')).toBeNull()
     expect(resolveCapability('totally.unknown')).toBeNull()
     expect(resolveCapability('')).toBeNull()
@@ -132,7 +139,7 @@ describe('useBackend shim send()', () => {
 
   it('returns UNMAPPED_CAPABILITY without calling the broker for an unmapped type', async () => {
     const backend = useBackend()
-    const resp = await backend.send('issues.list', {})
+    const resp = await backend.send('terminal.input', {})
     expect(callCapability).not.toHaveBeenCalled()
     expect(resp.ok).toBe(false)
     expect(resp.error?.code).toBe('UNMAPPED_CAPABILITY')

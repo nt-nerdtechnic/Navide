@@ -347,8 +347,9 @@ export function openFsProbePluginView(hostWindow: BrowserWindow): void {
 }
 
 /**
- * The M4 mini-IDE plugin descriptor. Declares all six capability namespaces so
- * its brokered `fs`/`git`/`terminal`/`search`/`chat`/`ui` calls are authorized.
+ * The M4 mini-IDE plugin descriptor. Declares all seven capability namespaces so
+ * its brokered `fs`/`git`/`terminal`/`search`/`chat`/`ui`/`issues` calls are
+ * authorized (issues drives GitPane's gh/glab cloud-issue pane).
  *
  * Unlike noop/fs_probe, this bundle is built SEPARATELY (vite.mini-ide.config.ts)
  * with the `useBackend` → capabilityBackend alias, so it is NOT served by the
@@ -368,7 +369,7 @@ export function miniIdePluginDescriptor(
   const qs = params.toString()
   return {
     id: 'navide.mini-ide',
-    requires: ['fs', 'git', 'terminal', 'search', 'chat', 'ui'],
+    requires: ['fs', 'git', 'terminal', 'search', 'chat', 'ui', 'issues'],
     devUrl: '', // separate build → not on the dev server; always loadFile
     entryFile: join(__dirname, '../renderer/plugins/mini-ide/index.html'),
     query: qs ? `?${qs}` : '',

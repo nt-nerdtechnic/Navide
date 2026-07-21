@@ -29,13 +29,16 @@ const EXPECTED_EXPLICIT: Readonly<Record<string, string>> = {
 }
 
 describe('resolveWsType', () => {
-  it('maps the uniform fs/git/search surface to backend WS types', () => {
+  it('maps the uniform fs/git/search/issues surface to backend WS types', () => {
     expect(resolveWsType('fs', 'read_file')).toBe('fs.read_file')
     expect(resolveWsType('fs', 'write_file')).toBe('fs.write_file')
     expect(resolveWsType('fs', 'delete')).toBe('fs.delete')
     expect(resolveWsType('git', 'status')).toBe('git.status')
     expect(resolveWsType('git', 'diff_all')).toBe('git.diff_all')
     expect(resolveWsType('search', 'find_in_files')).toBe('search.find_in_files')
+    expect(resolveWsType('issues', 'provider')).toBe('issues.provider')
+    expect(resolveWsType('issues', 'list')).toBe('issues.list')
+    expect(resolveWsType('issues', 'set_state')).toBe('issues.set_state')
   })
 
   it('inverts the shim non-uniform remaps back to their backend WS types', () => {
@@ -49,7 +52,7 @@ describe('resolveWsType', () => {
 
   it('returns null for an unmapped (ns, method)', () => {
     expect(resolveWsType('ping', 'ping')).toBeNull()
-    expect(resolveWsType('issues', 'list')).toBeNull()
+    expect(resolveWsType('issues', 'nope')).toBeNull()
     expect(resolveWsType('fs', 'nope')).toBeNull()
   })
 
@@ -68,14 +71,16 @@ describe('resolveWsType', () => {
   it('keeps uniform-namespace entries an identity map (value === key)', () => {
     for (const [key, value] of Object.entries(CAP_MAP)) {
       const ns = key.slice(0, key.indexOf('.'))
-      if (ns === 'fs' || ns === 'git' || ns === 'search') expect(value).toBe(key)
+      if (ns === 'fs' || ns === 'git' || ns === 'search' || ns === 'issues') {
+        expect(value).toBe(key)
+      }
     }
   })
 
-  it('has no CAP_MAP entry outside the fs/git/search uniform + explicit surface', () => {
+  it('has no CAP_MAP entry outside the fs/git/search/issues uniform + explicit surface', () => {
     for (const key of Object.keys(CAP_MAP)) {
       const ns = key.slice(0, key.indexOf('.'))
-      const isUniform = ns === 'fs' || ns === 'git' || ns === 'search'
+      const isUniform = ns === 'fs' || ns === 'git' || ns === 'search' || ns === 'issues'
       expect(isUniform || key in EXPECTED_EXPLICIT).toBe(true)
     }
   })

@@ -68,14 +68,12 @@ const FS_METHODS = [
   'rename',
   'convert_office',
   'list_archive',
-  // Backend gap: no FsCapability.read_image yet (M5). Mapped so the shim
-  // resolves it; the broker/backend must grow the method for it to succeed.
   'read_image',
 ] as const
 
-// git.* WS types are `git.<method>`. Only a subset has a GitCapability method
-// today (status/log/commit/diff_all/diff_file/diff_branches/show_commit/
-// stash_list/apply_patch); the rest resolve here but are backend gaps for M5.
+// git.* WS types are `git.<method>` one-for-one. The backend WS handlers for
+// these already exist (direct mode drives them via useGit), so the broker
+// dispatches each mapped type straight through.
 const GIT_METHODS = [
   'status', 'log', 'diff_branches', 'rebase', 'restore_from_branch', 'show_commit',
   'worktrees', 'add_worktree', 'remove_worktree', 'prune_worktrees', 'lock_worktree',
@@ -94,6 +92,11 @@ const GIT_METHODS = [
 
 // search.* WS types are `search.<SearchCapability method>` one-for-one.
 const SEARCH_METHODS = ['find_in_files', 'replace_in_files'] as const
+
+// issues.* WS types are `issues.<method>` one-for-one (GitPane → useIssues,
+// gh/glab CRUD). The backend handlers already exist; the plugin just needs the
+// `issues` namespace granted in its manifest `requires` for the broker to route.
+const ISSUES_METHODS = ['provider', 'list', 'get', 'create', 'comment', 'set_state'] as const
 
 // Non-uniform WS types: the type string differs from `<ns>.<method>`. These are
 // the shell/editor/ai/ui families, remapped explicitly onto the M3 capability
@@ -116,12 +119,10 @@ const EXPLICIT: Record<string, CapabilityRef> = {
   'ai.chat.approve_command': { ns: 'chat', method: 'approve_command' },
   'ai.chat.reject_command': { ns: 'chat', method: 'reject_command' },
   'ai.chat.notes.set': { ns: 'chat', method: 'notes_set' },
-  // Backend gaps (ChatCapability has the *set* but no *get* yet — M5):
   'ai.chat.notes.get': { ns: 'chat', method: 'notes_get' },
   'ai.chat.threads.set': { ns: 'chat', method: 'threads_set' },
   'ai.chat.threads.get': { ns: 'chat', method: 'threads_get' },
-  // settings persistence → UiCapability (host-side; capability method is an M5
-  // gap, mapped so it resolves to the ui namespace the manifest already grants).
+  // settings persistence → UiCapability (ui.settings.set backend handler exists).
   'ui.settings.set': { ns: 'ui', method: 'settings_set' },
 }
 
@@ -130,14 +131,14 @@ const EXPLICIT: Record<string, CapabilityRef> = {
  * Pure data so it is trivially unit-testable. A `type` absent here is an
  * explicit "unmapped" (see {@link resolveCapability}).
  *
- * NOTE `issues.*` (GitPane → useIssues) is intentionally absent: M3 defines no
- * `issues` capability and the manifest does not `require` it, so those calls are
- * unmapped by design (they surface as errors until an issues capability lands).
+ * `issues.*` (GitPane → useIssues) maps to the `issues` namespace the manifest
+ * grants; the backend gh/glab handlers already exist, so it routes like fs/git.
  */
 export const TYPE_TO_CAP: Readonly<Record<string, CapabilityRef>> = {
   ...fromNs('fs', FS_METHODS),
   ...fromNs('git', GIT_METHODS),
   ...fromNs('search', SEARCH_METHODS),
+  ...fromNs('issues', ISSUES_METHODS),
   ...EXPLICIT,
 }
 

@@ -13,7 +13,7 @@
 // share a module — capabilityMap.test.ts cross-checks that they stay inverses.
 
 /** Build `{ "<ns>.<method>": "<ns>.<method>" }` for a namespace whose backend WS
- *  types are exactly `"<ns>.<method>"` (fs / git / search — the uniform
+ *  types are exactly `"<ns>.<method>"` (fs / git / search / issues — the uniform
  *  namespaces the shim splits on the dotted method). */
 function uniformNs(ns: string, methods: readonly string[]): Record<string, string> {
   const out: Record<string, string> = {}
@@ -48,6 +48,11 @@ const GIT_METHODS = [
 // search capability methods → backend `search.<method>` one-for-one.
 const SEARCH_METHODS = ['find_in_files', 'replace_in_files'] as const
 
+// issues capability methods → backend `issues.<method>` one-for-one. GitPane's
+// useIssues drives cloud issues (gh/glab CRUD); the backend handlers already
+// exist, so plugin parity is a pure mapping plus a `requires: ["issues"]` grant.
+const ISSUES_METHODS = ['provider', 'list', 'get', 'create', 'comment', 'set_state'] as const
+
 // Non-uniform `(ns.method)` → backend WS type. These invert the shim's EXPLICIT
 // remaps of the shell/editor/ai/ui families onto the terminal/chat/ui namespaces.
 const EXPLICIT_CAP_MAP: Readonly<Record<string, string>> = {
@@ -76,12 +81,13 @@ const EXPLICIT_CAP_MAP: Readonly<Record<string, string>> = {
 }
 
 /** `(ns, method)` → backend WS message type. The full mini-IDE call surface
- *  (fs / git / search / terminal / chat / ui) the broker dispatches to the
- *  backend. Keep in sync with the shim's `TYPE_TO_CAP`. */
+ *  (fs / git / search / issues / terminal / chat / ui) the broker dispatches to
+ *  the backend. Keep in sync with the shim's `TYPE_TO_CAP`. */
 export const CAP_MAP: Readonly<Record<string, string>> = {
   ...uniformNs('fs', FS_METHODS),
   ...uniformNs('git', GIT_METHODS),
   ...uniformNs('search', SEARCH_METHODS),
+  ...uniformNs('issues', ISSUES_METHODS),
   ...EXPLICIT_CAP_MAP,
 }
 

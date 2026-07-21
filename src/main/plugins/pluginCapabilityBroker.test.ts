@@ -143,6 +143,17 @@ describe('planCapabilityCall', () => {
     expect(plan.kind).toBe('respond')
     if (plan.kind === 'respond') expect(plan.response.error?.code).toBe('UNKNOWN')
   })
+
+  it('routes a granted issues call to its backend WS type', () => {
+    const plan = planCapabilityCall(call({ ns: 'issues', method: 'list' }), ['issues'])
+    expect(plan).toEqual({ kind: 'backend', wsType: 'issues.list' })
+  })
+
+  it('DENIES an issues call when the plugin did not declare issues', () => {
+    const plan = planCapabilityCall(call({ ns: 'issues', method: 'list' }), ['fs', 'git'])
+    expect(plan.kind).toBe('respond')
+    if (plan.kind === 'respond') expect(plan.response.error?.code).toBe('CAP_DENIED')
+  })
 })
 
 describe('backendResponseToCapability', () => {
