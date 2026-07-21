@@ -135,7 +135,17 @@ onMounted(refreshInstalled)
           requests sensitive capabilities:
           <strong>{{ pendingConfirm.prepared.sensitive.join(', ') }}</strong>.
         </p>
-        <p class="ext-trust-tier">Trust: {{ pendingConfirm.prepared.trustTier }}</p>
+        <p class="ext-trust-tier">
+          <span
+            v-if="pendingConfirm.prepared.trustTier === 'signed-verified'"
+            class="ext-trust-badge ext-verified"
+          >
+            Signed &amp; verified
+          </span>
+          <span v-else class="ext-trust-badge ext-unsigned">
+            Unsigned — not cryptographically verified
+          </span>
+        </p>
         <div class="ext-trust-actions">
           <button class="ext-confirm" @click="confirmSensitive">Install anyway</button>
           <button class="ext-cancel" @click="cancelSensitive">Cancel</button>
@@ -209,6 +219,21 @@ onMounted(refreshInstalled)
 }
 .ext-trust-tier {
   color: var(--text-muted, #888);
+}
+.ext-trust-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.ext-trust-badge.ext-verified {
+  color: #1a7f37;
+  background: rgba(26, 127, 55, 0.12);
+}
+.ext-trust-badge.ext-unsigned {
+  color: #c77400;
+  background: rgba(199, 116, 0, 0.12);
 }
 .ext-trust-actions {
   display: flex;

@@ -31,6 +31,11 @@ const SIG_EOCD = 0x06054b50
 const SIG_CENTRAL = 0x02014b50
 const SIG_LOCAL = 0x04034b50
 
+/** Zip-bomb defence: cap the decompressed output of a single entry and of the
+ *  whole archive so a small deflate stream cannot inflate to exhaust memory. */
+const MAX_ENTRY_OUTPUT = 50 * 1024 * 1024 // 50 MB per entry
+const MAX_TOTAL_OUTPUT = 200 * 1024 * 1024 // 200 MB per archive
+
 /** Locate the End-Of-Central-Directory record by scanning back from the end
  *  (the trailing 22-byte record may be followed by a variable comment). */
 function findEocd(buf: Buffer): number {
@@ -52,6 +57,7 @@ export function readZipEntries(bytes: Uint8Array): ZipEntry[] {
   let ptr = buf.readUInt32LE(eocd + 16) // central directory offset
 
   const entries: ZipEntry[] = []
+  let totalOutput = 0
   for (let i = 0; i < entryCount; i++) {
     if (ptr + 46 > buf.length || buf.readUInt32LE(ptr) !== SIG_CENTRAL) {
       throw new PluginPackageError('corrupt central directory')
@@ -67,18 +73,40 @@ export function readZipEntries(bytes: Uint8Array): ZipEntry[] {
 
     if (name.endsWith('/')) continue // directory entry — no data
 
-    if (buf.readUInt32LE(localOffset) !== SIG_LOCAL) {
+    // Bounds-check the local header before reading it: a malformed central
+    // directory could point past the buffer, which would otherwise raise an
+    // uncaught RangeError instead of a PluginPackageError.
+    if (localOffset + 30 > buf.length || buf.readUInt32LE(localOffset) !== SIG_LOCAL) {
       throw new PluginPackageError(`corrupt local header for ${name}`)
     }
     const lNameLen = buf.readUInt16LE(localOffset + 26)
     const lExtraLen = buf.readUInt16LE(localOffset + 28)
     const dataStart = localOffset + 30 + lNameLen + lExtraLen
+    if (dataStart + compSize > buf.length) {
+      throw new PluginPackageError(`entry data out of bounds for ${name}`)
+    }
     const raw = buf.subarray(dataStart, dataStart + compSize)
 
     let data: Buffer
     if (method === 0) data = Buffer.from(raw)
-    else if (method === 8) data = inflateRawSync(raw)
-    else throw new PluginPackageError(`unsupported compression method ${method} for ${name}`)
+    else if (method === 8) {
+      // Cap the inflated size so a zip bomb (tiny deflate → huge output) is
+      // refused as a PluginPackageError rather than exhausting memory.
+      try {
+        data = inflateRawSync(raw, { maxOutputLength: MAX_ENTRY_OUTPUT })
+      } catch (err) {
+        throw new PluginPackageError(
+          `entry ${name} failed to inflate or exceeds the ${MAX_ENTRY_OUTPUT}-byte limit: ${(err as Error).message}`
+        )
+      }
+    } else throw new PluginPackageError(`unsupported compression method ${method} for ${name}`)
+
+    totalOutput += data.length
+    if (totalOutput > MAX_TOTAL_OUTPUT) {
+      throw new PluginPackageError(
+        `archive decompressed output exceeds the ${MAX_TOTAL_OUTPUT}-byte limit`
+      )
+    }
 
     entries.push({ path: name, data })
   }

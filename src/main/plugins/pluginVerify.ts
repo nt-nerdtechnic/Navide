@@ -124,6 +124,35 @@ export function assertSafeEntryPath(name: string): void {
   }
 }
 
+/**
+ * Enforce the registry-transport policy before any marketplace fetch. In
+ * production plaintext `http:` is refused (a MITM could swap the package bytes
+ * or the trusted digest metadata); only `https:` is allowed. Loopback hosts
+ * (`localhost`/`127.0.0.1`/`::1`) are the sole `http:` exception so a locally
+ * run dev registry keeps working. Outside production any `http:` is allowed.
+ * Throws on a malformed URL or a disallowed scheme/host — the caller must not
+ * fetch when this throws.
+ */
+export function assertRegistryUrlAllowed(url: string, isProduction: boolean): void {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw new Error(`invalid marketplace registry URL: ${url}`)
+  }
+  if (parsed.protocol === 'https:') return
+  if (parsed.protocol === 'http:') {
+    const host = parsed.hostname
+    const loopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+    if (loopback) return
+    if (!isProduction) return
+    throw new Error(
+      `refusing plaintext http marketplace registry URL in production (use https): ${url}`
+    )
+  }
+  throw new Error(`unsupported marketplace registry URL scheme (${parsed.protocol}): ${url}`)
+}
+
 export interface VerifyPackageInput {
   /** The raw downloaded package (`.vsix`) bytes. */
   bytes: Uint8Array
@@ -133,8 +162,9 @@ export interface VerifyPackageInput {
   signature?: string | null
   /** Publisher PEM public key, when available (else null). */
   publicKey?: string | null
-  /** Trust tier the registry recorded for this version, consumed as a fallback
-   *  when no signature material is available to re-verify client-side. */
+  /** Trust tier the registry claims for this version. DISPLAY HINT ONLY — it is
+   *  never allowed to upgrade the effective trust tier (fail-closed); a lying
+   *  registry cannot mint `signed-verified` without a valid client-side sig. */
   claimedTrustTier?: string | null
   /** The manifest's declared capability namespaces. */
   requires?: readonly string[]
@@ -158,8 +188,9 @@ export interface VerifyPackageResult {
  *   - digest mismatch                     → always blocks (`DIGEST_MISMATCH`).
  *   - signature + key present, verify OK  → `signed-verified`.
  *   - signature + key present, verify BAD → blocks (`SIGNATURE_INVALID`).
- *   - no signature material               → not blocked; trust tier falls back
- *     to the registry's recorded tier (or `unsigned`), surfaced to the user.
+ *   - no signature material               → not blocked; ALWAYS `unsigned`
+ *     regardless of any registry claim (fail-closed; the registry cannot
+ *     upgrade trust).
  *   - unknown capability in `requires`    → blocks (`CAP_UNKNOWN`).
  */
 export function verifyPackage(input: VerifyPackageInput): VerifyPackageResult {
@@ -174,7 +205,12 @@ export function verifyPackage(input: VerifyPackageInput): VerifyPackageResult {
     )
   }
 
-  let trustTier: TrustTier
+  // Trust is fail-closed: `signed-verified` is earned ONLY by a client-side
+  // Ed25519 verification that passes here. The registry's `claimedTrustTier` is
+  // never allowed to upgrade trust — a compromised/lying registry claiming
+  // `signed-verified` gets `unsigned` all the same. It may be surfaced as a
+  // display hint by the caller, but it is not consulted for the effective tier.
+  let trustTier: TrustTier = TRUST_UNSIGNED
   const hasMaterial = Boolean(input.signature && input.publicKey)
   if (hasMaterial) {
     if (!verifyEd25519(digest, input.signature, input.publicKey)) {
@@ -184,8 +220,6 @@ export function verifyPackage(input: VerifyPackageInput): VerifyPackageResult {
       )
     }
     trustTier = TRUST_SIGNED
-  } else {
-    trustTier = input.claimedTrustTier === TRUST_SIGNED ? TRUST_SIGNED : TRUST_UNSIGNED
   }
 
   return { digest, trustTier, sensitive: sensitiveCapabilities(requires) }

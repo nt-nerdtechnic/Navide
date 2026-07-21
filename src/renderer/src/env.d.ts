@@ -207,6 +207,7 @@ declare global {
         openSettings: (key: TccPermissionKey) => Promise<{ ok: boolean; error?: string }>
       }
       plugins?: {
+        isEnabled: () => Promise<boolean>
         listInstalled: () => Promise<InstalledPluginSummary[]>
         marketplaceSearch: (query?: string) => Promise<MarketplaceListResponse>
         prepareInstall: (args: {

@@ -10,20 +10,26 @@
 // Download bytes never cross to the renderer — the prepared package is held
 // main-side, keyed by id, until commit.
 
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import {
   prepareInstall,
   commitInstall,
   removePlugin,
   type PreparedInstall,
 } from './pluginInstaller'
-import { sensitiveCapabilities } from './pluginVerify'
+import { sensitiveCapabilities, assertRegistryUrlAllowed } from './pluginVerify'
+import { miniIdePluginEnabled } from './pluginFlags'
 import type { FrontendPluginManager } from './frontendPluginManager'
 
 const DEFAULT_MARKETPLACE_URL = 'http://localhost:8787'
 
+/** Resolve the marketplace registry URL, enforcing the transport policy
+ *  (production forbids plaintext http except loopback). Throws before any
+ *  fetch when the configured URL is disallowed. */
 function marketplaceUrl(): string {
-  return process.env['AGENT_TEAM_MARKETPLACE_URL'] ?? DEFAULT_MARKETPLACE_URL
+  const url = process.env['AGENT_TEAM_MARKETPLACE_URL'] ?? DEFAULT_MARKETPLACE_URL
+  assertRegistryUrlAllowed(url, app.isPackaged)
+  return url
 }
 
 interface InstalledSummary {
@@ -40,6 +46,11 @@ export function registerPluginIpc(
 ): void {
   // Packages verified by prepareInstall, awaiting a commit, keyed by plugin id.
   const prepared = new Map<string, PreparedInstall>()
+
+  // Whether the plugin layer is opted in (AGENT_TEAM_MINI_IDE_PLUGIN=1). The
+  // renderer gates the Extensions entry on this so the whole surface is absent
+  // when the flag is off.
+  ipcMain.handle('plugins:isEnabled', (): boolean => miniIdePluginEnabled())
 
   ipcMain.handle('plugins:listInstalled', (): InstalledSummary[] => {
     return manager.listDescriptors().map((d) => ({
@@ -65,9 +76,11 @@ export function registerPluginIpc(
       if (!detailRes.ok) throw new Error(`extension not found: HTTP ${detailRes.status}`)
       const detail = (await detailRes.json()) as {
         latest_version: string | null
+        public_key: string | null
         versions: Array<{
           version: string
           package_digest: string
+          signature: string | null
           trust_tier: string
           yanked: boolean
         }>
@@ -76,16 +89,21 @@ export function registerPluginIpc(
       const versionRow = detail.versions.find((v) => v.version === wanted && !v.yanked)
       if (!versionRow) throw new Error(`no installable version ${wanted ?? '(latest)'} found`)
 
-      // The registry API does not currently expose the detached signature bytes
-      // or the publisher public key, so client-side re-verification is not
-      // possible here; the registry-recorded trust tier is consumed instead.
-      // The mandatory digest check still runs against the trusted metadata.
+      // Feed the registry's signature material into the client-side verification
+      // chain so a validly-signed package can reach `signed-verified`. The wire
+      // is snake_case; `prepareInstall` takes camelCase. Signature is the one on
+      // the SELECTED version row (paired with its `package_digest`); the public
+      // key is publisher-level (detail top-level). Both may be null — an unsigned
+      // package or unregistered key simply resolves to `unsigned` (fail-closed;
+      // a bad-but-present signature still hard-blocks in `verifyPackage`).
       const result = await prepareInstall({
         registryUrl: marketplaceUrl(),
         namespace: args.namespace,
         name: args.name,
         version: versionRow.version,
         expectedDigest: versionRow.package_digest,
+        signature: versionRow.signature,
+        publicKey: detail.public_key,
         claimedTrustTier: versionRow.trust_tier,
       })
       prepared.set(result.id, result)

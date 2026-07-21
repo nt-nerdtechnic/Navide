@@ -34,6 +34,14 @@ describe('parseInstalledManifest', () => {
   it('rejects an unknown capability (scope over-reach)', () => {
     expect(() => parseInstalledManifest({ ...VALID, requires: ['fs', 'network'] })).toThrow(/network/)
   })
+
+  it.each(['../escape.js', 'a/../../etc/passwd', '/abs/main.js', '..\\win.js', 'C:/win.js'])(
+    'rejects a path-traversal entry %j',
+    (entry) => {
+      expect(() => parseInstalledManifest({ ...VALID, entry })).toThrow(InstalledPluginError)
+      expect(() => parseInstalledManifest({ ...VALID, entry })).toThrow(/unsafe entry path/)
+    }
+  )
 })
 
 describe('manifestToDescriptor', () => {

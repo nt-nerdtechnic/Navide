@@ -5,6 +5,7 @@ import {
   verifyEd25519,
   assertKnownCapabilities,
   assertSafeEntryPath,
+  assertRegistryUrlAllowed,
   sensitiveCapabilities,
   verifyPackage,
   PluginVerifyError,
@@ -93,6 +94,34 @@ describe('assertSafeEntryPath (zip-slip)', () => {
   })
 })
 
+describe('assertRegistryUrlAllowed', () => {
+  it('allows https in production', () => {
+    expect(() => assertRegistryUrlAllowed('https://registry.example.com', true)).not.toThrow()
+  })
+
+  it('rejects a remote plaintext http URL in production', () => {
+    expect(() => assertRegistryUrlAllowed('http://registry.example.com', true)).toThrow(
+      /plaintext http/
+    )
+  })
+
+  it('allows loopback http even in production (local dev registry)', () => {
+    expect(() => assertRegistryUrlAllowed('http://localhost:8787', true)).not.toThrow()
+    expect(() => assertRegistryUrlAllowed('http://127.0.0.1:8787', true)).not.toThrow()
+  })
+
+  it('allows any http outside production (dev)', () => {
+    expect(() => assertRegistryUrlAllowed('http://registry.example.com', false)).not.toThrow()
+  })
+
+  it('rejects a malformed URL and an unsupported scheme', () => {
+    expect(() => assertRegistryUrlAllowed('not a url', true)).toThrow(/invalid marketplace/)
+    expect(() => assertRegistryUrlAllowed('ftp://registry.example.com', true)).toThrow(
+      /unsupported/
+    )
+  })
+})
+
 describe('sensitiveCapabilities', () => {
   it('flags fs/terminal only', () => {
     expect(sensitiveCapabilities(['fs', 'git', 'terminal', 'ui'])).toEqual(['fs', 'terminal'])
@@ -144,13 +173,15 @@ describe('verifyPackage policy', () => {
     expect(res.trustTier).toBe(TRUST_UNSIGNED)
   })
 
-  it('consumes the registry tier when no material is available to re-verify', () => {
+  it('never upgrades trust from a registry claim without a client-side signature', () => {
+    // Fail-closed: a registry claiming `signed-verified` but supplying no
+    // signature material must still resolve to `unsigned`.
     const res = verifyPackage({
       bytes: BYTES,
       expectedDigest: DIGEST,
       claimedTrustTier: TRUST_SIGNED,
     })
-    expect(res.trustTier).toBe(TRUST_SIGNED)
+    expect(res.trustTier).toBe(TRUST_UNSIGNED)
   })
 
   it('blocks an unknown capability before any trust decision', () => {

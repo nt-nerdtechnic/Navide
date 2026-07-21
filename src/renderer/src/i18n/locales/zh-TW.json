@@ -450,7 +450,8 @@
       "general": "⚙️ 一般",
       "appearance": "🎨 外觀",
       "accounts": "🔑 帳號",
-      "shortcuts": "⌨️ 快捷鍵"
+      "shortcuts": "⌨️ 快捷鍵",
+      "extensions": "🧩 擴充功能"
     },
     "cliAgents": {
       "title": "CLI Agents",

@@ -106,6 +106,52 @@ describe('ExtensionsPane', () => {
     expect(wrapper.find('.ext-trust-dialog').exists()).toBe(false)
   })
 
+  it('shows an unsigned warning (never a verified badge) for an unsigned install', async () => {
+    mockPlugins({
+      prepareInstall: vi.fn().mockResolvedValue({
+        id: 'acme.demo',
+        version: '1.0.0',
+        trustTier: 'unsigned',
+        sensitive: ['fs'],
+        requiresConfirmation: true,
+      }),
+    })
+    wrapper = mount(ExtensionsPane)
+    await flushPromises()
+    await wrapper.get('.ext-search button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.ext-install').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.get('.ext-trust-dialog')
+    // Unsigned must surface the unsigned/unverified badge and NEVER the verified one.
+    expect(dialog.find('.ext-unsigned').exists()).toBe(true)
+    expect(dialog.find('.ext-verified').exists()).toBe(false)
+    expect(dialog.find('.ext-unsigned').text()).toContain('not cryptographically verified')
+  })
+
+  it('shows a verified badge only for a signed-verified install', async () => {
+    mockPlugins({
+      prepareInstall: vi.fn().mockResolvedValue({
+        id: 'acme.demo',
+        version: '1.0.0',
+        trustTier: 'signed-verified',
+        sensitive: ['fs'],
+        requiresConfirmation: true,
+      }),
+    })
+    wrapper = mount(ExtensionsPane)
+    await flushPromises()
+    await wrapper.get('.ext-search button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.ext-install').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.get('.ext-trust-dialog')
+    expect(dialog.find('.ext-verified').exists()).toBe(true)
+    expect(dialog.find('.ext-unsigned').exists()).toBe(false)
+  })
+
   it('cancelling the trust dialog does not install', async () => {
     const api = mockPlugins({
       prepareInstall: vi.fn().mockResolvedValue({

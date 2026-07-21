@@ -56,6 +56,14 @@ const IPC_CALL = 'plugin:cap:call'
 const IPC_EVENT = 'plugin:cap:event'
 const IPC_READY = 'plugin:ready'
 
+/** The `navide.` publisher namespace is reserved for host built-ins (mini-IDE,
+ *  noop, fs_probe). No installed third-party plugin may register an id here, so
+ *  a marketplace package cannot masquerade as — or overwrite — a trusted
+ *  built-in like `navide.mini-ide`. */
+export function isReservedPluginId(id: string): boolean {
+  return id === 'navide.mini-ide' || id.startsWith('navide.')
+}
+
 /**
  * Manages the lifecycle of frontend plugin views and brokers their capability
  * calls. A single instance owns all plugin views across every host window.
@@ -288,8 +296,18 @@ export class FrontendPluginManager {
 
   // -- loader registry (installed / available descriptors) ----------------
 
-  /** Register (or replace) an available plugin descriptor. */
-  registerDescriptor(descriptor: PluginLaunchDescriptor): void {
+  /**
+   * Register (or replace) an available plugin descriptor. Ids under the
+   * reserved built-in `navide.` namespace may only be registered by the host
+   * itself (`opts.builtin`); an installed third-party plugin claiming such an id
+   * (e.g. spoofing `navide.mini-ide` to hijack the trusted mini-IDE) is refused.
+   */
+  registerDescriptor(descriptor: PluginLaunchDescriptor, opts: { builtin?: boolean } = {}): void {
+    if (!opts.builtin && isReservedPluginId(descriptor.id)) {
+      throw new Error(
+        `refusing to register reserved built-in plugin id '${descriptor.id}' from an installed plugin`
+      )
+    }
     this.descriptors.set(descriptor.id, descriptor)
   }
 
@@ -314,8 +332,14 @@ export class FrontendPluginManager {
     const errors: string[] = []
     for (const scanned of scanInstalledPlugins(root)) {
       if (scanned.descriptor) {
-        this.registerDescriptor(scanned.descriptor)
-        loaded.push(scanned.descriptor.id)
+        try {
+          this.registerDescriptor(scanned.descriptor)
+          loaded.push(scanned.descriptor.id)
+        } catch (err) {
+          // A reserved-id spoof (or other registration refusal) is reported and
+          // skipped, never aborting the rest of the scan.
+          errors.push(`${scanned.dir}: ${err instanceof Error ? err.message : String(err)}`)
+        }
       } else if (scanned.error) {
         errors.push(`${scanned.dir}: ${scanned.error}`)
       }

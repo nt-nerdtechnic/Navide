@@ -450,7 +450,8 @@
       "general": "⚙️ General",
       "appearance": "🎨 Appearance",
       "accounts": "🔑 Accounts",
-      "shortcuts": "⌨️ Keyboard Shortcuts"
+      "shortcuts": "⌨️ Keyboard Shortcuts",
+      "extensions": "🧩 Extensions"
     },
     "cliAgents": {
       "title": "CLI Agents",

@@ -4,6 +4,35 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.49] — 2026-07-21 — signed release
+
+### Added
+
+- Mini-IDE plugin system: a plugin architecture with an install / update / remove lifecycle, an Extensions view in Settings, and per-plugin verification and packaging. The whole surface is gated behind an opt-in flag (`AGENT_TEAM_MINI_IDE_PLUGIN`) and stays hidden until the main process confirms it is enabled.
+- Plugin marketplace: a registry service, a publishing flow with a signing and trust model, and a discovery website to browse, search, and view plugin details.
+- Kimi Code CLI integration: conversation-log reader and resume support.
+- Git History window as a standalone view.
+- Unified plan documents: a shared model for HTML and Markdown plans with in-place todo editing, stage snapshots with live refresh, a shared review toolbar, and Plans surfaced as a left-sidebar tab.
+- Keybindings: Ctrl+1–5 to quick-select a CLI type, and Cmd+Shift+<n> to switch stage tabs.
+
+### Changed
+
+- Plans move to a left-sidebar tab with drill-down, replacing the pop-out window.
+- Grid layout accepts custom column×row presets.
+- Refreshed status-badge colors across components.
+
+### Fixed
+
+- Prevent stored XSS in the marketplace by serving plugin assets same-origin.
+- Derive the Kimi resume session id from the directory name instead of the file stem, and validate the session exists during resume preflight.
+- Stop focus/refit repaints from falsely showing a RUNNING pane badge.
+- Plan QA hardening: preserve skipped/unknown todo fields, close panels on ESC, and fix blank todo-only plans.
+- Externalize optional `ws` native dependencies (bufferutil, utf-8-validate) so the build does not break.
+
+### Distribution note
+
+- This release is signed with a Developer ID and notarized by Apple, and is published as a stable release eligible for the in-app update channel.
+
 ## [0.1.48] — 2026-07-20 — unsigned preview
 
 ### Added

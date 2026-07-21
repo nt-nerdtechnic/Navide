@@ -11,7 +11,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { assertKnownCapabilities, PluginVerifyError } from './pluginVerify'
+import { assertKnownCapabilities, assertSafeEntryPath, PluginVerifyError } from './pluginVerify'
 import type { PluginLaunchDescriptor } from './frontendPluginManager'
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*\.[a-z0-9][a-z0-9-]*$/
@@ -52,6 +52,17 @@ export function parseInstalledManifest(raw: unknown): InstalledManifest {
   const entry = m.entry
   if (typeof entry !== 'string' || entry.length === 0) {
     throw new InstalledPluginError(`manifest ${id} has no 'entry' (frontend bundle path)`)
+  }
+  // The entry is joined onto the plugin dir to build the load path, so it must
+  // not escape it: reject absolute paths, drive letters, backslashes, and any
+  // `..` segment (path traversal). Same policy as zip-slip on unpack.
+  try {
+    assertSafeEntryPath(entry)
+  } catch (err) {
+    if (err instanceof PluginVerifyError) {
+      throw new InstalledPluginError(`manifest ${id} has unsafe entry path: ${entry}`)
+    }
+    throw err
   }
   const requires = Array.isArray(m.requires) ? m.requires.map(String) : []
   try {

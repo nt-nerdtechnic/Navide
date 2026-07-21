@@ -22,6 +22,8 @@ import { useNotify } from '../composables/useNotify'
 import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp.vue'
+import ExtensionsPane from './ExtensionsPane.vue'
+import { useMiniIdePluginEnabled } from '../composables/useMiniIdePluginEnabled'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -44,8 +46,12 @@ const confirmBeforeCloseModel = computed({
 })
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'cliAgents' | 'general' | 'appearance' | 'accounts' | 'shortcuts'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'cliAgents' | 'general' | 'appearance' | 'accounts' | 'shortcuts' | 'extensions'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
+
+// Extensions/plugin layer is opt-in (AGENT_TEAM_MINI_IDE_PLUGIN=1). The tab and
+// its panel are hidden entirely until the main process confirms the flag is on.
+const extensionsEnabled = useMiniIdePluginEnabled()
 
 // ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
 const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
@@ -418,6 +424,7 @@ const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPa
   appearance: { scope: 'User', storage: 'localStorage' },
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
   shortcuts: { scope: 'User', storage: 'localStorage' },
+  extensions: { scope: 'User', storage: 'mainProcess' },
 }
 
 async function loadSettingsPaths(): Promise<void> {
@@ -1239,6 +1246,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
             <button :class="['s-tab', { active: activeTab === 'shortcuts' }]" @click="activeTab = 'shortcuts'">{{ $t('settings.tab.shortcuts') }}</button>
+            <button v-if="extensionsEnabled" :class="['s-tab', { active: activeTab === 'extensions' }]" @click="activeTab = 'extensions'">{{ $t('settings.tab.extensions') }}</button>
           </div>
           <div class="s-search-box">
             <input
@@ -2192,6 +2200,11 @@ async function plDelete(id: string, name: string) {
         <!-- ── KEYBOARD SHORTCUTS TAB ────────────────────────────────────── -->
         <div v-show="activeTab === 'shortcuts'" class="s-body shortcuts-body" data-settings-section="shortcuts">
           <KeyboardShortcutsHelp />
+        </div>
+
+        <!-- ── EXTENSIONS TAB (flag-gated) ───────────────────────────────── -->
+        <div v-if="extensionsEnabled" v-show="activeTab === 'extensions'" class="s-body" data-settings-section="extensions">
+          <ExtensionsPane />
         </div>
 
 
