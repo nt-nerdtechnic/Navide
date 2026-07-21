@@ -1,20 +1,19 @@
 // Grid layout presets for the grid view mode. 'auto' shows every pane at once
-// (column count derived from pane count); fixed presets cap the panes shown per
-// page and page through the rest.
-export type GridPreset = 'auto' | '2x1' | '2x2' | '3x3'
+// (column count derived from pane count); a fixed 'CxR' preset (e.g. '2x2',
+// '4x2', cols/rows 1–9) keeps that exact frame per page and pages through the
+// overflow.
+export type GridPreset = string
 
-const PRESET_DIMS: Record<Exclude<GridPreset, 'auto'>, { cols: number; rows: number }> = {
-  '2x1': { cols: 2, rows: 1 },
-  '2x2': { cols: 2, rows: 2 },
-  '3x3': { cols: 3, rows: 3 },
-}
+const PRESET_RE = /^([1-9])x([1-9])$/
 
 export function parseGridPreset(v: string | null | undefined): GridPreset {
-  return v === '2x1' || v === '2x2' || v === '3x3' ? v : 'auto'
+  return v && PRESET_RE.test(v) ? v : 'auto'
 }
 
 export function gridPresetDims(preset: GridPreset): { cols: number; rows: number } | null {
-  return preset === 'auto' ? null : PRESET_DIMS[preset]
+  const m = PRESET_RE.exec(preset)
+  if (!m) return null
+  return { cols: Number(m[1]), rows: Number(m[2]) }
 }
 
 export function gridPageCount(paneCount: number, preset: GridPreset): number {

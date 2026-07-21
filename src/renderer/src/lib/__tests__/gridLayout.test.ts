@@ -2,15 +2,19 @@ import { describe, expect, it } from 'vitest'
 import { gridPageCount, gridPageSlice, gridPresetDims, parseGridPreset } from '../gridLayout'
 
 describe('parseGridPreset', () => {
-  it('accepts the three fixed presets', () => {
+  it('accepts any CxR preset with cols/rows 1-9', () => {
     expect(parseGridPreset('2x1')).toBe('2x1')
     expect(parseGridPreset('2x2')).toBe('2x2')
     expect(parseGridPreset('3x3')).toBe('3x3')
+    expect(parseGridPreset('4x2')).toBe('4x2')
+    expect(parseGridPreset('9x9')).toBe('9x9')
   })
 
   it('falls back to auto for anything else', () => {
     expect(parseGridPreset('auto')).toBe('auto')
-    expect(parseGridPreset('4x4')).toBe('auto')
+    expect(parseGridPreset('0x2')).toBe('auto')
+    expect(parseGridPreset('10x2')).toBe('auto')
+    expect(parseGridPreset('2x')).toBe('auto')
     expect(parseGridPreset('')).toBe('auto')
     expect(parseGridPreset(null)).toBe('auto')
     expect(parseGridPreset(undefined)).toBe('auto')
@@ -18,11 +22,11 @@ describe('parseGridPreset', () => {
 })
 
 describe('gridPresetDims', () => {
-  it('returns null for auto and fixed dims otherwise', () => {
+  it('returns null for auto and parsed dims otherwise', () => {
     expect(gridPresetDims('auto')).toBeNull()
     expect(gridPresetDims('2x1')).toEqual({ cols: 2, rows: 1 })
-    expect(gridPresetDims('2x2')).toEqual({ cols: 2, rows: 2 })
     expect(gridPresetDims('3x3')).toEqual({ cols: 3, rows: 3 })
+    expect(gridPresetDims('4x2')).toEqual({ cols: 4, rows: 2 })
   })
 })
 

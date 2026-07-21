@@ -475,6 +475,7 @@ watch(() => props.show, (visible) => {
 .hm-close {
   background: transparent; border: none; color: var(--text-muted);
   font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 .hm-close:hover { background: var(--bg-active); color: var(--text-primary); }
 
@@ -484,8 +485,9 @@ watch(() => props.show, (visible) => {
   border-bottom: 1px solid var(--border-muted); flex-shrink: 0;
 }
 .hm-select {
-  background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: 5px;
+  background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: 4px;
   color: var(--text-primary); font-size: 11px; padding: 3px 6px; cursor: pointer;
+  transition: border-color 0.1s ease;
 }
 .hm-select:focus { outline: none; border-color: var(--accent-focus); }
 .hm-select:disabled { opacity: 0.5; cursor: default; }
@@ -511,7 +513,7 @@ watch(() => props.show, (visible) => {
   color: var(--text-muted); font-size: 11px; font-weight: 600; user-select: none;
 }
 .tbl-body { flex: 1; overflow-y: auto; }
-.tbl-row { height: 24px; padding: 0 8px 0 0; cursor: pointer; color: var(--text-primary); }
+.tbl-row { height: 24px; padding: 0 8px 0 0; cursor: pointer; color: var(--text-primary); transition: background-color 0.1s ease, color 0.1s ease; }
 .tbl-row:hover { background: var(--bg-hover-faint); }
 .tbl-row.selected { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
 .tbl-row.selected .chash,
@@ -524,6 +526,11 @@ watch(() => props.show, (visible) => {
 .col-date { width: 92px; flex-shrink: 0; padding: 0 8px; }
 .col-commit { width: 74px; flex-shrink: 0; padding: 0 4px; }
 .cell-ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+/* Thin column dividers on the header only — keeps the dense ledger legible
+   without cluttering every body row (or fighting the selected-row fill). */
+.tbl-head .col-author,
+.tbl-head .col-date,
+.tbl-head .col-commit { border-left: 1px solid var(--border-muted); }
 
 .graph-cell { position: relative; align-self: stretch; }
 .graph-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -538,14 +545,18 @@ watch(() => props.show, (visible) => {
 .ref-pill { font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 999px; line-height: 1.5; flex-shrink: 0; }
 .ref-pill.local  { background: var(--accent-muted); color: var(--accent-bright); }
 .ref-pill.remote { background: var(--success-subtle); color: var(--success-bright); }
-.ref-pill.tag    { background: var(--warning-subtle, var(--bg-active)); color: var(--warning-fg, var(--text-primary)); }
+.ref-pill.tag    { background: var(--attention-subtle); color: var(--attention-fg); }
 .ref-pill.head   { background: var(--accent-emphasis); color: var(--text-on-emphasis); }
+/* On the solid-accent selected row, tint pills with a translucent overlay so
+   they stay legible instead of clashing with (or vanishing into) the fill. */
+.tbl-row.selected .ref-pill { background: var(--overlay-soft); color: var(--text-on-emphasis); }
 .chash { font-size: 11px; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: transparent; }
 
 .hm-loadmore { display: flex; justify-content: center; padding: 5px 0; flex-shrink: 0; }
 .load-more-btn {
-  background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: 5px;
+  background: var(--bg-subtle); border: 1px solid var(--border-default); border-radius: 4px;
   color: var(--text-primary); font-size: 11px; padding: 3px 14px; cursor: pointer;
+  transition: border-color 0.1s ease, color 0.1s ease;
 }
 .load-more-btn:hover:not(:disabled) { border-color: var(--accent-focus); color: var(--text-bright); }
 .load-more-btn:disabled { opacity: 0.5; cursor: default; }
@@ -573,6 +584,7 @@ watch(() => props.show, (visible) => {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; color: var(--text-primary);
   padding: 2px 4px; border-radius: 3px; cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 .dl-file:hover { background: var(--bg-hover-faint); }
 .dl-file.active { background: var(--accent-muted); color: var(--accent-bright); }
@@ -606,6 +618,7 @@ watch(() => props.show, (visible) => {
   background: transparent; border: none; color: var(--text-primary);
   font-size: 12px; padding: 5px 10px; border-radius: 4px; cursor: pointer;
   text-align: left; font-family: inherit; gap: 6px;
+  transition: background-color 0.1s ease, color 0.1s ease;
 }
 .ctx-menu .menu-item:hover { background: var(--bg-active); }
 .ctx-menu .menu-item.danger { color: var(--danger-fg); }
@@ -620,7 +633,7 @@ watch(() => props.show, (visible) => {
   display: flex; flex-direction: column; gap: 10px;
 }
 .mini-modal-path {
-  font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; color: var(--accent-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--accent-fg);
   word-break: break-all;
 }
 .mini-modal-btns { display: flex; gap: 6px; justify-content: flex-end; }
@@ -634,6 +647,7 @@ watch(() => props.show, (visible) => {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   background: var(--bg-base); border: 1px solid var(--border-default); border-radius: 6px;
   padding: 7px 10px; cursor: pointer; text-align: left;
+  transition: border-color 0.1s ease;
 }
 .reset-mode-btn:hover { border-color: var(--accent-focus); }
 .reset-mode-btn.danger:hover { border-color: var(--danger-fg); }
@@ -647,6 +661,7 @@ watch(() => props.show, (visible) => {
 .btn-ghost {
   background: transparent; border: 1px solid var(--border-default); border-radius: 4px;
   color: var(--text-secondary); font-size: 12px; padding: 4px 8px; cursor: pointer;
+  transition: background-color 0.1s ease, border-color 0.1s ease, color 0.1s ease;
 }
 .btn-ghost:hover { border-color: var(--border-strong); color: var(--text-primary); }
 .btn-ghost.sm { font-size: 11px; padding: 3px 7px; }

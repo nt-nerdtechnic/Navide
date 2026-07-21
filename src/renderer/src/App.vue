@@ -6517,9 +6517,9 @@ watch(sidebarLeftPx, (v) => { settingsSet('agentTeam.sidebarLeftPx', String(v)) 
 watch(dualFocusSplitPx, (v) => { settingsSet('agentTeam.dualFocusSplitPx', String(v)) })
 
 // ── Grid layout preset + paging ──────────────────────────────────────────────
-// 'auto' shows every visible pane at once; fixed presets (2x1/2x2/3x3) cap the
-// panes per page and page through the rest. Paged-out panes are only hidden
-// (v-show) so their terminals stay alive.
+// 'auto' shows every visible pane at once; fixed CxR presets (2x1/2x2/3x3 or a
+// custom typed size) cap the panes per page and page through the rest.
+// Paged-out panes are only hidden (v-show) so their terminals stay alive.
 const gridPreset = ref<GridPreset>(parseGridPreset(settingsGet('agentTeam.gridPreset', 'auto')))
 const gridPage = ref(0)
 watch(gridPreset, (v) => { settingsSet('agentTeam.gridPreset', v); gridPage.value = 0 })
@@ -6533,16 +6533,35 @@ const gridPresetOptions: { key: GridPreset; label: string; title: string }[] = [
   { key: '2x2', label: '2×2', title: '2×2 layout — pages of 4 panes' },
   { key: '3x3', label: '3×3', title: '3×3 layout — pages of 9 panes' },
 ]
+// Custom CxR entry — any cols × rows (1–9 each) typed by the user.
+const _customSeed = gridPresetDims(gridPreset.value)
+const gridCustomCols = ref<number>(_customSeed?.cols ?? 3)
+const gridCustomRows = ref<number>(_customSeed?.rows ?? 3)
+const gridCustomActive = computed(() =>
+  gridPreset.value !== 'auto' && !gridPresetOptions.some((o) => o.key === gridPreset.value)
+)
+function applyGridCustom(): void {
+  const clamp = (v: number): number => Math.max(1, Math.min(9, Math.floor(v) || 1))
+  gridCustomCols.value = clamp(gridCustomCols.value)
+  gridCustomRows.value = clamp(gridCustomRows.value)
+  gridPreset.value = `${gridCustomCols.value}x${gridCustomRows.value}`
+}
 
+// Fixed presets keep their exact frame (empty cells stay blank when the page
+// is not full); 'auto' derives the shape from the visible pane count.
 const numCols = computed(() => {
   const d = gridPresetDims(gridPreset.value)
-  if (d) return Math.max(1, Math.min(d.cols, gridPagePanes.value.length))
+  if (d) return d.cols
   const n = tabVisiblePanes.value.length
   if (n <= 1) return 1
   if (n <= 4) return 2
   return 3
 })
-const numRows = computed(() => Math.max(1, Math.ceil(gridPagePanes.value.length / numCols.value)))
+const numRows = computed(() => {
+  const d = gridPresetDims(gridPreset.value)
+  if (d) return d.rows
+  return Math.max(1, Math.ceil(gridPagePanes.value.length / numCols.value))
+})
 
 watch(numCols, (n) => { colWidths.value = Array(n).fill(1) }, { immediate: true })
 watch(numRows, (n) => { rowHeights.value = Array(n).fill(1) }, { immediate: true })
@@ -7222,6 +7241,28 @@ function paneIsCommander(p: ActivePane): boolean {
             :aria-pressed="gridPreset === opt.key"
             @click="gridPreset = opt.key"
           >{{ opt.label }}</button>
+          <span class="grid-page-sep" />
+          <input
+            v-model.number="gridCustomCols"
+            :class="['grid-custom-input', { active: gridCustomActive }]"
+            type="number"
+            min="1"
+            max="9"
+            title="Custom columns"
+            @change="applyGridCustom"
+            @keydown.enter="applyGridCustom"
+          />
+          <span class="grid-custom-x">×</span>
+          <input
+            v-model.number="gridCustomRows"
+            :class="['grid-custom-input', { active: gridCustomActive }]"
+            type="number"
+            min="1"
+            max="9"
+            title="Custom rows"
+            @change="applyGridCustom"
+            @keydown.enter="applyGridCustom"
+          />
           <template v-if="gridPageTotal > 1">
             <span class="grid-page-sep" />
             <button class="grid-page-btn" :disabled="gridPage <= 0" title="Previous page" @click="gridPage--">‹</button>
@@ -8155,6 +8196,38 @@ function paneIsCommander(p: ActivePane): boolean {
   height: 14px;
   background: var(--border-default);
   margin: 0 3px;
+}
+.grid-custom-input {
+  width: 30px;
+  height: 22px;
+  padding: 0 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: center;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.grid-custom-input::-webkit-inner-spin-button,
+.grid-custom-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.grid-custom-input:focus {
+  outline: none;
+  border-color: var(--accent-focus);
+  color: var(--text-primary);
+}
+.grid-custom-input.active {
+  border-color: var(--accent-emphasis);
+  color: var(--accent-bright);
+  background: color-mix(in srgb, var(--accent-emphasis) 20%, transparent);
+}
+.grid-custom-x {
+  font-size: 10px;
+  color: var(--text-secondary);
 }
 .grid-page-label {
   font-size: 11px;
