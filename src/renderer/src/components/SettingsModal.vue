@@ -19,7 +19,7 @@ import {
 import { useNotify } from '../composables/useNotify'
 import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
-import type { TabItem } from './StageTabBar.vue'
+import KeyboardShortcutsHelp from './KeyboardShortcutsHelp.vue'
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
@@ -29,62 +29,20 @@ const props = defineProps<{
   pipelinesApi?: ReturnType<typeof usePipelines>
   initialTab?: Tab
   confirmBeforeClose?: boolean
-  stageTabs?: TabItem[]
 }>()
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'open-pipeline', id: string): void
   (e: 'reopen-onboarding'): void
   (e: 'update:confirmBeforeClose', v: boolean): void
-  (e: 'reorder-tab', fromKey: string, toKey: string): void
 }>()
 const confirmBeforeCloseModel = computed({
   get: () => props.confirmBeforeClose ?? true,
   set: (v: boolean) => emit('update:confirmBeforeClose', v),
 })
 
-// ── Tab order ──────────────────────────────────────────────────────────────────
-// Only real RunGroup tabs (type 'stage') are reorderable; the synthetic "手動"
-// tab is always last and is excluded. The Cmd+Alt+N badge mirrors the actual
-// switchToTabN handler: ⌘⌥1–8 map to positions 1–8, and ⌘⌥9 always jumps to the
-// LAST tab. Positions between 9 and the last have no shortcut.
-const tabOrderRows = computed(() => {
-  const all = props.stageTabs ?? []
-  const total = all.length
-  return all
-    .map((tab, idx) => ({ tab, idx }))
-    .filter(({ tab }) => tab.type === 'stage')
-    .map(({ tab, idx }) => {
-      const isLast = idx === total - 1
-      let badge: string | null = null
-      if (isLast) badge = '⌘⌥9'
-      else if (idx + 1 <= 8) badge = `⌘⌥${idx + 1}`
-      return { key: tab.key, label: tab.label, count: tab.count, badge, isLast }
-    })
-})
-
-const tabOrderDragOverKey = ref<string | null>(null)
-const tabOrderDraggingKey = ref<string | null>(null)
-function onTabOrderDragStart(e: DragEvent, key: string): void {
-  e.dataTransfer?.setData('application/x-settings-tab-key', key)
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
-  tabOrderDraggingKey.value = key
-}
-function onTabOrderDragEnter(key: string): void {
-  if (key !== tabOrderDraggingKey.value) tabOrderDragOverKey.value = key
-}
-function onTabOrderDrop(e: DragEvent, key: string): void {
-  tabOrderDragOverKey.value = null
-  const fromKey = e.dataTransfer?.getData('application/x-settings-tab-key') || ''
-  if (fromKey && fromKey !== key) emit('reorder-tab', fromKey, key)
-}
-function onTabOrderDragEnd(): void {
-  tabOrderDraggingKey.value = null
-  tabOrderDragOverKey.value = null
-}
-
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'general' | 'appearance' | 'accounts'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'general' | 'appearance' | 'accounts' | 'shortcuts'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
 
 interface SettingsSearchItem {
@@ -228,15 +186,6 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'backend timeout health check startup 啟動逾時 後端',
   },
   {
-    id: 'tab-order',
-    tab: 'general',
-    section: 'tab-order',
-    title: 'Tab Shortcut Order / 分頁快捷鍵排序',
-    group: 'General',
-    summary: 'Drag to reorder the main window Run Group tabs and see each tab\'s Cmd+Alt+N shortcut.',
-    keywords: 'tab order tabs reorder drag run group 分頁 排序 拖曳 拖拉 快捷鍵 shortcut cmd shift command switch tab',
-  },
-  {
     id: 'general-loop-prompt',
     tab: 'general',
     section: 'general-loop-prompt',
@@ -253,6 +202,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     group: 'Accounts',
     summary: 'Add, edit, and remove encrypted Git host credentials and tokens.',
     keywords: 'git account accounts credential credentials token github safeStorage 帳號 憑證 金鑰 加密',
+  },
+  {
+    id: 'shortcuts',
+    tab: 'shortcuts',
+    section: 'shortcuts',
+    title: 'Keyboard Shortcuts / 快捷鍵',
+    group: 'Shortcuts',
+    summary: 'Read-only reference of all keyboard shortcuts across workbench, AI chat, editor, terminal, and native menu.',
+    keywords: 'keyboard shortcuts keys keybinding hotkey 快捷鍵 鍵盤 按鍵 workbench editor terminal cli ctrl cmd shift option',
   },
 ])
 
@@ -400,6 +358,7 @@ const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPa
   general: { scope: 'User', storage: 'localStorage' },
   appearance: { scope: 'User', storage: 'localStorage' },
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
+  shortcuts: { scope: 'User', storage: 'localStorage' },
 }
 
 async function loadSettingsPaths(): Promise<void> {
@@ -1219,6 +1178,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'general' }]" @click="activeTab = 'general'">{{ $t('settings.tab.general') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'shortcuts' }]" @click="activeTab = 'shortcuts'">{{ $t('settings.tab.shortcuts') }}</button>
           </div>
           <div class="s-search-box">
             <input
@@ -1990,34 +1950,6 @@ async function plDelete(id: string, name: string) {
               <span>{{ $t('confirm-close.setting-label') }}</span>
             </label>
           </section>
-          <section class="ap-section" data-settings-section="tab-order">
-            <h3 class="ap-title">{{ $t('settings.appearance.tab-order') }}</h3>
-            <p class="ap-hint">{{ $t('settings.appearance.tab-order-hint') }}</p>
-            <ul v-if="tabOrderRows.length > 0" class="tab-order-list">
-              <li
-                v-for="row in tabOrderRows"
-                :key="row.key"
-                class="tab-order-row"
-                :class="{ 'drag-over': tabOrderDragOverKey === row.key }"
-                draggable="true"
-                @dragstart="onTabOrderDragStart($event, row.key)"
-                @dragend="onTabOrderDragEnd"
-                @dragover.prevent
-                @dragenter.prevent="onTabOrderDragEnter(row.key)"
-                @dragleave="tabOrderDragOverKey = (tabOrderDragOverKey === row.key ? null : tabOrderDragOverKey)"
-                @drop.prevent="onTabOrderDrop($event, row.key)"
-              >
-                <span class="tab-order-grip">⠿</span>
-                <span class="tab-order-label">{{ row.label }}</span>
-                <span class="tab-order-count">{{ row.count }}</span>
-                <span v-if="row.badge" class="tab-order-kbd">
-                  {{ row.badge }}<template v-if="row.isLast"> · {{ $t('settings.appearance.tab-order-last') }}</template>
-                </span>
-              </li>
-            </ul>
-            <p v-else class="ap-hint">{{ $t('settings.appearance.tab-order-empty') }}</p>
-          </section>
-
           <section class="ap-section" data-settings-section="general-loop-prompt">
             <h3 class="ap-title">{{ $t('settings.appearance.loop-prompt') }}</h3>
             <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
@@ -2161,6 +2093,11 @@ async function plDelete(id: string, name: string) {
             <span class="settings-path">{{ pathForTab('accounts') }}</span>
           </div>
           <GitAccountsPane :api="accountsApi" />
+        </div>
+
+        <!-- ── KEYBOARD SHORTCUTS TAB ────────────────────────────────────── -->
+        <div v-show="activeTab === 'shortcuts'" class="s-body shortcuts-body" data-settings-section="shortcuts">
+          <KeyboardShortcutsHelp />
         </div>
 
 
@@ -2356,29 +2293,6 @@ async function plDelete(id: string, name: string) {
 .ap-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ap-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text-bright); }
 .ap-hint { margin: 0 0 14px; font-size: 11.5px; color: var(--text-secondary); }
-.tab-order-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.tab-order-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px;
-  border: 1px solid var(--border-muted);
-  border-radius: 6px;
-  background: var(--bg-subtle);
-  cursor: grab;
-  user-select: none;
-}
-.tab-order-row.drag-over { border-color: var(--accent-emphasis); background: var(--bg-muted); }
-.tab-order-grip { color: var(--text-muted); cursor: grab; }
-.tab-order-label { flex: 1; font-size: 12px; color: var(--text-bright); }
-.tab-order-count { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.tab-order-kbd {
-  font-family: Menlo, Monaco, monospace;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-inset);
-  border: 1px solid var(--border-muted);
-  border-radius: 4px;
-  padding: 1px 6px;
-}
 .ap-theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -2650,6 +2564,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 
 /* ── Appearance tab ─────────────────────────────────────────────────────────── */
 .appearance-body { overflow-y: auto; }
+.shortcuts-body { overflow-y: auto; padding: 16px 18px; }
 
 /* ── MCP tab ──────────────────────────────────────────────────────────────── */
 .mcp-body { overflow-y: auto; display: flex; flex-direction: column; }

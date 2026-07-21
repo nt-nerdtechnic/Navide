@@ -71,13 +71,6 @@ function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
     return e.code === 'Slash' || e.code === 'NumpadDivide'
   }
 
-  // Shifted digits emit symbols on many layouts (macOS US: Shift+1 = '!'), so
-  // `e.key` misses for Cmd+Shift+<n>. Match the physical digit key as a fallback
-  // to keep numeric shortcuts reliable regardless of the shift-produced symbol.
-  if (expectedKey >= '1' && expectedKey <= '9') {
-    return e.code === `Digit${expectedKey}` || e.code === `Numpad${expectedKey}`
-  }
-
   return false
 }
 

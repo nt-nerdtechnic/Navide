@@ -148,21 +148,19 @@ export const defaults: KeybindingRule[] = [
   { key: 'cmd+shift+u', command: 'workbench.action.spawnAgent' },
   { key: 'cmd+shift+b', command: 'workbench.action.rebuildFocusedPane' },
 
-  // ── Run-group tabs (main window) ──────────────────────────────────────────────
-  // Cmd+Alt+<n> jumps to the Nth stage tab; Cmd+Alt+9 always lands on the LAST
-  // tab so tabs beyond 8 stay reachable. Uses Cmd+Alt (not Cmd+Shift, which
-  // collides with the macOS screenshot shortcuts, nor plain cmd+<n>, which is the
-  // editor-window "open editor at index"). The matcher falls back to
-  // e.code=Digit<n> since macOS emits symbols for Option+digit.
-  { key: 'cmd+alt+1', command: 'workbench.action.switchToTab1' },
-  { key: 'cmd+alt+2', command: 'workbench.action.switchToTab2' },
-  { key: 'cmd+alt+3', command: 'workbench.action.switchToTab3' },
-  { key: 'cmd+alt+4', command: 'workbench.action.switchToTab4' },
-  { key: 'cmd+alt+5', command: 'workbench.action.switchToTab5' },
-  { key: 'cmd+alt+6', command: 'workbench.action.switchToTab6' },
-  { key: 'cmd+alt+7', command: 'workbench.action.switchToTab7' },
-  { key: 'cmd+alt+8', command: 'workbench.action.switchToTab8' },
-  { key: 'cmd+alt+9', command: 'workbench.action.switchToTab9' },
+  // ── CLI type quick-select (ControlPane) ──────────────────────────────────────
+  // Ctrl+<n> selects the Nth manual CLI type for the next spawn (no-op past the
+  // list). Ctrl+digit is unused elsewhere, so e.key is '1'..'9' and the central
+  // matcher hits directly — no physical-digit fallback needed.
+  { key: 'ctrl+1', command: 'controlPane.selectCliType1' },
+  { key: 'ctrl+2', command: 'controlPane.selectCliType2' },
+  { key: 'ctrl+3', command: 'controlPane.selectCliType3' },
+  { key: 'ctrl+4', command: 'controlPane.selectCliType4' },
+  { key: 'ctrl+5', command: 'controlPane.selectCliType5' },
+  { key: 'ctrl+6', command: 'controlPane.selectCliType6' },
+  { key: 'ctrl+7', command: 'controlPane.selectCliType7' },
+  { key: 'ctrl+8', command: 'controlPane.selectCliType8' },
+  { key: 'ctrl+9', command: 'controlPane.selectCliType9' },
 
   // ── Editor tabs ──────────────────────────────────────────────────────────────
   { key: 'ctrl+tab',       command: 'workbench.action.openNextEditor' },
