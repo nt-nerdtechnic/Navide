@@ -58,6 +58,7 @@ import {
 import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { AGENT_SPECS } from './lib/agentSpecs'
+import { orderedAgentKeys, isAgentEnabled } from './composables/useCliAgentPrefs'
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
 import { planSpecHintBlock } from './lib/planSpecHint'
@@ -353,7 +354,24 @@ function roleLabel(key: string): string {
   return rolesApi.find(key)?.label ?? key
 }
 
+// Full canonical list — used for agentKey → spec/label lookups everywhere, so a
+// disabled agent's existing panes still resolve their label.
 const agentSpecs: AgentSpec[] = AGENT_SPECS
+
+// The subset (+order) the user chose in Settings → CLI Agents, fed to the manual
+// spawn UI. Only non-terminal specs are filtered/ordered; terminal is kept as-is
+// (ControlPane filters it out of the dropdown itself). Reactive via
+// useCliAgentPrefs so a Settings edit updates the dropdown live.
+const enabledAgentSpecs = computed<AgentSpec[]>(() => {
+  const byKey = new Map(agentSpecs.map((s) => [s.agentKey, s]))
+  const cliKeys = agentSpecs.filter((s) => s.agentKey !== 'terminal').map((s) => s.agentKey)
+  const cli = orderedAgentKeys(cliKeys)
+    .filter((k) => isAgentEnabled(k))
+    .map((k) => byKey.get(k))
+    .filter((s): s is AgentSpec => !!s)
+  const terminal = agentSpecs.filter((s) => s.agentKey === 'terminal')
+  return [...cli, ...terminal]
+})
 
 // Sticky toggles — defaults ON. Saved to the settings store so they survive reloads.
 function makeStickyBool(key: string, fallback: boolean) {
@@ -6945,7 +6963,7 @@ function paneIsCommander(p: ActivePane): boolean {
       ref="controlPaneRef"
       :backend-status="backend.status.value"
       :backend-url="backendUrl"
-      :agent-specs="agentSpecs"
+      :agent-specs="enabledAgentSpecs"
       :roles="rolesApi.roles.value"
       :stages="stagesApi.stages.value"
       :panes="paneViews.filter(v => tabFilteredPaneIds.has(v.id))"

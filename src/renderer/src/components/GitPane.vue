@@ -12,7 +12,6 @@ import { useNotify } from '../composables/useNotify'
 import { computeGraph, laneColor } from '../lib/git-graph'
 import { guardedDiscard } from '../lib/discardConfirm'
 import GitCredentialModal from './GitCredentialModal.vue'
-import GitHistoryModal from './GitHistoryModal.vue'
 
 const props = defineProps<{
   workspacePath: string
@@ -56,16 +55,14 @@ function openBranchDiffTab(base = 'main'): void {
 const {
   gitStatus, loadStatus, discoveredRepos, showIgnored, gitLog, gitBranches, gitStashes, gitRemotes, gitTags,
   gitWorktrees, gitConfig, gitConfigAllowedKeys,
-  logScope, canLoadMoreLog, loadMoreLog, logSearch, setLogScope, isLoadingLog,
-  logOrder, setLogOrder, resetToCommit,
   isCommitting, isGenerating, isInitializing,
   syncOutput, syncError, gitError, clearGitError,
   initRepo, stageFile, unstageFile, stageAll, stageFiles, unstageFiles, discardFiles,
   fetchRemote, pullOnly, pushOnly, pushUpstream, sync,
-  createBranch, switchBranch, checkoutRemoteBranch, checkoutCommit, deleteBranch, mergeBranch, mergeInto, rebaseOn,
+  createBranch, switchBranch, checkoutRemoteBranch, deleteBranch, mergeBranch, mergeInto, rebaseOn,
   compareBranches, restoreFileFromBranch, commitFileDiff,
   stashPush, stashPop, stashDrop,
-  commit, amendCommit, undoLastCommit, revertCommit, cherryPick, generateMessage, checkStaged,
+  commit, amendCommit, undoLastCommit, generateMessage, checkStaged,
   fileLog, showFile, diffBlame, resolveConflictOurs, resolveConflictTheirs,
   addRemote, removeRemote,
   createTag, deleteTag, showCommit,
@@ -1404,10 +1401,14 @@ async function toggleCommitFileDiff(hash: string, file: string): Promise<void> {
 
 // ── history ───────────────────────────────────────────────────────────────────
 // The main panel shows only the latest page (read-only expand). Search, scope
-// toggle, pagination and commit actions live in the GitHistoryModal dialog.
+// toggle, pagination and commit actions live in the standalone Git History
+// window (?window=githistory), one per workspace.
 const historyExpanded = ref(true)
-const showHistoryModal = ref(false)
 const latestLog = computed(() => gitLog.value.slice(0, 15))
+
+function openHistoryWindow(): void {
+  void window.agentTeam?.openGitHistoryWindow?.({ workspace_path: props.workspacePath })
+}
 
 // ── section expand states ─────────────────────────────────────────────────────
 const stagedExpanded = ref(true)
@@ -2230,7 +2231,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           </div>
         </div>
         <div class="history-load-more">
-          <button class="load-more-btn" @click.stop="showHistoryModal = true">{{ $t('label.view-full-history') }}</button>
+          <button class="load-more-btn" @click.stop="openHistoryWindow()">{{ $t('label.view-full-history') }}</button>
         </div>
         </div>
       </div>
@@ -2628,32 +2629,6 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
       :workspace-path="workspacePath"
       @submit="submitCredential"
       @cancel="cancelCredential"
-    />
-
-    <!-- ── Full history dialog ──────────────────────────────────────────── -->
-    <GitHistoryModal
-      :show="showHistoryModal"
-      :backend="backend"
-      :workspace-path="workspacePath"
-      :git-log="gitLog"
-      :log-scope="logScope"
-      :log-order="logOrder"
-      :is-loading-log="isLoadingLog"
-      :can-load-more-log="canLoadMoreLog"
-      :set-log-scope="setLogScope"
-      :set-log-order="setLogOrder"
-      :load-more-log="loadMoreLog"
-      :log-search="logSearch"
-      :show-commit="showCommit"
-      :commit-file-diff="commitFileDiff"
-      :cherry-pick="cherryPick"
-      :revert-commit="revertCommit"
-      :checkout-commit="checkoutCommit"
-      :create-branch="createBranch"
-      :create-tag="createTag"
-      :merge-into-current="mergeBranch"
-      :reset-to-commit="resetToCommit"
-      @close="showHistoryModal = false"
     />
   </div>
 </template>

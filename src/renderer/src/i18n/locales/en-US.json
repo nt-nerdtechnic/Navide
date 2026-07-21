@@ -446,10 +446,16 @@
       "pipelines": "🔀 Pipelines",
       "mcp": "🔌 MCP",
       "analyzer": "🧠 Analyzer",
+      "cliAgents": "🤖 CLI Agents",
       "general": "⚙️ General",
       "appearance": "🎨 Appearance",
       "accounts": "🔑 Accounts",
       "shortcuts": "⌨️ Keyboard Shortcuts"
+    },
+    "cliAgents": {
+      "title": "CLI Agents",
+      "hint": "Enable, disable, and reorder which CLI agents appear in the manual spawn dropdown. At least one must stay enabled.",
+      "drag-hint": "Drag to reorder"
     },
     "shortcuts": {
       "intro": "Read-only reference of every keyboard shortcut the app currently supports. Most bindings are defined in the central keybinding system, but the handlers live across different windows and components, so some keys only take effect in specific contexts.",

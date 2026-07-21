@@ -10,6 +10,8 @@ import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCa
 import { useTheme } from '../composables/useTheme'
 import { useSettings } from '../composables/useSettings'
 import { settingsGet, settingsSet } from '../lib/settings'
+import { useCliAgentPrefs } from '../composables/useCliAgentPrefs'
+import { CLI_AGENT_SPECS } from '../lib/agentSpecs'
 import {
   LOOP_PROMPT_SETTING_KEY,
   DEFAULT_LOOP_PROMPT,
@@ -42,8 +44,64 @@ const confirmBeforeCloseModel = computed({
 })
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'general' | 'appearance' | 'accounts' | 'shortcuts'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'cliAgents' | 'general' | 'appearance' | 'accounts' | 'shortcuts'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
+
+// ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
+const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
+
+const cliAgentRows = computed(() => {
+  const rank = (k: string) => {
+    const i = cliOrder.value.indexOf(k)
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i
+  }
+  return [...CLI_AGENT_SPECS].sort((a, b) => rank(a.agentKey) - rank(b.agentKey))
+})
+const cliEnabledCount = computed(
+  () => CLI_AGENT_SPECS.filter((s) => !cliDisabled.value.includes(s.agentKey)).length
+)
+function cliAgentEnabled(k: string): boolean {
+  return !cliDisabled.value.includes(k)
+}
+function toggleCliAgent(k: string): void {
+  const set = new Set(cliDisabled.value)
+  if (set.has(k)) {
+    set.delete(k)
+  } else {
+    if (cliEnabledCount.value <= 1) return // keep at least one enabled — else nothing can spawn
+    set.add(k)
+  }
+  cliDisabled.value = [...set]
+}
+const cliDragKey = ref('')
+const cliDragOverKey = ref('')
+function onCliDragStart(e: DragEvent, k: string): void {
+  cliDragKey.value = k
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', k)
+  }
+}
+function onCliDragOver(e: DragEvent, k: string): void {
+  if (!cliDragKey.value || cliDragKey.value === k) return
+  e.preventDefault()
+  cliDragOverKey.value = k
+}
+function onCliDragLeave(k: string): void {
+  if (cliDragOverKey.value === k) cliDragOverKey.value = ''
+}
+function onCliDrop(k: string): void {
+  const from = cliDragKey.value
+  cliDragOverKey.value = ''
+  cliDragKey.value = ''
+  if (!from || from === k) return
+  const keys = cliAgentRows.value.map((s) => s.agentKey)
+  const fi = keys.indexOf(from)
+  const ti = keys.indexOf(k)
+  if (fi < 0 || ti < 0) return
+  keys.splice(ti, 0, keys.splice(fi, 1)[0])
+  cliOrder.value = keys
+}
 
 interface SettingsSearchItem {
   id: string
@@ -355,6 +413,7 @@ const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPa
   pipelines: { scope: 'User', storage: 'pipelines' },
   mcp: { scope: 'User', storage: 'mcp' },
   analyzer: { scope: 'User', storage: 'analyzer' },
+  cliAgents: { scope: 'User', storage: 'localStorage' },
   general: { scope: 'User', storage: 'localStorage' },
   appearance: { scope: 'User', storage: 'localStorage' },
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
@@ -1175,6 +1234,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'pipelines' }]" @click="activeTab = 'pipelines'">{{ $t('settings.tab.pipelines') }}</button>
             <button :class="['s-tab', { active: activeTab === 'mcp' }]" @click="activeTab = 'mcp'">{{ $t('settings.tab.mcp') }}</button>
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'cliAgents' }]" @click="activeTab = 'cliAgents'">{{ $t('settings.tab.cliAgents') }}</button>
             <button :class="['s-tab', { active: activeTab === 'general' }]" @click="activeTab = 'general'">{{ $t('settings.tab.general') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
@@ -1940,6 +2000,40 @@ async function plDelete(id: string, name: string) {
 
         </div>
 
+        <!-- ══ CLI AGENTS TAB ══ -->
+        <div v-show="activeTab === 'cliAgents'" class="s-body">
+          <section class="ap-section" data-settings-section="cli-agents-list">
+            <h3 class="ap-title">{{ $t('settings.cliAgents.title') }}</h3>
+            <p class="ap-hint">{{ $t('settings.cliAgents.hint') }}</p>
+            <ul class="cli-agent-list">
+              <li
+                v-for="spec in cliAgentRows"
+                :key="spec.agentKey"
+                class="cli-agent-row"
+                :class="{ 'drag-over': cliDragOverKey === spec.agentKey, 'is-disabled': !cliAgentEnabled(spec.agentKey) }"
+                draggable="true"
+                @dragstart="onCliDragStart($event, spec.agentKey)"
+                @dragover="onCliDragOver($event, spec.agentKey)"
+                @dragenter="onCliDragOver($event, spec.agentKey)"
+                @dragleave="onCliDragLeave(spec.agentKey)"
+                @drop.prevent="onCliDrop(spec.agentKey)"
+              >
+                <span class="cli-agent-grip" :title="$t('settings.cliAgents.drag-hint')">⠿</span>
+                <label class="cli-agent-toggle">
+                  <input
+                    type="checkbox"
+                    :checked="cliAgentEnabled(spec.agentKey)"
+                    :disabled="cliAgentEnabled(spec.agentKey) && cliEnabledCount <= 1"
+                    @change="toggleCliAgent(spec.agentKey)"
+                  />
+                  <span class="cli-agent-label">{{ spec.label }}</span>
+                </label>
+                <span v-if="spec.hint" class="cli-agent-hint">{{ spec.hint }}</span>
+              </li>
+            </ul>
+          </section>
+        </div>
+
         <!-- ══ GENERAL TAB ══ -->
         <div v-show="activeTab === 'general'" class="s-body appearance-body">
           <section class="ap-section" data-settings-section="general-confirm-close">
@@ -2293,6 +2387,20 @@ async function plDelete(id: string, name: string) {
 .ap-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ap-title { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text-bright); }
 .ap-hint { margin: 0 0 14px; font-size: 11.5px; color: var(--text-secondary); }
+
+/* CLI Agents tab — enable/disable + drag-reorder list */
+.cli-agent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.cli-agent-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border: 1px solid var(--border-default); border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.cli-agent-row.drag-over { box-shadow: inset 0 0 0 2px var(--accent-focus); background: var(--accent-subtle); }
+.cli-agent-row.is-disabled { opacity: 0.55; }
+.cli-agent-grip { color: var(--text-secondary); cursor: grab; user-select: none; font-size: 14px; }
+.cli-agent-toggle { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; margin: 0; }
+.cli-agent-label { font-size: 13px; font-weight: 600; }
+.cli-agent-hint { font-size: 11px; color: var(--text-secondary); }
 .ap-theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

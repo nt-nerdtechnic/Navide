@@ -446,10 +446,16 @@
       "pipelines": "🔀 流程",
       "mcp": "🔌 MCP",
       "analyzer": "🧠 分析器",
+      "cliAgents": "🤖 CLI Agents",
       "general": "⚙️ 一般",
       "appearance": "🎨 外觀",
       "accounts": "🔑 帳號",
       "shortcuts": "⌨️ 快捷鍵"
+    },
+    "cliAgents": {
+      "title": "CLI Agents",
+      "hint": "啟用、停用並排序主視窗手動生成（manual spawn）下拉選單中出現的 CLI agent，順序也會套用到 Ctrl+數字快捷鍵。至少須保留一個啟用。",
+      "drag-hint": "拖曳以排序"
     },
     "shortcuts": {
       "intro": "整個 app 目前支援的鍵盤操作對照表（唯讀）。多數快捷鍵集中定義在中央 keybinding 系統，但真正掛上動作的位置分佈在不同視窗與元件，因此有些鍵只在特定情境生效。",

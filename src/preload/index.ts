@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
       workspace_path: args.workspace_path,
       ...(args.rel_path ? { rel_path: args.rel_path } : {}),
     }),
+  openGitHistoryWindow: (args: { workspace_path: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('window:openGitHistory', { workspace_path: args.workspace_path }),
   // Plan-window side receiver: main asks an already-open plan window to switch
   // to a newly clicked plan instead of reopening the window. Returns a disposer.
   onPlanOpenDoc: (handler: (relPath: string) => void): (() => void) => {

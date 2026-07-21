@@ -866,6 +866,43 @@ ipcMain.handle('window:openPlans', (_event, args: { workspace_path?: string; rel
   return { ok: true }
 })
 
+// Git History window: one per workspace, mirroring the plan window pattern.
+const gitHistoryWindows = new Map<string, BrowserWindow>()
+
+function openGitHistoryWindow(workspacePath: string): void {
+  const existing = gitHistoryWindows.get(workspacePath)
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    title: 'Agent-Team · Git History',
+    backgroundColor: '#0d1117',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  gitHistoryWindows.set(workspacePath, win)
+  win.on('closed', () => {
+    if (gitHistoryWindows.get(workspacePath) === win) gitHistoryWindows.delete(workspacePath)
+  })
+  loadWindow(win, { window: 'githistory', workspace_path: workspacePath })
+}
+
+ipcMain.handle('window:openGitHistory', (_event, args: { workspace_path?: string }) => {
+  const workspacePath = (args?.workspace_path ?? '').trim()
+  if (!workspacePath) return { ok: false }
+  openGitHistoryWindow(workspacePath)
+  return { ok: true }
+})
+
 // Plan execute dispatch: the plan window hands an approved plan to a CLI
 // agent. Focus the main window bound to the plan's workspace and forward the
 // payload; that renderer creates/reuses the agent pane and injects the
