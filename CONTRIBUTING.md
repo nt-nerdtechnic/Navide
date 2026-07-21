@@ -7,12 +7,21 @@ Thank you for your interest in contributing!
 
 ## Table of Contents
 
+- [Asking Questions](#asking-questions)
 - [Reporting Bugs](#reporting-bugs)
 - [Requesting Features](#requesting-features)
 - [Development Setup](#development-setup)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 - [Code Style](#code-style)
 - [Commit Format](#commit-format)
+
+---
+
+## Asking Questions / 提問
+
+Usage questions and open-ended ideas belong in [GitHub Discussions](https://github.com/nt-nerdtechnic/Navide/discussions) — use **Q&A** for help and **Ideas** for early proposals. Issues are reserved for confirmed bugs and concrete feature requests.
+
+> 使用問題與尚未成形的想法請到 [GitHub Discussions](https://github.com/nt-nerdtechnic/Navide/discussions)（Q&A 提問、Ideas 討論構想）；Issue 保留給已確認的 bug 與具體的功能需求。
 
 ---
 
