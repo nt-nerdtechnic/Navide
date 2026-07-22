@@ -3735,24 +3735,8 @@ async function reapOrphans(): Promise<void> {
 /** Status-bar "close all": kill every session pane and close this window's
  *  run-group tabs, freeing the project's resources. Spawn history is kept
  *  (onKill only stamps removedAt); groups handed off to detached windows are
- *  left untouched. Guarded against accidental clicks: double-click to trigger
- *  (a single click only shows a hint), then a confirm dialog. */
-let closeAllHintTimer: number | null = null
-
-function closeAllHint(): void {
-  if (closeAllHintTimer !== null) return
-  // Delay past the dblclick window so a real double-click shows no hint.
-  closeAllHintTimer = window.setTimeout(() => {
-    closeAllHintTimer = null
-    notifyRestore.toast(i18n.global.t('closeAll.hint'), { type: 'info' })
-  }, 350)
-}
-
+ *  left untouched. Always confirms before acting. */
 async function closeAllSessions(): Promise<void> {
-  if (closeAllHintTimer !== null) {
-    window.clearTimeout(closeAllHintTimer)
-    closeAllHintTimer = null
-  }
   const count = panes.value.length
   if (count === 0) return
   const ok = await notifyRestore.confirm(
@@ -7897,8 +7881,7 @@ function paneIsCommander(p: ActivePane): boolean {
           v-if="!isDetachedWindow && panes.length > 0"
           class="sb-item sb-clickable sb-close-all"
           :title="$t('closeAll.title')"
-          @click="closeAllHint"
-          @dblclick="closeAllSessions"
+          @click="closeAllSessions"
         >✕ {{ $t('closeAll.label') }}</span>
         <span
           v-if="orphanCount > 0"
