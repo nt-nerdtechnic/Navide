@@ -39,6 +39,9 @@ VERSION_FILES=(
   backend/agent_team_backend/__init__.py
   backend/pyproject.toml
   backend/uv.lock
+  README.md
+  README.zh-TW.md
+  README.ja-JP.md
 )
 
 if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -90,6 +93,9 @@ trap rollback_version_files EXIT
 
 version_changed=true
 node scripts/set-release-version.mjs "$VERSION"
+# Point the README download links at this release too (every release, patch
+# included), so the download point always reflects the latest version.
+node scripts/update-readme-download-links.mjs "$VERSION"
 uv --project backend lock
 pnpm release:check "$TAG"
 
@@ -110,7 +116,7 @@ CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dist
 unexpected_changes="$(
   git status --porcelain --untracked-files=all \
     | sed -E 's/^.. //' \
-    | grep -Ev '^(package.json|backend/agent_team_backend/__init__\.py|backend/pyproject\.toml|backend/uv\.lock)$' \
+    | grep -Ev '^(package.json|backend/agent_team_backend/__init__\.py|backend/pyproject\.toml|backend/uv\.lock|README\.md|README\.zh-TW\.md|README\.ja-JP\.md)$' \
     || true
 )"
 [[ -z "$unexpected_changes" ]] || \

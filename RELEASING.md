@@ -8,8 +8,12 @@ We use a **two-tier** model.
 
 | Tier | When | Command | Extra steps |
 |------|------|---------|-------------|
-| **Patch / hotfix** | small fixes, no new user-facing feature | `./release.sh patch` | none — auto-update delivers it |
-| **Minor / major** | new features, notable changes | `./release.sh minor` (or `major`) | update README download links + announce |
+| **Patch / hotfix** | small fixes, no new user-facing feature | `./release.sh patch` | none |
+| **Minor / major** | new features, notable changes | `./release.sh minor` (or `major`) | announce (release notes, etc.) |
+
+`release.sh` updates the README download links to the new version on **every**
+release (patch included), so the download point always reflects the latest
+version — no manual README edit is needed for any tier.
 
 Every release — patch or major — is fully built, signed, notarized, and
 published to GitHub Releases (with `latest-mac.yml`). There is no "hot patch"
@@ -37,9 +41,9 @@ around it, not the build itself.
 Release. Existing users' apps auto-check (startup + every 4h), download the
 delta in the background, and prompt "Restart to update".
 
-That's the whole hotfix flow. **Do not** touch the README download links for a
-patch — they intentionally keep pointing at the last feature release for new
-users downloading a DMG.
+That's the whole hotfix flow. `release.sh` already repointed the README
+download links (and the `latest-release` badge tracks the newest release), so
+new users downloading a DMG always get the latest version too.
 
 ## Minor / major flow
 
@@ -49,13 +53,9 @@ users downloading a DMG.
 ./release.sh major      # e.g. 0.1.50 -> 1.0.0
 ```
 
-Same as above, **plus** after the GitHub Release is published:
-
-1. Update the download links + version in `README.md`, `README.zh-TW.md`,
-   `README.ja-JP.md` to the new version, then commit + push. (The
-   `latest-release` badge updates itself; only the direct DMG/ZIP/tag links are
-   hard-coded.)
-2. Announce as appropriate (release notes, etc.).
+Same as above (the README download links are updated by `release.sh`
+automatically), **plus** announce as appropriate (release notes, etc.) after
+the GitHub Release is published.
 
 ## Explicit version
 
