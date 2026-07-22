@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
-import { mergePreferredPath, expandHomePath, collapseHomePath, type PickerItem } from '../useTerminal'
+import { mergePreferredPath, expandHomePath, collapseHomePath, extractPlanDocRelPath, type PickerItem } from '../useTerminal'
 
 const item = (abs: string): PickerItem => {
   const parts = abs.split('/')
@@ -93,5 +93,31 @@ describe('collapseHomePath', () => {
 
   it('is a no-op when home is unknown', () => {
     expect(collapseHomePath('/Users/u/x', '')).toBe('/Users/u/x')
+  })
+})
+
+// cmd+click on a plan doc reference routes to the plan review window. The CLI
+// wraps the path in CJK prose ("計畫已建立：…（stage:…"); the ASCII-only extractor
+// must recover just the rel-path, matching isHtmlPlanDoc's shape.
+describe('extractPlanDocRelPath', () => {
+  it('extracts the plan rel-path from CJK prose (the screenshot case)', () => {
+    const line = '計畫已建立：.agent-team/plans/employment-check-mail_e7b41a.html（stage: in-review）'
+    expect(extractPlanDocRelPath(line)).toBe('.agent-team/plans/employment-check-mail_e7b41a.html')
+  })
+
+  it('strips a leading ./ and absolute prefix, keeping the workspace-relative path', () => {
+    expect(extractPlanDocRelPath('./.agent-team/plans/x.html')).toBe('.agent-team/plans/x.html')
+    expect(extractPlanDocRelPath('/Users/u/proj/.agent-team/plans/x_1a2b.html'))
+      .toBe('.agent-team/plans/x_1a2b.html')
+  })
+
+  it('ignores infrastructure docs whose name starts with _ (matches isHtmlPlanDoc)', () => {
+    expect(extractPlanDocRelPath('.agent-team/plans/_template.html')).toBeUndefined()
+  })
+
+  it('ignores non-.html and non-plan paths', () => {
+    expect(extractPlanDocRelPath('.agent-team/plans/notes.md')).toBeUndefined()
+    expect(extractPlanDocRelPath('src/main/index.ts')).toBeUndefined()
+    expect(extractPlanDocRelPath('.agent-team/plans/sub/x.html')).toBeUndefined()
   })
 })

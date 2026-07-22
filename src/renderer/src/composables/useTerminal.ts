@@ -167,7 +167,20 @@ function splitSuffix(raw: string): { filepath: string; line?: number } {
   return { filepath: raw.slice(0, m.index), line: lineStr ? parseInt(lineStr, 10) : undefined }
 }
 
-type _AgentApi = { openEditorWindow?: (a: Record<string, unknown>) => Promise<unknown> }
+type _AgentApi = {
+  openEditorWindow?: (a: Record<string, unknown>) => Promise<unknown>
+  openPlansWindow?: (a: { workspace_path: string; rel_path?: string }) => Promise<unknown>
+}
+
+// A plan doc reference embedded in CLI prose ("計畫已建立：.agent-team/plans/x.html
+// （stage:…"). Extract just the ASCII plan rel-path, matching isHtmlPlanDoc's shape
+// (top-level, non-'_' name under .agent-team/plans/). Because the class is
+// ASCII-only, any surrounding CJK/full-width characters the FILE_LINK_RE swallowed
+// are naturally shed. Returns the workspace-relative path, or undefined.
+const _PLAN_DOC_RE = /\.agent-team\/plans\/[A-Za-z0-9.-][A-Za-z0-9._-]*\.html/
+export function extractPlanDocRelPath(raw: string): string | undefined {
+  return raw.match(_PLAN_DOC_RE)?.[0]
+}
 
 function openInEditor(absPath: string, line: number | undefined): void {
   const api = (window as Window & { agentTeam?: _AgentApi }).agentTeam
@@ -987,7 +1000,18 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         })
       }
 
-      function close(): void { clearTimeout(debounceTimer); root.remove() }
+      // ESC closes the picker no matter where focus went — a click on the card,
+      // or xterm's hidden textarea grabbing focus back, used to leave ESC dead
+      // because it was bound to the input alone. Listen at the document capture
+      // layer for the picker's lifetime and detach on close.
+      const onDocKeydown = (e: KeyboardEvent): void => {
+        if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close() }
+      }
+      function close(): void {
+        clearTimeout(debounceTimer)
+        document.removeEventListener('keydown', onDocKeydown, true)
+        root.remove()
+      }
 
       async function doSearch(q: string): Promise<void> {
         searchPending = true
@@ -1022,7 +1046,6 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       })
 
       pickerInput.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key === 'Escape') { e.stopPropagation(); close(); return }
         if (e.key === 'ArrowDown') {
           e.preventDefault()
           if (selectedIdx < currentItems.length - 1) { selectedIdx++; renderList() }
@@ -1037,6 +1060,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       })
 
       root.addEventListener('mousedown', (e) => { if (e.target === root) close() })
+      document.addEventListener('keydown', onDocKeydown, true)
       pickerInput.focus()
       pickerInput.select()
       renderList() // show 'Searching…' immediately, never a silent blank list
@@ -1074,6 +1098,21 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       const rowText = term.buffer.active.getLine(bufferRow)?.translateToString(true) ?? ''
       const singleRaw = findFileLinkAt(rowText, col)
       const wsPath = opts?.workspacePath
+
+      // A plan doc reference routes to its dedicated review window, not the
+      // generic file picker. extractPlanDocRelPath sheds any CJK prose the CLI
+      // wrapped around the path ("計畫已建立：…（stage:…"). Workspace stays this
+      // pane's own (resolve base intentionally unchanged) — a plan path that
+      // belongs to a different workspace falls through to the picker as before.
+      const planRel = extractPlanDocRelPath(pieceRaw) ?? extractPlanDocRelPath(match.text)
+      if (planRel && wsPath) {
+        const agentApi = (window as Window & { agentTeam?: _AgentApi }).agentTeam
+        if (agentApi?.openPlansWindow) {
+          void agentApi.openPlansWindow({ workspace_path: wsPath, rel_path: planRel })
+          return
+        }
+      }
+
       const statOk = async (abs: string | undefined): Promise<boolean> => {
         if (!abs) return false
         try {
