@@ -5,7 +5,12 @@ import {
   SESSION_LIMIT_RE,
   matchSessionLimit,
   unseenTail,
+  LOOP_DONE_MARKER,
+  LOOP_DONE_INSTRUCTION,
+  withLoopDoneInstruction,
+  DEFAULT_LOOP_PROMPT,
 } from '../loopPrompt'
+import { turnEndsWithSentinel } from '../completion'
 
 // parseLimitReset resolves the CLI session-limit message ("You've hit your
 // session limit · resets 4:30am (Asia/Taipei)") to the epoch ms to auto-resume
@@ -135,5 +140,32 @@ describe('lib/loopPrompt unseenTail', () => {
 
   it('returns empty for a baseline at/past totalSeen', () => {
     expect(unseenTail('abcdef', 6, 9, 100)).toBe('')
+  })
+})
+
+// withLoopDoneInstruction appends the marker instruction so the app-level loop
+// can detect task completion (LOOP_DONE_MARKER as the turn's final line) and
+// stop resending the resume prompt.
+describe('lib/loopPrompt withLoopDoneInstruction', () => {
+  it('appends the done-marker instruction to the prompt', () => {
+    const out = withLoopDoneInstruction(DEFAULT_LOOP_PROMPT)
+    expect(out.startsWith(DEFAULT_LOOP_PROMPT)).toBe(true)
+    expect(out.endsWith(LOOP_DONE_INSTRUCTION)).toBe(true)
+    expect(out).toContain(LOOP_DONE_MARKER)
+  })
+
+  it('appends to a bare resume prompt too', () => {
+    expect(withLoopDoneInstruction('繼續')).toBe('繼續' + LOOP_DONE_INSTRUCTION)
+  })
+
+  it('produces a marker detectable as the turn-final line (auto-stop path)', () => {
+    // The agent finishes and prints the marker alone on the last line.
+    const turnText = '功能已全部完成，報告書已建立。\n\n' + LOOP_DONE_MARKER
+    expect(turnEndsWithSentinel(turnText, LOOP_DONE_MARKER)).toBe(true)
+  })
+
+  it('does NOT stop when the marker is only mentioned mid-text (keeps looping)', () => {
+    const turnText = `完成後我會輸出 ${LOOP_DONE_MARKER}。\n目前還在進行第 2 階段。`
+    expect(turnEndsWithSentinel(turnText, LOOP_DONE_MARKER)).toBe(false)
   })
 })

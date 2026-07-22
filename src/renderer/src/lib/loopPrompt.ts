@@ -9,6 +9,23 @@ export const LOOP_RESUME_SETTING_KEY = 'loop-resume-text'
 
 export const DEFAULT_LOOP_RESUME = '繼續'
 
+/** End-of-turn marker the loop asks the CLI to print when it judges the WHOLE
+ *  task complete. The app watches for it (as the turn's final line, via
+ *  turnEndsWithSentinel) to auto-stop the loop instead of resending the resume
+ *  prompt forever — the app-level analogue of a pipeline stage sentinel. */
+export const LOOP_DONE_MARKER = '<<LOOP_DONE>>'
+
+/** Suffix appended to every loop injection (start + resume) so the CLI knows to
+ *  emit LOOP_DONE_MARKER on its own line when finished. Kept out of the stored
+ *  loop-prompt setting so the user's editable text stays clean. */
+export const LOOP_DONE_INSTRUCTION =
+  `\n\n（重要：當你判定整個任務已全部完成、確認功能正常且無需再繼續時，請在回覆的最後獨立一行「只」輸出 ${LOOP_DONE_MARKER} 這個標記，前後不要有任何其他文字；只要還需要繼續，就絕對不要輸出這個標記。）`
+
+/** Append the done-marker instruction to a loop prompt at injection time. */
+export function withLoopDoneInstruction(prompt: string): string {
+  return prompt + LOOP_DONE_INSTRUCTION
+}
+
 /** CLI session-limit message, e.g.
  *  "You've hit your session limit · resets 4:30am (Asia/Taipei)". */
 export const SESSION_LIMIT_RE =
