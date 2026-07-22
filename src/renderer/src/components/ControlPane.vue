@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, defineAsyncComponent } from 'vue'
 import { extractDropPaths } from '../lib/drop'
 import { settingsGet, settingsSet } from '../lib/settings'
 import ViewPanel, { type LayoutMode } from './ViewPanel.vue'
@@ -236,19 +236,24 @@ const emit = defineEmits<{
 
 const renamingPaneId = ref<string | null>(null)
 const renameDraft = ref('')
-const renameInputRefs = ref<HTMLInputElement[]>([])
 let _cancelledRename = false
 
-async function startRename(p: ActivePaneView): Promise<void> {
+// Autofocus + select the rename input the moment it mounts. Mirrors App.vue's
+// vFocus: a shared array template ref's `.find()` could resolve to a stale
+// (already unmounted) input on the second edit, leaving the real input
+// unfocused so keystrokes were silently dropped ("rename works once, then
+// does nothing").
+const vFocus = {
+  mounted(el: HTMLInputElement): void {
+    el.focus()
+    el.select()
+  },
+}
+
+function startRename(p: ActivePaneView): void {
   _cancelledRename = false
   renameDraft.value = p.agentLabel
   renamingPaneId.value = p.id
-  await nextTick()
-  const el = renameInputRefs.value.find(el => el?.dataset?.paneId === p.id)
-  if (el) {
-    el.focus()
-    el.select()
-  }
 }
 
 function commitRename(): void {
@@ -1106,8 +1111,7 @@ function onPipelineDividerEnd(): void {
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <input
               v-if="renamingPaneId === p.id"
-              ref="renameInputRefs"
-              :data-pane-id="p.id"
+              v-focus
               v-model="renameDraft"
               class="rename-input"
               @keydown="onRenameKeydown"
