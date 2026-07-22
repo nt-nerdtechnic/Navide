@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import PlansPane from '../PlansPane.vue'
@@ -8,6 +8,11 @@ import { parseHtmlPlanMeta } from '../../composables/usePlanHtml'
 import { parsePlanMeta } from '../../composables/usePlanFile'
 
 i18n.global.locale.value = 'en-US'
+
+// Collapse state now persists to localStorage per workspace; happy-dom shares
+// one localStorage across the file, so reset it before each test to keep the
+// default-collapse assumptions (e.g. Archived folded) isolated.
+beforeEach(() => localStorage.clear())
 
 // Markdown plan carrying an explicit stage (unified list groups it by stage,
 // same as HTML plans — not the legacy Active/Completed split).
@@ -124,12 +129,15 @@ function makeBackend(opts?: {
 }) {
   // Tracks concurrent .agent-team reads so tests can assert parallel fan-out.
   const htmlReads = { inflight: 0, max: 0 }
+  // Same, for legacy markdown reads under .cursor/plans.
+  const mdReads = { inflight: 0, max: 0 }
   const renames: { src: string; dst: string }[] = []
   const writes: { rel: string; content: string }[] = []
   const listeners = new Map<string, Set<(p: unknown) => void>>()
   return {
     status: ref('connected'),
     htmlReads,
+    mdReads,
     renames,
     writes,
     on: (type: string, cb: (p: unknown) => void) => {
@@ -171,6 +179,12 @@ function makeBackend(opts?: {
           await Promise.resolve()
           htmlReads.inflight--
           if (opts?.readFailures?.includes(rel)) return { payload: { ok: false, error: 'read failed' } }
+        }
+        if (rel.startsWith('.cursor/')) {
+          mdReads.inflight++
+          mdReads.max = Math.max(mdReads.max, mdReads.inflight)
+          await Promise.resolve()
+          mdReads.inflight--
         }
         if (opts?.htmlFiles && rel in opts.htmlFiles) {
           return { payload: { ok: true, content: opts.htmlFiles[rel] } }
@@ -413,6 +427,17 @@ describe('PlansPane', () => {
     expect(wrapper.text()).toContain('HTML Done Plan')
   })
 
+  it('reads legacy markdown plans in parallel', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // Both .cursor/plans reads overlap (Promise.all fan-out, not a serial loop).
+    expect(backend.mdReads.max).toBe(2)
+    expect(wrapper.text()).toContain('Active Plan')
+    expect(wrapper.text()).toContain('Done Plan')
+  })
+
   it('keeps other HTML plans when one read fails', async () => {
     const wrapper = mountPane(
       makeBackend({
@@ -503,6 +528,33 @@ describe('PlansPane – plans.changed live refresh', () => {
     expect(wrapper.text()).toContain('Active Plan')
   })
 
+  it('keeps the existing list and shows no loading overlay on a background refresh', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Active Plan')
+
+    // A refresh while a list already exists must not flash the loading overlay
+    // or blank the rows (which would reset the sidebar scroll position).
+    backend.emit('plans.changed', { workspace_path: '/ws' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.plans-muted').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Active Plan')
+
+    await flushPromises()
+    expect(wrapper.text()).toContain('Active Plan')
+  })
+
+  it('shows the loading overlay only on the first load', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    // Before the first load resolves, the loading overlay is visible.
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.plans-muted').text()).toContain('Loading plans')
+    await flushPromises()
+    expect(wrapper.find('.plans-muted').exists()).toBe(false)
+  })
+
   it('ignores broadcasts for other workspaces and malformed payloads', async () => {
     const backend = makeBackend()
     mountPane(backend)
@@ -568,7 +620,7 @@ describe('PlansPane – context menu', () => {
     await openMenuOn(wrapper, 'HTML Review Plan')
 
     const labels = wrapper.findAll('.menu-item').map((i) => i.text())
-    expect(labels).toEqual(['Open', 'Share to Git', 'Rename', 'Archive', 'Delete'])
+    expect(labels).toEqual(['Open', 'Copy path', 'Share to Git', 'Rename', 'Archive', 'Delete'])
   })
 
   it('adds Promote to Plan for HTML docs without meta', async () => {
@@ -580,11 +632,19 @@ describe('PlansPane – context menu', () => {
     expect(labels).toContain('Promote to Plan')
   })
 
-  it('does not open for legacy markdown plans', async () => {
+  it('opens for markdown plans with only the format-agnostic actions', async () => {
+    // A markdown plan (with meta) is no longer frozen: it gets Open/Archive/
+    // Delete but none of the HTML-only Rename/Share/Promote items.
     const wrapper = mountPane(makeBackend())
     await flushPromises()
     await openMenuOn(wrapper, 'Active Plan')
-    expect(wrapper.find('.ctx-menu').exists()).toBe(false)
+
+    expect(wrapper.find('.ctx-menu').exists()).toBe(true)
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toEqual(['Open', 'Copy path', 'Archive', 'Delete'])
+    expect(labels).not.toContain('Rename')
+    expect(labels).not.toContain('Share to Git')
+    expect(labels).not.toContain('Promote to Plan')
   })
 
   it('Open fires the open-file emit', async () => {
@@ -901,6 +961,22 @@ const HTML_ARCHIVED_PLAN = htmlPlan({
   reviewNotes: [],
 })
 
+// Markdown plan already archived (lives in the collapsed Archived group).
+const MD_ARCHIVED_PLAN = `---
+name: MD Archived Plan
+overview: Filed away.
+stage: done
+archivedAt: '2026-07-20T00:00:00Z'
+todos:
+  - id: phase-a
+    content: Done work.
+    status: done
+isProject: false
+---
+
+# MD Archived Plan
+`
+
 describe('PlansPane – archive', () => {
   it('lists an archived plan in the collapsed Archived group, not its stage group', async () => {
     const wrapper = mountPane(
@@ -925,6 +1001,31 @@ describe('PlansPane – archive', () => {
     const archivedHead = wrapper.findAll('.plans-section-head').find((h) => h.text().includes('Archived'))!
     await archivedHead.trigger('click')
     expect(rowVisible()).toBe(true)
+  })
+
+  it('excludes an archived done plan from "Delete all"', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'archived_a1b2c3.html', rel_path: '.agent-team/plans/archived_a1b2c3.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/archived_a1b2c3.html': HTML_ARCHIVED_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // The legacy markdown done.plan.md keeps the button enabled; clicking it
+    // must delete that one but never touch the archived HTML plan.
+    await wrapper.findAll('.plans-link-btn').find((b) => b.text() === 'Delete all')!.trigger('click')
+    await flushPromises()
+
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/done.plan.md',
+    })
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/archived_a1b2c3.html',
+    })
   })
 
   it('archive-all-done archives done plans through the optimistic-lock store, not fs.delete', async () => {
@@ -996,5 +1097,332 @@ describe('PlansPane – archive', () => {
 
     expect(backend.writes).toHaveLength(1)
     expect(parseHtmlPlanMeta(backend.writes[0].content)!.meta.archivedAt).toBeNull()
+  })
+
+  it('context menu archives a markdown plan through writeMeta (sets archivedAt)', async () => {
+    notify.confirm.mockClear()
+    // active.plan.md serves an explicit-stage markdown plan with meta.
+    const backend = makeBackend({ htmlFiles: { '.cursor/plans/active.plan.md': MD_REVIEW_PLAN } })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'MD Review Plan')
+
+    expect(wrapper.findAll('.menu-item').map((i) => i.text())).toContain('Archive')
+    await menuItem(wrapper, 'Archive').trigger('click')
+    await flushPromises()
+
+    const write = backend.writes.find((w) => w.rel === '.cursor/plans/active.plan.md')!
+    expect(write).toBeDefined()
+    expect(parsePlanMeta(write.content)!.archivedAt).toBeTruthy()
+    // Archiving goes through writeMeta, never fs.delete.
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+  })
+
+  it('context menu unarchives a markdown plan and clears archivedAt', async () => {
+    const backend = makeBackend({ htmlFiles: { '.cursor/plans/active.plan.md': MD_ARCHIVED_PLAN } })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // Reveal the archived row (Archived group is collapsed by default).
+    await wrapper.findAll('.plans-section-head').find((h) => h.text().includes('Archived'))!.trigger('click')
+    await openMenuOn(wrapper, 'MD Archived Plan')
+
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toContain('Unarchive')
+    expect(labels).not.toContain('Archive')
+    expect(labels).not.toContain('Rename')
+    await menuItem(wrapper, 'Unarchive').trigger('click')
+    await flushPromises()
+
+    const write = backend.writes.find((w) => w.rel === '.cursor/plans/active.plan.md')!
+    expect(write).toBeDefined()
+    expect(parsePlanMeta(write.content)!.archivedAt).toBeNull()
+  })
+})
+
+// ── Collapse persistence (localStorage per workspace) ────────────────────────
+
+describe('PlansPane – collapse persistence', () => {
+  const KEY = 'navide.plans.collapsed./ws'
+
+  function mountAt(workspacePath: string, backend: ReturnType<typeof makeBackend>) {
+    return mount(PlansPane, {
+      props: { workspacePath, backend: backend as never },
+      global: { plugins: [i18n] },
+    })
+  }
+
+  it('persists a manually collapsed section to localStorage', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+    const head = wrapper.findAll('.plans-section-head').find((h) => h.text().includes('In Review'))!
+    await head.trigger('click')
+
+    const raw = localStorage.getItem(KEY)
+    expect(raw).not.toBeNull()
+    expect(JSON.parse(raw!)).toContain('in-review')
+  })
+
+  it('restores the collapsed state from localStorage on (re)mount', async () => {
+    localStorage.setItem(KEY, JSON.stringify(['in-review']))
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+
+    // Stored collapse hides the In Review row without any user interaction.
+    const rowVisible = wrapper.findAll('.plan-row').some((r) => r.text().includes('HTML Review Plan'))
+    expect(rowVisible).toBe(false)
+  })
+
+  it('keeps collapse state independent per workspace path', async () => {
+    localStorage.setItem(KEY, JSON.stringify(['in-review']))
+    const wrapper = mountAt('/other-ws', reviewBackend())
+    await flushPromises()
+
+    // /other-ws has no stored state → default (In Review expanded), row visible.
+    const rowVisible = wrapper.findAll('.plan-row').some((r) => r.text().includes('HTML Review Plan'))
+    expect(rowVisible).toBe(true)
+  })
+
+  it('falls back to the default collapsed set when storage holds bad JSON', async () => {
+    localStorage.setItem(KEY, '{not valid json')
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'archived_a1b2c3.html', rel_path: '.agent-team/plans/archived_a1b2c3.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/archived_a1b2c3.html': HTML_ARCHIVED_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // No throw; default applies → Archived group folded, row hidden.
+    const rowVisible = wrapper.findAll('.plan-row').some((r) => r.text().includes('HTML Archived Plan'))
+    expect(rowVisible).toBe(false)
+  })
+})
+
+// ── Copy path ────────────────────────────────────────────────────────────────
+
+describe('PlansPane – copy path', () => {
+  it('copies the item relPath to the clipboard with a success toast', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    notify.toast.mockClear()
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    await menuItem(wrapper, 'Copy path').trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledWith('.agent-team/plans/review_a1b2c3.html')
+    expect(notify.toast).toHaveBeenCalledWith('Path copied', { type: 'success' })
+    // Copy closes the menu.
+    expect(wrapper.find('.ctx-menu').exists()).toBe(false)
+  })
+
+  it('offers Copy path for meta-less docs too', async () => {
+    const wrapper = mountPane(docBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'notes_aaaaaa.html')
+    expect(wrapper.findAll('.menu-item').map((i) => i.text())).toContain('Copy path')
+  })
+})
+
+// ── Rename autofocus ─────────────────────────────────────────────────────────
+
+describe('PlansPane – rename autofocus', () => {
+  it('focuses and selects the rename input when the dialog opens', async () => {
+    const wrapper = mount(PlansPane, {
+      props: { workspacePath: '/ws', backend: reviewBackend() as never },
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+    await menuItem(wrapper, 'Rename').trigger('click')
+    await flushPromises()
+
+    const input = wrapper.find('.rename-input').element as HTMLInputElement
+    expect(document.activeElement).toBe(input)
+    wrapper.unmount()
+  })
+})
+
+// ── Empty state + completed action row ───────────────────────────────────────
+
+function emptyBackend() {
+  return {
+    status: ref('connected'),
+    on: () => () => {},
+    send: vi.fn(async (channel: string, payload: Record<string, unknown>) => {
+      if (channel === 'fs.list_dir') {
+        if (payload.rel_path === '.cursor/plans') return { payload: { ok: true, entries: [] } }
+        return { payload: { ok: false, error: 'not a directory' } }
+      }
+      return { payload: { ok: false, error: 'unexpected' } }
+    }),
+  }
+}
+
+describe('PlansPane – empty state', () => {
+  it('shows the empty-all guide and hides the completed action row with zero plans', async () => {
+    const wrapper = mount(PlansPane, {
+      props: { workspacePath: '/ws', backend: emptyBackend() as never },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.plans-empty').text()).toContain('No plans yet')
+    // No actionable done/deletable plans → the whole action row is gone.
+    expect(wrapper.findAll('.plans-link-btn').length).toBe(0)
+  })
+})
+
+// ── Row accessibility (no button-in-button, keyboard-reachable) ──────────────
+
+describe('PlansPane – row accessibility', () => {
+  it('renders each row as a role=button DIV with a nested BUTTON delete (no button-in-button)', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+
+    const row = wrapper.find('.plan-row')
+    expect(row.element.tagName).toBe('DIV')
+    expect(row.attributes('role')).toBe('button')
+    expect(row.attributes('tabindex')).toBe('0')
+
+    const del = row.find('.plan-row-delete')
+    expect(del.element.tagName).toBe('BUTTON')
+    // No interactive element nested inside another button.
+    expect(wrapper.findAll('button .plan-row-delete').length).toBe(0)
+  })
+
+  it('opens a plan on Enter and Space from the focusable row', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+
+    const row = wrapper.findAll('.plan-row').find((r) => r.text().includes('HTML Review Plan'))!
+    await row.trigger('keydown.enter')
+    await row.trigger('keydown.space')
+
+    const emitted = wrapper.emitted('open-file')!
+    expect(emitted.length).toBe(2)
+    expect(emitted[0]).toEqual([
+      { filepath: '.agent-team/plans/review_a1b2c3.html', name: 'review_a1b2c3.html' },
+    ])
+    expect(emitted[1]).toEqual(emitted[0])
+  })
+
+  it('deletes from the keyboard-reachable delete BUTTON without opening the plan', async () => {
+    notify.confirm.mockClear()
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const del = wrapper.find('.plan-row-delete')
+    expect(del.element.tagName).toBe('BUTTON')
+    await del.trigger('click')
+    await flushPromises()
+
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+    // click.stop keeps the row's open handler from firing.
+    expect(wrapper.emitted('open-file')).toBeUndefined()
+  })
+
+  it('does not open the plan when Enter/Space is pressed on the delete button', async () => {
+    notify.confirm.mockClear()
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const del = wrapper.find('.plan-row-delete')
+    expect(del.element.tagName).toBe('BUTTON')
+
+    // A native <button> turns keyboard Enter/Space into a click; the keydown
+    // itself must NOT bubble to the row's open handler (the a11y seam bug).
+    // happy-dom does not synthesize that native click, so dispatch the keydown
+    // (which the fix must stop at the button) plus the click the browser fires.
+    await del.trigger('keydown.enter')
+    await del.trigger('keydown.space')
+    expect(wrapper.emitted('open-file')).toBeUndefined()
+
+    await del.trigger('click')
+    await flushPromises()
+    expect(backend.send).toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+    // Deleting via the keyboard never opens the plan.
+    expect(wrapper.emitted('open-file')).toBeUndefined()
+  })
+
+  it('opens (and never deletes) when Enter is pressed on the row itself', async () => {
+    const backend = makeBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const row = wrapper.find('.plan-row')
+    await row.trigger('keydown.enter')
+
+    expect(wrapper.emitted('open-file')?.length).toBe(1)
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.cursor/plans/active.plan.md',
+    })
+  })
+})
+
+// ── Context menu dismissal ───────────────────────────────────────────────────
+
+describe('PlansPane – context menu dismissal', () => {
+  it('closes the context menu on window scroll', async () => {
+    const wrapper = mountPane(reviewBackend())
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+    expect(wrapper.find('.ctx-menu').exists()).toBe(true)
+
+    window.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+    expect(wrapper.find('.ctx-menu').exists()).toBe(false)
+  })
+})
+
+// ── Within-group sorting by plan title ───────────────────────────────────────
+
+describe('PlansPane – within-group sort by name', () => {
+  const draftNamed = (name: string) =>
+    htmlPlan({
+      schemaVersion: 1,
+      name,
+      overview: '',
+      stage: 'draft',
+      approvedAt: null,
+      todos: [],
+      reviewNotes: [],
+    })
+
+  it('orders plans inside a stage group by meta.name, not filename', async () => {
+    // Filename order (aaa < zzz) is the opposite of title order (Apple < Zebra),
+    // so a filename sort would list Zebra first — the name sort must not.
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'aaa_111111.html', rel_path: '.agent-team/plans/aaa_111111.html', is_dir: false },
+        { name: 'zzz_222222.html', rel_path: '.agent-team/plans/zzz_222222.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/aaa_111111.html': draftNamed('Zebra Plan'),
+        '.agent-team/plans/zzz_222222.html': draftNamed('Apple Plan'),
+      },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const names = wrapper.findAll('.plan-row-name').map((n) => n.text())
+    expect(names.indexOf('Apple Plan')).toBeLessThan(names.indexOf('Zebra Plan'))
   })
 })

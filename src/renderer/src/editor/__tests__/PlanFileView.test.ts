@@ -216,6 +216,24 @@ describe('PlanFileView – checkbox interaction', () => {
     expect(writtenContent).toContain('- id: todo-3')
   })
 
+  it('does not add a new todo while the IME is composing', async () => {
+    const backend = makeBackend()
+    const wrapper = mount(PlanFileView, {
+      props: { workspacePath: '/ws', relPath: 'test.plan.md', backend: backend as never },
+    })
+    await flushPromises()
+
+    await wrapper.find('.pfv-new-btn').trigger('click')
+    await wrapper.find('.pfv-new-input').setValue('Composing task')
+    await wrapper.find('.pfv-new-input').trigger('keydown', { key: 'Enter', isComposing: true })
+    await flushPromises()
+
+    const writeCall = (backend.send as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: string[]) => c[0] === 'fs.write_file'
+    )
+    expect(writeCall).toBeUndefined()
+  })
+
   it('removes a todo via its remove button', async () => {
     const backend = makeBackend()
     const wrapper = mount(PlanFileView, {

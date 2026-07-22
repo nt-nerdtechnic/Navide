@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { parsePlanMeta, writePlanMeta } from '../composables/usePlanFile'
@@ -51,15 +51,20 @@ const plans = ref<PlanItem[]>([])
 
 async function loadPlans(): Promise<void> {
   if (!props.workspacePath) return
+  // Only the very first load (no plans yet) shows the loading overlay. Later
+  // refreshes (own todo-status toggles, external plans.changed broadcasts)
+  // keep the existing list on screen and swap it in silently — no flicker,
+  // no sidebar scroll reset.
+  const isFirstLoad = plans.value.length === 0
   if (props.backend.status?.value && props.backend.status.value !== 'connected') {
     waitingForBackend.value = true
-    loading.value = true
+    loading.value = isFirstLoad
     error.value = ''
     return
   }
 
   waitingForBackend.value = false
-  loading.value = true
+  loading.value = isFirstLoad
   error.value = ''
   try {
     const loaded: PlanItem[] = []
@@ -73,24 +78,27 @@ async function loadPlans(): Promise<void> {
     if (!list.payload?.ok) {
       error.value = list.payload?.error === 'not a directory'
         ? ''
-        : (list.payload?.error || 'Failed to list plans')
+        : (list.payload?.error || t('pane.plans.list-failed'))
     } else {
       const entries = (list.payload.entries ?? [])
         .filter((entry) => !entry.is_dir && entry.name.endsWith('.plan.md'))
         .sort((a, b) => a.name.localeCompare(b.name))
 
-      for (const entry of entries) {
-        const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
-          workspace_path: props.workspacePath,
-          rel_path: entry.rel_path,
+      const mdItems = await Promise.all(
+        entries.map(async (entry): Promise<PlanItem | null> => {
+          const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+            workspace_path: props.workspacePath,
+            rel_path: entry.rel_path,
+          })
+          if (!read.payload?.ok) return null
+          return {
+            relPath: entry.rel_path,
+            name: entry.name,
+            meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
+          }
         })
-        if (!read.payload?.ok) continue
-        loaded.push({
-          relPath: entry.rel_path,
-          name: entry.name,
-          meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
-        })
-      }
+      )
+      loaded.push(...mdItems.filter((item): item is PlanItem => item !== null))
     }
 
     // HTML plans: .agent-team/plans/*.html (underscore-prefixed files are
@@ -104,7 +112,7 @@ async function loadPlans(): Promise<void> {
     if (!htmlList.payload?.ok) {
       // Missing directory is intentional silence; real errors surface.
       if (htmlList.payload?.error !== 'not a directory') {
-        error.value = htmlList.payload?.error || 'Failed to list plans'
+        error.value = htmlList.payload?.error || t('pane.plans.list-failed')
       }
     } else {
       const htmlEntries = (htmlList.payload.entries ?? [])
@@ -136,7 +144,7 @@ async function loadPlans(): Promise<void> {
 
     plans.value = loaded
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load plans'
+    error.value = err instanceof Error ? err.message : t('pane.plans.load-failed')
   } finally {
     loading.value = false
   }
@@ -155,8 +163,12 @@ onMounted(() => {
 onUnmounted(() => {
   offPlansChanged?.()
   offPlansChanged = null
+  removeCtxListeners()
 })
-watch(() => props.workspacePath, () => void loadPlans())
+watch(() => props.workspacePath, (next) => {
+  collapsedSections.value = loadCollapsed(next)
+  void loadPlans()
+})
 watch(() => props.backend.status?.value, (status) => {
   if (status === 'connected' && waitingForBackend.value) void loadPlans()
 })
@@ -176,22 +188,28 @@ interface PlanStageRow {
 // (skipped counts toward neither done nor total-done), consistent across
 // markdown and HTML.
 function stageRows(stages: PlanStage[]): PlanStageRow[] {
-  return plans.value.flatMap((p) => {
-    // Archived plans leave their stage group and live in the Archived group so
-    // they never appear in both places at once.
-    if (!p.meta || p.meta.archivedAt || !stages.includes(p.meta.stage)) return []
-    const progress = htmlPlanProgress(p.meta.todos)
-    return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
-  })
+  return plans.value
+    .flatMap((p) => {
+      // Archived plans leave their stage group and live in the Archived group so
+      // they never appear in both places at once.
+      if (!p.meta || p.meta.archivedAt || !stages.includes(p.meta.stage)) return []
+      const progress = htmlPlanProgress(p.meta.todos)
+      return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
+    })
+    // Sort by plan title (meta.name) — the near-random `_6hex` filename order
+    // reads as arbitrary; the title is the intuitive within-group order.
+    .sort((a, b) => a.meta.name.localeCompare(b.meta.name))
 }
 
 // Archived plans (any stage) collected into their own collapsed group.
 const archivedRows = computed<PlanStageRow[]>(() =>
-  plans.value.flatMap((p) => {
-    if (!p.meta || !p.meta.archivedAt) return []
-    const progress = htmlPlanProgress(p.meta.todos)
-    return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
-  })
+  plans.value
+    .flatMap((p) => {
+      if (!p.meta || !p.meta.archivedAt) return []
+      const progress = htmlPlanProgress(p.meta.todos)
+      return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
+    })
+    .sort((a, b) => a.meta.name.localeCompare(b.meta.name))
 )
 
 // "Archive all done": done plans not yet archived. Drives the button state and
@@ -216,19 +234,56 @@ const stageGroups = computed(() =>
 )
 
 // Batch-deletable = finished stages (done/abandoned), markdown and HTML alike.
+// Archived plans are intentionally kept — they live in the Archived group and
+// must never be swept up by "Delete all".
 const deletablePlans = computed(() =>
-  plans.value.filter((p) => p.meta && (p.meta.stage === 'done' || p.meta.stage === 'abandoned'))
+  plans.value.filter(
+    (p) => p.meta && !p.meta.archivedAt && (p.meta.stage === 'done' || p.meta.stage === 'abandoned'),
+  )
 )
 
 // Section collapse — click a group header to fold/unfold its rows. Keyed by
 // 'active' for the doc group and by stage key for the stage groups. The
 // 'archived' group starts collapsed so archived plans stay out of the way.
-const collapsedSections = ref<Set<string>>(new Set(['archived']))
+// Persisted to localStorage per workspace so manual folds survive tab switches
+// (unmount/remount) and window reopens.
+const COLLAPSE_KEY_PREFIX = 'navide.plans.collapsed.'
+const DEFAULT_COLLAPSED = ['archived']
+
+function collapseStorageKey(workspacePath: string): string {
+  return `${COLLAPSE_KEY_PREFIX}${workspacePath}`
+}
+
+// Restore the workspace's collapsed set; the first time there is nothing stored
+// (or the stored value is corrupt) fall back to the default (archived folded).
+// Never let a storage/parse error break the component.
+function loadCollapsed(workspacePath: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(collapseStorageKey(workspacePath))
+    if (raw === null) return new Set(DEFAULT_COLLAPSED)
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set(DEFAULT_COLLAPSED)
+    return new Set(parsed.filter((k): k is string => typeof k === 'string'))
+  } catch {
+    return new Set(DEFAULT_COLLAPSED)
+  }
+}
+
+function saveCollapsed(workspacePath: string, set: Set<string>): void {
+  try {
+    localStorage.setItem(collapseStorageKey(workspacePath), JSON.stringify([...set]))
+  } catch {
+    // Storage unavailable (quota/private mode) — persistence is best-effort.
+  }
+}
+
+const collapsedSections = ref<Set<string>>(loadCollapsed(props.workspacePath))
 function toggleSection(key: string): void {
   const next = new Set(collapsedSections.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
   collapsedSections.value = next
+  saveCollapsed(props.workspacePath, next)
 }
 function isSectionCollapsed(key: string): boolean {
   return collapsedSections.value.has(key)
@@ -240,9 +295,9 @@ function openPlan(item: PlanItem): void {
 
 async function deleteCompleted(): Promise<void> {
   if (!deletablePlans.value.length) return
-  const ok = await confirm(`Delete ${deletablePlans.value.length} completed plan(s)?`, {
-    title: 'Delete Completed Plans',
-    confirmText: 'Delete',
+  const ok = await confirm(t('pane.plans.delete-completed-confirm', { count: deletablePlans.value.length }), {
+    title: t('pane.plans.delete-completed-title'),
+    confirmText: t('pane.plans.menu-delete'),
   })
   if (!ok) return
 
@@ -253,9 +308,9 @@ async function deleteCompleted(): Promise<void> {
       rel_path: item.relPath,
     })
     if (resp.payload?.ok) deleted++
-    else toast(resp.payload?.error || `Failed to delete ${item.name}`, { type: 'error' })
+    else toast(resp.payload?.error || t('pane.plans.delete-item-failed', { name: item.name }), { type: 'error' })
   }
-  toast(`Deleted ${deleted} completed plan(s)`, { type: 'success' })
+  toast(t('pane.plans.deleted-count', { count: deleted }), { type: 'success' })
   await loadPlans()
 }
 
@@ -294,15 +349,16 @@ async function archiveAllDone(): Promise<void> {
       archivedAt: new Date().toISOString(),
     }))
     if (resp.ok) archived++
-    else toast(resp.error || `Failed to archive ${item.name}`, { type: 'error' })
+    else toast(resp.error || t('pane.plans.archive-item-failed', { name: item.name }), { type: 'error' })
   }
   toast(t('pane.plans.archived-count', { count: archived }), { type: 'success' })
   await loadPlans()
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────
-// Opens for HTML items (plans and docs) and for meta-less markdown docs (so
-// they can be promoted). Legacy markdown plans (with meta) stay frozen.
+// Opens for every row. Individual items are gated per format/state below:
+// markdown plans (with meta) get Open/Archive-Unarchive/Delete but not the
+// HTML-only Rename/Share/Promote; meta-less docs get Promote.
 // Backdrop + absolutely-positioned menu, following the GitPane convention.
 const ctxMenu = ref<{ show: boolean; x: number; y: number; item: PlanItem | null }>({
   show: false,
@@ -310,20 +366,55 @@ const ctxMenu = ref<{ show: boolean; x: number; y: number; item: PlanItem | null
   y: 0,
   item: null,
 })
+const ctxMenuEl = ref<HTMLElement | null>(null)
 
 function isHtmlItem(item: PlanItem): boolean {
   return item.name.endsWith('.html')
 }
 
-function openCtxMenu(e: MouseEvent, item: PlanItem): void {
-  // Frozen: legacy markdown plans (non-HTML with meta) get no menu.
-  if (!isHtmlItem(item) && item.meta) return
-  const x = Math.min(e.clientX, window.innerWidth - 224)
-  const y = Math.min(e.clientY, window.innerHeight - 220)
-  ctxMenu.value = { show: true, x, y, item }
+// Keep the menu inside the viewport. Clamp the requested corner with a rough
+// size first (so it never spawns off-screen on a narrow sidebar), then re-clamp
+// once the real element is measured.
+function clampMenu(x: number, y: number, w: number, h: number): { x: number; y: number } {
+  return {
+    x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+  }
+}
+
+// Any scroll/resize while the menu is open would leave it detached from its
+// anchor, so close it. Registered only while open; removed on close/unmount.
+let ctxListening = false
+function addCtxListeners(): void {
+  if (ctxListening) return
+  window.addEventListener('scroll', closeCtxMenu, true)
+  window.addEventListener('resize', closeCtxMenu)
+  ctxListening = true
+}
+function removeCtxListeners(): void {
+  if (!ctxListening) return
+  window.removeEventListener('scroll', closeCtxMenu, true)
+  window.removeEventListener('resize', closeCtxMenu)
+  ctxListening = false
+}
+
+async function openCtxMenu(e: MouseEvent, item: PlanItem): Promise<void> {
+  const first = clampMenu(e.clientX, e.clientY, 200, 300)
+  ctxMenu.value = { show: true, x: first.x, y: first.y, item }
+  addCtxListeners()
+  await nextTick()
+  const el = ctxMenuEl.value
+  if (!el || !ctxMenu.value.show) return
+  const rect = el.getBoundingClientRect()
+  if (!rect.width && !rect.height) return
+  const fit = clampMenu(e.clientX, e.clientY, rect.width, rect.height)
+  if (fit.x !== ctxMenu.value.x || fit.y !== ctxMenu.value.y) {
+    ctxMenu.value = { ...ctxMenu.value, x: fit.x, y: fit.y }
+  }
 }
 
 function closeCtxMenu(): void {
+  removeCtxListeners()
   ctxMenu.value = { ...ctxMenu.value, show: false, item: null }
 }
 
@@ -331,6 +422,18 @@ function ctxOpen(): void {
   const item = ctxMenu.value.item
   closeCtxMenu()
   if (item) openPlan(item)
+}
+
+async function ctxCopyPath(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  try {
+    await navigator.clipboard.writeText(item.relPath)
+    toast(t('pane.plans.copy-path-success'), { type: 'success' })
+  } catch {
+    toast(item.relPath, { type: 'error' })
+  }
 }
 
 async function ctxShareToGit(): Promise<void> {
@@ -346,13 +449,18 @@ async function ctxShareToGit(): Promise<void> {
 const PLAN_FILENAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*_[0-9a-f]{6}\.html$/
 const renameTarget = ref<PlanItem | null>(null)
 const renameValue = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
 
-function ctxRename(): void {
+async function ctxRename(): Promise<void> {
   const item = ctxMenu.value.item
   closeCtxMenu()
   if (!item) return
   renameTarget.value = item
   renameValue.value = item.name
+  // Focus + select so the name is editable immediately, no extra click.
+  await nextTick()
+  renameInput.value?.focus()
+  renameInput.value?.select()
 }
 
 function cancelRename(): void {
@@ -545,52 +653,75 @@ async function ctxUpgradeToPlan(): Promise<void> {
   <div class="plans-pane">
     <header class="plans-head">
       <div>
-        <div class="plans-title">Plans</div>
+        <div class="plans-title">{{ t('pane.plans.title') }}</div>
       </div>
-      <button class="plans-icon-btn" title="Refresh" @click="loadPlans">↻</button>
+      <button class="plans-icon-btn" :title="t('pane.plans.refresh')" @click="loadPlans">↻</button>
     </header>
 
     <div v-if="loading" class="plans-muted">
-      {{ waitingForBackend ? 'Waiting for backend…' : 'Loading plans…' }}
+      {{ waitingForBackend ? t('pane.plans.waiting-backend') : t('pane.plans.loading') }}
     </div>
     <div v-else-if="error" class="plans-error">{{ error }}</div>
 
     <template v-else>
+      <div v-if="!plans.length" class="plans-empty">{{ t('pane.plans.empty-all') }}</div>
+      <template v-else>
       <section class="plans-section">
-        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection('active')">
+        <div
+          class="plans-section-head"
+          role="button"
+          tabindex="0"
+          @click="toggleSection('active')"
+          @keydown.enter.prevent="toggleSection('active')"
+          @keydown.space.prevent="toggleSection('active')"
+        >
           <span class="plans-section-title">
             <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed('active') }">▾</span>
-            Active
+            {{ t('pane.plans.section-active') }}
           </span>
           <span>{{ docItems.length }}</span>
         </div>
         <template v-if="!isSectionCollapsed('active')">
-          <button
+          <div
             v-for="item in docItems"
             :key="item.relPath"
             class="plan-row"
+            role="button"
+            tabindex="0"
             @click="openPlan(item)"
+            @keydown.enter.prevent="openPlan(item)"
+            @keydown.space.prevent="openPlan(item)"
             @contextmenu.prevent="openCtxMenu($event, item)"
           >
             <span class="plan-row-name">{{ item.name }}</span>
             <span class="plan-row-path" :title="item.relPath">{{ item.relPath }}</span>
             <span class="plan-row-meta">
-              <span>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
-              <span class="plan-chip">doc</span>
+              <span>{{ item.name.endsWith('.html') ? t('pane.plans.format-html') : t('pane.plans.format-markdown') }}</span>
+              <span class="plan-chip">{{ t('pane.plans.doc-badge') }}</span>
             </span>
-            <span
+            <button
               class="plan-row-delete"
-              role="button"
+              type="button"
               :title="t('pane.plans.menu-delete')"
+              :aria-label="t('pane.plans.menu-delete')"
               @click.stop="deletePlan(item)"
-            >✕</span>
-          </button>
-          <div v-if="!docItems.length" class="plans-empty">No active plans.</div>
+              @keydown.enter.stop
+              @keydown.space.stop
+            >✕</button>
+          </div>
+          <div v-if="!docItems.length" class="plans-empty">{{ t('pane.plans.empty-active') }}</div>
         </template>
       </section>
 
       <section v-for="group in stageGroups" :key="group.key" class="plans-section">
-        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection(group.key)">
+        <div
+          class="plans-section-head"
+          role="button"
+          tabindex="0"
+          @click="toggleSection(group.key)"
+          @keydown.enter.prevent="toggleSection(group.key)"
+          @keydown.space.prevent="toggleSection(group.key)"
+        >
           <span class="plans-section-title">
             <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed(group.key) }">▾</span>
             {{ group.label }}
@@ -598,12 +729,16 @@ async function ctxUpgradeToPlan(): Promise<void> {
           <span>{{ group.rows.length }}</span>
         </div>
         <template v-if="!isSectionCollapsed(group.key)">
-          <button
+          <div
             v-for="row in group.rows"
             :key="row.item.relPath"
             class="plan-row"
             :class="{ 'plan-row--done': group.finished }"
+            role="button"
+            tabindex="0"
             @click="openPlan(row.item)"
+            @keydown.enter.prevent="openPlan(row.item)"
+            @keydown.space.prevent="openPlan(row.item)"
             @contextmenu.prevent="openCtxMenu($event, row.item)"
           >
             <span class="plan-row-name">{{ row.meta.name }}</span>
@@ -613,18 +748,28 @@ async function ctxUpgradeToPlan(): Promise<void> {
               <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
               <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
             </span>
-            <span
+            <button
               class="plan-row-delete"
-              role="button"
+              type="button"
               :title="t('pane.plans.menu-delete')"
+              :aria-label="t('pane.plans.menu-delete')"
               @click.stop="deletePlan(row.item)"
-            >✕</span>
-          </button>
+              @keydown.enter.stop
+              @keydown.space.stop
+            >✕</button>
+          </div>
         </template>
       </section>
 
       <section v-if="archivedRows.length" class="plans-section">
-        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection('archived')">
+        <div
+          class="plans-section-head"
+          role="button"
+          tabindex="0"
+          @click="toggleSection('archived')"
+          @keydown.enter.prevent="toggleSection('archived')"
+          @keydown.space.prevent="toggleSection('archived')"
+        >
           <span class="plans-section-title">
             <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed('archived') }">▾</span>
             {{ t('pane.plans.archived') }}
@@ -632,11 +777,15 @@ async function ctxUpgradeToPlan(): Promise<void> {
           <span>{{ archivedRows.length }}</span>
         </div>
         <template v-if="!isSectionCollapsed('archived')">
-          <button
+          <div
             v-for="row in archivedRows"
             :key="row.item.relPath"
             class="plan-row plan-row--done"
+            role="button"
+            tabindex="0"
             @click="openPlan(row.item)"
+            @keydown.enter.prevent="openPlan(row.item)"
+            @keydown.space.prevent="openPlan(row.item)"
             @contextmenu.prevent="openCtxMenu($event, row.item)"
           >
             <span class="plan-row-name">{{ row.meta.name }}</span>
@@ -649,19 +798,22 @@ async function ctxUpgradeToPlan(): Promise<void> {
                 <span class="plan-chip plan-chip--archived">{{ t('pane.plans.archived') }}</span>
               </span>
             </span>
-            <span
+            <button
               class="plan-row-delete"
-              role="button"
+              type="button"
               :title="t('pane.plans.menu-delete')"
+              :aria-label="t('pane.plans.menu-delete')"
               @click.stop="deletePlan(row.item)"
-            >✕</span>
-          </button>
+              @keydown.enter.stop
+              @keydown.space.stop
+            >✕</button>
+          </div>
         </template>
       </section>
 
-      <section class="plans-section">
+      <section v-if="archivableDone.length || deletablePlans.length" class="plans-section">
         <div class="plans-section-head">
-          <span>Completed</span>
+          <span>{{ t('pane.plans.section-completed') }}</span>
           <span class="plans-head-actions">
             <button
               class="plans-link-btn"
@@ -672,21 +824,23 @@ async function ctxUpgradeToPlan(): Promise<void> {
               class="plans-link-btn"
               :disabled="!deletablePlans.length"
               @click="deleteCompleted"
-            >Delete all</button>
+            >{{ t('pane.plans.delete-all') }}</button>
           </span>
         </div>
       </section>
+      </template>
     </template>
 
     <template v-if="ctxMenu.show && ctxMenu.item">
       <div class="ctx-backdrop" @click="closeCtxMenu" @contextmenu.prevent="closeCtxMenu" />
-      <div class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
+      <div ref="ctxMenuEl" class="ctx-menu" :style="{ top: ctxMenu.y + 'px', left: ctxMenu.x + 'px' }" @click.stop>
         <button class="menu-item" @click="ctxOpen">{{ t('pane.plans.menu-open') }}</button>
+        <button class="menu-item" @click="ctxCopyPath">{{ t('action.copy-path') }}</button>
         <template v-if="isHtmlItem(ctxMenu.item)">
           <button class="menu-item" @click="ctxShareToGit">{{ t('pane.plans.share-git') }}</button>
           <button class="menu-item" @click="ctxRename">{{ t('pane.plans.menu-rename') }}</button>
         </template>
-        <button v-if="isHtmlItem(ctxMenu.item) && ctxMenu.item.meta" class="menu-item" @click="ctxToggleArchive">
+        <button v-if="ctxMenu.item.meta" class="menu-item" @click="ctxToggleArchive">
           {{ ctxMenu.item.meta.archivedAt ? t('pane.plans.unarchive') : t('pane.plans.archive') }}
         </button>
         <template v-if="!ctxMenu.item.meta">
@@ -703,6 +857,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
       <div class="rename-dialog">
         <div class="rename-title">{{ t('pane.plans.rename-title') }}</div>
         <input
+          ref="renameInput"
           v-model="renameValue"
           class="rename-input"
           :placeholder="t('pane.plans.rename-placeholder')"
@@ -823,6 +978,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
+  box-sizing: border-box;
   color: inherit;
   cursor: pointer;
   display: grid;
@@ -838,8 +994,16 @@ async function ctxUpgradeToPlan(): Promise<void> {
   border-color: var(--border-subtle);
 }
 
+.plan-row:focus-visible {
+  border-color: var(--accent-focus);
+  outline: 2px solid var(--accent-focus);
+  outline-offset: -1px;
+}
+
 .plan-row-delete {
   align-items: center;
+  background: transparent;
+  border: none;
   border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
@@ -848,10 +1012,19 @@ async function ctxUpgradeToPlan(): Promise<void> {
   height: 20px;
   justify-content: center;
   opacity: 0;
+  padding: 0;
   position: absolute;
   right: 6px;
   top: 6px;
   width: 20px;
+}
+
+/* The delete button is opacity-hidden until row hover; keep it reachable and
+   visible while keyboard-focused. */
+.plan-row-delete:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-focus);
+  outline-offset: -1px;
 }
 
 .plan-row:hover .plan-row-delete {

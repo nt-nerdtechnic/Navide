@@ -253,6 +253,13 @@ async function removeTodo(todoId: string): Promise<void> {
   await saveTodos(plan.todos.filter((t) => t.id !== todoId))
 }
 
+// Guard against IME composition: Enter committing a candidate must not add a
+// half-formed to-do (matches onEditTodoEnter for the edit flow).
+function onAddTodoEnter(event: KeyboardEvent): void {
+  if (event.isComposing) return
+  void addTodo()
+}
+
 // Shared in-flight guard for the inline edit flows below.
 const saving = ref(false)
 
@@ -462,7 +469,7 @@ function badgeClass(status: TodoStatus): string {
           v-model="newTodoText"
           class="pfv-new-input"
           placeholder="Describe the to-do…"
-          @keydown.enter="addTodo"
+          @keydown.enter="onAddTodoEnter"
           @keydown.esc="addingTodo = false"
         />
         <button class="pfv-new-btn" @click="addTodo">Add</button>
