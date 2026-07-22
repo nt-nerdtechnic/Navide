@@ -202,16 +202,38 @@ const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 const { state: updateState, startDownload, installUpdate } = useUpdater()
 
 // Announce a freshly-available update once per version — subtle, non-spammy.
-// The toast system has no action button, so this is message-only; the badge
-// and Settings → Updates section are the interactive entry points.
-const { toast: notifyToast } = useNotify()
+// Patch releases keep the message-only toast (main auto-downloads them); the
+// badge and Settings → Updates section are the interactive entry points.
+// Minor/major updates never auto-download, so ask instead: a confirm dialog
+// with the version jump and release notes offers Download / Later. "Later"
+// simply closes — no re-prompt for that version.
+const { toast: notifyToast, confirm: notifyConfirm } = useNotify()
 let lastNotifiedUpdate: string | undefined
 watch(
   () => [updateState.value.status, updateState.value.availableVersion] as const,
   ([status, version]) => {
     if (status === 'available' && version && version !== lastNotifiedUpdate) {
       lastNotifiedUpdate = version
-      notifyToast(i18n.global.t('updater.new-version-toast', { version }), { type: 'info' })
+      // severity is undefined when the main process predates severity support;
+      // treat that as 'patch' to preserve the old toast behavior.
+      const severity = updateState.value.severity ?? 'patch'
+      if (severity === 'patch') {
+        notifyToast(i18n.global.t('updater.new-version-toast', { version }), { type: 'info' })
+        return
+      }
+      const body = i18n.global.t('updater.major-update-body', {
+        current: updateState.value.currentVersion,
+        version,
+      })
+      const notes = updateState.value.releaseNotes
+      const message = notes ? `${body}\n\n${i18n.global.t('updater.release-notes')}:\n${notes}` : body
+      void notifyConfirm(message, {
+        title: i18n.global.t('updater.major-update-title'),
+        confirmText: i18n.global.t('updater.download-now'),
+        cancelText: i18n.global.t('updater.later'),
+      }).then((accepted) => {
+        if (accepted) void startDownload()
+      })
     }
   },
 )

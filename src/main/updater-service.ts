@@ -1,4 +1,4 @@
-import type { UpdateActionResult, UpdateState } from '../shared/updater'
+import type { UpdateActionResult, UpdateSeverity, UpdateState } from '../shared/updater'
 
 interface UpdateInfoLike {
   version: string
@@ -48,6 +48,22 @@ function normalizeReleaseNotes(notes: UpdateInfoLike['releaseNotes']): string | 
   return undefined
 }
 
+// Classify how far availableVersion is from currentVersion (semver X.Y.Z).
+// Unparsable versions count as 'major' — the safest reading is to ask the user
+// rather than silently auto-download an unknown jump.
+export function computeUpdateSeverity(current: string, available: string): UpdateSeverity {
+  const parse = (version: string): [number, number] | null => {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version.trim())
+    return match ? [Number(match[1]), Number(match[2])] : null
+  }
+  const from = parse(current)
+  const to = parse(available)
+  if (!from || !to) return 'major'
+  if (from[0] !== to[0]) return 'major'
+  if (from[1] !== to[1]) return 'minor'
+  return 'patch'
+}
+
 export function createUpdaterService(
   client: UpdaterClient,
   currentVersion: string,
@@ -88,6 +104,7 @@ export function createUpdaterService(
         currentVersion,
         availableVersion: info.version,
         releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+        severity: computeUpdateSeverity(currentVersion, info.version),
         checkedAt: new Date().toISOString(),
       })
     })
@@ -100,6 +117,7 @@ export function createUpdaterService(
         currentVersion,
         availableVersion: state.availableVersion,
         releaseNotes: state.releaseNotes,
+        severity: state.severity,
         percent: Math.max(0, Math.min(100, Math.round(progress.percent))),
       })
     })
@@ -109,6 +127,7 @@ export function createUpdaterService(
         currentVersion,
         availableVersion: info.version,
         releaseNotes: normalizeReleaseNotes(info.releaseNotes) ?? state.releaseNotes,
+        severity: computeUpdateSeverity(currentVersion, info.version),
         percent: 100,
       })
     })
@@ -149,6 +168,7 @@ export function createUpdaterService(
               currentVersion,
               availableVersion: version,
               releaseNotes: normalizeReleaseNotes(result?.updateInfo?.releaseNotes),
+              severity: computeUpdateSeverity(currentVersion, version),
               checkedAt: new Date().toISOString(),
             })
           } else {
@@ -191,13 +211,14 @@ export function createUpdaterService(
     if (!availableVersion) return failure('No update is ready to download.')
 
     const releaseNotes = state.releaseNotes
+    const severity = state.severity
     downloadPromise = (async () => {
-      setState({ status: 'downloading', currentVersion, availableVersion, releaseNotes, percent: 0 })
+      setState({ status: 'downloading', currentVersion, availableVersion, releaseNotes, severity, percent: 0 })
       try {
         await client.downloadUpdate()
         if (state.status === 'error') return failure(state.message ?? 'Update download failed.')
         if (state.status === 'downloading') {
-          setState({ status: 'downloaded', currentVersion, availableVersion, releaseNotes, percent: 100 })
+          setState({ status: 'downloaded', currentVersion, availableVersion, releaseNotes, severity, percent: 100 })
         }
         return success()
       } catch (error) {

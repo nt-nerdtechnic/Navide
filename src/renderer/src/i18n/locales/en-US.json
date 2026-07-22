@@ -949,7 +949,11 @@
     "release-notes": "Release notes",
     "error": "Update error: {message}",
     "unsupported": "Automatic updates aren't available in this build.",
-    "new-version-toast": "Agent-Team v{version} is available"
+    "new-version-toast": "Agent-Team v{version} is available",
+    "major-update-title": "Update available",
+    "major-update-body": "Agent-Team v{version} is available (you're on v{current}). Download it now?",
+    "download-now": "Download update",
+    "later": "Later"
   },
   "preview": {
     "binary-file": "Binary file",

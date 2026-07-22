@@ -27,7 +27,9 @@ function publishState(state: UpdateState): void {
   // without user action when enabled. download() is idempotent and only
   // proceeds from the 'available'/'error' states, so it self-guards against
   // double-download once it has moved the state to 'downloading'.
-  if (state.status === 'available' && settings?.autoDownload) {
+  // Only patch releases download silently; minor/major updates stay at
+  // 'available' so the renderer can ask the user first.
+  if (state.status === 'available' && state.severity === 'patch' && settings?.autoDownload) {
     queueMicrotask(() => { void service?.download() })
   }
 }
@@ -82,9 +84,11 @@ export function initUpdater(options: {
         applyChannel(settings)
         if (settings.autoCheck) startPeriodicCheck()
         else stopPeriodicCheck()
-        // If auto-download was just enabled and an update is already waiting,
-        // start it now rather than waiting for the next check.
-        if (settings.autoDownload && service!.getState().status === 'available') {
+        // If auto-download was just enabled and a patch update is already
+        // waiting, start it now rather than waiting for the next check.
+        // Minor/major updates always wait for the user's decision.
+        const current = service!.getState()
+        if (settings.autoDownload && current.status === 'available' && current.severity === 'patch') {
           queueMicrotask(() => { void service?.download() })
         }
       }

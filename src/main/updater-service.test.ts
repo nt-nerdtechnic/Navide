@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createUpdaterService, type UpdaterClient } from './updater-service'
+import { computeUpdateSeverity, createUpdaterService, type UpdaterClient } from './updater-service'
 import type { UpdateState } from '../shared/updater'
 
 type Listener = (...args: never[]) => void
@@ -21,6 +21,24 @@ function fakeClient() {
   }
   return { client: client as unknown as UpdaterClient, raw: client, emit }
 }
+
+describe('computeUpdateSeverity', () => {
+  it('classifies patch, minor, and major version jumps', () => {
+    expect(computeUpdateSeverity('1.2.3', '1.2.4')).toBe('patch')
+    expect(computeUpdateSeverity('1.2.3', '1.3.0')).toBe('minor')
+    expect(computeUpdateSeverity('1.2.3', '2.0.0')).toBe('major')
+  })
+
+  it('tolerates a leading v prefix', () => {
+    expect(computeUpdateSeverity('v1.2.3', 'v1.2.9')).toBe('patch')
+  })
+
+  it('treats unparsable versions as major so the user is asked', () => {
+    expect(computeUpdateSeverity('garbage', '1.2.4')).toBe('major')
+    expect(computeUpdateSeverity('1.2.3', 'nightly')).toBe('major')
+    expect(computeUpdateSeverity('', '')).toBe('major')
+  })
+})
 
 describe('createUpdaterService', () => {
   it('reports dev builds as unsupported without contacting a provider', async () => {
@@ -61,12 +79,12 @@ describe('createUpdaterService', () => {
     expect(raw.downloadUpdate).toHaveBeenCalledOnce()
     emit('download-progress', { percent: 42.4 })
     expect(service.getState()).toMatchObject({
-      status: 'downloading', availableVersion: '1.1.0', percent: 42,
+      status: 'downloading', availableVersion: '1.1.0', percent: 42, severity: 'minor',
     })
     emit('update-downloaded', { version: '1.1.0' })
     resolveDownload([])
     expect((await download).ok).toBe(true)
-    expect(service.getState().status).toBe('downloaded')
+    expect(service.getState()).toMatchObject({ status: 'downloaded', severity: 'minor' })
   })
 
   it('only installs a downloaded update', () => {

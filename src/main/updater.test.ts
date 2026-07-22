@@ -100,12 +100,28 @@ describe('initUpdater lifecycle', () => {
     expect(h.autoUpdater.checkForUpdates).not.toHaveBeenCalled()
   })
 
-  it('auto-downloads when an update becomes available and autoDownload is on', async () => {
+  it('auto-downloads a patch update when autoDownload is on', async () => {
+    const initUpdater = await loadInitUpdater()
+    initUpdater({ enabled: true, currentVersion: '1.0.0' })
+
+    emit('update-available', { version: '1.0.1' })
+    await flush()
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not auto-download minor or major updates even with autoDownload on', async () => {
     const initUpdater = await loadInitUpdater()
     initUpdater({ enabled: true, currentVersion: '1.0.0' })
 
     emit('update-available', { version: '1.1.0' })
     await flush()
+    emit('update-available', { version: '2.0.0' })
+    await flush()
+    expect(h.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+
+    // The user can still start the download explicitly for any severity.
+    const download = h.ipcHandlers.get('updater:download')!
+    await download()
     expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
   })
 
@@ -118,9 +134,31 @@ describe('initUpdater lifecycle', () => {
     expect(result.ok).toBe(true)
     expect(result.settings.autoDownload).toBe(false)
 
-    emit('update-available', { version: '1.1.0' })
+    emit('update-available', { version: '1.0.1' })
     await flush()
     expect(h.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+  })
+
+  it('starts a waiting patch download when autoDownload is re-enabled, but not a major one', async () => {
+    const initUpdater = await loadInitUpdater()
+    initUpdater({ enabled: true, currentVersion: '1.0.0' })
+
+    const setSettings = h.ipcHandlers.get('updater:set-settings')!
+    await setSettings({}, { autoDownload: false } as Partial<UpdaterSettings>)
+
+    emit('update-available', { version: '2.0.0' })
+    await flush()
+    await setSettings({}, { autoDownload: true } as Partial<UpdaterSettings>)
+    await flush()
+    expect(h.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+
+    await setSettings({}, { autoDownload: false } as Partial<UpdaterSettings>)
+    emit('update-available', { version: '1.0.1' })
+    await flush()
+    expect(h.autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+    await setSettings({}, { autoDownload: true } as Partial<UpdaterSettings>)
+    await flush()
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
   })
 
   it('persists channel changes and re-applies them to autoUpdater', async () => {

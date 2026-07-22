@@ -9,6 +9,8 @@ export type UpdateStatus =
   | 'not-available'
   | 'error'
 
+export type UpdateSeverity = 'patch' | 'minor' | 'major'
+
 export interface UpdateState {
   status: UpdateStatus
   currentVersion: string
@@ -17,6 +19,7 @@ export interface UpdateState {
   message?: string
   checkedAt?: string
   releaseNotes?: string
+  severity?: UpdateSeverity
 }
 
 export interface UpdateActionResult {
