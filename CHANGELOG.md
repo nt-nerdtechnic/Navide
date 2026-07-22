@@ -4,6 +4,41 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.52] — 2026-07-23 — signed release
+
+### Changed
+
+- Move the update controls (version, check for updates, auto-check/auto-download, release channel, and release notes) into their own **Updates** tab in Settings.
+- The status-bar "close all" now acts on a single click with a confirmation dialog, replacing the double-click-to-arm gesture and its hint.
+
+### Distribution note
+
+- Signed with a Developer ID and notarized by Apple; published as a stable release eligible for the in-app updater.
+
+## [0.1.51] — 2026-07-22 — signed release
+
+### Added
+
+- In-app update experience: full updater lifecycle and UX (check, download, restart, and release channel selection).
+- Agent History: search filter plus history filtering and grouping.
+- Spawn history tracking for panes.
+- Plans: archive without deleting, approve directly from a draft, per-plan file path in the sidebar list, and section collapse in the editor.
+- Store backup and forward-migration when the app version changes.
+- Log-reader parsing, terminal cursor shortcuts, and keybinding/completion improvements.
+- Dynamic latest-release badges in the READMEs.
+
+### Fixed
+
+- Keep the selected layout mode when only a single pane is visible.
+- Propagate pane renames to peer windows and autofocus the rename input.
+- Reap a killed child process on timeout; serialize git fetch per repository.
+
+## [0.1.50] — 2026-07-21 — signed release
+
+### Changed
+
+- First **signed and notarized** stable release. Same feature set as the v0.1.49 preview, now built with a Developer ID certificate and Apple notarization and eligible for the in-app updater. Establishes the signed release pipeline.
+
 ## [0.1.49] — 2026-07-21 — unsigned preview
 
 ### Added
