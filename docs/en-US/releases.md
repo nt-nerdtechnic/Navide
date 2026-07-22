@@ -1,6 +1,6 @@
 # Versioning and In-App Releases
 
-> **Current distribution status:** v0.1.47 is the latest explicitly labeled unsigned macOS arm64 preview prerelease. It provides direct GitHub downloads but is not an official signed/notarized stable release and is not selected by the stable updater channel. A future signed release must use a higher version.
+> **Current distribution status:** v0.1.50 is the latest signed and notarized macOS arm64 stable release, built and published by GitHub Actions and eligible for the in-app updater. (v0.1.49 was a one-off manual unsigned preview published while the signing key was being set up; v0.1.26–v0.1.48 were unsigned previews.) Every stable release from v0.1.50 onward goes through the signed workflow described below.
 
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
@@ -51,28 +51,38 @@ an official release:
 4. Create an active tag ruleset under **Settings → Rules → Rulesets** for
    `v*.*.*`; restrict tag creation and put only the release-maintainer team in
    its bypass list.
-5. Store the Apple credentials listed below as `production` Environment
-   secrets. Remove repository-level copies so no job can read them without the
-   Environment approval gate.
+5. Store the five signing/notarization secrets listed below. They are
+   **currently repository secrets** on `nt-nerdtechnic/Navide` (readable by the
+   `production` Environment job); moving them into the protected Environment and
+   removing the repository copies is a recommended hardening step.
 
-The release workflow declares the `production` Environment. A tag push can
-start the workflow, but the signing job cannot access its protected secrets or
-publish until an authorized reviewer approves it.
+The release workflow declares the `production` Environment. A tag push starts
+the workflow; if required reviewers are configured, the signing/publish job
+waits for approval.
 
-Add these secrets to the protected `production` Environment:
+The workflow reads these secrets (matching `.github/workflows/release.yml`):
 
-| `production` Environment secret | Value |
+| Secret | Value |
 | --- | --- |
-| `MAC_CSC_LINK` | Base64-encoded Developer ID Application `.p12` certificate |
-| `MAC_CSC_KEY_PASSWORD` | Password used when exporting that certificate |
-| `APPLE_API_KEY_BASE64` | Base64-encoded App Store Connect `.p8` API private key |
-| `APPLE_API_KEY_ID` | App Store Connect API key ID |
-| `APPLE_API_ISSUER` | App Store Connect API issuer ID |
+| `CSC_LINK` | Base64-encoded Developer ID Application `.p12` (**legacy** format) |
+| `CSC_KEY_PASSWORD` | Password for that `.p12` |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_TEAM_ID` | Developer Team ID (`Q5988V8U8D`) |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from account.apple.com |
 
-The release job deliberately uses `forceCodeSigning=true`: missing or invalid
-credentials fail the release instead of silently shipping an app that cannot
-update. Secrets are never required for local development and must never be
-committed.
+The first two sign the app; the last three notarize it (`mac.notarize: true` in
+`package.json`). The certificate, private key, password, and the exact commands
+to (re)generate the `.p12` and (re)apply the secrets live **outside the repo**
+in `~/navide-signing/` — see that folder's `README.md`, and run its
+`./set-secrets.sh` to reset `CSC_LINK` / `CSC_KEY_PASSWORD` (add `--dry-run` to
+also trigger a signing test run). The `.p12` must use OpenSSL's `-legacy`
+format or CI's `security import` fails with a misleading "MAC verification
+failed … (wrong password?)".
+
+Missing or invalid credentials fail the release at the **signature &
+notarization verify step** (`codesign` / `spctl` / `stapler`) instead of
+silently shipping an app that cannot update. Secrets are never required for
+local development and must never be committed.
 
 ## Creating a release
 
