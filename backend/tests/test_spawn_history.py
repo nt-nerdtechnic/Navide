@@ -331,3 +331,283 @@ async def test_get_spawn_history_handler_returns_canonical_workspace_path(
     resp = session.websocket.sent[0]  # type: ignore[attr-defined]
     assert resp["payload"]["canonical_workspace_path"] == str(real.resolve())
     assert [e["paneId"] for e in resp["payload"]["entries"]] == ["p1"]
+
+
+# ── patch_entry ──────────────────────────────────────────────────────────────
+
+
+def test_patch_entry_sets_and_removes_fields(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("p1"), _entry("p2")])
+    assert store.patch_entry(str(tmp_path), "p1", {"customName": "Renamed"})
+    assert _stored_entries(store, tmp_path)[0]["customName"] == "Renamed"
+    # A None value removes the key (customName reset).
+    assert store.patch_entry(str(tmp_path), "p1", {"customName": None})
+    entries = _stored_entries(store, tmp_path)
+    assert "customName" not in entries[0]
+    assert [e["paneId"] for e in entries] == ["p1", "p2"]
+
+
+def test_patch_entry_unknown_pane_id_writes_nothing(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("p1")])
+    before = store.history_file(str(tmp_path)).read_text(encoding="utf-8")
+    assert not store.patch_entry(str(tmp_path), "ghost", {"customName": "X"})
+    assert store.history_file(str(tmp_path)).read_text(encoding="utf-8") == before
+
+
+def test_patch_entry_seeds_migration_from_mirror(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    assert store.patch_entry(
+        str(tmp_path), "m1", {"customName": "Renamed"}, seed=[_entry("m1")]
+    )
+    assert _stored_entries(store, tmp_path)[0]["customName"] == "Renamed"
+
+
+# ── delete_entries ───────────────────────────────────────────────────────────
+
+
+def test_delete_entries_ids_mode_ignores_unknown_ids(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("p0"), _entry("p1"), _entry("p2")])
+    deleted, total = store.delete_entries(
+        str(tmp_path), mode="ids", pane_ids=["p1", "ghost"]
+    )
+    assert deleted == ["p1"]
+    assert total == 2
+    assert [e["paneId"] for e in _stored_entries(store, tmp_path)] == ["p0", "p2"]
+
+
+def test_delete_entries_removed_mode_keeps_active(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [
+        _entry("active"),
+        _entry("gone-1", removedAt="2026-07-01T00:00:00Z"),
+        _entry("gone-2", removedAt="2026-07-02T00:00:00Z"),
+    ])
+    deleted, total = store.delete_entries(str(tmp_path), mode="removed")
+    assert deleted == ["gone-1", "gone-2"]
+    assert total == 1
+    assert [e["paneId"] for e in _stored_entries(store, tmp_path)] == ["active"]
+
+
+def test_delete_entries_older_than_boundary(tmp_path: Path) -> None:
+    """Strictly before the cutoff; exact-cutoff, active, and unparseable
+    spawnedAt entries all survive."""
+    store = SpawnHistoryStore()
+    cutoff = "2026-07-15T00:00:00Z"
+    store.merge(str(tmp_path), [
+        _entry("old-removed", spawnedAt="2026-07-14T23:59:59Z", removedAt="2026-07-14T23:59:59Z"),
+        _entry("at-cutoff", spawnedAt=cutoff, removedAt=cutoff),
+        _entry("new-removed", spawnedAt="2026-07-16T00:00:00Z", removedAt="2026-07-16T00:00:00Z"),
+        _entry("old-active", spawnedAt="2026-07-01T00:00:00Z"),
+        _entry("bad-ts", spawnedAt="not-a-date", removedAt="2026-07-01T00:00:00Z"),
+    ])
+    deleted, total = store.delete_entries(
+        str(tmp_path), mode="older_than", cutoff_iso=cutoff
+    )
+    assert deleted == ["old-removed"]
+    assert total == 4
+    assert [e["paneId"] for e in _stored_entries(store, tmp_path)] == [
+        "at-cutoff", "new-removed", "old-active", "bad-ts",
+    ]
+
+
+def test_delete_entries_unknown_mode_and_empty_store_are_safe(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    # Empty store: nothing deleted and no file created.
+    deleted, total = store.delete_entries(str(tmp_path), mode="removed")
+    assert (deleted, total) == ([], 0)
+    assert not store.history_file(str(tmp_path)).exists()
+    store.merge(str(tmp_path), [_entry("p1", removedAt="2026-07-01T00:00:00Z")])
+    deleted, total = store.delete_entries(str(tmp_path), mode="bogus")
+    assert (deleted, total) == ([], 1)
+
+
+def test_delete_entries_other_workspace_untouched(tmp_path: Path) -> None:
+    """Deletion is per-workspace-store: the same pane id in another
+    workspace's file is never affected."""
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    store = SpawnHistoryStore()
+    store.merge(str(ws_a), [_entry("shared-id", workspacePath=str(ws_a))])
+    store.merge(str(ws_b), [_entry("shared-id", workspacePath=str(ws_b))])
+    deleted, _ = store.delete_entries(str(ws_a), mode="ids", pane_ids=["shared-id"])
+    assert deleted == ["shared-id"]
+    assert [e["paneId"] for e in _stored_entries(store, ws_b)] == ["shared-id"]
+
+
+def test_delete_entries_via_symlink_alias_hits_the_shared_store(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    store = SpawnHistoryStore()
+    store.merge(str(real), [_entry("p1", removedAt="2026-07-01T00:00:00Z")])
+    deleted, total = store.delete_entries(str(alias), mode="removed")
+    assert deleted == ["p1"]
+    assert total == 0
+    assert _stored_entries(store, real) == []
+
+
+# ── project.delete_spawn_history / project.rename_spawn_history handlers ────
+
+
+async def test_delete_spawn_history_handler_syncs_mirror_and_broadcasts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    mirror = [
+        _entry("p0", workspacePath=str(tmp_path)),
+        _entry("p1", workspacePath=str(tmp_path), removedAt="2026-07-01T00:00:00Z"),
+        _entry("p2", workspacePath=str(tmp_path)),
+    ]
+    store.set_ui_state(str(tmp_path), spawn_history=mirror)
+    monkeypatch.setattr(app, "project_store", store)
+
+    events: list[dict[str, Any]] = []
+
+    async def capture(event: dict[str, Any], exclude: Any = None) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", capture)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.delete_spawn_history")
+    assert fn is not None
+    await fn(session, "m1", "project.delete_spawn_history", {
+        "workspace_path": str(tmp_path),
+        "mode": "removed",
+    })
+
+    resp = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert resp["payload"] == {"deleted": 1, "total": 2}
+    # Full store (seeded from the mirror) and mirror both lost p1.
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert [e["paneId"] for e in stored] == ["p0", "p2"]
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert [e["paneId"] for e in fresh.ui_spawn_history or []] == ["p0", "p2"]
+    # Peers got the updated mirror over the existing ui_state_changed channel.
+    assert len(events) == 1
+    assert events[0]["type"] == "project.ui_state_changed"
+    assert [e["paneId"] for e in events[0]["payload"]["spawn_history"]] == ["p0", "p2"]
+
+
+async def test_delete_spawn_history_handler_rejects_bad_requests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    monkeypatch.setattr(app, "project_store", store)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.delete_spawn_history")
+    assert fn is not None
+    for bad in (
+        {"mode": "bogus"},
+        {"mode": "ids", "pane_ids": []},
+        {"mode": "older_than"},
+    ):
+        await fn(session, "m1", "project.delete_spawn_history", {
+            "workspace_path": str(tmp_path), **bad,
+        })
+    for resp in session.websocket.sent:  # type: ignore[attr-defined]
+        assert resp["ok"] is False
+        assert resp["error"]["code"] == "BAD_REQUEST"
+
+
+async def test_rename_spawn_history_handler_patches_store_and_mirror(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    # Full store holds an old entry the 100-entry mirror no longer carries.
+    app.spawn_history_store.merge(str(tmp_path), [
+        _entry("p-old", workspacePath=str(tmp_path)),
+        _entry("p1", workspacePath=str(tmp_path)),
+    ])
+    store.set_ui_state(
+        str(tmp_path), spawn_history=[_entry("p1", workspacePath=str(tmp_path))]
+    )
+    monkeypatch.setattr(app, "project_store", store)
+
+    events: list[dict[str, Any]] = []
+
+    async def capture(event: dict[str, Any], exclude: Any = None) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", capture)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.rename_spawn_history")
+    assert fn is not None
+
+    # Beyond-mirror entry: full store patched, no mirror change → no broadcast.
+    await fn(session, "m1", "project.rename_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p-old", "custom_name": "Oldie",
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert stored[0]["customName"] == "Oldie"
+    assert events == []
+
+    # Mirror entry: both layers patched + mirror broadcast to peers.
+    await fn(session, "m2", "project.rename_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "custom_name": "Newie",
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert stored[1]["customName"] == "Newie"
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert (fresh.ui_spawn_history or [])[0]["customName"] == "Newie"
+    assert len(events) == 1
+    assert events[0]["type"] == "project.ui_state_changed"
+
+    # Empty custom_name resets the name in the full store.
+    await fn(session, "m3", "project.rename_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p-old", "custom_name": "",
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert "customName" not in stored[0]
+
+
+async def test_rename_pane_handler_patches_full_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A live-pane rename must reach spawn-history.json at the source, not
+    only via the renderer's debounced snapshot merge."""
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    store.set_ui_state(
+        str(tmp_path), spawn_history=[_entry("p1", workspacePath=str(tmp_path))]
+    )
+    app.spawn_history_store.merge(
+        str(tmp_path), [_entry("p1", workspacePath=str(tmp_path))]
+    )
+    monkeypatch.setattr(app, "project_store", store)
+
+    async def no_broadcast(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(app, "broadcast", no_broadcast)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.rename_pane")
+    assert fn is not None
+    await fn(session, "m1", "project.rename_pane", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "custom_name": "Live name",
+    })
+
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert stored[0]["customName"] == "Live name"

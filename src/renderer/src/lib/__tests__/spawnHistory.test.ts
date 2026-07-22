@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  countHistoryCleanupEntries,
   entryBelongsToWorkspace,
   filterHistoryEntries,
   filterWorkspaceEntries,
   formatTerminalExit,
   groupHistoryByDay,
+  historyCleanupCutoffIso,
+  historyCleanupMatches,
   historyEntryLabel,
   isTerminalCrashLoopOpen,
   legacyHistoryLogPath,
@@ -364,5 +367,47 @@ describe('workspace isolation filter', () => {
       { paneId: 'd' } as { paneId: string; workspacePath?: string },
     ]
     expect(filterWorkspaceEntries(entries, workspace).map((e) => e.paneId)).toEqual(['a', 'b'])
+  })
+})
+
+describe('history cleanup helpers', () => {
+  const now = new Date('2026-07-22T12:00:00Z')
+
+  it('computes the cutoff N days before now as an ISO string', () => {
+    expect(historyCleanupCutoffIso(now)).toBe('2026-07-15T12:00:00.000Z')
+    expect(historyCleanupCutoffIso(now, 1)).toBe('2026-07-21T12:00:00.000Z')
+  })
+
+  it('removed mode matches only entries with a removedAt', () => {
+    expect(historyCleanupMatches({ removedAt: '2026-07-20T00:00:00Z' }, 'removed')).toBe(true)
+    expect(historyCleanupMatches({}, 'removed')).toBe(false)
+    expect(historyCleanupMatches({ spawnedAt: '2026-01-01T00:00:00Z' }, 'removed')).toBe(false)
+  })
+
+  it('older_than matches removed entries spawned strictly before the cutoff', () => {
+    const cutoff = historyCleanupCutoffIso(now)
+    const removed = { removedAt: '2026-07-20T00:00:00Z' }
+    expect(historyCleanupMatches({ ...removed, spawnedAt: '2026-07-15T11:59:59Z' }, 'older_than', cutoff)).toBe(true)
+    // Exactly at the cutoff → kept (strict comparison, mirrors the backend).
+    expect(historyCleanupMatches({ ...removed, spawnedAt: '2026-07-15T12:00:00.000Z' }, 'older_than', cutoff)).toBe(false)
+    expect(historyCleanupMatches({ ...removed, spawnedAt: '2026-07-16T00:00:00Z' }, 'older_than', cutoff)).toBe(false)
+    // Active entries are never bulk-cleaned, no matter how old.
+    expect(historyCleanupMatches({ spawnedAt: '2026-01-01T00:00:00Z' }, 'older_than', cutoff)).toBe(false)
+    // Missing or unparseable spawnedAt → kept.
+    expect(historyCleanupMatches({ ...removed }, 'older_than', cutoff)).toBe(false)
+    expect(historyCleanupMatches({ ...removed, spawnedAt: 'not-a-date' }, 'older_than', cutoff)).toBe(false)
+    // Missing cutoff → nothing matches.
+    expect(historyCleanupMatches({ ...removed, spawnedAt: '2026-01-01T00:00:00Z' }, 'older_than')).toBe(false)
+  })
+
+  it('countHistoryCleanupEntries tallies matches per mode', () => {
+    const cutoff = historyCleanupCutoffIso(now)
+    const entries = [
+      { spawnedAt: '2026-07-01T00:00:00Z', removedAt: '2026-07-02T00:00:00Z' },
+      { spawnedAt: '2026-07-21T00:00:00Z', removedAt: '2026-07-21T01:00:00Z' },
+      { spawnedAt: '2026-07-01T00:00:00Z' },
+    ]
+    expect(countHistoryCleanupEntries(entries, 'removed')).toBe(2)
+    expect(countHistoryCleanupEntries(entries, 'older_than', cutoff)).toBe(1)
   })
 })

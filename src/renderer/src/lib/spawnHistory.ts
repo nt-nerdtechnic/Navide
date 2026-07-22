@@ -139,6 +139,40 @@ export function groupHistoryByDay<T extends { spawnedAt?: string }>(
     .map((key) => ({ key, entries: buckets[key] }))
 }
 
+export type HistoryCleanupMode = 'removed' | 'older_than'
+
+export const HISTORY_CLEANUP_DAYS = 7
+
+/** ISO cutoff for the "older than" cleanup: `days` before `now`. */
+export function historyCleanupCutoffIso(now: Date, days = HISTORY_CLEANUP_DAYS): string {
+  return new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString()
+}
+
+/** True when a cleanup of `mode` would delete this entry. Mirrors the
+ *  backend predicate (SpawnHistoryStore.delete_entries): only removed
+ *  entries are ever bulk-cleaned; 'older_than' additionally requires a
+ *  parseable spawnedAt strictly before the cutoff. */
+export function historyCleanupMatches(
+  entry: { removedAt?: string; spawnedAt?: string },
+  mode: HistoryCleanupMode,
+  cutoffIso?: string
+): boolean {
+  if (!entry.removedAt) return false
+  if (mode === 'removed') return true
+  if (!cutoffIso || !entry.spawnedAt) return false
+  const spawned = new Date(entry.spawnedAt).getTime()
+  const cutoff = new Date(cutoffIso).getTime()
+  return !Number.isNaN(spawned) && !Number.isNaN(cutoff) && spawned < cutoff
+}
+
+export function countHistoryCleanupEntries(
+  entries: { removedAt?: string; spawnedAt?: string }[],
+  mode: HistoryCleanupMode,
+  cutoffIso?: string
+): number {
+  return entries.filter((entry) => historyCleanupMatches(entry, mode, cutoffIso)).length
+}
+
 export function updateHistoryCustomName(
   entries: HistoryTitleEntry[],
   identity: string | HistoryTitleIdentity,

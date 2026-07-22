@@ -3050,6 +3050,17 @@ async def project_rename_pane(session: "Session", msg_id: str, msg_type: str, pa
         project = app.project_store.rename_pane(
             ws_raw, pane_id=pane_id, custom_name=custom_name
         )
+        # Patch the full store (spawn-history.json) at the source too: the
+        # renderer's debounced snapshot merge also carries the rename, but it
+        # can be lost on quit and never runs in detached windows.
+        if project is not None:
+            await asyncio.to_thread(
+                app.spawn_history_store.patch_entry,
+                ws_raw,
+                pane_id,
+                {"customName": custom_name or None},
+                seed=project.ui_spawn_history,
+            )
         # rename_pane() patches the persisted history mirror; push it to
         # peer windows so their in-memory copies (and later snapshots)
         # don't clobber the rename with stale entries. renamed_pane lets
@@ -3067,6 +3078,122 @@ async def project_rename_pane(session: "Session", msg_id: str, msg_type: str, pa
                 exclude=session,
             )
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
+@handler("project.rename_spawn_history")
+async def project_rename_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Rename a spawn-history entry whose pane no longer exists.
+
+    Unlike project.rename_pane this never creates a pane record: it patches
+    the full store (spawn-history.json) plus the project.json mirror, then
+    broadcasts the updated mirror so peer windows adopt the new name.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    custom_name = (payload.get("custom_name", "") or "").strip()
+    patched = False
+    if pane_id:
+
+        def _patch():
+            project = app.project_store.peek(ws_raw)
+            seed = project.ui_spawn_history if project is not None else None
+            ok = app.spawn_history_store.patch_entry(
+                ws_raw, pane_id, {"customName": custom_name or None}, seed=seed
+            )
+            # Entries past the mirror's 100-entry window simply aren't there
+            # to patch — rename_history_entry() returns None and no broadcast
+            # is needed (peers can't be showing them from the mirror anyway).
+            mirror_project = app.project_store.rename_history_entry(
+                ws_raw, pane_id=pane_id, custom_name=custom_name
+            )
+            return ok, mirror_project
+
+        patched, project = await asyncio.to_thread(_patch)
+        if project is not None and project.ui_spawn_history is not None:
+            await app.broadcast(
+                make_event(
+                    "project.ui_state_changed",
+                    {
+                        "workspace_path": project.workspace_path,
+                        "spawn_history": project.ui_spawn_history,
+                    },
+                ),
+                exclude=session,
+            )
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "patched": patched})
+    )
+
+
+@handler("project.delete_spawn_history")
+async def project_delete_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Delete spawn-history entries from the full store and the mirror.
+
+    Modes: "ids" (explicit pane_ids), "removed" (every removed entry),
+    "older_than" (removed entries spawned before cutoff_iso). Record-only —
+    a live pane is never killed, only its history entry disappears. Peers
+    get the updated mirror via project.ui_state_changed.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    mode = payload.get("mode")
+    raw_ids = payload.get("pane_ids")
+    pane_ids = (
+        [p for p in raw_ids if isinstance(p, str) and p]
+        if isinstance(raw_ids, list)
+        else []
+    )
+    raw_cutoff = payload.get("cutoff_iso")
+    cutoff_iso = raw_cutoff if isinstance(raw_cutoff, str) and raw_cutoff else None
+    if (
+        mode not in ("ids", "removed", "older_than")
+        or (mode == "ids" and not pane_ids)
+        or (mode == "older_than" and cutoff_iso is None)
+    ):
+        await session.send_json(
+            make_error(
+                msg_id, msg_type, "BAD_REQUEST", "invalid delete_spawn_history request"
+            )
+        )
+        return
+
+    def _delete():
+        project = app.project_store.peek(ws_raw)
+        seed = project.ui_spawn_history if project is not None else None
+        deleted_ids, total = app.spawn_history_store.delete_entries(
+            ws_raw, mode=mode, pane_ids=pane_ids, cutoff_iso=cutoff_iso, seed=seed
+        )
+        # Keep the project.json mirror consistent: drop exactly the entries
+        # the store deleted (the store is a superset of the mirror after the
+        # seed migration above, so filtering by id is complete).
+        if deleted_ids and project is not None and project.ui_spawn_history:
+            gone = set(deleted_ids)
+            mirror = [
+                e
+                for e in project.ui_spawn_history
+                if not (isinstance(e, dict) and e.get("paneId") in gone)
+            ]
+            project = app.project_store.set_ui_state(ws_raw, spawn_history=mirror)
+        return deleted_ids, total, project
+
+    deleted_ids, total, project = await asyncio.to_thread(_delete)
+    if deleted_ids and project is not None:
+        await app.broadcast(
+            make_event(
+                "project.ui_state_changed",
+                {
+                    "workspace_path": project.workspace_path,
+                    "spawn_history": project.ui_spawn_history or [],
+                },
+            ),
+            exclude=session,
+        )
+    await session.send_json(
+        make_response(msg_id, msg_type, {"deleted": len(deleted_ids), "total": total})
+    )
 
 
 @handler("project.set_theme")

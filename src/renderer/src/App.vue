@@ -95,7 +95,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
+import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryCleanupMode, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -785,6 +785,65 @@ async function loadMoreSpawnHistory(): Promise<void> {
   } finally {
     spawnHistoryLoadingMore = false
   }
+}
+
+/** Inline rename from the Agent History detail pane. A live pane goes through
+ *  the normal pane rename flow (project.rename_pane, pane title included);
+ *  removed entries patch the persisted history directly, full store + mirror
+ *  (project.rename_spawn_history). */
+function onRenameHistoryEntry(entry: SpawnHistoryEntry, rawName: string): void {
+  if (!entry.removedAt && panes.value.some((p) => p.id === entry.paneId)) {
+    setPaneCustomName(entry.paneId, rawName)
+    return
+  }
+  const name = rawName.trim()
+  // Same reset rule as setPaneCustomName: empty or default label clears it.
+  const nameToSet = name && name !== entry.agentLabel ? name : undefined
+  updateHistoryCustomName(spawnHistory.value, {
+    paneId: entry.paneId,
+    agentKey: entry.agentKey,
+    sessionId: entry.sessionId,
+    sessionHomeId: entry.sessionHomeId,
+  }, nameToSet)
+  const ws = entry.workspacePath || currentWorkspace.value
+  if (!ws) return
+  backend.send('project.rename_spawn_history', {
+    workspace_path: ws,
+    pane_id: entry.paneId,
+    custom_name: nameToSet ?? '',
+  })
+}
+
+/** Deletes one history record (never kills a pane — the modal only offers
+ *  delete on removed entries). Backend removes it from the full store and
+ *  the project.json mirror; locally we drop it and fix the paging counters. */
+async function onDeleteHistoryEntry(entry: SpawnHistoryEntry): Promise<void> {
+  const ws = currentWorkspace.value
+  if (!ws) return
+  const resp = await sendQuiet<{ deleted: number; total: number }>('project.delete_spawn_history', {
+    workspace_path: ws,
+    mode: 'ids',
+    pane_ids: [entry.paneId],
+  })
+  if (!resp) return
+  spawnHistory.value = spawnHistory.value.filter((e) => e.paneId !== entry.paneId)
+  spawnHistoryTotal.value = resp.total
+  spawnHistoryFetched.value = Math.max(0, spawnHistoryFetched.value - resp.deleted)
+}
+
+/** Bulk cleanup ("clear all removed" / "clear older than 7 days"). Runs over
+ *  the FULL store on the backend — including entries never paged in — so the
+ *  loaded window is re-synced from page 0 afterwards instead of patched
+ *  locally. `[]` (not null) skips hydrate's legacy-localStorage fallback and
+ *  its one-time migration write. */
+async function onCleanupHistory(mode: HistoryCleanupMode, cutoffIso: string): Promise<void> {
+  const ws = currentWorkspace.value
+  if (!ws) return
+  const payload: Record<string, unknown> = { workspace_path: ws, mode }
+  if (mode === 'older_than') payload.cutoff_iso = cutoffIso
+  const resp = await sendQuiet<{ deleted: number; total: number }>('project.delete_spawn_history', payload)
+  if (!resp) return
+  await hydrateSpawnHistory(ws, [])
 }
 
 watch(currentWorkspace, (workspacePath) => {
@@ -2807,9 +2866,15 @@ watch(previewLogOpen, (open) => {
   }
 })
 
-async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
+// Resolve a history entry's log path and read its content. Shared by the
+// inline preview in AgentHistoryModal (passed down as a prop) and the pop-out
+// full-log modal below. Returns null when no log path could be resolved;
+// rejects with a localized message when the log exists but reading fails.
+async function fetchHistoryLog(
+  entry: SpawnHistoryEntry
+): Promise<{ title: string; content: string } | null> {
   const ws = entry.workspacePath || currentWorkspace.value
-  if (!ws) return
+  if (!ws) return null
   const api = (window as Window & { agentTeam?: {
     readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }>
     findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }>
@@ -2825,19 +2890,28 @@ async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
     logPath = found.ok ? found.path ?? undefined : undefined
   }
   if (!logPath) logPath = legacyHistoryLogPath(entry, ws)
-  if (api?.readFileFrom && logPath) {
-    try {
-      const res = await api.readFileFrom(logPath, 0)
-      if (res.ok) {
-        previewLogTitle.value = historyEntryLabel(entry)
-        previewLogContent.value = res.content
-        previewLogOpen.value = true
-      } else {
-        alert(i18n.global.t('label.history-log-read-failed', { path: logPath, error: res.error || '' }))
-      }
-    } catch (e) {
-      alert(i18n.global.t('label.history-log-read-error', { error: String(e) }))
-    }
+  if (!api?.readFileFrom || !logPath) return null
+  let res: { ok: boolean; content: string; error?: string }
+  try {
+    res = await api.readFileFrom(logPath, 0)
+  } catch (e) {
+    throw new Error(i18n.global.t('label.history-log-read-error', { error: String(e) }))
+  }
+  if (!res.ok) {
+    throw new Error(i18n.global.t('label.history-log-read-failed', { path: logPath, error: res.error || '' }))
+  }
+  return { title: historyEntryLabel(entry), content: res.content }
+}
+
+async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
+  try {
+    const log = await fetchHistoryLog(entry)
+    if (!log) return
+    previewLogTitle.value = log.title
+    previewLogContent.value = log.content
+    previewLogOpen.value = true
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -7296,11 +7370,15 @@ function paneIsCommander(p: ActivePane): boolean {
       :preview-content="previewLogContent"
       :history-has-more="spawnHistoryHasMore"
       :load-more-history="loadMoreSpawnHistory"
+      :fetch-history-log="fetchHistoryLog"
       @close="showHistory = false"
       @kill-all="onKillAll"
       @resume="onResumeHistoryAgent"
       @preview="onPreviewHistoryAgent"
       @close-preview="previewLogOpen = false"
+      @rename="onRenameHistoryEntry"
+      @delete="onDeleteHistoryEntry"
+      @cleanup="onCleanupHistory"
     />
     <main
       class="stage"

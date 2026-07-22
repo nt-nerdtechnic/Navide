@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,21 @@ def filter_foreign_entries(
             dropped, workspace_path, context,
         )
     return kept
+
+
+def _parse_entry_timestamp(value: Any) -> datetime | None:
+    """Parse an entry's ISO-8601 timestamp; None when missing/unparseable.
+
+    Naive timestamps are assumed UTC so they stay comparable with the
+    renderer's `toISOString()` cutoffs (always suffixed with Z).
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 class SpawnHistoryStore:
@@ -189,6 +205,93 @@ class SpawnHistoryStore:
                 )
             self._write(workspace_path, stored)
             return len(stored)
+
+    def patch_entry(
+        self,
+        workspace_path: str,
+        pane_id: str,
+        fields: dict[str, Any],
+        *,
+        seed: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        """Patch one stored entry in place (atomic rewrite).
+
+        A ``None`` value removes the key (e.g. resetting a customName); any
+        other value is set. Returns False — and writes nothing — when no
+        entry matches ``pane_id``. ``seed`` mirrors merge()/read_page(): a
+        missing file is first migrated from the project.json mirror so
+        pre-store projects can still be patched.
+        """
+        with self._lock:
+            stored = self._load(workspace_path, seed)
+            target = next(
+                (e for e in stored if e.get("paneId") == pane_id), None
+            )
+            if target is None:
+                return False
+            for key, value in fields.items():
+                if value is None:
+                    target.pop(key, None)
+                else:
+                    target[key] = value
+            self._write(workspace_path, stored)
+            return True
+
+    def delete_entries(
+        self,
+        workspace_path: str,
+        *,
+        mode: str,
+        pane_ids: list[str] | None = None,
+        cutoff_iso: str | None = None,
+        seed: list[dict[str, Any]] | None = None,
+    ) -> tuple[list[str], int]:
+        """Delete entries from the full store; returns (deleted ids, total left).
+
+        Modes:
+        - ``"ids"``: entries whose paneId is in ``pane_ids`` (record-only —
+          live panes are never touched, only their history entry goes).
+        - ``"removed"``: every entry carrying a ``removedAt`` timestamp.
+        - ``"older_than"``: removed entries whose ``spawnedAt`` is strictly
+          before ``cutoff_iso``. Active entries and entries without a
+          parseable spawnedAt are kept — bulk cleanup never deletes the
+          record of something that may still be running.
+
+        Unknown mode deletes nothing. The rewrite is atomic (tmp +
+        os.replace) and skipped entirely when nothing matched. Each
+        workspace's file is keyed by its canonical path, so entries of other
+        workspaces are never affected. ``seed`` mirrors read_page(): a
+        missing file is first migrated from the project.json mirror so the
+        deletion also covers pre-store entries.
+        """
+        ids = {p for p in pane_ids or [] if isinstance(p, str) and p}
+        cutoff = _parse_entry_timestamp(cutoff_iso)
+
+        def doomed(entry: dict[str, Any]) -> bool:
+            if mode == "ids":
+                return entry.get("paneId") in ids
+            if mode == "removed":
+                return bool(entry.get("removedAt"))
+            if mode == "older_than":
+                if not entry.get("removedAt") or cutoff is None:
+                    return False
+                spawned = _parse_entry_timestamp(entry.get("spawnedAt"))
+                return spawned is not None and spawned < cutoff
+            return False
+
+        with self._lock:
+            stored = self._load(workspace_path, seed)
+            kept: list[dict[str, Any]] = []
+            deleted: list[str] = []
+            for entry in stored:
+                if doomed(entry):
+                    pane_id = entry.get("paneId")
+                    deleted.append(pane_id if isinstance(pane_id, str) else "")
+                else:
+                    kept.append(entry)
+            if deleted:
+                self._write(workspace_path, kept)
+            return deleted, len(kept)
 
     def read_page(
         self,

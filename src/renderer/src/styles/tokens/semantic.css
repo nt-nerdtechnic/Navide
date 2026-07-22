@@ -104,4 +104,22 @@
   --syntax-type: var(--yellow-1);     /* #e3b341 */
   --syntax-variable: var(--blue-2);   /* #58a6ff */
   --syntax-invalid: var(--red-3);     /* #f85149 */
+
+  /* ── ANSI 16-color palette (log preview) — GitHub Dark ansi ─ */
+  --ansi-black: #484f58;
+  --ansi-red: #ff7b72;
+  --ansi-green: #3fb950;
+  --ansi-yellow: #d29922;
+  --ansi-blue: #58a6ff;
+  --ansi-magenta: #bc8cff;
+  --ansi-cyan: #39c5cf;
+  --ansi-white: #b1bac4;
+  --ansi-bright-black: #6e7681;
+  --ansi-bright-red: #ffa198;
+  --ansi-bright-green: #56d364;
+  --ansi-bright-yellow: #e3b341;
+  --ansi-bright-blue: #79c0ff;
+  --ansi-bright-magenta: #d2a8ff;
+  --ansi-bright-cyan: #56d4dd;
+  --ansi-bright-white: #f0f6fc;
 }

@@ -679,6 +679,36 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def rename_history_entry(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        custom_name: str,
+    ) -> Project | None:
+        """Patch only the ui_spawn_history mirror's customName for pane_id.
+
+        The history-side companion of rename_pane() for entries whose pane no
+        longer exists — it never creates a pane record. Empty custom_name
+        resets to the default label. Returns None when no project exists or
+        the mirror has no matching entry (nothing was saved).
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        changed = False
+        for entry in project.ui_spawn_history or []:
+            if isinstance(entry, dict) and entry.get("paneId") == pane_id:
+                if custom_name:
+                    entry["customName"] = custom_name
+                else:
+                    entry.pop("customName", None)
+                changed = True
+        if not changed:
+            return None
+        self.save(project)
+        return project
+
     def record_manual_pane_session(
         self,
         workspace_path: str,
