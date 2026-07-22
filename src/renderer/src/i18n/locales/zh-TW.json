@@ -52,7 +52,7 @@
       "review-notes": "審查留言",
       "review-unresolved": "{count} 則未解決",
       "review-approve": "核准",
-      "review-approve-hint": "須為審查中且所有留言皆已解決",
+      "review-approve-hint": "須為草稿或審查中，且所有留言皆已解決",
       "review-resolve": "解決",
       "review-resolved": "已解決",
       "review-empty": "尚無審查留言",

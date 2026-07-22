@@ -52,7 +52,7 @@
       "review-notes": "Review Notes",
       "review-unresolved": "{count} unresolved",
       "review-approve": "Approve",
-      "review-approve-hint": "Requires in-review stage with all notes resolved",
+      "review-approve-hint": "Requires draft or in-review stage with all notes resolved",
       "review-resolve": "Resolve",
       "review-resolved": "Resolved",
       "review-empty": "No review notes yet",

@@ -149,7 +149,13 @@ watch(
 
 const progress = computed(() => htmlPlanProgress(meta.value?.todos ?? []))
 const unresolvedCount = computed(() => (meta.value?.reviewNotes ?? []).filter((n) => !n.resolved).length)
-const canApprove = computed(() => meta.value?.stage === 'in-review' && unresolvedCount.value === 0)
+// Approve is reachable from draft as well as in-review. The toolbar has no
+// draft→in-review transition, so gating approval on in-review alone left every
+// freshly-created draft plan permanently un-approvable; draft now skips straight
+// to approved (still requiring all review notes resolved).
+const canApprove = computed(
+  () => (meta.value?.stage === 'draft' || meta.value?.stage === 'in-review') && unresolvedCount.value === 0
+)
 // Outline entries (section h2 / phase-head leading text) for the nav dropdown.
 const outline = computed(() => props.store.outline(rawContent.value))
 
@@ -210,7 +216,7 @@ async function writeMeta(
 async function approve(): Promise<void> {
   if (!meta.value || !canApprove.value || saving.value) return
   await writeMeta((fresh) => {
-    if (fresh.stage !== 'in-review' || fresh.reviewNotes.some((n) => !n.resolved)) return null
+    if ((fresh.stage !== 'draft' && fresh.stage !== 'in-review') || fresh.reviewNotes.some((n) => !n.resolved)) return null
     return { ...fresh, stage: 'approved', approvedAt: new Date().toISOString() }
   })
 }

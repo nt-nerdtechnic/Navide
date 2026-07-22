@@ -234,10 +234,24 @@ describe('PlanReviewToolbar – approve gating', () => {
     expect(wrapper.find('.prt-approve').attributes('disabled')).toBeDefined()
   })
 
-  it('disables Approve when stage is not in-review', async () => {
-    const meta = baseMeta({ stage: 'draft' })
+  it('disables Approve once the stage is past review (e.g. in-progress)', async () => {
+    const meta = baseMeta({ stage: 'in-progress' })
     const { wrapper } = await mountToolbar(planDoc(meta))
     expect(wrapper.find('.prt-approve').attributes('disabled')).toBeDefined()
+  })
+
+  it('enables Approve for a draft plan and approves it (no draft→in-review step exists)', async () => {
+    const meta = baseMeta({ stage: 'draft' })
+    const { wrapper, writes } = await mountToolbar(planDoc(meta))
+    const approve = wrapper.find('.prt-approve')
+    expect(approve.attributes('disabled')).toBeUndefined()
+
+    await approve.trigger('click')
+    await flushPromises()
+
+    expect(writes).toHaveLength(1)
+    expect(lastWrittenMeta(writes).stage).toBe('approved')
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--approved')
   })
 
   it('approves an in-review plan with all notes resolved, writing stage and approvedAt', async () => {
@@ -392,19 +406,19 @@ describe('PlanReviewToolbar – read-before-write', () => {
     expect(written.reviewNotes[1]).toMatchObject({ id: 'n6', text: 'New note', author: 'user' })
   })
 
-  it('aborts approve without writing when the fresh file is no longer in-review', async () => {
+  it('aborts approve without writing when the fresh file is no longer approvable', async () => {
     const { wrapper, writes, setContent } = await mountToolbar(planDoc(baseMeta()))
     expect(wrapper.find('.prt-approve').attributes('disabled')).toBeUndefined()
 
-    // External agent moved the plan back to draft after the toolbar's read.
-    setContent(planDoc(baseMeta({ stage: 'draft' })))
+    // External agent moved the plan into in-progress (past review) after the read.
+    setContent(planDoc(baseMeta({ stage: 'in-progress' })))
 
     await wrapper.find('.prt-approve').trigger('click')
     await flushPromises()
 
     expect(writes).toHaveLength(0)
     // The UI refreshed to the fresh state instead of writing.
-    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--draft')
+    expect(wrapper.find('.prt-stage').classes()).toContain('prt-stage--in-progress')
     expect(wrapper.emitted('updated')).toHaveLength(1)
   })
 })
