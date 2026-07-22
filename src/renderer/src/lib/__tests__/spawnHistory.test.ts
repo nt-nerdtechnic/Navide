@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   entryBelongsToWorkspace,
+  filterHistoryEntries,
   filterWorkspaceEntries,
   formatTerminalExit,
+  groupHistoryByDay,
   historyEntryLabel,
   isTerminalCrashLoopOpen,
   legacyHistoryLogPath,
@@ -158,6 +160,95 @@ describe('matchesHistorySearch', () => {
   it('rejects a query that hits no field', () => {
     expect(matchesHistorySearch(searchable, 'backend')).toBe(false)
     expect(matchesHistorySearch(entry(), 'missing')).toBe(false)
+  })
+})
+
+describe('filterHistoryEntries', () => {
+  const entries = [
+    { ...entry({ paneId: 'a', customName: 'Frontend Lead' }), origin: 'manual' as const },
+    { ...entry({ paneId: 'b', agentLabel: 'Codex' }), origin: 'manual' as const, removedAt: '2026-07-21T10:00:00.000Z' },
+    { ...entry({ paneId: 'c', agentLabel: 'Claude Code' }), origin: 'pipeline' as const, removedAt: '2026-07-20T10:00:00.000Z' },
+    { ...entry({ paneId: 'd', agentLabel: 'Claude Code' }), origin: 'pipeline' as const },
+  ]
+
+  it('passes everything through with the all/all/empty filter', () => {
+    expect(filterHistoryEntries(entries, { query: '', status: 'all', origin: 'all' }))
+      .toEqual(entries)
+  })
+
+  it('filters by status: active keeps only entries without removedAt', () => {
+    expect(filterHistoryEntries(entries, { query: '', status: 'active', origin: 'all' })
+      .map((e) => e.paneId)).toEqual(['a', 'd'])
+  })
+
+  it('filters by status: removed keeps only entries with removedAt', () => {
+    expect(filterHistoryEntries(entries, { query: '', status: 'removed', origin: 'all' })
+      .map((e) => e.paneId)).toEqual(['b', 'c'])
+  })
+
+  it('filters by origin', () => {
+    expect(filterHistoryEntries(entries, { query: '', status: 'all', origin: 'manual' })
+      .map((e) => e.paneId)).toEqual(['a', 'b'])
+    expect(filterHistoryEntries(entries, { query: '', status: 'all', origin: 'pipeline' })
+      .map((e) => e.paneId)).toEqual(['c', 'd'])
+  })
+
+  it('combines status, origin, and text query', () => {
+    expect(filterHistoryEntries(entries, { query: 'claude', status: 'active', origin: 'pipeline' })
+      .map((e) => e.paneId)).toEqual(['d'])
+    expect(filterHistoryEntries(entries, { query: 'codex', status: 'active', origin: 'all' }))
+      .toEqual([])
+  })
+})
+
+describe('groupHistoryByDay', () => {
+  // Local-calendar reference point: 2026-07-22 15:30 local time.
+  const now = new Date(2026, 6, 22, 15, 30, 0)
+  const localIso = (d: number, h: number, m = 0): string =>
+    new Date(2026, 6, d, h, m).toISOString()
+
+  it('buckets entries by local calendar day across the midnight boundaries', () => {
+    const groups = groupHistoryByDay([
+      { paneId: 'today-start', spawnedAt: localIso(22, 0) },
+      { paneId: 'yesterday-end', spawnedAt: localIso(21, 23, 59) },
+      { paneId: 'yesterday-start', spawnedAt: localIso(21, 0) },
+      { paneId: 'earlier-end', spawnedAt: localIso(20, 23, 59) },
+    ], now)
+
+    expect(groups.map((g) => g.key)).toEqual(['today', 'yesterday', 'earlier'])
+    expect(groups[0].entries.map((e) => e.paneId)).toEqual(['today-start'])
+    expect(groups[1].entries.map((e) => e.paneId)).toEqual(['yesterday-end', 'yesterday-start'])
+    expect(groups[2].entries.map((e) => e.paneId)).toEqual(['earlier-end'])
+  })
+
+  it('sends missing and unparseable spawnedAt to earlier', () => {
+    const groups = groupHistoryByDay([
+      { paneId: 'none' },
+      { paneId: 'garbage', spawnedAt: 'not-a-date' },
+    ], now)
+
+    expect(groups).toHaveLength(1)
+    expect(groups[0].key).toBe('earlier')
+    expect(groups[0].entries.map((e) => e.paneId)).toEqual(['none', 'garbage'])
+  })
+
+  it('omits empty buckets', () => {
+    const groups = groupHistoryByDay([{ paneId: 'a', spawnedAt: localIso(22, 9) }], now)
+    expect(groups.map((g) => g.key)).toEqual(['today'])
+  })
+
+  it('preserves the input order within each bucket (stable)', () => {
+    const groups = groupHistoryByDay([
+      { paneId: 'n1', spawnedAt: localIso(22, 14) },
+      { paneId: 'n2', spawnedAt: localIso(22, 15) },
+      { paneId: 'n3', spawnedAt: localIso(22, 9) },
+    ], now)
+
+    expect(groups[0].entries.map((e) => e.paneId)).toEqual(['n1', 'n2', 'n3'])
+  })
+
+  it('returns no groups for an empty list', () => {
+    expect(groupHistoryByDay([], now)).toEqual([])
   })
 })
 
