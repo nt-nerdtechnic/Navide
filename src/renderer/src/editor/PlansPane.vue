@@ -203,6 +203,19 @@ const deletablePlans = computed(() =>
   plans.value.filter((p) => p.meta && (p.meta.stage === 'done' || p.meta.stage === 'abandoned'))
 )
 
+// Section collapse — click a group header to fold/unfold its rows. Keyed by
+// 'active' for the doc group and by stage key for the stage groups.
+const collapsedSections = ref<Set<string>>(new Set())
+function toggleSection(key: string): void {
+  const next = new Set(collapsedSections.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  collapsedSections.value = next
+}
+function isSectionCollapsed(key: string): boolean {
+  return collapsedSections.value.has(key)
+}
+
 function openPlan(item: PlanItem): void {
   emit('open-file', { filepath: item.relPath, name: item.name })
 }
@@ -470,60 +483,70 @@ async function ctxUpgradeToPlan(): Promise<void> {
 
     <template v-else>
       <section class="plans-section">
-        <div class="plans-section-head">
-          <span>Active</span>
+        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection('active')">
+          <span class="plans-section-title">
+            <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed('active') }">▾</span>
+            Active
+          </span>
           <span>{{ docItems.length }}</span>
         </div>
-        <button
-          v-for="item in docItems"
-          :key="item.relPath"
-          class="plan-row"
-          @click="openPlan(item)"
-          @contextmenu.prevent="openCtxMenu($event, item)"
-        >
-          <span class="plan-row-name">{{ item.name }}</span>
-          <span class="plan-row-path" :title="item.relPath">{{ item.relPath }}</span>
-          <span class="plan-row-meta">
-            <span>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
-            <span class="plan-chip">doc</span>
-          </span>
-          <span
-            class="plan-row-delete"
-            role="button"
-            :title="t('pane.plans.menu-delete')"
-            @click.stop="deletePlan(item)"
-          >✕</span>
-        </button>
-        <div v-if="!docItems.length" class="plans-empty">No active plans.</div>
+        <template v-if="!isSectionCollapsed('active')">
+          <button
+            v-for="item in docItems"
+            :key="item.relPath"
+            class="plan-row"
+            @click="openPlan(item)"
+            @contextmenu.prevent="openCtxMenu($event, item)"
+          >
+            <span class="plan-row-name">{{ item.name }}</span>
+            <span class="plan-row-path" :title="item.relPath">{{ item.relPath }}</span>
+            <span class="plan-row-meta">
+              <span>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
+              <span class="plan-chip">doc</span>
+            </span>
+            <span
+              class="plan-row-delete"
+              role="button"
+              :title="t('pane.plans.menu-delete')"
+              @click.stop="deletePlan(item)"
+            >✕</span>
+          </button>
+          <div v-if="!docItems.length" class="plans-empty">No active plans.</div>
+        </template>
       </section>
 
       <section v-for="group in stageGroups" :key="group.key" class="plans-section">
-        <div class="plans-section-head">
-          <span>{{ group.label }}</span>
+        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection(group.key)">
+          <span class="plans-section-title">
+            <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed(group.key) }">▾</span>
+            {{ group.label }}
+          </span>
           <span>{{ group.rows.length }}</span>
         </div>
-        <button
-          v-for="row in group.rows"
-          :key="row.item.relPath"
-          class="plan-row"
-          :class="{ 'plan-row--done': group.finished }"
-          @click="openPlan(row.item)"
-          @contextmenu.prevent="openCtxMenu($event, row.item)"
-        >
-          <span class="plan-row-name">{{ row.meta.name }}</span>
-          <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
-          <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
-          <span class="plan-row-meta">
-            <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
-            <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
-          </span>
-          <span
-            class="plan-row-delete"
-            role="button"
-            :title="t('pane.plans.menu-delete')"
-            @click.stop="deletePlan(row.item)"
-          >✕</span>
-        </button>
+        <template v-if="!isSectionCollapsed(group.key)">
+          <button
+            v-for="row in group.rows"
+            :key="row.item.relPath"
+            class="plan-row"
+            :class="{ 'plan-row--done': group.finished }"
+            @click="openPlan(row.item)"
+            @contextmenu.prevent="openCtxMenu($event, row.item)"
+          >
+            <span class="plan-row-name">{{ row.meta.name }}</span>
+            <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
+            <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
+            <span class="plan-row-meta">
+              <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+              <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
+            </span>
+            <span
+              class="plan-row-delete"
+              role="button"
+              :title="t('pane.plans.menu-delete')"
+              @click.stop="deletePlan(row.item)"
+            >✕</span>
+          </button>
+        </template>
       </section>
 
       <section class="plans-section">
@@ -655,6 +678,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
 .plans-section-head {
   align-items: center;
   color: var(--text-muted);
+  cursor: pointer;
   display: flex;
   font-size: 11px;
   font-weight: 700;
@@ -662,6 +686,23 @@ async function ctxUpgradeToPlan(): Promise<void> {
   letter-spacing: 0.05em;
   padding: 0 4px 6px;
   text-transform: uppercase;
+  user-select: none;
+}
+
+.plans-section-title {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+
+.plans-section-chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.12s ease;
+}
+
+.plans-section-chevron.collapsed {
+  transform: rotate(-90deg);
 }
 
 .plan-row {

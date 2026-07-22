@@ -356,6 +356,30 @@ describe('PlansPane', () => {
     expect(path!.attributes('title')).toBe('.agent-team/plans/review_a1b2c3.html')
   })
 
+  it('collapses and expands a section when its header is clicked', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+      })
+    )
+    await flushPromises()
+
+    const rowVisible = (): boolean =>
+      wrapper.findAll('.plan-row').some((r) => r.text().includes('HTML Review Plan'))
+    const inReviewHead = wrapper.findAll('.plans-section-head').find((h) => h.text().includes('In Review'))!
+    expect(inReviewHead).toBeTruthy()
+    expect(rowVisible()).toBe(true)
+
+    await inReviewHead.trigger('click')
+    expect(rowVisible()).toBe(false)
+
+    await inReviewHead.trigger('click')
+    expect(rowVisible()).toBe(true)
+  })
+
   it('surfaces a real .agent-team/plans list error', async () => {
     const wrapper = mountPane(makeBackend({ htmlListError: 'permission denied' }))
     await flushPromises()
