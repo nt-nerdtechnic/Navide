@@ -5,7 +5,7 @@ Design (B — workspace ↔ CLI folder association):
   1. The user registers a workspace by ever telling Agent-Team about its path
      (project.peek / project.upsert / pipeline.start / terminal.create).
      Each workspace records its expected CLI session folders:
-       • Claude  → ~/.claude/projects/<cwd-with-slashes-as-dashes>/
+       • Claude  → ~/.claude/projects/<encoded-cwd>/ (encode_claude_cwd)
        • Codex   → matched by session_meta.cwd at parse time
   2. When a token-usage event arrives, we look up which registered workspace
      the file belongs to. Events outside any registered workspace are dropped
@@ -36,6 +36,7 @@ from typing import Iterable
 
 from ..applog import app_data_dir
 from .base import LogReader, TokenUsage
+from .claude import encode_claude_cwd
 
 log = logging.getLogger("agent_team_backend.log_readers.attribution")
 
@@ -81,10 +82,6 @@ class _PaneRegistration:
     # first session file containing it can be bound to this pane (those CLIs
     # can't pin a session id at launch, unlike Claude's --session-id).
     session_marker: str = ""
-
-
-def _encode_claude_cwd(cwd: str) -> str:
-    return cwd.replace("/", "-")
 
 
 def _extract_resume_id(vendor: str, text: str) -> str:
@@ -177,17 +174,23 @@ class Attribution:
         if not workspace_path:
             return
         with self._lock:
-            if workspace_path in self._workspaces:
-                return
-            mapping = WorkspaceMapping(workspace_path=workspace_path)
+            mapping = self._workspaces.get(workspace_path) or WorkspaceMapping(
+                workspace_path=workspace_path
+            )
 
-            # Claude: project folder name = cwd with all "/" → "-"
+            # Claude: project folder name = encode_claude_cwd(cwd). Recompute
+            # on every (re-)registration so a stale claude_dir persisted by an
+            # older encoder self-corrects the next time the workspace opens.
+            claude_dir = mapping.claude_dir
             if "claude" in self._readers:
-                encoded = _encode_claude_cwd(workspace_path)
+                encoded = encode_claude_cwd(workspace_path)
                 for root in self._readers["claude"].project_dirs():
-                    mapping.claude_dir = str(root / encoded)
+                    claude_dir = str(root / encoded)
                     break
 
+            if workspace_path in self._workspaces and claude_dir == mapping.claude_dir:
+                return
+            mapping.claude_dir = claude_dir
             self._workspaces[workspace_path] = mapping
             self._save_workspaces()
         log.info(
@@ -666,7 +669,7 @@ class Attribution:
             return False
         file_path = usage.file_path
         if usage.vendor == "claude":
-            expected_dir = _encode_claude_cwd(pane_cwd)
+            expected_dir = encode_claude_cwd(pane_cwd)
             return f"/{expected_dir}/" in file_path
         if usage.vendor in ("codex", "antigravity", "grok", "kimi"):
             return usage.cwd == pane_cwd

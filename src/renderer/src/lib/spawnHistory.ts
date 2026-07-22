@@ -1,3 +1,5 @@
+import type { RoleKey } from '../data/roles'
+import type { StageId } from '../data/stages'
 import { normalizeResumeSessionId } from './resume-command'
 
 export interface HistoryTitleEntry {
@@ -9,11 +11,57 @@ export interface HistoryTitleEntry {
   sessionHomeId?: string
 }
 
+export interface SpawnHistoryEntry extends HistoryTitleEntry {
+  agentKey: string
+  roleKey: RoleKey
+  roleLabel: string
+  command: string
+  sessionId?: string
+  origin: 'manual' | 'pipeline'
+  stageId: StageId
+  workspacePath: string
+  spawnedAt: string
+  removedAt?: string
+  restoreMode?: 'memory-resume' | 'fresh'
+  sessionHomeId?: string
+  runGroupId?: string
+  outputLogFile?: string
+}
+
 export interface HistoryTitleIdentity {
   paneId: string
   agentKey?: string
   sessionId?: string
   sessionHomeId?: string
+}
+
+export interface WorkspaceIdentity {
+  /** The workspace path as the renderer spells it (currentWorkspace). */
+  workspacePath: string
+  /** Backend-resolved realpath of the same workspace (symlink alias), when known. */
+  canonicalWorkspacePath?: string
+}
+
+/** Display/write-layer line of the workspace-isolation defense (the backend
+ *  store filters independently on persist): true when an entry's
+ *  workspacePath names the current workspace, matching either the renderer's
+ *  spelling or the backend's canonical (symlink-resolved) spelling. Entries
+ *  without a workspacePath are treated as foreign. */
+export function entryBelongsToWorkspace(
+  entry: { workspacePath?: string } | null | undefined,
+  workspace: WorkspaceIdentity
+): boolean {
+  const path = entry?.workspacePath
+  if (!path || !workspace.workspacePath) return false
+  if (path === workspace.workspacePath) return true
+  return !!workspace.canonicalWorkspacePath && path === workspace.canonicalWorkspacePath
+}
+
+export function filterWorkspaceEntries<T extends { workspacePath?: string }>(
+  entries: T[],
+  workspace: WorkspaceIdentity
+): T[] {
+  return entries.filter((entry) => entryBelongsToWorkspace(entry, workspace))
 }
 
 export function historyEntryLabel(entry: HistoryTitleEntry): string {
@@ -30,6 +78,65 @@ export function matchesHistorySearch(
   if (!q) return true
   return [entry.customName, entry.agentLabel, entry.sessionId, entry.roleKey, entry.roleLabel]
     .some((field) => !!field && field.toLowerCase().includes(q))
+}
+
+export type HistoryStatusFilter = 'all' | 'active' | 'removed'
+export type HistoryOriginFilter = 'all' | 'manual' | 'pipeline'
+
+export interface HistoryEntryFilter {
+  query: string
+  status: HistoryStatusFilter
+  origin: HistoryOriginFilter
+}
+
+/** Combines the text search with a status filter (active = no removedAt)
+ *  and an origin filter. 'all' disables the corresponding dimension. */
+export function filterHistoryEntries<T extends HistoryTitleEntry & {
+  removedAt?: string
+  origin?: 'manual' | 'pipeline'
+  roleKey?: string
+  roleLabel?: string
+}>(entries: T[], filter: HistoryEntryFilter): T[] {
+  return entries.filter((entry) => {
+    if (filter.status === 'active' && entry.removedAt) return false
+    if (filter.status === 'removed' && !entry.removedAt) return false
+    if (filter.origin !== 'all' && entry.origin !== filter.origin) return false
+    return matchesHistorySearch(entry, filter.query)
+  })
+}
+
+export type HistoryDayGroupKey = 'today' | 'yesterday' | 'earlier'
+
+export interface HistoryDayGroup<T> {
+  key: HistoryDayGroupKey
+  entries: T[]
+}
+
+/** Buckets entries into today / yesterday / earlier by the local calendar
+ *  day of `spawnedAt` relative to `now` (injected for testability). Entries
+ *  with a missing or unparseable spawnedAt land in 'earlier'. Empty buckets
+ *  are omitted; bucket order is today, yesterday, earlier. */
+export function groupHistoryByDay<T extends { spawnedAt?: string }>(
+  entries: T[],
+  now: Date
+): HistoryDayGroup<T>[] {
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1).getTime()
+  const buckets: Record<HistoryDayGroupKey, T[]> = { today: [], yesterday: [], earlier: [] }
+  for (const entry of entries) {
+    const ts = entry.spawnedAt ? new Date(entry.spawnedAt).getTime() : Number.NaN
+    const key: HistoryDayGroupKey = Number.isNaN(ts)
+      ? 'earlier'
+      : ts >= todayStart
+        ? 'today'
+        : ts >= yesterdayStart
+          ? 'yesterday'
+          : 'earlier'
+    buckets[key].push(entry)
+  }
+  return (['today', 'yesterday', 'earlier'] as const)
+    .filter((key) => buckets[key].length > 0)
+    .map((key) => ({ key, entries: buckets[key] }))
 }
 
 export function updateHistoryCustomName(

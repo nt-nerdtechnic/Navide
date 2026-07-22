@@ -18,6 +18,7 @@ import threading
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from .ipc import make_error, make_event, make_response
+from .spawn_history import canonical_workspace_path, filter_foreign_entries
 
 if TYPE_CHECKING:
     from .app import Session
@@ -2935,18 +2936,45 @@ async def project_set_ui_state(session: "Session", msg_id: str, msg_type: str, p
     raw_repo = payload.get("git_tab_repo")
     git_tab_repo = raw_repo if isinstance(raw_repo, str) else None
     raw_history = payload.get("spawn_history")
-    spawn_history = (
-        [entry for entry in raw_history if isinstance(entry, dict)][-100:]
+    full_history = (
+        [entry for entry in raw_history if isinstance(entry, dict)]
         if isinstance(raw_history, list)
         else None
     )
-    project = app.project_store.set_ui_state(
-        ws_raw,
-        run_groups=run_groups,
-        active_tab=active_tab,
-        git_tab_repo=git_tab_repo,
-        spawn_history=spawn_history,
-    )
+    if full_history is not None and ws_raw:
+        # Workspace isolation at the write layer: never persist entries that
+        # belong to another workspace, in the full store or the mirror.
+        # merge() filters again on its own — each layer stands alone.
+        full_history = filter_foreign_entries(
+            ws_raw, full_history, context="set_ui_state"
+        )
+    spawn_history = full_history[-100:] if full_history is not None else None
+
+    # Offload the blocking read-modify-write (json.dumps + write_text +
+    # os.replace) to a worker thread: during cold-start restore storms the
+    # event loop is contended enough that a synchronous save can blow the
+    # frontend's 10s RPC deadline and lose UI state. The store's save lock
+    # serializes concurrent offloaded calls.
+    def _persist():
+        # Full-store merge first (upsert-only, never deletes), then the
+        # legacy 100-entry mirror in project.json for backward compat. The
+        # peek gates the merge so an unknown workspace still creates no
+        # files, and seeds the one-time migration from the old mirror.
+        if full_history is not None:
+            prev = app.project_store.peek(ws_raw)
+            if prev is not None:
+                app.spawn_history_store.merge(
+                    ws_raw, full_history, seed=prev.ui_spawn_history
+                )
+        return app.project_store.set_ui_state(
+            ws_raw,
+            run_groups=run_groups,
+            active_tab=active_tab,
+            git_tab_repo=git_tab_repo,
+            spawn_history=spawn_history,
+        )
+
+    project = await asyncio.to_thread(_persist)
     if project is not None:
         # Peer windows on the same workspace adopt the change live
         # (replaces the old cross-window localStorage `storage` event).
@@ -2966,6 +2994,48 @@ async def project_set_ui_state(session: "Session", msg_id: str, msg_type: str, p
     # migration only deletes its legacy copy after a real ack.
     await session.send_json(
         make_response(msg_id, msg_type, {"ok": project is not None})
+    )
+
+
+@handler("project.get_spawn_history")
+async def project_get_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Paged read of the full spawn history (spawn-history.json).
+
+    `offset` counts from the newest end (0 = latest); the returned page is
+    newest → oldest. Falls back to seeding the full store from the
+    project.json mirror for projects created before the store existed.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    raw_offset = payload.get("offset")
+    offset = raw_offset if isinstance(raw_offset, int) and raw_offset >= 0 else 0
+    raw_limit = payload.get("limit")
+    limit = raw_limit if isinstance(raw_limit, int) and 0 < raw_limit <= 1000 else 100
+
+    def _read() -> tuple[list[dict], int]:
+        project = app.project_store.peek(ws_raw)
+        seed = project.ui_spawn_history if project is not None else None
+        return app.spawn_history_store.read_page(
+            ws_raw, offset=offset, limit=limit, seed=seed
+        )
+
+    entries, total = await asyncio.to_thread(_read)
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "entries": entries,
+                "total": total,
+                "offset": offset,
+                # Symlink-resolved identity of the workspace so the renderer
+                # can also match entries recorded under the canonical spelling.
+                "canonical_workspace_path": (
+                    canonical_workspace_path(ws_raw) if ws_raw else ""
+                ),
+            },
+        )
     )
 
 

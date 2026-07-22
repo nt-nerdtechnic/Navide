@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  entryBelongsToWorkspace,
+  filterWorkspaceEntries,
   formatTerminalExit,
   historyEntryLabel,
   isTerminalCrashLoopOpen,
@@ -222,5 +224,54 @@ describe('terminal crash-loop diagnostics', () => {
       uptime_ms: 42,
       startup_probe: { binary_path: '/opt/bin/claude' },
     })).toBe('Process was terminated by SIGKILL 42ms after spawn — /opt/bin/claude')
+  })
+})
+
+describe('workspace isolation filter', () => {
+  const workspace = {
+    workspacePath: '/Users/me/alias-workspace',
+    canonicalWorkspacePath: '/Users/me/real-workspace',
+  }
+
+  it('matches the workspace path as spelled by the renderer', () => {
+    expect(entryBelongsToWorkspace({ workspacePath: '/Users/me/alias-workspace' }, workspace)).toBe(true)
+  })
+
+  it('matches the backend-resolved canonical (symlink) spelling', () => {
+    expect(entryBelongsToWorkspace({ workspacePath: '/Users/me/real-workspace' }, workspace)).toBe(true)
+  })
+
+  it('rejects entries from a foreign workspace', () => {
+    expect(entryBelongsToWorkspace({ workspacePath: '/Users/me/other' }, workspace)).toBe(false)
+  })
+
+  it('rejects entries without a workspacePath and nullish entries', () => {
+    expect(entryBelongsToWorkspace({}, workspace)).toBe(false)
+    expect(entryBelongsToWorkspace({ workspacePath: '' }, workspace)).toBe(false)
+    expect(entryBelongsToWorkspace(null, workspace)).toBe(false)
+    expect(entryBelongsToWorkspace(undefined, workspace)).toBe(false)
+  })
+
+  it('rejects everything when the current workspace is empty', () => {
+    expect(entryBelongsToWorkspace(
+      { workspacePath: '/Users/me/real-workspace' },
+      { workspacePath: '', canonicalWorkspacePath: '/Users/me/real-workspace' },
+    )).toBe(false)
+  })
+
+  it('works without a canonical alias (exact match only)', () => {
+    const bare = { workspacePath: '/Users/me/ws' }
+    expect(entryBelongsToWorkspace({ workspacePath: '/Users/me/ws' }, bare)).toBe(true)
+    expect(entryBelongsToWorkspace({ workspacePath: '/Users/me/real-workspace' }, bare)).toBe(false)
+  })
+
+  it('filterWorkspaceEntries keeps only entries of the current workspace', () => {
+    const entries = [
+      { paneId: 'a', workspacePath: '/Users/me/alias-workspace' },
+      { paneId: 'b', workspacePath: '/Users/me/real-workspace' },
+      { paneId: 'c', workspacePath: '/Users/me/other' },
+      { paneId: 'd' } as { paneId: string; workspacePath?: string },
+    ]
+    expect(filterWorkspaceEntries(entries, workspace).map((e) => e.paneId)).toEqual(['a', 'b'])
   })
 })

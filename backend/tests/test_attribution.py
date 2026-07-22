@@ -16,6 +16,7 @@ import pytest
 
 from agent_team_backend.log_readers.attribution import Attribution
 from agent_team_backend.log_readers.base import LogReader, TokenUsage
+from agent_team_backend.log_readers.claude import encode_claude_cwd
 
 
 class FakeReader(LogReader):
@@ -483,3 +484,68 @@ def test_marker_unregistered_after_pane_killed(codex_attr: tuple[Attribution, Pa
     f = _codex_file(root, "rollout.jsonl", marker="at-pane:p1", meta_id="uuid-1")
     # Marker gone with the pane → nothing to bind.
     assert attr.maybe_bind_by_marker(_make_usage("codex", session_id="s", file_path=str(f))) is None
+
+
+# ─────────────────────────── claude cwd encoding (CJK paths) ─────────────────
+
+CJK_WS = "/Users/x/Desktop/客戶名單"
+CJK_ENCODED = "-Users-x-Desktop-----"  # 4 Chinese chars + leading "/" → 5 dashes
+
+
+def test_encode_claude_cwd_collapses_non_ascii_to_dashes() -> None:
+    """The attribution encoder must match the real Claude CLI encoding."""
+    assert encode_claude_cwd(CJK_WS) == CJK_ENCODED
+    assert "客戶名單" not in encode_claude_cwd(CJK_WS)
+
+
+def test_encode_claude_cwd_agrees_with_resume_preflight_encoder() -> None:
+    """attribution and app.py must produce the SAME project dir for a cwd —
+    a disagreement is exactly the bug that lost CJK workspaces' sessions."""
+    from agent_team_backend.app import _session_lookup_path
+
+    p = _session_lookup_path("claude", CJK_WS, "sid1")
+    assert p.endswith(f"/{encode_claude_cwd(CJK_WS)}/sid1.jsonl")
+
+
+def test_cwd_matches_dash_encoded_dir_for_cjk_workspace(
+    claude_attr: tuple[Attribution, Path],
+) -> None:
+    attr, root = claude_attr
+    f = root / CJK_ENCODED / "s.jsonl"
+    usage = _make_usage("claude", session_id="s", file_path=str(f))
+    assert attr._cwd_matches(CJK_WS, usage) is True
+
+
+def test_register_cjk_workspace_attributes_dash_encoded_files(
+    claude_attr: tuple[Attribution, Path],
+) -> None:
+    attr, root = claude_attr
+    attr.register_workspace(CJK_WS)
+    proj_dir = root / CJK_ENCODED; proj_dir.mkdir()
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    result = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.workspace_path == CJK_WS
+
+
+def test_reregistration_corrects_stale_claude_dir(tmp_path: Path) -> None:
+    """A claude_dir persisted by the old broken encoder (CJK preserved) must be
+    overwritten with the dash-encoded dir on the next registration."""
+    root = tmp_path / "claude_projects"; root.mkdir()
+    ws_json = tmp_path / "ws.json"
+    stale_dir = str(root / CJK_WS.replace("/", "-"))  # old encoder's output
+    ws_json.write_text(
+        json.dumps({CJK_WS: {"claude_dir": stale_dir, "registered_at": 1.0}}),
+        encoding="utf-8",
+    )
+
+    attr = Attribution([FakeReader("claude", root)], workspaces_path=ws_json)
+    attr.register_workspace(CJK_WS)
+
+    data = json.loads(ws_json.read_text(encoding="utf-8"))
+    assert data[CJK_WS]["claude_dir"] == str(root / CJK_ENCODED)
+    # And attribution now works against the corrected dir.
+    proj_dir = root / CJK_ENCODED; proj_dir.mkdir()
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    assert attr.attribute(
+        _make_usage("claude", session_id="s", file_path=str(f))
+    ).workspace_path == CJK_WS

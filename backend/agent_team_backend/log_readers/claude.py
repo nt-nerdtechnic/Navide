@@ -7,7 +7,8 @@ Path resolution (first hit wins):
   2. ~/.config/claude/projects
   3. ~/.claude/projects
 
-Each cwd → one subdirectory whose name is the cwd with "/" → "-".
+Each cwd → one subdirectory named per encode_claude_cwd (every
+non-alphanumeric char → "-").
 Each session → one {uuid}.jsonl file inside that subdirectory.
 Token-relevant lines have type="assistant" and message.usage populated.
 """
@@ -17,11 +18,23 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
 
 log = logging.getLogger("agent_team_backend.log_readers.claude")
+
+
+def encode_claude_cwd(cwd: str) -> str:
+    """Claude Code's project-dir name for a cwd — the single source of truth.
+
+    Claude replaces EVERY non-alphanumeric char with "-" (dots, underscores,
+    spaces, unicode — not just "/"). It encodes its *normalized* cwd, which
+    never carries a trailing separator, so strip one before encoding:
+    otherwise the extra "-" makes the encoded dir miss the real one.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd.rstrip("/"))
 
 
 def _int(v) -> int:  # noqa: ANN001
@@ -69,11 +82,11 @@ class ClaudeLogReader(LogReader):
     def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
         """Only the jsonl files under this workspace's project subdirectory.
 
-        Claude names each project dir after the cwd with "/" → "-", so one
+        Claude names each project dir after the encoded cwd, so one
         workspace maps to exactly one folder — we can enumerate just that
         folder instead of the entire (potentially multi-GB) projects root.
         """
-        encoded = workspace_path.replace("/", "-")  # same hash as cwd_from_file's inverse
+        encoded = encode_claude_cwd(workspace_path)
         out: list[Path] = []
         for root in self.project_dirs():
             d = root / encoded

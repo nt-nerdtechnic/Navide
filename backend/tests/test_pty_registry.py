@@ -80,6 +80,33 @@ def test_scan_orphans_skips_live_sibling_owned(monkeypatch) -> None:
         proc.wait()
 
 
+def test_scan_orphans_skips_own_live_children() -> None:
+    # Entries owned by THIS backend are its live in-window sessions, not
+    # orphans — regression: `owner != me` used to let them fall through to
+    # _classify, so the badge counted (and reap killed) live sessions.
+    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "300"])  # owner = os.getpid()
+
+        assert pty_registry.scan_orphans() == []
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_reap_leaves_own_live_children_untouched() -> None:
+    proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "300"])  # owner = os.getpid()
+
+        assert pty_registry.reap_stale(grace=0.0) == []
+        assert proc.poll() is None  # not signalled
+        assert str(proc.pid) in _registry()  # entry preserved
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_reap_kills_recorded_orphan() -> None:
     proc = subprocess.Popen(["sleep", "300"], start_new_session=True)
     pty_registry.register(proc.pid, ["sleep", "300"])

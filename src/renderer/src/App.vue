@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
+import AgentHistoryModal from './components/AgentHistoryModal.vue'
 import ControlPane, {
   type AgentSpec,
   type ActivePaneView,
@@ -69,6 +70,17 @@ import {
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
 } from './lib/resume-command'
+import {
+  claimFreshSessionId,
+  classifyAttributedSession,
+  classifySessionExistsResponse,
+  confirmGhostAdoption,
+  createGhostHealGate,
+  createUiStateSeqGuard,
+  pinFreshClaudeSession,
+  sendWithUiStateRetry,
+  shouldAttemptResume,
+} from './lib/sessionHeal'
 import { gridPageCount, gridPageSlice, gridPresetDims, parseGridPreset, type GridPreset } from './lib/gridLayout'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
@@ -83,7 +95,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { historyEntryLabel, legacyHistoryLogPath, manualLogFileName, matchesHistorySearch, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
+import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -599,23 +611,6 @@ interface ActivePane {
   loopEstimateResetAt?: number | null
 }
 
-interface SpawnHistoryEntry extends HistoryTitleEntry {
-  agentKey: string
-  roleKey: RoleKey
-  roleLabel: string
-  command: string
-  sessionId?: string
-  origin: 'manual' | 'pipeline'
-  stageId: StageId
-  workspacePath: string
-  spawnedAt: string
-  removedAt?: string
-  restoreMode?: 'memory-resume' | 'fresh'
-  sessionHomeId?: string
-  runGroupId?: string
-  outputLogFile?: string
-}
-
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
 const persistedPaneSessions = new Set<string>()
@@ -626,10 +621,10 @@ const issueHandoffs = ref<Map<string, { paneId: string; mode: string; state: 'ha
 const SPAWN_HISTORY_KEY = 'agentTeam.spawnHistory'
 const MAX_SPAWN_HISTORY = 100
 
-function parseSpawnHistory(raw: string, workspacePath: string): SpawnHistoryEntry[] {
+function parseSpawnHistory(raw: string, workspace: WorkspaceIdentity): SpawnHistoryEntry[] {
   try {
     return (JSON.parse(raw) as SpawnHistoryEntry[])
-      .filter((entry) => entry?.workspacePath === workspacePath)
+      .filter((entry) => entryBelongsToWorkspace(entry, workspace))
       .slice(-MAX_SPAWN_HISTORY)
       .map((entry) => ({
         ...entry,
@@ -645,16 +640,31 @@ function parseSpawnHistory(raw: string, workspacePath: string): SpawnHistoryEntr
 /** One-time source for projects created before history moved into project.json. */
 function loadLegacySpawnHistory(workspacePath: string): SpawnHistoryEntry[] {
   const raw = settingsGet<string | null>(SPAWN_HISTORY_KEY, null)
-  return raw ? parseSpawnHistory(raw, workspacePath) : []
+  return raw ? parseSpawnHistory(raw, spawnHistoryWorkspaceIdentity(workspacePath)) : []
 }
 
 const spawnHistory = ref<SpawnHistoryEntry[]>([])
+// Backend-resolved realpath of the hydrated workspace (from
+// project.get_spawn_history). Lets entries recorded under a symlinked
+// workspace's canonical spelling still count as ours.
+const spawnHistoryCanonicalWorkspace = ref('')
+
+function spawnHistoryWorkspaceIdentity(workspacePath: string): WorkspaceIdentity {
+  return {
+    workspacePath,
+    canonicalWorkspacePath: spawnHistoryCanonicalWorkspace.value || undefined,
+  }
+}
 
 const sessionHistory = computed(() => {
+  const workspace = spawnHistoryWorkspaceIdentity(currentWorkspace.value)
   const result: SpawnHistoryEntry[] = []
   const seen = new Set<string>()
   for (let i = spawnHistory.value.length - 1; i >= 0; i--) {
     const entry = spawnHistory.value[i]
+    // Display-layer guard: never show another workspace's entries, even if
+    // one slipped into spawnHistory at runtime.
+    if (!entryBelongsToWorkspace(entry, workspace)) continue
     const key = entry.sessionId ? `session:${entry.sessionId}` : `pane:${entry.paneId}`
     if (!seen.has(key)) {
       seen.add(key)
@@ -664,29 +674,68 @@ const sessionHistory = computed(() => {
   return result
 })
 
-const filteredSessionHistory = computed(() =>
-  sessionHistory.value.filter((entry) => matchesHistorySearch(entry, historySearchQuery.value))
-)
-
 let spawnHistoryWorkspace = ''
 let spawnHistoryHydrated = false
 let spawnHistoryPersistTimer: number | undefined
 
-function hydrateSpawnHistory(
+// Paged reads from the backend's full store (spawn-history.json). Counts are
+// from the newest end: `fetched` = how many entries we already pulled.
+interface SpawnHistoryPage {
+  entries: SpawnHistoryEntry[]
+  total: number
+  offset: number
+  canonical_workspace_path?: string
+}
+const spawnHistoryTotal = ref(0)
+const spawnHistoryFetched = ref(0)
+const spawnHistoryHasMore = computed(() => spawnHistoryFetched.value < spawnHistoryTotal.value)
+let spawnHistoryLoadingMore = false
+
+async function hydrateSpawnHistory(
   workspacePath: string,
   persisted: SpawnHistoryEntry[] | null | undefined,
-): void {
+): Promise<void> {
   if (spawnHistoryPersistTimer !== undefined) {
     window.clearTimeout(spawnHistoryPersistTimer)
     spawnHistoryPersistTimer = undefined
   }
   spawnHistoryHydrated = false
   spawnHistoryWorkspace = workspacePath
-  const source = Array.isArray(persisted)
-    ? persisted
-    : loadLegacySpawnHistory(workspacePath)
+  spawnHistoryCanonicalWorkspace.value = ''
+  spawnHistoryTotal.value = 0
+  spawnHistoryFetched.value = 0
+  const baselineLength = spawnHistory.value.length
+
+  // The full history lives in .agent-team/spawn-history.json; ask the backend
+  // for the newest page. The project.json mirror (`persisted`) stays as the
+  // fallback for backends without the paginated API.
+  let source: SpawnHistoryEntry[]
+  const page = await sendQuiet<SpawnHistoryPage>('project.get_spawn_history', {
+    workspace_path: workspacePath,
+    offset: 0,
+    limit: MAX_SPAWN_HISTORY,
+  })
+  if (spawnHistoryWorkspace !== workspacePath) return // workspace switched mid-fetch
+  if (page && typeof page.canonical_workspace_path === 'string') {
+    spawnHistoryCanonicalWorkspace.value = page.canonical_workspace_path
+  }
+  if (page && Array.isArray(page.entries) && (page.entries.length > 0 || persisted != null)) {
+    source = [...page.entries].reverse() // newest→oldest page → stored oldest→newest
+    spawnHistoryTotal.value = typeof page.total === 'number' ? page.total : page.entries.length
+    spawnHistoryFetched.value = page.entries.length
+  } else {
+    // API missing/failed, or an old project whose history never reached the
+    // backend: keep the pre-pagination path (mirror, then legacy settings).
+    source = Array.isArray(persisted) ? persisted : loadLegacySpawnHistory(workspacePath)
+  }
   // Reuse the parser for normalization and workspace filtering.
-  spawnHistory.value = parseSpawnHistory(JSON.stringify(source), workspacePath)
+  const hydrated = parseSpawnHistory(JSON.stringify(source), spawnHistoryWorkspaceIdentity(workspacePath))
+  // Keep entries pushed while the page was in flight (e.g. restore backfill).
+  const hydratedIds = new Set(hydrated.map((e) => e.paneId))
+  const inFlight = spawnHistory.value
+    .slice(baselineLength)
+    .filter((e) => e.workspacePath === workspacePath && !hydratedIds.has(e.paneId))
+  spawnHistory.value = [...hydrated, ...inFlight]
   spawnHistoryHydrated = true
 
   // Missing (not empty) means an old project: migrate its matching slice once.
@@ -698,6 +747,46 @@ function hydrateSpawnHistory(
   }
 }
 
+/** Fetch the next (older) page of the full spawn history and prepend it,
+ *  deduped by paneId. Data layer only — the UI trigger ships in Phase D;
+ *  exposed to AgentHistoryModal via props. */
+async function loadMoreSpawnHistory(): Promise<void> {
+  const workspacePath = spawnHistoryWorkspace
+  if (!workspacePath || !spawnHistoryHydrated || spawnHistoryLoadingMore) return
+  if (!spawnHistoryHasMore.value) return
+  spawnHistoryLoadingMore = true
+  try {
+    const page = await sendQuiet<SpawnHistoryPage>('project.get_spawn_history', {
+      workspace_path: workspacePath,
+      offset: spawnHistoryFetched.value,
+      limit: MAX_SPAWN_HISTORY,
+    })
+    if (!page || !Array.isArray(page.entries)) return
+    if (spawnHistoryWorkspace !== workspacePath) return // workspace switched mid-fetch
+    if (typeof page.total === 'number') spawnHistoryTotal.value = page.total
+    spawnHistoryFetched.value += page.entries.length
+    if (page.entries.length === 0) {
+      // Past the end (e.g. the store shrank): stop advertising more.
+      spawnHistoryTotal.value = spawnHistoryFetched.value
+      return
+    }
+    const existing = new Set(spawnHistory.value.map((e) => e.paneId))
+    const workspace = spawnHistoryWorkspaceIdentity(workspacePath)
+    const older = page.entries
+      .filter((entry) => entryBelongsToWorkspace(entry, workspace) && !!entry.paneId && !existing.has(entry.paneId))
+      .map((entry) => ({
+        ...entry,
+        sessionId: entry.sessionId
+          ? normalizeResumeSessionId(entry.agentKey, entry.sessionId)
+          : entry.sessionId,
+      }))
+      .reverse() // newest→oldest page → oldest→newest for storage order
+    if (older.length > 0) spawnHistory.value = [...older, ...spawnHistory.value]
+  } finally {
+    spawnHistoryLoadingMore = false
+  }
+}
+
 watch(currentWorkspace, (workspacePath) => {
   if (workspacePath === spawnHistoryWorkspace) return
   if (spawnHistoryPersistTimer !== undefined) {
@@ -706,6 +795,7 @@ watch(currentWorkspace, (workspacePath) => {
   }
   spawnHistoryHydrated = false
   spawnHistoryWorkspace = workspacePath
+  spawnHistoryCanonicalWorkspace.value = ''
   spawnHistory.value = []
 })
 
@@ -713,7 +803,8 @@ watch(spawnHistory, (v) => {
   if (!spawnHistoryHydrated || !spawnHistoryWorkspace || isDetachedWindow) return
   if (spawnHistoryPersistTimer !== undefined) window.clearTimeout(spawnHistoryPersistTimer)
   const workspacePath = spawnHistoryWorkspace
-  const snapshot = v.slice(-MAX_SPAWN_HISTORY)
+  // Write-layer guard: never persist entries that belong to another workspace.
+  const snapshot = filterWorkspaceEntries(v, spawnHistoryWorkspaceIdentity(workspacePath)).slice(-MAX_SPAWN_HISTORY)
   spawnHistoryPersistTimer = window.setTimeout(() => {
     void sendQuiet('project.set_ui_state', {
       workspace_path: workspacePath,
@@ -1669,6 +1760,11 @@ interface SpawnInternal {
   restoreMode?: 'memory-resume' | 'fresh'
   sessionHomeId?: string
   resumeSessionId?: string
+  /** Explicit --session-id for a FRESH (non-resume) Claude spawn. The restore
+   *  fallback for a not-resumable session passes the saved id here so a
+   *  cold-start rebuild reuses the SAME id instead of minting a new ghost id
+   *  on every restart. Ignored when isResume or for other agents. */
+  freshSessionId?: string
   /** Instructs spawnPane to atomically replace an existing pane's position in the UI array. */
   replacePaneId?: string
 }
@@ -1732,11 +1828,14 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   // pane's CLI events (turn_complete / agent_active / JSONL) precisely. Without
   // it, panes sharing one workspace are matched by a first-come-claim heuristic
   // that mis-routed a pane's turn_complete to a sibling (the Stage 01 bug).
-  let explicitSessionId = ''
-  if (opts.agentKey === 'claude' && !opts.isResume && !command.includes('--session-id')) {
-    explicitSessionId = crypto.randomUUID()
-    command = `${command} --session-id ${explicitSessionId}`
-  }
+  // freshSessionId (restore fallback of a not-resumable session) reuses the
+  // saved id instead of minting a new one — see pinFreshClaudeSession.
+  const pinned = pinFreshClaudeSession(
+    opts.agentKey, opts.isResume ?? false, command, opts.freshSessionId,
+    () => crypto.randomUUID()
+  )
+  command = pinned.command
+  const explicitSessionId = pinned.explicitSessionId
   const sessionHomeId = opts.agentKey === 'codex'
     ? (opts.sessionHomeId || id)
     : ''
@@ -1803,23 +1902,29 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       }
     }, SESSION_OVERLAY_GRACE_MS)
   }
-  spawnHistory.value.push({
-    paneId: id,
-    agentKey: pane.agentKey,
-    agentLabel: pane.agentLabel,
-    customName: pane.customName,
-    roleKey: pane.roleKey,
-    roleLabel: roleLabel(pane.roleKey),
-    command: pane.command,
-    sessionId: pane.pinnedSessionId,
-    origin: pane.origin,
-    stageId: pane.stageId,
-    workspacePath: pane.workspacePath,
-    spawnedAt: new Date().toISOString(),
-    restoreMode: opts.restoreMode,
-    sessionHomeId: pane.sessionHomeId,
-    runGroupId: pane.runGroupId,
-  })
+  if (entryBelongsToWorkspace({ workspacePath: pane.workspacePath }, spawnHistoryWorkspaceIdentity(currentWorkspace.value))) {
+    spawnHistory.value.push({
+      paneId: id,
+      agentKey: pane.agentKey,
+      agentLabel: pane.agentLabel,
+      customName: pane.customName,
+      roleKey: pane.roleKey,
+      roleLabel: roleLabel(pane.roleKey),
+      command: pane.command,
+      sessionId: pane.pinnedSessionId,
+      origin: pane.origin,
+      stageId: pane.stageId,
+      workspacePath: pane.workspacePath,
+      spawnedAt: new Date().toISOString(),
+      restoreMode: opts.restoreMode,
+      sessionHomeId: pane.sessionHomeId,
+      runGroupId: pane.runGroupId,
+    })
+  } else {
+    console.warn(
+      `[spawn-history] skipped entry for foreign workspace "${pane.workspacePath}" (current: "${currentWorkspace.value}")`,
+    )
+  }
   await nextTick()
   const ref = paneRefs[id]
   if (!ref) return id
@@ -2055,7 +2160,8 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
   if (!sessionId) return false
   // Authoritative existence check: the datalist may list a since-deleted id, or
   // the user may have pasted a bad one. Never fall through to a fresh spawn —
-  // that would silently start a brand-new agent and confuse the user.
+  // that would silently start a brand-new agent and confuse the user. A failed
+  // probe (null) is refused like false: the user can simply retry the button.
   const exists = await canResumeSession(agentKey, workspacePath, sessionId)
   if (!exists) {
     controlPaneRef.value?.showResumeError(i18n.global.t('label.resume-session-not-found'))
@@ -2289,6 +2395,8 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   for (const key of lockKeys) rebuildingPanes.add(key)
   try {
     const ws = pane.workspacePath
+    // Fail-safe: abort on false AND on null (probe failed) — never kill a
+    // live pane on an unverified resumability answer.
     if (!(await canResumeSession(pane.agentKey, ws, sessionId))) {
       pipelineLog(`⚠ rebuild ${pane.agentLabel}: session ${sessionId} not resumable`)
       return
@@ -2547,11 +2655,6 @@ function openSettingsAccounts(): void {
 const showKbPanel = ref(false)
 const kbQueryMain = ref('')
 const showHistory = ref(false)
-const historySearchQuery = ref('')
-watch(showHistory, (open) => {
-  if (!open) historySearchQuery.value = ''
-})
-const confirmKillAll = ref(false)
 const revivingHistoryPaneId = ref('')
 const unavailableHistoryPaneIds = ref<Set<string>>(new Set())
 
@@ -2882,11 +2985,15 @@ function looksLikeResumeCommand(agentKey: string, command: string): boolean {
   return new RegExp(`^${agentKey}\\s+--resume\\s+\\S+`).test(cmd)
 }
 
+/** Tri-state: true = transcript exists, false = definitively absent, null =
+ *  the probe itself failed (sendQuiet returns null on any RPC error/timeout)
+ *  — unknown, NOT absent. Callers that need fail-safe behavior must
+ *  distinguish false from null (see classifySessionExistsResponse). */
 async function canResumeSession(
   agentKey: string,
   workspacePath: string,
   sessionId: string
-): Promise<boolean> {
+): Promise<boolean | null> {
   const normalizedId = normalizeResumeSessionId(agentKey, sessionId)
   if (!normalizedId) return false
   const resp = await sendQuiet<SessionExistsPayload>('agent.session_exists', {
@@ -2894,7 +3001,7 @@ async function canResumeSession(
     workspace_path: workspacePath,
     session_id: normalizedId,
   })
-  return resp?.exists === true
+  return classifySessionExistsResponse(resp)
 }
 
 function applyProjectPaths(p: ProjectPayload | undefined): void {
@@ -3011,9 +3118,11 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
-    // Agent History is owned by this workspace. Old projects have no field and
-    // migrate only the matching entries from the former global settings key.
-    hydrateSpawnHistory(path, resp.project.ui_spawn_history)
+    // Agent History is owned by this workspace. The full store is paged from
+    // the backend; old projects have no field and migrate only the matching
+    // entries from the former global settings key.
+    await hydrateSpawnHistory(path, resp.project.ui_spawn_history)
+    if (seq !== workspaceCheckSeq) return // superseded while the page loaded
     // Adopt the backend theme backup only if the settings store held nothing
     // (load order: settings store → backend → default). loadTheme() is a no-op
     // for theme when the store already wins, so this is safe to call here.
@@ -3220,6 +3329,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // post-restore re-sort below maps the saved order onto the new ids.
   const restoredPaneIds: (string | undefined)[] = new Array(toRestore.length)
 
+  // Session ids already claimed for --session-id reuse in THIS restore batch.
+  // dedupeRestorablePanes collapses same-(agent,id) records, but a saved id can
+  // still surface twice (e.g. cross-agent duplicates); only the first spawn may
+  // reuse it — a second `--session-id <same>` would collide.
+  const usedFreshSessionIds = new Set<string>()
+
   await Promise.all(toRestore.map(async (saved, restoreIdx) => {
     const rawSessionId = (saved.session_id ?? '').trim()
     const sessionId = normalizeResumeSessionId(saved.agent, rawSessionId)
@@ -3236,9 +3351,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       ? ensureSavedGroup(savedGid)
       : (saved.origin === 'pipeline' ? ensureRestoreGroup() : (runGroups.value[0]?.id ?? ''))
 
-    // Unified session-resume logic for all pane types
+    // Unified session-resume logic for all pane types. Tri-state: true /
+    // false (definitively absent) / null (probe failed — unknown).
     const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
-    if (shouldPreserveMissingSessionOnRestore(saved.agent, rawSessionId, canResume)) {
+    // Codex preserve-untouched applies whenever the rollout is not CONFIRMED
+    // present (false and null alike) — unchanged pre-tri-state behavior.
+    if (shouldPreserveMissingSessionOnRestore(saved.agent, rawSessionId, canResume === true)) {
       // Never turn a saved Codex conversation into a replacement conversation
       // merely because its rollout is temporarily unavailable. In particular,
       // do not reach manual_pane.spawn/session below, which would overwrite the
@@ -3246,14 +3364,19 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       pipelineLog(`⚠ ${saved.agent} session ${sessionId} is unavailable; preserving saved pane`)
       return
     }
-    const resumeCmd = canResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
-    // A pane that was continuing a conversation but whose transcript is gone
-    // falls back to a fresh pane below. Surface that instead of silently
-    // swapping in a new conversation (a resume that can't find its jsonl —
-    // moved home, deleted, or a transient failure under load — otherwise looks
-    // like the app lost the conversation).
+    // Routing: true → resume; null (unknown) → STILL attempt --resume with the
+    // saved id (if the transcript exists it resumes perfectly; if not the CLI
+    // errors for one boot, but the id mapping survives); only a definitive
+    // false falls back to a fresh spawn reusing the saved id below.
+    const attemptResume = shouldAttemptResume(canResume)
+    const resumeCmd = attemptResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+    // A pane whose transcript is DEFINITIVELY gone falls back to a fresh pane
+    // below. Surface that instead of silently swapping in a new conversation
+    // (a resume that can't find its jsonl — moved home or deleted — otherwise
+    // looks like the app lost the conversation). No warning on null: we still
+    // attempt the resume then.
     if (shouldWarnMissingResume(
-      saved.agent, rawSessionId, canResume,
+      saved.agent, rawSessionId, attemptResume,
       looksLikeResumeCommand(saved.agent, saved.command || '')
     )) {
       pipelineLog(
@@ -3285,6 +3408,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       restoreMode: isResume ? 'memory-resume' : 'fresh',
       sessionHomeId,
       resumeSessionId: sessionId,
+      // Not-resumable fallback ("opened a fresh one"): reuse the saved id for
+      // the fresh spawn so cold-start restore is idempotent instead of
+      // rotating a new ghost id every boot. No-op when isResume. Duplicate
+      // saved ids: only the first record claims the id; later ones get '' and
+      // mint a new uuid (claim is synchronous — safe across the Promise.all).
+      freshSessionId: claimFreshSessionId(usedFreshSessionIds, sessionId),
     })
 
     if (!paneId) return
@@ -3456,12 +3585,28 @@ async function onPipelineResume(): Promise<void> {
   await activateStage(info.nextStageIndex)
 }
 
+// Orders every project.set_ui_state write per (workspace, state-field) key so
+// a delayed retry never overwrites a newer snapshot (see sendWithUiStateRetry).
+const uiStateSeqGuard = createUiStateSeqGuard()
+
 async function sendQuiet<T = unknown>(
   type: string,
   payload: Record<string, unknown>
 ): Promise<T | null> {
   try {
-    const resp = await backend.send<T>(type, payload)
+    // project.set_ui_state gets exactly one retry on timeout: it carries
+    // freshly computed spawn-history/run-group state that a single cold-start
+    // storm timeout would otherwise lose permanently (see sessionHeal.ts).
+    // The seq guard drops the retry if a NEWER send for the same UI-state
+    // field(s) was issued during the delay — the retry's stale snapshot must
+    // not win a last-writer-wins race against fresher state.
+    const resp = await sendWithUiStateRetry(
+      (t, p) => backend.send<T>(t, p),
+      type,
+      payload,
+      500,
+      uiStateSeqGuard
+    )
     if (!resp.ok) {
       pipelineLog(`${type} failed: ${resp.error?.message ?? 'unknown'}`)
       return null
@@ -4330,6 +4475,17 @@ function notifyAttention(paneId: string): void {
   )
 }
 
+// Ghost-heal gate for the attribution handler below: probes whether a pane's
+// pinned id has a real transcript (agent.session_exists). A missing pane is
+// reported as "has transcript" so adoption is refused rather than racing a
+// teardown. The probe is tri-state: null (probe failed — unknown) also
+// refuses adoption inside the gate; only a DEFINITIVE ghost (false) adopts.
+const sessionGhostHealGate = createGhostHealGate(async (paneId, pinnedSessionId) => {
+  const p = panes.value.find((x) => x.id === paneId)
+  if (!p) return true
+  return canResumeSession(p.agentKey, p.workspacePath, pinnedSessionId)
+})
+
 // CLI lifecycle events (the reliable, non-buffer signal). agent_active = the CLI
 // is working; turn_complete = its turn ended. We timestamp both per pane; the
 // completion logic reads these instead of guessing from the TUI buffer.
@@ -4352,16 +4508,45 @@ backend.on('agent.activity', (raw) => {
   }
   if (ev.vendor === 'claude' && ev.session_id) {
     const pane = panes.value.find((p) => p.id === ev.pane_id)
-    // Attribution can mis-route an unowned session to a sibling pane in the
-    // same cwd — never let that overwrite a pane that already pinned a
-    // different id, or the pane's persisted resume id is lost for good.
-    const accepts = !pane?.pinnedSessionId || pane.pinnedSessionId === ev.session_id
-    if (pane?.origin === 'manual' && accepts) {
-      pane.pinnedSessionId = ev.session_id
-      syncViews()
-      void persistPaneSession(pane, ev.session_id)
-      const h = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
-      if (h) h.sessionId = ev.session_id
+    if (pane) {
+      const attributedId = ev.session_id
+      const adopt = (): void => {
+        pane.pinnedSessionId = attributedId
+        syncViews()
+        void persistPaneSession(pane, attributedId)
+        const h = spawnHistory.value.find((e) => e.paneId === pane.id)
+        if (h) h.sessionId = attributedId
+      }
+      // Attribution can mis-route an unowned session to a sibling pane in the
+      // same cwd — never let that overwrite a HEALTHY pinned id. But a pinned
+      // id with NO transcript (ghost — e.g. /clear re-rolled the CLI's real
+      // id) must stay replaceable, or the pane can never learn its real id:
+      // verify the pinned id first and adopt only when it is a ghost. The
+      // gate serializes concurrent events; first confirmed adoption wins.
+      if (classifyAttributedSession(pane.pinnedSessionId, attributedId) === 'adopt') {
+        adopt()
+      } else {
+        const pinnedId = pane.pinnedSessionId!
+        void sessionGhostHealGate.shouldAdopt(pane.id, pinnedId).then((won) => {
+          // Re-check after the async probe: the pane must STILL be mounted
+          // (not killed/removed while the probe was in flight — adopting a
+          // torn-down pane would persist a session for a dead pane_id) and
+          // must still pin the exact id we just verified as a ghost.
+          if (confirmGhostAdoption({
+            gateWon: won,
+            paneStillMounted: panes.value.some((p) => p.id === pane.id),
+            currentPinnedId: pane.pinnedSessionId,
+            verifiedPinnedId: pinnedId,
+            attributedId,
+          })) {
+            pipelineLog(
+              `[pane ${pane.id.slice(0, 8)}] pinned session ${pinnedId.slice(0, 8)} has no ` +
+              `transcript — adopting attributed session ${attributedId.slice(0, 8)}`
+            )
+            adopt()
+          }
+        })
+      }
     }
   }
 })
@@ -5806,7 +5991,7 @@ function onRunGroupsRemoteSync(raw: unknown): void {
     // straight back through our deep watcher.
     spawnHistoryHydrated = false
     spawnHistoryWorkspace = ws
-    spawnHistory.value = parseSpawnHistory(JSON.stringify(d.spawn_history), ws)
+    spawnHistory.value = parseSpawnHistory(JSON.stringify(d.spawn_history), spawnHistoryWorkspaceIdentity(ws))
     void nextTick(() => { spawnHistoryHydrated = true })
   }
   if (!Array.isArray(d.run_groups)) return
@@ -7100,103 +7285,23 @@ function paneIsCommander(p: ActivePane): boolean {
         </ul>
       </div>
     </div>
-    <Teleport v-if="showHistory" to="body">
-      <div class="history-overlay" @click.self="showHistory = false">
-        <div class="history-modal">
-          <div class="history-modal-header">
-            <div class="history-header-left">
-              <span>{{ $t('label.agent-history') }}</span>
-              <div class="agent-history-search">
-                <input
-                  v-model="historySearchQuery"
-                  class="agent-history-search-input"
-                  :placeholder="$t('label.search-history')"
-                />
-                <button
-                  v-if="historySearchQuery"
-                  class="agent-history-search-clear"
-                  @click="historySearchQuery = ''"
-                >✕</button>
-              </div>
-              <button
-                v-if="panes.length > 0"
-                class="history-killall"
-                @click="confirmKillAll = true"
-                :title="$t('action.kill-all-agents')"
-              >🗑 {{ $t('action.kill-all') }}</button>
-            </div>
-            <button class="history-close" @click="showHistory = false">✕</button>
-          </div>
-          <div class="agent-history-list">
-            <div v-if="sessionHistory.length === 0" class="agent-history-empty">尚無 agent 紀錄</div>
-            <div v-else-if="filteredSessionHistory.length === 0" class="agent-history-empty">
-              {{ $t('label.no-matching-history') }}
-            </div>
-            <div
-              v-for="entry in filteredSessionHistory"
-              :key="entry.paneId"
-              class="agent-history-row"
-              :class="{ active: !entry.removedAt }"
-            >
-              <div class="agent-history-main">
-                <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
-                <span class="ah-origin">{{ entry.origin }}</span>
-                <span
-                  v-if="entry.restoreMode === 'memory-resume'"
-                  class="ah-restore-badge ah-resume"
-                  title="以 CLI resume 指令載入記憶"
-                >記憶恢復</span>
-                <span class="ah-status" :class="entry.removedAt ? 'removed' : 'active'">
-                  {{ entry.removedAt ? 'removed' : 'active' }}
-                </span>
-              </div>
-              <div class="agent-history-meta">
-                <span class="ah-role">
-                  <template v-if="entry.agentKey">{{ agentSpecs.find(s => s.agentKey === entry.agentKey)?.label ?? entry.agentKey }}<template v-if="entry.roleLabel"> · </template></template>{{ entry.roleLabel }}
-                </span>
-                <span class="ah-time">{{ new Date(entry.spawnedAt).toLocaleTimeString() }}</span>
-                <span v-if="entry.sessionId" class="ah-session" :title="entry.sessionId">
-                  🔖 {{ entry.sessionId.slice(0, 8) }}…
-                </span>
-              </div>
-              <div v-if="entry.removedAt" class="agent-history-actions">
-                <span
-                  v-if="unavailableHistoryPaneIds.has(entry.paneId)"
-                  class="ah-session-unavailable"
-                >{{ $t('label.history-session-unavailable') }}</span>
-                <button
-                  v-if="entry.sessionId && !unavailableHistoryPaneIds.has(entry.paneId)"
-                  class="ah-revive"
-                  :disabled="!!revivingHistoryPaneId"
-                  @click="onResumeHistoryAgent(entry)"
-                >{{ revivingHistoryPaneId === entry.paneId ? '…' : $t('action.resume-session') }}</button>
-                <button
-                  class="ah-revive ah-preview"
-                  @click="onPreviewHistoryAgent(entry)"
-                >預覽</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
-    <Teleport v-if="confirmKillAll" to="body">
-      <div class="history-overlay" @click.self="confirmKillAll = false">
-        <div class="history-modal" style="height: auto; max-width: 400px;">
-          <div class="history-modal-header">
-            <span>🗑 Kill all agents?</span>
-            <button class="history-close" @click="confirmKillAll = false">✕</button>
-          </div>
-          <div style="padding: 16px 14px; font-size: 13px; color: var(--text-primary);">
-            這將強制終止 <strong>{{ panes.length }} 個 agent</strong>，所有進行中的工作將遺失。
-          </div>
-          <div style="display: flex; gap: 8px; padding: 0 14px 14px; justify-content: flex-end;">
-            <button class="history-close" style="border: 1px solid var(--border-default); padding: 4px 12px; border-radius: 6px;" @click="confirmKillAll = false">{{ $t('action.cancel') }}</button>
-            <button class="danger" style="padding: 4px 14px; border-radius: 6px; font-size: 12px;" @click="() => { onKillAll(); confirmKillAll = false }">{{ $t('action.kill-all') }}</button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <AgentHistoryModal
+      :show="showHistory"
+      :session-history="sessionHistory"
+      :pane-count="panes.length"
+      :reviving-pane-id="revivingHistoryPaneId"
+      :unavailable-pane-ids="unavailableHistoryPaneIds"
+      :preview-open="previewLogOpen"
+      :preview-title="previewLogTitle"
+      :preview-content="previewLogContent"
+      :history-has-more="spawnHistoryHasMore"
+      :load-more-history="loadMoreSpawnHistory"
+      @close="showHistory = false"
+      @kill-all="onKillAll"
+      @resume="onResumeHistoryAgent"
+      @preview="onPreviewHistoryAgent"
+      @close-preview="previewLogOpen = false"
+    />
     <main
       class="stage"
       :class="{ 'stage--tabbed': stageTabs.length > 0 }"
@@ -7687,19 +7792,6 @@ function paneIsCommander(p: ActivePane): boolean {
           :disabled="backendBusy || backend.status.value !== 'connected'"
           @click="onStopBackend"
         >Stop</button>
-      </div>
-    </div>
-
-    <!-- Log Preview Modal -->
-    <div v-if="previewLogOpen" class="log-preview-overlay" @click.self="previewLogOpen = false">
-      <div class="log-preview-modal">
-        <div class="log-preview-header">
-          <h3>{{ previewLogTitle }}</h3>
-          <button class="log-preview-close" @click="previewLogOpen = false">✕</button>
-        </div>
-        <div class="log-preview-body">
-          <pre>{{ previewLogContent }}</pre>
-        </div>
       </div>
     </div>
   </div>
@@ -8671,218 +8763,6 @@ function paneIsCommander(p: ActivePane): boolean {
 }
 
 /* ── Stage-stall confirmation modal ──────────────────────────────────────── */
-.history-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--shadow-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1100;
-  -webkit-app-region: no-drag;
-}
-.history-modal {
-  background: var(--bg-base);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  width: min(680px, 92vw);
-  height: min(560px, 85vh);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: 0 12px 48px var(--shadow-overlay);
-}
-.history-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border-muted);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-bright);
-}
-.history-header-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.history-killall {
-  background: transparent;
-  border: 1px solid var(--danger-muted);
-  color: var(--danger-fg);
-  font-size: 11px;
-  padding: 2px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.7;
-}
-.history-killall:hover {
-  background: var(--danger-subtle);
-  border-color: var(--danger-fg);
-  opacity: 1;
-}
-.agent-history-search {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-.agent-history-search-input {
-  background: var(--bg-muted);
-  border: 1px solid var(--border-default);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 400;
-  padding: 2px 20px 2px 8px;
-  width: 160px;
-  outline: none;
-}
-.agent-history-search-input:focus {
-  border-color: var(--accent-muted);
-}
-.agent-history-search-clear {
-  position: absolute;
-  right: 2px;
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 10px;
-  cursor: pointer;
-  padding: 1px 4px;
-}
-.agent-history-search-clear:hover {
-  color: var(--text-bright);
-}
-.history-close {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-.history-close:hover {
-  color: var(--text-bright);
-  background: var(--bg-muted);
-}
-.agent-history-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 8px 0;
-}
-.agent-history-empty {
-  color: var(--text-secondary);
-  font-size: 12px;
-  text-align: center;
-  padding: 24px;
-}
-.agent-history-row {
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--bg-subtle);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.agent-history-row.active {
-  border-left: 3px solid var(--success-fg);
-  padding-left: 11px;
-}
-.agent-history-main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.ah-badge {
-  background: var(--bg-muted);
-  border: 1px solid var(--border-default);
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 11px;
-  color: var(--text-bright);
-}
-.ah-role {
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ah-origin {
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-.ah-status {
-  font-size: 10px;
-  font-weight: 600;
-}
-.ah-status.active { color: var(--success-fg); }
-.ah-status.removed { color: var(--text-muted); }
-.agent-history-meta {
-  display: flex;
-  gap: 10px;
-  font-size: 10px;
-  color: var(--text-muted);
-}
-.ah-session {
-  font-family: monospace;
-}
-.ah-restore-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 10px;
-  letter-spacing: 0.2px;
-}
-.ah-restore-badge.ah-memory {
-  background: var(--accent-subtle);
-  color: var(--accent-fg);
-  border: 1px solid var(--accent-muted);
-}
-.agent-history-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 2px;
-}
-.ah-session-unavailable {
-  width: 100%;
-  color: var(--warning-fg);
-  font-size: 11px;
-}
-.ah-revive {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 10px;
-  border-radius: 20px;
-  border: 1px solid var(--accent-muted);
-  background: var(--accent-subtle);
-  color: var(--accent-bright);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.ah-revive:hover {
-  background: var(--bg-selected);
-  border-color: var(--accent-bright);
-  color: var(--accent-bright);
-}
-.ah-revive.ah-preview {
-  border-color: var(--border-default);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-}
-.ah-revive:disabled {
-  cursor: wait;
-  opacity: 0.55;
-}
 .stall-overlay {
   position: fixed;
   inset: 0;
@@ -9045,65 +8925,4 @@ body,
   background: var(--bg-inset);
 }
 
-/* Log Preview Modal */
-.log-preview-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-}
-.log-preview-modal {
-  background: var(--bg-base);
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  width: 80vw;
-  height: 80vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-  overflow: hidden;
-}
-.log-preview-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-default);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--bg-subtle);
-}
-.log-preview-header h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.log-preview-close {
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 16px;
-  padding: 4px;
-}
-.log-preview-close:hover {
-  color: var(--text-primary);
-}
-.log-preview-body {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
-  background: var(--bg-base);
-}
-.log-preview-body pre {
-  margin: 0;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
-  color: var(--text-primary);
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
 </style>

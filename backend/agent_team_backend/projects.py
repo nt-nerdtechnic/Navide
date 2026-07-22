@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -224,6 +225,14 @@ class Project:
 class ProjectStore:
     """Manages project.json + pipeline.log under each workspace."""
 
+    def __init__(self) -> None:
+        # Serializes project.json writes. Most mutations run on the asyncio
+        # event loop (implicitly serialized); set_ui_state is offloaded to a
+        # worker thread (see ws_handlers), so its read-modify-write and every
+        # save() must be mutually exclusive to keep the shared .tmp file and
+        # snapshot consistent. RLock: set_ui_state holds it across save().
+        self._save_lock = threading.RLock()
+
     def project_dir(self, workspace_path: str) -> Path:
         return Path(workspace_path) / PROJECT_DIR_NAME
 
@@ -311,14 +320,15 @@ class ProjectStore:
         return project
 
     def save(self, project: Project) -> Path:
-        project.updated_at = _now_iso()
-        self._ensure_dir(project.workspace_path)
-        pf = self.project_file(project.workspace_path)
-        tmp = pf.with_suffix(pf.suffix + ".tmp")
-        payload = json.dumps(project.to_dict(), indent=2, ensure_ascii=False)
-        tmp.write_text(payload, encoding="utf-8")
-        os.replace(tmp, pf)
-        return pf
+        with self._save_lock:
+            project.updated_at = _now_iso()
+            self._ensure_dir(project.workspace_path)
+            pf = self.project_file(project.workspace_path)
+            tmp = pf.with_suffix(pf.suffix + ".tmp")
+            payload = json.dumps(project.to_dict(), indent=2, ensure_ascii=False)
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, pf)
+            return pf
 
     def append_event(
         self, workspace_path: str, event: dict[str, Any], log_file_name: str = ""
@@ -768,19 +778,23 @@ class ProjectStore:
         """
         if run_groups is None and active_tab is None and git_tab_repo is None and spawn_history is None:
             return None
-        project = self.peek(workspace_path)
-        if project is None:
-            return None
-        if run_groups is not None:
-            project.ui_run_groups = list(run_groups)
-        if active_tab is not None:
-            project.ui_active_tab = active_tab
-        if git_tab_repo is not None:
-            project.ui_git_tab_repo = git_tab_repo
-        if spawn_history is not None:
-            project.ui_spawn_history = list(spawn_history)
-        self.save(project)
-        return project
+        # Runs on a worker thread (asyncio.to_thread from ws_handlers): hold
+        # the save lock across the whole read-modify-write so concurrent
+        # offloaded calls cannot interleave and drop each other's fields.
+        with self._save_lock:
+            project = self.peek(workspace_path)
+            if project is None:
+                return None
+            if run_groups is not None:
+                project.ui_run_groups = list(run_groups)
+            if active_tab is not None:
+                project.ui_active_tab = active_tab
+            if git_tab_repo is not None:
+                project.ui_git_tab_repo = git_tab_repo
+            if spawn_history is not None:
+                project.ui_spawn_history = list(spawn_history)
+            self.save(project)
+            return project
 
     def update_slot_kickoff(
         self,

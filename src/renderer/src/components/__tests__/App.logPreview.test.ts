@@ -12,22 +12,28 @@ const appSource = readFileSync(
   resolve(process.cwd(), 'src/renderer/src/App.vue'),
   'utf8'
 )
+// The modal markup + CSS moved into AgentHistoryModal.vue; the open/close
+// state and keybinding wiring stayed in App.vue.
+const modalSource = readFileSync(
+  resolve(process.cwd(), 'src/renderer/src/components/AgentHistoryModal.vue'),
+  'utf8'
+)
 const semanticTokensSource = readFileSync(
   resolve(process.cwd(), 'src/renderer/src/styles/tokens/semantic.css'),
   'utf8'
 )
 
-function block(startMarker: string, endMarker: string): string {
-  const start = appSource.indexOf(startMarker)
+function block(startMarker: string, endMarker: string, source: string = appSource): string {
+  const start = source.indexOf(startMarker)
   expect(start, `${startMarker} should exist`).toBeGreaterThan(-1)
-  const end = appSource.indexOf(endMarker, start + startMarker.length)
+  const end = source.indexOf(endMarker, start + startMarker.length)
   expect(end, `${endMarker} should exist after ${startMarker}`).toBeGreaterThan(-1)
-  return appSource.slice(start, end)
+  return source.slice(start, end)
 }
 
 describe('Log preview modal CSS tokens', () => {
   it('only references --xxx custom properties defined in semantic.css (fallback-guarded vars excluded)', () => {
-    const css = block('.log-preview-overlay {', '</style>')
+    const css = block('.log-preview-overlay {', '</style>', modalSource)
     // Only vars used WITHOUT a fallback must resolve — that's the class of bug
     // fixed here (undefined token -> transparent background).
     const referenced = [...css.matchAll(/var\((--[a-z-]+)\)/g)].map((m) => m[1])

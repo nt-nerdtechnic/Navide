@@ -139,8 +139,8 @@ def scan_orphans() -> list[int]:
         orphans: list[int] = []
         for pid_s, info in entries.items():
             owner = info.get("owner")
-            if isinstance(owner, int) and owner != me and _backend_alive(owner):
-                continue  # a live sibling backend owns it — not an orphan
+            if isinstance(owner, int) and (owner == me or _backend_alive(owner)):
+                continue  # a live backend (this one or a sibling) owns it — not an orphan
             if _classify(int(pid_s), info) == _MATCH:
                 orphans.append(int(pid_s))
         return orphans
@@ -167,7 +167,7 @@ def reap_stale(grace: float = 1.0) -> list[int]:
         keep: dict[str, dict] = {}
         for pid_s, info in entries.items():
             owner = info.get("owner")
-            if isinstance(owner, int) and owner != me and _backend_alive(owner):
+            if isinstance(owner, int) and (owner == me or _backend_alive(owner)):
                 keep[pid_s] = info
                 continue
             verdict = _classify(int(pid_s), info)

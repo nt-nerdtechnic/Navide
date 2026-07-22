@@ -61,12 +61,14 @@ from .log_readers import (
     TokenUsage,
 )
 from .log_readers.attribution import Attribution
+from .log_readers.claude import encode_claude_cwd
 from .doc_injector import fetch_stage_docs
 from .mcp_manager import MCPManager
 from .mcp_settings import MCPServersDocument, MCPSettingsStore
 from .plan_provisioning import ensure_plan_assets, plan_spec_exists
 from .chat_store import ChatStore
 from .projects import ProjectStore
+from .spawn_history import SpawnHistoryStore
 from .recent_workspaces import RecentWorkspacesStore
 from .roles_store import RolesStore
 from .stages_store import StagesStore
@@ -93,6 +95,7 @@ STARTED_AT = datetime.now(timezone.utc).isoformat()
 app = FastAPI(title="navide-backend", version=__version__)
 
 project_store = ProjectStore()
+spawn_history_store = SpawnHistoryStore()
 recent_workspaces_store = RecentWorkspacesStore()
 roles_store = RolesStore()
 stages_store = StagesStore()
@@ -1038,12 +1041,10 @@ def _project_payload(project) -> dict[str, Any]:
 
 
 def _claude_session_file(workspace_path: str, session_id: str) -> Path:
-    # Claude Code encodes the cwd by replacing EVERY non-alphanumeric char
-    # with "-" (dots, underscores, spaces, unicode — not just "/"). It encodes
-    # its *normalized* cwd, which never carries a trailing separator, so strip
-    # one the frontend may have sent: otherwise the extra "-" makes the encoded
-    # dir miss the real one and resume falsely reports the session "not found".
-    project_dir = re.sub(r"[^A-Za-z0-9]", "-", workspace_path.rstrip("/"))
+    # Encoding details (why EVERY non-alphanumeric char becomes "-", why the
+    # trailing separator must be stripped) live in encode_claude_cwd — the
+    # single source of truth shared with the attribution layer.
+    project_dir = encode_claude_cwd(workspace_path)
     return Path.home() / ".claude" / "projects" / project_dir / f"{session_id}.jsonl"
 
 

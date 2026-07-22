@@ -14,6 +14,7 @@ from agent_team_backend.log_readers import (
     TokenUsage,
 )
 from agent_team_backend.log_readers.attribution import Attribution
+from agent_team_backend.log_readers.claude import encode_claude_cwd
 from agent_team_backend.tokens_store import TokensStore
 
 
@@ -93,7 +94,7 @@ async def test_ingestion_restart_append_and_workspace_replay(
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = str(workspace_path)
-    project_dir = config / "projects" / workspace.replace("/", "-")
+    project_dir = config / "projects" / encode_claude_cwd(workspace)
     session = project_dir / "session-1.jsonl"
     _append(session, _usage_record("m1", "r1", 100, 40))
 

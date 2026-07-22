@@ -9,8 +9,10 @@ for old project.json files without the fields.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 from agent_team_backend.projects import ProjectStore
 
@@ -145,3 +147,172 @@ def test_project_json_without_fields_defaults(tmp_path: Path) -> None:
     assert fresh.ui_active_tab == ""
     assert fresh.ui_git_tab_repo == ""
     assert fresh.ui_spawn_history is None
+
+
+# ── event-loop offload (project.set_ui_state must not lose state) ────────────
+
+
+async def test_set_ui_state_handler_offloads_and_round_trips(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The ws handler path (asyncio.to_thread → store) still persists and acks."""
+    from agent_team_backend import app, ws_handlers
+
+    store = _store_with_project(tmp_path)
+    monkeypatch.setattr(app, "project_store", store)
+
+    async def no_broadcast(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(app, "broadcast", no_broadcast)
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any]] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.sent.append(payload)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.set_ui_state")
+    assert fn is not None
+    await fn(session, "m1", "project.set_ui_state", {
+        "workspace_path": str(tmp_path),
+        "run_groups": GROUPS,
+        "active_tab": "rg-2",
+    })
+
+    resp = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert resp["payload"] == {"ok": True}
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert fresh.ui_run_groups == GROUPS
+    assert fresh.ui_active_tab == "rg-2"
+
+
+async def test_set_ui_state_handler_merges_full_spawn_history_store(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """spawn_history payloads land in the full store (spawn-history.json,
+    upsert-only) while project.json keeps its 100-entry mirror."""
+    import json as _json
+
+    from agent_team_backend import app, ws_handlers
+
+    store = _store_with_project(tmp_path)
+    # Pre-existing mirror from before the full store existed → seeds it.
+    store.set_ui_state(str(tmp_path), spawn_history=[{"paneId": "legacy-1"}])
+    monkeypatch.setattr(app, "project_store", store)
+
+    async def no_broadcast(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(app, "broadcast", no_broadcast)
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any]] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.sent.append(payload)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.set_ui_state")
+    assert fn is not None
+    # 150 entries: the mirror truncates to the newest 100, the full store keeps all.
+    history = [{"paneId": f"p{i}"} for i in range(150)]
+    await fn(session, "m1", "project.set_ui_state", {
+        "workspace_path": str(tmp_path),
+        "spawn_history": history,
+    })
+
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert fresh.ui_spawn_history == history[-100:]
+    full_file = app.spawn_history_store.history_file(str(tmp_path))
+    stored = _json.loads(full_file.read_text(encoding="utf-8"))["entries"]
+    # legacy-1 was seeded from the old mirror, then all 150 merged after it.
+    assert [e["paneId"] for e in stored] == ["legacy-1"] + [f"p{i}" for i in range(150)]
+
+    # A later windowed snapshot never deletes older full-store entries.
+    await fn(session, "m2", "project.set_ui_state", {
+        "workspace_path": str(tmp_path),
+        "spawn_history": [{"paneId": "p149", "customName": "Renamed"}],
+    })
+    stored = _json.loads(full_file.read_text(encoding="utf-8"))["entries"]
+    assert len(stored) == 151
+    assert stored[-1] == {"paneId": "p149", "customName": "Renamed"}
+
+
+async def test_set_ui_state_handler_filters_foreign_spawn_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Workspace isolation at the write layer: entries whose workspacePath
+    belongs to another workspace reach neither the project.json mirror nor
+    the full store."""
+    import json as _json
+
+    from agent_team_backend import app, ws_handlers
+
+    store = _store_with_project(tmp_path)
+    monkeypatch.setattr(app, "project_store", store)
+
+    async def no_broadcast(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(app, "broadcast", no_broadcast)
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any]] = []
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.sent.append(payload)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.set_ui_state")
+    assert fn is not None
+    await fn(session, "m1", "project.set_ui_state", {
+        "workspace_path": str(tmp_path),
+        "spawn_history": [
+            {"paneId": "mine", "workspacePath": str(tmp_path)},
+            {"paneId": "foreign", "workspacePath": str(tmp_path / "other")},
+        ],
+    })
+
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert fresh.ui_spawn_history is not None
+    assert [e["paneId"] for e in fresh.ui_spawn_history] == ["mine"]
+    full_file = app.spawn_history_store.history_file(str(tmp_path))
+    stored = _json.loads(full_file.read_text(encoding="utf-8"))["entries"]
+    assert [e["paneId"] for e in stored] == ["mine"]
+
+
+async def test_concurrent_offloaded_saves_serialize(tmp_path: Path) -> None:
+    """Concurrent set_ui_state calls on worker threads (the ws handler offloads
+    via asyncio.to_thread) must serialize: the surviving file is valid JSON and
+    each writer's field pair lands atomically (no torn read-modify-write)."""
+    store = _store_with_project(tmp_path)
+    # Bulk payload widens the write window so unserialized saves would tear.
+    filler = [{"paneId": f"p{i}", "agentLabel": "x" * 200} for i in range(50)]
+
+    def write(i: int) -> None:
+        store.set_ui_state(
+            str(tmp_path),
+            run_groups=[{"id": f"rg-{i}"}],
+            active_tab=f"rg-{i}",
+            spawn_history=filler,
+        )
+
+    await asyncio.gather(*(asyncio.to_thread(write, i) for i in range(30)))
+
+    raw = store.project_file(str(tmp_path)).read_text(encoding="utf-8")
+    data = json.loads(raw)  # last-writer-wins, but always valid JSON
+    # The winning writer's two fields must be from the SAME call.
+    assert data["ui_run_groups"] == [{"id": data["ui_active_tab"]}]
+    assert data["ui_active_tab"].startswith("rg-")
+    assert data["ui_spawn_history"] == filler
+    # No orphaned temp file left behind by interleaved writers.
+    tmp_file = store.project_file(str(tmp_path)).with_suffix(".json.tmp")
+    assert not tmp_file.exists()
