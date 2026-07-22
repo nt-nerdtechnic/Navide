@@ -306,6 +306,9 @@ function commitRename(): void {
 }
 
 function onRenameKeydown(e: KeyboardEvent): void {
+  // Ignore the Enter/Escape an IME (e.g. Chinese) sends while composing —
+  // that keystroke confirms candidate selection, not the rename.
+  if (e.isComposing) return
   if (e.key === 'Enter') { e.preventDefault(); commitRename() }
   if (e.key === 'Escape') { e.preventDefault(); _cancelledRename = true; renamingPaneId.value = null }
 }

@@ -6969,6 +6969,9 @@ function commitInlineRename(): void {
 }
 
 function onInlineRenameKeydown(e: KeyboardEvent): void {
+  // Ignore the Enter/Escape an IME (e.g. Chinese) sends while composing —
+  // that keystroke confirms candidate selection, not the rename.
+  if (e.isComposing) return
   if (e.key === 'Enter') { e.preventDefault(); commitInlineRename() }
   if (e.key === 'Escape') { e.preventDefault(); inlineRenamingId.value = null }
 }
