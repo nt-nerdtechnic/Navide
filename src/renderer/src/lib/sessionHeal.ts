@@ -193,6 +193,112 @@ export async function sendWithUiStateRetry<T>(
   }
 }
 
+/** A pane considered for deterministic reconnect: its id, current display name
+ *  (customName), and its own saved session id (the ghost pointer). */
+export interface ReconnectPane {
+  paneId: string
+  customName: string
+  sessionId: string
+}
+
+/** Provenance record: spawn-history's memory of "this pane used session X".
+ *  Only paneId / customName / sessionId are consulted here. */
+export interface ReconnectProvenanceEntry {
+  paneId: string
+  customName?: string
+  sessionId?: string
+}
+
+/** Session ids this pane's spawn-history provenance points at — matched by
+ *  paneId first (definitive), else by the pane's current customName (a weaker
+ *  signal used only when no paneId record exists). Deduped, blanks dropped.
+ *  These are the ids a caller should probe for transcript existence before
+ *  calling resolveDeterministicReconnect. */
+export function reconnectCandidateSessionIds(
+  pane: Pick<ReconnectPane, 'paneId' | 'customName'>,
+  spawnHistory: ReconnectProvenanceEntry[]
+): string[] {
+  const byPaneId = spawnHistory.filter((e) => e.paneId === pane.paneId)
+  const source =
+    byPaneId.length > 0
+      ? byPaneId
+      : pane.customName
+        ? spawnHistory.filter((e) => (e.customName ?? '') === pane.customName)
+        : []
+  const ids: string[] = []
+  for (const e of source) {
+    const id = (e.sessionId ?? '').trim()
+    if (id && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/** Deterministic auto-reconnect resolver (pure). Given a ghost pane, returns the
+ *  ONE session id its spawn-history provenance uniquely points at — but only
+ *  when the evidence is unambiguous:
+ *   - the pane's own saved id is NOT itself resumable (else it is healthy, not a
+ *     ghost, and must never be touched — returns null),
+ *   - candidates come from provenance (paneId, else customName), never content,
+ *   - each candidate's transcript must exist (`transcriptExists` — a caller
+ *     supplies the awaited agent.session_exists result as a sync lookup),
+ *   - a candidate that is another live pane's current session id is excluded
+ *     (it belongs to that pane).
+ *  Returns the id IFF exactly one candidate survives; zero or ambiguous → null.
+ */
+export function resolveDeterministicReconnect(
+  pane: ReconnectPane,
+  spawnHistory: ReconnectProvenanceEntry[],
+  transcriptExists: (sessionId: string) => boolean,
+  livePanes: { paneId: string; sessionId: string }[]
+): string | null {
+  // A healthy pane (own id has a transcript) is never a reconnect target.
+  const ownId = pane.sessionId.trim()
+  if (ownId && transcriptExists(ownId)) return null
+  const claimedElsewhere = new Set(
+    livePanes
+      .filter((p) => p.paneId !== pane.paneId)
+      .map((p) => p.sessionId.trim())
+      .filter(Boolean)
+  )
+  const candidates = reconnectCandidateSessionIds(pane, spawnHistory).filter(
+    (id) => id !== ownId && transcriptExists(id) && !claimedElsewhere.has(id)
+  )
+  return candidates.length === 1 ? candidates[0] : null
+}
+
+/** A row of workspace.list_orphan_sessions as the backend sends it: the display
+ *  name arrives as `custom_name`, while the picker/OrphanSession read `.name`. */
+export interface RawOrphanSession {
+  session_id: string
+  preview?: string[]
+  size_bytes?: number
+  mtime?: number
+  resumable?: boolean
+  custom_name?: string
+}
+
+/** Normalize a backend orphan row into the picker's OrphanSession shape. The
+ *  key fix is `custom_name → name`: casting the response straight to
+ *  OrphanSession left `.name` undefined, so every row rendered as "(unnamed)".
+ *  Mapping explicitly makes the rename type-checked instead of silently lost. */
+export function mapOrphanSession(raw: RawOrphanSession): {
+  session_id: string
+  preview: string[]
+  size_bytes: number
+  mtime: number
+  resumable: boolean
+  name: string
+} {
+  return {
+    session_id: raw.session_id,
+    preview: raw.preview ?? [],
+    size_bytes: raw.size_bytes ?? 0,
+    mtime: raw.mtime ?? 0,
+    resumable: raw.resumable ?? false,
+    name: raw.custom_name ?? '',
+  }
+}
+
 /** Post-probe adoption re-check for the ghost-heal path. The gate's probe
  *  awaited the backend, so the world may have moved: the pane can have been
  *  killed/removed, re-pinned, or attributed already. Adopt only when the gate

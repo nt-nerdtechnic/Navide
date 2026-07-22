@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, react
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import AgentHistoryModal from './components/AgentHistoryModal.vue'
+import ReconnectSessionModal, { type OrphanSession } from './components/ReconnectSessionModal.vue'
 import ControlPane, {
   type AgentSpec,
   type ActivePaneView,
@@ -79,12 +80,23 @@ import {
   confirmGhostAdoption,
   createGhostHealGate,
   createUiStateSeqGuard,
+  mapOrphanSession,
   pinFreshClaudeSession,
+  reconnectCandidateSessionIds,
+  resolveDeterministicReconnect,
   sendWithUiStateRetry,
   shouldAttemptResume,
+  type RawOrphanSession,
 } from './lib/sessionHeal'
 import { gridPageCount, gridPageSlice, gridPresetDims, parseGridPreset, type GridPreset } from './lib/gridLayout'
 import { parseLegacyRunGroups, resolveActiveTab } from './lib/runGroups'
+import {
+  RESUME_BEHAVIOR_SETTING_KEY,
+  normalizeResumeBehavior,
+  resolveRestoreDecision,
+  stripPinnedSessionId,
+  type RestoreDecision,
+} from './lib/resumeBehavior'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
 import {
   LOOP_PROMPT_SETTING_KEY,
@@ -92,6 +104,8 @@ import {
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
   LOOP_ESTIMATE_WINDOW_MS,
+  LOOP_DONE_MARKER,
+  withLoopDoneInstruction,
   parseLimitReset,
   matchSessionLimit,
   unseenTail,
@@ -900,12 +914,6 @@ const paneTurnCompleteAt = new Map<string, number>()
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
 
-// Latest assistant turn text per pane, from the CLI's own conversation log
-// (`agent.activity` events carrying `text`). Role-separated at the source —
-// kickoff echo is a user message and can never appear here — which is what
-// makes turn-text detection immune to TUI echo/redraw false positives.
-const paneAssistantText = new Map<string, string>()
-
 function syncViews(): void {
   paneViews.value = panes.value.map((p) => {
     const ref = paneRefs[p.id]
@@ -1174,7 +1182,12 @@ async function togglePaneLoop(paneId: string): Promise<void> {
   await acquireInjectionSlot()
   let ok: boolean
   try {
-    ok = await injectPane(paneId, settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT), 'loop-start', true)
+    ok = await injectPane(
+      paneId,
+      withLoopDoneInstruction(settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT)),
+      'loop-start',
+      true
+    )
   } finally {
     releaseInjectionSlot()
   }
@@ -1184,7 +1197,12 @@ async function togglePaneLoop(paneId: string): Promise<void> {
     pane.loopEstimateResetAt = null
     pane.loopWaitUntil = null
     stopLoopLimitWatcher(paneId)
+    return
   }
+  // Arm turn-complete auto-continue: only a turn_complete AFTER this instant
+  // counts, so a stale signal from before loop-start can't trigger an instant
+  // resend (mirrors the pipeline's armedAt discipline).
+  armLoopTurn(paneId)
 }
 
 /** Shared resume path for the scheduled (watcher expiry) and manual
@@ -1206,7 +1224,12 @@ async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   await acquireInjectionSlot()
   let ok: boolean
   try {
-    ok = await injectPane(paneId, settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME), logLabel, true)
+    ok = await injectPane(
+      paneId,
+      withLoopDoneInstruction(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME)),
+      logLabel,
+      true
+    )
   } finally {
     releaseInjectionSlot()
   }
@@ -1219,6 +1242,78 @@ async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   // Resume landed: a fresh quota window starts now, so refresh the badge's
   // pre-limit estimate (otherwise it reverts to the already-elapsed one).
   pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
+  // Re-arm turn-complete: the pre-limit turn's signal must not trigger an
+  // instant continue right after the quota resumes.
+  armLoopTurn(paneId)
+}
+
+/** Auto-continue path for turn-complete (unattended loop). Sends the resume
+ *  prompt (with the done-marker instruction) once the CLI's turn has genuinely
+ *  ended, then re-arms so the NEXT turn is what's judged. Guarded by
+ *  watcher.continuing so overlapping polls can't double-inject. */
+async function fireLoopContinue(paneId: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  const watcher = loopLimitWatchers.get(paneId)
+  if (!pane || !pane.loopActive || !watcher || watcher.continuing) return
+  watcher.continuing = true
+  await acquireInjectionSlot()
+  let ok: boolean
+  try {
+    ok = await injectPane(
+      paneId,
+      withLoopDoneInstruction(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME)),
+      'loop-continue',
+      true
+    )
+  } finally {
+    releaseInjectionSlot()
+    watcher.continuing = false
+  }
+  if (!pane.loopActive) return // loop turned off while the injection was in flight
+  if (!ok) {
+    console.warn(`[loop] pane ${paneId}: continue injection failed — will retry next turn`)
+    return
+  }
+  // Fresh turn started: re-arm and refresh the pre-limit estimate window.
+  armLoopTurn(paneId)
+  pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
+}
+
+/** The CLI reported LOOP_DONE_MARKER as its turn's final line — the task is
+ *  complete. Clear all loop state and notify (same background-gated path as the
+ *  paused/limit notifications). */
+function stopLoopComplete(paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || !pane.loopActive) return
+  pane.loopActive = false
+  pane.loopWaitUntil = null
+  pane.loopEstimateResetAt = null
+  stopLoopLimitWatcher(paneId)
+  sysNotify.notifyPaneState(
+    paneId,
+    'done',
+    i18n.global.t('pane.terminal.loop-complete-notify-title'),
+    i18n.global.t('pane.terminal.loop-complete-notify-body')
+  )
+}
+
+/** Set the turn-complete arm time on a pane's loop watcher (no-op if the
+ *  watcher is gone). Only a turn_complete after this instant is judged. */
+function armLoopTurn(paneId: string): void {
+  const watcher = loopLimitWatchers.get(paneId)
+  if (watcher) watcher.armedAt = Date.now()
+}
+
+/** turn_complete carried LOOP_DONE_MARKER as its final line: stop the loop if
+ *  the event is fresh (not a replayed historical turn from before this loop
+ *  armed — MAX_SAFE_INTEGER armedAt before the first injection lands also
+ *  rejects, so a marker can never stop a loop that hasn't started yet). */
+function stopLoopOnDoneMarker(paneId: string, timestamp: string): void {
+  const watcher = loopLimitWatchers.get(paneId)
+  if (!watcher) return
+  const eventMs = timestamp ? Date.parse(timestamp) : NaN
+  if (!Number.isNaN(eventMs) && eventMs < watcher.armedAt - TURN_TEXT_REPLAY_TOLERANCE_MS) return
+  stopLoopComplete(paneId)
 }
 
 /** Waiting badge clicked: the user wants the loop resumed immediately. */
@@ -1244,6 +1339,14 @@ interface LoopLimitWatcher {
   /** Last unparseable matched message — dedupes the warn/notify when TUI
    *  repaints re-surface the same text. */
   lastUnparseable: string | null
+  /** Wall-clock ms when the current turn was armed (loop-start / after each
+   *  resume/continue). Only a turn_complete AFTER this counts for auto-continue
+   *  — mirrors the pipeline's paneArmedAt. MAX_SAFE_INTEGER until the first
+   *  injection lands, so a stale pre-start turn_complete can't fire a resend. */
+  armedAt: number
+  /** A continue injection is in flight — blocks overlapping polls from
+   *  double-sending the resume prompt for the same turn. */
+  continuing: boolean
 }
 const loopLimitWatchers = new Map<string, LoopLimitWatcher>()
 const LOOP_LIMIT_POLL_MS = 5000
@@ -1265,6 +1368,8 @@ function startLoopLimitWatcher(paneId: string): void {
     timer: 0,
     baseline: paneCleanBytes(paneId),
     lastUnparseable: null,
+    armedAt: Number.MAX_SAFE_INTEGER,
+    continuing: false,
   }
   watcher.timer = window.setInterval(() => {
     const pane = panes.value.find((p) => p.id === paneId)
@@ -1295,36 +1400,59 @@ function startLoopLimitWatcher(paneId: string): void {
     const buf = ((ref.cleanBuffer as unknown as string) ?? '')
     const tail = unseenTail(buf, paneCleanBytes(paneId), watcher.baseline, LOOP_LIMIT_TAIL_CHARS)
     const matched = matchSessionLimit(tail)
-    if (matched == null) return
-    // Consume the matched region either way so the same text can't re-match
-    // on a later poll (a stale re-match would roll the wait a full day out).
-    watcher.baseline = paneCleanBytes(paneId)
-    const resumeAt = parseLimitReset(matched)
-    if (resumeAt == null) {
-      // Fail open: badge stays lit, no auto-resume — but KEEP watching so a
-      // future parseable limit message still schedules. Warn/notify once per
-      // distinct unparseable message.
-      if (matched !== watcher.lastUnparseable) {
-        watcher.lastUnparseable = matched
-        console.warn(`[loop] pane ${paneId}: session-limit message matched but reset time was unparseable; auto-resume not scheduled`)
-        sysNotify.notifyPaneState(
-          paneId,
-          'attention',
-          i18n.global.t('pane.terminal.loop-unparseable-notify-title'),
-          i18n.global.t('pane.terminal.loop-unparseable-notify-body')
-        )
+    // Session limit takes priority over auto-continue: when the CLI hit the
+    // quota its turn also "ends" (turn_complete), but resending now would just
+    // burn against the still-exhausted quota — schedule the timed resume instead.
+    if (matched != null) {
+      // Consume the matched region either way so the same text can't re-match
+      // on a later poll (a stale re-match would roll the wait a full day out).
+      watcher.baseline = paneCleanBytes(paneId)
+      const resumeAt = parseLimitReset(matched)
+      if (resumeAt == null) {
+        // Fail open: badge stays lit, no auto-resume — but KEEP watching so a
+        // future parseable limit message still schedules. Warn/notify once per
+        // distinct unparseable message.
+        if (matched !== watcher.lastUnparseable) {
+          watcher.lastUnparseable = matched
+          console.warn(`[loop] pane ${paneId}: session-limit message matched but reset time was unparseable; auto-resume not scheduled`)
+          sysNotify.notifyPaneState(
+            paneId,
+            'attention',
+            i18n.global.t('pane.terminal.loop-unparseable-notify-title'),
+            i18n.global.t('pane.terminal.loop-unparseable-notify-body')
+          )
+        }
+        return
       }
+      pane.loopWaitUntil = resumeAt
+      // Make the pause visible even when the pane is unfocused — same
+      // background-gated native notification path as done/attention.
+      sysNotify.notifyPaneState(
+        paneId,
+        'attention',
+        i18n.global.t('pane.terminal.loop-paused-notify-title'),
+        i18n.global.t('pane.terminal.loop-paused-notify-body', { time: formatLoopTime(resumeAt) })
+      )
       return
     }
-    pane.loopWaitUntil = resumeAt
-    // Make the pause visible even when the pane is unfocused — same
-    // background-gated native notification path as done/attention.
-    sysNotify.notifyPaneState(
-      paneId,
-      'attention',
-      i18n.global.t('pane.terminal.loop-paused-notify-title'),
-      i18n.global.t('pane.terminal.loop-paused-notify-body', { time: formatLoopTime(resumeAt) })
-    )
+    // No session limit — unattended auto-continue. When the CLI's turn has
+    // genuinely ended (turn_complete after arm, the LATEST signal, settled — so
+    // a mid-turn thinking record or a turn that asked a question never counts),
+    // resend the resume prompt so the loop keeps going. Task COMPLETION is
+    // handled separately in the agent.activity handler: LOOP_DONE_MARKER stops
+    // the loop (loopActive=false) before this poll can fire another continue.
+    if (
+      !watcher.continuing &&
+      turnCompleteDone({
+        turnCompleteAt: paneTurnCompleteAt.get(paneId) ?? 0,
+        lastActiveAt: paneLastActiveAt.get(paneId) ?? 0,
+        armedAt: watcher.armedAt,
+        now: Date.now(),
+        settleMs: TURN_COMPLETE_SETTLE_MS,
+      })
+    ) {
+      void fireLoopContinue(paneId)
+    }
   }, LOOP_LIMIT_POLL_MS)
   loopLimitWatchers.set(paneId, watcher)
 }
@@ -3111,6 +3239,10 @@ const controlPaneRef = ref<InstanceType<typeof ControlPane> | null>(null)
 //   otherwise         → spawn
 const currentMode = ref<WorkspaceMode>('spawn')
 let workspaceCheckSeq = 0
+// Remembers the "resume vs start-fresh" answer per workspace so the 'ask'
+// preference prompts at most once per window even though onWorkspaceCheck
+// re-runs on comm-failure retries.
+const restoreDecisionCache = new Map<string, RestoreDecision>()
 // Cold-boot race guard: a workspace window mounts (firing workspace-check ~400ms
 // in) seconds before the backend WS connects — and with several windows
 // restoring panes at once, an established backend can still be too busy to
@@ -3271,7 +3403,9 @@ async function onWorkspaceCheck(path: string): Promise<void> {
       // view without re-resuming the source window's live agent sessions.
       suppressPaneRestoreOnce = false
     } else {
-      await restoreWorkspacePanes(resp, path)
+      // isStale lets restore bail if a newer workspace-check superseded this one
+      // while the 'ask' resume dialog was open (the await can span a user pause).
+      await restoreWorkspacePanes(resp, path, undefined, () => seq !== workspaceCheckSeq)
     }
     // If the active tab has no panes (e.g. old project.json panes landed in a
     // different group via fallback), switch to the first tab that has panes so
@@ -3311,7 +3445,7 @@ watch(
  *  is injected (no role, no kickoff): the pane sits idle with memory loaded
  *  until the user drives it. Slots without an id fall back to a fresh spawn
  *  (role re-injected), the same as before this feature. */
-async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string, onlyGroupId?: string): Promise<void> {
+async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string, onlyGroupId?: string, isStale?: () => boolean): Promise<void> {
   // Don't restore if pipeline is active or paused — panes are already alive.
   if (pipeline.state === 'running' || pipeline.state === 'aborted') return
 
@@ -3384,6 +3518,32 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   if (toRestore.length > 0) pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
   pipeline.workspacePath = workspacePath
 
+  // Resume-behavior preference: 'always' resumes (legacy behavior), 'never'
+  // spawns every pane fresh, 'ask' prompts once. Only a full cold restore is
+  // subject to it — a group reattach (onlyGroupId) or detached child window is
+  // handing back panes whose PTYs are already alive, never a resume decision.
+  let forceFresh = false
+  if (onlyGroupId === undefined && !isDetachedWindow) {
+    const decision = await resolveRestoreDecision({
+      behavior: normalizeResumeBehavior(settingsGet(RESUME_BEHAVIOR_SETTING_KEY, 'always')),
+      restorableCount: toRestore.length,
+      workspacePath,
+      decisionCache: restoreDecisionCache,
+      ask: () => notifyRestore.confirm(
+        i18n.global.t('restore.resume-prompt-message', { count: toRestore.length }),
+        {
+          title: i18n.global.t('restore.resume-prompt-title'),
+          confirmText: i18n.global.t('restore.resume-prompt-confirm'),
+          cancelText: i18n.global.t('restore.resume-prompt-cancel'),
+        }
+      ),
+    })
+    // The 'ask' dialog can span a user pause; bail if a newer workspace-check
+    // superseded this restore so we don't spawn panes into a stale workspace.
+    if (isStale?.()) return
+    forceFresh = decision === 'fresh'
+  }
+
   // Lazily create one group to house restored pipeline panes whose saved
   // run_group_id no longer maps to an existing tab (e.g. localStorage cleared
   // while project.json survived, or records predating run_group_id). Created
@@ -3420,6 +3580,15 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // reuse it — a second `--session-id <same>` would collide.
   const usedFreshSessionIds = new Set<string>()
 
+  // Ghost/reconnect detection applies only to a full cold restore — a group
+  // reattach or detached child window hands back panes whose PTYs are alive.
+  const fullRestore = onlyGroupId === undefined && !isDetachedWindow
+  if (fullRestore) {
+    reconnectedCount.value = 0
+    disconnectedPaneIds.value = []
+    reconnectBannerDismissed.value = false
+  }
+
   await Promise.all(toRestore.map(async (saved, restoreIdx) => {
     const rawSessionId = (saved.session_id ?? '').trim()
     const sessionId = normalizeResumeSessionId(saved.agent, rawSessionId)
@@ -3438,10 +3607,13 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
 
     // Unified session-resume logic for all pane types. Tri-state: true /
     // false (definitively absent) / null (probe failed — unknown).
-    const canResume = await canResumeSession(saved.agent, workspacePath, sessionId)
+    // forceFresh (user chose "start fresh"): skip the probe and take the
+    // fresh-spawn path for every pane — including Codex, which is normally
+    // preserved when its rollout is missing.
+    const canResume = forceFresh ? false : await canResumeSession(saved.agent, workspacePath, sessionId)
     // Codex preserve-untouched applies whenever the rollout is not CONFIRMED
     // present (false and null alike) — unchanged pre-tri-state behavior.
-    if (shouldPreserveMissingSessionOnRestore(saved.agent, rawSessionId, canResume === true)) {
+    if (!forceFresh && shouldPreserveMissingSessionOnRestore(saved.agent, rawSessionId, canResume === true)) {
       // Never turn a saved Codex conversation into a replacement conversation
       // merely because its rollout is temporarily unavailable. In particular,
       // do not reach manual_pane.spawn/session below, which would overwrite the
@@ -3454,16 +3626,38 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     // errors for one boot, but the id mapping survives); only a definitive
     // false falls back to a fresh spawn reusing the saved id below.
     const attemptResume = shouldAttemptResume(canResume)
-    const resumeCmd = attemptResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
-    // A pane whose transcript is DEFINITIVELY gone falls back to a fresh pane
-    // below. Surface that instead of silently swapping in a new conversation
-    // (a resume that can't find its jsonl — moved home or deleted — otherwise
-    // looks like the app lost the conversation). No warning on null: we still
-    // attempt the resume then.
-    if (shouldWarnMissingResume(
+    let resumeCmd = attemptResume ? buildResumeCommand(saved.agent, sessionId, skipFlag) : ''
+    // A pane whose transcript is DEFINITIVELY gone would otherwise fall back to
+    // a fresh conversation. Before that, attempt a deterministic reconnect from
+    // spawn-history provenance (Claude only — it alone carries the pinned-id
+    // provenance the resolver uses). A unique still-resumable match is adopted
+    // and resumed; zero/ambiguous is deferred to the manual reconnect banner.
+    // Never touch a pane whose own id resumes (attemptResume) — I1 invariant.
+    const ghostConfirmed = !forceFresh && shouldWarnMissingResume(
       saved.agent, rawSessionId, attemptResume,
       looksLikeResumeCommand(saved.agent, saved.command || '')
-    )) {
+    )
+    let reconnectId = ''
+    if (fullRestore && ghostConfirmed && saved.agent === 'claude') {
+      reconnectId = await resolveReconnectForPane(saved, workspacePath, allProjectPanes)
+    }
+    let wasDisconnected = false
+    if (reconnectId) {
+      // Unique provenance match: point the saved record at the resolved id
+      // (backend backs up project.json first) and resume it in place.
+      await sendQuiet('pane.reconnect_session', {
+        workspace_path: workspacePath,
+        pane_id: saved.pane_id,
+        session_id: reconnectId,
+      })
+      resumeCmd = buildResumeCommand(saved.agent, reconnectId, skipFlag)
+      reconnectedCount.value++
+      pipelineLog(`↩ ${saved.agent}: auto-reconnected ${saved.pane_id} → ${reconnectId}`)
+    } else if (ghostConfirmed) {
+      // Zero/ambiguous provenance: keep the fresh fallback (surface instead of
+      // silently swapping a new conversation) and flag the pane for the manual
+      // reconnect banner/picker.
+      wasDisconnected = fullRestore
       pipelineLog(
         `⚠ ${saved.agent}: previous conversation ${sessionId} not found at ${workspacePath}; opened a fresh one`
       )
@@ -3472,8 +3666,13 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         { type: 'error', duration: 8000 }
       )
     }
-    const fallbackCommand = saved.command && !looksLikeResumeCommand(saved.agent, saved.command)
+    const effectiveResumeId = reconnectId || sessionId
+    const savedFallbackCommand = saved.command && !looksLikeResumeCommand(saved.agent, saved.command)
       ? saved.command : ''
+    // Start-fresh must not inherit a hand-written --session-id from the saved
+    // command: that id's transcript still exists, so it would resume (and
+    // re-persist) the old conversation instead of minting a new one.
+    const fallbackCommand = forceFresh ? stripPinnedSessionId(savedFallbackCommand) : savedFallbackCommand
     const commandOverride = resumeCmd || fallbackCommand || ''
     const isResume = !!resumeCmd
 
@@ -3492,17 +3691,20 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       stageIndex: saved.stage_index ?? -1,
       restoreMode: isResume ? 'memory-resume' : 'fresh',
       sessionHomeId,
-      resumeSessionId: sessionId,
+      resumeSessionId: effectiveResumeId,
       // Not-resumable fallback ("opened a fresh one"): reuse the saved id for
       // the fresh spawn so cold-start restore is idempotent instead of
       // rotating a new ghost id every boot. No-op when isResume. Duplicate
       // saved ids: only the first record claims the id; later ones get '' and
       // mint a new uuid (claim is synchronous — safe across the Promise.all).
-      freshSessionId: claimFreshSessionId(usedFreshSessionIds, sessionId),
+      // forceFresh is different: the saved transcript still exists, so reusing
+      // its id would collide — mint a brand-new id instead.
+      freshSessionId: forceFresh ? undefined : claimFreshSessionId(usedFreshSessionIds, sessionId),
     })
 
     if (!paneId) return
     restoredPaneIds[restoreIdx] = paneId
+    if (wasDisconnected) disconnectedPaneIds.value = [...disconnectedPaneIds.value, paneId]
 
     // Re-apply the persisted collapsed-to-sidebar state to the new pane id.
     if (saved.is_minimized) {
@@ -3522,7 +3724,10 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         pane_id: paneId,
         agent: saved.agent,
         role: saved.role,
-        session_id: isResume ? sessionId : (newPinnedId || sessionId),
+        // forceFresh abandons the saved conversation: persist only a freshly
+        // pinned id (empty until a non-Claude CLI's new session is detected),
+        // never the old id we deliberately did not resume.
+        session_id: isResume ? effectiveResumeId : (newPinnedId || (forceFresh ? '' : sessionId)),
         session_home_id: sessionHomeId,
         run_group_id: runGroupId,
       })
@@ -3534,7 +3739,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
         agent: saved.agent,
         role: saved.role,
         command: fallbackCommand,
-        session_id: isResume ? sessionId : newPinnedId,
+        session_id: isResume ? effectiveResumeId : newPinnedId,
         session_home_id: sessionHomeId,
         run_group_id: runGroupId,
         output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
@@ -3554,6 +3759,15 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // project.panes order (toRestore mirrors it). Panes outside this restore
   // (e.g. already-live ones on a group reattach) keep their positions.
   sortByIdOrder(panes.value, restoredPaneIds.filter((id): id is string => !!id))
+
+  // Notify once for the batch: auto-reconnected ghosts get a success toast;
+  // the disconnected (deferred) panes are surfaced by the status-bar banner.
+  if (fullRestore && reconnectedCount.value > 0) {
+    notifyRestore.toast(
+      i18n.global.t('reconnect.auto-toast', { count: reconnectedCount.value }),
+      { type: 'success' }
+    )
+  }
 
   // Backfill removed manual panes into spawnHistory so Agent History shows past sessions.
   const removedManual = allProjectPanes.filter(
@@ -3735,6 +3949,114 @@ async function reapOrphans(): Promise<void> {
     notifyRestore.toast(i18n.global.t('orphans.failed'), { type: 'error' })
   }
   await refreshOrphanCount()
+}
+
+// ── Lost-conversation reconnect (ghost panes) ───────────────────────────────
+// On workspace restore a pane whose saved session id has no transcript is a
+// "ghost". When spawn-history provenance points at exactly one still-resumable
+// transcript we auto-reconnect (reconnectedCount + toast); otherwise the pane
+// is surfaced in a dismissible status-bar banner that opens a manual picker.
+const reconnectedCount = ref(0)
+const disconnectedPaneIds = ref<string[]>([])
+const disconnectedCount = computed(() => disconnectedPaneIds.value.length)
+const reconnectBannerDismissed = ref(false)
+const reconnectPickerOpen = ref(false)
+const reconnectPickerPaneId = ref('')
+const reconnectOrphans = ref<OrphanSession[]>([])
+const reconnectLoading = ref(false)
+
+/** Resolve a definitively-ghost restored pane to a unique reconnect target via
+ *  spawn-history provenance. Probes each provenance candidate's transcript
+ *  (awaited agent.session_exists) then defers the "exactly one" decision to the
+ *  pure resolver. Returns '' when zero or ambiguous (→ manual picker).
+ *
+ *  Exclusion set: a customName-provenance candidate must not be adopted if it is
+ *  ALREADY spoken for by any other pane in the workspace. In-window live panes
+ *  alone (panes.value) miss two fork windows: a session live in a detached/other
+ *  window, and a sibling not yet spawned in this concurrent restore batch.
+ *  savedPanes is the full saved-record set for the workspace (every
+ *  project.json panes[].session_id) — keyed by pane_id, any id persisted to
+ *  ANOTHER pane record is excluded regardless of spawn timing, so two panes can
+ *  never --resume the same conversation. (paneId-provenance is unaffected: those
+ *  candidates belong to THIS pane and are never claimed under another pane_id.) */
+async function resolveReconnectForPane(saved: ProjectPane, workspacePath: string, savedPanes: ProjectPane[]): Promise<string> {
+  const paneInfo = {
+    paneId: saved.pane_id,
+    customName: saved.custom_name || '',
+    sessionId: (saved.session_id ?? '').trim(),
+  }
+  const candidateIds = reconnectCandidateSessionIds(paneInfo, spawnHistory.value)
+  if (candidateIds.length === 0) return ''
+  const existing = new Set<string>()
+  await Promise.all(candidateIds.map(async (id) => {
+    if ((await canResumeSession(saved.agent, workspacePath, id)) === true) existing.add(id)
+  }))
+  const inWindowPanes = panes.value.map((p) => ({ paneId: p.id, sessionId: (p.pinnedSessionId ?? '').trim() }))
+  const savedClaims = savedPanes.map((p) => ({ paneId: p.pane_id, sessionId: (p.session_id ?? '').trim() }))
+  const exclusion = [...inWindowPanes, ...savedClaims]
+  return resolveDeterministicReconnect(paneInfo, spawnHistory.value, (id) => existing.has(id), exclusion) ?? ''
+}
+
+/** Ghost gating for the pane context menu: a Claude pane flagged disconnected
+ *  during the last restore (its saved id had no transcript). */
+function isGhostPane(view: ActivePaneView | null): boolean {
+  return !!view && view.agentKey === 'claude' && disconnectedPaneIds.value.includes(view.id)
+}
+
+function dismissReconnectBanner(): void {
+  reconnectBannerDismissed.value = true
+}
+
+/** Open the manual reconnect picker for a pane, loading the workspace's orphan
+ *  transcripts. */
+async function openReconnectPicker(paneId: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  reconnectPickerPaneId.value = paneId
+  reconnectOrphans.value = []
+  reconnectLoading.value = true
+  reconnectPickerOpen.value = true
+  const resp = await sendQuiet<{ orphans: RawOrphanSession[] }>('workspace.list_orphan_sessions', {
+    workspace_path: pane.workspacePath,
+  })
+  if (reconnectPickerPaneId.value !== paneId) return // superseded by another open
+  reconnectLoading.value = false
+  // Backend rows carry `custom_name`; the picker reads `.name`. Map explicitly
+  // (checked) instead of casting — the bare cast left every row "(unnamed)".
+  reconnectOrphans.value = (resp?.orphans ?? []).map(mapOrphanSession)
+}
+
+/** Confirm a manual reconnect: point the pane's saved record at the chosen
+ *  session (with a project.json backup), re-resume it, then retire the ghost
+ *  pane so the workspace holds one live pane per conversation. */
+async function onConfirmReconnect(sessionId: string): Promise<void> {
+  const paneId = reconnectPickerPaneId.value
+  reconnectPickerOpen.value = false
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  // A failed re-point (e.g. NO_TRANSCRIPT — the transcript vanished between the
+  // picker load and confirm) returns null from sendQuiet. Surface it and keep
+  // the ghost pane instead of killing it against a resume that never happened.
+  const repointed = await sendQuiet('pane.reconnect_session', {
+    workspace_path: pane.workspacePath,
+    pane_id: paneId,
+    session_id: sessionId,
+  })
+  if (!repointed) {
+    notifyRestore.toast(i18n.global.t('reconnect.failed'), { type: 'error', duration: 8000 })
+    return
+  }
+  const ok = await onManualResume({
+    agentKey: pane.agentKey,
+    workspacePath: pane.workspacePath,
+    sessionId,
+    customName: pane.customName,
+    runGroupId: pane.runGroupId,
+  })
+  if (ok) {
+    await onKill(paneId)
+    disconnectedPaneIds.value = disconnectedPaneIds.value.filter((id) => id !== paneId)
+  }
 }
 
 /** Status-bar "close all": kill every session pane and close this window's
@@ -4462,6 +4784,24 @@ async function onWorkspaceBrowse(path: string): Promise<void> {
 
 // ──────────────── Continuous-mode watcher + question alerts ────────────────
 
+// Question placeholder-stub filter (e.g. "<your question>"), shared by every
+// question detector so all paths classify a stub identically.
+const QUESTION_PLACEHOLDER_RE = /^<[^>]{1,40}>$/
+
+// Vendors whose log reader delivers assistant turn text. For their panes the
+// strict turn-text sentinel path (judgeTurnText) is authoritative, so the loose
+// in-buffer sentinel scan is skipped — it can false-complete on a TUI redraw
+// that re-echoes the kickoff's sentinel examples. Vendors without turn text
+// (grok/antigravity emit no turn_complete, kimi carries none) keep the buffer
+// scan as their only sentinel source.
+const TURN_TEXT_VENDORS = new Set(['claude', 'codex'])
+
+// A turn_complete whose CLI timestamp predates the watcher arming by more than
+// this is a replayed historical event (backend restart re-parses whole logs and
+// re-emits old turn_complete events), not a live completion — don't judge it.
+// The window tolerates same-machine clock skew between the CLI and the app.
+const TURN_TEXT_REPLAY_TOLERANCE_MS = 60_000
+
 // Absolute ceiling on a single stage so a wedged agent can't block the
 // pipeline forever. The agent's own sentinel (or the analyzer reading its
 // output) ends a stage long before this — the cap is just a backstop.
@@ -4595,13 +4935,21 @@ const sessionGhostHealGate = createGhostHealGate(async (paneId, pinnedSessionId)
 // is working; turn_complete = its turn ended. We timestamp both per pane; the
 // completion logic reads these instead of guessing from the TUI buffer.
 backend.on('agent.activity', (raw) => {
-  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string; detail?: string; text?: string }
+  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string; detail?: string; text?: string; timestamp?: string }
   if (!ev?.pane_id) return
-  if (ev.text) paneAssistantText.set(ev.pane_id, ev.text)
   if (ev.event_type === 'turn_complete') {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
     scheduleDoneNotify(ev.pane_id)
-    judgeTurnText(ev.pane_id)
+    // Judge THIS turn's own text (not a retained map): an empty-text
+    // turn_complete (Claude Stop hook, thinking-only record, Codex cross-batch)
+    // must never be judged against a previous turn's text.
+    judgeTurnText(ev.pane_id, ev.text ?? '', ev.timestamp ?? '')
+    // Unattended loop: the CLI printed LOOP_DONE_MARKER as this turn's final
+    // line → the whole task is done. Stop the loop so the poll never resends
+    // the resume prompt again (runs before the poll's turn-complete continue).
+    if (ev.text && turnEndsWithSentinel(ev.text, LOOP_DONE_MARKER)) {
+      stopLoopOnDoneMarker(ev.pane_id, ev.timestamp ?? '')
+    }
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
     // A new turn re-arms 'done' notifications for this pane.
@@ -4661,39 +5009,34 @@ backend.on('agent.activity', (raw) => {
   }
 })
 
-// Turn-text detection: judged once per completed turn on the assistant's own
-// message text from the CLI conversation log (never the terminal buffer, never
-// echoed input). Question blocks win over the sentinel; the sentinel only
-// counts as the turn's final line — mentions inside the text never trigger.
-function judgeTurnText(paneId: string): void {
+// Turn-text sentinel detection: judged on the completed turn's OWN assistant
+// text from the CLI conversation log (never the terminal buffer, never echoed
+// input). The sentinel counts only as the turn's final non-empty line, so
+// mentions inside the text never trigger. Questions are NOT surfaced here — the
+// buffer question pre-check owns that (it advances scanFrom and dedups); we only
+// DEFER completion when the turn also asked a real question, preserving
+// "question wins over sentinel" without a second enqueue path.
+function judgeTurnText(paneId: string, text: string, timestamp: string): void {
   const watcher = watchers.get(paneId)
   if (!watcher || watcher.cancelled) return
-  const text = paneAssistantText.get(paneId) ?? ''
+  // Empty text: a Stop-hook / thinking-only / cross-batch turn_complete carries
+  // none. Judging would fall back to stale content, so never proceed.
   if (!text) return
   const stage = stagesApi.stages.value[watcher.stageIndex]
-  if (!stage) return
-
-  if (stage.allowQuestions && !watcher.waitingForAnswer) {
-    const PLACEHOLDER_RE = /^<[^>]{1,40}>$/
+  if (!stage || !stage.sentinel) return
+  // Freshness: a replayed historical turn_complete (backend restart re-parses
+  // the whole log) carries its original, older CLI timestamp. Reject it so a
+  // prior turn's sentinel can't complete a freshly armed stage at kickoff.
+  const armedAt = paneArmedAt.get(paneId) ?? watcher.armedAt
+  const eventMs = timestamp ? Date.parse(timestamp) : NaN
+  if (!Number.isNaN(eventMs) && eventMs < armedAt - TURN_TEXT_REPLAY_TOLERANCE_MS) return
+  // Question wins: if this turn also asked a real question, defer to the buffer
+  // question path instead of completing the stage.
+  if (stage.allowQuestions) {
     const blocks = findConsecutiveQuestionBlocks(text, 0)
-    const real = blocks.filter((b) => !PLACEHOLDER_RE.test(b.prompt.trim()))
-    if (real.length > 0) {
-      watcher.waitingForAnswer = true
-      const paneMeta = panes.value.find((p) => p.id === paneId)
-      enqueueQuestion({
-        paneId,
-        stageIndex: watcher.stageIndex,
-        questions: real.map((b) => ({ prompt: b.prompt, type: b.type, options: b.options })),
-        agentLabel: paneMeta?.agentLabel ?? 'Agent',
-        stageTitle: stage.title,
-        slotLabel: paneMeta?.slotLabel ?? ''
-      })
-      pipelineLog(`Stage ${stage.id} ❓ (turn text) agent asked ${real.length} question(s)`)
-      return
-    }
+    if (blocks.some((b) => !QUESTION_PLACEHOLDER_RE.test(b.prompt.trim()))) return
   }
-
-  if (stage.sentinel && turnEndsWithSentinel(text, stage.sentinel)) {
+  if (turnEndsWithSentinel(text, stage.sentinel)) {
     cancelWatcher(paneId)
     pipelineLog(`Stage ${stage.id} ✓ sentinel detected (turn text)`)
     onStageSlotCompleted(watcher.stageIndex, paneId, 'sentinel')
@@ -5203,7 +5546,6 @@ function cancelAllWatchers(): void {
   paneArmedAt.clear()
   paneTurnCompleteAt.clear()
   paneLastActiveAt.clear()
-  paneAssistantText.clear()
 }
 
 // ── Manager-mode router: parsers + scan + route ─────────────────────────────
@@ -5676,9 +6018,8 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     // Only applies to allowQuestions stages (currently Stage 01); other stages
     // have no question detection and the sentinel remains fully unconditional.
     if (stage.allowQuestions && !watcher.waitingForAnswer && buf.length > watcher.scanFrom && !agentGenerating) {
-      const PLACEHOLDER_RE_PRE = /^<[^>]{1,40}>$/
       const preBlocks = findConsecutiveQuestionBlocks(buf, watcher.scanFrom)
-      const realPreBlocks = preBlocks.filter((b) => !PLACEHOLDER_RE_PRE.test(b.prompt.trim()))
+      const realPreBlocks = preBlocks.filter((b) => !QUESTION_PLACEHOLDER_RE.test(b.prompt.trim()))
       if (realPreBlocks.length > 0) {
         watcher.waitingForAnswer = true
         watcher.scanFrom = preBlocks[preBlocks.length - 1].endIndex
@@ -5705,13 +6046,14 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     // stages when a real question precedes the sentinel.
     //
     // Primary sentinel detection is turn-text (judgeTurnText, fed by the CLI's
-    // own conversation log via agent.activity). This in-buffer scan remains as
-    // a transitional fallback for vendors whose log reader carries no text —
-    // scanFrom keeps it clear of the kickoff echo. The old outputLogFile
-    // supplement was removed: it re-read the pane's rendered output where TUI
-    // redraws re-echo the kickoff (with its sentinel usage examples) after the
-    // arm-time snapshot, falsely completing stages seconds after kickoff.
-    if (stage.sentinel) {
+    // own conversation log via agent.activity). This in-buffer scan is the
+    // fallback ONLY for vendors whose log reader carries no turn text
+    // (grok/antigravity/kimi); for claude/codex the strict turn-text path is
+    // authoritative and this loose scan is skipped, because a TUI redraw that
+    // re-echoes the kickoff's sentinel examples past scanFrom can false-complete
+    // here — the exact class the outputLogFile supplement was removed for.
+    const paneVendor = panes.value.find((p) => p.id === paneId)?.agentKey ?? ''
+    if (stage.sentinel && !TURN_TEXT_VENDORS.has(paneVendor)) {
       let detected = false
       if (buf.length > watcher.scanFrom) {
         detected = buf.indexOf('\n' + stage.sentinel, watcher.scanFrom) >= 0
@@ -5769,8 +6111,7 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
         // Drop any block whose prompt is still a template placeholder (e.g.
         // "<你的問題>", "<your question>"). The agent copied the INTERACTION_PROTOCOL
         // example verbatim instead of filling in real content.
-        const PLACEHOLDER_RE = /^<[^>]{1,40}>$/
-        const realBlocks = blocks.filter((b) => !PLACEHOLDER_RE.test(b.prompt.trim()))
+        const realBlocks = blocks.filter((b) => !QUESTION_PLACEHOLDER_RE.test(b.prompt.trim()))
         if (realBlocks.length < blocks.length) {
           pipelineLog(`Stage ${stage.id} ⚠ dropped ${blocks.length - realBlocks.length} placeholder question(s) — agent echoed the template`)
         }
@@ -7427,6 +7768,13 @@ function paneIsCommander(p: ActivePane): boolean {
       @delete="onDeleteHistoryEntry"
       @cleanup="onCleanupHistory"
     />
+    <ReconnectSessionModal
+      :show="reconnectPickerOpen"
+      :orphans="reconnectOrphans"
+      :loading="reconnectLoading"
+      @close="reconnectPickerOpen = false"
+      @select="onConfirmReconnect"
+    />
     <main
       class="stage"
       :class="{ 'stage--tabbed': stageTabs.length > 0 }"
@@ -7807,6 +8155,11 @@ function paneIsCommander(p: ActivePane): boolean {
           @click="restorePane(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.restore') }}</div>
         <div class="pane-ctx-item" @click="startRenamePane(paneCtxMenu!.paneId)">{{ $t('action.rename') }}</div>
+        <div
+          class="pane-ctx-item"
+          :class="{ disabled: !isGhostPane(paneCtxView) }"
+          @click="openReconnectPicker(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('reconnect.menu-item') }}</div>
         <div class="pane-ctx-sep"></div>
         <div
           class="pane-ctx-item"
@@ -7899,6 +8252,17 @@ function paneIsCommander(p: ActivePane): boolean {
           :title="$t('orphans.title')"
           @click="reapOrphans"
         >⚠ {{ orphanCount }} {{ $t('orphans.leftover') }}</span>
+        <span
+          v-if="!isDetachedWindow && disconnectedCount > 0 && !reconnectBannerDismissed"
+          class="sb-item sb-reconnect"
+        >
+          <span
+            class="sb-reconnect-text"
+            :title="$t('reconnect.banner-title')"
+            @click="openReconnectPicker(disconnectedPaneIds[0])"
+          >⚡ {{ $t('reconnect.banner', { count: disconnectedCount }) }}</span>
+          <span class="sb-reconnect-dismiss" :title="$t('restore.dismiss')" @click="dismissReconnectBanner">✕</span>
+        </span>
         <span class="sb-item sb-build">{{ buildTag }}</span>
       </div>
     </div>
@@ -9010,6 +9374,11 @@ function paneIsCommander(p: ActivePane): boolean {
 .sb-build { color: var(--text-muted); }
 .sb-orphans { color: var(--danger, #C0392B); cursor: pointer; font-weight: 600; }
 .sb-orphans:hover { text-decoration: underline; }
+.sb-reconnect { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-bright, #3B5BDB); font-weight: 600; }
+.sb-reconnect-text { cursor: pointer; }
+.sb-reconnect-text:hover { text-decoration: underline; }
+.sb-reconnect-dismiss { cursor: pointer; opacity: 0.7; }
+.sb-reconnect-dismiss:hover { opacity: 1; }
 .sb-close-all { color: var(--danger, #C0392B); font-weight: 600; margin-left: 12px; }
 .sb-close-all:hover { text-decoration: underline; }
 

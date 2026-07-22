@@ -10,6 +10,11 @@ import { MCP_CATALOG, isMcpInstalled, type McpCatalogEntry } from '../data/mcpCa
 import { useTheme } from '../composables/useTheme'
 import { useSettings } from '../composables/useSettings'
 import { settingsGet, settingsSet } from '../lib/settings'
+import {
+  RESUME_BEHAVIOR_SETTING_KEY,
+  normalizeResumeBehavior,
+  type ResumeBehavior,
+} from '../lib/resumeBehavior'
 import { useCliAgentPrefs } from '../composables/useCliAgentPrefs'
 import { CLI_AGENT_SPECS } from '../lib/agentSpecs'
 import {
@@ -270,6 +275,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
   },
   {
+    id: 'general-resume-behavior',
+    tab: 'general',
+    section: 'general-resume-behavior',
+    title: 'Resume on Open / 開啟時恢復對話',
+    group: 'General',
+    summary: 'Whether opening a workspace resumes its previous CLI panes, starts them fresh, or asks each time.',
+    keywords: 'resume restore start fresh ask workspace open session conversation 恢復 還原 開新對話 詢問 開啟 工作區 對話 續接',
+  },
+  {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
@@ -406,6 +420,16 @@ function onLoopPromptChange(): void {
 const loopResumeText = ref(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME))
 function onLoopResumeChange(): void {
   settingsSet(LOOP_RESUME_SETTING_KEY, loopResumeText.value)
+}
+
+// Whether opening a workspace resumes its previous CLI panes, starts them
+// fresh, or asks. Read at restore time in App.vue.
+const resumeBehaviorModel = ref<ResumeBehavior>(
+  normalizeResumeBehavior(settingsGet(RESUME_BEHAVIOR_SETTING_KEY, 'always'))
+)
+function onResumeBehaviorChange(value: string): void {
+  resumeBehaviorModel.value = normalizeResumeBehavior(value)
+  settingsSet(RESUME_BEHAVIOR_SETTING_KEY, resumeBehaviorModel.value)
 }
 
 const { confirm: notifyConfirm } = useNotify()
@@ -2082,6 +2106,19 @@ async function plDelete(id: string, name: string) {
             <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
             <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
             <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
+          </section>
+
+          <section class="ap-section" data-settings-section="general-resume-behavior">
+            <h3 class="ap-title">{{ $t('settings.appearance.resume-behavior') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.resume-behavior-hint') }}</p>
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('settings.appearance.resume-behavior-label') }}</label>
+              <select :value="resumeBehaviorModel" @change="onResumeBehaviorChange(($event.target as HTMLSelectElement).value)">
+                <option value="always">{{ $t('settings.appearance.resume-behavior-always') }}</option>
+                <option value="never">{{ $t('settings.appearance.resume-behavior-never') }}</option>
+                <option value="ask">{{ $t('settings.appearance.resume-behavior-ask') }}</option>
+              </select>
+            </div>
           </section>
 
           <section class="ap-section" data-settings-section="general-environment">

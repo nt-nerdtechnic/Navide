@@ -172,7 +172,9 @@
       "loop-paused-notify-title": "Loop 已暫停",
       "loop-paused-notify-body": "已達工作階段上限，預計 {time} 自動續跑（點擊 Loop 標籤可立即續跑）",
       "loop-unparseable-notify-title": "Loop 已達工作階段上限",
-      "loop-unparseable-notify-body": "無法解析額度重置時間，因此不會排程自動續跑——請於額度重置後手動續跑"
+      "loop-unparseable-notify-body": "無法解析額度重置時間，因此不會排程自動續跑——請於額度重置後手動續跑",
+      "loop-complete-notify-title": "Loop 已完成",
+      "loop-complete-notify-body": "Agent 回報任務已全部完成——Loop 已自動停止"
     },
     "prep": {
       "starting": "啟動 CLI 中",
@@ -456,8 +458,14 @@
       "backend-timeout-hint": "啟動或重啟時等待後端變為健康狀態的時間，逾時就放棄。較慢的機器可拉長此值（15–120 秒）。",
       "backend-timeout-label": "逾時秒數",
       "loop-prompt": "Loop 提示詞",
-      "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。",
-      "loop-resume-hint": "工作階段達上限暫停後，額度重置時自動送出的續跑提示詞。"
+      "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。之後每輪結束會自動繼續，直到 Agent 回報任務完成才停止。",
+      "loop-resume-hint": "每輪結束後自動送出以持續 Loop 的續跑提示詞；工作階段達上限暫停後，額度重置時也會自動送出。",
+      "resume-behavior": "開啟工作區時恢復對話",
+      "resume-behavior-hint": "開啟工作區時，先前已啟動的 CLI pane 要如何處理。",
+      "resume-behavior-label": "開啟工作區時",
+      "resume-behavior-always": "總是恢復",
+      "resume-behavior-never": "一律開新對話",
+      "resume-behavior-ask": "每次詢問"
     },
     "roles": {
       "title": "角色",
@@ -1016,7 +1024,11 @@
     "dialog-message": "偵測到上次未正常關閉。要重新開啟 {count} 個 workspace 嗎？",
     "apply": "恢復",
     "dismiss": "忽略",
-    "session-not-found": "找不到 {agent} 的先前對話，已改開新對話。"
+    "session-not-found": "找不到 {agent} 的先前對話，已改開新對話。",
+    "resume-prompt-title": "恢復先前的對話？",
+    "resume-prompt-message": "此工作區有 {count} 個先前的對話，要恢復它們還是全新開始？",
+    "resume-prompt-confirm": "恢復對話",
+    "resume-prompt-cancel": "全新開始"
   },
   "orphans": {
     "title": "殘留 CLI 程序",
@@ -1025,6 +1037,21 @@
     "clean": "清理",
     "cleaned": "已清理 {count} 個殘留程序",
     "failed": "清理失敗"
+  },
+  "reconnect": {
+    "banner": "偵測到 {count} 段對話可能已斷開，點此復原",
+    "banner-title": "開啟手動指認清單以重新連結對話",
+    "auto-toast": "已自動接回 {count} 段對話",
+    "menu-item": "重新連結對話…",
+    "modal-title": "重新連結對話",
+    "modal-hint": "選擇要接回這個 pane 的先前對話：",
+    "loading": "載入中…",
+    "empty": "找不到可接回的孤兒對話",
+    "unnamed": "(未命名)",
+    "resumable": "可接回",
+    "not-resumable": "無法接回",
+    "confirm": "重新連結",
+    "failed": "無法接回這段對話，其歷史紀錄可能已不存在"
   },
   "closeAll": {
     "label": "全部關閉",
