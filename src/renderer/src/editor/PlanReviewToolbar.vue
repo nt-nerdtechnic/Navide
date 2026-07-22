@@ -374,6 +374,22 @@ async function reopen(): Promise<void> {
   })
 }
 
+// ── Archive ────────────────────────────────────────────────────────────────
+// Orthogonal to stage: archiving keeps the file and its stage, only setting
+// `archivedAt` (null clears it). This is the window-level entry point so
+// markdown plans — frozen in the PlansPane context menu — can still be archived.
+const isArchived = computed(() => !!meta.value?.archivedAt)
+
+async function archive(): Promise<void> {
+  if (!meta.value || saving.value || meta.value.archivedAt) return
+  await writeMeta((fresh) => (fresh.archivedAt ? null : { ...fresh, archivedAt: new Date().toISOString() }))
+}
+
+async function unarchive(): Promise<void> {
+  if (!meta.value || saving.value || !meta.value.archivedAt) return
+  await writeMeta((fresh) => (fresh.archivedAt ? { ...fresh, archivedAt: null } : null))
+}
+
 // ── Execute dispatch (Phase D) ────────────────────────────────────────────
 // Only an approved plan can be dispatched. Selecting an agent appends an
 // execution record + moves the stage to in-progress (through writeMeta, so
@@ -766,6 +782,7 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
   <div v-if="meta" class="prt">
     <div class="prt-bar">
       <span class="prt-stage" :class="`prt-stage--${meta.stage}`">{{ t(`pane.plans.stage-${meta.stage}`) }}</span>
+      <span v-if="isArchived" class="prt-archived-pill">{{ t('pane.plans.archived') }}</span>
       <span class="prt-progress">{{ t('pane.plans.progress-done', { done: progress.done, total: progress.total }) }}</span>
       <select v-if="outline.length" class="prt-outline" value="" @change="onOutlinePick">
         <option value="" disabled selected>{{ t('pane.plans.outline') }}</option>
@@ -799,6 +816,20 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
         :title="t('pane.plans.abandon-tooltip')"
         @click="abandon"
       >{{ t('pane.plans.abandon') }}</button>
+      <button
+        v-if="isArchived"
+        class="prt-unarchive"
+        :disabled="saving"
+        :title="t('pane.plans.unarchive-tooltip')"
+        @click="unarchive"
+      >{{ t('pane.plans.unarchive') }}</button>
+      <button
+        v-else
+        class="prt-archive"
+        :disabled="saving"
+        :title="t('pane.plans.archive-tooltip')"
+        @click="archive"
+      >{{ t('pane.plans.archive') }}</button>
       <button
         class="prt-share"
         :disabled="sharing"
@@ -1122,6 +1153,8 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
 .prt-approve,
 .prt-abandon,
 .prt-reopen,
+.prt-archive,
+.prt-unarchive,
 .prt-note-resolve,
 .prt-send {
   background: var(--bg-muted);
@@ -1131,6 +1164,29 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
   cursor: pointer;
   font-size: 11px;
   padding: 3px 10px;
+}
+
+.prt-archive:hover:not(:disabled),
+.prt-unarchive:hover:not(:disabled) {
+  background: var(--bg-hover-strong);
+}
+
+.prt-archive:disabled,
+.prt-unarchive:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.prt-archived-pill {
+  background: var(--bg-muted);
+  border-radius: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  text-transform: uppercase;
 }
 
 .prt-notes-btn:hover,

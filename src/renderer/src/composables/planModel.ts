@@ -53,6 +53,9 @@ export interface PlanMeta {
   overview: string
   stage: PlanStage
   approvedAt: string | null
+  /** ISO timestamp when the plan was archived; null/absent = not archived.
+   * Orthogonal to `stage` — an archived plan keeps its original stage. */
+  archivedAt?: string | null
   todos: PlanTodo[]
   reviewNotes: ReviewNote[]
   /** Optional dispatch log; absent means never dispatched. */

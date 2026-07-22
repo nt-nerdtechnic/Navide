@@ -1444,3 +1444,37 @@ describe('PlanReviewToolbar – markdown plans', () => {
     expect(rows.map((r) => r.find('.prt-history-stage').text())).toEqual(['in-review', 'draft'])
   })
 })
+
+describe('PlanReviewToolbar – archive', () => {
+  it('shows the Archive button and no archived pill for an unarchived plan', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()))
+    expect(wrapper.find('.prt-archive').exists()).toBe(true)
+    expect(wrapper.find('.prt-unarchive').exists()).toBe(false)
+    expect(wrapper.find('.prt-archived-pill').exists()).toBe(false)
+  })
+
+  it('archives the plan, writing archivedAt (stage untouched) and showing the pill + Unarchive', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta()))
+    await wrapper.find('.prt-archive').trigger('click')
+    await flushPromises()
+
+    const written = lastWrittenMeta(writes)
+    expect(typeof written.archivedAt).toBe('string')
+    expect(written.stage).toBe('in-review') // archive is orthogonal to stage
+    expect(wrapper.find('.prt-archived-pill').exists()).toBe(true)
+    expect(wrapper.find('.prt-unarchive').exists()).toBe(true)
+    expect(wrapper.find('.prt-archive').exists()).toBe(false)
+  })
+
+  it('unarchives an archived plan, clearing archivedAt and hiding the pill', async () => {
+    const { wrapper, writes } = await mountToolbar(planDoc(baseMeta({ archivedAt: '2026-07-20T00:00:00Z' })))
+    expect(wrapper.find('.prt-archived-pill').exists()).toBe(true)
+
+    await wrapper.find('.prt-unarchive').trigger('click')
+    await flushPromises()
+
+    expect(lastWrittenMeta(writes).archivedAt).toBeNull()
+    expect(wrapper.find('.prt-archived-pill').exists()).toBe(false)
+    expect(wrapper.find('.prt-archive').exists()).toBe(true)
+  })
+})

@@ -515,6 +515,29 @@ Some text.
     expect(bodyOf(written)).toBe(bodyOf(META_PLAN))
   })
 
+  it('defaults archivedAt to null when the field is absent (legacy plans)', () => {
+    expect(parsePlanMeta(META_PLAN)!.archivedAt).toBeNull()
+  })
+
+  it('writes and round-trips archivedAt through writePlanMeta', () => {
+    const meta = { ...parsePlanMeta(META_PLAN)!, archivedAt: '2026-07-22T00:00:00Z' }
+    const written = writePlanMeta(meta, META_PLAN)
+    expect(written).toContain('archivedAt:')
+    expect(parsePlanMeta(written)!.archivedAt).toBe('2026-07-22T00:00:00Z')
+  })
+
+  it('round-trips a null archivedAt back to null', () => {
+    const written = writePlanMeta(parsePlanMeta(META_PLAN)!, META_PLAN)
+    expect(parsePlanMeta(written)!.archivedAt).toBeNull()
+  })
+
+  it('legacy writePlanFile preserves an existing archivedAt instead of stripping it', () => {
+    const archived = writePlanMeta({ ...parsePlanMeta(META_PLAN)!, archivedAt: '2026-07-22T00:00:00Z' }, META_PLAN)
+    // A subsequent PlanFileView save (writePlanFile) must not drop archivedAt.
+    const reWritten = writePlanFile(parsePlanFile(archived)!, archived)
+    expect(parsePlanMeta(reWritten)!.archivedAt).toBe('2026-07-22T00:00:00Z')
+  })
+
   it('reads and writes the skipped status through the meta path', () => {
     const raw = `---
 name: Skips

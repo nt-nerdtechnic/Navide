@@ -225,7 +225,7 @@ describe('PlansPane', () => {
     const backend = makeBackend()
     const wrapper = mountPane(backend)
     await flushPromises()
-    await wrapper.find('.plans-link-btn').trigger('click')
+    await wrapper.findAll('.plans-link-btn').find((b) => b.text() === 'Delete all')!.trigger('click')
     await flushPromises()
     expect(backend.send).toHaveBeenCalledWith('fs.delete', {
       workspace_path: '/ws',
@@ -470,7 +470,7 @@ describe('PlansPane', () => {
     const wrapper = mountPane(backend)
     await flushPromises()
 
-    await wrapper.find('.plans-link-btn').trigger('click')
+    await wrapper.findAll('.plans-link-btn').find((b) => b.text() === 'Delete all')!.trigger('click')
     await flushPromises()
 
     expect(backend.send).toHaveBeenCalledWith('fs.delete', {
@@ -568,7 +568,7 @@ describe('PlansPane – context menu', () => {
     await openMenuOn(wrapper, 'HTML Review Plan')
 
     const labels = wrapper.findAll('.menu-item').map((i) => i.text())
-    expect(labels).toEqual(['Open', 'Share to Git', 'Rename', 'Delete'])
+    expect(labels).toEqual(['Open', 'Share to Git', 'Rename', 'Archive', 'Delete'])
   })
 
   it('adds Promote to Plan for HTML docs without meta', async () => {
@@ -885,5 +885,116 @@ describe('PlansPane – markdown plans use unified meta', () => {
     // Original body survives verbatim after the frontmatter.
     expect(written).toContain('# Email Attachments')
     expect(written).toContain('More detail here.')
+  })
+})
+
+// ── Archive ──────────────────────────────────────────────────────────────────
+
+const HTML_ARCHIVED_PLAN = htmlPlan({
+  schemaVersion: 1,
+  name: 'HTML Archived Plan',
+  overview: 'Shipped and filed away.',
+  stage: 'done',
+  approvedAt: '2026-07-01T00:00:00Z',
+  archivedAt: '2026-07-20T00:00:00Z',
+  todos: [{ id: 'phase-a', content: 'All done', status: 'done' }],
+  reviewNotes: [],
+})
+
+describe('PlansPane – archive', () => {
+  it('lists an archived plan in the collapsed Archived group, not its stage group', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'archived_a1b2c3.html', rel_path: '.agent-team/plans/archived_a1b2c3.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/archived_a1b2c3.html': HTML_ARCHIVED_PLAN },
+      })
+    )
+    await flushPromises()
+
+    const heads = wrapper.findAll('.plans-section-head').map((h) => h.text())
+    expect(heads.some((t) => t.includes('Archived'))).toBe(true)
+    // The Done stage group is gone — the plan left it for the Archived group.
+    expect(heads.some((t) => /\bDone\b/.test(t))).toBe(false)
+
+    // Default collapsed: the row is hidden until the header is clicked.
+    const rowVisible = (): boolean =>
+      wrapper.findAll('.plan-row').some((r) => r.text().includes('HTML Archived Plan'))
+    expect(rowVisible()).toBe(false)
+    const archivedHead = wrapper.findAll('.plans-section-head').find((h) => h.text().includes('Archived'))!
+    await archivedHead.trigger('click')
+    expect(rowVisible()).toBe(true)
+  })
+
+  it('archive-all-done archives done plans through the optimistic-lock store, not fs.delete', async () => {
+    notify.confirm.mockClear()
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    const archiveBtn = wrapper.findAll('.plans-link-btn').find((b) => b.text().includes('Archive all done'))!
+    expect(archiveBtn.attributes('disabled')).toBeUndefined()
+    await archiveBtn.trigger('click')
+    await flushPromises()
+
+    // Both done plans (legacy markdown + HTML) are archived through writeMeta.
+    const htmlWrite = backend.writes.find((w) => w.rel === '.agent-team/plans/shipped_d4e5f6.html')!
+    expect(htmlWrite).toBeDefined()
+    const parsed = parseHtmlPlanMeta(htmlWrite.content)!
+    expect(typeof parsed.meta.archivedAt).toBe('string')
+    expect(parsed.meta.stage).toBe('done') // stage preserved, not deleted
+    const mdWrite = backend.writes.find((w) => w.rel === '.cursor/plans/done.plan.md')!
+    expect(mdWrite).toBeDefined()
+    expect(parsePlanMeta(mdWrite.content)!.archivedAt).toBeTruthy()
+    // Archiving must never delete.
+    expect(backend.send).not.toHaveBeenCalledWith('fs.delete', {
+      workspace_path: '/ws',
+      rel_path: '.agent-team/plans/shipped_d4e5f6.html',
+    })
+  })
+
+  it('context menu archives an HTML plan (sets archivedAt)', async () => {
+    notify.confirm.mockClear()
+    const backend = reviewBackend()
+    const wrapper = mountPane(backend)
+    await flushPromises()
+    await openMenuOn(wrapper, 'HTML Review Plan')
+
+    expect(wrapper.findAll('.menu-item').map((i) => i.text())).toContain('Archive')
+    await menuItem(wrapper, 'Archive').trigger('click')
+    await flushPromises()
+
+    expect(backend.writes).toHaveLength(1)
+    expect(parseHtmlPlanMeta(backend.writes[0].content)!.meta.archivedAt).toBeTruthy()
+  })
+
+  it('context menu offers Unarchive for an archived plan and clears archivedAt', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'archived_a1b2c3.html', rel_path: '.agent-team/plans/archived_a1b2c3.html', is_dir: false },
+      ],
+      htmlFiles: { '.agent-team/plans/archived_a1b2c3.html': HTML_ARCHIVED_PLAN },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // Reveal the archived row (group is collapsed by default).
+    await wrapper.findAll('.plans-section-head').find((h) => h.text().includes('Archived'))!.trigger('click')
+    await openMenuOn(wrapper, 'HTML Archived Plan')
+
+    const labels = wrapper.findAll('.menu-item').map((i) => i.text())
+    expect(labels).toContain('Unarchive')
+    expect(labels).not.toContain('Archive')
+    await menuItem(wrapper, 'Unarchive').trigger('click')
+    await flushPromises()
+
+    expect(backend.writes).toHaveLength(1)
+    expect(parseHtmlPlanMeta(backend.writes[0].content)!.meta.archivedAt).toBeNull()
   })
 })

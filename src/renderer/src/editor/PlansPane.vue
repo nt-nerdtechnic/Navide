@@ -177,11 +177,28 @@ interface PlanStageRow {
 // markdown and HTML.
 function stageRows(stages: PlanStage[]): PlanStageRow[] {
   return plans.value.flatMap((p) => {
-    if (!p.meta || !stages.includes(p.meta.stage)) return []
+    // Archived plans leave their stage group and live in the Archived group so
+    // they never appear in both places at once.
+    if (!p.meta || p.meta.archivedAt || !stages.includes(p.meta.stage)) return []
     const progress = htmlPlanProgress(p.meta.todos)
     return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
   })
 }
+
+// Archived plans (any stage) collected into their own collapsed group.
+const archivedRows = computed<PlanStageRow[]>(() =>
+  plans.value.flatMap((p) => {
+    if (!p.meta || !p.meta.archivedAt) return []
+    const progress = htmlPlanProgress(p.meta.todos)
+    return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
+  })
+)
+
+// "Archive all done": done plans not yet archived. Drives the button state and
+// the batch target.
+const archivableDone = computed(() =>
+  plans.value.filter((p) => p.meta && p.meta.stage === 'done' && !p.meta.archivedAt)
+)
 
 const stageGroups = computed(() =>
   (
@@ -204,8 +221,9 @@ const deletablePlans = computed(() =>
 )
 
 // Section collapse — click a group header to fold/unfold its rows. Keyed by
-// 'active' for the doc group and by stage key for the stage groups.
-const collapsedSections = ref<Set<string>>(new Set())
+// 'active' for the doc group and by stage key for the stage groups. The
+// 'archived' group starts collapsed so archived plans stay out of the way.
+const collapsedSections = ref<Set<string>>(new Set(['archived']))
 function toggleSection(key: string): void {
   const next = new Set(collapsedSections.value)
   if (next.has(key)) next.delete(key)
@@ -238,6 +256,47 @@ async function deleteCompleted(): Promise<void> {
     else toast(resp.payload?.error || `Failed to delete ${item.name}`, { type: 'error' })
   }
   toast(`Deleted ${deleted} completed plan(s)`, { type: 'success' })
+  await loadPlans()
+}
+
+// ── Archive ────────────────────────────────────────────────────────────────
+// Archiving is non-destructive: the file stays on disk, only `archivedAt` is
+// set (null clears it). Writes go through the optimistic-lock store.writeMeta
+// so concurrent external edits are preserved, unlike the unlocked fs.delete.
+function planCtx(relPath: string) {
+  return { backend: props.backend, workspacePath: props.workspacePath, relPath }
+}
+
+async function setArchived(item: PlanItem, archivedAt: string | null): Promise<void> {
+  const resp = await resolvePlanStore(item.relPath).writeMeta(planCtx(item.relPath), (fresh) => ({
+    ...fresh,
+    archivedAt,
+  }))
+  if (!resp.ok) {
+    toast(resp.error ?? t('pane.plans.review-save-failed'), { type: 'error' })
+    return
+  }
+  await loadPlans()
+}
+
+async function archiveAllDone(): Promise<void> {
+  if (!archivableDone.value.length) return
+  const ok = await confirm(t('pane.plans.archive-all-confirm', { count: archivableDone.value.length }), {
+    title: t('pane.plans.archive-all-done'),
+    confirmText: t('pane.plans.archive-all-done'),
+  })
+  if (!ok) return
+
+  let archived = 0
+  for (const item of archivableDone.value) {
+    const resp = await resolvePlanStore(item.relPath).writeMeta(planCtx(item.relPath), (fresh) => ({
+      ...fresh,
+      archivedAt: new Date().toISOString(),
+    }))
+    if (resp.ok) archived++
+    else toast(resp.error || `Failed to archive ${item.name}`, { type: 'error' })
+  }
+  toast(t('pane.plans.archived-count', { count: archived }), { type: 'success' })
   await loadPlans()
 }
 
@@ -384,6 +443,22 @@ async function ctxDelete(): Promise<void> {
   if (item) await deletePlan(item)
 }
 
+async function ctxToggleArchive(): Promise<void> {
+  const item = ctxMenu.value.item
+  closeCtxMenu()
+  if (!item) return
+  if (item.meta?.archivedAt) {
+    await setArchived(item, null) // unarchive — reversible, no confirm
+    return
+  }
+  const ok = await confirm(t('pane.plans.archive-confirm', { name: item.meta?.name ?? item.name }), {
+    title: t('pane.plans.archive'),
+    confirmText: t('pane.plans.archive'),
+  })
+  if (!ok) return
+  await setArchived(item, new Date().toISOString())
+}
+
 // ── Promote doc → plan ────────────────────────────────────────────────────
 // HTML docs get a `plan-meta` island injected; markdown docs get a YAML
 // frontmatter block prepended (body preserved byte-for-byte). Both start at
@@ -471,7 +546,6 @@ async function ctxUpgradeToPlan(): Promise<void> {
     <header class="plans-head">
       <div>
         <div class="plans-title">Plans</div>
-        <div class="plans-subtitle">.agent-team/plans · .cursor/plans</div>
       </div>
       <button class="plans-icon-btn" title="Refresh" @click="loadPlans">↻</button>
     </header>
@@ -549,14 +623,57 @@ async function ctxUpgradeToPlan(): Promise<void> {
         </template>
       </section>
 
+      <section v-if="archivedRows.length" class="plans-section">
+        <div class="plans-section-head" role="button" tabindex="0" @click="toggleSection('archived')">
+          <span class="plans-section-title">
+            <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed('archived') }">▾</span>
+            {{ t('pane.plans.archived') }}
+          </span>
+          <span>{{ archivedRows.length }}</span>
+        </div>
+        <template v-if="!isSectionCollapsed('archived')">
+          <button
+            v-for="row in archivedRows"
+            :key="row.item.relPath"
+            class="plan-row plan-row--done"
+            @click="openPlan(row.item)"
+            @contextmenu.prevent="openCtxMenu($event, row.item)"
+          >
+            <span class="plan-row-name">{{ row.meta.name }}</span>
+            <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
+            <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
+            <span class="plan-row-meta">
+              <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+              <span class="plan-row-chips">
+                <span class="plan-chip">{{ row.meta.stage }}</span>
+                <span class="plan-chip plan-chip--archived">{{ t('pane.plans.archived') }}</span>
+              </span>
+            </span>
+            <span
+              class="plan-row-delete"
+              role="button"
+              :title="t('pane.plans.menu-delete')"
+              @click.stop="deletePlan(row.item)"
+            >✕</span>
+          </button>
+        </template>
+      </section>
+
       <section class="plans-section">
         <div class="plans-section-head">
           <span>Completed</span>
-          <button
-            class="plans-link-btn"
-            :disabled="!deletablePlans.length"
-            @click="deleteCompleted"
-          >Delete all</button>
+          <span class="plans-head-actions">
+            <button
+              class="plans-link-btn"
+              :disabled="!archivableDone.length"
+              @click="archiveAllDone"
+            >{{ t('pane.plans.archive-all-done') }}</button>
+            <button
+              class="plans-link-btn"
+              :disabled="!deletablePlans.length"
+              @click="deleteCompleted"
+            >Delete all</button>
+          </span>
         </div>
       </section>
     </template>
@@ -569,6 +686,9 @@ async function ctxUpgradeToPlan(): Promise<void> {
           <button class="menu-item" @click="ctxShareToGit">{{ t('pane.plans.share-git') }}</button>
           <button class="menu-item" @click="ctxRename">{{ t('pane.plans.menu-rename') }}</button>
         </template>
+        <button v-if="isHtmlItem(ctxMenu.item) && ctxMenu.item.meta" class="menu-item" @click="ctxToggleArchive">
+          {{ ctxMenu.item.meta.archivedAt ? t('pane.plans.unarchive') : t('pane.plans.archive') }}
+        </button>
         <template v-if="!ctxMenu.item.meta">
           <div class="menu-sep" />
           <button class="menu-item" @click="ctxUpgradeToPlan">{{ t('pane.plans.menu-upgrade') }}</button>
@@ -626,12 +746,6 @@ async function ctxUpgradeToPlan(): Promise<void> {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-.plans-subtitle {
-  color: var(--text-muted);
-  font-size: 11px;
-  margin-top: 2px;
 }
 
 .plans-icon-btn,
@@ -798,6 +912,22 @@ async function ctxUpgradeToPlan(): Promise<void> {
 .plan-chip--done {
   background: var(--success-subtle);
   color: var(--success-fg);
+}
+
+.plan-chip--archived {
+  background: var(--bg-muted);
+  color: var(--text-muted);
+}
+
+.plan-row-chips {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.plans-head-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .ctx-backdrop {

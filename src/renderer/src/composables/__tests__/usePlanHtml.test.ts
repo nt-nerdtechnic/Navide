@@ -242,6 +242,27 @@ describe('replaceHtmlPlanMeta', () => {
   })
 })
 
+describe('archivedAt', () => {
+  it('defaults to null when the field is absent (legacy plans)', () => {
+    const result = parseHtmlPlanMeta(VALID_HTML)!
+    expect(result.meta.archivedAt).toBeNull()
+  })
+
+  it('parses an explicit archivedAt string', () => {
+    const archived = wrapHtml(JSON.stringify({ ...VALID_META, archivedAt: '2026-07-22T00:00:00Z' }))
+    expect(parseHtmlPlanMeta(archived)!.meta.archivedAt).toBe('2026-07-22T00:00:00Z')
+  })
+
+  it('round-trips archivedAt through replaceHtmlPlanMeta', () => {
+    const meta: HtmlPlanMeta = {
+      ...parseHtmlPlanMeta(VALID_HTML)!.meta,
+      archivedAt: '2026-07-22T12:34:56Z',
+    }
+    const reparsed = parseHtmlPlanMeta(replaceHtmlPlanMeta(VALID_HTML, meta))!
+    expect(reparsed.meta.archivedAt).toBe('2026-07-22T12:34:56Z')
+  })
+})
+
 describe('unknown-field preservation and executions', () => {
   const EXTRA_META = {
     ...VALID_META,
@@ -391,6 +412,7 @@ describe('injectPlanMeta', () => {
     overview: '',
     stage: 'draft',
     approvedAt: null,
+    archivedAt: null,
     todos: [],
     reviewNotes: [],
   }

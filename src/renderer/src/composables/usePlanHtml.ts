@@ -27,6 +27,8 @@ export interface HtmlPlanMeta {
   overview: string
   stage: PlanStage
   approvedAt: string | null
+  /** ISO timestamp when archived; null/absent = not archived (orthogonal to stage). */
+  archivedAt?: string | null
   todos: HtmlPlanTodo[]
   reviewNotes: HtmlPlanReviewNote[]
   /** Optional dispatch log; absent means never dispatched. */
@@ -138,6 +140,7 @@ export function parseHtmlPlanMeta(content: string): { meta: HtmlPlanMeta; warnin
     overview: asString(obj.overview),
     stage,
     approvedAt: typeof obj.approvedAt === 'string' ? obj.approvedAt : null,
+    archivedAt: typeof obj.archivedAt === 'string' ? obj.archivedAt : null,
     todos,
     reviewNotes,
   }

@@ -285,6 +285,7 @@ export function parsePlanMeta(raw: string): PlanMeta | null {
     overview: typeof obj.overview === 'string' ? obj.overview : '',
     stage: readStage(obj, todos),
     approvedAt: typeof obj.approvedAt === 'string' ? obj.approvedAt : null,
+    archivedAt: typeof obj.archivedAt === 'string' ? obj.archivedAt : null,
     todos,
     reviewNotes: readReviewNotes(obj),
     isProject: obj.isProject === true,
@@ -319,6 +320,9 @@ interface FrontmatterFields {
   isProject: boolean
   stage: PlanStage
   approvedAt: string | null
+  /** Omitted (undefined) by the legacy `writePlanFile` path so an existing
+   * on-disk value round-trips; `writePlanMeta` always passes it (null or ISO). */
+  archivedAt?: string | null
   reviewNotes: ReviewNote[]
   executions?: PlanExecution[]
 }
@@ -337,6 +341,10 @@ function serializeFrontmatter(originalYaml: string, fields: FrontmatterFields): 
   base.isProject = fields.isProject
   base.stage = fields.stage
   base.approvedAt = fields.approvedAt
+  // archivedAt mirrors approvedAt (a value is always written, null is written
+  // too) — but only when the caller supplies it. The legacy `writePlanFile`
+  // path omits it, so an existing on-disk `archivedAt` survives untouched.
+  if (fields.archivedAt !== undefined) base.archivedAt = fields.archivedAt
   base.reviewNotes = fields.reviewNotes
   if (fields.executions && fields.executions.length > 0) base.executions = fields.executions
   else delete base.executions
@@ -407,6 +415,7 @@ export function writePlanMeta(meta: PlanMeta, originalRaw: string): string {
     isProject: meta.isProject === true,
     stage: meta.stage,
     approvedAt: meta.approvedAt,
+    archivedAt: meta.archivedAt ?? null,
     reviewNotes: meta.reviewNotes,
     executions: meta.executions,
   })
