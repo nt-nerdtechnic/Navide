@@ -2982,13 +2982,18 @@ async def project_rename_pane(session: "Session", msg_id: str, msg_type: str, pa
         )
         # rename_pane() patches the persisted history mirror; push it to
         # peer windows so their in-memory copies (and later snapshots)
-        # don't clobber the rename with stale entries.
-        if project is not None and project.ui_spawn_history is not None:
+        # don't clobber the rename with stale entries. renamed_pane lets
+        # peers also patch their live panes[] state — spawn_history alone
+        # leaves their pane titles/lists showing the old name.
+        if project is not None:
+            delta: dict = {
+                "workspace_path": project.workspace_path,
+                "renamed_pane": {"pane_id": pane_id, "custom_name": custom_name},
+            }
+            if project.ui_spawn_history is not None:
+                delta["spawn_history"] = project.ui_spawn_history
             await app.broadcast(
-                make_event("project.ui_state_changed", {
-                    "workspace_path": project.workspace_path,
-                    "spawn_history": project.ui_spawn_history,
-                }),
+                make_event("project.ui_state_changed", delta),
                 exclude=session,
             )
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))

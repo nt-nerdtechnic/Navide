@@ -5790,9 +5790,17 @@ function onRunGroupsRemoteSync(raw: unknown): void {
     workspace_path?: string
     run_groups?: RunGroup[]
     spawn_history?: SpawnHistoryEntry[]
+    renamed_pane?: { pane_id?: string; custom_name?: string }
   } | null
   const ws = currentWorkspace.value
   if (!ws || !d || d.workspace_path !== ws) return
+  // A peer window renamed a pane. spawn_history below only patches the
+  // resume/history mirror — the live pane state must be patched too, or this
+  // window's pane title and lists keep showing the old name.
+  if (d.renamed_pane?.pane_id) {
+    const pane = panes.value.find((p) => p.id === d.renamed_pane!.pane_id)
+    if (pane) pane.customName = d.renamed_pane.custom_name?.trim() || undefined
+  }
   if (Array.isArray(d.spawn_history)) {
     // Apply the peer window's persisted workspace history without echoing it
     // straight back through our deep watcher.
