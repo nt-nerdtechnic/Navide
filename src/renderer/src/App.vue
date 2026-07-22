@@ -6679,7 +6679,6 @@ watch(layoutMode, (mode) => {
 }, { immediate: true })
 
 const effectiveLayoutMode = computed<'grid' | 'spotlight' | 'sidebar' | 'fullscreen'>(() => {
-  if (tabVisiblePanes.value.length <= 1) return 'grid'
   const m = layoutMode.value
   // auto → sidebar layout (focus pane left, others stacked in right column)
   if (m === 'auto') return 'sidebar'
