@@ -61,8 +61,12 @@ export interface ActivePaneView {
   loopActive?: boolean
   /** Epoch ms of the scheduled loop auto-resume; null/undefined when not waiting. */
   loopWaitUntil?: number | null
-  /** Uses App's canonical resume eligibility check. The sidebar only renders a
-   *  rebuild control; App remains the sole owner of the rebuild operation. */
+  /** True when the pane's agent is resume-capable — RENDERS the rebuild control
+   *  (disabled until canRebuild), matching the in-pane button's discoverability. */
+  rebuildVisible?: boolean
+  /** Uses App's canonical resume eligibility check — ENABLES the control. The
+   *  sidebar only renders a rebuild control; App remains the sole owner of the
+   *  rebuild operation. */
   canRebuild?: boolean
   /** True while App has a rebuild in flight for this pane's session — disables
    *  the rebuild control so a double-click cannot start a second kill/spawn. */
@@ -1169,11 +1173,11 @@ function onPipelineDividerEnd(): void {
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
             <button
-              v-if="p.canRebuild && !p.isMinimized"
+              v-if="p.rebuildVisible && !p.isMinimized"
               class="icon-btn agent-rebuild-btn"
-              :disabled="p.rebuilding"
-              :title="$t('pane.terminal.rebuild-tooltip')"
-              :aria-label="$t('pane.terminal.rebuild-tooltip')"
+              :disabled="p.rebuilding || !p.canRebuild"
+              :title="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
+              :aria-label="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
               @click.stop="emit('rebuild', p.id)"
             >
               <RebuildIcon />

@@ -89,6 +89,37 @@ export function dedupeRestorablePanes<T extends { agent?: string; session_id?: s
   return out
 }
 
+/** CLIs whose panes can be re-spawned via `<cli> --resume <id>`. */
+export const REBUILD_CAPABLE_AGENTS = ['claude', 'codex', 'antigravity', 'grok', 'kimi']
+
+/** Whether the Rebuild (resume) button is RENDERED for a pane. Purely by
+ * agentKey, so a resume-capable pane shows the button from spawn (disabled
+ * until it becomes rebuildable) for discoverability. Non-resumable agents
+ * (e.g. plain terminal) never render it. */
+export function paneRebuildVisible(pane: { agentKey: string }): boolean {
+  return REBUILD_CAPABLE_AGENTS.includes(pane.agentKey)
+}
+
+/** Whether the Rebuild (resume) button is ENABLED: a transcript for the pane's
+ * session must exist on disk. Every resumable CLI needs both a pinned session
+ * id AND the sessionOnDisk flag:
+ *  - claude pins `--session-id` at spawn, before any transcript is written, so
+ *    the id alone is not enough — the flag is set on resume spawns, on the
+ *    first claude turn event, and on session.detected.
+ *  - the other CLIs only ever receive pinnedSessionId together with the flag
+ *    (resume spawn or session.detected), so requiring both leaves their
+ *    enable timing unchanged.
+ */
+export function paneCanRebuild(pane: {
+  agentKey: string
+  pinnedSessionId?: string
+  sessionOnDisk?: boolean
+}): boolean {
+  if (!pane.pinnedSessionId) return false
+  if (!pane.sessionOnDisk) return false
+  return REBUILD_CAPABLE_AGENTS.includes(pane.agentKey)
+}
+
 export function buildResumeCommand(
   agentKey: string,
   sessionId: string,

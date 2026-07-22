@@ -18,7 +18,19 @@ const minimalProps = {
       command: 'codex',
       origin: 'manual',
       isMinimized: false,
+      rebuildVisible: true,
       canRebuild: true
+    },
+    {
+      id: 'pane-fresh',
+      agentKey: 'codex',
+      agentLabel: 'Codex',
+      status: 'idle',
+      command: 'codex',
+      origin: 'manual',
+      isMinimized: false,
+      rebuildVisible: true,
+      canRebuild: false
     },
     {
       id: 'pane-not-resumable',
@@ -28,6 +40,7 @@ const minimalProps = {
       command: 'zsh',
       origin: 'manual',
       isMinimized: false,
+      rebuildVisible: false,
       canRebuild: false
     }
   ],
@@ -58,12 +71,23 @@ describe('ControlPane – rebuild control', () => {
     sessionStorage.clear()
   })
 
-  it('only renders for panes App marks as rebuildable', () => {
-    expect(wrapper.findAll('.agent-rebuild-btn')).toHaveLength(1)
+  it('renders for every resume-capable pane (visible), not only rebuildable ones', () => {
+    // codex resumable + codex fresh render; the non-resumable shell pane does not
+    expect(wrapper.findAll('.agent-rebuild-btn')).toHaveLength(2)
+  })
+
+  it('disables the button and shows the disabled tooltip for a not-yet-rebuildable pane', () => {
+    const buttons = wrapper.findAll<HTMLButtonElement>('.agent-rebuild-btn')
+    const enabled = buttons[0] // pane-resumable
+    const disabled = buttons[1] // pane-fresh
+    expect(enabled.element.disabled).toBe(false)
+    expect(enabled.attributes('title')).toBe('pane.terminal.rebuild-tooltip')
+    expect(disabled.element.disabled).toBe(true)
+    expect(disabled.attributes('title')).toBe('pane.terminal.rebuild-tooltip-disabled')
   })
 
   it('emits the pane id so App can call its existing rebuild implementation', async () => {
-    await wrapper.get('.agent-rebuild-btn').trigger('click')
+    await wrapper.findAll('.agent-rebuild-btn')[0].trigger('click')
     expect(wrapper.emitted('rebuild')).toEqual([['pane-resumable']])
   })
 

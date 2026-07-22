@@ -67,6 +67,8 @@ import {
   buildResumeCommand,
   dedupeRestorablePanes,
   normalizeResumeSessionId,
+  paneCanRebuild,
+  paneRebuildVisible,
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
 } from './lib/resume-command'
@@ -588,6 +590,11 @@ interface ActivePane {
    *  Claude (the --session-id we pinned); filled in later for Codex/Antigravity once
    *  their CLI-generated id is detected from the session file. */
   pinnedSessionId?: string
+  /** True once the CLI transcript for pinnedSessionId is known to exist on
+   *  disk (resume spawn, first Claude turn event, or session.detected).
+   *  Gates the Rebuild (resume) buttons for Claude, whose pinnedSessionId is
+   *  minted at spawn — before any transcript is written. Runtime-only. */
+  sessionOnDisk?: boolean
   /** Stable Codex CODEX_HOME id. It can differ from the live pane id after restore. */
   sessionHomeId?: string
   /** Unique marker embedded in this pane's kickoff (Codex/Antigravity only) so the
@@ -922,6 +929,7 @@ function syncViews(): void {
       isMinimized: minimizedPanes.value.has(p.id),
       loopActive: p.loopActive,
       loopWaitUntil: p.loopWaitUntil,
+      rebuildVisible: paneRebuildVisible(p),
       canRebuild: paneCanRebuild(p),
       rebuilding: paneRebuilding(p)
     }
@@ -1937,6 +1945,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     kickoffPrompt: opts.kickoffPrompt ?? '',
     skipRoleInjection: opts.skipRoleInjection ?? false,
     pinnedSessionId,
+    sessionOnDisk: opts.isResume ? true : undefined,
     sessionHomeId: sessionHomeId || undefined,
     sessionMarker: sessionMarker || undefined,
   }
@@ -2417,10 +2426,6 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
  *  via --resume at the current size. */
 const rebuildingPanes = reactive(new Set<string>())
 const rebuildingTabPanes = ref(false)
-
-function paneCanRebuild(pane: ActivePane): boolean {
-  return !!pane.pinnedSessionId && ['claude', 'codex', 'antigravity', 'grok', 'kimi'].includes(pane.agentKey)
-}
 
 /** Canonical pane → resume-session-id derivation, shared by the rebuild lock
  *  and its UI state. */
@@ -4611,6 +4616,9 @@ backend.on('agent.activity', (raw) => {
   if (ev.vendor === 'claude' && ev.session_id) {
     const pane = panes.value.find((p) => p.id === ev.pane_id)
     if (pane) {
+      // A claude turn event means the CLI is writing its transcript — the
+      // pane's session is now resumable, so unlock the Rebuild buttons.
+      pane.sessionOnDisk = true
       const attributedId = ev.session_id
       const adopt = (): void => {
         pane.pinnedSessionId = attributedId
@@ -4704,6 +4712,7 @@ backend.on('session.detected', (raw) => {
   const sessionId = normalizeResumeSessionId(pane.agentKey, ev.session_id)
   if (!sessionId) return
   pane.pinnedSessionId = sessionId
+  pane.sessionOnDisk = true
   syncViews()
   const histSd = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
   if (histSd) histSd.sessionId = sessionId
@@ -7550,6 +7559,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :pipe-tag="p.origin === 'pipeline' && p.stageId ? `P${p.stageId}` : undefined"
           :is-commander="paneIsCommander(p)"
           :is-focus="p.id === effectiveFocusPaneId"
+          :rebuild-visible="paneRebuildVisible(p)"
           :can-rebuild="paneCanRebuild(p)"
           :rebuilding="paneRebuilding(p)"
           :is-preparing="paneShowsPrepOverlay(p)"

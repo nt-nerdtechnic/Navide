@@ -3,6 +3,8 @@ import {
   buildResumeCommand,
   dedupeRestorablePanes,
   normalizeResumeSessionId,
+  paneCanRebuild,
+  paneRebuildVisible,
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
 } from '../resume-command'
@@ -118,6 +120,52 @@ describe('dedupeRestorablePanes', () => {
       { agent: 'claude', session_id: 's2', pane_id: 'd' },
     ]
     expect(dedupeRestorablePanes(panes).map((p) => p.pane_id)).toEqual(['a', 'b', 'd'])
+  })
+})
+
+describe('paneRebuildVisible', () => {
+  it('renders the button for every resume-capable CLI, regardless of session state', () => {
+    for (const agentKey of ['claude', 'codex', 'antigravity', 'grok', 'kimi']) {
+      expect(paneRebuildVisible({ agentKey })).toBe(true)
+    }
+  })
+
+  it('shows a fresh codex pane the button (visible) even though it is not yet rebuildable', () => {
+    const pane = { agentKey: 'codex' }
+    expect(paneRebuildVisible(pane)).toBe(true)
+    expect(paneCanRebuild(pane)).toBe(false)
+  })
+
+  it('never renders the button for a non-resumable agent (plain terminal)', () => {
+    expect(paneRebuildVisible({ agentKey: 'terminal' })).toBe(false)
+  })
+})
+
+describe('paneCanRebuild', () => {
+  it('hides rebuild for a fresh claude pane (pinned id, no transcript yet)', () => {
+    expect(paneCanRebuild({ agentKey: 'claude', pinnedSessionId: 's1' })).toBe(false)
+  })
+
+  it('unlocks a claude pane once its transcript exists (turn event / resume spawn)', () => {
+    expect(paneCanRebuild({ agentKey: 'claude', pinnedSessionId: 's1', sessionOnDisk: true })).toBe(true)
+  })
+
+  it('never rebuilds without a pinned session id, even with the flag', () => {
+    expect(paneCanRebuild({ agentKey: 'claude', sessionOnDisk: true })).toBe(false)
+  })
+
+  it('unlocks other CLIs only when both the pinned id and the flag are present', () => {
+    for (const agentKey of ['codex', 'antigravity', 'grok', 'kimi']) {
+      expect(paneCanRebuild({ agentKey, pinnedSessionId: 's1', sessionOnDisk: true })).toBe(true)
+    }
+  })
+
+  it('hides rebuild for a codex pane with a pinned id but no flag', () => {
+    expect(paneCanRebuild({ agentKey: 'codex', pinnedSessionId: 's1' })).toBe(false)
+  })
+
+  it('excludes non-resumable agents (plain terminal)', () => {
+    expect(paneCanRebuild({ agentKey: 'terminal', pinnedSessionId: 's1', sessionOnDisk: true })).toBe(false)
   })
 })
 

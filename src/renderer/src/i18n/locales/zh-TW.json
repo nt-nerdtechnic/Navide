@@ -136,6 +136,7 @@
     },
     "terminal": {
       "rebuild-tooltip": "重建 (resume) ⌘⇧B — 殺掉並用 --resume 在當前尺寸重新開,清除無法重畫的疊影/跑版。會中斷進行中的回合、重印對話。",
+      "rebuild-tooltip-disabled": "重建需要一段可 resume 的對話。請先送出一則訊息，逐字稿會在第一次對話後建立。",
       "minimize-tooltip": "縮到側邊欄",
       "drag-to-tab-tooltip": "拖曳到上方 tab 可移動到其他分頁",
       "commander-tooltip": "全域管理者 — 跨階段協調,決定 ---STAGE-DONE---",

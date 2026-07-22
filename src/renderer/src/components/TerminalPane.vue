@@ -21,8 +21,12 @@ interface Props {
   pipeTag?: string
   isCommander?: boolean
   isFocus?: boolean
-  /** True when this pane has a resumable CLI session id — enables the rebuild
-   *  button (re-spawns the pane via --resume to recover from render corruption). */
+  /** True when this pane's agent is resume-capable — RENDERS the rebuild button
+   *  (disabled until canRebuild), so the control is discoverable from spawn. */
+  rebuildVisible?: boolean
+  /** True when this pane has a resumable CLI session id on disk — ENABLES the
+   *  rebuild button (re-spawns the pane via --resume to recover from render
+   *  corruption). */
   canRebuild?: boolean
   /** True while App has a rebuild in flight for this pane's session — disables
    *  the rebuild button so a double-click cannot start a second kill/spawn. */
@@ -264,12 +268,12 @@ onMounted(() => {
 <template>
   <div :class="['pane', { 'pane-focus': isFocus }]">
     <button
-      v-if="canRebuild"
+      v-if="rebuildVisible"
       class="rebuild-btn"
-      :disabled="rebuilding"
+      :disabled="rebuilding || !canRebuild"
       @click.stop="emit('rebuild')"
-      :title="$t('pane.terminal.rebuild-tooltip')"
-      :aria-label="$t('pane.terminal.rebuild-tooltip')"
+      :title="canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
+      :aria-label="canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
     ><RebuildIcon /></button>
     <button class="minimize-btn" @click.stop="emit('minimize')" :title="$t('pane.terminal.minimize-tooltip')">⊟</button>
     <header
