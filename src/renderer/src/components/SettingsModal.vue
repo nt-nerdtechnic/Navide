@@ -48,7 +48,7 @@ const confirmBeforeCloseModel = computed({
 })
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'cliAgents' | 'general' | 'appearance' | 'accounts' | 'shortcuts' | 'extensions'
+type Tab = 'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'cliAgents' | 'general' | 'updates' | 'appearance' | 'accounts' | 'shortcuts' | 'extensions'
 const activeTab = ref<Tab>(props.initialTab ?? 'roles')
 
 // Extensions/plugin layer is opt-in (AGENT_TEAM_MINI_IDE_PLUGIN=1). The tab and
@@ -252,11 +252,11 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'backend timeout health check startup 啟動逾時 後端',
   },
   {
-    id: 'general-updates',
-    tab: 'general',
-    section: 'general-updates',
+    id: 'updates',
+    tab: 'updates',
+    section: 'updates',
     title: 'Updates / 更新',
-    group: 'General',
+    group: 'Updates',
     summary: 'Check for updates, auto-check/auto-download, and release channel.',
     keywords: 'update updates version check auto download channel stable beta release notes 更新 版本 檢查 自動下載 頻道 穩定版 測試版',
   },
@@ -443,6 +443,7 @@ const settingsScopeNotes: Record<Tab, { scope: string; storage: keyof SettingsPa
   analyzer: { scope: 'User', storage: 'analyzer' },
   cliAgents: { scope: 'User', storage: 'localStorage' },
   general: { scope: 'User', storage: 'localStorage' },
+  updates: { scope: 'User', storage: 'mainProcess' },
   appearance: { scope: 'User', storage: 'localStorage' },
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
   shortcuts: { scope: 'User', storage: 'localStorage' },
@@ -1265,6 +1266,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
             <button :class="['s-tab', { active: activeTab === 'cliAgents' }]" @click="activeTab = 'cliAgents'">{{ $t('settings.tab.cliAgents') }}</button>
             <button :class="['s-tab', { active: activeTab === 'general' }]" @click="activeTab = 'general'">{{ $t('settings.tab.general') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'updates' }]" @click="activeTab = 'updates'">{{ $t('updater.section-title') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
             <button :class="['s-tab', { active: activeTab === 'shortcuts' }]" @click="activeTab = 'shortcuts'">{{ $t('settings.tab.shortcuts') }}</button>
@@ -2119,8 +2121,11 @@ async function plDelete(id: string, name: string) {
             <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
             <p v-if="settingsBundleError" class="err-msg">{{ settingsBundleError }}</p>
           </section>
+        </div>
 
-          <section class="ap-section" data-settings-section="general-updates">
+        <!-- ══ UPDATES TAB ══ -->
+        <div v-show="activeTab === 'updates'" class="s-body">
+          <section class="ap-section" data-settings-section="updates">
             <div class="ap-section-head">
               <h3 class="ap-title">{{ $t('updater.section-title') }}</h3>
               <button class="ap-reset" :disabled="updIsBusy || updateState.status === 'unsupported'" @click="checkForUpdates">{{ $t('updater.check') }}</button>
