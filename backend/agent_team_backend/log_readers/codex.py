@@ -16,25 +16,37 @@ import json
 import logging
 from pathlib import Path
 
-from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
+from .base import (
+    ActivityEvent,
+    IncrementalParseResult,
+    LogReader,
+    TokenUsage,
+    join_text_blocks,
+    read_jsonl_tail,
+)
 
 log = logging.getLogger("agent_team_backend.log_readers.codex")
 
 # Sentinel prefix for storing the file's prior cumulative totals inside the
 # per-file seen_keys set (avoids needing a separate state dict).
 _CUM_PREFIX = "__cum__:"
+# Prefix for stashing the last assistant text inside seen_keys, so a turn whose
+# assistant message and token_count boundary land in different poll batches
+# still delivers the text on its turn_complete (Codex's per-turn boundary).
+_TEXT_PREFIX = "__lasttext__:"
 
 
-def _output_text(content) -> str:  # noqa: ANN001
-    """Join output_text blocks of a rollout assistant message ("" when none)."""
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "output_text":
-                parts.append(str(block.get("text") or ""))
-    return "\n".join(p for p in parts if p)
+def _read_last_text(seen_keys: set[str]) -> str:
+    for k in seen_keys:
+        if k.startswith(_TEXT_PREFIX):
+            return k[len(_TEXT_PREFIX):]
+    return ""
+
+
+def _write_last_text(seen_keys: set[str], text: str) -> None:
+    for k in [k for k in seen_keys if k.startswith(_TEXT_PREFIX)]:
+        seen_keys.discard(k)
+    seen_keys.add(f"{_TEXT_PREFIX}{text}")
 
 
 def _int(v) -> int:  # noqa: ANN001
@@ -321,9 +333,12 @@ class CodexLogReader(LogReader):
         out: list[ActivityEvent] = []
         session_id = path.stem
         cwd = ""
-        # Latest assistant text seen while scanning; attached to the next
-        # token_count turn_complete so the frontend can judge the full turn.
-        last_text = ""
+        # Latest assistant text for this turn. Persisted in seen_keys (per-file,
+        # owned by the watcher) so a turn whose assistant message and its
+        # token_count boundary land in DIFFERENT poll batches still delivers the
+        # text on turn_complete — a scan-local variable would reset to "".
+        last_text = _read_last_text(seen_keys)
+        text_changed = False
         try:
             fh = path.open(encoding="utf-8")
         except OSError:
@@ -365,9 +380,10 @@ class CodexLogReader(LogReader):
                         and payload.get("role") == "assistant"
                         and payload.get("type") == "message"
                     ):
-                        text = _output_text(payload.get("content"))
+                        text = join_text_blocks(payload.get("content"), "output_text")
                         if text:
                             last_text = text
+                            text_changed = True
                     seen_keys.add(key)
                 elif rtype == "event_msg":
                     payload = rec.get("payload") or {}
@@ -376,12 +392,14 @@ class CodexLogReader(LogReader):
                         msg_text = str(payload.get("message") or "")
                         if msg_text:
                             last_text = msg_text
+                            text_changed = True
                     seen_keys.add(key)
+                    # Text rides only on turn_complete (the sole event the
+                    # frontend judges); agent_active carries none.
                     out.append(ActivityEvent(
                         vendor="codex", event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts, detail=ptype,
-                        text=last_text if ptype == "agent_message" else "",
                     ))
                     # token_count typically fires once per turn end in Codex.
                     if ptype == "token_count":
@@ -391,6 +409,12 @@ class CodexLogReader(LogReader):
                             dedup_key=f"turn:{line_no}", timestamp=ts,
                             detail="token_count", text=last_text,
                         ))
+                        # Turn consumed the text; reset so the next turn's
+                        # empty-text boundary can't reuse it.
+                        last_text = ""
+                        text_changed = True
                 else:
                     seen_keys.add(key)
+        if text_changed:
+            _write_last_text(seen_keys, last_text)
         return out

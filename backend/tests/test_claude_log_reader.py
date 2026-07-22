@@ -279,3 +279,38 @@ def test_parse_activity_text_joins_only_text_blocks(
     events = reader.parse_activity(session, seen)
     turns = [e for e in events if e.event_type == "turn_complete"]
     assert turns[0].text == "第一段\n---PLAN-DONE---"
+
+
+def test_parse_activity_text_only_on_turn_complete_not_agent_active(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "ghi-789.jsonl"
+    _write_jsonl(session, [
+        {
+            "type": "assistant",
+            "timestamp": "2026-07-22T13:24:00Z",
+            "message": {
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "完成\n---SPEC-DONE---"}],
+            },
+        },
+    ])
+    seen: set[str] = set()
+    events = reader.parse_activity(session, seen)
+    # agent_active never carries text (only turn_complete does).
+    assert all(e.text == "" for e in events if e.event_type == "agent_active")
+    turns = [e for e in events if e.event_type == "turn_complete"]
+    assert turns[0].text == "完成\n---SPEC-DONE---"
+
+
+def test_join_text_blocks_shared_helper() -> None:
+    from agent_team_backend.log_readers.base import join_text_blocks
+    assert join_text_blocks("plain", "text") == "plain"
+    assert join_text_blocks(
+        [{"type": "text", "text": "a"}, {"type": "tool_use"}, {"type": "text", "text": "b"}],
+        "text",
+    ) == "a\nb"
+    assert join_text_blocks([{"type": "output_text", "text": "x"}], "output_text") == "x"
+    assert join_text_blocks([{"type": "text", "text": "x"}], "output_text") == ""
+    assert join_text_blocks(None, "text") == ""

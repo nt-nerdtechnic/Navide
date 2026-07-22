@@ -63,6 +63,23 @@ class ActivityEvent:
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
+def join_text_blocks(content: Any, block_type: str) -> str:
+    """Join the text of a message's content blocks of one type ("" when none).
+
+    Shared by the vendor readers so assistant-text extraction stays identical
+    across CLIs — the pipeline's sentinel/question judgment depends on this
+    normalization being the same for every vendor.
+    """
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == block_type:
+                parts.append(str(block.get("text") or ""))
+    return "\n".join(p for p in parts if p)
+
+
 @dataclass
 class IncrementalParseResult:
     """Token events plus the compact cursor after the last complete source item."""

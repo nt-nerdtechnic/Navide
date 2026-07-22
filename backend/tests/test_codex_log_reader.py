@@ -264,9 +264,11 @@ def test_parse_activity_token_count_carries_last_assistant_text(
     assert turns[0].text == "測試完成\n---TEST-DONE---"
 
 
-def test_parse_activity_agent_message_event_carries_text(
+def test_parse_activity_text_only_on_turn_complete_not_agent_active(
     fake_codex_session: Path,
 ) -> None:
+    # Text rides only on turn_complete; agent_active never carries it (so a
+    # tool-heavy turn doesn't broadcast text on every line).
     _write_jsonl(fake_codex_session, [
         {
             "timestamp": "2026-07-22T13:26:00Z",
@@ -277,6 +279,33 @@ def test_parse_activity_agent_message_event_carries_text(
     reader = CodexLogReader()
     seen: set[str] = set()
     events = reader.parse_activity(fake_codex_session, seen)
-    msgs = [e for e in events if e.detail == "agent_message"]
-    assert len(msgs) == 1
-    assert msgs[0].text == "回覆內容"
+    assert all(e.text == "" for e in events if e.event_type == "agent_active")
+
+
+def test_parse_activity_last_text_persists_across_poll_batches(
+    fake_codex_session: Path,
+) -> None:
+    # The assistant message and its token_count boundary can land in different
+    # poll batches; the persisted last_text must still reach turn_complete.
+    _write_jsonl(fake_codex_session, [
+        {
+            "timestamp": "2026-07-22T13:26:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "測試完成\n---TEST-DONE---"}],
+            },
+        },
+    ])
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    # Batch 1: only the assistant message is present yet.
+    first = reader.parse_activity(fake_codex_session, seen)
+    assert not [e for e in first if e.event_type == "turn_complete"]
+    # Batch 2: the token_count boundary appends later.
+    with fake_codex_session.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(_token_count_event(100, 0, 50, 0)) + "\n")
+    second = reader.parse_activity(fake_codex_session, seen)
+    turns = [e for e in second if e.event_type == "turn_complete"]
+    assert len(turns) == 1
+    assert turns[0].text == "測試完成\n---TEST-DONE---"

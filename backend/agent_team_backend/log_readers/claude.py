@@ -21,7 +21,14 @@ import os
 import re
 from pathlib import Path
 
-from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
+from .base import (
+    ActivityEvent,
+    IncrementalParseResult,
+    LogReader,
+    TokenUsage,
+    join_text_blocks,
+    read_jsonl_tail,
+)
 
 log = logging.getLogger("agent_team_backend.log_readers.claude")
 
@@ -39,15 +46,54 @@ def encode_claude_cwd(cwd: str) -> str:
 
 def _assistant_text(msg: dict) -> str:
     """Join the text blocks of an assistant message ("" when none)."""
-    content = msg.get("content")
-    if isinstance(content, str):
-        return content
-    parts: list[str] = []
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(str(block.get("text") or ""))
-    return "\n".join(p for p in parts if p)
+    return join_text_blocks(msg.get("content"), "text")
+
+
+_PREVIEW_MAX_CHARS = 80
+
+
+def first_user_prompts(path: Path, limit: int = 2) -> list[str]:
+    """The first ``limit`` real human prompts from a Claude .jsonl (best-effort).
+
+    Mirrors parse_session_file's per-line ``json.loads`` loop. A "real" prompt
+    is a ``type=="user"`` record whose ``message.content`` is a plain string of
+    human text — not a tool_result / injected-text list, and not a slash-command
+    or system wrapper (those render as a string starting with "<", e.g.
+    ``<command-name>``, ``<task-notification>``, ``<local-command-stdout>``).
+    Each prompt is truncated to ~80 chars. Malformed lines are skipped;
+    returns ``[]`` when the file cannot be opened.
+    """
+    out: list[str] = []
+    try:
+        fh = path.open(encoding="utf-8")
+    except OSError as err:
+        log.debug("open %s failed: %s", path, err)
+        return out
+
+    with fh:
+        for raw in fh:
+            if len(out) >= limit:
+                break
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("type") != "user":
+                continue
+            msg = rec.get("message")
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if not isinstance(content, str):
+                continue  # tool_result / injected-text lists aren't human prompts
+            text = content.strip()
+            if not text or text.startswith("<"):
+                continue  # command wrappers, task-notifications, resume stubs
+            out.append(text[:_PREVIEW_MAX_CHARS])
+    return out
 
 
 def _int(v) -> int:  # noqa: ANN001
@@ -282,16 +328,17 @@ class ClaudeLogReader(LogReader):
                 if rtype == "assistant":
                     msg = rec.get("message") or {}
                     stop_reason = str(msg.get("stop_reason") or "")
-                    text = _assistant_text(msg)
                     # Mark every assistant line as activity so the watcher
-                    # knows the agent is producing content.
+                    # knows the agent is producing content. Text rides only on
+                    # turn_complete (the sole event the frontend judges), so a
+                    # tool-heavy turn doesn't broadcast its text on every line.
                     seen_keys.add(key)
                     out.append(ActivityEvent(
                         vendor="claude",
                         event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts,
-                        detail="assistant", text=text,
+                        detail="assistant",
                     ))
                     # end_turn = clean finish, not a tool_use pause.
                     if stop_reason == "end_turn":
@@ -300,7 +347,7 @@ class ClaudeLogReader(LogReader):
                             event_type="turn_complete",
                             cwd=cwd, session_id=session_id, file_path=str(path),
                             dedup_key=f"turn:{line_no}", timestamp=ts,
-                            detail=stop_reason, text=text,
+                            detail=stop_reason, text=_assistant_text(msg),
                         ))
                 elif rtype in ("tool_use", "user"):
                     seen_keys.add(key)

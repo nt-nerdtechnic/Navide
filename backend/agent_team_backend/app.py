@@ -570,6 +570,21 @@ async def _on_session_file(vendor: str, path: Path) -> None:
     await _maybe_announce_session(usage)
 
 
+# Safety bound on the assistant turn text carried on turn_complete events. It
+# only needs to keep a full turn (leading QUESTION block + trailing sentinel)
+# intact; the cap is generous and, when exceeded, keeps BOTH ends so neither a
+# head QUESTION block nor the last-line sentinel is lost. Text rides once per
+# turn (turn_complete only), so this is not a per-line hot-path cost.
+_ACTIVITY_TEXT_MAX_CHARS = 200_000
+
+
+def _cap_activity_text(text: str) -> str:
+    if len(text) <= _ACTIVITY_TEXT_MAX_CHARS:
+        return text
+    half = _ACTIVITY_TEXT_MAX_CHARS // 2
+    return f"{text[:half]}\n…\n{text[-half:]}"
+
+
 async def _on_log_activity(event: ActivityEvent) -> None:
     """Sink for agent-activity events (agent_active / turn_complete).
 
@@ -600,9 +615,9 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             "cwd": event.cwd,
             "timestamp": event.timestamp,
             "detail": event.detail,
-            # Tail-capped assistant turn text: enough for QUESTION blocks and
-            # the last-line sentinel without unbounded WS payloads.
-            "text": event.text[-8000:] if event.text else "",
+            # Assistant turn text (turn_complete only) for sentinel/question
+            # judgment. Bounded but generous — see _ACTIVITY_TEXT_MAX_CHARS.
+            "text": _cap_activity_text(event.text),
         }))
     except Exception as err:  # noqa: BLE001
         log.warning("activity sink failed: %s", err)
