@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -47,6 +48,23 @@ def _make_log_filename(task_description: str) -> str:
 def _project_id_for(workspace_path: str) -> str:
     h = hashlib.sha1(workspace_path.encode("utf-8")).hexdigest()[:10]
     return f"proj_{h}"
+
+
+def _backup_project_json(workspace_path: str) -> None:
+    """Copy project.json to a sibling project.json.bak (best-effort).
+
+    Called before reconnect_pane_session rewrites a pane's session id, so the
+    prior mapping can be recovered. No-op when the source is missing; a backup
+    failure logs and returns rather than blocking the reconnect. Mirrors the
+    shutil.copy2 style of store_migrations._backup_stores.
+    """
+    src = Path(workspace_path) / PROJECT_DIR_NAME / PROJECT_FILE
+    if not src.exists():
+        return
+    try:
+        shutil.copy2(src, src.with_suffix(src.suffix + ".bak"))
+    except OSError as err:  # noqa: BLE001
+        log.warning("project.json backup failed for %s (%s); continuing", workspace_path, err)
 
 
 def ensure_workspace_data_dir(workspace_path: str) -> Path:
@@ -724,6 +742,31 @@ class ProjectStore:
         pane.session_id = session_id
         self.save(project)
         return project
+
+    def reconnect_pane_session(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        session_id: str,
+    ) -> Project:
+        """Point a single pane at a chosen transcript's session id.
+
+        Deterministic reconnect for a ghost pane (its own id has no transcript):
+        under the save lock, back up project.json first, then rewrite ONLY the
+        matching pane's session_id and save — the same write shape as
+        record_manual_pane_session. Raises KeyError when pane_id is unknown.
+        Never touches any other pane.
+        """
+        with self._save_lock:
+            project = self.load_or_create(workspace_path)
+            pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+            if pane is None:
+                raise KeyError(f"pane {pane_id!r} not found in project {project.id}")
+            _backup_project_json(workspace_path)
+            pane.session_id = session_id
+            self.save(project)
+            return project
 
     def set_pane_run_group(
         self,

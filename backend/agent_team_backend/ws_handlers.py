@@ -18,6 +18,7 @@ import threading
 from typing import TYPE_CHECKING, Awaitable, Callable
 
 from .ipc import make_error, make_event, make_response
+from .log_readers.claude import ClaudeLogReader, first_user_prompts
 from .spawn_history import canonical_workspace_path, filter_foreign_entries
 
 if TYPE_CHECKING:
@@ -3534,6 +3535,89 @@ async def pane_set_run_group(session: "Session", msg_id: str, msg_type: str, pay
         pane_id=payload["pane_id"],
         run_group_id=payload.get("run_group_id", ""),
     )
+    await session.send_json(
+        make_response(msg_id, msg_type, app._project_payload(project))
+    )
+
+
+# ── Reconnect lost conversations (workspace/pane.*) ──────────────────────────
+def _collect_orphan_sessions(workspace_path: str) -> list[dict]:
+    """Enumerate this workspace's Claude transcripts that no live pane holds.
+
+    A transcript is orphaned when its session id is not the current session_id
+    of any non-removed pane in the workspace's project — those are the ones a
+    reconnect can safely adopt. Each orphan carries a short human-prompt
+    preview, size/mtime, its resumable flag, and (best-effort) the spawn-history
+    customName last associated with the id. Sorted newest mtime first. Blocking
+    file IO — call via asyncio.to_thread.
+    """
+    from . import app
+
+    files = ClaudeLogReader().session_files_for_workspace(workspace_path)
+    project = app.project_store.peek(workspace_path)
+    live_ids: set[str] = set()
+    history_names: dict[str, str] = {}
+    if project is not None:
+        for pane in project.panes:
+            if pane.spawn_status != "removed" and pane.session_id:
+                live_ids.add(pane.session_id)
+        # Oldest→newest order: overwriting keeps the name last associated.
+        for entry in project.ui_spawn_history or []:
+            if not isinstance(entry, dict):
+                continue
+            sid = entry.get("sessionId")
+            name = entry.get("customName")
+            if isinstance(sid, str) and sid and isinstance(name, str) and name:
+                history_names[sid] = name
+
+    orphans: list[dict] = []
+    for f in files:
+        sid = f.stem
+        if sid in live_ids:
+            continue
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        orphans.append({
+            "session_id": sid,
+            "preview": first_user_prompts(f, limit=2),
+            "size_bytes": st.st_size,
+            "mtime": st.st_mtime,
+            "resumable": app._session_exists("claude", workspace_path, sid),
+            "custom_name": history_names.get(sid, ""),
+        })
+    orphans.sort(key=lambda o: o["mtime"], reverse=True)
+    return orphans
+
+
+@handler("workspace.list_orphan_sessions")
+async def workspace_list_orphan_sessions(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    workspace_path = str(payload.get("workspace_path", ""))
+    orphans = await asyncio.to_thread(_collect_orphan_sessions, workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, {"orphans": orphans}))
+
+
+@handler("pane.reconnect_session")
+async def pane_reconnect_session(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    workspace_path = str(payload.get("workspace_path", ""))
+    pane_id = str(payload.get("pane_id", ""))
+    session_id = str(payload.get("session_id", ""))
+    if not app._session_exists("claude", workspace_path, session_id):
+        await session.send_json(make_error(
+            msg_id, msg_type, "NO_TRANSCRIPT",
+            f"no Claude transcript for session {session_id!r} in this workspace",
+        ))
+        return
+    try:
+        project = app.project_store.reconnect_pane_session(
+            workspace_path, pane_id=pane_id, session_id=session_id,
+        )
+    except KeyError as err:
+        await session.send_json(make_error(msg_id, msg_type, "PANE_NOT_FOUND", str(err)))
+        return
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
