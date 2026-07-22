@@ -33,6 +33,8 @@ from .projects import PROJECT_DIR_NAME
 log = logging.getLogger("agent_team_backend.tokens")
 
 TOKENS_FILE = "tokens.json"
+# Persisted-store schema version for tokens.json (see store_migrations.py).
+TOKENS_SCHEMA_VERSION = 1
 RECORDED_KEYS_FILE = "recorded-event-keys.json"
 LEGACY_READER_KEYS_FILE = "log-readers-seen.json"
 INGESTION_STATE_FILE = "token-ingestion-state.json"
@@ -97,6 +99,7 @@ def _empty_workspace_doc() -> dict[str, Any]:
 
 def _empty_global_doc() -> dict[str, Any]:
     return {
+        "schemaVersion": TOKENS_SCHEMA_VERSION,
         "all_time": _empty_bucket(),
         "by_vendor": {},
         "by_day": {},
@@ -284,6 +287,20 @@ class TokensStore:
             doc = json.loads(self._global_path.read_text(encoding="utf-8"))
             for k, v in _empty_global_doc().items():
                 doc.setdefault(k, v)
+            schema = doc.get("schemaVersion", TOKENS_SCHEMA_VERSION)
+            try:
+                schema = int(schema)
+            except (TypeError, ValueError):
+                schema = TOKENS_SCHEMA_VERSION
+            if schema > TOKENS_SCHEMA_VERSION:
+                # Written by a newer app version; load as-is (unknown keys are
+                # preserved) and don't crash.
+                log.warning(
+                    "global tokens.json schemaVersion %s is newer than supported "
+                    "%s; loading as-is",
+                    schema,
+                    TOKENS_SCHEMA_VERSION,
+                )
             return doc
         except Exception as err:  # noqa: BLE001
             log.warning("global tokens.json corrupt (%s); starting fresh", err)

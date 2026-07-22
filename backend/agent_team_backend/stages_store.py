@@ -23,6 +23,11 @@ log = logging.getLogger("agent_team_backend.stages")
 PIPELINES_FILE = "pipelines.json"
 STAGES_FILE = "stages.json"  # legacy — only used for migration detection
 
+# Persisted-store schema version. Bumped when the on-disk shape changes in a way
+# that needs a forward migration (see store_migrations.py). Distinct from the
+# doc's own "version": 2 field, which gates the pipelines container format.
+SCHEMA_VERSION = 1
+
 
 @dataclass
 class SlotDef:
@@ -440,6 +445,20 @@ class StagesStore:
                 self._write_doc(doc)
                 return doc
             if isinstance(data, dict) and data.get("version") == 2:
+                schema = data.get("schemaVersion", SCHEMA_VERSION)
+                try:
+                    schema = int(schema)
+                except (TypeError, ValueError):
+                    schema = SCHEMA_VERSION
+                if schema > SCHEMA_VERSION:
+                    # Written by a newer app version. Load as-is and do NOT
+                    # regenerate/overwrite — avoid truncating forward data.
+                    log.warning(
+                        "pipelines.json schemaVersion %s is newer than supported "
+                        "%s; loading as-is without rewriting",
+                        schema,
+                        SCHEMA_VERSION,
+                    )
                 return data
             raise ValueError("unknown format")
         except Exception as err:  # noqa: BLE001
@@ -477,6 +496,7 @@ class StagesStore:
     def _seed_doc(self) -> dict[str, Any]:
         return {
             "version": 2,
+            "schemaVersion": SCHEMA_VERSION,
             "active_pipeline_id": "default",
             "pipelines": [
                 {

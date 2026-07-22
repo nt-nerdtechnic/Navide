@@ -70,6 +70,7 @@ from .projects import ProjectStore
 from .recent_workspaces import RecentWorkspacesStore
 from .roles_store import RolesStore
 from .stages_store import StagesStore
+from .store_migrations import run_startup_migrations
 from .terminals import TerminalService
 from .tokens_store import TokensStore
 from .ui_settings import UiSettingsStore
@@ -728,6 +729,15 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
 
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
+    # One-time data protection on a version upgrade: back up the persisted JSON
+    # stores and forward-migrate their schema. Idempotent and best-effort —
+    # run_startup_migrations never raises, so it can't block startup. File I/O
+    # runs off the event loop.
+    try:
+        await asyncio.to_thread(run_startup_migrations)
+    except Exception as err:  # noqa: BLE001
+        log.warning("store backup/migration failed: %s", err)
+
     # Reap PTY children left behind by a previous run that died without its
     # shutdown sweep (SIGKILL, crash). Blocking ps/sleep — off the loop.
     try:
