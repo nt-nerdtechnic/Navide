@@ -63,6 +63,7 @@ while IFS=$'\t' read -r num title; do
     [ "$SHOW_ALL" -eq 1 ] && echo "  #$num  $title"
   else
     new_count=$((new_count + 1))
+    new_num="$num"
     echo "NEW #$num  $title"
     new_titles="${new_titles}#${num} ${title}"$'\n'
     echo "$num" >>"$STATE_FILE"
@@ -72,13 +73,33 @@ done <<<"$ISSUES"
 echo "---"
 echo "$REPO: $open_count open issue(s), $new_count new since last check."
 
-if [ "$new_count" -gt 0 ] && [ "$NOTIFY" -eq 1 ] && command -v osascript >/dev/null 2>&1; then
-  # Issue titles are attacker-controllable, so never interpolate them into the
-  # osascript source. Pass them via env vars and read them with `system
-  # attribute` inside AppleScript, which treats them as data, not code.
-  NAVIDE_BODY="$new_titles" NAVIDE_TITLE="Navide: $new_count new issue(s)" \
-    osascript -e 'display notification (system attribute "NAVIDE_BODY") with title (system attribute "NAVIDE_TITLE")' \
-    >/dev/null 2>&1 || true
+if [ "$new_count" -gt 0 ] && [ "$NOTIFY" -eq 1 ]; then
+  # Click target: the single new issue when there's exactly one, else the
+  # repo's issue list. $REPO and $new_num both come from gh's JSON (a
+  # nameWithOwner string and an integer), so the URL needs no escaping.
+  if [ "$new_count" -eq 1 ]; then
+    open_url="https://github.com/$REPO/issues/$new_num"
+  else
+    open_url="https://github.com/$REPO/issues"
+  fi
+
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    # terminal-notifier shows under its own identity (not Script Editor) and,
+    # unlike osascript's `display notification`, supports a click action via
+    # -open. Titles are attacker-controllable but pass as argv, so they're
+    # treated as data, never shell-interpolated.
+    terminal-notifier \
+      -title "Navide: $new_count new issue(s)" \
+      -message "$new_titles" \
+      -open "$open_url" \
+      >/dev/null 2>&1 || true
+  elif command -v osascript >/dev/null 2>&1; then
+    # Fallback (no click action): pass titles via env vars and read them with
+    # `system attribute` so AppleScript treats them as data, not code.
+    NAVIDE_BODY="$new_titles" NAVIDE_TITLE="Navide: $new_count new issue(s)" \
+      osascript -e 'display notification (system attribute "NAVIDE_BODY") with title (system attribute "NAVIDE_TITLE")' \
+      >/dev/null 2>&1 || true
+  fi
 fi
 
 exit 1
