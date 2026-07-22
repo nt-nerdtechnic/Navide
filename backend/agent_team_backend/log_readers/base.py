@@ -58,6 +58,8 @@ class ActivityEvent:
     dedup_key: str             # stable key per event for in-memory dedup
     timestamp: str = ""        # ISO 8601 if available
     detail: str = ""           # e.g. tool name, stop_reason, etc. (UI hint only)
+    text: str = ""             # assistant message text for this turn, when the
+                               # vendor log carries it; "" when unavailable
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 

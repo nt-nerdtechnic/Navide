@@ -163,6 +163,23 @@ describe('useTerminal — cursor shortcuts prevent the browser default', () => {
     scope.stop()
   })
 
+  it('Ctrl+1..9 are reserved by the app and never leak into the PTY', async () => {
+    const { mock, scope } = await spawnedTerminal()
+    // Normal path and IME path (e.key is a non-digit) both matched via e.code.
+    for (const overrides of [
+      { key: '1', code: 'Digit1', ctrlKey: true },
+      { key: 'Process', code: 'Digit2', ctrlKey: true },
+      { key: 'Unidentified', code: 'Numpad9', ctrlKey: true },
+    ]) {
+      const e = keyEvent(overrides)
+      const handled = captured.keyHandler!(e)
+      expect(handled).toBe(false)
+      expect(e.preventDefault).toHaveBeenCalled()
+    }
+    expect(inputsSent(mock)).toEqual([]) // no bytes sent to the terminal
+    scope.stop()
+  })
+
   it('plain keys pass through to xterm without preventDefault', async () => {
     const { mock, scope } = await spawnedTerminal()
     for (const overrides of [{ key: 'a' }, { key: 'ArrowLeft' }, { key: 'Backspace' }]) {

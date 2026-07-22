@@ -879,6 +879,15 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { e.preventDefault(); pasteText('\x01'); return false }
       if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { e.preventDefault(); pasteText('\x05'); return false }
       if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x17'); return false }
+
+      // App reserves Ctrl+1..9 for CLI quick-select (see keybindings/defaults).
+      // The central dispatcher normally consumes them, but if it misses (e.g. an
+      // IME reports a non-digit `e.key`) they must never leak into the PTY. Match
+      // on the physical key so the guard holds regardless of layout/IME.
+      if (e.ctrlKey && !e.metaKey && !e.altKey && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
+        e.preventDefault()
+        return false
+      }
       return true
     })
     // Make the whole pane click-focusable so the user can type immediately.

@@ -71,6 +71,14 @@ function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
     return e.code === 'Slash' || e.code === 'NumpadDivide'
   }
 
+  // Same layout/IME problem for digit shortcuts (Ctrl+1..9 CLI quick-select):
+  // with a Chinese IME active `e.key` may be `Process`/`Unidentified`, so the
+  // binding silently missed and the keystroke leaked into the focused terminal.
+  // Fall back to the physical digit key from the main row or the numpad.
+  if (/^[0-9]$/.test(expectedKey)) {
+    return e.code === `Digit${expectedKey}` || e.code === `Numpad${expectedKey}`
+  }
+
   return false
 }
 

@@ -25,6 +25,18 @@ log = logging.getLogger("agent_team_backend.log_readers.codex")
 _CUM_PREFIX = "__cum__:"
 
 
+def _output_text(content) -> str:  # noqa: ANN001
+    """Join output_text blocks of a rollout assistant message ("" when none)."""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "output_text":
+                parts.append(str(block.get("text") or ""))
+    return "\n".join(p for p in parts if p)
+
+
 def _int(v) -> int:  # noqa: ANN001
     try:
         return max(0, int(v))
@@ -309,6 +321,9 @@ class CodexLogReader(LogReader):
         out: list[ActivityEvent] = []
         session_id = path.stem
         cwd = ""
+        # Latest assistant text seen while scanning; attached to the next
+        # token_count turn_complete so the frontend can judge the full turn.
+        last_text = ""
         try:
             fh = path.open(encoding="utf-8")
         except OSError:
@@ -343,14 +358,30 @@ class CodexLogReader(LogReader):
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts, detail="assistant",
                     ))
+                elif rtype == "response_item":
+                    payload = rec.get("payload") or {}
+                    if (
+                        isinstance(payload, dict)
+                        and payload.get("role") == "assistant"
+                        and payload.get("type") == "message"
+                    ):
+                        text = _output_text(payload.get("content"))
+                        if text:
+                            last_text = text
+                    seen_keys.add(key)
                 elif rtype == "event_msg":
                     payload = rec.get("payload") or {}
                     ptype = str(payload.get("type") or "") if isinstance(payload, dict) else ""
+                    if ptype == "agent_message":
+                        msg_text = str(payload.get("message") or "")
+                        if msg_text:
+                            last_text = msg_text
                     seen_keys.add(key)
                     out.append(ActivityEvent(
                         vendor="codex", event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts, detail=ptype,
+                        text=last_text if ptype == "agent_message" else "",
                     ))
                     # token_count typically fires once per turn end in Codex.
                     if ptype == "token_count":
@@ -358,7 +389,7 @@ class CodexLogReader(LogReader):
                             vendor="codex", event_type="turn_complete",
                             cwd=cwd, session_id=session_id, file_path=str(path),
                             dedup_key=f"turn:{line_no}", timestamp=ts,
-                            detail="token_count",
+                            detail="token_count", text=last_text,
                         ))
                 else:
                     seen_keys.add(key)

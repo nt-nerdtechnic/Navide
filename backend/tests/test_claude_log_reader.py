@@ -217,3 +217,65 @@ def test_incremental_parse_reads_only_appended_complete_lines(
     parsed2 = reader.parse_incremental(session, partial.checkpoint)
     assert [(e.input_tokens, e.output_tokens) for e in parsed2.events] == [(20, 7)]
     assert len(parsed2.checkpoint["recent_keys"]) <= 64
+
+
+# ── parse_activity: assistant turn text ──────────────────────────────────────
+# The pipeline judges sentinel/QUESTION on this text. Role separation is the
+# core property: kickoff (user record) must never surface as event text, even
+# when it quotes the sentinel — that echo is what falsely completed stages
+# when detection read the rendered terminal output instead.
+
+def test_parse_activity_turn_complete_carries_assistant_text(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "abc-123.jsonl"
+    _write_jsonl(session, [
+        {
+            "type": "user",
+            "timestamp": "2026-07-22T13:23:27Z",
+            "message": {"content": "完成後，最後一行只輸出 ---SPEC-DONE---\n---SPEC-DONE---"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-07-22T13:24:00Z",
+            "message": {
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": "規格完成。\n---SPEC-DONE---"}],
+            },
+        },
+    ])
+    seen: set[str] = set()
+    events = reader.parse_activity(session, seen)
+
+    turns = [e for e in events if e.event_type == "turn_complete"]
+    assert len(turns) == 1
+    assert turns[0].text == "規格完成。\n---SPEC-DONE---"
+
+    user_events = [e for e in events if e.detail == "user"]
+    assert user_events and all(e.text == "" for e in user_events)
+
+
+def test_parse_activity_text_joins_only_text_blocks(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "def-456.jsonl"
+    _write_jsonl(session, [
+        {
+            "type": "assistant",
+            "timestamp": "2026-07-22T13:24:00Z",
+            "message": {
+                "stop_reason": "end_turn",
+                "content": [
+                    {"type": "text", "text": "第一段"},
+                    {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                    {"type": "text", "text": "---PLAN-DONE---"},
+                ],
+            },
+        },
+    ])
+    seen: set[str] = set()
+    events = reader.parse_activity(session, seen)
+    turns = [e for e in events if e.event_type == "turn_complete"]
+    assert turns[0].text == "第一段\n---PLAN-DONE---"

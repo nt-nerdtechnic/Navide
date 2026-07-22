@@ -221,3 +221,62 @@ def test_incremental_parse_counts_replaced_file_as_new_generation(
     replaced = reader.parse_incremental(fake_codex_session, first.checkpoint)
     assert [(e.input_tokens, e.output_tokens) for e in replaced.events] == [(700, 300)]
     assert replaced.checkpoint["identity"] != first.checkpoint["identity"]
+
+
+# ── parse_activity: assistant turn text ──────────────────────────────────────
+# token_count is Codex's turn boundary; the turn's text comes from the last
+# assistant response_item / agent_message seen before it. User input_text
+# (kickoff, which quotes the sentinel) must never surface as event text.
+
+def test_parse_activity_token_count_carries_last_assistant_text(
+    fake_codex_session: Path,
+) -> None:
+    _write_jsonl(fake_codex_session, [
+        {
+            "timestamp": "2026-07-22T13:25:24Z",
+            "type": "session_meta",
+            "payload": {"cwd": "/tmp/demo"},
+        },
+        {
+            "timestamp": "2026-07-22T13:25:25Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "user",
+                "content": [{"type": "input_text", "text": "完成後輸出 ---TEST-DONE---\n---TEST-DONE---"}],
+            },
+        },
+        {
+            "timestamp": "2026-07-22T13:26:00Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "測試完成\n---TEST-DONE---"}],
+            },
+        },
+        _token_count_event(100, 0, 50, 0),
+    ])
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    events = reader.parse_activity(fake_codex_session, seen)
+
+    turns = [e for e in events if e.event_type == "turn_complete"]
+    assert len(turns) == 1
+    assert turns[0].text == "測試完成\n---TEST-DONE---"
+
+
+def test_parse_activity_agent_message_event_carries_text(
+    fake_codex_session: Path,
+) -> None:
+    _write_jsonl(fake_codex_session, [
+        {
+            "timestamp": "2026-07-22T13:26:00Z",
+            "type": "event_msg",
+            "payload": {"type": "agent_message", "message": "回覆內容"},
+        },
+    ])
+    reader = CodexLogReader()
+    seen: set[str] = set()
+    events = reader.parse_activity(fake_codex_session, seen)
+    msgs = [e for e in events if e.detail == "agent_message"]
+    assert len(msgs) == 1
+    assert msgs[0].text == "回覆內容"

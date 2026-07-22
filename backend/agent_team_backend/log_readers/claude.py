@@ -37,6 +37,19 @@ def encode_claude_cwd(cwd: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", cwd.rstrip("/"))
 
 
+def _assistant_text(msg: dict) -> str:
+    """Join the text blocks of an assistant message ("" when none)."""
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+    return "\n".join(p for p in parts if p)
+
+
 def _int(v) -> int:  # noqa: ANN001
     try:
         return max(0, int(v))
@@ -269,6 +282,7 @@ class ClaudeLogReader(LogReader):
                 if rtype == "assistant":
                     msg = rec.get("message") or {}
                     stop_reason = str(msg.get("stop_reason") or "")
+                    text = _assistant_text(msg)
                     # Mark every assistant line as activity so the watcher
                     # knows the agent is producing content.
                     seen_keys.add(key)
@@ -277,7 +291,7 @@ class ClaudeLogReader(LogReader):
                         event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts,
-                        detail="assistant",
+                        detail="assistant", text=text,
                     ))
                     # end_turn = clean finish, not a tool_use pause.
                     if stop_reason == "end_turn":
@@ -286,7 +300,7 @@ class ClaudeLogReader(LogReader):
                             event_type="turn_complete",
                             cwd=cwd, session_id=session_id, file_path=str(path),
                             dedup_key=f"turn:{line_no}", timestamp=ts,
-                            detail=stop_reason,
+                            detail=stop_reason, text=text,
                         ))
                 elif rtype in ("tool_use", "user"):
                     seen_keys.add(key)

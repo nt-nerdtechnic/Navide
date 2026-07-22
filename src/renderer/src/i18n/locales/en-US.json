@@ -1001,6 +1001,15 @@
     "cleaned": "Cleaned up {count} leftover process(es)",
     "failed": "Cleanup failed"
   },
+  "closeAll": {
+    "label": "close all",
+    "title": "Close all sessions and tabs (history kept) — double-click to trigger",
+    "hint": "Double-click to close all sessions",
+    "confirmTitle": "Close all sessions",
+    "confirm": "Close all {count} session(s) and their tabs? Agent history is kept — this only frees the resources used by this project.",
+    "confirmBtn": "Close all",
+    "done": "Closed {count} session(s)"
+  },
   "cli-health": {
     "kicker": "CLI health check",
     "title": "Navide found an agent CLI setup issue",

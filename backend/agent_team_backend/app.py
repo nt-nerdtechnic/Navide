@@ -600,6 +600,9 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             "cwd": event.cwd,
             "timestamp": event.timestamp,
             "detail": event.detail,
+            # Tail-capped assistant turn text: enough for QUESTION blocks and
+            # the last-line sentinel without unbounded WS payloads.
+            "text": event.text[-8000:] if event.text else "",
         }))
     except Exception as err:  # noqa: BLE001
         log.warning("activity sink failed: %s", err)

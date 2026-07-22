@@ -56,7 +56,7 @@ import {
   CLI_CHIP_LINE_CAP,
   CLI_PASTE_LINE_CAP
 } from './lib/cliContext'
-import { allSlotsFinished, turnCompleteDone, type SlotSignal } from './lib/completion'
+import { allSlotsFinished, turnCompleteDone, turnEndsWithSentinel, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { AGENT_SPECS } from './lib/agentSpecs'
 import { orderedAgentKeys, isAgentEnabled } from './composables/useCliAgentPrefs'
@@ -892,6 +892,12 @@ const paneTurnCompleteAt = new Map<string, number>()
 // MOST RECENT signal was "working" vs "turn ended" — the core of the CLI-state
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
+
+// Latest assistant turn text per pane, from the CLI's own conversation log
+// (`agent.activity` events carrying `text`). Role-separated at the source —
+// kickoff echo is a user message and can never appear here — which is what
+// makes turn-text detection immune to TUI echo/redraw false positives.
+const paneAssistantText = new Map<string, string>()
 
 function syncViews(): void {
   paneViews.value = panes.value.map((p) => {
@@ -3726,6 +3732,46 @@ async function reapOrphans(): Promise<void> {
   await refreshOrphanCount()
 }
 
+/** Status-bar "close all": kill every session pane and close this window's
+ *  run-group tabs, freeing the project's resources. Spawn history is kept
+ *  (onKill only stamps removedAt); groups handed off to detached windows are
+ *  left untouched. Guarded against accidental clicks: double-click to trigger
+ *  (a single click only shows a hint), then a confirm dialog. */
+let closeAllHintTimer: number | null = null
+
+function closeAllHint(): void {
+  if (closeAllHintTimer !== null) return
+  // Delay past the dblclick window so a real double-click shows no hint.
+  closeAllHintTimer = window.setTimeout(() => {
+    closeAllHintTimer = null
+    notifyRestore.toast(i18n.global.t('closeAll.hint'), { type: 'info' })
+  }, 350)
+}
+
+async function closeAllSessions(): Promise<void> {
+  if (closeAllHintTimer !== null) {
+    window.clearTimeout(closeAllHintTimer)
+    closeAllHintTimer = null
+  }
+  const count = panes.value.length
+  if (count === 0) return
+  const ok = await notifyRestore.confirm(
+    i18n.global.t('closeAll.confirm', { count }),
+    {
+      title: i18n.global.t('closeAll.confirmTitle'),
+      confirmText: i18n.global.t('closeAll.confirmBtn'),
+      cancelText: i18n.global.t('restore.dismiss'),
+    },
+  )
+  if (!ok) return
+  if (pipeline.state === 'running') await onPipelineAbort()
+  for (const p of [...panes.value]) await onKill(p.id)
+  runGroups.value = runGroups.value.filter((g) => detachedGroupIds.value.has(g.id))
+  if (!runGroups.value.some((g) => g.id === currentRunGroupId.value)) currentRunGroupId.value = ''
+  activeTab.value = ''
+  notifyRestore.toast(i18n.global.t('closeAll.done', { count }), { type: 'success' })
+}
+
 /** Fetch framework docs from Context7 via MCP. Returns "" on failure (best-effort). */
 async function fetchDocPrefix(stageDocQuery: string): Promise<string> {
   if (!pipeline.task) return ''
@@ -4465,10 +4511,6 @@ interface StageWatcher {
    *  Used to detect "agent still generating" — if buf.length > lastPollBufLen
    *  the buffer is growing and question detection is deferred one tick. */
   lastPollBufLen: number
-  /** Byte offset into the outputLogFile already scanned for sentinel.
-   *  Lets us scan only new bytes each poll — more reliable than cleanBuffer
-   *  which can be truncated or have scanFrom pushed past the sentinel. */
-  logFileOffset: number
   /** Minimum safe scanFrom: set in startStageWatcher by scanning for any
    *  pre-existing sentinel in the buffer (e.g. old session history replayed
    *  via `claude resume`). Buffer-cap resets use this instead of 0 to avoid
@@ -4564,11 +4606,13 @@ const sessionGhostHealGate = createGhostHealGate(async (paneId, pinnedSessionId)
 // is working; turn_complete = its turn ended. We timestamp both per pane; the
 // completion logic reads these instead of guessing from the TUI buffer.
 backend.on('agent.activity', (raw) => {
-  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string; detail?: string }
+  const ev = raw as { event_type?: string; pane_id?: string; vendor?: string; session_id?: string; detail?: string; text?: string }
   if (!ev?.pane_id) return
+  if (ev.text) paneAssistantText.set(ev.pane_id, ev.text)
   if (ev.event_type === 'turn_complete') {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
     scheduleDoneNotify(ev.pane_id)
+    judgeTurnText(ev.pane_id)
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
     // A new turn re-arms 'done' notifications for this pane.
@@ -4624,6 +4668,45 @@ backend.on('agent.activity', (raw) => {
     }
   }
 })
+
+// Turn-text detection: judged once per completed turn on the assistant's own
+// message text from the CLI conversation log (never the terminal buffer, never
+// echoed input). Question blocks win over the sentinel; the sentinel only
+// counts as the turn's final line — mentions inside the text never trigger.
+function judgeTurnText(paneId: string): void {
+  const watcher = watchers.get(paneId)
+  if (!watcher || watcher.cancelled) return
+  const text = paneAssistantText.get(paneId) ?? ''
+  if (!text) return
+  const stage = stagesApi.stages.value[watcher.stageIndex]
+  if (!stage) return
+
+  if (stage.allowQuestions && !watcher.waitingForAnswer) {
+    const PLACEHOLDER_RE = /^<[^>]{1,40}>$/
+    const blocks = findConsecutiveQuestionBlocks(text, 0)
+    const real = blocks.filter((b) => !PLACEHOLDER_RE.test(b.prompt.trim()))
+    if (real.length > 0) {
+      watcher.waitingForAnswer = true
+      const paneMeta = panes.value.find((p) => p.id === paneId)
+      enqueueQuestion({
+        paneId,
+        stageIndex: watcher.stageIndex,
+        questions: real.map((b) => ({ prompt: b.prompt, type: b.type, options: b.options })),
+        agentLabel: paneMeta?.agentLabel ?? 'Agent',
+        stageTitle: stage.title,
+        slotLabel: paneMeta?.slotLabel ?? ''
+      })
+      pipelineLog(`Stage ${stage.id} ❓ (turn text) agent asked ${real.length} question(s)`)
+      return
+    }
+  }
+
+  if (stage.sentinel && turnEndsWithSentinel(text, stage.sentinel)) {
+    cancelWatcher(paneId)
+    pipelineLog(`Stage ${stage.id} ✓ sentinel detected (turn text)`)
+    onStageSlotCompleted(watcher.stageIndex, paneId, 'sentinel')
+  }
+}
 
 // Codex/Antigravity sessions are persisted after the backend observes their
 // session files: Codex announces the resume id from its per-pane CODEX_HOME
@@ -5127,6 +5210,7 @@ function cancelAllWatchers(): void {
   paneArmedAt.clear()
   paneTurnCompleteAt.clear()
   paneLastActiveAt.clear()
+  paneAssistantText.clear()
 }
 
 // ── Manager-mode router: parsers + scan + route ─────────────────────────────
@@ -5539,7 +5623,6 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     analyzerCooldownUntil: 0,
     lastAnalyzedBufferLen: 0,
     lastPollBufLen: 0,
-    logFileOffset: -1,  // -1 = not yet initialized; set to current file size on first poll
     minScanFrom
   }
   watchers.set(paneId, watcher)
@@ -5628,46 +5711,18 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
     // Exception: the question pre-check above returns early for allowQuestions
     // stages when a real question precedes the sentinel.
     //
-    // TWO sources are checked (cleanBuffer first, then outputLogFile):
-    //   1. cleanBuffer — fast, in-memory, but scanFrom can be pushed past the
-    //      sentinel by Q&A injections, and TUI animations may garble it.
-    //   2. outputLogFile — complete append-only record; immune to scanFrom and
-    //      truncation. Used as a reliable supplement when cleanBuffer misses.
+    // Primary sentinel detection is turn-text (judgeTurnText, fed by the CLI's
+    // own conversation log via agent.activity). This in-buffer scan remains as
+    // a transitional fallback for vendors whose log reader carries no text —
+    // scanFrom keeps it clear of the kickoff echo. The old outputLogFile
+    // supplement was removed: it re-read the pane's rendered output where TUI
+    // redraws re-echo the kickoff (with its sentinel usage examples) after the
+    // arm-time snapshot, falsely completing stages seconds after kickoff.
     if (stage.sentinel) {
       let detected = false
       if (buf.length > watcher.scanFrom) {
         detected = buf.indexOf('\n' + stage.sentinel, watcher.scanFrom) >= 0
         if (!detected) detected = findSentinel(buf, stage.sentinel, watcher.scanFrom) >= 0
-      }
-
-      // outputLogFile supplement — always runs, async, non-blocking.
-      // Reads only NEW bytes since last check so it stays cheap.
-      const pane = panes.value.find((p) => p.id === paneId)
-      const logFile = pane?.outputLogFile
-      if (!detected && logFile && window.agentTeam?.readFileFrom) {
-        ;(async () => {
-          // On first call, snapshot the current file size so we only read bytes
-          // written AFTER the watcher armed — the kickoff itself contains the
-          // sentinel in its usage examples and would cause a false positive.
-          if (watcher.logFileOffset < 0) {
-            const init = await window.agentTeam!.readFileFrom(logFile, 0)
-            if (!init.ok || watcher.cancelled) return
-            watcher.logFileOffset = init.newOffset  // skip everything up to now
-            return
-          }
-          const result = await window.agentTeam!.readFileFrom(logFile, watcher.logFileOffset)
-          if (!result.ok || watcher.cancelled) return
-          watcher.logFileOffset = result.newOffset
-          // Strip ANSI from log bytes before searching
-          const clean = result.content.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '')
-          if (clean.includes(stage.sentinel!)) {
-            if (!watcher.cancelled) {
-              cancelWatcher(paneId)
-              pipelineLog(`Stage ${stage.id} ✓ sentinel detected (log file)`)
-              onStageSlotCompleted(stageIndex, paneId, 'sentinel')
-            }
-          }
-        })()
       }
 
       if (detected) {
@@ -7840,6 +7895,13 @@ function paneIsCommander(p: ActivePane): boolean {
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
         <span
+          v-if="!isDetachedWindow && panes.length > 0"
+          class="sb-item sb-clickable sb-close-all"
+          :title="$t('closeAll.title')"
+          @click="closeAllHint"
+          @dblclick="closeAllSessions"
+        >✕ {{ $t('closeAll.label') }}</span>
+        <span
           v-if="orphanCount > 0"
           class="sb-item sb-orphans"
           :title="$t('orphans.title')"
@@ -8956,6 +9018,8 @@ function paneIsCommander(p: ActivePane): boolean {
 .sb-build { color: var(--text-muted); }
 .sb-orphans { color: var(--danger, #C0392B); cursor: pointer; font-weight: 600; }
 .sb-orphans:hover { text-decoration: underline; }
+.sb-close-all { color: var(--danger, #C0392B); font-weight: 600; margin-left: 12px; }
+.sb-close-all:hover { text-decoration: underline; }
 
 /* Pane right-click context menu */
 .pane-ctx-backdrop { position: fixed; inset: 0; z-index: 999; }

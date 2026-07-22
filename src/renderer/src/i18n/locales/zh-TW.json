@@ -1001,6 +1001,15 @@
     "cleaned": "已清理 {count} 個殘留程序",
     "failed": "清理失敗"
   },
+  "closeAll": {
+    "label": "全部關閉",
+    "title": "關閉所有 session 與分頁（保留紀錄）— 雙擊觸發",
+    "hint": "雙擊才會關閉全部 session",
+    "confirmTitle": "關閉全部 session",
+    "confirm": "要關閉全部 {count} 個 session 與分頁嗎？Agent 紀錄會保留，只釋放本專案佔用的資源。",
+    "confirmBtn": "全部關閉",
+    "done": "已關閉 {count} 個 session"
+  },
   "cli-health": {
     "kicker": "CLI 健康檢查",
     "title": "Navide 發現 Agent CLI 設定問題",

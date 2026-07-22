@@ -67,6 +67,13 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
+  // The confirm-before-quit gate (main's before-quit → native dialog, enabled
+  // by default on a fresh user-data dir) would block app.close() forever;
+  // auto-confirm the quit instead.
+  await app?.evaluate(({ dialog }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as any
+  })
   await app?.close()
   if (root) rmSync(root, { recursive: true, force: true })
 })

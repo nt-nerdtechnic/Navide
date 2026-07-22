@@ -171,6 +171,32 @@ describe('chord handling', () => {
   })
 })
 
+describe('ctrl+digit CLI quick-select resolves via physical key (IME leak fix)', () => {
+  it('consumes ctrl+2 even when an IME reports e.key as "Process"', () => {
+    const spy = vi.fn()
+    registerCommand('controlPane.selectCliType2', spy)
+    const e = dispatch({ key: 'Process', code: 'Digit2', ctrlKey: true })
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+    expect(probeEvents).toHaveLength(0) // never leaks to the focused terminal
+  })
+
+  it('still resolves ctrl+3 on the normal path where e.key is the digit', () => {
+    const spy = vi.fn()
+    registerCommand('controlPane.selectCliType3', spy)
+    const e = dispatch({ key: '3', code: 'Digit3', ctrlKey: true })
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(e.defaultPrevented).toBe(true)
+  })
+
+  it('resolves the numpad digit too when e.key is unidentified', () => {
+    const spy = vi.fn()
+    registerCommand('controlPane.selectCliType4', spy)
+    dispatch({ key: 'Unidentified', code: 'Numpad4', ctrlKey: true })
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('mod key cross-platform (audit issue 7)', () => {
   it('a "mod" rule matches ctrl on non-mac and meta on mac', () => {
     const spy = vi.fn()

@@ -302,6 +302,13 @@ test('prebind detects and persists two Codex panes plus one Antigravity pane thr
     expect(existsSync(join(home, '.codex', 'config.toml'))).toBe(true)
   } finally {
     client?.close()
+    // The confirm-before-quit gate (main's before-quit → native dialog, enabled
+    // by default on a fresh user-data dir) would block app.close() forever;
+    // auto-confirm the quit instead.
+    await app?.evaluate(({ dialog }) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as any
+    })
     await app?.close()
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }

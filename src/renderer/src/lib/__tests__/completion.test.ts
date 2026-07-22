@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { slotFinished, allSlotsFinished, turnCompleteDone, type SlotSignal } from '../completion'
+import { slotFinished, allSlotsFinished, turnCompleteDone, turnEndsWithSentinel, type SlotSignal } from '../completion'
 
 // Fixed reference time for the watcher arming. turn_complete only counts when
 // its timestamp is strictly AFTER this.
@@ -102,5 +102,39 @@ describe('turnCompleteDone', () => {
       turnCompleteAt: 0, lastActiveAt: 0, armedAt: ARMED,
       now: 999_999, settleMs: SETTLE
     })).toBe(false)
+  })
+})
+
+describe('turnEndsWithSentinel', () => {
+  const S = '---SPEC-DONE---'
+
+  it('accepts the sentinel as the final non-empty line', () => {
+    expect(turnEndsWithSentinel(`規格完成。\n${S}`, S)).toBe(true)
+    expect(turnEndsWithSentinel(`規格完成。\n${S}\n\n  `, S)).toBe(true)
+    expect(turnEndsWithSentinel(`  ${S}  `, S)).toBe(true)
+  })
+
+  it('rejects mid-text mentions (quoted protocol / instructions)', () => {
+    // Real kickoff instruction lines from the CRM run — these were echoed by
+    // the TUI and falsely completed stages under the old log-file scanner.
+    expect(turnEndsWithSentinel(`錯誤：完成了 ${S}\n接下來開始工作`, S)).toBe(false)
+    expect(turnEndsWithSentinel(`${S}\n正確：最後一行只有 ${S}。`, S)).toBe(false)
+    expect(turnEndsWithSentinel(`完成後，最後一行只輸出 ${S}。`, S)).toBe(false)
+  })
+
+  it('rejects inline text on the final line', () => {
+    expect(turnEndsWithSentinel(`完成了 ${S}`, S)).toBe(false)
+    expect(turnEndsWithSentinel(`${S} 以上`, S)).toBe(false)
+  })
+
+  it('rejects empty inputs', () => {
+    expect(turnEndsWithSentinel('', S)).toBe(false)
+    expect(turnEndsWithSentinel('done', '')).toBe(false)
+  })
+
+  it('question block followed by a bare sentinel line still ends with the sentinel', () => {
+    // Ordering (question wins) is the caller's job; this fn only judges the tail.
+    const text = `---QUESTION-START---\ntype: choice\nprompt: MVP 核心？\n---QUESTION-END---\n${S}`
+    expect(turnEndsWithSentinel(text, S)).toBe(true)
   })
 })

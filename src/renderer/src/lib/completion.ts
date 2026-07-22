@@ -58,3 +58,19 @@ export function turnCompleteDone(s: TurnCompleteState): boolean {
     s.now - s.turnCompleteAt >= s.settleMs
   )
 }
+
+/** True when the turn's final non-empty line is exactly the sentinel.
+ *  Judged on clean assistant text from the CLI's own conversation log (role-
+ *  separated at the source: kickoff echo is a user message and can never
+ *  appear here). Mid-text mentions or quoted protocol examples never match —
+ *  only a deliberate bare-line sentinel ending the turn counts. */
+export function turnEndsWithSentinel(text: string, sentinel: string): boolean {
+  if (!text || !sentinel) return false
+  const lines = text.split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (!line) continue
+    return line === sentinel
+  }
+  return false
+}
