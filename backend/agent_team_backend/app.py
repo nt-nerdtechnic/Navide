@@ -346,6 +346,15 @@ class Session:
             return
         try:
             async with self._send_lock:
+                # Re-check under the lock: on disconnect, a swarm of producers
+                # (broadcast + PTY output pump) can all pass the pre-lock guard
+                # while dead is still False, then serialize here. Without this
+                # re-check every one of them sends onto the closed socket, fails,
+                # and logs — turning a single disconnect into thousands of
+                # identical warnings that saturate the event loop. The first
+                # failure sets dead=True; the rest must no-op as documented.
+                if self.dead:
+                    return
                 await self.websocket.send_json(data)
         except (RuntimeError, WebSocketDisconnect, ClientDisconnected) as err:
             # RuntimeError: starlette's 'Cannot call "send" once a close

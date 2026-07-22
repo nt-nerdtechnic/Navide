@@ -77,6 +77,50 @@ async def test_dead_session_send_json_is_silent_noop() -> None:
     assert sock.send_attempts == 1
 
 
+class SuspendingClosedSocket:
+    """Closed socket whose send yields once before failing.
+
+    A real websocket.send_json awaits transport I/O, so it suspends mid-send.
+    That suspension is what lets a whole swarm of producers pass the pre-lock
+    dead guard before the first failure lands — a synchronous fake cannot
+    reproduce the race.
+    """
+
+    def __init__(self) -> None:
+        self.send_attempts = 0
+
+    async def send_json(self, data: dict) -> None:
+        self.send_attempts += 1
+        await asyncio.sleep(0)  # yield: let queued producers pass the guard
+        raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+
+async def test_concurrent_sends_on_closed_socket_hit_it_once() -> None:
+    """A disconnect swarm must collapse to a single send attempt.
+
+    Observed 2026-07-23 (installed-app backend.log): after a disconnect,
+    hundreds of already-scheduled producers (broadcast + PTY output pump) each
+    passed the pre-lock `if self.dead` guard while dead was still False, then
+    serialized on _send_lock and every one sent onto the closed socket, failed,
+    and logged `ws send failed; marking session dead`. The flood saturated the
+    event loop and pushed terminal.create past the frontend's 10 s timeout
+    ("setup failed"). The post-lock re-check must let only the first through.
+    """
+    sock = SuspendingClosedSocket()
+    session = app_module.Session(sock)  # type: ignore[arg-type]
+    app_module._SESSIONS.add(session)
+    try:
+        await asyncio.gather(
+            *(session.send_json({"type": "x", "n": i}) for i in range(50))
+        )
+        assert session.dead is True
+        # Only the first coroutine reaches the socket; the other 49 re-check
+        # dead under the lock and no-op instead of failing + logging.
+        assert sock.send_attempts == 1
+    finally:
+        app_module._SESSIONS.discard(session)
+
+
 async def test_broadcast_prunes_dead_session() -> None:
     sock = ClosedSocket()
     session = app_module.Session(sock)  # type: ignore[arg-type]
