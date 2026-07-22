@@ -158,7 +158,11 @@ def test_pane_attribution_within_run(claude_attr: tuple[Attribution, Path]) -> N
     assert result.stage_id == "01"
 
 
-def test_two_panes_same_workspace_get_different_files(claude_attr: tuple[Attribution, Path]) -> None:
+def test_two_unclaimed_panes_same_workspace_claim_nothing(claude_attr: tuple[Attribution, Path]) -> None:
+    """Several unclaimed same-cwd panes = ambiguous provenance. Pre-fix the
+    oldest registration claimed the session (a guess that could route one
+    pane's session to a sibling, which the frontend then persisted — silently
+    replacing that pane's session). Now: do nothing rather than guess."""
     attr, root = claude_attr
     cwd = "/x"
     proj = root / "-x"; proj.mkdir()
@@ -169,9 +173,34 @@ def test_two_panes_same_workspace_get_different_files(claude_attr: tuple[Attribu
     f2 = proj / "s2.jsonl"; f2.write_text("")
     r1 = attr.attribute(_make_usage("claude", session_id="s1", file_path=str(f1)))
     r2 = attr.attribute(_make_usage("claude", session_id="s2", file_path=str(f2)))
-    # Both belong to the workspace; the two new files map to two distinct panes.
+    # Workspace attribution still works; pane attribution is refused for both,
+    # and the refusal must not consume either pane (no side-effect claims).
     assert r1.workspace_path == r2.workspace_path == cwd
-    assert {r1.pane_id, r2.pane_id} == {"p1", "p2"}
+    assert r1.pane_id is None
+    assert r2.pane_id is None
+    assert attr.pane_for_session("s1") == (None, None, None)
+    assert attr.pane_for_session("s2") == (None, None, None)
+
+
+def test_rolled_session_id_never_claims_a_pinned_sibling(claude_attr: tuple[Attribution, Path]) -> None:
+    """/clear rolls a NEW session id in the same cwd. Every pane that pinned an
+    explicit --session-id is excluded from the fresh-claim heuristic, so the
+    rolled id must claim NO pane (deterministic provenance absent → do
+    nothing), never a sibling."""
+    attr, root = claude_attr
+    cwd = "/x"
+    proj = root / "-x"; proj.mkdir()
+    attr.register_pane("p1", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="sess-a")
+    attr.register_pane("p2", vendor="claude", cwd=cwd, workspace_path=cwd,
+                       explicit_session_id="sess-b")
+    rolled = proj / "sess-z.jsonl"; rolled.write_text("")
+    r = attr.attribute(_make_usage("claude", session_id="sess-z", file_path=str(rolled)))
+    assert r.workspace_path == cwd
+    assert r.pane_id is None
+    # The siblings' own sessions still route deterministically afterwards.
+    fa = proj / "sess-a.jsonl"; fa.write_text("")
+    assert attr.attribute(_make_usage("claude", session_id="sess-a", file_path=str(fa))).pane_id == "p1"
 
 
 def test_event_without_matching_pane_still_attributed_to_workspace(claude_attr: tuple[Attribution, Path]) -> None:

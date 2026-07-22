@@ -92,6 +92,12 @@ export function createGhostHealGate(
   }
 }
 
+/** Hand-written `--session-id <uuid>` in a custom command. Claude only accepts
+ *  a UUID here, so a strict UUID match is the deterministic parse; anything
+ *  else (odd quoting/placeholder) yields no pin — same as before. */
+const HANDWRITTEN_SESSION_ID_RE =
+  /--session-id[=\s]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![0-9a-fA-F-])/
+
 /** Fresh (non-resume) Claude launch pinning — extracted from spawnPane.
  *
  *  `requestedId` lets a restore/rebuild of a NOT-resumable session reuse the
@@ -106,8 +112,19 @@ export function pinFreshClaudeSession(
   requestedId: string | undefined,
   generate: () => string
 ): { command: string; explicitSessionId: string } {
-  if (agentKey !== 'claude' || isResume || command.includes('--session-id')) {
+  if (agentKey !== 'claude' || isResume) {
     return { command, explicitSessionId: '' }
+  }
+  if (command.includes('--session-id')) {
+    // Hand-written --session-id: the pane's session IS that id — definitive
+    // provenance from the launch command itself. Surface it as the explicit
+    // pin so (a) the backend binds session→pane deterministically instead of
+    // leaving the pane claimable by the same-cwd first-come heuristic, and
+    // (b) the attribution handler sees a pinned id and never blind-adopts a
+    // mis-routed sibling session (a pane's session must never be silently
+    // replaced). An unparseable form keeps the old no-pin behavior.
+    const handwritten = command.match(HANDWRITTEN_SESSION_ID_RE)
+    return { command, explicitSessionId: handwritten ? handwritten[1] : '' }
   }
   const id = requestedId?.trim() || generate()
   return { command: `${command} --session-id ${id}`, explicitSessionId: id }

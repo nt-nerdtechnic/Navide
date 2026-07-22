@@ -193,13 +193,47 @@ describe('pinFreshClaudeSession', () => {
     }
   })
 
-  it('never pins for resumes, other agents, or commands that already carry an id', () => {
+  it('never pins for resumes or other agents', () => {
     expect(pinFreshClaudeSession('claude', true, 'claude --resume x', 'saved-id', generate))
       .toEqual({ command: 'claude --resume x', explicitSessionId: '' })
     expect(pinFreshClaudeSession('codex', false, 'codex', 'saved-id', generate))
       .toEqual({ command: 'codex', explicitSessionId: '' })
-    expect(pinFreshClaudeSession('claude', false, 'claude --session-id abc', 'saved-id', generate))
-      .toEqual({ command: 'claude --session-id abc', explicitSessionId: '' })
+  })
+
+  const handwrittenId = '11111111-2222-3333-4444-555555555555'
+
+  it('a hand-written --session-id is surfaced as the explicit pin, command untouched', () => {
+    // Pre-fix: explicitSessionId was '' → pane.pinnedSessionId stayed
+    // undefined → classifyAttributedSession returned unconditional 'adopt' →
+    // a mis-routed sibling session could silently replace this pane's real
+    // (persisted) session. The parsed pin closes that hole end-to-end: the
+    // backend gets a deterministic session→pane claim and the frontend gate
+    // treats any divergent attribution as verify-first.
+    for (const cmd of [
+      `claude --session-id ${handwrittenId}`,
+      `claude --session-id=${handwrittenId}`,
+      `claude --session-id ${handwrittenId} --model opus`,
+    ]) {
+      expect(pinFreshClaudeSession('claude', false, cmd, undefined, generate))
+        .toEqual({ command: cmd, explicitSessionId: handwrittenId })
+    }
+  })
+
+  it('an unparseable hand-written --session-id keeps the old no-pin behavior', () => {
+    for (const cmd of ['claude --session-id abc', 'claude --session-id "$SID"']) {
+      expect(pinFreshClaudeSession('claude', false, cmd, 'saved-id', generate))
+        .toEqual({ command: cmd, explicitSessionId: '' })
+    }
+  })
+
+  it('hand-written pin + divergent attribution routes through ghost verification, never blind adopt', () => {
+    const { explicitSessionId } = pinFreshClaudeSession(
+      'claude', false, `claude --session-id ${handwrittenId}`, undefined, generate
+    )
+    // spawnPane assigns pinnedSessionId = explicitSessionId || undefined.
+    const pinnedSessionId = explicitSessionId || undefined
+    expect(classifyAttributedSession(pinnedSessionId, 'attributed-sibling-id')).toBe('verify')
+    expect(classifyAttributedSession(pinnedSessionId, handwrittenId)).toBe('adopt')
   })
 })
 

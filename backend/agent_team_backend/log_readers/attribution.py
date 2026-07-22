@@ -655,10 +655,15 @@ class Attribution:
             and file_path not in reg.baseline_files
             and not reg.claimed_session_ids
         ]
-        if not candidates:
+        if len(candidates) != 1:
+            # Zero candidates: nothing to claim. Several candidates: ambiguous
+            # provenance — guessing (old behavior: oldest registration wins)
+            # could route one pane's session to a sibling, which the frontend
+            # may then adopt AND persist, silently replacing that pane's
+            # session. Do nothing; only a deterministic path (explicit
+            # --session-id, per-pane home dir, kickoff marker) may bind it.
+            # Mirrors _bind_antigravity_new_conversation's exactly-one rule.
             return None, None, None
-
-        candidates.sort(key=lambda r: r.registered_at)
         reg = candidates[0]
         self._session_owner[usage.session_id] = reg.pane_id
         reg.claimed_session_ids.add(usage.session_id)
