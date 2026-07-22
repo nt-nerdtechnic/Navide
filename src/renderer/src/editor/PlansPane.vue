@@ -482,6 +482,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
           @contextmenu.prevent="openCtxMenu($event, item)"
         >
           <span class="plan-row-name">{{ item.name }}</span>
+          <span class="plan-row-path" :title="item.relPath">{{ item.relPath }}</span>
           <span class="plan-row-meta">
             <span>{{ item.name.endsWith('.html') ? 'html' : 'markdown' }}</span>
             <span class="plan-chip">doc</span>
@@ -511,6 +512,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
         >
           <span class="plan-row-name">{{ row.meta.name }}</span>
           <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
+          <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
           <span class="plan-row-meta">
             <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
             <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
@@ -721,6 +723,16 @@ async function ctxUpgradeToPlan(): Promise<void> {
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.plan-row-path {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .plan-row-meta {

@@ -338,6 +338,24 @@ describe('PlansPane', () => {
     ])
   })
 
+  it('shows each plan file path in the row (with a full-path title for the ellipsis)', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+        ],
+        htmlFiles: { '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN },
+      })
+    )
+    await flushPromises()
+
+    const path = wrapper
+      .findAll('.plan-row-path')
+      .find((p) => p.text() === '.agent-team/plans/review_a1b2c3.html')
+    expect(path).toBeTruthy()
+    expect(path!.attributes('title')).toBe('.agent-team/plans/review_a1b2c3.html')
+  })
+
   it('surfaces a real .agent-team/plans list error', async () => {
     const wrapper = mountPane(makeBackend({ htmlListError: 'permission denied' }))
     await flushPromises()
