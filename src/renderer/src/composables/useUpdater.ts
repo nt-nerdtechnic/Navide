@@ -1,14 +1,38 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import type { UpdateState } from '../../../shared/updater'
+import type { UpdateState, UpdaterSettings } from '../../../shared/updater'
 
 export type RendererUpdateState = UpdateState
+
+const DEFAULT_SETTINGS: UpdaterSettings = { autoCheck: true, autoDownload: true, channel: 'stable' }
 
 export function useUpdater() {
   const state = ref<RendererUpdateState>({
     status: 'idle',
     currentVersion: window.agentTeam?.version ?? '',
   })
+  const settings = ref<UpdaterSettings>({ ...DEFAULT_SETTINGS })
   let dispose: (() => void) | undefined
+
+  async function loadSettings(): Promise<void> {
+    const api = window.agentTeam?.updater
+    if (!api?.getSettings) return
+    try {
+      settings.value = await api.getSettings()
+    } catch {
+      // Keep defaults if the main process cannot answer.
+    }
+  }
+
+  async function updateSettings(patch: Partial<UpdaterSettings>): Promise<void> {
+    const api = window.agentTeam?.updater
+    if (!api?.setSettings) return
+    try {
+      const result = await api.setSettings(patch)
+      if (result.ok) settings.value = result.settings
+    } catch {
+      // Leave the UI on the last known-good settings.
+    }
+  }
 
   onMounted(() => {
     const api = window.agentTeam?.updater
@@ -21,6 +45,7 @@ export function useUpdater() {
         message: error instanceof Error ? error.message : String(error),
       }
     })
+    void loadSettings()
   })
 
   onUnmounted(() => dispose?.())
@@ -42,9 +67,12 @@ export function useUpdater() {
 
   return {
     state,
+    settings,
     isBusy: computed(() => ['checking', 'downloading', 'installing'].includes(state.value.status)),
     checkForUpdates: (): Promise<void> => run('check'),
     startDownload: (): Promise<void> => run('download'),
     installUpdate: (): Promise<void> => run('install'),
+    loadSettings,
+    updateSettings,
   }
 }

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { UpdateActionResult, UpdateState } from '../../shared/updater'
+import type { UpdateActionResult, UpdateSettingsResult, UpdaterSettings, UpdateState } from '../../shared/updater'
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue'
@@ -184,6 +184,8 @@ declare global {
         download: () => Promise<UpdateActionResult>
         install: () => Promise<UpdateActionResult>
         onStateChanged: (cb: (state: UpdateState) => void) => () => void
+        getSettings: () => Promise<UpdaterSettings>
+        setSettings: (patch: Partial<UpdaterSettings>) => Promise<UpdateSettingsResult>
       }
       gitAccounts?: {
         isAvailable: () => Promise<{ ok: boolean; available?: boolean; error?: string }>

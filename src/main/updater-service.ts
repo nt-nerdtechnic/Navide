@@ -2,6 +2,7 @@ import type { UpdateActionResult, UpdateState } from '../shared/updater'
 
 interface UpdateInfoLike {
   version: string
+  releaseNotes?: string | Array<{ version?: string; note?: string | null }> | null
 }
 
 interface CheckResultLike {
@@ -23,13 +24,28 @@ export interface UpdaterClient {
 
 export interface UpdaterService {
   getState(): UpdateState
-  check(): Promise<UpdateActionResult>
+  check(options?: { silent?: boolean }): Promise<UpdateActionResult>
   download(): Promise<UpdateActionResult>
   install(): UpdateActionResult
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+// electron-updater's UpdateInfo.releaseNotes may be a string, an array of
+// { version, note } entries, or null. Normalize to a single string (or
+// undefined when there is nothing meaningful to show).
+function normalizeReleaseNotes(notes: UpdateInfoLike['releaseNotes']): string | undefined {
+  if (typeof notes === 'string') return notes.trim() ? notes : undefined
+  if (Array.isArray(notes)) {
+    const joined = notes
+      .map((entry) => (typeof entry?.note === 'string' ? entry.note : ''))
+      .filter((note) => note.trim().length > 0)
+      .join('\n\n')
+    return joined.length > 0 ? joined : undefined
+  }
+  return undefined
 }
 
 export function createUpdaterService(
@@ -47,6 +63,9 @@ export function createUpdaterService(
       }
   let checkPromise: Promise<UpdateActionResult> | null = null
   let downloadPromise: Promise<UpdateActionResult> | null = null
+  // True while a silent (startup/periodic) check is in flight. When set,
+  // provider errors are logged but never surfaced as an 'error' state.
+  let silentActive = false
 
   const snapshot = (): UpdateState => ({ ...state })
   const setState = (next: UpdateState): void => {
@@ -68,6 +87,7 @@ export function createUpdaterService(
         status: 'available',
         currentVersion,
         availableVersion: info.version,
+        releaseNotes: normalizeReleaseNotes(info.releaseNotes),
         checkedAt: new Date().toISOString(),
       })
     })
@@ -79,6 +99,7 @@ export function createUpdaterService(
         status: 'downloading',
         currentVersion,
         availableVersion: state.availableVersion,
+        releaseNotes: state.releaseNotes,
         percent: Math.max(0, Math.min(100, Math.round(progress.percent))),
       })
     })
@@ -87,25 +108,34 @@ export function createUpdaterService(
         status: 'downloaded',
         currentVersion,
         availableVersion: info.version,
+        releaseNotes: normalizeReleaseNotes(info.releaseNotes) ?? state.releaseNotes,
         percent: 100,
       })
     })
     client.on('error', (error) => {
+      const message = errorMessage(error)
+      // Silent checks (startup/periodic) must not disrupt the visible state on
+      // a transient network/feed error; log and leave the state as-is.
+      if (silentActive) {
+        console.warn('[updater] silent check error:', message)
+        return
+      }
       setState({
         status: 'error',
         currentVersion,
         availableVersion: state.availableVersion,
-        message: errorMessage(error),
+        message,
       })
     })
   }
 
-  async function check(): Promise<UpdateActionResult> {
+  async function check({ silent = false }: { silent?: boolean } = {}): Promise<UpdateActionResult> {
     if (!supported) return failure(state.message ?? 'Updates are not supported in this build.')
     if (checkPromise) return checkPromise
     if (downloadPromise || state.status === 'downloaded' || state.status === 'installing') return success()
 
     checkPromise = (async () => {
+      silentActive = silent
       setState({ status: 'checking', currentVersion, availableVersion: state.availableVersion })
       try {
         const result = await client.checkForUpdates()
@@ -118,6 +148,7 @@ export function createUpdaterService(
               status: 'available',
               currentVersion,
               availableVersion: version,
+              releaseNotes: normalizeReleaseNotes(result?.updateInfo?.releaseNotes),
               checkedAt: new Date().toISOString(),
             })
           } else {
@@ -128,11 +159,21 @@ export function createUpdaterService(
         return success()
       } catch (error) {
         const message = errorMessage(error)
+        // A silent check must never surface an error state; log only and settle
+        // into not-available if we are still mid-check.
+        if (silent) {
+          console.warn('[updater] silent check failed:', message)
+          if (state.status === 'checking') {
+            setState({ status: 'not-available', currentVersion, checkedAt: new Date().toISOString() })
+          }
+          return failure(message)
+        }
         if (state.status !== 'error' || state.message !== message) {
           setState({ status: 'error', currentVersion, message })
         }
         return failure(message)
       } finally {
+        silentActive = false
         checkPromise = null
       }
     })()
@@ -149,13 +190,14 @@ export function createUpdaterService(
     const availableVersion = state.availableVersion
     if (!availableVersion) return failure('No update is ready to download.')
 
+    const releaseNotes = state.releaseNotes
     downloadPromise = (async () => {
-      setState({ status: 'downloading', currentVersion, availableVersion, percent: 0 })
+      setState({ status: 'downloading', currentVersion, availableVersion, releaseNotes, percent: 0 })
       try {
         await client.downloadUpdate()
         if (state.status === 'error') return failure(state.message ?? 'Update download failed.')
         if (state.status === 'downloading') {
-          setState({ status: 'downloaded', currentVersion, availableVersion, percent: 100 })
+          setState({ status: 'downloaded', currentVersion, availableVersion, releaseNotes, percent: 100 })
         }
         return success()
       } catch (error) {

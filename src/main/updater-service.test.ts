@@ -109,4 +109,53 @@ describe('createUpdaterService', () => {
       status: 'downloaded', availableVersion: '1.1.0', percent: 100,
     })
   })
+
+  it('captures and normalizes release notes from string and array shapes', () => {
+    const { client, emit } = fakeClient()
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    emit('update-available', { version: '1.1.0', releaseNotes: '  Fixes  ' })
+    expect(service.getState().releaseNotes).toBe('  Fixes  ')
+
+    emit('update-downloaded', {
+      version: '1.1.0',
+      releaseNotes: [{ version: '1.1.0', note: 'Line A' }, { version: '1.0.9', note: 'Line B' }],
+    })
+    expect(service.getState().releaseNotes).toBe('Line A\n\nLine B')
+  })
+
+  it('does not surface a provider error during a silent check', async () => {
+    const { client, raw } = fakeClient()
+    raw.checkForUpdates.mockRejectedValue(new Error('feed unavailable'))
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    const result = await service.check({ silent: true })
+    expect(result.ok).toBe(false)
+    // Silent: state settles to not-available, never 'error'.
+    expect(service.getState().status).toBe('not-available')
+  })
+
+  it('ignores an emitted error event while a silent check is in flight', async () => {
+    const { client, raw, emit } = fakeClient()
+    let resolveCheck!: (value: { isUpdateAvailable: boolean }) => void
+    raw.checkForUpdates.mockReturnValue(new Promise((resolve) => { resolveCheck = resolve }))
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    const check = service.check({ silent: true })
+    emit('error', new Error('transient'))
+    expect(service.getState().status).not.toBe('error')
+    resolveCheck({ isUpdateAvailable: false })
+    await check
+    expect(service.getState().status).toBe('not-available')
+  })
+
+  it('still reports errors for a manual (non-silent) check', async () => {
+    const { client, raw } = fakeClient()
+    raw.checkForUpdates.mockRejectedValue(new Error('feed unavailable'))
+    const service = createUpdaterService(client, '1.0.0', true, vi.fn())
+
+    const result = await service.check({ silent: false })
+    expect(result).toMatchObject({ ok: false, error: 'feed unavailable' })
+    expect(service.getState()).toMatchObject({ status: 'error', message: 'feed unavailable' })
+  })
 })

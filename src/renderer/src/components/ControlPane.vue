@@ -11,6 +11,8 @@ import type { Stage, StageId } from '../data/stages'
 import type { Issue, IssueDetail, IssueProvider, IssueHandlerMode } from '../composables/useIssues'
 import { registerCommand } from '../keybindings/useKeybindings'
 import { useUpdater } from '../composables/useUpdater'
+import { i18n } from '../i18n'
+import { useNotify } from '../composables/useNotify'
 
 // MultiRepoGit wraps GitPane and adds a repo tab bar when 2+ repos are found.
 // Loaded async (same reasoning as GitPane: ~276KB, off first-paint path).
@@ -198,6 +200,21 @@ const props = defineProps<Props>()
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
 const { state: updateState, startDownload, installUpdate } = useUpdater()
+
+// Announce a freshly-available update once per version — subtle, non-spammy.
+// The toast system has no action button, so this is message-only; the badge
+// and Settings → Updates section are the interactive entry points.
+const { toast: notifyToast } = useNotify()
+let lastNotifiedUpdate: string | undefined
+watch(
+  () => [updateState.value.status, updateState.value.availableVersion] as const,
+  ([status, version]) => {
+    if (status === 'available' && version && version !== lastNotifiedUpdate) {
+      lastNotifiedUpdate = version
+      notifyToast(i18n.global.t('updater.new-version-toast', { version }), { type: 'info' })
+    }
+  },
+)
 
 const emit = defineEmits<{
   (e: 'spawn', payload: SpawnPayload): void
@@ -900,22 +917,23 @@ function onPipelineDividerEnd(): void {
         v-if="['available', 'downloading', 'downloaded', 'installing'].includes(updateState.status)"
         class="update-badge"
         :class="{ ready: updateState.status === 'downloaded', downloading: updateState.status === 'downloading' }"
+        :title="updateState.availableVersion ? `v${updateState.availableVersion}` : undefined"
       >
         <template v-if="updateState.status === 'downloaded'">
           <span class="update-dot"></span>
-          <span class="update-label">v{{ updateState.availableVersion }} ready</span>
-          <button class="update-action" @click="installUpdate">Restart</button>
+          <span class="update-label">{{ $t('updater.badge-ready', { version: updateState.availableVersion }) }}</span>
+          <button class="update-action" @click="installUpdate">{{ $t('updater.restart') }}</button>
         </template>
         <template v-else-if="updateState.status === 'installing'">
-          <span class="update-label">Restarting…</span>
+          <span class="update-label">{{ $t('updater.restarting') }}</span>
         </template>
         <template v-else-if="updateState.status === 'downloading'">
-          <span class="update-label">{{ updateState.percent ?? 0 }}%</span>
+          <span class="update-label">{{ $t('updater.badge-downloading', { percent: updateState.percent ?? 0 }) }}</span>
         </template>
         <template v-else>
           <span class="update-dot"></span>
           <span class="update-label">v{{ updateState.availableVersion }}</span>
-          <button class="update-action" @click="startDownload">Update</button>
+          <button class="update-action" @click="startDownload">{{ $t('updater.update') }}</button>
         </template>
       </div>
     </div>

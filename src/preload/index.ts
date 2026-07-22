@@ -1,5 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { UpdateActionResult, UpdateState } from '../shared/updater'
+import type {
+  UpdateActionResult,
+  UpdateSettingsResult,
+  UpdaterSettings,
+  UpdateState,
+} from '../shared/updater'
 
 export interface BackendInfo {
   status: 'starting' | 'ready' | 'error'
@@ -363,6 +368,9 @@ contextBridge.exposeInMainWorld('agentTeam', {
     check: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:check'),
     download: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:download'),
     install: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updater:install'),
+    getSettings: (): Promise<UpdaterSettings> => ipcRenderer.invoke('updater:get-settings'),
+    setSettings: (patch: Partial<UpdaterSettings>): Promise<UpdateSettingsResult> =>
+      ipcRenderer.invoke('updater:set-settings', patch),
     onStateChanged: (cb: (state: UpdateState) => void): (() => void) => {
       const listener = (_event: unknown, state: UpdateState): void => cb(state)
       ipcRenderer.on('updater:state-changed', listener)

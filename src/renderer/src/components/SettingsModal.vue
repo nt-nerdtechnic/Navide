@@ -19,6 +19,8 @@ import {
   DEFAULT_LOOP_RESUME,
 } from '../lib/loopPrompt'
 import { useNotify } from '../composables/useNotify'
+import { useUpdater } from '../composables/useUpdater'
+import type { UpdateChannel } from '../../../shared/updater'
 import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp.vue'
@@ -250,6 +252,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'backend timeout health check startup 啟動逾時 後端',
   },
   {
+    id: 'general-updates',
+    tab: 'general',
+    section: 'general-updates',
+    title: 'Updates / 更新',
+    group: 'General',
+    summary: 'Check for updates, auto-check/auto-download, and release channel.',
+    keywords: 'update updates version check auto download channel stable beta release notes 更新 版本 檢查 自動下載 頻道 穩定版 測試版',
+  },
+  {
     id: 'general-loop-prompt',
     tab: 'general',
     section: 'general-loop-prompt',
@@ -398,6 +409,17 @@ function onLoopResumeChange(): void {
 }
 
 const { confirm: notifyConfirm } = useNotify()
+
+// ── Updates (auto-update UX) ────────────────────────────────────────────────
+const {
+  state: updateState,
+  settings: updSettings,
+  isBusy: updIsBusy,
+  checkForUpdates,
+  startDownload,
+  installUpdate,
+  updateSettings: updUpdateSettings,
+} = useUpdater()
 
 // ── Settings management / metadata ──────────────────────────────────────────
 interface SettingsPaths {
@@ -2097,6 +2119,59 @@ async function plDelete(id: string, name: string) {
             <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
             <p v-if="settingsBundleError" class="err-msg">{{ settingsBundleError }}</p>
           </section>
+
+          <section class="ap-section" data-settings-section="general-updates">
+            <div class="ap-section-head">
+              <h3 class="ap-title">{{ $t('updater.section-title') }}</h3>
+              <button class="ap-reset" :disabled="updIsBusy || updateState.status === 'unsupported'" @click="checkForUpdates">{{ $t('updater.check') }}</button>
+            </div>
+            <p class="ap-hint">{{ $t('updater.section-hint') }}</p>
+            <div class="settings-meta-row inline">
+              <span class="scope-badge">{{ $t('updater.current-version') }}</span>
+              <span class="settings-path">v{{ updateState.currentVersion }}</span>
+            </div>
+
+            <p v-if="updateState.status === 'checking'" class="ap-hint">{{ $t('updater.checking') }}</p>
+            <p v-else-if="updateState.status === 'not-available'" class="summary-ok">{{ $t('updater.up-to-date') }}</p>
+            <p v-else-if="updateState.status === 'error'" class="err-msg">{{ $t('updater.error', { message: updateState.message }) }}</p>
+            <p v-else-if="updateState.status === 'unsupported'" class="ap-hint">{{ $t('updater.unsupported') }}</p>
+
+            <div v-if="['available', 'downloading', 'downloaded', 'installing'].includes(updateState.status)" class="upd-available">
+              <p class="summary-ok">{{ $t('updater.available', { version: updateState.availableVersion }) }}</p>
+              <p v-if="updateState.status === 'downloading'" class="ap-hint">{{ $t('updater.downloading', { percent: updateState.percent ?? 0 }) }}</p>
+              <p v-else-if="updateState.status === 'downloaded'" class="ap-hint">{{ $t('updater.downloaded') }}</p>
+              <p v-else-if="updateState.status === 'installing'" class="ap-hint">{{ $t('updater.restarting') }}</p>
+              <div v-if="updateState.releaseNotes" class="upd-notes">
+                <div class="ap-hint">{{ $t('updater.release-notes') }}</div>
+                <pre class="upd-notes-body">{{ updateState.releaseNotes }}</pre>
+              </div>
+              <div class="row-g gap">
+                <button v-if="updateState.status === 'available'" class="ap-reset" @click="startDownload">{{ $t('updater.download') }}</button>
+                <button v-else-if="updateState.status === 'downloaded'" class="ap-reset" @click="installUpdate">{{ $t('updater.install') }}</button>
+              </div>
+            </div>
+
+            <label class="check-row">
+              <input type="checkbox" :checked="updSettings.autoCheck" @change="updUpdateSettings({ autoCheck: ($event.target as HTMLInputElement).checked })" />
+              <span>{{ $t('updater.auto-check') }}</span>
+            </label>
+            <p class="ap-hint">{{ $t('updater.auto-check-hint') }}</p>
+            <label class="check-row">
+              <input type="checkbox" :checked="updSettings.autoDownload" @change="updUpdateSettings({ autoDownload: ($event.target as HTMLInputElement).checked })" />
+              <span>{{ $t('updater.auto-download') }}</span>
+            </label>
+            <p class="ap-hint">{{ $t('updater.auto-download-hint') }}</p>
+
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('updater.channel') }}</label>
+              <select :value="updSettings.channel" @change="updUpdateSettings({ channel: ($event.target as HTMLSelectElement).value as UpdateChannel })">
+                <option value="stable">{{ $t('updater.channel-stable') }}</option>
+                <option value="beta">{{ $t('updater.channel-beta') }}</option>
+              </select>
+            </div>
+            <p class="ap-hint">{{ $t('updater.channel-hint') }}</p>
+            <p v-if="updSettings.channel === 'beta'" class="ap-hint">{{ $t('updater.beta-warning') }}</p>
+          </section>
         </div>
 
         <!-- ══ APPEARANCE TAB ══ -->
@@ -2585,6 +2660,18 @@ button.tiny {
   line-height: 1.2;
 }
 .summary-ok { font-size: 11px; color: var(--success-fg); margin-left: 6px; }
+.upd-notes-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  font-size: 11.5px;
+  font-family: inherit;
+  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  border-radius: 6px;
+}
 
 /* ── Split layout (list + detail) ─────────────────────────────────────────── */
 .split {

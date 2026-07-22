@@ -81,4 +81,45 @@ describe('useUpdater', () => {
     await updater.checkForUpdates()
     expect(updater.state.value).toMatchObject({ status: 'error', message: 'offline' })
   })
+
+  it('hydrates settings on mount and adopts updates from setSettings', async () => {
+    const setSettings = vi.fn().mockResolvedValue({
+      ok: true,
+      settings: { autoCheck: false, autoDownload: true, channel: 'beta' },
+    })
+    window.agentTeam = {
+      version: '1.0.0',
+      updater: {
+        getState: vi.fn().mockResolvedValue({ status: 'idle', currentVersion: '1.0.0' }),
+        onStateChanged: vi.fn(() => vi.fn()),
+        getSettings: vi.fn().mockResolvedValue({ autoCheck: true, autoDownload: false, channel: 'stable' }),
+        setSettings,
+      },
+    } as unknown as typeof window.agentTeam
+
+    const updater = mountUpdater()
+    await nextTick()
+    await nextTick()
+    expect(updater.settings.value).toEqual({ autoCheck: true, autoDownload: false, channel: 'stable' })
+
+    await updater.updateSettings({ channel: 'beta', autoCheck: false })
+    expect(setSettings).toHaveBeenCalledWith({ channel: 'beta', autoCheck: false })
+    expect(updater.settings.value).toEqual({ autoCheck: false, autoDownload: true, channel: 'beta' })
+  })
+
+  it('keeps default settings when the settings IPC is unavailable', async () => {
+    window.agentTeam = {
+      version: '1.0.0',
+      updater: {
+        getState: vi.fn().mockResolvedValue({ status: 'idle', currentVersion: '1.0.0' }),
+        onStateChanged: vi.fn(() => vi.fn()),
+      },
+    } as unknown as typeof window.agentTeam
+
+    const updater = mountUpdater()
+    await nextTick()
+    await nextTick()
+    expect(updater.settings.value).toEqual({ autoCheck: true, autoDownload: true, channel: 'stable' })
+    await expect(updater.updateSettings({ channel: 'beta' })).resolves.toBeUndefined()
+  })
 })
