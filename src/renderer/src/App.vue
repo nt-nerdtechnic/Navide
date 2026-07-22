@@ -83,7 +83,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
+import { historyEntryLabel, legacyHistoryLogPath, manualLogFileName, matchesHistorySearch, updateHistoryCustomName, type HistoryTitleEntry } from './lib/spawnHistory'
 import { useKeybindings, registerCommand, setContext } from './keybindings/useKeybindings'
 
 // Modals/wizard that only render behind a v-if (settings opened, run completed,
@@ -663,6 +663,10 @@ const sessionHistory = computed(() => {
   }
   return result
 })
+
+const filteredSessionHistory = computed(() =>
+  sessionHistory.value.filter((entry) => matchesHistorySearch(entry, historySearchQuery.value))
+)
 
 let spawnHistoryWorkspace = ''
 let spawnHistoryHydrated = false
@@ -2543,6 +2547,10 @@ function openSettingsAccounts(): void {
 const showKbPanel = ref(false)
 const kbQueryMain = ref('')
 const showHistory = ref(false)
+const historySearchQuery = ref('')
+watch(showHistory, (open) => {
+  if (!open) historySearchQuery.value = ''
+})
 const confirmKillAll = ref(false)
 const revivingHistoryPaneId = ref('')
 const unavailableHistoryPaneIds = ref<Set<string>>(new Set())
@@ -7090,6 +7098,18 @@ function paneIsCommander(p: ActivePane): boolean {
           <div class="history-modal-header">
             <div class="history-header-left">
               <span>{{ $t('label.agent-history') }}</span>
+              <div class="agent-history-search">
+                <input
+                  v-model="historySearchQuery"
+                  class="agent-history-search-input"
+                  :placeholder="$t('label.search-history')"
+                />
+                <button
+                  v-if="historySearchQuery"
+                  class="agent-history-search-clear"
+                  @click="historySearchQuery = ''"
+                >✕</button>
+              </div>
               <button
                 v-if="panes.length > 0"
                 class="history-killall"
@@ -7101,8 +7121,11 @@ function paneIsCommander(p: ActivePane): boolean {
           </div>
           <div class="agent-history-list">
             <div v-if="sessionHistory.length === 0" class="agent-history-empty">尚無 agent 紀錄</div>
+            <div v-else-if="filteredSessionHistory.length === 0" class="agent-history-empty">
+              {{ $t('label.no-matching-history') }}
+            </div>
             <div
-              v-for="entry in sessionHistory"
+              v-for="entry in filteredSessionHistory"
               :key="entry.paneId"
               class="agent-history-row"
               :class="{ active: !entry.removedAt }"
@@ -8690,6 +8713,38 @@ function paneIsCommander(p: ActivePane): boolean {
   background: var(--danger-subtle);
   border-color: var(--danger-fg);
   opacity: 1;
+}
+.agent-history-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.agent-history-search-input {
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 400;
+  padding: 2px 20px 2px 8px;
+  width: 160px;
+  outline: none;
+}
+.agent-history-search-input:focus {
+  border-color: var(--accent-muted);
+}
+.agent-history-search-clear {
+  position: absolute;
+  right: 2px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 4px;
+}
+.agent-history-search-clear:hover {
+  color: var(--text-bright);
 }
 .history-close {
   background: transparent;

@@ -699,6 +699,8 @@
     "connecting": "Connecting…",
     "committing": "Committing…",
     "agent-history": "Agent History",
+    "search-history": "Search history…",
+    "no-matching-history": "No matching history entries",
     "current": "Current",
     "no-symbols-found": "No symbols found in open files",
     "no-symbols-detected": "No symbols detected in the current file",

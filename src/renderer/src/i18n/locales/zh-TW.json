@@ -699,6 +699,8 @@
     "connecting": "連接中…",
     "committing": "提交中…",
     "agent-history": "Agent 歷史記錄",
+    "search-history": "搜尋歷史記錄…",
+    "no-matching-history": "沒有符合的歷史記錄",
     "current": "目前",
     "no-symbols-found": "在開啟的檔案中找不到符號",
     "no-symbols-detected": "目前檔案中未偵測到符號",

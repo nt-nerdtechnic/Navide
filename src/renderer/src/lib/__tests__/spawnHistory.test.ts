@@ -5,6 +5,7 @@ import {
   isTerminalCrashLoopOpen,
   legacyHistoryLogPath,
   manualLogFileName,
+  matchesHistorySearch,
   recordTerminalExit,
   resetTerminalCrashLoop,
   terminalCrashKey,
@@ -118,6 +119,43 @@ describe('spawn history titles', () => {
     }, 'Exact title')).toBe(true)
     expect(entries[0].customName).toBe('Exact title')
     expect(entries[1].customName).toBe('Exact title')
+  })
+})
+
+describe('matchesHistorySearch', () => {
+  const searchable = {
+    ...entry({ customName: 'Frontend Lead', sessionId: 'abc123-session' }),
+    roleKey: 'frontend',
+    roleLabel: 'Frontend Engineer',
+  }
+
+  it('matches everything when the query is empty or whitespace', () => {
+    expect(matchesHistorySearch(entry(), '')).toBe(true)
+    expect(matchesHistorySearch(entry(), '   ')).toBe(true)
+  })
+
+  it('matches the custom name and the agent label', () => {
+    expect(matchesHistorySearch(searchable, 'Frontend Lead')).toBe(true)
+    expect(matchesHistorySearch(entry(), 'Claude')).toBe(true)
+  })
+
+  it('matches a partial session id', () => {
+    expect(matchesHistorySearch(searchable, 'abc123')).toBe(true)
+  })
+
+  it('is case-insensitive', () => {
+    expect(matchesHistorySearch(searchable, 'fRoNtEnD lEaD')).toBe(true)
+    expect(matchesHistorySearch(searchable, 'ABC123')).toBe(true)
+  })
+
+  it('matches the role key and role label', () => {
+    expect(matchesHistorySearch(searchable, 'engineer')).toBe(true)
+    expect(matchesHistorySearch(searchable, 'frontend')).toBe(true)
+  })
+
+  it('rejects a query that hits no field', () => {
+    expect(matchesHistorySearch(searchable, 'backend')).toBe(false)
+    expect(matchesHistorySearch(entry(), 'missing')).toBe(false)
   })
 })
 

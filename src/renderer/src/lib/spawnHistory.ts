@@ -20,6 +20,18 @@ export function historyEntryLabel(entry: HistoryTitleEntry): string {
   return entry.customName || entry.agentLabel
 }
 
+/** Case-insensitive match of a history entry against a search query.
+ *  An empty (or whitespace-only) query matches everything. */
+export function matchesHistorySearch(
+  entry: HistoryTitleEntry & { roleKey?: string; roleLabel?: string },
+  query: string
+): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  return [entry.customName, entry.agentLabel, entry.sessionId, entry.roleKey, entry.roleLabel]
+    .some((field) => !!field && field.toLowerCase().includes(q))
+}
+
 export function updateHistoryCustomName(
   entries: HistoryTitleEntry[],
   identity: string | HistoryTitleIdentity,
