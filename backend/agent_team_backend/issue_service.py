@@ -70,6 +70,7 @@ async def _run(args: list[str], cwd: str) -> tuple[int, str, str]:
     except asyncio.TimeoutError:
         try:
             proc.kill()
+            await proc.wait()  # reap the killed child so it doesn't linger as a zombie
         except Exception:
             pass
         return 128, "", f"{args[0]} timed out"

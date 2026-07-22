@@ -330,3 +330,46 @@ class TestWriteOps:
         r = await issue_service.set_issue_state("/ws", 7, "frozen")
         assert r["ok"] is False
         assert "state" in r["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_kills_and_reaps(monkeypatch):
+    """On timeout, _run kills AND awaits the child so it doesn't linger as a zombie."""
+    import asyncio
+
+    holder = {}
+
+    class FakeProc:
+        returncode = None
+
+        def __init__(self):
+            self.killed = False
+            self.waited = False
+
+        async def communicate(self, input=None):
+            await asyncio.sleep(3600)  # never returns within the timeout
+
+        def kill(self):
+            self.killed = True
+
+        async def wait(self):
+            self.waited = True
+            return -9
+
+    async def fake_exec(*args, **kwargs):
+        holder["proc"] = FakeProc()
+        return holder["proc"]
+
+    real_wait_for = asyncio.wait_for
+
+    async def fast_wait_for(awaitable, timeout=None):
+        return await real_wait_for(awaitable, timeout=0.01)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(asyncio, "wait_for", fast_wait_for)
+
+    rc, _out, err = await issue_service._run(["gh", "issue", "list"], "/ws")
+    assert rc == 128
+    assert "timed out" in err
+    assert holder["proc"].killed is True
+    assert holder["proc"].waited is True
