@@ -2417,3 +2417,39 @@ class TestGitProcLimit:
         assert result == (128, "", "git command timed out")
         assert procs[0].killed is True
         assert procs[0].waited is True
+
+    @pytest.mark.asyncio
+    async def test_fetch_serialized_per_repo(self, monkeypatch):
+        """fetch carries @_serialize_write: two fetches on one repo never overlap."""
+        from contextlib import asynccontextmanager
+
+        in_flight = 0
+        peak = 0
+        release = asyncio.Event()
+
+        async def fake_run_with_timeout(args, cwd, timeout=None, env=None):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await release.wait()
+            in_flight -= 1
+            return 0, "", ""
+
+        @asynccontextmanager
+        async def fake_askpass(*_a, **_k):
+            yield {}
+
+        monkeypatch.setattr(git_service, "_run_with_timeout", fake_run_with_timeout)
+        monkeypatch.setattr(git_service, "_askpass_env", fake_askpass)
+
+        t1 = asyncio.create_task(git_service.fetch("/same-repo"))
+        t2 = asyncio.create_task(git_service.fetch("/same-repo"))
+        for _ in range(20):
+            await asyncio.sleep(0)
+        # Serialized by the per-repo write lock: only one fetch runs at a time.
+        assert peak == 1
+        assert in_flight == 1
+
+        release.set()
+        await asyncio.gather(t1, t2)
+        assert peak == 1

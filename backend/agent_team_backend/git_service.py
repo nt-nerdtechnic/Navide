@@ -1217,6 +1217,7 @@ async def push_set_upstream(
     return {"ok": rc == 0, "output": (out + stderr).strip(), "error": stderr.strip() if rc != 0 else ""}
 
 
+@_serialize_write
 async def fetch(
     workspace_path: str,
     *,
