@@ -5,8 +5,34 @@ IFS=$'\n\t'
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-}"
-VERSION="${VERSION#v}"
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+[[ $# -eq 1 ]] || fail "usage: ./release.sh <X.Y.Z | patch | minor | major>"
+
+REQUEST="${1#v}"
+
+# patch/minor/major compute the next version from the current package.json;
+# an explicit X.Y.Z is used verbatim (existing behavior, unchanged).
+if [[ "$REQUEST" == "patch" || "$REQUEST" == "minor" || "$REQUEST" == "major" ]]; then
+  command -v node >/dev/null || fail "node is required to compute the next version"
+  CURRENT="$(node -p "require('./package.json').version")"
+  [[ "$CURRENT" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || \
+    fail "current package.json version '$CURRENT' is not X.Y.Z"
+  MAJOR="${BASH_REMATCH[1]}"; MINOR="${BASH_REMATCH[2]}"; PATCH="${BASH_REMATCH[3]}"
+  case "$REQUEST" in
+    patch) PATCH=$((PATCH + 1)) ;;
+    minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+    major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+  esac
+  VERSION="${MAJOR}.${MINOR}.${PATCH}"
+  echo "Bump '${REQUEST}': ${CURRENT} -> ${VERSION}"
+else
+  VERSION="$REQUEST"
+fi
+
 TAG="v${VERSION}"
 VERSION_FILES=(
   package.json
@@ -15,13 +41,8 @@ VERSION_FILES=(
   backend/uv.lock
 )
 
-fail() {
-  echo "ERROR: $*" >&2
-  exit 1
-}
-
-if [[ $# -ne 1 || ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  fail "usage: ./release.sh X.Y.Z"
+if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+  fail "resolved version '$VERSION' is not a valid X.Y.Z"
 fi
 
 for command in git node pnpm uv; do
