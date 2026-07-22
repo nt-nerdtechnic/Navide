@@ -69,15 +69,24 @@ export function useIssues(
 
   function clearIssuesError(): void { issuesError.value = '' }
 
-  async function loadProvider(): Promise<void> {
+  // Returns true only when the backend gave a definitive answer for the current
+  // workspace. An empty workspace, a transient WS error, or a workspace that
+  // changed mid-request all return false so callers can retry instead of
+  // treating the initial `unknown` as final.
+  async function loadProvider(): Promise<boolean> {
     const ws = workspacePath()
-    if (!ws) { provider.value = emptyProvider(); return }
+    if (!ws) { provider.value = emptyProvider(); return false }
     isLoadingProvider.value = true
     try {
       const resp = await send<IssueProviderInfo>('issues.provider', { workspace_path: ws })
-      if (resp.ok && resp.payload && workspacePath() === ws) provider.value = resp.payload
+      if (resp.ok && resp.payload && workspacePath() === ws) {
+        provider.value = resp.payload
+        return true
+      }
+      return false
     } catch {
-      // transient WS error — loading flag reset in finally
+      // transient WS error — caller decides whether to retry
+      return false
     } finally {
       if (workspacePath() === ws) isLoadingProvider.value = false
     }
@@ -111,7 +120,10 @@ export function useIssues(
   /** Lazy entry point: called when the Issues card is first expanded. */
   async function ensureLoaded(): Promise<void> {
     if (loadedOnce.value) return
-    await loadProvider()
+    // Don't lock `loadedOnce` on a failed/empty probe, or the card would stay
+    // stuck on the initial `unknown` state forever (the caller only re-invokes
+    // this on the next expand or workspace switch).
+    if (!(await loadProvider())) return
     if (provider.value.provider !== 'unknown' && provider.value.authenticated) {
       await loadIssues()
     } else {

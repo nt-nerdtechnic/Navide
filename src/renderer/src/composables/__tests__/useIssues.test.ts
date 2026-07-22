@@ -59,6 +59,32 @@ describe('useIssues', () => {
     scope.stop()
   })
 
+  it('does NOT lock loadedOnce when the provider probe fails, and recovers on retry', async () => {
+    const mock = createMockBackend('connected')
+    // First probe fails (e.g. transient WS error / backend not ready yet).
+    mock.setResponse('issues.provider', {}, { ok: false, error: { code: 'x', message: 'boom' } })
+
+    const { result, scope } = withScope(() => useIssues(() => WS, mock.backend))
+    await result.ensureLoaded()
+    await flush()
+
+    // Stuck on the initial unknown, but NOT locked — otherwise the panel would
+    // show "no supported issue host" forever.
+    expect(result.provider.value.provider).toBe('unknown')
+    expect(result.loadedOnce.value).toBe(false)
+
+    // Backend recovers; a second ensureLoaded now resolves the provider + list.
+    mock.setResponse('issues.provider', ghProvider)
+    mock.setResponse('issues.list', { ok: true, provider: 'github', issues: [sampleIssue] })
+    await result.ensureLoaded()
+    await flush()
+
+    expect(result.provider.value.provider).toBe('github')
+    expect(result.issues.value).toHaveLength(1)
+    expect(result.loadedOnce.value).toBe(true)
+    scope.stop()
+  })
+
   it('surfaces a backend list error into issuesError', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('issues.list', { ok: false, provider: 'github', issues: [], error: 'gh not found' })

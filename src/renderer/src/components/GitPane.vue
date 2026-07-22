@@ -1200,6 +1200,13 @@ function toggleIssuesCard(): void {
   issuesExpanded.value = !issuesExpanded.value
   if (issuesExpanded.value) void ensureIssuesLoaded()
 }
+
+// Switching workspace while the card is open resets the composable's state but
+// keeps it lazy — no expand event re-fires, so without this the panel would sit
+// on a stale `unknown` (misleading "no supported issue host" message). Reload.
+watch(() => props.workspacePath, () => {
+  if (issuesExpanded.value) void refreshIssues()
+})
 async function submitNewIssue(): Promise<void> {
   const r = await createIssue(newIssueTitle.value, newIssueBody.value)
   if (r.ok) { newIssueTitle.value = ''; newIssueBody.value = ''; showNewIssue.value = false }
@@ -2416,7 +2423,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
             @click.stop="showNewIssue = !showNewIssue"
           >＋</button>
           <button
-            v-if="issuesExpanded && issueProvider.authenticated"
+            v-if="issuesExpanded"
             class="row-btn always" title="Refresh" @click.stop="refreshIssues"
           >↻</button>
         </div>
