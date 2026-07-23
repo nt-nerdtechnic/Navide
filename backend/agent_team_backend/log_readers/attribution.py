@@ -315,9 +315,15 @@ class Attribution:
 
         Falls back to marker matching for older sessions and during rollout.
         Antigravity has no identity path at launch (`agy --conversation` can't
-        create a chosen id), so it relies on marker matching exclusively; its
-        resume id is the conversation .db filename stem (= usage.session_id).
-        Grok also relies on markers exclusively, but stores every session in
+        create a chosen id), so it relies on marker matching plus the
+        single-candidate new-session fallback; its resume id is the
+        conversation .db filename stem (= usage.session_id).
+        Kimi likewise can't pin an id (`kimi --session` only resumes); its
+        marker is typed into the TUI post-launch and is silently lost when the
+        injection loses the startup timing race, so the single-candidate
+        fallback is its safety net — resume id is the `session_<uuid>` dir
+        name (= usage.session_id).
+        Grok relies on markers exclusively, but stores every session in
         one shared SQLite db — its binding queries the db via the reader.
         """
         if usage.vendor == "grok":
@@ -352,8 +358,8 @@ class Attribution:
         marker_binding = self.maybe_bind_by_marker(usage)
         if marker_binding:
             pane_id, resume_id = marker_binding
-        elif usage.vendor == "antigravity":
-            return self._bind_antigravity_new_conversation(usage)
+        elif usage.vendor in ("antigravity", "kimi"):
+            return self._bind_new_session_single_candidate(usage)
         else:
             return None
         with self._lock:
@@ -487,17 +493,21 @@ class Attribution:
             return binding
         return None
 
-    def _bind_antigravity_new_conversation(self, usage: TokenUsage) -> SessionBinding | None:
-        """Fallback Antigravity resume capture when the marker is not yet visible.
+    def _bind_new_session_single_candidate(self, usage: TokenUsage) -> SessionBinding | None:
+        """Fallback Antigravity/Kimi resume capture when the marker is not visible.
 
         Antigravity writes SQLite conversations and may create the .db before the
-        injected marker lands in either the main db or WAL. If exactly one
-        registered Antigravity pane in this cwd has a new, unclaimed conversation
+        injected marker lands in either the main db or WAL. Kimi creates its
+        session dir at launch, but its marker is typed into the TUI after
+        startup and is silently dropped whenever that injection loses the
+        timing race — without a fallback the session id is never captured and
+        resume-on-restart spawns a blank fresh session. If exactly one
+        registered pane of this vendor in this cwd has a new, unclaimed session
         file, bind it to that pane. Multiple candidates are intentionally left
         unbound so marker matching can resolve them later without cross-pane
         corruption.
         """
-        if usage.vendor != "antigravity" or not usage.session_id:
+        if usage.vendor not in ("antigravity", "kimi") or not usage.session_id:
             return None
         file_path = Path(usage.file_path)
         key = f"{usage.vendor}:{usage.session_id}:{usage.session_id}"
@@ -509,7 +519,7 @@ class Attribution:
                 return None
             candidates = [
                 reg for reg in self._panes.values()
-                if reg.vendor == "antigravity"
+                if reg.vendor == usage.vendor
                 and self._cwd_matches(reg.cwd, usage)
                 and file_path not in reg.baseline_files
                 and not reg.claimed_session_ids
@@ -530,8 +540,8 @@ class Attribution:
                 session_file=usage.file_path,
             )
         log.info(
-            "bound antigravity session=%s → pane=%s via new conversation fallback",
-            usage.session_id, binding.pane_id,
+            "bound %s session=%s → pane=%s via new-session fallback",
+            usage.vendor, usage.session_id, binding.pane_id,
         )
         return binding
 
@@ -662,7 +672,7 @@ class Attribution:
             # may then adopt AND persist, silently replacing that pane's
             # session. Do nothing; only a deterministic path (explicit
             # --session-id, per-pane home dir, kickoff marker) may bind it.
-            # Mirrors _bind_antigravity_new_conversation's exactly-one rule.
+            # Mirrors _bind_new_session_single_candidate's exactly-one rule.
             return None, None, None
         reg = candidates[0]
         self._session_owner[usage.session_id] = reg.pane_id

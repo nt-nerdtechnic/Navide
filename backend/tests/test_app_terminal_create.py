@@ -259,6 +259,25 @@ def test_claude_resume_id_parses_resume_commands() -> None:
     assert app._claude_resume_id(["/bin/zsh", "-lc", "claude"]) == ""
 
 
+def test_kimi_resume_id_parses_resume_commands() -> None:
+    assert app._kimi_resume_id("kimi --session session_abc-123") == "session_abc-123"
+    assert app._kimi_resume_id("kimi -S session_abc-123") == "session_abc-123"
+    assert app._kimi_resume_id("kimi --session session_abc-123 --yolo") == "session_abc-123"
+    assert app._kimi_resume_id("kimi --yolo --session session_abc-123") == "session_abc-123"
+    assert app._kimi_resume_id("kimi") == ""
+    # `--session` takes an OPTIONAL id (bare flag = interactive picker); a
+    # following flag must not be captured as the id.
+    assert app._kimi_resume_id("kimi --session --yolo") == ""
+    assert app._kimi_resume_id("kimi --session") == ""
+    assert app._kimi_resume_id("") == ""
+    assert app._kimi_resume_id(None) == ""
+    # Shell-wrapped list — the shape the frontend actually sends.
+    assert app._kimi_resume_id(
+        ["/bin/zsh", "-lc", "kimi --session session_abc-123 --yolo"]
+    ) == "session_abc-123"
+    assert app._kimi_resume_id(["/bin/zsh", "-lc", "kimi"]) == ""
+
+
 @pytest.mark.asyncio
 async def test_terminal_create_claude_resume_claims_resume_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -317,6 +336,33 @@ async def test_terminal_create_claude_metadata_session_id_wins_over_command(
     })
 
     assert fake_attr.registered[0]["explicit_session_id"] == "pinned-uuid"
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_kimi_resume_claims_resume_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resumed Kimi panes claim their resume id at registration so live events
+    route back to them and the new-session single-candidate fallback excludes
+    them (a fresh sibling pane in the same cwd stays bindable)."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m8",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "kimi-pane",
+            "agent_key": "kimi",
+            "command": ["/bin/zsh", "-lc", "kimi --session session_resumed-uuid --yolo"],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    assert fake_attr.registered[0]["explicit_session_id"] == "session_resumed-uuid"
 
 
 @pytest.mark.asyncio

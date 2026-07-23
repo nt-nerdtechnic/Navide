@@ -578,3 +578,121 @@ def test_reregistration_corrects_stale_claude_dir(tmp_path: Path) -> None:
     assert attr.attribute(
         _make_usage("claude", session_id="s", file_path=str(f))
     ).workspace_path == CJK_WS
+
+
+# ──────────── new-session single-candidate fallback (Kimi/Antigravity) ───────
+
+@pytest.fixture
+def kimi_attr(tmp_path: Path) -> tuple[Attribution, Path]:
+    root = tmp_path / "kimi_sessions"; root.mkdir()
+    attr = Attribution([FakeReader("kimi", root)], workspaces_path=tmp_path / "ws.json")
+    return attr, root
+
+
+def _kimi_wire(root: Path, session_id: str, text: str = "") -> Path:
+    d = root / "wd_ws" / session_id / "agents" / "main"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "wire.jsonl"
+    f.write_text(text or json.dumps({"type": "metadata"}) + "\n", encoding="utf-8")
+    return f
+
+
+def _kimi_usage(session_id: str, file_path: Path) -> TokenUsage:
+    return _make_usage("kimi", session_id=session_id, file_path=str(file_path), cwd="/ws")
+
+
+def test_kimi_fallback_binds_single_candidate_without_marker(
+    kimi_attr: tuple[Attribution, Path],
+) -> None:
+    """Kimi's marker is typed into the TUI post-launch and can be silently lost
+    to the startup timing race; a lone fresh pane must still capture its new
+    session dir so resume-on-restart works."""
+    attr, root = kimi_attr
+    attr.register_pane("p1", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p1")
+    f = _kimi_wire(root, "session_abc")
+
+    binding = attr.maybe_announce_session(_kimi_usage("session_abc", f))
+    assert binding is not None
+    assert binding.pane_id == "p1"
+    assert binding.resume_id == "session_abc"
+    assert binding.workspace_path == "/ws"
+    assert attr.pane_for_session("session_abc")[0] == "p1"
+    # Announce-once: a later watcher event for the same session is silent.
+    assert attr.maybe_announce_session(_kimi_usage("session_abc", f)) is None
+
+
+def test_kimi_fallback_leaves_multiple_candidates_unbound(
+    kimi_attr: tuple[Attribution, Path],
+) -> None:
+    attr, root = kimi_attr
+    attr.register_pane("p1", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p1")
+    attr.register_pane("p2", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p2")
+    f = _kimi_wire(root, "session_abc")
+    assert attr.maybe_announce_session(_kimi_usage("session_abc", f)) is None
+
+
+def test_kimi_fallback_ignores_baseline_sessions(
+    kimi_attr: tuple[Attribution, Path],
+) -> None:
+    """A session file that predates the pane's spawn is another conversation —
+    never fallback-bind it."""
+    attr, root = kimi_attr
+    f = _kimi_wire(root, "session_old")
+    attr.register_pane("p1", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p1")
+    assert attr.maybe_announce_session(_kimi_usage("session_old", f)) is None
+
+
+def test_kimi_resumed_sibling_does_not_block_fallback(
+    kimi_attr: tuple[Attribution, Path],
+) -> None:
+    """A resumed pane claims its id at registration (explicit_session_id), so a
+    fresh sibling in the same cwd remains the single fallback candidate."""
+    attr, root = kimi_attr
+    _kimi_wire(root, "session_old")
+    attr.register_pane("p-resumed", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       explicit_session_id="session_old")
+    attr.register_pane("p-fresh", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:pf")
+    f = _kimi_wire(root, "session_new")
+    binding = attr.maybe_announce_session(_kimi_usage("session_new", f))
+    assert binding is not None
+    assert binding.pane_id == "p-fresh"
+
+
+def test_kimi_marker_binding_still_preferred(
+    kimi_attr: tuple[Attribution, Path],
+) -> None:
+    """When the marker DID land in wire.jsonl, marker matching resolves the
+    pane even with multiple candidates."""
+    attr, root = kimi_attr
+    attr.register_pane("p1", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p1")
+    attr.register_pane("p2", vendor="kimi", cwd="/ws", workspace_path="/ws",
+                       session_marker="at-pane:p2")
+    f2 = _kimi_wire(root, "session_two", text=json.dumps({
+        "type": "turn.prompt",
+        "prompt": {"input": [{"text": "hi <!-- agent-team-session: at-pane:p2 -->"}]},
+    }) + "\n")
+    binding = attr.maybe_announce_session(_kimi_usage("session_two", f2))
+    assert binding is not None
+    assert binding.pane_id == "p2"
+    assert binding.resume_id == "session_two"
+
+
+def test_antigravity_fallback_unchanged_by_generalization(tmp_path: Path) -> None:
+    """The single-candidate fallback still binds Antigravity conversations."""
+    root = tmp_path / "agy"; root.mkdir()
+    attr = Attribution(
+        [FakeReader("antigravity", root)], workspaces_path=tmp_path / "ws.json"
+    )
+    attr.register_pane("pa", vendor="antigravity", cwd="/ws", workspace_path="/ws")
+    f = root / "conv-1.jsonl"; f.write_text("")
+    binding = attr.maybe_announce_session(
+        _make_usage("antigravity", session_id="conv-1", file_path=str(f), cwd="/ws")
+    )
+    assert binding is not None
+    assert binding.pane_id == "pa"

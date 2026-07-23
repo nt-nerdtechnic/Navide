@@ -1104,6 +1104,17 @@ def _claude_resume_id(command: Any) -> str:
     return m.group(1) if m else ""
 
 
+# `--session [id]` takes an OPTIONAL id (bare flag = interactive picker), so
+# the capture must not swallow a following flag like `--yolo`.
+_KIMI_RESUME_RE = re.compile(r"^kimi\s+(?:\S+\s+)*(?:--session|-S)\s+([^-\s]\S*)")
+
+
+def _kimi_resume_id(command: Any) -> str:
+    """Session id from a `kimi ... --session <id>` / `-S <id>` command ('' otherwise)."""
+    m = _KIMI_RESUME_RE.match(_command_text(command).strip())
+    return m.group(1) if m else ""
+
+
 def _session_lookup_path(agent: str, workspace_path: str, session_id: str) -> str:
     """The filesystem path the resume preflight checks for this session — logged
     and returned so a failed resume is diagnosable (e.g. a cwd whose non-ASCII
