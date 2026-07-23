@@ -1290,7 +1290,7 @@ async function plDelete(id: string, name: string) {
             <button :class="['s-tab', { active: activeTab === 'analyzer' }]" @click="activeTab = 'analyzer'">{{ $t('settings.tab.analyzer') }}</button>
             <button :class="['s-tab', { active: activeTab === 'cliAgents' }]" @click="activeTab = 'cliAgents'">{{ $t('settings.tab.cliAgents') }}</button>
             <button :class="['s-tab', { active: activeTab === 'general' }]" @click="activeTab = 'general'">{{ $t('settings.tab.general') }}</button>
-            <button :class="['s-tab', { active: activeTab === 'updates' }]" @click="activeTab = 'updates'">{{ $t('updater.section-title') }}</button>
+            <button :class="['s-tab', { active: activeTab === 'updates' }]" @click="activeTab = 'updates'">{{ $t('settings.tab.updates') }}</button>
             <button :class="['s-tab', { active: activeTab === 'appearance' }]" @click="activeTab = 'appearance'">{{ $t('settings.tab.appearance') }}</button>
             <button :class="['s-tab', { active: activeTab === 'accounts' }]" @click="activeTab = 'accounts'">{{ $t('settings.tab.accounts') }}</button>
             <button :class="['s-tab', { active: activeTab === 'shortcuts' }]" @click="activeTab = 'shortcuts'">{{ $t('settings.tab.shortcuts') }}</button>
@@ -1327,7 +1327,7 @@ async function plDelete(id: string, name: string) {
         </div>
 
         <!-- ── ROLES TAB ─────────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'roles'" class="s-body" data-settings-section="roles">
+        <div v-show="activeTab === 'roles'" class="s-body roles-body" data-settings-section="roles">
           <div class="settings-meta-row">
             <span class="scope-badge">{{ settingsScopeNotes.roles.scope }}</span>
             <span class="settings-path" :title="pathForTab('roles')">{{ pathForTab('roles') }}</span>
@@ -1381,7 +1381,10 @@ async function plDelete(id: string, name: string) {
                 <p class="hint-msg">{{ rDraft.system_prompt.length }} chars · Changes apply to new spawns only</p>
               </div>
             </section>
-            <section v-else class="split-detail empty-detail"><p>{{ $t('hint.select-role-create') }}</p></section>
+            <section v-else class="split-detail empty-detail">
+              <div class="empty-glyph">👤</div>
+              <p>{{ $t('hint.select-role-create') }}</p>
+            </section>
           </div>
         </div>
 
@@ -2057,7 +2060,7 @@ async function plDelete(id: string, name: string) {
         </div>
 
         <!-- ══ CLI AGENTS TAB ══ -->
-        <div v-show="activeTab === 'cliAgents'" class="s-body">
+        <div v-show="activeTab === 'cliAgents'" class="s-body cli-agents-body">
           <section class="ap-section" data-settings-section="cli-agents-list">
             <h3 class="ap-title">{{ $t('settings.cliAgents.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliAgents.hint') }}</p>
@@ -2161,7 +2164,7 @@ async function plDelete(id: string, name: string) {
         </div>
 
         <!-- ══ UPDATES TAB ══ -->
-        <div v-show="activeTab === 'updates'" class="s-body">
+        <div v-show="activeTab === 'updates'" class="s-body updates-body">
           <section class="ap-section" data-settings-section="updates">
             <div class="ap-section-head">
               <h3 class="ap-title">{{ $t('updater.section-title') }}</h3>
@@ -2413,6 +2416,8 @@ async function plDelete(id: string, name: string) {
   gap: 4px;
   flex: 1;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .s-tab {
   border: 1px solid transparent;
@@ -2424,6 +2429,8 @@ async function plDelete(id: string, name: string) {
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .s-tab:hover { background: var(--bg-subtle); color: var(--text-bright); }
 .s-tab.active { background: var(--bg-muted); border-color: var(--border-default); color: var(--accent-fg); }
@@ -2555,7 +2562,7 @@ async function plDelete(id: string, name: string) {
 .ap-swatch { width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--border-muted); }
 .ap-theme-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
 .ap-check { position: absolute; top: 10px; right: 11px; font-size: 12px; color: var(--accent-fg); }
-.ap-lang-row { display: flex; gap: 10px; }
+.ap-lang-row { display: flex; gap: 10px; flex-wrap: wrap; }
 .ap-toggle-row { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--text-primary); font-size: 13px; }
 .ap-toggle-row input { cursor: pointer; }
 .ap-lang-btn {
@@ -2635,6 +2642,8 @@ async function plDelete(id: string, name: string) {
   min-height: 0;
   overflow: hidden;
 }
+.cli-agents-body { overflow-y: auto; padding: 18px 22px; }
+.updates-body { overflow-y: auto; padding: 18px 22px; }
 .settings-meta-row {
   display: flex;
   align-items: center;
@@ -2711,7 +2720,7 @@ button.tiny {
   padding: 8px 10px;
   font-size: 11.5px;
   font-family: inherit;
-  background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  background: var(--bg-subtle);
   border-radius: 6px;
 }
 
@@ -2719,7 +2728,7 @@ button.tiny {
 .split {
   flex: 1;
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 240px minmax(0, 1fr);
   min-height: 0;
 }
 .split-list {
@@ -2738,6 +2747,39 @@ button.tiny {
 .split-detail { padding: 14px 18px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 .empty-detail { align-items: center; justify-content: center; color: var(--text-muted); }
 
+/* ── Roles tab polish (scoped; pipelines tab keeps base styles) ───────────── */
+.roles-body .split-list { padding: 0 8px 8px; }
+.roles-body .split-list .new-btn { margin: 10px 2px 8px; border-radius: 6px; }
+.roles-body .split-list ul { display: flex; flex-direction: column; gap: 2px; }
+.roles-body .split-list li {
+  padding: 8px 10px;
+  border-bottom: none;
+  border-radius: 6px;
+  border-left: 2px solid transparent;
+}
+.roles-body .split-list li.active {
+  background: var(--accent-muted);
+  border-left-color: var(--accent-emphasis);
+}
+.roles-body .mono-key { background: var(--bg-muted); padding: 1px 6px; border-radius: 4px; }
+.roles-body .badge {
+  background: color-mix(in srgb, var(--accent-fg) 12%, transparent);
+  color: var(--accent-fg);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.roles-body .item-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roles-body .detail-head {
+  justify-content: space-between;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.roles-body .detail-head h3 { font-size: 15px; }
+.roles-body .split-detail { gap: 12px; }
+.roles-body .empty-detail { gap: 10px; }
+.roles-body .empty-glyph { font-size: 30px; opacity: 0.3; line-height: 1; }
+.roles-body .empty-detail p { margin: 0; font-size: 12px; }
+
 /* ── Fields ───────────────────────────────────────────────────────────────── */
 .field { display: flex; flex-direction: column; gap: 4px; }
 .lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-secondary); }
@@ -2755,7 +2797,7 @@ input[type='text'], input[type='email'], input[type='number'], textarea, select 
 textarea { font-family: Menlo, Monaco, monospace; resize: vertical; line-height: 1.5; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent-emphasis); }
 input:disabled { opacity: 0.5; cursor: not-allowed; }
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .detail-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .detail-head h3 { margin: 0; font-size: 14px; }
 .check-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none; }
@@ -2821,11 +2863,11 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 
 /* Top bar */
 .mcp-topbar {
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 12px 16px; border-bottom: 1px solid var(--border-muted);
   flex-shrink: 0; background: var(--bg-inset);
 }
-.mcp-page-title { font-size: 13px; font-weight: 700; color: var(--text-bright); flex: 1; }
+.mcp-page-title { font-size: 13px; font-weight: 700; color: var(--text-bright); flex: 1; min-width: 0; }
 .mcp-topbar-actions { display: flex; gap: 8px; }
 .mcp-action-btn {
   font-size: 11px; padding: 5px 11px; border-radius: 6px;
@@ -2841,7 +2883,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .mcp-summary-ok { font-size: 11px; color: var(--success-fg); padding: 4px 16px; }
 
 /* Server list */
-.mcp-server-list { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1; }
+.mcp-server-list { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1; min-height: 0; }
 .mcp-loading { color: var(--text-secondary); font-size: 12px; padding: 8px 0; }
 .mcp-empty { color: var(--text-muted); font-size: 12px; padding: 24px 0; text-align: center; }
 
@@ -2857,7 +2899,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
   padding: 12px 14px; min-height: 44px;
 }
 .mcp-spacer { flex: 1; }
-.mcp-server-name { font-weight: 700; font-size: 13px; color: var(--text-bright); }
+.mcp-server-name { font-weight: 700; font-size: 13px; color: var(--text-bright); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Status dot */
 .mcp-dot {
@@ -2929,7 +2971,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 /* Env vars editor */
 .mcp-env-row { display: flex; align-items: center; gap: 6px; }
 .mcp-env-key { width: 140px; flex-shrink: 0; font-family: Menlo, Monaco, monospace; font-size: 11px; }
-.mcp-env-val { flex: 1; font-family: Menlo, Monaco, monospace; font-size: 11px; }
+.mcp-env-val { flex: 1; min-width: 0; font-family: Menlo, Monaco, monospace; font-size: 11px; }
 .mcp-add-env-btn {
   font-size: 10px; padding: 2px 7px; border-radius: 4px;
   background: transparent; border: 1px solid var(--border-default); color: var(--text-secondary); cursor: pointer; margin-left: 6px;
@@ -3121,7 +3163,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-hint code { background: var(--bg-subtle); padding: 1px 5px; border-radius: 3px; font-size: 11px; color: var(--text-bright); }
 .az-pass-rule { color: var(--accent-fg); font-size: 11px; }
 
-.az-results { padding: 16px 20px; flex: 1; overflow-y: auto; }
+.az-results { padding: 16px 20px; flex: 1; overflow-y: auto; min-height: 0; }
 .az-results-summary {
   font-size: 12px;
   color: var(--text-secondary);
@@ -3140,7 +3182,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 }
 .az-th-task, .az-th-score, .az-th-verdict { text-align: center; }
 .az-table td { padding: 8px 10px; border-bottom: 1px solid var(--bg-subtle); vertical-align: middle; }
-.az-td-model { font-family: monospace; font-size: 11px; color: var(--text-bright); }
+.az-td-model { font-family: monospace; font-size: 11px; color: var(--text-bright); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .az-td-task { text-align: center; white-space: nowrap; }
 .az-td-score { text-align: center; color: var(--text-secondary); }
 .az-td-verdict { text-align: center; }
@@ -3167,13 +3209,13 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 }
 /* ── Pipelines tab ─────────────────────────────────────────────────────────── */
 .pipelines-body { display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
-.pl-create-row { display: flex; gap: 6px; align-items: center; }
+.pl-create-row { display: flex; gap: 6px; align-items: center; padding: 0 16px; }
 .pl-input {
   background: var(--bg-inset); border: 1px solid var(--accent-emphasis); border-radius: 4px;
   color: var(--text-bright); font-size: 12px; padding: 5px 8px; flex: 1;
 }
 .pl-rename { max-width: 180px; }
-.pl-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pl-list { list-style: none; margin: 0; padding: 0 16px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 0; }
 .pl-item {
   background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: 6px;
   padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;
@@ -3222,7 +3264,7 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .pl-delete-icon:disabled { opacity: 0.2; cursor: not-allowed; }
 .pl-detail-header {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 4px 0 12px; border-bottom: 1px solid var(--border-muted); margin-bottom: 6px; min-height: 36px;
+  padding: 4px 16px 12px; border-bottom: 1px solid var(--border-muted); margin-bottom: 6px; min-height: 36px;
 }
 .pl-detail-title { font-size: 15px; font-weight: 600; color: var(--accent-bright); margin: 0; flex: 1; display: flex; align-items: center; gap: 6px; }
 .pl-rename-icon {

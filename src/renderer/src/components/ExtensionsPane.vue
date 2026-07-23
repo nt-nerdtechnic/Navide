@@ -159,6 +159,9 @@ onMounted(refreshInstalled)
 .extensions-pane {
   padding: 12px 16px;
   font-size: 13px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .ext-title {
   font-size: 16px;
@@ -178,7 +181,7 @@ onMounted(refreshInstalled)
   align-items: center;
   gap: 8px;
   padding: 6px 0;
-  border-bottom: 1px solid var(--border-color, #333);
+  border-bottom: 1px solid var(--border-muted);
 }
 .ext-id {
   font-weight: 600;
