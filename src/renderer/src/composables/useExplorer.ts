@@ -26,6 +26,9 @@ interface FetchDirResult {
 
 const SHOW_HIDDEN_KEY = 'agentTeam.explorerShowHidden'
 
+/** Minimum gap between window-focus refreshes (there is no fs watcher). */
+const FOCUS_REFRESH_INTERVAL_MS = 5000
+
 /**
  * useExplorer — lazy directory tree backed by the `fs.*` WebSocket API.
  *
@@ -33,8 +36,16 @@ const SHOW_HIDDEN_KEY = 'agentTeam.explorerShowHidden'
  * demand and cached; toggling `showHidden` or a `git.changed` event invalidates
  * the cache and reloads whatever is currently expanded. Git status is NOT
  * fetched here — the host merges it as an overlay via {@link statusFor}.
+ *
+ * Because there is no fs watcher, a window `focus` also refreshes the visible
+ * tree (throttled; skipped while `opts.isRefreshBlocked()` is true, e.g. an
+ * inline rename/create prompt is open).
  */
-export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePath: Ref<string>) {
+export function useExplorer(
+  backend: ReturnType<typeof useBackend>,
+  workspacePath: Ref<string>,
+  opts?: { isRefreshBlocked?: () => boolean }
+) {
   const childrenCache = ref<Map<string, FsEntry[]>>(new Map())
   const expanded = ref<Set<string>>(new Set())
   const loadingDirs = ref<Set<string>>(new Set())
@@ -211,6 +222,22 @@ export function useExplorer(backend: ReturnType<typeof useBackend>, workspacePat
     void refreshVisible()
   })
   onScopeDispose(() => off())
+
+  // ── window focus → refresh ────────────────────────────────────────────────
+  // External tools (terminals, other editors) create/delete files without any
+  // git.changed event; re-list what's visible when the app regains focus.
+  let lastFocusRefreshAt = 0
+  function onWindowFocus(): void {
+    if (!ws()) return
+    if (backend.status.value !== 'connected') return
+    if (opts?.isRefreshBlocked?.()) return
+    const now = Date.now()
+    if (now - lastFocusRefreshAt < FOCUS_REFRESH_INTERVAL_MS) return
+    lastFocusRefreshAt = now
+    void refreshVisible()
+  }
+  window.addEventListener('focus', onWindowFocus)
+  onScopeDispose(() => window.removeEventListener('focus', onWindowFocus))
 
   // Reset when the workspace changes.
   watch(workspacePath, () => {

@@ -71,6 +71,14 @@ function eventKeyMatches(expectedKey: string, e: KeyboardEvent): boolean {
     return e.code === 'Slash' || e.code === 'NumpadDivide'
   }
 
+  // On macOS, Option+letter types a special character (e.g. Option+Z → 'Ω'),
+  // so `e.key` never reports the plain letter for alt-modified letter
+  // shortcuts like Alt+Z. Fall back to the physical letter key when Alt is
+  // held; without Alt, `e.key` remains the authoritative layout-aware match.
+  if (e.altKey && /^[a-z]$/.test(expectedKey)) {
+    return e.code === `Key${expectedKey.toUpperCase()}`
+  }
+
   // Same layout/IME problem for digit shortcuts (Ctrl+1..9 CLI quick-select):
   // with a Chinese IME active `e.key` may be `Process`/`Unidentified`, so the
   // binding silently missed and the keystroke leaked into the focused terminal.

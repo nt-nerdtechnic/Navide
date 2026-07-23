@@ -19,6 +19,7 @@ import ProblemsPane from './components/ProblemsPane.vue'
 import PlanFileView from './editor/PlanFileView.vue'
 import FilePreviewPane from './editor/FilePreviewPane.vue'
 import { previewKind, isMarkdownFile } from './editor/previewTypes'
+import { rebindPath, rebindTabs } from './editor/tabRebind'
 import { useKeybindings, registerCommand, setContext, executeCommand } from './keybindings/useKeybindings'
 import { useTheme, BUILTIN_THEMES } from './composables/useTheme'
 import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from './lib/settings'
@@ -179,7 +180,12 @@ function askSelectionWithAi(file: OpenFile, payload: unknown): void {
 // kind='diff': relPath is a synthetic key (\x00diff:<staged>:<filepath>), filepath/staged hold the real values.
 // kind='conflict': relPath is a synthetic key (\x00conflict:<filepath>), filepath holds the real path.
 // kind='branch-diff': relPath is a synthetic key (\x00branch-diff:<base>), base holds the base branch.
-interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
+interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; id: number; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
+// Stable tab identity for template keys: relPath is mutable (tabs follow
+// explorer renames/moves), and keying panes by it would remount EditorPane on
+// rename — losing the Monaco undo stack and any unsaved buffer.
+let tabIdSeq = 1
+function nextTabId(): number { return tabIdSeq++ }
 const openFiles = ref<OpenFile[]>([])
 const activeRel = ref('')
 
@@ -404,7 +410,7 @@ function openFile(p: { filepath: string; name?: string; line?: number }): void {
       existing.revealSeq = (existing.revealSeq ?? 0) + 1
     }
   } else {
-    openFiles.value.push({ kind: 'file', relPath, name, line: p.line ?? 0, dirty: false, revealSeq: 0 })
+    openFiles.value.push({ kind: 'file', id: nextTabId(), relPath, name, line: p.line ?? 0, dirty: false, revealSeq: 0 })
     // Auto-enable plan view for .plan.md files.
     if (isPlanFile(relPath)) {
       const s = new Set(planViewFiles.value)
@@ -429,7 +435,7 @@ function openDiff(p: { filepath: string; staged: boolean; name?: string }): void
   const tabKey = `\x00diff:${p.staged ? '1' : '0'}:${p.filepath}`
   const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
   if (!openFiles.value.find((f) => f.relPath === tabKey)) {
-    openFiles.value.push({ kind: 'diff', relPath: tabKey, filepath: p.filepath, staged: p.staged, name, line: 0, dirty: false, revealSeq: 0 })
+    openFiles.value.push({ kind: 'diff', id: nextTabId(), relPath: tabKey, filepath: p.filepath, staged: p.staged, name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
 }
@@ -438,7 +444,7 @@ function openConflict(p: { filepath: string; name?: string }): void {
   const tabKey = `\x00conflict:${p.filepath}`
   const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
   if (!openFiles.value.find((f) => f.relPath === tabKey)) {
-    openFiles.value.push({ kind: 'conflict', relPath: tabKey, filepath: p.filepath, name, line: 0, dirty: false, revealSeq: 0 })
+    openFiles.value.push({ kind: 'conflict', id: nextTabId(), relPath: tabKey, filepath: p.filepath, name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
 }
@@ -453,9 +459,42 @@ function openBranchDiff(p: { base: string; compare?: string; workspacePath?: str
     // update workspace in case called from a different workspace context
     existing.filepath = ws
   } else {
-    openFiles.value.push({ kind: 'branch-diff', relPath: tabKey, base, compare: p.compare ?? '', filepath: ws, name, line: 0, dirty: false, revealSeq: 0 })
+    openFiles.value.push({ kind: 'branch-diff', id: nextTabId(), relPath: tabKey, base, compare: p.compare ?? '', filepath: ws, name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
+}
+
+// ── Tab rebinding on explorer rename/move ─────────────────────────────────────
+// Keeps open tabs bound to their files after fs.rename (inline rename and
+// drag-to-move, file or folder). Tabs are keyed by stable id, so rewriting
+// relPath in place does NOT remount EditorPane — the buffer, undo stack, and
+// mtime baseline survive, and the pane's next save targets the new path.
+function onEntryRenamed(p: { oldRel: string; newRel: string }): void {
+  const moved = rebindTabs(openFiles.value, p.oldRel, p.newRel)
+  for (const { tab, prevRelPath } of moved) {
+    // Migrate state keyed by the old relPath.
+    const pane = editorPaneRefs.get(prevRelPath)
+    if (pane) { editorPaneRefs.delete(prevRelPath); editorPaneRefs.set(tab.relPath, pane) }
+    if (planViewFiles.value.has(prevRelPath)) {
+      const s = new Set(planViewFiles.value); s.delete(prevRelPath); s.add(tab.relPath)
+      planViewFiles.value = s
+    }
+    if (previewFiles.value.has(prevRelPath)) {
+      const s = new Set(previewFiles.value); s.delete(prevRelPath); s.add(tab.relPath)
+      previewFiles.value = s
+    }
+  }
+  if (secondaryGroup.value) {
+    const movedSec = rebindTabs(secondaryGroup.value.files, p.oldRel, p.newRel)
+    for (const { tab, prevRelPath } of movedSec) {
+      const pane = editorPaneRefsSecondary.get(prevRelPath)
+      if (pane) { editorPaneRefsSecondary.delete(prevRelPath); editorPaneRefsSecondary.set(tab.relPath, pane) }
+    }
+    const nextSecActive = rebindPath(secondaryGroup.value.activeRel, p.oldRel, p.newRel)
+    if (nextSecActive !== null) secondaryGroup.value.activeRel = nextSecActive
+  }
+  const nextActive = rebindPath(activeRel.value, p.oldRel, p.newRel)
+  if (nextActive !== null) activeRel.value = nextActive
 }
 
 const closedHistory: Array<{ relPath: string; name: string }> = []
@@ -1002,6 +1041,7 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.selectCurrentWord',       label: 'Select Current Word' },
   { id: 'editor.action.trimTrailingWhitespace', label: 'Trim Trailing Whitespace',   keys: '⌘K ⌘X' },
   { id: 'editor.action.toggleLineNumbers',      label: 'Toggle Line Numbers',         keys: '⌘K ⌘L' },
+  { id: 'editor.action.toggleWordWrap',         label: 'Toggle Word Wrap' },
   { id: 'editor.action.marker.nextInFiles',     label: 'Next Problem',                keys: 'F8' },
   { id: 'editor.action.marker.prevInFiles',     label: 'Previous Problem',            keys: '⇧F8' },
   { id: 'workbench.action.problems.focus',      label: 'Show Problems',               keys: '⌘⇧M' },
@@ -1327,6 +1367,7 @@ registerCommand('editor.action.fontZoomIn',    () => activeEditor()?.zoomIn())
 registerCommand('editor.action.fontZoomOut',   () => activeEditor()?.zoomOut())
 registerCommand('editor.action.fontZoomReset', () => activeEditor()?.zoomReset())
 registerCommand('editor.action.toggleLineNumbers', () => activeEditor()?.toggleLineNumbers())
+registerCommand('editor.action.toggleWordWrap',    () => activeEditor()?.toggleWordWrap())
 
 // ── Go to Symbol in Workspace (⌘T) ──────────────────────────────────────────
 interface WsymItem { name: string; kind: string; relPath: string; line: number }
@@ -1734,6 +1775,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         embedded
         :on-ask-ai-about-file="handleAskAiAboutFile"
         @open-file="openFile"
+        @entry-renamed="onEntryRenamed"
       />
       <SearchPane
         ref="searchRef"
@@ -1775,7 +1817,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         <div ref="tabsEl" class="ide-tabs">
           <div
             v-for="f in openFiles"
-            :key="f.relPath"
+            :key="f.id"
             class="ide-tab"
             :class="{ active: f.relPath === activeRel }"
             :title="(f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : f.relPath"
@@ -1823,7 +1865,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </div>
 
       <div class="ide-editors">
-        <template v-for="f in openFiles" :key="f.relPath">
+        <template v-for="f in openFiles" :key="f.id">
           <!-- Plan view: .plan.md files in plan mode, and plain .md files in
                markdown preview mode (same rendering pipeline). -->
           <PlanFileView
@@ -1852,7 +1894,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
                Key changes when toggling plan/raw, forcing a fresh load from disk. -->
           <EditorPane
             v-if="f.kind === 'file' && !(isPlanFile(f.relPath) && planViewFiles.has(f.relPath)) && !previewFiles.has(f.relPath)"
-            :key="f.relPath + ':' + (planViewFiles.has(f.relPath) ? 'plan' : 'raw')"
+            :key="f.id + ':' + (planViewFiles.has(f.relPath) ? 'plan' : 'raw')"
             v-show="f.relPath === activeRel"
             :ref="(el) => setEditorRef(f.relPath, el)"
             :workspace-path="workspacePath"
@@ -1912,7 +1954,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         <div class="ide-tabs">
           <div
             v-for="f in secondaryGroup.files"
-            :key="f.relPath"
+            :key="f.id"
             class="ide-tab"
             :class="{ active: f.relPath === secondaryGroup.activeRel }"
             @click="secondaryGroup.activeRel = f.relPath"
@@ -1922,7 +1964,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           </div>
         </div>
         <div class="ide-editors">
-          <template v-for="f in secondaryGroup.files" :key="'sec:' + f.relPath">
+          <template v-for="f in secondaryGroup.files" :key="'sec:' + f.id">
             <EditorPane
               v-if="f.kind === 'file'"
               v-show="f.relPath === secondaryGroup.activeRel"

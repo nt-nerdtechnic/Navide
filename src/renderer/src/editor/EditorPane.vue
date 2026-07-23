@@ -4,6 +4,7 @@ import type { useBackend } from '../composables/useBackend'
 import { useNotify } from '../composables/useNotify'
 import { setContext } from '../keybindings/useKeybindings'
 import EditorViewMonaco from './view/EditorViewMonaco.vue'
+import { languageForFile, normalizeLanguage } from './languageDetect'
 import type { Range, Position } from './types'
 import { diagnosticsStore } from './diagnostics'
 import { loadImageDataUrl } from '../lib/imageData'
@@ -66,14 +67,26 @@ const editorRef = ref<InstanceType<typeof EditorViewMonaco> | null>(null)
 
 const model = 'qwen2:latest' // analyzer's default; rewrite/complete proxy to local LLM
 const langOverride = ref<string | null>(null)
-const lang = computed(() => langOverride.value ?? (props.name.split('.').pop() ?? ''))
+// Effective Monaco language ID: manual override wins, else filename-aware detection.
+const lang = computed(() =>
+  langOverride.value != null ? normalizeLanguage(langOverride.value) : languageForFile(props.name))
 
+// Status-bar labels keyed by Monaco language ID.
 const LANG_MAP: Record<string, string> = {
-  ts: 'TypeScript', tsx: 'TypeScript JSX', js: 'JavaScript', jsx: 'JavaScript JSX',
-  vue: 'Vue', py: 'Python', json: 'JSON', md: 'Markdown', html: 'HTML',
-  css: 'CSS', scss: 'SCSS', sh: 'Shell', go: 'Go', rs: 'Rust', rb: 'Ruby',
-  java: 'Java', kt: 'Kotlin', swift: 'Swift', cpp: 'C++', c: 'C', yaml: 'YAML',
-  toml: 'TOML', xml: 'XML', sql: 'SQL',
+  typescript: 'TypeScript', javascript: 'JavaScript', python: 'Python',
+  json: 'JSON', markdown: 'Markdown', html: 'HTML', css: 'CSS', scss: 'SCSS',
+  less: 'Less', shell: 'Shell', go: 'Go', rust: 'Rust', ruby: 'Ruby',
+  java: 'Java', kotlin: 'Kotlin', swift: 'Swift', cpp: 'C++', c: 'C',
+  csharp: 'C#', php: 'PHP', yaml: 'YAML', ini: 'INI', xml: 'XML', sql: 'SQL',
+  graphql: 'GraphQL', dockerfile: 'Dockerfile', bat: 'Batch',
+  powershell: 'PowerShell', perl: 'Perl', scala: 'Scala', clojure: 'Clojure',
+  coffee: 'CoffeeScript', elixir: 'Elixir', fsharp: 'F#',
+  'objective-c': 'Objective-C', pascal: 'Pascal', protobuf: 'Protobuf',
+  pug: 'Pug', restructuredtext: 'reStructuredText', solidity: 'Solidity',
+  tcl: 'Tcl', twig: 'Twig', vb: 'Visual Basic', wgsl: 'WGSL',
+  handlebars: 'Handlebars', liquid: 'Liquid', razor: 'Razor', bicep: 'Bicep',
+  hcl: 'HCL', dart: 'Dart', lua: 'Lua', r: 'R', julia: 'Julia',
+  plaintext: 'Text',
 }
 const langDisplay = computed(() => LANG_MAP[lang.value] ?? (lang.value ? lang.value.toUpperCase() : 'Text'))
 
@@ -1028,6 +1041,7 @@ function zoomIn(): void { editorRef.value?.zoomIn() }
 function zoomOut(): void { editorRef.value?.zoomOut() }
 function zoomReset(): void { editorRef.value?.zoomReset() }
 function toggleLineNumbers(): void { editorRef.value?.toggleLineNumbers() }
+function toggleWordWrap(): void { editorRef.value?.toggleWordWrap() }
 function undo(): void { editorRef.value?.undo() }
 function redo(): void { editorRef.value?.redo() }
 function selectAll(): void { editorRef.value?.selectAll() }
@@ -1064,7 +1078,7 @@ defineExpose({
   foldToLevel: (n: number) => editorRef.value?.foldToLevel(n),
   foldRecursively: (line: number) => editorRef.value?.foldRecursively(line),
   unfoldRecursively: (line: number) => editorRef.value?.unfoldRecursively(line),
-  setLanguage, zoomIn, zoomOut, zoomReset, toggleLineNumbers,
+  setLanguage, zoomIn, zoomOut, zoomReset, toggleLineNumbers, toggleWordWrap,
   undo, redo, selectAll,
   openReplace,
   getContent: () => content.value,

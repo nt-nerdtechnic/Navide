@@ -7,9 +7,11 @@ import { i18n } from '../../i18n'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import type { BackendStatus } from '../../composables/useBackend'
 
-// Stub useNotify so toast/alert/confirm calls don't throw.
+// Stub useNotify so toast/alert/confirm calls don't throw (shared spies so
+// tests can assert on them).
+const notify = vi.hoisted(() => ({ toast: vi.fn(), alert: vi.fn(), confirm: vi.fn() }))
 vi.mock('../../composables/useNotify', () => ({
-  useNotify: () => ({ toast: vi.fn(), alert: vi.fn(), confirm: vi.fn() }),
+  useNotify: () => notify,
 }))
 
 const FILE_ENTRY = {
@@ -26,6 +28,19 @@ const DIR_ENTRY = {
   is_dir: true,
   is_hidden: false,
   is_noise: false,
+}
+
+const SUB_DIR_ENTRY = {
+  name: 'sub',
+  rel_path: 'src/sub',
+  is_dir: true,
+  is_hidden: false,
+  is_noise: false,
+}
+
+/** Minimal DataTransfer stand-in for drop events (happy-dom has no real one). */
+function makeDataTransfer(text: string) {
+  return { getData: () => text, types: ['text/plain'], files: [], dropEffect: '' }
 }
 
 function mountPane(backend: unknown) {
@@ -117,5 +132,136 @@ describe('ExplorerPane – connection states', () => {
     await flushPromises()
     expect(listDirCalls(sent)).toBe(2)
     expect(wrapper.text()).toContain('readme.md')
+  })
+})
+
+describe('ExplorerPane – drag to move', () => {
+  function renameCalls(sent: { type: string; payload: Record<string, unknown> }[]) {
+    return sent.filter((s) => s.type === 'fs.rename')
+  }
+
+  it('moves a file dropped onto a folder row via fs.rename', async () => {
+    const { backend, setResponse, sent } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY, DIR_ENTRY] })
+    setResponse('fs.rename', { ok: true })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('[data-rel="src"]').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/readme.md'),
+    })
+    await flushPromises()
+
+    const renames = renameCalls(sent)
+    expect(renames).toHaveLength(1)
+    expect(renames[0].payload).toMatchObject({ src_path: 'readme.md', dst_path: 'src/readme.md' })
+  })
+
+  it('does not rename when dropped onto the item\'s current parent', async () => {
+    const { backend, setResponse, sent } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY, DIR_ENTRY] })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // readme.md already lives at the root; dropping on the tree background no-ops.
+    await wrapper.find('.exp-tree').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/readme.md'),
+    })
+    await flushPromises()
+
+    expect(renameCalls(sent)).toHaveLength(0)
+  })
+
+  it('does not rename when a folder is dropped onto its own descendant', async () => {
+    const { backend, setResponse, sent } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [DIR_ENTRY] })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    setResponse('fs.list_dir', { ok: true, entries: [SUB_DIR_ENTRY] })
+    await wrapper.find('[data-rel="src"]').trigger('click') // expand 'src'
+    await flushPromises()
+
+    await wrapper.find('[data-rel="src/sub"]').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/src'),
+    })
+    await flushPromises()
+
+    expect(renameCalls(sent)).toHaveLength(0)
+  })
+
+  it('surfaces a name collision as an error alert without overwriting', async () => {
+    notify.alert.mockClear()
+    const { backend, setResponse, sent } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY, DIR_ENTRY] })
+    setResponse('fs.rename', { ok: false, error: 'destination already exists' })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('[data-rel="src"]').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/readme.md'),
+    })
+    await flushPromises()
+
+    expect(renameCalls(sent)).toHaveLength(1)
+    expect(notify.alert).toHaveBeenCalledWith('destination already exists', { title: 'Error' })
+  })
+})
+
+describe('ExplorerPane – entry-renamed emission', () => {
+  it('emits entry-renamed after a successful drag-to-move', async () => {
+    const { backend, setResponse } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY, DIR_ENTRY] })
+    setResponse('fs.rename', { ok: true })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('[data-rel="src"]').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/readme.md'),
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('entry-renamed')).toEqual([
+      [{ oldRel: 'readme.md', newRel: 'src/readme.md' }],
+    ])
+  })
+
+  it('does not emit entry-renamed when the move fails', async () => {
+    const { backend, setResponse } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY, DIR_ENTRY] })
+    setResponse('fs.rename', { ok: false, error: 'destination already exists' })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('[data-rel="src"]').trigger('drop', {
+      dataTransfer: makeDataTransfer('/ws/readme.md'),
+    })
+    await flushPromises()
+
+    expect(wrapper.emitted('entry-renamed')).toBeUndefined()
+  })
+
+  it('emits entry-renamed after a successful inline rename', async () => {
+    const { backend, setResponse } = createMockBackend('connected' as BackendStatus)
+    setResponse('fs.list_dir', { ok: true, entries: [FILE_ENTRY] })
+    setResponse('fs.rename', { ok: true })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('[data-rel="readme.md"]').trigger('contextmenu')
+    const renameBtn = wrapper
+      .findAll('.exp-ctx-item')
+      .find((b) => b.text() === 'Rename')
+    expect(renameBtn).toBeDefined()
+    await renameBtn!.trigger('click')
+
+    const input = wrapper.find('.exp-prompt-input')
+    await input.setValue('index.md')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(wrapper.emitted('entry-renamed')).toEqual([
+      [{ oldRel: 'readme.md', newRel: 'index.md' }],
+    ])
   })
 })

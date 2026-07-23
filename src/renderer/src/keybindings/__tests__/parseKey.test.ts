@@ -122,6 +122,24 @@ describe('matchesEvent', () => {
     const e = mkEvent('Process', { metaKey: true, code: 'KeyP' })
     expect(matchesEvent(parsed, e)).toBe(false)
   })
+
+  it('matches alt+z by physical key when macOS Option reports a special char', () => {
+    const parsed = parseKey('alt+z')
+    const e = mkEvent('Ω', { altKey: true, code: 'KeyZ' })
+    expect(matchesEvent(parsed, e)).toBe(true)
+  })
+
+  it('does not treat another physical key as alt+z', () => {
+    const parsed = parseKey('alt+z')
+    const e = mkEvent('Ω', { altKey: true, code: 'KeyX' })
+    expect(matchesEvent(parsed, e)).toBe(false)
+  })
+
+  it('cmd+z without alt still requires the layout key (no physical fallback)', () => {
+    const parsed = parseKey('cmd+z')
+    expect(matchesEvent(parsed, mkEvent('z', { metaKey: true, code: 'KeyZ' }))).toBe(true)
+    expect(matchesEvent(parsed, mkEvent('y', { metaKey: true, code: 'KeyZ' }))).toBe(false)
+  })
 })
 
 describe('parsedKeyEquals', () => {

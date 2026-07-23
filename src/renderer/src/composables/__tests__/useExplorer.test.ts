@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { ref } from 'vue'
 import { useExplorer, type FsEntry } from '../useExplorer'
 import type { GitStatus } from '../useGit'
@@ -159,6 +159,67 @@ describe('useExplorer', () => {
     mock.emit('git.changed', {})
     await flush()
     expect(mock.sent.filter((s) => s.type === 'fs.list_dir').length).toBeGreaterThan(before)
+    scope.stop()
+  })
+
+  it('window focus refreshes the visible tree, throttled to one per 5s', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries() })
+    const wp = ref('/ws')
+    const { result, scope } = withScope(() => useExplorer(mock.backend, wp))
+    await result.loadDir('')
+    const count = (): number => mock.sent.filter((s) => s.type === 'fs.list_dir').length
+    const before = count()
+
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    const afterFirst = count()
+    expect(afterFirst).toBeGreaterThan(before)
+
+    // Second focus within the 5s window: throttled, no new listing.
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    expect(count()).toBe(afterFirst)
+
+    // Past the window: refreshes again.
+    const realNow = Date.now()
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 5001)
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    const afterSecond = count()
+    expect(afterSecond).toBeGreaterThan(afterFirst)
+
+    // Scope disposal removes the listener.
+    scope.stop()
+    nowSpy.mockReturnValue(realNow + 60000)
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    expect(count()).toBe(afterSecond)
+    nowSpy.mockRestore()
+  })
+
+  it('skips the focus refresh while isRefreshBlocked returns true', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('fs.list_dir', { ok: true, entries: entries() })
+    const wp = ref('/ws')
+    let blocked = true
+    const { result, scope } = withScope(() =>
+      useExplorer(mock.backend, wp, { isRefreshBlocked: () => blocked })
+    )
+    await result.loadDir('')
+    const count = (): number => mock.sent.filter((s) => s.type === 'fs.list_dir').length
+    const before = count()
+
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    expect(count()).toBe(before)
+
+    // A blocked focus must not consume the throttle window: unblocking and
+    // focusing again refreshes immediately.
+    blocked = false
+    window.dispatchEvent(new Event('focus'))
+    await flush()
+    expect(count()).toBeGreaterThan(before)
     scope.stop()
   })
 

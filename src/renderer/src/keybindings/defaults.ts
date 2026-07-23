@@ -35,6 +35,7 @@ export const defaults: KeybindingRule[] = [
   { key: 'ctrl+l',      command: 'editor.action.selectLine', when: 'editorTextFocus' },
   { key: 'ctrl+g',         command: 'editor.action.gotoLine',       when: 'editorOpen' },
   { key: 'cmd+/',         command: 'editor.action.toggleComment',  when: 'editorTextFocus' },
+  { key: 'alt+z',         command: 'editor.action.toggleWordWrap', when: 'editorTextFocus' },
   { key: 'cmd+alt+/',     command: 'editor.action.blockComment',   when: 'editorTextFocus' },
   { key: 'shift+alt+a',  command: 'editor.action.blockComment',   when: 'editorTextFocus' },
   { key: 'cmd+shift+k',   command: 'editor.action.deleteLines',    when: 'editorTextFocus' },

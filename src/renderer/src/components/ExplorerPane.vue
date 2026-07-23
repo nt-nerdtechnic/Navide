@@ -16,10 +16,16 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open-file', payload: { filepath: string; name: string }): void
+  // Fired after every successful fs.rename (inline rename and drag-to-move,
+  // file or folder) so the host can rebind open editor tabs to the new path.
+  (e: 'entry-renamed', payload: { oldRel: string; newRel: string }): void
 }>()
 
 const wsRef = toRef(props, 'workspacePath')
-const explorer = useExplorer(props.backend, wsRef)
+// Skip focus-refreshes while the inline create/rename prompt is open so the
+// user's input is never clobbered. (`prompt` is declared below; the guard only
+// runs on later focus events.)
+const explorer = useExplorer(props.backend, wsRef, { isRefreshBlocked: () => prompt.value !== null })
 const git = useGit(() => props.workspacePath, props.backend)
 const { toast, alert, confirm } = useNotify()
 
@@ -335,7 +341,10 @@ async function submitPrompt(): Promise<void> {
   }
   // Drop stale expansion/cache state under the old path; keep the subtree
   // expanded under the new one.
-  if (p.kind === 'rename' && p.srcRel) explorer.pruneDir(p.srcRel, rel)
+  if (p.kind === 'rename' && p.srcRel) {
+    explorer.pruneDir(p.srcRel, rel)
+    emit('entry-renamed', { oldRel: p.srcRel, newRel: rel })
+  }
   // Make sure the affected dir is expanded so the result is visible.
   if (p.kind !== 'rename' && p.parentRel && !explorer.isExpanded(p.parentRel)) {
     await explorer.toggleDir(p.parentRel)
@@ -378,6 +387,105 @@ async function copyPath(entry: FsEntry): Promise<void> {
   } catch {
     toast('Copy failed', { type: 'error' })
   }
+}
+
+// ── Drag to move ─────────────────────────────────────────────────────────────
+// Rows keep their absolute-path text/plain dragstart payload (cross-window
+// drags depend on it). In-tree, folder rows and the tree background accept
+// drops and move the dragged entry via fs.rename, keeping its basename.
+const dropTargetRel = ref<string | null>(null) // '' = workspace root
+
+// During dragover the payload is unreadable (dataTransfer protected mode), so
+// only gate on types here; the path itself is validated on drop.
+function canAcceptDrag(e: DragEvent): boolean {
+  const types = e.dataTransfer?.types
+  if (!types) return false
+  const list = Array.from(types)
+  return list.includes('text/plain') && !list.includes('Files')
+}
+
+/** Workspace-relative path from a drop payload, or null for foreign drops. */
+function relFromDrop(e: DragEvent): string | null {
+  if (e.dataTransfer?.files?.length) return null
+  const text = e.dataTransfer?.getData('text/plain') ?? ''
+  const root = props.workspacePath.replace(/\/+$/, '')
+  if (!root || !text.startsWith(root + '/')) return null
+  return text.slice(root.length + 1)
+}
+
+function onRowDragOver(e: DragEvent, entry: FsEntry): void {
+  if (!entry.is_dir || !canAcceptDrag(e)) return // file rows bubble to the tree (root target)
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropTargetRel.value = entry.rel_path
+}
+
+function onTreeDragOver(e: DragEvent): void {
+  if (!canAcceptDrag(e)) return
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  dropTargetRel.value = ''
+}
+
+function onTreeDragLeave(e: DragEvent): void {
+  const to = e.relatedTarget as Node | null
+  if (!to || !treeEl.value?.contains(to)) dropTargetRel.value = null
+}
+
+function onRowDrop(e: DragEvent, entry: FsEntry): void {
+  if (!entry.is_dir) return // bubbles to the tree handler (root target)
+  e.preventDefault()
+  e.stopPropagation()
+  dropTargetRel.value = null
+  const rel = relFromDrop(e)
+  if (rel === null) return
+  void moveEntries(rel, entry.rel_path)
+}
+
+function onTreeDrop(e: DragEvent): void {
+  e.preventDefault()
+  dropTargetRel.value = null
+  const rel = relFromDrop(e)
+  if (rel === null) return
+  void moveEntries(rel, '')
+}
+
+/** Move the dragged entry (or the whole multi-selection containing it) into
+ *  `targetDir`. Same-parent and folder-into-itself/descendant drops no-op;
+ *  collisions are refused by the backend and surfaced via alert. */
+async function moveEntries(draggedRel: string, targetDir: string): Promise<void> {
+  const rels = selectedKeys.value.has(draggedRel) ? [...selectedKeys.value] : [draggedRel]
+  // Shallowest first; skip children whose ancestor is also being moved.
+  const sorted = rels.sort((a, b) => a.split('/').length - b.split('/').length)
+  const moved = new Set<string>()
+  for (const rel of sorted) {
+    if ([...moved].some((m) => rel.startsWith(m + '/'))) continue
+    if (parentOf(rel) === targetDir) continue // already in the target dir
+    if (targetDir === rel || targetDir.startsWith(rel + '/')) continue // folder into itself/descendant
+    const name = rel.split('/').pop()!
+    const dst = targetDir ? `${targetDir}/${name}` : name
+    try {
+      const res = await props.backend.send<FsResult>('fs.rename', {
+        workspace_path: props.workspacePath,
+        src_path: rel,
+        dst_path: dst,
+      })
+      if (!res.payload?.ok) {
+        void alert(res.payload?.error || `Failed to move "${rel}"`, { title: 'Error' })
+        continue
+      }
+    } catch (err) {
+      void alert(err instanceof Error ? err.message : `Failed to move "${rel}"`, { title: 'Error' })
+      continue
+    }
+    moved.add(rel)
+    explorer.pruneDir(rel, dst)
+    emit('entry-renamed', { oldRel: rel, newRel: dst })
+  }
+  if (moved.size === 0) return
+  clearSelection()
+  await explorer.refreshVisible()
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -521,15 +629,28 @@ defineExpose({ revealFile, focusTree })
     </div>
 
     <!-- Tree -->
-    <div ref="treeEl" class="exp-tree" tabindex="0" @contextmenu="openCtx($event, null)" @keydown="onTreeKeydown" @focus="onTreeFocus">
+    <div
+      ref="treeEl"
+      class="exp-tree"
+      :class="{ 'drop-target-root': dropTargetRel === '' }"
+      tabindex="0"
+      @contextmenu="openCtx($event, null)"
+      @keydown="onTreeKeydown"
+      @focus="onTreeFocus"
+      @dragover="onTreeDragOver"
+      @dragleave="onTreeDragLeave"
+      @drop="onTreeDrop"
+    >
       <template v-for="(row, rowIdx) in rows" :key="row.entry.rel_path">
         <div
           :data-rel="row.entry.rel_path"
           class="exp-row"
-          :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx }"
+          :class="{ noise: row.entry.is_noise, hidden: row.entry.is_hidden, 'row-selected': selectedKeys.has(row.entry.rel_path), 'row-focused': focusedIdx === rowIdx, 'drop-target': dropTargetRel === row.entry.rel_path }"
           :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
           :draggable="true"
           @dragstart="(e) => e.dataTransfer?.setData('text/plain', absPath(row.entry.rel_path))"
+          @dragover="onRowDragOver($event, row.entry)"
+          @drop="onRowDrop($event, row.entry)"
           @click.stop="handleRowClick($event, row.entry)"
           @dblclick.stop="row.entry.is_dir ? explorer.toggleDir(row.entry.rel_path) : openInEditor(row.entry)"
           @contextmenu.stop="openCtx($event, row.entry)"
@@ -812,6 +933,14 @@ defineExpose({ revealFile, focusTree })
 .exp-row.row-selected:hover { background: color-mix(in srgb, var(--accent-fg) 18%, transparent); }
 .exp-row.row-focused { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }
 .exp-tree:focus { outline: none; }
+
+/* Drag-to-move drop targets */
+.exp-row.drop-target {
+  background: color-mix(in srgb, var(--accent-fg) 18%, transparent);
+  outline: 1px solid var(--accent-emphasis);
+  outline-offset: -1px;
+}
+.exp-tree.drop-target-root { outline: 1px solid var(--accent-emphasis); outline-offset: -1px; }
 
 .selection-bar {
   position: sticky;

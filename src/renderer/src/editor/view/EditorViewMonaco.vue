@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import './monacoWorkers'
 import * as monaco from 'monaco-editor'
 import type { Decoration } from '../types'
+import { normalizeLanguage } from '../languageDetect'
 import {
   toSnakeCase, toCamelCase, toKebabCase, toPascalCase,
 } from '../textTransforms'
@@ -174,31 +175,6 @@ function buildMonacoTheme(): monaco.editor.IStandaloneThemeData {
       'peekViewTitle.background':            '#1e1e1e',
     },
   }
-}
-
-// ── Language mapping ───────────────────────────────────────────────────────────
-function normalizeLanguage(lang: string): string {
-  const map: Record<string, string> = {
-    js: 'javascript', jsx: 'javascript',
-    ts: 'typescript', tsx: 'typescript',
-    py: 'python', rb: 'ruby', rs: 'rust', go: 'go',
-    java: 'java', cpp: 'cpp', cc: 'cpp', cxx: 'cpp',
-    c: 'c', cs: 'csharp', php: 'php',
-    md: 'markdown', mdx: 'markdown',
-    yml: 'yaml', yaml: 'yaml', toml: 'ini',
-    sh: 'shell', bash: 'shell', zsh: 'shell',
-    vue: 'html', svelte: 'html',
-    json: 'json', jsonc: 'json',
-    css: 'css', scss: 'scss', sass: 'scss', less: 'less',
-    html: 'html', xml: 'xml', svg: 'xml',
-    sql: 'sql', graphql: 'graphql',
-    dockerfile: 'dockerfile', Dockerfile: 'dockerfile',
-    makefile: 'makefile', Makefile: 'makefile',
-    swift: 'swift', kt: 'kotlin', dart: 'dart',
-    lua: 'lua', r: 'r', jl: 'julia',
-    tf: 'hcl', hcl: 'hcl',
-  }
-  return map[lang] ?? lang
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -650,6 +626,13 @@ function toggleLineNumbers(): void {
   editor?.updateOptions({ lineNumbers: show ? 'on' : 'off' })
 }
 
+// Word wrap (per-pane toggle, Alt+Z)
+const wordWrapEnabled = ref(false)
+function toggleWordWrap(): void {
+  wordWrapEnabled.value = !wordWrapEnabled.value
+  editor?.updateOptions({ wordWrap: wordWrapEnabled.value ? 'on' : 'off' })
+}
+
 // Tab / space settings
 function setTabSize(size: number): void { editor?.getModel()?.updateOptions({ tabSize: size }) }
 function setUseSpaces(use: boolean): void { editor?.getModel()?.updateOptions({ insertSpaces: use }) }
@@ -703,7 +686,7 @@ defineExpose({
   sortLinesAscending, sortLinesDescending, reverseLines, removeDuplicateLines,
   transpose, indentationToSpaces, indentationToTabs,
   openLinkAtCursor,
-  zoomIn, zoomOut, zoomReset, toggleLineNumbers,
+  zoomIn, zoomOut, zoomReset, toggleLineNumbers, toggleWordWrap,
   setTabSize, setUseSpaces, getTabSize, getUseSpaces,
   getWordAtCursor,
   setDecorations, setGhost, acceptGhost,
