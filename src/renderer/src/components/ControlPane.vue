@@ -1184,6 +1184,7 @@ function onPipelineDividerEnd(): void {
               @dblclick.stop="startRename(p)"
             >{{ p.agentLabel }}</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
+            <span v-if="expandedPaneId !== p.id" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }}<template v-if="p.roleLabel"> · {{ p.roleLabel }}</template></span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
             <span class="expand-caret" aria-hidden="true">▶</span>
             <span class="agent-line-actions">
@@ -2385,6 +2386,15 @@ button.icon-btn.muted:hover {
 @media (prefers-reduced-motion: reduce) {
   .status-dot { animation: none !important; }
   .expand-caret { transition: none; }
+}
+.agent-line-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
 }
 .agent-line .minimized-tag {
   margin-left: auto;
