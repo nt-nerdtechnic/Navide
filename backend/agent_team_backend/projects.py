@@ -251,6 +251,11 @@ class ProjectStore:
         # save() must be mutually exclusive to keep the shared .tmp file and
         # snapshot consistent. RLock: set_ui_state holds it across save().
         self._save_lock = threading.RLock()
+        # pane_ids already warned about in record_manual_pane_session, so a
+        # frontend that re-sends manual_pane.session on every activity event
+        # (permanently-missing pane record) floods the log — and the event loop —
+        # with one warning per call. Warn once per pane instead.
+        self._warned_missing_manual_panes: set[str] = set()
 
     def project_dir(self, workspace_path: str) -> Path:
         return Path(workspace_path) / PROJECT_DIR_NAME
@@ -802,8 +807,12 @@ class ProjectStore:
         project = self.load_or_create(workspace_path)
         pane = self._find_manual_pane(project, pane_id)
         if pane is None:
-            log.warning("manual_pane.session: pane %s not found — session %r not persisted", pane_id, session_id)
+            if pane_id not in self._warned_missing_manual_panes:
+                self._warned_missing_manual_panes.add(pane_id)
+                log.warning("manual_pane.session: pane %s not found — session %r not persisted", pane_id, session_id)
             return project
+        # Recovered: clear the once-warned mark so a later disappearance re-warns.
+        self._warned_missing_manual_panes.discard(pane_id)
         pane.session_id = session_id
         self.save(project)
         return project

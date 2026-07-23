@@ -677,6 +677,14 @@ interface ActivePane {
 const panes = ref<ActivePane[]>([])
 const paneRefs = reactive<Record<string, InstanceType<typeof TerminalPane> | null>>({})
 const persistedPaneSessions = new Set<string>()
+// Bounded retry for persistPaneSession. The backend noops when the manual-pane
+// record doesn't exist yet (persist racing manual_pane.spawn) — normally
+// transient. But a permanently-missing record would otherwise re-send
+// manual_pane.session on every activity event forever, a ~60/sec flood that
+// saturates the backend event loop and times out terminal.create. Cap attempts
+// per key, then give up (treat as persisted so callers stop re-sending).
+const persistPaneAttempts = new Map<string, number>()
+const MAX_PERSIST_PANE_ATTEMPTS = 8
 
 // Tracks which issues have been dispatched/handled and to which pane.
 // key: issue.url  value: { paneId, mode, state }
@@ -1994,7 +2002,17 @@ async function persistPaneSession(pane: ActivePane, sessionId: string): Promise<
       session_id: id,
     })
   }
-  if (saved) persistedPaneSessions.add(key)
+  if (saved) {
+    persistedPaneSessions.add(key)
+    persistPaneAttempts.delete(key)
+  } else {
+    // Unconfirmed (pane record missing). Retry a bounded number of times for the
+    // transient spawn race, then stop so a permanently-missing pane can't flood
+    // manual_pane.session on every activity event.
+    const attempts = (persistPaneAttempts.get(key) ?? 0) + 1
+    persistPaneAttempts.set(key, attempts)
+    if (attempts >= MAX_PERSIST_PANE_ATTEMPTS) persistedPaneSessions.add(key)
+  }
 }
 
 function scheduleInjection(pane: ActivePane): void {

@@ -360,6 +360,41 @@ def test_manual_pane_session_fills_in_later(store_with_stage: tuple[ProjectStore
     assert pane.session_id == "codex-sess"
 
 
+def test_manual_pane_session_missing_pane_warns_once(
+    store_with_stage: tuple[ProjectStore, str], caplog
+) -> None:
+    """A frontend that re-sends manual_pane.session on every activity event for a
+    permanently-missing pane must not flood the log (and the event loop) — warn
+    once per pane, not once per call."""
+    store, ws = store_with_stage
+    with caplog.at_level("WARNING"):
+        for _ in range(50):
+            store.record_manual_pane_session(ws, pane_id="ghost", session_id="s")
+    warnings = [r for r in caplog.records if "not found" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def test_manual_pane_session_rewarns_after_recovery(
+    store_with_stage: tuple[ProjectStore, str], caplog
+) -> None:
+    """A successful persist clears the once-warned mark, so if the pane later
+    goes missing again the next miss warns afresh (not suppressed forever)."""
+    store, ws = store_with_stage
+    with caplog.at_level("WARNING"):
+        store.record_manual_pane_session(ws, pane_id="pane-1", session_id="s1")  # miss → warn
+        store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="codex")       # record appears
+        store.record_manual_pane_session(ws, pane_id="pane-1", session_id="s2")  # hit → clears mark
+    # Directly drop the record to simulate a later disappearance without relying
+    # on unspawn's mark-removed semantics.
+    project = store.peek(ws)
+    project.panes = [p for p in project.panes if p.pane_id != "pane-1"]
+    store.save(project)
+    with caplog.at_level("WARNING"):
+        store.record_manual_pane_session(ws, pane_id="pane-1", session_id="s3")  # miss → warn again
+    warnings = [r for r in caplog.records if "not found" in r.getMessage()]
+    assert len(warnings) == 2
+
+
 def test_manual_pane_session_can_be_cleared(store_with_stage: tuple[ProjectStore, str]) -> None:
     store, ws = store_with_stage
     store.record_manual_pane_spawn(ws, pane_id="pane-1", agent="claude", session_id="bad-sess")
