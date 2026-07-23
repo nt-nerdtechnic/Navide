@@ -22,9 +22,10 @@ import {
 } from './cli-buffer-relay'
 import {
   hitTestWindows,
+  selectDropCandidates,
   PANE_DRAG_END_CHANNEL,
   EXTERNAL_PANE_DROP_CHANNEL,
-  type DropCandidate
+  type CandidateWindow
 } from './cross-window-drag'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
 import { findManualLogFile } from './manual-log-search'
@@ -80,6 +81,13 @@ let quitConfirmed = false
 // holds them all for lifecycle code that must reach every main window.
 let mainWindow: BrowserWindow | null = null
 const mainWindows = new Set<BrowserWindow>()
+// Focus recency per window id — approximates z-order for the cross-window pane
+// drop hit-test (Electron has no cross-platform z-order query).
+const windowFocusSeq = new Map<number, number>()
+let windowFocusCounter = 0
+app.on('browser-window-focus', (_event, win) => {
+  windowFocusSeq.set(win.id, ++windowFocusCounter)
+})
 // Maps each main window to its workspace_path so we can focus an existing window
 // instead of creating a duplicate when the same folder is opened again.
 const mainWindowWorkspaces = new Map<BrowserWindow, string>()
@@ -1004,27 +1012,36 @@ ipcMain.handle('cli:get-pane-buffer', (_event, paneId: string): Promise<CliPaneB
   return cliBufferRelay.request(targets, String(paneId ?? ''))
 })
 
-// Cross-window pane drop: a drag started in a main window never reaches the
-// editor window (HTML5 DnD does not cross BrowserWindow boundaries), so the
-// source reports the release point from its dragend — already filtered to drags
-// that were NOT dropped in-window — and we hand it to the window under it.
+// Cross-window pane drop: a drag started in one window never reaches another
+// (HTML5 DnD does not cross BrowserWindow boundaries), so the source reports
+// the release point from its dragend — already filtered to drags that were NOT
+// dropped in-window — and we hand it to the window under it. Candidates: the
+// editor window plus every main window (other workspaces and detached group
+// windows), excluding the drag source itself.
 ipcMain.on(
   PANE_DRAG_END_CHANNEL,
-  (_event, args: { paneId?: string; screenX?: number; screenY?: number }) => {
+  (event, args: { paneId?: string; screenX?: number; screenY?: number }) => {
     const paneId = String(args?.paneId ?? '')
     if (!paneId) return
     const point = { x: Number(args?.screenX ?? 0), y: Number(args?.screenY ?? 0) }
-    const candidates: DropCandidate<BrowserWindow>[] =
-      editorWindow && !editorWindow.isDestroyed()
-        ? [
-            {
-              bounds: editorWindow.getBounds(),
-              visible: editorWindow.isVisible(),
-              minimized: editorWindow.isMinimized(),
-              window: editorWindow
-            }
-          ]
-        : []
+    const windows: CandidateWindow<BrowserWindow>[] = []
+    const editor = editorWindow && !editorWindow.isDestroyed() ? [editorWindow] : []
+    for (const win of [...editor, ...mainWindows]) {
+      if (win.isDestroyed()) continue
+      windows.push({
+        id: win.id,
+        bounds: win.getBounds(),
+        visible: win.isVisible(),
+        minimized: win.isMinimized(),
+        window: win
+      })
+    }
+    const sender = BrowserWindow.fromWebContents(event.sender)
+    const candidates = selectDropCandidates(
+      windows,
+      sender?.id ?? null,
+      (id) => windowFocusSeq.get(id) ?? 0
+    )
     const win = hitTestWindows(point, candidates)
     win?.webContents.send(EXTERNAL_PANE_DROP_CHANNEL, {
       paneId,

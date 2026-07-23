@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { hitTestWindows, type DropCandidate } from './cross-window-drag'
+import {
+  hitTestWindows,
+  selectDropCandidates,
+  type CandidateWindow,
+  type DropCandidate
+} from './cross-window-drag'
 
 function candidate(
   name: string,
@@ -53,5 +58,59 @@ describe('hitTestWindows', () => {
     const left = candidate('left', { x: -1200, y: -300, width: 800, height: 600 })
     expect(hitTestWindows({ x: -900, y: -100 }, [left])).toBe('left')
     expect(hitTestWindows({ x: -1300, y: -100 }, [left])).toBeNull()
+  })
+})
+
+describe('selectDropCandidates', () => {
+  const bounds = { x: 0, y: 0, width: 800, height: 600 }
+  function win(name: string, id: number): CandidateWindow<string> {
+    return { ...candidate(name, bounds), id }
+  }
+
+  it('excludes the drag-source window', () => {
+    const picked = selectDropCandidates([win('a', 1), win('b', 2)], 1, () => 0)
+    expect(picked.map((c) => c.window)).toEqual(['b'])
+  })
+
+  it('keeps every window when senderId is null', () => {
+    const picked = selectDropCandidates([win('a', 1), win('b', 2)], null, () => 0)
+    expect(picked).toHaveLength(2)
+  })
+
+  it('orders by focus recency, most recent first', () => {
+    const seq = new Map([
+      [1, 5],
+      [2, 9],
+      [3, 7]
+    ])
+    const picked = selectDropCandidates(
+      [win('a', 1), win('b', 2), win('c', 3)],
+      null,
+      (id) => seq.get(id) ?? 0
+    )
+    expect(picked.map((c) => c.window)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('treats never-focused windows as least recent', () => {
+    const seq = new Map([[2, 1]])
+    const picked = selectDropCandidates(
+      [win('a', 1), win('b', 2)],
+      null,
+      (id) => seq.get(id) ?? 0
+    )
+    expect(picked.map((c) => c.window)).toEqual(['b', 'a'])
+  })
+
+  it('recency ordering decides overlapping-window hit-tests', () => {
+    const seq = new Map([
+      [1, 1],
+      [2, 2]
+    ])
+    const picked = selectDropCandidates(
+      [win('under', 1), win('over', 2)],
+      null,
+      (id) => seq.get(id) ?? 0
+    )
+    expect(hitTestWindows({ x: 100, y: 100 }, picked)).toBe('over')
   })
 })

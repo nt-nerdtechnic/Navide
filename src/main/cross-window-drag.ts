@@ -31,6 +31,28 @@ export interface DropCandidate<T> {
   window: T
 }
 
+/** A drop candidate plus the identity/ordering fields candidate selection
+ *  needs (BrowserWindow.id in production; plain numbers in tests). */
+export interface CandidateWindow<T> extends DropCandidate<T> {
+  id: number
+}
+
+/** Prepare the candidate list for the hit-test: drop the drag-source window
+ *  (its own in-window DnD already had the chance to consume the release), then
+ *  sort by focus recency so the most-recently-focused window wins where
+ *  windows overlap. Focus recency only approximates z-order — Electron has no
+ *  cross-platform z-order query — so an overlapped, less-recently-focused
+ *  window can lose the hit even when it is visually on top. */
+export function selectDropCandidates<T>(
+  windows: CandidateWindow<T>[],
+  senderId: number | null,
+  focusSeq: (id: number) => number
+): DropCandidate<T>[] {
+  return windows
+    .filter((w) => w.id !== senderId)
+    .sort((a, b) => focusSeq(b.id) - focusSeq(a.id))
+}
+
 /** First candidate whose bounds contain `point`, skipping hidden/minimized
  *  windows. Returns null when the point lands on none of them. */
 export function hitTestWindows<T>(point: ScreenPoint, candidates: DropCandidate<T>[]): T | null {
