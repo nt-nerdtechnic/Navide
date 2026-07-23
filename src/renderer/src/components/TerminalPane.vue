@@ -393,6 +393,7 @@ onMounted(() => {
       ref="containerRef"
       class="xterm-host"
       :class="{ 'drag-over': isDragOver, 'cli-drag-over': isCliDragOver, 'alt-buffer': terminal.isAltBuffer.value }"
+      :data-pane-id="paneId"
       @mousedown="emit('set-focus')"
       @dragover.prevent="onTerminalDragOver"
       @dragenter.prevent="onTerminalDragOver"

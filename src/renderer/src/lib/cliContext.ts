@@ -144,6 +144,38 @@ export function buildPaneContextPaste(context: CliSessionContext, buffer: string
   return `--- CLI session context: ${who} ---\n${reference}\n${logHint}${excerpt}\n--- end CLI session context ---`
 }
 
+/** Build the paste text for an EXTERNAL (cross-window) pane drop from the
+ *  pane-buffer relay reply. The reply is authoritative — the source pane lives
+ *  in another window, so there is no local pane record to read. An error reply
+ *  yields null (the caller surfaces the failure). */
+export function buildExternalPaneContextPaste(
+  paneId: string,
+  reply: {
+    label?: string
+    agentKey?: string
+    sessionId?: string | null
+    sessionHomeId?: string
+    workspacePath?: string
+    conversationLogPath?: string
+    buffer?: string
+    error?: string
+  }
+): string | null {
+  if (reply.error) return null
+  return buildPaneContextPaste(
+    {
+      paneId,
+      agentKey: reply.agentKey || undefined,
+      label: reply.label || undefined,
+      sessionId: reply.sessionId || null,
+      sessionHomeId: reply.sessionHomeId || undefined,
+      workspacePath: reply.workspacePath || undefined,
+      conversationLogPath: reply.conversationLogPath || undefined
+    },
+    reply.buffer ?? ''
+  )
+}
+
 /** Split text into chunks of at most `size` UTF-16 code units WITHOUT cutting a
  *  surrogate pair in half — a split mid-codepoint reaches the PTY as two broken
  *  halves and garbles the paste (emoji / non-BMP CJK). */

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildCliPaneBufferReply,
+  buildExternalPaneContextPaste,
   parseCliContextPayload,
   resolveCliDropPayload,
   writeCliPaneDragPayload,
@@ -366,6 +367,50 @@ describe('buildPaneContextPaste', () => {
     const text = buildPaneContextPaste(context, '') as string
     expect(text).toContain('conversation_log:')
     expect(text).not.toContain('recent terminal excerpt')
+  })
+})
+
+describe('buildExternalPaneContextPaste', () => {
+  const reply = {
+    label: 'Backend',
+    agentKey: 'claude',
+    sessionId: 'session-a',
+    sessionHomeId: 'home-a',
+    workspacePath: '/other-workspace',
+    conversationLogPath: '/other-workspace/.agent-team/manual/claude-pane-a.log',
+    buffer: 'line one\nline two'
+  }
+
+  it('builds the paste text from the relay reply fields', () => {
+    const text = buildExternalPaneContextPaste('pane-a', reply) as string
+    expect(text).toContain('--- CLI session context: Backend (claude) ---')
+    expect(text).toContain('source_pane_id: "pane-a"')
+    expect(text).toContain('source_workspace: "/other-workspace"')
+    expect(text).toContain('--- recent terminal excerpt ---\nline one\nline two')
+  })
+
+  it('returns null for an error reply (caller surfaces the failure)', () => {
+    expect(buildExternalPaneContextPaste('pane-a', { error: 'not-found' })).toBeNull()
+    expect(buildExternalPaneContextPaste('pane-a', { ...reply, error: 'timeout' })).toBeNull()
+  })
+
+  it('returns null when there is nothing to share (no buffer, log, or session)', () => {
+    expect(buildExternalPaneContextPaste('pane-a', { label: 'Backend', buffer: '  \n ' })).toBeNull()
+  })
+
+  it('omits empty-string reply fields instead of quoting them', () => {
+    const text = buildExternalPaneContextPaste('pane-a', {
+      label: '',
+      agentKey: '',
+      sessionId: null,
+      sessionHomeId: '',
+      workspacePath: '',
+      conversationLogPath: '',
+      buffer: 'out'
+    }) as string
+    expect(text.split('\n')[0]).toBe('--- CLI session context: pane ---')
+    expect(text).not.toContain('source_agent')
+    expect(text).not.toContain('source_workspace')
   })
 })
 

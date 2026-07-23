@@ -1110,6 +1110,11 @@
     "confirm": "重新連結",
     "failed": "無法接回這段對話，其歷史紀錄可能已不存在"
   },
+  "cliDrop": {
+    "source-closed": "來源 CLI pane 已關閉",
+    "fetch-failed": "無法取得 CLI pane 的輸出",
+    "empty": "CLI pane 尚無輸出"
+  },
   "closeAll": {
     "label": "全部關閉",
     "title": "關閉所有 session 與分頁（保留紀錄）",

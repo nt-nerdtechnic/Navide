@@ -1110,6 +1110,11 @@
     "confirm": "Reconnect",
     "failed": "Could not reconnect that conversation — its transcript may no longer exist"
   },
+  "cliDrop": {
+    "source-closed": "CLI pane is no longer open",
+    "fetch-failed": "Could not fetch CLI pane output",
+    "empty": "CLI pane has no output yet"
+  },
   "closeAll": {
     "label": "close all",
     "title": "Close all sessions and tabs (history kept)",

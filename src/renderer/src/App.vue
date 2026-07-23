@@ -56,8 +56,10 @@ import { deriveAutoName } from './lib/autoName'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import {
   buildCliPaneBufferReply,
+  buildExternalPaneContextPaste,
   buildPaneContextPaste,
   chunkForPty,
+  screenToClientPoint,
   CLI_CHIP_LINE_CAP,
   CLI_PASTE_LINE_CAP
 } from './lib/cliContext'
@@ -171,6 +173,21 @@ onMounted(() => {
           }
         : null
     )
+  })
+  // Cross-window pane drop: a pane dragged from ANOTHER window (another
+  // workspace, or a detached group window) never produces a drop event here —
+  // main routed the dragend release point to this window instead. Inject the
+  // source pane's context only when that point lands on a terminal area.
+  window.agentTeam?.onExternalPaneDrop?.(({ paneId, screenX, screenY }) => {
+    if (!paneId) return
+    const { x, y } = screenToClientPoint(
+      { screenX, screenY },
+      { screenX: window.screenX, screenY: window.screenY }
+    )
+    const host = document.elementFromPoint(x, y)?.closest('[data-pane-id]')
+    const targetPaneId = host instanceof HTMLElement ? host.dataset.paneId : undefined
+    if (!targetPaneId || targetPaneId === paneId) return
+    void injectExternalPaneContext(paneId, targetPaneId)
   })
   window.addEventListener('resize', onWindowResize)
   // Warm the heaviest deferred panel (Settings) during idle: it stays lazy to
@@ -1320,9 +1337,8 @@ function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines
 async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
   const sourcePane = panes.value.find((p) => p.id === sourcePaneId)
   const sourceRef = paneRefs[sourcePaneId]
-  const targetSessionId = paneRefs[targetPaneId]?.sessionId as string | undefined
-  // Source pane closed mid-drag, or target has no live PTY → nothing to do.
-  if (!sourcePane || !sourceRef || !targetSessionId) return
+  // Source pane closed mid-drag → nothing to do.
+  if (!sourcePane || !sourceRef) return
 
   const text = buildPaneContextPaste({
     paneId: sourcePane.id,
@@ -1335,15 +1351,51 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
   }, readPaneShareText(sourceRef, CLI_PASTE_LINE_CAP))
   if (!text) return // no session reference or buffer worth sharing
 
+  await pastePaneContext(targetPaneId, text)
+}
+
+// Shared delivery tail for both context-share paths (same-window and
+// cross-window): bracketed paste into the target pane's PTY, chunked so no
+// surrogate pair is split across sends.
+async function pastePaneContext(targetPaneId: string, text: string): Promise<void> {
+  const targetSessionId = paneRefs[targetPaneId]?.sessionId as string | undefined
+  if (!targetSessionId) return // target has no live PTY
   const payload = BRACKETED_PASTE_START + text + BRACKETED_PASTE_END
   for (const chunk of chunkForPty(payload, 512)) {
     try {
       await backend.send('terminal.input', { terminal_session_id: targetSessionId, data: chunk })
     } catch (err) {
-      console.error(`[injectPaneContext] send failed for pane ${targetPaneId}:`, err)
+      console.error(`[pastePaneContext] send failed for pane ${targetPaneId}:`, err)
       return
     }
   }
+}
+
+// Cross-WINDOW variant of injectPaneContext: the source pane lives in another
+// window (another workspace, or a detached group window), so its metadata and
+// scrollback come from the cli:get-pane-buffer relay instead of local paneRefs.
+async function injectExternalPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
+  const getBuf = window.agentTeam?.getCliPaneBuffer
+  if (!getBuf || !paneRefs[targetPaneId]) return
+  let reply: Parameters<typeof buildExternalPaneContextPaste>[1]
+  try {
+    reply = await getBuf(sourcePaneId)
+  } catch {
+    reply = { error: 'unavailable' }
+  }
+  if (reply.error) {
+    notifyRestore.toast(
+      i18n.global.t(reply.error === 'not-found' ? 'cliDrop.source-closed' : 'cliDrop.fetch-failed'),
+      { type: 'error' }
+    )
+    return
+  }
+  const text = buildExternalPaneContextPaste(sourcePaneId, reply)
+  if (!text) {
+    notifyRestore.toast(i18n.global.t('cliDrop.empty'))
+    return
+  }
+  await pastePaneContext(targetPaneId, text)
 }
 
 // Loop launch button: first click injects the configurable loop prompt and
