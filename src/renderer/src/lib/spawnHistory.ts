@@ -87,10 +87,16 @@ export interface HistoryEntryFilter {
   query: string
   status: HistoryStatusFilter
   origin: HistoryOriginFilter
+  /** paneIds whose conversation log content matched `query` (from an async
+   *  search). Union'd with the metadata match so either one includes the
+   *  entry in the results. */
+  contentMatchedIds?: Set<string>
 }
 
 /** Combines the text search with a status filter (active = no removedAt)
- *  and an origin filter. 'all' disables the corresponding dimension. */
+ *  and an origin filter. 'all' disables the corresponding dimension. An
+ *  entry passes the text search if its metadata matches `filter.query`, or
+ *  (union) if its paneId is in `filter.contentMatchedIds`. */
 export function filterHistoryEntries<T extends HistoryTitleEntry & {
   removedAt?: string
   origin?: 'manual' | 'pipeline'
@@ -101,7 +107,8 @@ export function filterHistoryEntries<T extends HistoryTitleEntry & {
     if (filter.status === 'active' && entry.removedAt) return false
     if (filter.status === 'removed' && !entry.removedAt) return false
     if (filter.origin !== 'all' && entry.origin !== filter.origin) return false
-    return matchesHistorySearch(entry, filter.query)
+    if (matchesHistorySearch(entry, filter.query)) return true
+    return !!filter.contentMatchedIds?.has(entry.paneId)
   })
 }
 

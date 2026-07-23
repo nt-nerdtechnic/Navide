@@ -38,6 +38,7 @@ const props = defineProps<{
   historyHasMore?: boolean
   loadMoreHistory?: () => Promise<void>
   fetchHistoryLog?: (entry: SpawnHistoryEntry) => Promise<{ title: string; content: string } | null>
+  searchHistoryLogContent?: (entries: SpawnHistoryEntry[], query: string) => Promise<Set<string>>
 }>()
 
 const emit = defineEmits<{
@@ -54,6 +55,14 @@ const emit = defineEmits<{
 const agentSpecs = AGENT_SPECS
 
 const searchQuery = ref('')
+// Log-content search (debounced): paneIds whose conversation log matched the
+// current query, union'd into filteredSessionHistory alongside metadata
+// matches. contentSearchSeq guards against a stale response from a query
+// that's since changed (see runContentSearch).
+const contentMatchedIds = ref<Set<string>>(new Set())
+const contentSearchLoading = ref(false)
+let contentSearchSeq = 0
+let contentSearchDebounceTimer: number | undefined
 const statusFilter = ref<HistoryStatusFilter>('all')
 const originFilter = ref<HistoryOriginFilter>('all')
 const selectedPaneId = ref('')
@@ -92,8 +101,37 @@ watch(() => props.show, (open) => {
     confirmDelete.value = false
     cleanupMenuOpen.value = false
     confirmCleanup.value = null
+    if (contentSearchDebounceTimer !== undefined) { window.clearTimeout(contentSearchDebounceTimer); contentSearchDebounceTimer = undefined }
+    contentSearchSeq++
+    contentMatchedIds.value = new Set()
+    contentSearchLoading.value = false
   }
 })
+
+// Debounce the content search ~300ms after typing settles; an empty query
+// (or no search API) cancels/skips it outright. contentSearchSeq is bumped on
+// every query change so a slow search for an outdated query can never
+// clobber the current results (stale-response guard).
+watch(searchQuery, (query) => {
+  if (contentSearchDebounceTimer !== undefined) { window.clearTimeout(contentSearchDebounceTimer); contentSearchDebounceTimer = undefined }
+  contentSearchSeq++
+  const trimmed = query.trim()
+  if (!trimmed || !props.searchHistoryLogContent) {
+    contentMatchedIds.value = new Set()
+    contentSearchLoading.value = false
+    return
+  }
+  const seq = contentSearchSeq
+  contentSearchDebounceTimer = window.setTimeout(() => { void runContentSearch(trimmed, seq) }, 300)
+})
+
+async function runContentSearch(query: string, seq: number): Promise<void> {
+  contentSearchLoading.value = true
+  const result = await props.searchHistoryLogContent!(props.sessionHistory, query).catch(() => new Set<string>())
+  if (seq !== contentSearchSeq) return // stale: query changed since this search was scheduled
+  contentSearchLoading.value = false
+  contentMatchedIds.value = result
+}
 
 // Selection changed → any in-progress entry action belongs to the old entry.
 watch(selectedPaneId, () => {
@@ -107,6 +145,7 @@ const filteredSessionHistory = computed(() =>
     query: searchQuery.value,
     status: statusFilter.value,
     origin: originFilter.value,
+    contentMatchedIds: contentMatchedIds.value,
   })
 )
 
@@ -392,6 +431,9 @@ async function copyLogText(): Promise<void> {
                   class="agent-history-search-clear"
                   @click="searchQuery = ''"
                 >✕</button>
+              </div>
+              <div v-if="contentSearchLoading" class="agent-history-search-status">
+                {{ $t('label.history-search-loading') }}
               </div>
               <div class="history-filter-row">
                 <select v-model="statusFilter" class="history-filter-select">
@@ -784,6 +826,11 @@ async function copyLogText(): Promise<void> {
 }
 .agent-history-search-clear:hover {
   color: var(--text-bright);
+}
+.agent-history-search-status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  padding: 0 2px;
 }
 .history-close {
   background: transparent;

@@ -211,6 +211,8 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('fs:readFrom', filePath, fromByte),
   findManualLog: (workspacePath: string, filename: string): Promise<{ ok: boolean; path: string | null; error?: string }> =>
     ipcRenderer.invoke('logs:findManualLog', workspacePath, filename),
+  searchHistoryLogs: (args: { query: string; files: Array<{ id: string; path: string }> }): Promise<{ matchedIds: string[] }> =>
+    ipcRenderer.invoke('logs:searchContent', args),
   pickFile: (args?: {
     title?: string
     filters?: Array<{ name: string; extensions: string[] }>

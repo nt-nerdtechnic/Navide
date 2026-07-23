@@ -202,6 +202,26 @@ describe('filterHistoryEntries', () => {
     expect(filterHistoryEntries(entries, { query: 'codex', status: 'active', origin: 'all' }))
       .toEqual([])
   })
+
+  it('unions metadata matches with contentMatchedIds when a query is set', () => {
+    // No entry's metadata contains "hello"; 'b' is included only because its
+    // paneId is in contentMatchedIds (simulating a log-content match).
+    expect(filterHistoryEntries(entries, {
+      query: 'hello',
+      status: 'all',
+      origin: 'all',
+      contentMatchedIds: new Set(['b']),
+    }).map((e) => e.paneId)).toEqual(['b'])
+  })
+
+  it('ignores contentMatchedIds when the query is empty (metadata match already passes everything)', () => {
+    expect(filterHistoryEntries(entries, {
+      query: '',
+      status: 'all',
+      origin: 'all',
+      contentMatchedIds: new Set(),
+    })).toEqual(entries)
+  })
 })
 
 describe('groupHistoryByDay', () => {

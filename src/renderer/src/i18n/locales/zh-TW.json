@@ -747,6 +747,7 @@
     "committing": "提交中…",
     "agent-history": "Agent 歷史記錄",
     "search-history": "搜尋歷史記錄…",
+    "history-search-loading": "搜尋 log 內容中…",
     "no-matching-history": "沒有符合的歷史記錄",
     "no-history-yet": "尚無 agent 紀錄",
     "history-memory-resume": "記憶恢復",

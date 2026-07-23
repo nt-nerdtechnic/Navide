@@ -28,6 +28,7 @@ import {
 } from './cross-window-drag'
 import { readHealthCheckTimeoutSec, writeHealthCheckTimeoutSec } from './health-timeout'
 import { findManualLogFile } from './manual-log-search'
+import { searchLogFiles } from './log-content-search'
 import {
   getPermissionStatuses,
   requestPermission,
@@ -1324,6 +1325,18 @@ ipcMain.handle('logs:findManualLog', async (_event, workspacePath: string, filen
     return { ok: false, path: null, error: String((e as Error)?.message ?? e) }
   }
 })
+
+// Agent History content search: scans each resolved log path for `query`
+// (case-insensitive, ANSI-stripped) and returns the ids of files that
+// matched. See log-content-search.ts for the chunked-read implementation.
+ipcMain.handle(
+  'logs:searchContent',
+  async (_event, args: { query: string; files: Array<{ id: string; path: string }> }) => {
+    if (!args || typeof args.query !== 'string' || !Array.isArray(args.files)) return { matchedIds: [] }
+    const matchedIds = await searchLogFiles(args.query, args.files)
+    return { matchedIds }
+  }
+)
 
 ipcMain.on('app:setQuitConfirm', (_event, cfg: Partial<typeof quitConfirm>) => {
   if (cfg && typeof cfg === 'object') quitConfirm = { ...quitConfirm, ...cfg }

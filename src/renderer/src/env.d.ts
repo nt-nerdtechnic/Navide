@@ -99,6 +99,7 @@ declare global {
       }) => Promise<{ ok: boolean; path?: string; content?: string; canceled?: boolean; error?: string }>
       readFileFrom: (filePath: string, fromByte: number) => Promise<{ ok: boolean; content: string; newOffset: number; error?: string }>
       findManualLog: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null; error?: string }>
+      searchHistoryLogs: (args: { query: string; files: Array<{ id: string; path: string }> }) => Promise<{ matchedIds: string[] }>
       pickFile: (args?: {
         title?: string
         filters?: Array<{ name: string; extensions: string[] }>

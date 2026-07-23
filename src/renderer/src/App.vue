@@ -3064,30 +3064,40 @@ watch(previewLogOpen, (open) => {
   }
 })
 
-// Resolve a history entry's log path and read its content. Shared by the
-// inline preview in AgentHistoryModal (passed down as a prop) and the pop-out
-// full-log modal below. Returns null when no log path could be resolved;
-// rejects with a localized message when the log exists but reading fails.
-async function fetchHistoryLog(
-  entry: SpawnHistoryEntry
-): Promise<{ title: string; content: string } | null> {
+// Resolves a history entry's conversation log path, shared by fetchHistoryLog
+// (reads content) and searchHistoryLogsContent (scans content across many
+// entries). Legacy entries predate outputLogFile persistence. Manual
+// sessions: search by filename (unique — includes paneId) since spawnedAt can
+// drift from the log's actual date folder after restore/re-record. Pipeline
+// entries (and manual entries the search doesn't find) fall back to the
+// existing best-effort date reconstruction (see legacyHistoryLogPath).
+async function resolveHistoryLogPath(
+  entry: SpawnHistoryEntry,
+  api?: { findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }> }
+): Promise<string | undefined> {
   const ws = entry.workspacePath || currentWorkspace.value
-  if (!ws) return null
-  const api = (window as Window & { agentTeam?: {
-    readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }>
-    findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }>
-  } }).agentTeam
-  // Legacy entries predate outputLogFile persistence. Manual sessions: search
-  // by filename (unique — includes paneId) since spawnedAt can drift from the
-  // log's actual date folder after restore/re-record. Pipeline entries (and
-  // manual entries the search doesn't find) fall back to the existing
-  // best-effort date reconstruction (see legacyHistoryLogPath).
+  if (!ws) return undefined
   let logPath = entry.outputLogFile
   if (!logPath && entry.origin === 'manual' && api?.findManualLog) {
     const found = await api.findManualLog(ws, manualLogFileName(entry.agentKey, entry.paneId))
     logPath = found.ok ? found.path ?? undefined : undefined
   }
   if (!logPath) logPath = legacyHistoryLogPath(entry, ws)
+  return logPath
+}
+
+// Reads a history entry's log content. Shared by the inline preview in
+// AgentHistoryModal (passed down as a prop) and the pop-out full-log modal
+// below. Returns null when no log path could be resolved; rejects with a
+// localized message when the log exists but reading fails.
+async function fetchHistoryLog(
+  entry: SpawnHistoryEntry
+): Promise<{ title: string; content: string } | null> {
+  const api = (window as Window & { agentTeam?: {
+    readFileFrom?: (path: string, offset: number) => Promise<{ ok: boolean; content: string; error?: string }>
+    findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }>
+  } }).agentTeam
+  const logPath = await resolveHistoryLogPath(entry, api)
   if (!api?.readFileFrom || !logPath) return null
   let res: { ok: boolean; content: string; error?: string }
   try {
@@ -3099,6 +3109,29 @@ async function fetchHistoryLog(
     throw new Error(i18n.global.t('label.history-log-read-failed', { path: logPath, error: res.error || '' }))
   }
   return { title: historyEntryLabel(entry), content: res.content }
+}
+
+// Searches each entry's resolved log path for `query` (content search, not
+// metadata). Entries whose log path can't be resolved are skipped. Returns
+// the paneIds of entries whose log matched, for AgentHistoryModal to union
+// with its metadata-based filter.
+async function searchHistoryLogsContent(
+  entries: SpawnHistoryEntry[],
+  query: string
+): Promise<Set<string>> {
+  const api = (window as Window & { agentTeam?: {
+    findManualLog?: (workspacePath: string, filename: string) => Promise<{ ok: boolean; path: string | null }>
+    searchHistoryLogs?: (args: { query: string; files: Array<{ id: string; path: string }> }) => Promise<{ matchedIds: string[] }>
+  } }).agentTeam
+  if (!api?.searchHistoryLogs) return new Set()
+  const files: Array<{ id: string; path: string }> = []
+  for (const entry of entries) {
+    const path = await resolveHistoryLogPath(entry, api)
+    if (path) files.push({ id: entry.paneId, path })
+  }
+  if (files.length === 0) return new Set()
+  const result = await api.searchHistoryLogs({ query, files })
+  return new Set(result.matchedIds)
 }
 
 async function onPreviewHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
@@ -7833,6 +7866,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :history-has-more="spawnHistoryHasMore"
       :load-more-history="loadMoreSpawnHistory"
       :fetch-history-log="fetchHistoryLog"
+      :search-history-log-content="searchHistoryLogsContent"
       @close="showHistory = false"
       @kill-all="onKillAll"
       @resume="onResumeHistoryAgent"

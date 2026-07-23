@@ -747,6 +747,7 @@
     "committing": "Committing…",
     "agent-history": "Agent History",
     "search-history": "Search history…",
+    "history-search-loading": "Searching logs…",
     "no-matching-history": "No matching history entries",
     "no-history-yet": "No agent history yet",
     "history-memory-resume": "Memory restored",
