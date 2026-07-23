@@ -167,12 +167,23 @@ export function createResizeController(
       resizeRedrawTimer = null
       if (!active || !sessionId.value) return
       // Not fully settled yet (xterm still differs from the backend-acked size):
-      // wait for the resize to finish, then re-check.
-      if (term.cols !== _ackedCols || term.rows !== _ackedRows) { armResizeRedraw(); return }
+      // wait for the resize to finish, then re-check — but not past the deadline,
+      // or a stalled/lost resize ack would postpone the redraw forever. force_redraw
+      // sets the winsize to term's size anyway, so firing unacked still self-corrects.
+      if ((term.cols !== _ackedCols || term.rows !== _ackedRows) && Date.now() < resizeRedrawDeadline) {
+        armResizeRedraw(); return
+      }
       // Width unchanged since the last clean repaint (rows-only / no-op): skip.
       if (term.cols === lastRedrawCols) return
       // Prefer a quiet gap, but don't wait past the deadline for a busy agent.
-      const quiet = Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
+      // Exception: an alt-buffer TUI (Claude Code, vim, …) streams footer/spinner
+      // bytes continuously so it never goes quiet, and xterm cannot reflow the
+      // alternate buffer — the reflow residue (garbled footer on drag-resize)
+      // stays visible until the CLI itself repaints. A SIGWINCH repaint is a full
+      // ESC[2J + absolute redraw (safe mid-output), so for alt-buffer panes we
+      // skip the quiet wait and fire at settle instead of stalling to the deadline.
+      const altBuffer = term.buffer?.active?.type === 'alternate'
+      const quiet = altBuffer || Date.now() - lastRawActivityAt.value >= RESIZE_QUIET_MS
       if (!quiet && Date.now() < resizeRedrawDeadline) { armResizeRedraw(); return }
       const previousRedrawCols = lastRedrawCols
       const shrank = previousRedrawCols > 0 && term.cols < previousRedrawCols

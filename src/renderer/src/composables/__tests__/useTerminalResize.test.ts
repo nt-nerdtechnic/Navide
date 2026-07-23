@@ -10,7 +10,7 @@ import { createMockBackend } from './mockBackend'
 const SETTLE_MS = 220 // RESIZE_REDRAW_SETTLE_MS
 const MAX_WAIT_MS = 1500 // RESIZE_REDRAW_MAX_WAIT_MS
 
-type FakeTerm = { cols: number; rows: number; clear: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn> }
+type FakeTerm = { cols: number; rows: number; clear: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; buffer: { active: { type: string } } }
 
 describe('createResizeController — requestResizeRedraw gates', () => {
   let term: FakeTerm
@@ -31,7 +31,7 @@ describe('createResizeController — requestResizeRedraw gates', () => {
         disconnect(): void {}
       }
     )
-    term = { cols: 80, rows: 24, clear: vi.fn(), resize: vi.fn() }
+    term = { cols: 80, rows: 24, clear: vi.fn(), resize: vi.fn(), buffer: { active: { type: 'normal' } } }
     mock = createMockBackend()
     sessionId = ref('sess-1')
     lastRawActivityAt = ref(0)
@@ -135,6 +135,30 @@ describe('createResizeController — requestResizeRedraw gates', () => {
     expect(redrawCount()).toBe(0)
     await vi.advanceTimersByTimeAsync(SETTLE_MS) // gap 440ms — quiet now
     expect(redrawCount()).toBe(1)
+  })
+
+  it('alt-buffer pane skips the quiet gap: fires at settle even while streaming', async () => {
+    attach()
+    term.cols = 100
+    await ackCurrentSize()
+    term.buffer.active.type = 'alternate' // Claude Code / vim full-screen TUI
+    lastRawActivityAt.value = Date.now() // footer/spinner still streaming — never quiet
+    ctrl.requestResizeRedraw()
+    await vi.advanceTimersByTimeAsync(SETTLE_MS) // 220ms: a normal buffer would hold (<250ms quiet gate)
+    expect(redrawCount()).toBe(1)
+  })
+
+  it('fires at the deadline even if the resize ack never lands (gate A stall guard)', async () => {
+    attach()
+    await ackCurrentSize() // acked 80x24
+    term.cols = 100 // xterm refit; the backend ack for 100 never arrives
+    ctrl.requestResizeRedraw()
+    await vi.advanceTimersByTimeAsync(SETTLE_MS * 5) // 1100ms < 1500ms deadline, still unacked
+    expect(redrawCount()).toBe(0) // gate A holds while inside the deadline
+    await vi.advanceTimersByTimeAsync(SETTLE_MS * 2) // ~1540ms — past the deadline
+    expect(redrawCount()).toBe(1) // fires despite the unacked size
+    const redraw = mock.sent.find((s) => s.type === 'terminal.redraw')
+    expect(redraw?.payload).toMatchObject({ cols: 100, rows: 24 })
   })
 
   it('fires anyway at the bounded-wait deadline when the CLI never goes quiet', async () => {
