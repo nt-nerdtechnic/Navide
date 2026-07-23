@@ -3087,6 +3087,40 @@ async def project_rename_pane(session: "Session", msg_id: str, msg_type: str, pa
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
+@handler("project.set_pane_auto_name")
+async def project_set_pane_auto_name(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Persist an auto-generated pane title (set-once; custom_name wins).
+
+    Unlike project.rename_pane this never touches the spawn-history layers,
+    and a no-op (empty name, or the pane already named either way) is not
+    broadcast — the store is the final arbiter of the cross-window race, so
+    only the winning write reaches peer windows.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    auto_name = (payload.get("auto_name", "") or "").strip()
+    if pane_id:
+        project, changed = app.project_store.set_pane_auto_name(
+            ws_raw, pane_id=pane_id, auto_name=auto_name
+        )
+        if project is not None and changed:
+            # Peers patch their live panes[] state from auto_named_pane so
+            # their titles converge on the winning name.
+            await app.broadcast(
+                make_event(
+                    "project.ui_state_changed",
+                    {
+                        "workspace_path": project.workspace_path,
+                        "auto_named_pane": {"pane_id": pane_id, "auto_name": auto_name},
+                    },
+                ),
+                exclude=session,
+            )
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
 @handler("project.rename_spawn_history")
 async def project_rename_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Rename a spawn-history entry whose pane no longer exists.

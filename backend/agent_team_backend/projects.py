@@ -126,6 +126,7 @@ class PaneRecord:
     slot_label: str = ""
     kickoff_status: str = "none"    # none / sent / failed
     custom_name: str = ""           # user-set display name; empty falls back to the default label
+    auto_name: str = ""             # auto-generated display name; set once, custom_name wins
     output_log_file: str = ""       # conversation log path recorded at spawn time
 
 
@@ -696,6 +697,40 @@ class ProjectStore:
                     entry.pop("customName", None)
         self.save(project)
         return project
+
+    def set_pane_auto_name(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        auto_name: str,
+    ) -> tuple[Project | None, bool]:
+        """Persist an auto-generated display name for a pane, keyed by pane_id.
+
+        Set-once: this is the final arbiter for the cross-window race — if the
+        record already carries a non-empty custom_name or auto_name, the write
+        is ignored (first writer wins). An empty auto_name is also a no-op.
+        Returns (project, changed); project is None when no project exists for
+        the workspace.
+
+        Upsert mirrors rename_pane(): the name can arrive before the spawn
+        persists the PaneRecord, so create a pending stub keyed by pane_id.
+        Unlike rename_pane(), the spawn-history mirror is never touched.
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None, False
+        if not auto_name:
+            return project, False
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is not None and (pane.custom_name or pane.auto_name):
+            return project, False
+        if pane is None:
+            pane = PaneRecord(pane_id=pane_id, origin="manual")
+            project.panes.append(pane)
+        pane.auto_name = auto_name
+        self.save(project)
+        return project, True
 
     def rename_history_entry(
         self,

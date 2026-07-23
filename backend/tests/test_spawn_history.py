@@ -613,6 +613,93 @@ async def test_rename_pane_handler_patches_full_store(
     assert stored[0]["customName"] == "Live name"
 
 
+async def test_set_pane_auto_name_handler_broadcasts_once_and_skips_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """First auto-name write is broadcast to peers; set-once repeats are
+    silent no-ops, and neither touches the spawn-history layers."""
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    store.record_manual_pane_spawn(str(tmp_path), pane_id="p1", agent="claude")
+    store.set_ui_state(
+        str(tmp_path), spawn_history=[_entry("p1", workspacePath=str(tmp_path))]
+    )
+    monkeypatch.setattr(app, "project_store", store)
+
+    events: list[dict[str, Any]] = []
+
+    async def capture(event: dict[str, Any], exclude: Any = None) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", capture)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.set_pane_auto_name")
+    assert fn is not None
+
+    # First write wins: persisted + broadcast with the auto_name field.
+    await fn(session, "m1", "project.set_pane_auto_name", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "auto_name": "Fix login",
+    })
+    assert len(events) == 1
+    assert events[0]["type"] == "project.ui_state_changed"
+    assert events[0]["payload"]["auto_named_pane"] == {
+        "pane_id": "p1", "auto_name": "Fix login",
+    }
+    pane = next(p for p in store.peek(str(tmp_path)).panes if p.pane_id == "p1")
+    assert pane.auto_name == "Fix login"
+
+    # Set-once: the losing write is ignored and NOT broadcast.
+    await fn(session, "m2", "project.set_pane_auto_name", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "auto_name": "Loser",
+    })
+    assert len(events) == 1
+    pane = next(p for p in store.peek(str(tmp_path)).panes if p.pane_id == "p1")
+    assert pane.auto_name == "Fix login"
+
+    # Unlike rename_pane, neither the mirror nor spawn-history.json changed.
+    history = store.peek(str(tmp_path)).ui_spawn_history
+    assert "autoName" not in history[0] and "customName" not in history[0]
+    assert not app.spawn_history_store.history_file(str(tmp_path)).exists()
+
+    ok_responses = session.websocket.sent  # type: ignore[attr-defined]
+    assert [r["payload"] for r in ok_responses] == [{"ok": True}, {"ok": True}]
+
+
+async def test_set_pane_auto_name_handler_skips_broadcast_when_custom_named(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """custom_name wins: the handler neither writes nor broadcasts."""
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    store.record_manual_pane_spawn(str(tmp_path), pane_id="p1", agent="claude")
+    store.rename_pane(str(tmp_path), pane_id="p1", custom_name="User Name")
+    monkeypatch.setattr(app, "project_store", store)
+
+    events: list[dict[str, Any]] = []
+
+    async def capture(event: dict[str, Any], exclude: Any = None) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", capture)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.set_pane_auto_name")
+    assert fn is not None
+    await fn(session, "m1", "project.set_pane_auto_name", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "auto_name": "Auto",
+    })
+
+    assert events == []
+    pane = next(p for p in store.peek(str(tmp_path)).panes if p.pane_id == "p1")
+    assert pane.custom_name == "User Name"
+    assert pane.auto_name == ""
+
+
 def test_delete_entries_bulk_modes_skip_starred(tmp_path: Path) -> None:
     """Starred entries survive "removed" and "older_than" cleanup."""
     store = SpawnHistoryStore()
