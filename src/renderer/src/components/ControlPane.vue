@@ -1133,8 +1133,8 @@ function onPipelineDividerEnd(): void {
             class="agent-rebuild-all-btn"
             :class="{ busy: rebuildingAll }"
             :disabled="!canRebuildAll || rebuildingAll"
-            :title="$t('action.rebuild-tab-cli-panes')"
-            :aria-label="$t('action.rebuild-tab-cli-panes')"
+            :title="$t('action.rebuild-all-cli-panes')"
+            :aria-label="$t('action.rebuild-all-cli-panes')"
             @click="emit('rebuild-all')"
           >
             <RebuildIcon />

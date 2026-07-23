@@ -2604,9 +2604,14 @@ function paneRebuilding(pane: ActivePane): boolean {
   return !!sessionId && rebuildingPanes.has(sessionId)
 }
 
-/** Rebuildable panes in the active tab only — matches what the user can see. */
+/** Rebuildable panes in the active tab only — drives the tab bar's rebuild button. */
 const rebuildablePaneCount = computed(
   () => panes.value.filter((p) => tabFilteredPaneIds.value.has(p.id) && paneCanRebuild(p)).length
+)
+
+/** Rebuildable panes across all tabs — drives the sidebar's rebuild-all button. */
+const rebuildableAllPaneCount = computed(
+  () => panes.value.filter((p) => paneCanRebuild(p)).length
 )
 
 async function rebuildPaneViaResume(paneId: string): Promise<void> {
@@ -2718,16 +2723,18 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
   }
 }
 
-async function rebuildTabPanesViaResume(): Promise<void> {
+async function rebuildPanesViaResume(scope: 'tab' | 'all'): Promise<void> {
   if (rebuildingTabPanes.value) return
   // Rebuild replaces pane ids, so capture the batch up front.
   const ids = panes.value
-    .filter((p) => tabFilteredPaneIds.value.has(p.id) && paneCanRebuild(p))
+    .filter((p) => (scope === 'all' || tabFilteredPaneIds.value.has(p.id)) && paneCanRebuild(p))
     .map((pane) => pane.id)
   if (!ids.length) return
 
   rebuildingTabPanes.value = true
-  pipelineLog(`↻ rebuilding ${ids.length} CLI pane(s) in the active tab`)
+  pipelineLog(
+    `↻ rebuilding ${ids.length} CLI pane(s) in ${scope === 'all' ? 'all tabs' : 'the active tab'}`
+  )
   try {
     for (const id of ids) {
       try {
@@ -7759,7 +7766,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :agent-specs="enabledAgentSpecs"
       :roles="rolesApi.roles.value"
       :stages="stagesApi.stages.value"
-      :panes="paneViews.filter(v => tabFilteredPaneIds.has(v.id))"
+      :panes="paneViews"
       :pipeline="pipelineView"
       :existing-project="existingProject"
       :workspace="currentWorkspace"
@@ -7774,7 +7781,7 @@ function paneIsCommander(p: ActivePane): boolean {
       v-model:auto-answer-enabled="autoAnswerEnabled"
       :spawn-history="spawnHistory"
       :focus-pane-id="effectiveFocusPaneId ?? undefined"
-      :can-rebuild-all="rebuildablePaneCount > 0"
+      :can-rebuild-all="rebuildableAllPaneCount > 0"
       :rebuilding-all="rebuildingTabPanes"
       @spawn="onManualSpawn"
       @spawn-resume="onManualResume"
@@ -7783,7 +7790,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @kill-all="onKillAll"
       @reinject="onReinject"
       @rebuild="rebuildPaneViaResume"
-      @rebuild-all="rebuildTabPanesViaResume"
+      @rebuild-all="rebuildPanesViaResume('all')"
       @restore="restorePane"
       @context-menu="(id, ev) => openPaneCtxMenu(ev, id)"
       @update:layout-mode="layoutMode = $event"
@@ -7932,7 +7939,7 @@ function paneIsCommander(p: ActivePane): boolean {
         :rebuilding-all="rebuildingTabPanes"
         :rebuild-all-title="$t('action.rebuild-tab-cli-panes')"
         @add="createRunGroup()"
-        @rebuild-all="rebuildTabPanesViaResume()"
+        @rebuild-all="rebuildPanesViaResume('tab')"
         @rename="(key, name) => renameRunGroup(key, name)"
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"
@@ -8387,12 +8394,6 @@ function paneIsCommander(p: ActivePane): boolean {
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
         <span
-          v-if="!isDetachedWindow && panes.length > 0"
-          class="sb-item sb-clickable sb-close-all"
-          :title="$t('closeAll.title')"
-          @click="closeAllSessions"
-        >✕ {{ $t('closeAll.label') }}</span>
-        <span
           v-if="orphanCount > 0"
           class="sb-item sb-orphans"
           :title="$t('orphans.title')"
@@ -8410,6 +8411,12 @@ function paneIsCommander(p: ActivePane): boolean {
           <span class="sb-reconnect-dismiss" :title="$t('restore.dismiss')" @click="dismissReconnectBanner">✕</span>
         </span>
         <span class="sb-item sb-build">{{ buildTag }}</span>
+        <span
+          v-if="!isDetachedWindow && panes.length > 0"
+          class="sb-item sb-clickable sb-close-all"
+          :title="$t('closeAll.title')"
+          @click="closeAllSessions"
+        >✕</span>
       </div>
     </div>
 
