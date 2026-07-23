@@ -8075,7 +8075,9 @@ function paneIsCommander(p: ActivePane): boolean {
                   @dblclick.stop="startInlineRename(p)"
                 >{{ p.agentLabel }}</span>
               </div>
-              <span v-if="p.roleLabel" class="meeting-sub">{{ p.roleLabel }}</span>
+              <span class="meeting-sub">
+                {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
+              </span>
             </div>
             <span
               v-if="p.loopActive"

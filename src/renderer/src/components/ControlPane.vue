@@ -1187,12 +1187,12 @@ function onPipelineDividerEnd(): void {
             </button>
             <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
           </div>
-          <div v-if="p.roleLabel" class="role-line">{{ p.roleLabel }}</div>
+          <div class="role-line">{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></div>
           <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ agentTypeLabel(p.agentKey) }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-else-if="!p.isMinimized" class="stage-line">
-            {{ agentTypeLabel(p.agentKey) }} · manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
           </div>
           <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
           <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
