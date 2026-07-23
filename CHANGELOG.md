@@ -4,6 +4,32 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.54] — 2026-07-23 — signed release
+
+### Added
+
+- Star / favorite Agent History entries: a "starred only" filter, and starred entries are protected from bulk cleanup (an explicit single delete still removes them).
+- Search Agent History by log content, not just metadata: a chunked, ANSI-stripped log searcher over IPC with a debounced query.
+- Native application menu: Help, New Window, Open Recent, and About entries.
+
+### Changed
+
+- Capture Kimi resume session ids via a single-candidate fallback so a freshly spawned sibling pane stays bindable.
+- Show the agent-type label alongside the optional role in pane headers.
+- Settings: horizontally scrollable tab bar, scroll containers on several tab bodies, Roles-tab polish, and a dedicated Updates tab label.
+- Throttle and extend the timeout for terminal creation.
+
+### Fixed
+
+- Harden log-content search across chunk boundaries: withhold incomplete ANSI escapes, flush the UTF-8 decoder at EOF (truncated multi-byte/CJK queries still match), and bound concurrent file opens to avoid EMFILE.
+- Emit the Kimi turn-complete event once per turn and harden the notify path.
+- Re-check the dead flag inside the WebSocket send lock to stop a disconnect flood.
+- Ignore IME composition events during keydown in the rename flows.
+
+### Distribution note
+
+- Signed with a Developer ID and notarized by Apple; published as a stable release eligible for the in-app updater.
+
 ## [0.1.53] — 2026-07-23 — signed release
 
 ### Added
