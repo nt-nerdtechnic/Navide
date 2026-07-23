@@ -4,6 +4,32 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.55] — 2026-07-23 — signed release
+
+### Added
+
+- Inter-CLI messaging: panes address each other by name and exchange `---MSG---` protocol messages through an idle-gated, rate-limited queue, with a log/compose panel.
+- Auto-derived pane names: an unnamed pane gets a heuristic title from its kickoff / first-turn text (a custom name always wins), persisted and broadcast to peer windows.
+- Cross-window pane drop: drag a pane onto a terminal in another window to inject its context into that pane; drops route to the most-recently-focused overlapping window.
+- Compact, click-to-expand Active Agents list with a status dot, a type·role sub-label, and a one-open-at-a-time accordion.
+- Mini-IDE VS Code parity: filename-aware editor language detection, Toggle Word Wrap (Alt+Z), explorer drag-to-move, and tab rebinding that survives file renames/moves.
+- Plans pane: search, stage filter, sort, and in-body to-do editing.
+- Rebuild resumable CLI panes across all tabs from the sidebar.
+- Configurable resume-spawn concurrency limit.
+
+### Changed
+
+- Focusing a pane that lives in another tab now switches to that tab.
+- On macOS, Alt+letter keybindings match by physical key (so Option+letter shortcuts fire despite the special character the OS emits).
+
+### Fixed
+
+- Repaint alternate-buffer TUIs on drag-resize so the footer no longer stays garbled until the next output.
+
+### Distribution note
+
+- Signed with a Developer ID and notarized by Apple; published as a stable release eligible for the in-app updater.
+
 ## [0.1.54] — 2026-07-23 — signed release
 
 ### Added
