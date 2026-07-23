@@ -1,4 +1,25 @@
 {
+  "msg": {
+    "panel-title": "Inter-CLI Messages",
+    "open-panel": "Messages",
+    "pause": "Pause delivery",
+    "resume": "Resume delivery",
+    "clear-log": "Clear log",
+    "empty": "No messages yet",
+    "status-queued": "Queued",
+    "status-delivering": "Delivering",
+    "status-delivered": "Delivered",
+    "status-failed": "Failed",
+    "compose-title": "Send message to CLI",
+    "target": "Target",
+    "content-placeholder": "Message…",
+    "include-hint": "Include reply-protocol hint",
+    "send": "Send",
+    "send-to-pane": "Message this CLI…",
+    "rename-title": "Messaging name",
+    "rename-invalid": "Name invalid or already taken",
+    "paused-banner": "Delivery paused — messages queue but are not sent"
+  },
   "confirm-close": {
     "ws-title": "Close workspace?",
     "ws-body": "Return to the welcome screen and close the current workspace?",

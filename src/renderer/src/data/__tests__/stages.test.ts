@@ -126,4 +126,10 @@ describe('renderSlotKickoff', () => {
     const out = renderSlotKickoff(slot, 't')
     expect(out).toContain('自主執行模式')
   })
+
+  it('prepends the inter-CLI messaging protocol to every kickoff', () => {
+    const out = renderSlotKickoff(slot, 't')
+    expect(out.startsWith('[Inter-CLI Messaging Protocol]')).toBe(true)
+    expect(out).toContain('---MSG-START---')
+  })
 })

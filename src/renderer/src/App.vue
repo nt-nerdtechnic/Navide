@@ -20,6 +20,8 @@ import TokenStatsPanel from './components/TokenStatsPanel.vue'
 import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
 import { useNotify } from './composables/useNotify'
+import { useAgentMessaging } from './composables/useAgentMessaging'
+import { parseMessages } from './lib/agentMessaging'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -50,6 +52,7 @@ import {
   type StageSlot
 } from './data/stages'
 import { i18n } from './i18n'
+import { deriveAutoName } from './lib/autoName'
 import { findConsecutiveQuestionBlocks, findSentinel } from './lib/buffer'
 import {
   buildCliPaneBufferReply,
@@ -121,6 +124,7 @@ const CompletionModal = defineAsyncComponent(() => import('./components/Completi
 const SettingsModal = defineAsyncComponent(() => import('./components/SettingsModal.vue'))
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
+const AgentMessagesPanel = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 
 const backend = useBackend()
 // Hook the settings cache to the ws: reconciles + flushes queued writes once
@@ -591,6 +595,13 @@ interface ActivePane {
   /** User-set display name from the rename action. Overrides agentLabel in all
    *  pane surfaces when non-empty; persisted to project.json (PaneRecord.custom_name). */
   customName?: string
+  /** Auto-derived display name (set once from the pane's task material).
+   *  customName always wins; persisted to project.json (PaneRecord.auto_name). */
+  autoName?: string
+  /** Inter-CLI messaging address from the messaging registry. Absent for plain
+   *  terminal panes. Persisted to localStorage keyed by pane id so names
+   *  survive restart (see persistMessagingName). */
+  messagingName?: string
   roleKey: RoleKey
   stageId: StageId
   /** Human-readable slot label, e.g. "Architecture" or "UI/UX".
@@ -946,13 +957,157 @@ const paneTurnCompleteAt = new Map<string, number>()
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
 
+// ── Inter-CLI messaging (name registry + delivery queue wiring) ─────────────
+const messaging = useAgentMessaging()
+const showMessagesPanel = ref(false)
+const messagesPanelTarget = ref<string | null>(null)
+
+// messagingNames survive restart via localStorage (pane records in project.json
+// are backend-owned). Keyed by pane id — project.json stores the live pane id,
+// so a restored pane finds its old name under saved.pane_id and re-keys it.
+const MESSAGING_NAMES_KEY = 'agentTeam.messagingNames'
+const MESSAGING_NAMES_CAP = 200
+
+function loadMessagingNames(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(MESSAGING_NAMES_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function saveMessagingNames(map: Record<string, string>): void {
+  const keys = Object.keys(map)
+  if (keys.length > MESSAGING_NAMES_CAP) {
+    for (const k of keys.slice(0, keys.length - MESSAGING_NAMES_CAP)) delete map[k]
+  }
+  try { localStorage.setItem(MESSAGING_NAMES_KEY, JSON.stringify(map)) } catch { /* ignore */ }
+}
+
+function persistMessagingName(paneId: string, name: string): void {
+  const map = loadMessagingNames()
+  map[paneId] = name
+  saveMessagingNames(map)
+}
+
+function persistedMessagingName(paneId: string): string | undefined {
+  return loadMessagingNames()[paneId]
+}
+
+function dropPersistedMessagingName(paneId: string): void {
+  const map = loadMessagingNames()
+  if (paneId in map) {
+    delete map[paneId]
+    saveMessagingNames(map)
+  }
+}
+
+/** Register a CLI pane in the messaging name registry (no-op for plain
+ *  terminals). preferredName: persisted name on restore; falls back to the
+ *  pipeline slot label, then to the `<agentKey>-<n>` default. */
+function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
+  if (pane.agentKey === 'terminal') return
+  pane.messagingName = messaging.registerPane(pane.id, pane.agentKey, preferredName || pane.slotLabel || undefined)
+  persistMessagingName(pane.id, pane.messagingName)
+}
+
+/** keepPersisted: pane handed off to another window (detach) — it re-registers
+ *  there under the same persisted name. */
+function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean } = {}): void {
+  messaging.unregisterPane(paneId)
+  if (!opts.keepPersisted) dropPersistedMessagingName(paneId)
+}
+
+/** deliver() dep: inject the envelope via the same primitive as all other pane
+ *  injections (bracketed paste + verified submit), then push the target's
+ *  stage-watcher scan window past the injected text so sentinel/analyzer
+ *  scanning never reads the envelope as the pane's own output (mirrors the
+ *  handoff advance in onStageSlotCompleted). */
+async function deliverAgentMessage(paneId: string, text: string): Promise<boolean> {
+  const ok = await injectPane(paneId, text, 'agent-msg', true)
+  if (!ok) return false
+  await sleep(1500)
+  const sw = watchers.get(paneId)
+  if (sw && !sw.cancelled) {
+    const len = ((paneRefs[paneId]?.cleanBuffer as unknown as string) || '').length
+    if (len > sw.scanFrom) sw.scanFrom = len
+    sw.lastAnalyzedBufferLen = len
+  }
+  return true
+}
+
+/** isPaneIdle() dep: PTY alive and past startup, not mid role/kickoff
+ *  injection, latest CLI signal is "turn ended" (not agent_active), and no
+ *  activity in the last 2s. */
+function isPaneIdleForMessaging(paneId: string): boolean {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return false
+  const status = paneRefs[paneId]?.displayStatus as string | undefined
+  if (status !== 'running' && status !== 'idle') return false
+  if (pane.injectionStatus === 'scheduled' || pane.kickoffStatus === 'pending') return false
+  const lastActive = paneLastActiveAt.get(paneId) ?? 0
+  if (lastActive > (paneTurnCompleteAt.get(paneId) ?? 0)) return false // turn in flight
+  return Date.now() - lastActive >= 2000
+}
+
+// Per-pane timestamp of the last turn_complete whose text was scanned for MSG
+// blocks — the hook and the watcher can deliver the same turn twice.
+const paneMsgProcessedAt = new Map<string, number>()
+
+function onTurnCompleteForMessaging(paneId: string, text: string, timestamp: string): void {
+  const senderName = panes.value.find((p) => p.id === paneId)?.messagingName
+  if (senderName && text && !isReplayedTurnComplete(timestamp, Date.now(), TURN_TEXT_REPLAY_TOLERANCE_MS)) {
+    const eventMs = Date.parse(timestamp)
+    const fresh = Number.isNaN(eventMs) || eventMs > (paneMsgProcessedAt.get(paneId) ?? 0)
+    if (fresh) {
+      if (!Number.isNaN(eventMs)) paneMsgProcessedAt.set(paneId, eventMs)
+      for (const msg of parseMessages(text)) {
+        messaging.sendMessage(senderName, msg.target, msg.content)
+      }
+    }
+  }
+  // A turn ending is exactly when this pane's queue can flush.
+  messaging.pump()
+}
+
+function openMessagingPanel(target: string | null = null): void {
+  messagesPanelTarget.value = target
+  showMessagesPanel.value = true
+}
+
+function onOpenPaneMessaging(paneId: string): void {
+  openMessagingPanel(panes.value.find((p) => p.id === paneId)?.messagingName ?? null)
+}
+
+function onRenameMessaging(paneId: string, rawName: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  if (messaging.renamePane(paneId, rawName)) {
+    pane.messagingName = messaging.nameOf(paneId) ?? pane.messagingName
+    if (pane.messagingName) persistMessagingName(paneId, pane.messagingName)
+  } else {
+    notifyRestore.toast(i18n.global.t('msg.rename-invalid'), { type: 'error' })
+  }
+}
+
+let _msgPumpTimer = 0
+onMounted(() => {
+  messaging.configureMessaging({
+    now: () => Date.now(),
+    deliver: deliverAgentMessage,
+    isPaneIdle: isPaneIdleForMessaging,
+  })
+  _msgPumpTimer = window.setInterval(() => messaging.pump(), 1000)
+})
+onUnmounted(() => { window.clearInterval(_msgPumpTimer) })
+
 function syncViews(): void {
   paneViews.value = panes.value.map((p) => {
     const ref = paneRefs[p.id]
     return {
       id: p.id,
       agentKey: p.agentKey,
-      agentLabel: p.customName || p.agentLabel,
+      agentLabel: p.customName || p.autoName || p.agentLabel,
       roleKey: p.roleKey,
       roleLabel: roleLabel(p.roleKey),
       stageId: p.stageId,
@@ -1171,7 +1326,7 @@ async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Pr
 
   const text = buildPaneContextPaste({
     paneId: sourcePane.id,
-    label: sourcePane.customName || sourcePane.agentLabel,
+    label: sourcePane.customName || sourcePane.autoName || sourcePane.agentLabel,
     agentKey: sourcePane.agentKey,
     sessionId: sourcePane.pinnedSessionId || null,
     sessionHomeId: sourcePane.sessionHomeId,
@@ -1973,6 +2128,8 @@ interface SpawnInternal {
   /** User-set pane title. Runtime replacements such as rebuild must carry it
    *  forward because they receive a new pane id. */
   customName?: string
+  /** Auto-derived pane title, carried forward on rebuild/restore for the same reason. */
+  autoName?: string
   /** Human-readable slot label — set for parallel-stage slots so the context
    *  header for downstream stages can identify which agent produced which output. */
   slotLabel?: string
@@ -2000,6 +2157,9 @@ interface SpawnInternal {
   freshSessionId?: string
   /** Instructs spawnPane to atomically replace an existing pane's position in the UI array. */
   replacePaneId?: string
+  /** Persisted messaging name carried through a restore so inter-CLI messaging
+   *  addresses survive restart. */
+  preferredMessagingName?: string
 }
 
 /** Trailing line embedded in a Codex/Antigravity kickoff so the backend can match
@@ -2091,6 +2251,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     agentKey: opts.agentKey,
     agentLabel: spec.label,
     customName: opts.customName,
+    autoName: opts.autoName,
     roleKey: opts.roleKey,
     stageId: opts.stageId,
     slotLabel: opts.slotLabel ?? '',
@@ -2124,6 +2285,14 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   } else {
     panes.value.push(pane)
   }
+
+  // Inter-CLI messaging: give every CLI pane an addressable name (restored
+  // panes carry their previous name via preferredMessagingName).
+  registerPaneMessaging(pane, opts.preferredMessagingName)
+
+  // Auto-name from the kickoff task material. Set-once semantics live in
+  // setPaneAutoName: no-op when a customName or autoName was carried in.
+  if (opts.kickoffPrompt) setPaneAutoName(id, deriveAutoName(opts.kickoffPrompt))
 
   // Session detection can legitimately take forever (a fresh CLI sits at its
   // own setup dialog until the user acts), so the blocking overlay gets a hard
@@ -2571,6 +2740,8 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
     if (v.paneId === paneId) issueHandoffs.value.set(k, { ...v, state: 'pane-gone' })
   })
   delete paneRefs[paneId]
+  unregisterPaneMessaging(paneId)
+  paneMsgProcessedAt.delete(paneId)
   clearDoneNotifyTimer(paneId)
   stopLoopLimitWatcher(paneId)
   if (pane) {
@@ -2654,6 +2825,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     const snap = {
       agentKey: pane.agentKey,
       customName: pane.customName,
+      autoName: pane.autoName,
       roleKey: pane.roleKey,
       stageId: pane.stageId,
       stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
@@ -2670,6 +2842,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
+      autoName: snap.autoName,
       roleKey: snap.roleKey,
       stageId: snap.stageId,
       slotLabel: snap.slotLabel,
@@ -2762,6 +2935,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   const snap = {
     agentKey: pane.agentKey,
     customName: pane.customName,
+    autoName: pane.autoName,
     roleKey: pane.roleKey,
     stageId: pane.stageId,
     stageIndex: stagesApi.stages.value.findIndex((stage) => stage.id === pane.stageId),
@@ -2776,6 +2950,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     const newId = await spawnPane({
       agentKey: snap.agentKey,
       customName: snap.customName,
+      autoName: snap.autoName,
       roleKey: snap.roleKey,
       stageId: snap.stageId,
       slotLabel: snap.slotLabel,
@@ -3296,6 +3471,7 @@ interface ProjectPane {
   slot_label?: string
   kickoff_status?: string
   custom_name?: string
+  auto_name?: string
   is_minimized?: boolean
   output_log_file?: string
 }
@@ -3827,6 +4003,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       stageId: (saved.stage_id ?? '') as StageId,
       slotLabel: saved.slot_label,
       customName: saved.custom_name || undefined,
+      autoName: saved.auto_name || undefined,
       commandOverride,
       workspacePath,
       origin: saved.origin,
@@ -3845,10 +4022,14 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       // forceFresh is different: the saved transcript still exists, so reusing
       // its id would collide — mint a brand-new id instead.
       freshSessionId: forceFresh ? undefined : claimFreshSessionId(usedFreshSessionIds, sessionId),
+      preferredMessagingName: persistedMessagingName(saved.pane_id),
     })
 
     if (!paneId) return
     restoredPaneIds[restoreIdx] = paneId
+    // The messaging name is now re-keyed under the fresh pane id — drop the
+    // stale entry for the previous id.
+    if (saved.pane_id !== paneId) dropPersistedMessagingName(saved.pane_id)
     if (wasDisconnected) disconnectedPaneIds.value = [...disconnectedPaneIds.value, paneId]
 
     // Re-apply the persisted collapsed-to-sidebar state to the new pane id.
@@ -5022,8 +5203,8 @@ watch(sysNotify.pendingCount, (count) => { window.agentTeam?.setBadgeCount(count
 // a turn that ended to ask a QUESTION isn't mis-notified as completion.
 const paneDoneNotifyTimers = new Map<string, number>()
 
-function paneNotifyLabel(pane: { customName?: string; slotLabel?: string; agentLabel?: string }): string {
-  return pane.customName || pane.slotLabel || pane.agentLabel || ''
+function paneNotifyLabel(pane: { customName?: string; slotLabel?: string; autoName?: string; agentLabel?: string }): string {
+  return pane.customName || pane.slotLabel || pane.autoName || pane.agentLabel || ''
 }
 
 function clearDoneNotifyTimer(paneId: string): void {
@@ -5106,6 +5287,17 @@ backend.on('agent.activity', (raw) => {
     // the resume prompt again (runs before the poll's turn-complete continue).
     if (ev.text && turnEndsWithSentinel(ev.text, LOOP_DONE_MARKER)) {
       stopLoopOnDoneMarker(ev.pane_id, ev.timestamp ?? '')
+    }
+    // Inter-CLI messaging: scan this turn's text for MSG blocks, then pump.
+    onTurnCompleteForMessaging(ev.pane_id, ev.text ?? '', ev.timestamp ?? '')
+    // Auto-name a still-unnamed pane from its first completed turn's text.
+    // Set-once via setPaneAutoName; deliberately independent of judgeTurnText
+    // and the sentinel paths — it only reads ev.text.
+    if (ev.text) {
+      const pane = panes.value.find((p) => p.id === ev.pane_id)
+      if (pane && !pane.customName && !pane.autoName) {
+        setPaneAutoName(ev.pane_id, deriveAutoName(ev.text))
+      }
     }
   } else if (ev.event_type === 'agent_active') {
     paneLastActiveAt.set(ev.pane_id, Date.now())
@@ -6595,7 +6787,8 @@ function onRunGroupsRemoteSync(raw: unknown): void {
     workspace_path?: string
     run_groups?: RunGroup[]
     spawn_history?: SpawnHistoryEntry[]
-    renamed_pane?: { pane_id?: string; custom_name?: string }
+    renamed_pane?: { pane_id?: string; custom_name?: string; auto_name?: string }
+    auto_named_pane?: { pane_id?: string; auto_name?: string }
   } | null
   const ws = currentWorkspace.value
   if (!ws || !d || d.workspace_path !== ws) return
@@ -6604,7 +6797,25 @@ function onRunGroupsRemoteSync(raw: unknown): void {
   // window's pane title and lists keep showing the old name.
   if (d.renamed_pane?.pane_id) {
     const pane = panes.value.find((p) => p.id === d.renamed_pane!.pane_id)
-    if (pane) pane.customName = d.renamed_pane.custom_name?.trim() || undefined
+    if (pane) {
+      // Apply each name field only when the broadcast carries it, so an
+      // auto-name broadcast cannot clear a custom name (and vice versa).
+      if (d.renamed_pane.custom_name !== undefined) {
+        pane.customName = d.renamed_pane.custom_name.trim() || undefined
+      }
+      if (d.renamed_pane.auto_name !== undefined) {
+        pane.autoName = d.renamed_pane.auto_name.trim() || undefined
+      }
+    }
+  }
+  // A peer window auto-named a pane (backend broadcasts this under its own
+  // key so it can never be mistaken for a manual rename). customName still
+  // wins in the display chain, so applying it unconditionally is safe.
+  if (d.auto_named_pane?.pane_id && d.auto_named_pane.auto_name) {
+    const pane = panes.value.find((p) => p.id === d.auto_named_pane!.pane_id)
+    if (pane) {
+      pane.autoName = d.auto_named_pane.auto_name.trim() || undefined
+    }
   }
   if (Array.isArray(d.spawn_history)) {
     // Apply the peer window's persisted workspace history without echoing it
@@ -6659,7 +6870,11 @@ function handleGroupDetached(groupId: string): void {
   next.add(groupId)
   detachedGroupIds.value = next
   for (const p of panes.value) {
-    if ((p.runGroupId ?? '') === groupId) delete paneRefs[p.id]
+    if ((p.runGroupId ?? '') === groupId) {
+      delete paneRefs[p.id]
+      // Keep the persisted name: the pane re-registers in the child window.
+      unregisterPaneMessaging(p.id, { keepPersisted: true })
+    }
   }
   panes.value = panes.value.filter((p) => (p.runGroupId ?? '') !== groupId)
   if (activeTab.value === groupId) {
@@ -7000,7 +7215,7 @@ const {
     return {
       paneId: pane.id,
       agentKey: pane.agentKey,
-      label: pane.customName || pane.agentLabel,
+      label: pane.customName || pane.autoName || pane.agentLabel,
       sessionId: pane.pinnedSessionId || null,
       sessionHomeId: pane.sessionHomeId,
       workspacePath: pane.workspacePath,
@@ -7097,7 +7312,7 @@ const renameInput = ref<HTMLInputElement | null>(null)
 function startRenamePane(paneId: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
-  renamingPane.value = { paneId, value: pane.customName || pane.agentLabel }
+  renamingPane.value = { paneId, value: pane.customName || pane.autoName || pane.agentLabel }
   closePaneCtxMenu()
   void nextTick(() => { renameInput.value?.focus(); renameInput.value?.select() })
 }
@@ -7115,8 +7330,8 @@ const vFocus = {
   },
 }
 
-function startInlineRename(p: { id: string; customName?: string; agentLabel?: string }): void {
-  inlineRenameDraft.value = p.customName || p.agentLabel || ''
+function startInlineRename(p: { id: string; customName?: string; autoName?: string; agentLabel?: string }): void {
+  inlineRenameDraft.value = p.customName || p.autoName || p.agentLabel || ''
   inlineRenamingId.value = p.id
 }
 
@@ -7156,6 +7371,25 @@ function setPaneCustomName(paneId: string, rawName: string): void {
     workspace_path: pane.workspacePath,
     pane_id: pane.id,
     custom_name: pane.customName ?? '',
+  })
+}
+
+// Applies an auto-derived display name to a pane and persists it. Set-once:
+// a pane that already carries a customName or autoName is never renamed
+// again, so a user rename permanently silences auto-naming.
+function setPaneAutoName(paneId: string, name: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || !name) return
+  if (pane.customName || pane.autoName) return
+  pane.autoName = name
+  syncViews()
+  // No workspace → the backend has no project.json to persist into; keep it
+  // as in-memory state only (mirrors setPaneCustomName).
+  if (!pane.workspacePath) return
+  backend.send('project.set_pane_auto_name', {
+    workspace_path: pane.workspacePath,
+    pane_id: pane.id,
+    auto_name: name,
   })
 }
 
@@ -8061,7 +8295,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :ref="(el) => setPaneRef(p.id, el)"
           :data-pane-id="p.id"
           :pane-id="p.id"
-          :title="p.customName || p.agentLabel"
+          :title="p.customName || p.autoName || p.agentLabel"
           :agent-key="p.agentKey"
           :cli-session-id="p.pinnedSessionId"
           :session-home-id="p.sessionHomeId"
@@ -8080,6 +8314,9 @@ function paneIsCommander(p: ActivePane): boolean {
           :loop-active="p.loopActive"
           :loop-wait-until="p.loopWaitUntil"
           :loop-estimate-reset-at="p.loopEstimateResetAt"
+          :messaging-name="p.messagingName"
+          @open-messaging="onOpenPaneMessaging(p.id)"
+          @rename-messaging="(name) => onRenameMessaging(p.id, name)"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
           @rebuild="rebuildPaneViaResume(p.id)"
@@ -8367,6 +8604,11 @@ function paneIsCommander(p: ActivePane): boolean {
     <div class="resize-handle resize-handle-left" @mousedown="onResizeStart($event, 'left')" />
     <div v-if="tokenPanelExpanded" class="resize-handle resize-handle-right" @mousedown="onResizeStart($event, 'right')" />
     <NotificationHost />
+    <AgentMessagesPanel
+      v-if="showMessagesPanel"
+      :initial-target="messagesPanelTarget"
+      @close="showMessagesPanel = false"
+    />
     <!-- Status bar -->
     <div class="statusbar">
       <div class="statusbar-left">
@@ -8422,6 +8664,13 @@ function paneIsCommander(p: ActivePane): boolean {
           >⚡ {{ $t('reconnect.banner', { count: disconnectedCount }) }}</span>
           <span class="sb-reconnect-dismiss" :title="$t('restore.dismiss')" @click="dismissReconnectBanner">✕</span>
         </span>
+        <span
+          class="sb-item sb-clickable sb-messages"
+          role="button"
+          tabindex="0"
+          @click="openMessagingPanel()"
+          @keydown.enter="openMessagingPanel()"
+        >✉ {{ $t('msg.open-panel') }}</span>
         <span class="sb-item sb-build">{{ buildTag }}</span>
         <span
           v-if="!isDetachedWindow && panes.length > 0"

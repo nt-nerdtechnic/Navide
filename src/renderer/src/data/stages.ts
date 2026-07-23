@@ -1,6 +1,8 @@
 // Pipeline stage type definitions and utility functions.
 // The actual stage data is loaded dynamically from the backend via useStages().
 
+import { MSG_START, MSG_END, MSG_ENVELOPE_PREFIX } from '../lib/agentMessaging'
+
 export type StageId = string
 export type AgentKey = 'claude' | 'codex' | 'antigravity' | 'grok' | 'kimi'
 
@@ -51,6 +53,22 @@ export const REPORT_START = '---REPORT-START---'
 export const REPORT_END = '---REPORT-END---'
 export const DISPATCH_START = '---DISPATCH-START---'
 export const DISPATCH_END = '---DISPATCH-END---'
+
+// Inter-CLI messaging protocol — prepended to every pipeline slot kickoff so
+// agents know they can message other panes by messagingName. Manual panes get
+// no upfront protocol; the delivery envelope carries a one-line reply hint.
+export const MESSAGING_PROTOCOL = `[Inter-CLI Messaging Protocol]
+你可以與其他 CLI pane 的 agent 互傳訊息。控制訊號必須是裸文字，不可放進 markdown code block。
+
+主動傳訊息給其他 agent 時，輸出：
+${MSG_START} to: <對方名稱>
+<訊息內容，可多行>
+${MSG_END}
+
+收到開頭為 ${MSG_ENVELOPE_PREFIX} <名稱> 的輸入時，那是其他 agent 傳來的訊息；需要回覆就用上述 MSG 區塊指名對方。
+沒有溝通需求時不要輸出 MSG 區塊。
+
+`
 
 // Universal pre-amble for Stage 01-style stages — the PM may ask the user.
 export const INTERACTION_PROTOCOL = `[Pipeline Control Protocol]
@@ -254,5 +272,5 @@ export function renderSlotKickoff(
   } else {
     protocol = INTERACTION_PROTOCOL_AUTO
   }
-  return protocol + body
+  return MESSAGING_PROTOCOL + protocol + body
 }

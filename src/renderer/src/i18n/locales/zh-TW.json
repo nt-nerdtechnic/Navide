@@ -1,4 +1,25 @@
 {
+  "msg": {
+    "panel-title": "CLI 互傳訊息",
+    "open-panel": "訊息",
+    "pause": "暫停投遞",
+    "resume": "恢復投遞",
+    "clear-log": "清除記錄",
+    "empty": "尚無訊息",
+    "status-queued": "佇列中",
+    "status-delivering": "投遞中",
+    "status-delivered": "已投遞",
+    "status-failed": "失敗",
+    "compose-title": "傳訊給 CLI",
+    "target": "目標",
+    "content-placeholder": "訊息內容…",
+    "include-hint": "附上回覆協議說明",
+    "send": "傳送",
+    "send-to-pane": "傳訊給此 CLI…",
+    "rename-title": "訊息名稱",
+    "rename-invalid": "名稱無效或已被使用",
+    "paused-banner": "投遞已暫停 — 訊息會排入佇列但不會送出"
+  },
   "confirm-close": {
     "ws-title": "關閉工作區？",
     "ws-body": "確定要關閉目前工作區並返回歡迎頁嗎？",

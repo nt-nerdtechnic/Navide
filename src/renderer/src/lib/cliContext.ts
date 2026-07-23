@@ -243,6 +243,7 @@ export function buildCliPaneBufferReply(
   pane: {
     id: string
     customName?: string
+    autoName?: string
     agentLabel: string
     agentKey: string
     pinnedSessionId?: string
@@ -254,7 +255,7 @@ export function buildCliPaneBufferReply(
 ): CliPaneBufferReply | { error: 'not-found' } {
   if (!paneRef) return { error: 'not-found' }
   return {
-    label: pane ? pane.customName || pane.agentLabel : '',
+    label: pane ? pane.customName || pane.autoName || pane.agentLabel : '',
     agentKey: pane?.agentKey ?? '',
     sessionId: pane?.pinnedSessionId || null,
     sessionHomeId: pane?.sessionHomeId ?? '',
