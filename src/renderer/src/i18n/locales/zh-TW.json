@@ -515,7 +515,10 @@
       "resume-behavior-label": "開啟工作區時",
       "resume-behavior-always": "總是恢復",
       "resume-behavior-never": "一律開新對話",
-      "resume-behavior-ask": "每次詢問"
+      "resume-behavior-ask": "每次詢問",
+      "resume-concurrency": "同時恢復上限",
+      "resume-concurrency-hint": "開啟工作區或還原版面時，最多可同時恢復幾個 CLI pane，其餘依序排隊。若一次恢復太多 pane 導致「terminal.create timeout」錯誤，就把這個值調小（1–10）。",
+      "resume-concurrency-label": "同時恢復數上限"
     },
     "roles": {
       "title": "角色",

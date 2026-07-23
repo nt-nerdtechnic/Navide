@@ -15,6 +15,13 @@ import {
   normalizeResumeBehavior,
   type ResumeBehavior,
 } from '../lib/resumeBehavior'
+import {
+  RESUME_CONCURRENCY_SETTING_KEY,
+  DEFAULT_RESUME_CONCURRENCY,
+  MIN_RESUME_CONCURRENCY,
+  MAX_RESUME_CONCURRENCY,
+  clampResumeConcurrency,
+} from '../lib/resumeConcurrency'
 import { useCliAgentPrefs } from '../composables/useCliAgentPrefs'
 import { CLI_AGENT_SPECS } from '../lib/agentSpecs'
 import {
@@ -430,6 +437,17 @@ const resumeBehaviorModel = ref<ResumeBehavior>(
 function onResumeBehaviorChange(value: string): void {
   resumeBehaviorModel.value = normalizeResumeBehavior(value)
   settingsSet(RESUME_BEHAVIOR_SETTING_KEY, resumeBehaviorModel.value)
+}
+
+// Max resume spawns that run terminal.create concurrently (the rest queue).
+// Read live by useTerminal at spawn time; heavy resume bursts otherwise stack
+// on the backend and time out ("request terminal.create timeout").
+const resumeConcurrencyModel = ref(
+  clampResumeConcurrency(settingsGet(RESUME_CONCURRENCY_SETTING_KEY, DEFAULT_RESUME_CONCURRENCY))
+)
+function onResumeConcurrencyChange(value: string): void {
+  resumeConcurrencyModel.value = clampResumeConcurrency(value)
+  settingsSet(RESUME_CONCURRENCY_SETTING_KEY, resumeConcurrencyModel.value)
 }
 
 const { confirm: notifyConfirm } = useNotify()
@@ -2121,6 +2139,21 @@ async function plDelete(id: string, name: string) {
                 <option value="never">{{ $t('settings.appearance.resume-behavior-never') }}</option>
                 <option value="ask">{{ $t('settings.appearance.resume-behavior-ask') }}</option>
               </select>
+            </div>
+          </section>
+
+          <section class="ap-section" data-settings-section="general-resume-concurrency">
+            <h3 class="ap-title">{{ $t('settings.appearance.resume-concurrency') }}</h3>
+            <p class="ap-hint">{{ $t('settings.appearance.resume-concurrency-hint') }}</p>
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('settings.appearance.resume-concurrency-label') }}</label>
+              <input
+                type="number"
+                :min="MIN_RESUME_CONCURRENCY"
+                :max="MAX_RESUME_CONCURRENCY"
+                :value="resumeConcurrencyModel"
+                @change="onResumeConcurrencyChange(($event.target as HTMLInputElement).value)"
+              />
             </div>
           </section>
 

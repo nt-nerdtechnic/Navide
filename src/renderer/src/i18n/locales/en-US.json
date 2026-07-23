@@ -515,7 +515,10 @@
       "resume-behavior-label": "On workspace open",
       "resume-behavior-always": "Always resume",
       "resume-behavior-never": "Always start fresh",
-      "resume-behavior-ask": "Ask each time"
+      "resume-behavior-ask": "Ask each time",
+      "resume-concurrency": "Concurrent resume limit",
+      "resume-concurrency-hint": "How many CLI panes may resume at the same time when opening a workspace or restoring a layout; the rest queue. Lower this if resuming many panes at once causes 'terminal.create timeout' errors (1–10).",
+      "resume-concurrency-label": "Max concurrent resumes"
     },
     "roles": {
       "title": "Roles",

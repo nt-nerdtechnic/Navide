@@ -7,6 +7,7 @@ import type { useBackend } from './useBackend'
 import { bufferTail, dropTuiNoise, stripAnsi } from '../lib/buffer'
 import { createResizeController, type ResizeController } from './useTerminalResize'
 import { installTerminalZoomShortcuts, terminalFontSize } from './useTerminalFontSize'
+import { getResumeConcurrency } from '../lib/resumeConcurrency'
 import { setContext } from '../keybindings/contextService'
 import {
   formatTerminalExit,
@@ -473,37 +474,40 @@ interface UseTerminalOptions {
   onClear?: () => void
 }
 
-// Throttle for terminal.create across ALL panes. A session restore
-// (App.vue restores panes with Promise.all) or a multi-pane layout fires N
-// spawns at once, and each terminal.create does serial pre-ack work on the
+// Throttle for RESUME spawns' terminal.create across all panes. A session
+// restore (App.vue restores panes with Promise.all) or a multi-pane layout can
+// fire N resume spawns at once, and each does serial pre-ack work on the
 // backend's single event-loop thread: a login-shell PATH refresh, a CLI probe
 // (up to 8s), a synchronous PTY fork, an attribution scan. Letting all N hit at
 // once stacks that work and pushes later acks past the request deadline
 // ("request terminal.create timeout" → pane setup failed). This module-level
-// semaphore caps how many creates are in flight so the backend drains them in
-// small batches. Acquired BEFORE send() so queue-wait doesn't count against the
-// per-request timeout. Orthogonal to each composable's own `_creating` lock.
-const TERMINAL_CREATE_CONCURRENCY = 3
+// semaphore caps how many resume creates are in flight (rest queue) so the
+// backend drains them in small batches; the cap is user-configurable
+// (getResumeConcurrency, default 3). Fresh spawns are light and stay
+// unthrottled — throttling them too would stall pipeline stages spawned into
+// background tabs. Acquired BEFORE send() so queue-wait doesn't count against
+// the per-request timeout. Orthogonal to each composable's own `_creating` lock.
 // Raised from wsClient's 10s default: the backend's near-8s CLI probe plus PTY
 // fork and attribution scan is legitimately heavier than an average request, so
 // 10s was too tight even for a single healthy spawn.
 const TERMINAL_CREATE_TIMEOUT_MS = 30_000
-let _terminalCreateActive = 0
-const _terminalCreateWaiters: Array<() => void> = []
+let _resumeSpawnActive = 0
+const _resumeSpawnWaiters: Array<() => void> = []
 
-async function acquireTerminalCreateSlot(): Promise<void> {
-  if (_terminalCreateActive < TERMINAL_CREATE_CONCURRENCY) {
-    _terminalCreateActive++
+async function acquireResumeSpawnSlot(): Promise<void> {
+  // Cap read live at acquire time so a Settings change takes effect immediately.
+  if (_resumeSpawnActive < getResumeConcurrency()) {
+    _resumeSpawnActive++
     return
   }
-  // Wait; releaseTerminalCreateSlot hands us the slot (count stays put).
-  await new Promise<void>((resolve) => _terminalCreateWaiters.push(resolve))
+  // Wait; releaseResumeSpawnSlot hands us the slot (count stays put).
+  await new Promise<void>((resolve) => _resumeSpawnWaiters.push(resolve))
 }
 
-function releaseTerminalCreateSlot(): void {
-  const next = _terminalCreateWaiters.shift()
+function releaseResumeSpawnSlot(): void {
+  const next = _resumeSpawnWaiters.shift()
   if (next) next()  // pass the baton: our slot goes to the next waiter
-  else _terminalCreateActive--
+  else _resumeSpawnActive--
 }
 
 export function useTerminal(paneId: string, backend: ReturnType<typeof useBackend>, opts?: UseTerminalOptions) {
@@ -1532,9 +1536,11 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
         term.write('\r\n\x1b[2m\x1b[38;5;240m─── reconnected ───\x1b[0m\r\n')
       }
     }
-    // Acquire before send so the queue-wait is NOT charged against the
-    // per-request timeout; released in finally once the ack (or failure) lands.
-    await acquireTerminalCreateSlot()
+    // Only resume spawns are throttled (they are the heavy ones). Acquire before
+    // send so the queue-wait is NOT charged against the per-request timeout;
+    // released in finally once the ack (or failure) lands.
+    const throttled = !!opts.isResume
+    if (throttled) await acquireResumeSpawnSlot()
     try {
       const resp = await backend.send<{
         terminal_session_id: string
@@ -1603,7 +1609,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
       error.value = String((err as Error).message ?? err)
       term.writeln(`\r\n\x1b[31m[error] ${error.value}\x1b[0m`)
     } finally {
-      releaseTerminalCreateSlot()
+      if (throttled) releaseResumeSpawnSlot()
     }
   }
 
