@@ -41,6 +41,25 @@ describe('feedChunk', () => {
     const state = createChunkSearchState()
     expect(feedChunk(state, '\x1b[31mquick\x1b[0m', 'quick')).toBe(true)
   })
+
+  it('strips a CSI sequence split across a chunk boundary', () => {
+    const state = createChunkSearchState()
+    expect(feedChunk(state, 'foo\x1b[3', 'fooneedle')).toBe(false)
+    expect(feedChunk(state, '1mNEEDLE', 'fooneedle')).toBe(true)
+  })
+
+  it('does not leak split-escape remnants into the searchable text', () => {
+    const state = createChunkSearchState()
+    // Buggy chunk-local stripping would leave "31m" visible between chunks.
+    expect(feedChunk(state, 'foo\x1b[3', '31m')).toBe(false)
+    expect(feedChunk(state, '1mbar', '31m')).toBe(false)
+  })
+
+  it('handles a lone ESC at the chunk boundary', () => {
+    const state = createChunkSearchState()
+    expect(feedChunk(state, 'foo\x1b', 'fooneedle')).toBe(false)
+    expect(feedChunk(state, '[31mNEEDLE', 'fooneedle')).toBe(true)
+  })
 })
 
 describe('fileContainsQuery', () => {
@@ -70,6 +89,24 @@ describe('fileContainsQuery', () => {
     const content = 'x'.repeat(padLen) + 'NEEDLE' + 'y'.repeat(1000)
     writeFileSync(filePath, content)
     expect(await fileContainsQuery(filePath, 'needle')).toBe(true)
+  })
+
+  it('strips an ANSI sequence that straddles the read-chunk boundary', async () => {
+    const filePath = join(dir, 'ansi-boundary.log')
+    // Pad so "\x1b[31m" spans byte offset 65536 (split after "\x1b[3").
+    const pad = 'x'.repeat(64 * 1024 - 3)
+    writeFileSync(filePath, pad + '\x1b[31m' + 'NEEDLE')
+    // "xneedle" only matches if the split escape strips cleanly — a leaked
+    // "1m" remnant would break the adjacency.
+    expect(await fileContainsQuery(filePath, 'xneedle')).toBe(true)
+  })
+
+  it('finds a multi-byte CJK query whose bytes straddle the read-chunk boundary', async () => {
+    const filePath = join(dir, 'cjk-boundary.log')
+    // 65535 ASCII bytes, then a CJK string: the first character's 3 UTF-8
+    // bytes span offsets 65535-65537, crossing the 64KB read boundary.
+    writeFileSync(filePath, 'x'.repeat(64 * 1024 - 1) + '搜尋目標文字')
+    expect(await fileContainsQuery(filePath, '搜尋目標')).toBe(true)
   })
 
   it('resolves to false for a missing file instead of throwing', async () => {

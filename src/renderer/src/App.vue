@@ -3124,11 +3124,27 @@ async function searchHistoryLogsContent(
     searchHistoryLogs?: (args: { query: string; files: Array<{ id: string; path: string }> }) => Promise<{ matchedIds: string[] }>
   } }).agentTeam
   if (!api?.searchHistoryLogs) return new Set()
-  const files: Array<{ id: string; path: string }> = []
-  for (const entry of entries) {
-    const path = await resolveHistoryLogPath(entry, api)
-    if (path) files.push({ id: entry.paneId, path })
+  // Resolve paths with bounded parallelism: legacy entries without
+  // outputLogFile each cost a findManualLog IPC round-trip, so strictly
+  // serial resolution stacks up latency over large histories.
+  const RESOLVE_CONCURRENCY = 16
+  const paths = new Array<string | undefined>(entries.length)
+  let nextIndex = 0
+  async function resolveWorker(): Promise<void> {
+    for (;;) {
+      const i = nextIndex++
+      if (i >= entries.length) return
+      paths[i] = await resolveHistoryLogPath(entries[i], api)
+    }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(RESOLVE_CONCURRENCY, entries.length) }, () => resolveWorker())
+  )
+  const files: Array<{ id: string; path: string }> = []
+  entries.forEach((entry, i) => {
+    const path = paths[i]
+    if (path) files.push({ id: entry.paneId, path })
+  })
   if (files.length === 0) return new Set()
   const result = await api.searchHistoryLogs({ query, files })
   return new Set(result.matchedIds)
