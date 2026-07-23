@@ -57,7 +57,7 @@ import {
   CLI_CHIP_LINE_CAP,
   CLI_PASTE_LINE_CAP
 } from './lib/cliContext'
-import { allSlotsFinished, turnCompleteDone, turnEndsWithSentinel, type SlotSignal } from './lib/completion'
+import { allSlotsFinished, isReplayedTurnComplete, turnCompleteDone, turnEndsWithSentinel, type SlotSignal } from './lib/completion'
 import { reorderByIds, sortByIdOrder } from './lib/paneOrder'
 import { AGENT_SPECS } from './lib/agentSpecs'
 import { orderedAgentKeys, isAgentEnabled } from './composables/useCliAgentPrefs'
@@ -4886,15 +4886,27 @@ function clearDoneNotifyTimer(paneId: string): void {
   if (h != null) { window.clearTimeout(h); paneDoneNotifyTimers.delete(paneId) }
 }
 
-function scheduleDoneNotify(paneId: string): void {
+function scheduleDoneNotify(paneId: string, timestamp: string): void {
   clearDoneNotifyTimer(paneId)
+  // Replay guard (all vendors): a turn_complete replayed when the backend
+  // re-parses the whole log on restart carries its original, old CLI timestamp.
+  // Reject it here so a historical turn — or any vendor's weak/stale signal —
+  // can never bubble straight to a desktop notification.
+  if (isReplayedTurnComplete(timestamp, Date.now(), TURN_TEXT_REPLAY_TOLERANCE_MS)) return
   const h = window.setTimeout(() => {
     paneDoneNotifyTimers.delete(paneId)
-    const tc = paneTurnCompleteAt.get(paneId) ?? 0
-    const la = paneLastActiveAt.get(paneId) ?? 0
-    // Still finished? Suppress if the CLI went active again after turn_complete
-    // (e.g. a question arrived as hook:notification, or it resumed working).
-    if (tc <= 0 || la > tc) return
+    // Arm-time + latest + settle, judged by the SAME vetted verdict the pipeline
+    // uses (turnCompleteDone): the turn_complete must have landed after this
+    // pane armed, be the latest signal (no agent_active after it), and have held
+    // for settleMs. armedAt defaults to 0 for a plain interactive pane, so the
+    // arm-time clause is a no-op there while still rejecting a pre-arm stale one.
+    if (!turnCompleteDone({
+      turnCompleteAt: paneTurnCompleteAt.get(paneId) ?? 0,
+      lastActiveAt: paneLastActiveAt.get(paneId) ?? 0,
+      armedAt: paneArmedAt.get(paneId) ?? watchers.get(paneId)?.armedAt ?? 0,
+      now: Date.now(),
+      settleMs: TURN_COMPLETE_SETTLE_MS
+    })) return
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane) return
     playDoneSound()
@@ -4939,7 +4951,7 @@ backend.on('agent.activity', (raw) => {
   if (!ev?.pane_id) return
   if (ev.event_type === 'turn_complete') {
     paneTurnCompleteAt.set(ev.pane_id, Date.now())
-    scheduleDoneNotify(ev.pane_id)
+    scheduleDoneNotify(ev.pane_id, ev.timestamp ?? '')
     // Judge THIS turn's own text (not a retained map): an empty-text
     // turn_complete (Claude Stop hook, thinking-only record, Codex cross-batch)
     // must never be judged against a previous turn's text.

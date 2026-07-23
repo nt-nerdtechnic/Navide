@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { slotFinished, allSlotsFinished, turnCompleteDone, turnEndsWithSentinel, type SlotSignal } from '../completion'
+import { slotFinished, allSlotsFinished, turnCompleteDone, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, type SlotSignal } from '../completion'
 
 // Fixed reference time for the watcher arming. turn_complete only counts when
 // its timestamp is strictly AFTER this.
@@ -102,6 +102,45 @@ describe('turnCompleteDone', () => {
       turnCompleteAt: 0, lastActiveAt: 0, armedAt: ARMED,
       now: 999_999, settleMs: SETTLE
     })).toBe(false)
+  })
+})
+
+describe('parseEventMs', () => {
+  it('parses an ISO-8601 timestamp (Claude/Codex)', () => {
+    expect(parseEventMs('2026-07-23T07:45:32.000Z')).toBe(Date.parse('2026-07-23T07:45:32.000Z'))
+  })
+
+  it('parses a bare epoch-ms string (Kimi wire.jsonl time)', () => {
+    expect(parseEventMs('1784762222265')).toBe(1784762222265)
+  })
+
+  it('returns NaN for empty or unparseable input', () => {
+    expect(Number.isNaN(parseEventMs(''))).toBe(true)
+    expect(Number.isNaN(parseEventMs('not-a-date'))).toBe(true)
+  })
+})
+
+describe('isReplayedTurnComplete', () => {
+  const TOL = 60_000
+  const NOW = 2_000_000
+
+  it('flags a stale ISO event replayed on backend restart', () => {
+    const old = new Date(NOW - TOL - 5_000).toISOString()
+    expect(isReplayedTurnComplete(old, NOW, TOL)).toBe(true)
+  })
+
+  it('flags a stale epoch-ms (Kimi) event beyond tolerance', () => {
+    expect(isReplayedTurnComplete(String(NOW - TOL - 1), NOW, TOL)).toBe(true)
+  })
+
+  it('passes a live turn end within tolerance (both formats)', () => {
+    expect(isReplayedTurnComplete(String(NOW - 8_000), NOW, TOL)).toBe(false)
+    expect(isReplayedTurnComplete(new Date(NOW - 8_000).toISOString(), NOW, TOL)).toBe(false)
+  })
+
+  it('treats a missing/unparseable timestamp as live (never suppresses)', () => {
+    expect(isReplayedTurnComplete('', NOW, TOL)).toBe(false)
+    expect(isReplayedTurnComplete('garbage', NOW, TOL)).toBe(false)
   })
 })
 

@@ -59,6 +59,30 @@ export function turnCompleteDone(s: TurnCompleteState): boolean {
   )
 }
 
+/** Parse a CLI event timestamp into epoch ms. Accepts ISO-8601 (Claude/Codex
+ *  emit their log's ISO timestamp) and a bare epoch-ms string (Kimi emits the
+ *  wire.jsonl `time` field). Returns NaN when unparseable. */
+export function parseEventMs(timestamp: string): number {
+  if (!timestamp) return NaN
+  if (/^\d+$/.test(timestamp)) return Number(timestamp)
+  return Date.parse(timestamp)
+}
+
+/** True when a turn_complete is a stale REPLAY rather than a live turn end: its
+ *  own CLI timestamp is far older than now — e.g. the backend re-parsed the
+ *  whole log on restart and re-emitted historical turns, or a vendor emits a
+ *  weak per-step signal. Guards the notification path so such events never
+ *  bubble to a desktop notification. An unparseable/missing timestamp is
+ *  treated as live (never suppressed) so a missing field can't mute real ones. */
+export function isReplayedTurnComplete(
+  timestamp: string,
+  now: number,
+  toleranceMs: number,
+): boolean {
+  const eventMs = parseEventMs(timestamp)
+  return !Number.isNaN(eventMs) && now - eventMs > toleranceMs
+}
+
 /** True when the turn's final non-empty line is exactly the sentinel.
  *  Judged on clean assistant text from the CLI's own conversation log (role-
  *  separated at the source: kickoff echo is a user message and can never

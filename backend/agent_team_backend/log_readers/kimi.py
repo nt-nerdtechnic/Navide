@@ -16,11 +16,41 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
 from .base import ActivityEvent, IncrementalParseResult, LogReader, TokenUsage, read_jsonl_tail
 
 log = logging.getLogger("agent_team_backend.log_readers.kimi")
+
+# A Kimi user-facing turn spans MANY usage.record lines (one per agentic step),
+# and wire.jsonl carries NO turn-end record — a turn is only implicitly closed
+# by the next `turn.prompt`. So turn_complete is emitted at the turn *boundary*:
+# the next turn.prompt (or turn.cancel) flushes the previous turn; the latest
+# turn, having no following prompt, is flushed once the file goes quiet for
+# _TURN_IDLE_MS (wall-clock silence = the turn is done).
+_TURN_IDLE_MS = 8_000
+_STATE_PREFIX = "kimi_turn::"
+
+
+def _read_turn_state(seen_keys: set[str]) -> dict | None:
+    """The pending (currently-open) turn, persisted across polls inside the
+    watcher-owned seen_keys set. Shape: {idx, last_ms, flushed}."""
+    for k in seen_keys:
+        if k.startswith(_STATE_PREFIX):
+            try:
+                val = json.loads(k[len(_STATE_PREFIX):])
+            except json.JSONDecodeError:
+                return None
+            return val if isinstance(val, dict) else None
+    return None
+
+
+def _write_turn_state(seen_keys: set[str], state: dict | None) -> None:
+    seen_keys.difference_update(
+        {k for k in seen_keys if k.startswith(_STATE_PREFIX)}
+    )
+    seen_keys.add(_STATE_PREFIX + json.dumps(state, separators=(",", ":")))
 
 
 def _int(v) -> int:  # noqa: ANN001
@@ -224,11 +254,27 @@ class KimiLogReader(LogReader):
     def parse_activity(
         self, path: Path, seen_keys: set[str]
     ) -> list[ActivityEvent]:
-        """Emit `agent_active` on user prompts and usage records, and
-        `turn_complete` on each usage.record (Kimi's per-turn boundary)."""
+        """Emit `agent_active` for every prompt/usage line, and `turn_complete`
+        once per user-facing turn — at the turn *boundary*, not per usage.record.
+
+        A turn is closed (turn_complete emitted) when the next `turn.prompt`
+        arrives or `turn.cancel` aborts it. The latest turn has no following
+        prompt, so it is flushed once the file has been quiet for _TURN_IDLE_MS
+        (wall-clock silence stands in for the turn-end record Kimi never writes).
+        `dedup_key` is the turn index, so each turn notifies exactly once.
+        """
         out: list[ActivityEvent] = []
         cwd = self.cwd_from_file(path)
         session_id = self._session_id(path)
+        state = _read_turn_state(seen_keys)
+
+        def _complete(idx: int, ms: int, detail: str) -> ActivityEvent:
+            return ActivityEvent(
+                vendor="kimi", event_type="turn_complete",
+                cwd=cwd, session_id=session_id, file_path=str(path),
+                dedup_key=f"turn:{idx}", timestamp=_ts(ms), detail=detail,
+            )
+
         try:
             fh = path.open(encoding="utf-8")
         except OSError:
@@ -250,8 +296,17 @@ class KimiLogReader(LogReader):
 
                 rtype = rec.get("type")
                 ts = _ts(rec.get("time"))
+                tms = _int(rec.get("time"))
                 if rtype == "turn.prompt":
                     seen_keys.add(key)
+                    # A new prompt closes the previous turn (if still open).
+                    if state is not None and not state.get("flushed"):
+                        out.append(_complete(
+                            int(state["idx"]), int(state.get("last_ms") or 0),
+                            "boundary",
+                        ))
+                    idx = (int(state["idx"]) + 1) if state is not None else 0
+                    state = {"idx": idx, "last_ms": tms, "flushed": False}
                     out.append(ActivityEvent(
                         vendor="kimi", event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
@@ -259,17 +314,33 @@ class KimiLogReader(LogReader):
                     ))
                 elif rtype == "usage.record":
                     seen_keys.add(key)
+                    if state is not None:
+                        state["last_ms"] = max(int(state.get("last_ms") or 0), tms)
                     out.append(ActivityEvent(
                         vendor="kimi", event_type="agent_active",
                         cwd=cwd, session_id=session_id, file_path=str(path),
                         dedup_key=key, timestamp=ts, detail="usage",
                     ))
-                    out.append(ActivityEvent(
-                        vendor="kimi", event_type="turn_complete",
-                        cwd=cwd, session_id=session_id, file_path=str(path),
-                        dedup_key=f"turn:{line_no}", timestamp=ts,
-                        detail="usage.record",
-                    ))
+                elif rtype == "turn.cancel":
+                    seen_keys.add(key)
+                    if state is not None and not state.get("flushed"):
+                        out.append(_complete(
+                            int(state["idx"]),
+                            max(int(state.get("last_ms") or 0), tms), "cancel",
+                        ))
+                        state["flushed"] = True
                 else:
                     seen_keys.add(key)
+
+            # The latest (still-open) turn has no following prompt; flush it once
+            # the file has gone quiet long enough to treat the turn as finished.
+            if state is not None and not state.get("flushed"):
+                now_ms = int(time.time() * 1000)
+                if now_ms - int(state.get("last_ms") or 0) >= _TURN_IDLE_MS:
+                    out.append(_complete(
+                        int(state["idx"]), int(state.get("last_ms") or 0), "idle",
+                    ))
+                    state["flushed"] = True
+
+        _write_turn_state(seen_keys, state)
         return out
