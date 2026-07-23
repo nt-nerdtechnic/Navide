@@ -3069,7 +3069,18 @@ registerCommand('workbench.action.rebuildFocusedPane', async () => {
 })
 watch([showSettings, showKbPanel, showCompletionModal], ([s, k, c]) => setContext('modalOpen', s || k || c || previewLogOpen.value))
 
+/** The sidebar agent list shows panes from every tab; focusing one that lives
+ *  in another tab must also activate that tab, or the pane stays v-show-hidden. */
+function revealPaneTab(paneId: string): void {
+  if (tabFilteredPaneIds.value.has(paneId)) return
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const key = pane.runGroupId || 'manual'
+  if (stageTabs.value.some((t) => t.key === key)) activeTab.value = key
+}
+
 function onFocusPane(paneId: string): void {
+  revealPaneTab(paneId)
   focusPaneId.value = paneId
   nextTick(() => {
     const el = document.querySelector(`[data-pane-id="${paneId}"]`)
@@ -7040,6 +7051,7 @@ watch(activeTab, () => {
 })
 
 function onSetFocus(paneId: string): void {
+  revealPaneTab(paneId)
   focusPaneId.value = paneId
 }
 

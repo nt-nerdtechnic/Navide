@@ -829,6 +829,16 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
   }
 }
 
+// ── Active Agents list: compact rows, one expands at a time (accordion) ──────
+// A click focuses the pane AND toggles the row's detail body; collapsed rows
+// stay one line tall so a long agent list can be scanned without scrolling.
+const expandedPaneId = ref<string | null>(null)
+
+function onAgentLineClick(paneId: string): void {
+  emit('focus-pane', paneId)
+  expandedPaneId.value = expandedPaneId.value === paneId ? null : paneId
+}
+
 // ── Active Agents list: drag-reorder (mirrors the TerminalPane header drop) ──
 // Dragging one agent-line onto another agent-item emits 'reorder-pane'; App.vue
 // splices `panes.value`, so the Grid and this list reorder together. During
@@ -1148,13 +1158,14 @@ function onPipelineDividerEnd(): void {
           v-for="p in panes"
           :key="p.id"
           class="agent-item"
-          :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'drag-over': reorderDragOverId === p.id }"
+          :class="{ pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'drag-over': reorderDragOverId === p.id, expanded: expandedPaneId === p.id }"
           @dragover="onAgentDragOver($event, p.id)"
           @dragenter="onAgentDragOver($event, p.id)"
           @dragleave="onAgentDragLeave(p.id)"
           @drop.prevent="onAgentDrop($event, p.id)"
         >
-          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="emit('focus-pane', p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
+          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="onAgentLineClick(p.id)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
+            <span class="status-dot" :data-state="p.status" :title="p.status"></span>
             <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
             <input
               v-if="renamingPaneId === p.id"
@@ -1174,46 +1185,53 @@ function onPipelineDividerEnd(): void {
             >{{ p.agentLabel }}</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
-            <span v-else class="state" :data-state="p.status">{{ p.status }}</span>
-            <button
-              v-if="p.rebuildVisible && !p.isMinimized"
-              class="icon-btn agent-rebuild-btn"
-              :disabled="p.rebuilding || !p.canRebuild"
-              :title="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
-              :aria-label="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
-              @click.stop="emit('rebuild', p.id)"
-            >
-              <RebuildIcon />
-            </button>
-            <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
-          </div>
-          <div class="role-line">{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></div>
-          <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
-            stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-          </div>
-          <div v-else-if="!p.isMinimized" class="stage-line">
-            manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
-          </div>
-          <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
-          <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
-            🔖 session: <code>{{ p.sessionId }}</code>
-          </div>
-          <div v-if="p.error" class="err">{{ p.error }}</div>
-          <div class="row tight">
-            <template v-if="p.isMinimized">
-              <button class="ghost" @click="emit('restore', p.id)">{{ $t('action.restore') }}</button>
-              <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
-            </template>
-            <template v-else>
-              <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
-                {{ $t('action.interrupt') }}
+            <span class="expand-caret" aria-hidden="true">▶</span>
+            <span class="agent-line-actions">
+              <button
+                v-if="p.rebuildVisible && !p.isMinimized"
+                class="icon-btn agent-rebuild-btn"
+                :disabled="p.rebuilding || !p.canRebuild"
+                :title="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
+                :aria-label="p.canRebuild ? $t('pane.terminal.rebuild-tooltip') : $t('pane.terminal.rebuild-tooltip-disabled')"
+                @click.stop="emit('rebuild', p.id)"
+              >
+                <RebuildIcon />
               </button>
-              <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
-                {{ $t('action.reapply-role') }}
-              </button>
-              <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
-            </template>
+              <button class="icon-btn agent-close-btn" :title="$t('action.remove')" @click.stop="emit('kill', p.id)">✕</button>
+            </span>
           </div>
+          <template v-if="expandedPaneId === p.id">
+            <div class="agent-role-line">
+              <span>{{ agentTypeLabel(p.agentKey) }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span></span>
+              <span class="state" :data-state="p.status">{{ p.status }}</span>
+            </div>
+            <div v-if="!p.isMinimized && p.origin === 'pipeline'" class="stage-line">
+              stage {{ p.stageId }} · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            </div>
+            <div v-else-if="!p.isMinimized" class="stage-line">
+              manual · {{ preparationLabel(p.preparationStatus) }} · {{ injectionLabel(p.injectionStatus) }} {{ kickoffLabel(p.kickoffStatus) }}
+            </div>
+            <div v-if="!p.isMinimized" class="agent-cmd"><code>{{ p.command }}</code></div>
+            <div v-if="!p.isMinimized && p.sessionId" class="agent-session" title="CLI session id — used to resume this agent's memory on restart">
+              🔖 session: <code>{{ p.sessionId }}</code>
+            </div>
+            <div v-if="p.error" class="err">{{ p.error }}</div>
+            <div class="row tight">
+              <template v-if="p.isMinimized">
+                <button class="ghost" @click="emit('restore', p.id)">{{ $t('action.restore') }}</button>
+                <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
+              </template>
+              <template v-else>
+                <button class="ghost" @click="emit('interrupt', p.id)" :disabled="p.status !== 'running'">
+                  {{ $t('action.interrupt') }}
+                </button>
+                <button class="ghost" @click="emit('reinject', p.id)" :disabled="p.status !== 'running' || !p.roleKey">
+                  {{ $t('action.reapply-role') }}
+                </button>
+                <button class="danger" @click="emit('kill', p.id)">{{ $t('action.remove') }}</button>
+              </template>
+            </div>
+          </template>
         </li>
       </ul>
 
@@ -2267,26 +2285,36 @@ button.icon-btn.muted:hover {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
 }
+/* Collapsed rows are borderless one-liners; the card chrome only appears on
+ * the single expanded item so a long list scans as compact rows. */
 .agent-item {
-  background: var(--bg-subtle);
-  border: 1px solid var(--border-muted);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 4px;
-  padding: 8px 10px;
+  padding: 0 4px;
 }
-.agent-item.pipeline {
+.agent-item.expanded {
+  background: var(--bg-subtle);
+  border-color: var(--border-muted);
+  padding-bottom: 8px;
+}
+.agent-item.expanded.pipeline {
   border-color: var(--accent-muted);
   background: linear-gradient(180deg, var(--accent-subtle) 0%, var(--bg-subtle) 100%);
 }
-.agent-item.manager {
+.agent-item.expanded.manager {
   border-color: var(--attention-muted);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--manager-fg) 15%, transparent) inset;
 }
 .agent-item--focus {
+  background: color-mix(in srgb, var(--accent-focus) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-focus);
+}
+.agent-item.expanded.agent-item--focus {
   border-color: var(--accent-focus);
-  background: color-mix(in srgb, var(--accent-focus) 8%, var(--bg-subtle));
-  box-shadow: 0 0 0 2px var(--accent-focus);
+  box-shadow: inset 2px 0 0 var(--accent-focus), 0 0 0 1px var(--accent-focus);
 }
 /* Reorder drop target feedback, matching .pane-header.drag-over in TerminalPane.vue. */
 .agent-item.drag-over {
@@ -2297,11 +2325,10 @@ button.icon-btn.muted:hover {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 2px;
+  min-height: 26px;
   cursor: pointer;
   border-radius: 4px;
-  padding: 2px 4px;
-  margin-left: -4px;
+  padding: 1px 2px;
   overflow: hidden;
 }
 .role-line {
@@ -2314,7 +2341,90 @@ button.icon-btn.muted:hover {
   text-overflow: ellipsis;
 }
 .agent-line:hover {
-  background: var(--bg-subtle);
+  background: var(--bg-hover);
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: var(--text-muted);
+}
+.status-dot[data-state='running'] {
+  background: var(--success-fg);
+  animation: agent-dot-pulse 1.6s ease-in-out infinite;
+}
+.status-dot[data-state='starting'] {
+  background: var(--status-starting-fg);
+  animation: agent-dot-pulse 0.9s ease-in-out infinite;
+}
+.status-dot[data-state='idle'] {
+  background: var(--attention-fg);
+}
+.status-dot[data-state='error'] {
+  background: var(--danger-fg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger-fg) 25%, transparent);
+}
+.status-dot[data-state='exited'] {
+  background: var(--text-disabled);
+  opacity: 0.6;
+}
+@keyframes agent-dot-pulse {
+  50% { opacity: 0.35; }
+}
+.expand-caret {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 8px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+.agent-item.expanded .expand-caret {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot { animation: none !important; }
+  .expand-caret { transition: none; }
+}
+.agent-line .minimized-tag {
+  margin-left: auto;
+}
+.agent-line .minimized-tag ~ .expand-caret {
+  margin-left: 6px;
+}
+.agent-line-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.agent-line:hover .agent-line-actions,
+.agent-item.expanded .agent-line-actions {
+  display: inline-flex;
+}
+.agent-line .badge {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.agent-role-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--accent-bright);
+  margin: 2px 0 4px;
+}
+.agent-item.expanded > .agent-role-line,
+.agent-item.expanded > .stage-line,
+.agent-item.expanded > .agent-cmd,
+.agent-item.expanded > .agent-session,
+.agent-item.expanded > .err,
+.agent-item.expanded > .row.tight {
+  margin-left: 18px;
+  margin-right: 6px;
 }
 .agent-close-btn {
   margin-left: 4px;

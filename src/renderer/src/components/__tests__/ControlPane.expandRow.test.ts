@@ -1,0 +1,83 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { shallowMount, type VueWrapper } from '@vue/test-utils'
+import ControlPane from '../ControlPane.vue'
+
+// Coverage for the compact Active Agents list (one-line rows, click-to-expand
+// accordion): a click on an agent-line focuses the pane AND toggles the row's
+// detail body; at most one row is expanded at a time; collapsed rows hide the
+// command/detail/actions body but keep the status dot visible.
+
+const minimalProps = {
+  backendStatus: 'connected',
+  backendUrl: '',
+  agentSpecs: [],
+  roles: [],
+  stages: [],
+  panes: [
+    { id: 'pane-a', agentLabel: 'Claude', status: 'running', command: 'claude', origin: 'manual', isMinimized: false, isCommander: false },
+    { id: 'pane-b', agentLabel: 'Codex', status: 'idle', command: 'codex', origin: 'manual', isMinimized: false, isCommander: false }
+  ],
+  pipeline: { state: 'idle' },
+  yoloEnabled: false,
+  analyzerModel: '',
+  analyzerStatus: { available: false, version: '', defaultModel: '', models: [], benchmarkResults: [] },
+  autoAnswerEnabled: false,
+  existingProject: null
+} as unknown as Record<string, unknown>
+
+describe('ControlPane – compact agent rows with click-to-expand', () => {
+  let wrapper: VueWrapper
+
+  beforeEach(() => {
+    sessionStorage.setItem('agentTeam.sidebarTab', 'pipeline')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    wrapper = shallowMount(ControlPane as any, {
+      props: minimalProps,
+      global: { mocks: { $t: (key: string) => key } }
+    })
+  })
+
+  afterEach(() => {
+    wrapper.unmount()
+    sessionStorage.clear()
+  })
+
+  it('renders every row collapsed: status dot visible, detail body absent', () => {
+    const items = wrapper.findAll('.agent-item')
+    expect(items).toHaveLength(2)
+    expect(wrapper.findAll('.status-dot')).toHaveLength(2)
+    expect(wrapper.find('.status-dot').attributes('data-state')).toBe('running')
+    expect(wrapper.find('.agent-cmd').exists()).toBe(false)
+    expect(wrapper.find('.row.tight').exists()).toBe(false)
+    expect(items[0].classes()).not.toContain('expanded')
+  })
+
+  it('click expands the row, shows the detail body, and emits focus-pane', async () => {
+    await wrapper.findAll('.agent-line')[0].trigger('click')
+    expect(wrapper.emitted('focus-pane')).toEqual([['pane-a']])
+    const items = wrapper.findAll('.agent-item')
+    expect(items[0].classes()).toContain('expanded')
+    expect(items[0].find('.agent-cmd').text()).toContain('claude')
+    expect(items[0].find('.row.tight').exists()).toBe(true)
+    expect(items[0].find('.state').attributes('data-state')).toBe('running')
+  })
+
+  it('second click on the same row collapses it (still re-emitting focus-pane)', async () => {
+    await wrapper.findAll('.agent-line')[0].trigger('click')
+    await wrapper.findAll('.agent-line')[0].trigger('click')
+    expect(wrapper.emitted('focus-pane')).toEqual([['pane-a'], ['pane-a']])
+    expect(wrapper.findAll('.agent-item')[0].classes()).not.toContain('expanded')
+    expect(wrapper.find('.agent-cmd').exists()).toBe(false)
+  })
+
+  it('expanding another row collapses the first (single-open accordion)', async () => {
+    await wrapper.findAll('.agent-line')[0].trigger('click')
+    await wrapper.findAll('.agent-line')[1].trigger('click')
+    const items = wrapper.findAll('.agent-item')
+    expect(items[0].classes()).not.toContain('expanded')
+    expect(items[1].classes()).toContain('expanded')
+    expect(wrapper.findAll('.agent-cmd')).toHaveLength(1)
+    expect(items[1].find('.agent-cmd').text()).toContain('codex')
+  })
+})
