@@ -203,7 +203,7 @@ const props = defineProps<Props>()
 // is live when juggling worktrees / uncommitted changes.
 const buildTag = typeof __APP_BUILD__ === 'string' ? __APP_BUILD__ : 'dev'
 
-const { state: updateState, startDownload, installUpdate } = useUpdater()
+const { state: updateState, startDownload } = useUpdater()
 
 // Announce a freshly-available update once per version — subtle, non-spammy.
 // Patch releases keep the message-only toast (main auto-downloads them); the
@@ -951,30 +951,6 @@ function onPipelineDividerEnd(): void {
       <button :class="['tab-btn', { active: sidebarTab === 'plans' }]" title="Plans (⌘4)" @click="selectSidebarTab('plans')">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z"/></svg>
       </button>
-
-      <div
-        v-if="['available', 'downloading', 'downloaded', 'installing'].includes(updateState.status)"
-        class="update-badge"
-        :class="{ ready: updateState.status === 'downloaded', downloading: updateState.status === 'downloading' }"
-        :title="updateState.availableVersion ? `v${updateState.availableVersion}` : undefined"
-      >
-        <template v-if="updateState.status === 'downloaded'">
-          <span class="update-dot"></span>
-          <span class="update-label">{{ $t('updater.badge-ready', { version: updateState.availableVersion }) }}</span>
-          <button class="update-action" @click="installUpdate">{{ $t('updater.restart') }}</button>
-        </template>
-        <template v-else-if="updateState.status === 'installing'">
-          <span class="update-label">{{ $t('updater.restarting') }}</span>
-        </template>
-        <template v-else-if="updateState.status === 'downloading'">
-          <span class="update-label">{{ $t('updater.badge-downloading', { percent: updateState.percent ?? 0 }) }}</span>
-        </template>
-        <template v-else>
-          <span class="update-dot"></span>
-          <span class="update-label">v{{ updateState.availableVersion }}</span>
-          <button class="update-action" @click="startDownload">{{ $t('updater.update') }}</button>
-        </template>
-      </div>
     </div>
 
     <!-- ── Explorer / Git tabs (shared split: panel on top, agent dock pinned at bottom) ── -->
@@ -2737,60 +2713,4 @@ button.icon-btn.muted:hover {
   min-height: 0;
 }
 
-/* ── Update badge in sidebar-tabs bar ───────────────────────────────────── */
-.update-badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: var(--accent-subtle);
-  border: 1px solid var(--accent-muted);
-  font-size: 10px;
-  color: var(--accent-fg);
-  white-space: nowrap;
-  overflow: hidden;
-  max-width: 140px;
-}
-.update-badge.ready {
-  background: var(--success-subtle);
-  border-color: color-mix(in srgb, var(--success-strong) 40%, transparent);
-  color: var(--success-fg);
-}
-.update-badge.downloading {
-  background: var(--attention-subtle);
-  border-color: color-mix(in srgb, var(--attention-fg) 30%, transparent);
-  color: var(--attention-fg);
-}
-.update-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-}
-.update-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 10px;
-}
-.update-action {
-  border: none;
-  background: var(--accent-emphasis);
-  color: var(--text-on-emphasis);
-  font-size: 10px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.update-badge.ready .update-action {
-  background: var(--success-emphasis);
-}
-.update-action:hover {
-  opacity: 0.85;
-}
 </style>

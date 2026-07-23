@@ -32,6 +32,7 @@ import { usePipelines } from './composables/usePipelines'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
+import { useUpdater } from './composables/useUpdater'
 import { usePaneReorderDrag } from './composables/usePaneReorderDrag'
 import { cliHealthGuideForLaunch, type CliHealthStatus, type OnboardStatus } from './composables/useOnboarding'
 import { playDoneSound, playAttentionSound } from './composables/useSoundNotify'
@@ -3116,6 +3117,8 @@ function openSettingsAccounts(): void {
   settingsInitialTab.value = 'accounts'
   showSettings.value = true
 }
+// Status-bar update indicator: shares the updater state machine with ControlPane.
+const { state: updateState } = useUpdater()
 // Native application menu actions routed from main (menu:action). Existing
 // bridge listeners in this file never unsubscribe — App.vue lives for the
 // window's lifetime, so follow suit.
@@ -8689,6 +8692,22 @@ function paneIsCommander(p: ActivePane): boolean {
           {{ backend.status.value === 'connected' ? 'backend' : 'connecting…' }}
           <span v-if="backendUrl" class="sb-url">· {{ backendUrl }}</span>
         </span>
+        <span
+          v-if="['available', 'downloading', 'downloaded', 'error'].includes(updateState.status)"
+          class="sb-item sb-update sb-clickable"
+          :class="'sb-update-' + updateState.status"
+          role="button"
+          tabindex="0"
+          :title="updateState.status === 'error' ? updateState.message : (updateState.availableVersion ? `v${updateState.availableVersion}` : undefined)"
+          @click="settingsInitialTab = 'updates'; showSettings = true"
+          @keydown.enter="settingsInitialTab = 'updates'; showSettings = true"
+        >
+          <span class="sb-dot" />
+          <template v-if="updateState.status === 'downloading'">↓{{ updateState.percent ?? 0 }}%</template>
+          <template v-else-if="updateState.status === 'downloaded'">{{ $t('updater.restart') }}</template>
+          <template v-else-if="updateState.status === 'error'">{{ $t('updater.badge-error') }}</template>
+          <template v-else>↑{{ updateState.availableVersion }}</template>
+        </span>
       </div>
       <div class="statusbar-right">
         <span v-if="pipeline.state !== 'idle'" class="sb-item sb-pipeline" :class="'sb-' + pipeline.state">
@@ -9058,6 +9077,10 @@ function paneIsCommander(p: ActivePane): boolean {
 .sb-pipeline.sb-completed { color: var(--success-fg); }
 .sb-pipeline.sb-aborted { color: var(--danger-fg); }
 .sb-agents { color: var(--text-secondary); }
+.sb-update-available .sb-dot { background: var(--accent-fg); }
+.sb-update-downloading .sb-dot { background: var(--attention-fg); }
+.sb-update-downloaded .sb-dot { background: var(--success-fg); }
+.sb-update-error .sb-dot { background: var(--danger-fg); }
 .sb-clickable { cursor: pointer; }
 
 /* ── Backend supervisor popover ──────────────────────────────────────────── */

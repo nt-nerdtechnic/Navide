@@ -1023,6 +1023,7 @@
     "update": "Update",
     "badge-ready": "v{version} ready",
     "badge-downloading": "{percent}%",
+    "badge-error": "Update failed",
     "auto-check": "Automatically check for updates",
     "auto-check-hint": "Periodically check for new releases in the background.",
     "auto-download": "Automatically download updates",

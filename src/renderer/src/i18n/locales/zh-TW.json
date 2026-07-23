@@ -1023,6 +1023,7 @@
     "update": "更新",
     "badge-ready": "v{version} 已就緒",
     "badge-downloading": "{percent}%",
+    "badge-error": "更新失敗",
     "auto-check": "自動檢查更新",
     "auto-check-hint": "在背景定期檢查是否有新版本。",
     "auto-download": "自動下載更新",
