@@ -257,6 +257,9 @@ class SpawnHistoryStore:
           parseable spawnedAt are kept — bulk cleanup never deletes the
           record of something that may still be running.
 
+        Starred entries (``starred`` truthy) survive both bulk modes; only
+        an explicit ``"ids"`` delete removes them.
+
         Unknown mode deletes nothing. The rewrite is atomic (tmp +
         os.replace) and skipped entirely when nothing matched. Each
         workspace's file is keyed by its canonical path, so entries of other
@@ -271,9 +274,11 @@ class SpawnHistoryStore:
             if mode == "ids":
                 return entry.get("paneId") in ids
             if mode == "removed":
-                return bool(entry.get("removedAt"))
+                return bool(entry.get("removedAt")) and not entry.get("starred")
             if mode == "older_than":
                 if not entry.get("removedAt") or cutoff is None:
+                    return False
+                if entry.get("starred"):
                     return False
                 spawned = _parse_entry_timestamp(entry.get("spawnedAt"))
                 return spawned is not None and spawned < cutoff

@@ -50,6 +50,7 @@ const emit = defineEmits<{
   (e: 'rename', entry: SpawnHistoryEntry, name: string): void
   (e: 'delete', entry: SpawnHistoryEntry): void
   (e: 'cleanup', mode: HistoryCleanupMode, cutoffIso: string): void
+  (e: 'toggle-star', entry: SpawnHistoryEntry, starred: boolean): void
 }>()
 
 const agentSpecs = AGENT_SPECS
@@ -65,6 +66,7 @@ let contentSearchSeq = 0
 let contentSearchDebounceTimer: number | undefined
 const statusFilter = ref<HistoryStatusFilter>('all')
 const originFilter = ref<HistoryOriginFilter>('all')
+const starredOnly = ref(false)
 const selectedPaneId = ref('')
 const confirmKillAll = ref(false)
 const loadingMore = ref(false)
@@ -97,6 +99,7 @@ watch(() => props.show, (open) => {
     searchQuery.value = ''
     statusFilter.value = 'all'
     originFilter.value = 'all'
+    starredOnly.value = false
     selectedPaneId.value = ''
     confirmDelete.value = false
     cleanupMenuOpen.value = false
@@ -111,8 +114,11 @@ watch(() => props.show, (open) => {
 // Debounce the content search ~300ms after typing settles; an empty query
 // (or no search API) cancels/skips it outright. contentSearchSeq is bumped on
 // every query change so a slow search for an outdated query can never
-// clobber the current results (stale-response guard).
-watch(searchQuery, (query) => {
+// clobber the current results (stale-response guard). status/origin filter
+// changes also re-trigger the search because only entries passing those
+// gates are scanned (see runContentSearch) — broadening a filter must scan
+// the newly eligible entries.
+watch([searchQuery, statusFilter, originFilter, starredOnly], ([query]) => {
   if (contentSearchDebounceTimer !== undefined) { window.clearTimeout(contentSearchDebounceTimer); contentSearchDebounceTimer = undefined }
   contentSearchSeq++
   const trimmed = query.trim()
@@ -127,8 +133,17 @@ watch(searchQuery, (query) => {
 
 async function runContentSearch(query: string, seq: number): Promise<void> {
   contentSearchLoading.value = true
-  const result = await props.searchHistoryLogContent!(props.sessionHistory, query).catch(() => new Set<string>())
-  if (seq !== contentSearchSeq) return // stale: query changed since this search was scheduled
+  // Scan only entries the status/origin/starred gates would display —
+  // filterHistoryEntries drops the rest regardless of a content match, so
+  // scanning them would be wasted file reads.
+  const candidates = filterHistoryEntries(props.sessionHistory, {
+    query: '',
+    status: statusFilter.value,
+    origin: originFilter.value,
+    starredOnly: starredOnly.value,
+  })
+  const result = await props.searchHistoryLogContent!(candidates, query).catch(() => new Set<string>())
+  if (seq !== contentSearchSeq) return // stale: query/filters changed since this search was scheduled
   contentSearchLoading.value = false
   contentMatchedIds.value = result
 }
@@ -145,6 +160,7 @@ const filteredSessionHistory = computed(() =>
     query: searchQuery.value,
     status: statusFilter.value,
     origin: originFilter.value,
+    starredOnly: starredOnly.value,
     contentMatchedIds: contentMatchedIds.value,
   })
 )
@@ -446,6 +462,13 @@ async function copyLogText(): Promise<void> {
                   <option value="manual">{{ $t('label.history-filter-manual') }}</option>
                   <option value="pipeline">{{ $t('label.history-filter-pipeline') }}</option>
                 </select>
+                <button
+                  class="ah-star-filter"
+                  :class="{ active: starredOnly }"
+                  :title="$t('label.history-filter-starred')"
+                  :aria-pressed="starredOnly"
+                  @click="starredOnly = !starredOnly"
+                >{{ starredOnly ? '★' : '☆' }}</button>
               </div>
             </div>
             <div class="agent-history-list">
@@ -465,6 +488,18 @@ async function copyLogText(): Promise<void> {
                   <span class="ah-dot" :class="entry.removedAt ? 'removed' : 'active'"></span>
                   <span class="ah-badge">{{ historyEntryLabel(entry) }}</span>
                   <span class="ah-time">{{ listTime(entry, group.key) }}</span>
+                  <!-- span, not button: rows are <button> and nesting
+                       interactive elements is invalid HTML. -->
+                  <span
+                    class="ah-row-star"
+                    :class="{ starred: entry.starred }"
+                    role="button"
+                    tabindex="0"
+                    :title="entry.starred ? $t('action.unstar') : $t('action.star')"
+                    @click.stop="emit('toggle-star', entry, !entry.starred)"
+                    @keydown.enter.prevent.stop="emit('toggle-star', entry, !entry.starred)"
+                    @keydown.space.prevent.stop="emit('toggle-star', entry, !entry.starred)"
+                  >{{ entry.starred ? '★' : '☆' }}</span>
                 </button>
               </template>
               <button
@@ -486,6 +521,12 @@ async function copyLogText(): Promise<void> {
                     :title="$t('action.rename')"
                     @click="startRename"
                   >✎</button>
+                  <button
+                    class="ah-icon-btn ah-star-btn"
+                    :class="{ starred: selectedEntry.starred }"
+                    :title="selectedEntry.starred ? $t('action.unstar') : $t('action.star')"
+                    @click="emit('toggle-star', selectedEntry, !selectedEntry.starred)"
+                  >{{ selectedEntry.starred ? '★' : '☆' }}</button>
                 </template>
                 <input
                   v-else
@@ -656,6 +697,9 @@ async function copyLogText(): Promise<void> {
         </div>
         <div style="padding: 16px 14px; font-size: 13px; color: var(--text-primary);">
           {{ $t('label.history-cleanup-confirm-count', { count: confirmCleanup.count }) }}
+          <div style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">
+            {{ $t('label.history-cleanup-starred-kept') }}
+          </div>
         </div>
         <div style="display: flex; gap: 8px; padding: 0 14px 14px; justify-content: flex-end;">
           <button class="history-close" style="border: 1px solid var(--border-default); padding: 4px 12px; border-radius: 6px;" @click="confirmCleanup = null">{{ $t('action.cancel') }}</button>
@@ -715,7 +759,9 @@ async function copyLogText(): Promise<void> {
 .ah-cleanup-item:focus-visible,
 .history-killall:focus-visible,
 .history-close:focus-visible,
-.agent-history-search-clear:focus-visible {
+.agent-history-search-clear:focus-visible,
+.ah-star-filter:focus-visible,
+.ah-row-star:focus-visible {
   outline: 1px solid var(--accent-focus);
   outline-offset: 1px;
 }
@@ -919,6 +965,49 @@ async function copyLogText(): Promise<void> {
   flex-shrink: 0;
   font-size: 10px;
   color: var(--text-muted);
+}
+.ah-row-star {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: color 0.12s ease, opacity 0.12s ease;
+}
+.agent-history-row:hover .ah-row-star,
+.agent-history-row.selected .ah-row-star,
+.ah-row-star:focus-visible {
+  opacity: 0.7;
+}
+.ah-row-star.starred {
+  color: var(--warning-fg);
+  opacity: 1;
+}
+.ah-row-star:hover {
+  color: var(--warning-fg);
+  opacity: 1;
+}
+.ah-star-filter {
+  flex-shrink: 0;
+  background: var(--bg-muted);
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.ah-star-filter:hover {
+  color: var(--text-bright);
+}
+.ah-star-filter.active {
+  color: var(--warning-fg);
+  border-color: var(--warning-fg);
+}
+.ah-star-btn.starred {
+  color: var(--warning-fg);
 }
 .ah-load-more {
   display: block;

@@ -611,3 +611,146 @@ async def test_rename_pane_handler_patches_full_store(
 
     stored = _stored_entries(app.spawn_history_store, tmp_path)
     assert stored[0]["customName"] == "Live name"
+
+
+def test_delete_entries_bulk_modes_skip_starred(tmp_path: Path) -> None:
+    """Starred entries survive "removed" and "older_than" cleanup."""
+    store = SpawnHistoryStore()
+    cutoff = "2026-07-15T00:00:00Z"
+    store.merge(str(tmp_path), [
+        _entry("plain-removed", spawnedAt="2026-07-01T00:00:00Z", removedAt="2026-07-01T00:00:00Z"),
+        _entry("starred-removed", spawnedAt="2026-07-01T00:00:00Z", removedAt="2026-07-01T00:00:00Z", starred=True),
+        _entry("active"),
+    ])
+    deleted, total = store.delete_entries(str(tmp_path), mode="removed")
+    assert deleted == ["plain-removed"]
+    assert total == 2
+    assert [e["paneId"] for e in _stored_entries(store, tmp_path)] == [
+        "starred-removed", "active",
+    ]
+    # older_than: the starred entry is old and removed, yet still kept.
+    deleted, total = store.delete_entries(
+        str(tmp_path), mode="older_than", cutoff_iso=cutoff
+    )
+    assert deleted == []
+    assert total == 2
+
+
+def test_delete_entries_ids_mode_still_deletes_starred(tmp_path: Path) -> None:
+    """An explicit single delete overrides the star protection."""
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [
+        _entry("starred", removedAt="2026-07-01T00:00:00Z", starred=True),
+        _entry("other"),
+    ])
+    deleted, total = store.delete_entries(
+        str(tmp_path), mode="ids", pane_ids=["starred"]
+    )
+    assert deleted == ["starred"]
+    assert total == 1
+    assert [e["paneId"] for e in _stored_entries(store, tmp_path)] == ["other"]
+
+
+async def test_delete_spawn_history_handler_keeps_starred_in_store_and_mirror(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End-to-end check that the mirror inherits the starred protection:
+    the mirror is filtered by the store's deleted_ids, so an entry doomed()
+    skips must survive in BOTH layers after a bulk cleanup."""
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    mirror = [
+        _entry(
+            "starred-gone",
+            workspacePath=str(tmp_path),
+            removedAt="2026-07-01T00:00:00Z",
+            starred=True,
+        ),
+        _entry("plain-gone", workspacePath=str(tmp_path), removedAt="2026-07-02T00:00:00Z"),
+    ]
+    store.set_ui_state(str(tmp_path), spawn_history=mirror)
+    monkeypatch.setattr(app, "project_store", store)
+
+    async def no_broadcast(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(app, "broadcast", no_broadcast)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.delete_spawn_history")
+    assert fn is not None
+    await fn(session, "m1", "project.delete_spawn_history", {
+        "workspace_path": str(tmp_path),
+        "mode": "removed",
+    })
+
+    resp = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert resp["payload"] == {"deleted": 1, "total": 1}
+    # Full store: only the unstarred removed entry was cleaned.
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert [e["paneId"] for e in stored] == ["starred-gone"]
+    # project.json mirror: same survivor set.
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert [e["paneId"] for e in fresh.ui_spawn_history or []] == ["starred-gone"]
+
+
+async def test_star_spawn_history_handler_patches_store_and_mirror(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from agent_team_backend import app, ws_handlers
+
+    store = ProjectStore()
+    store.save(store.load_or_create(str(tmp_path)))
+    # Full store holds an old entry the 100-entry mirror no longer carries.
+    app.spawn_history_store.merge(str(tmp_path), [
+        _entry("p-old", workspacePath=str(tmp_path)),
+        _entry("p1", workspacePath=str(tmp_path)),
+    ])
+    store.set_ui_state(
+        str(tmp_path), spawn_history=[_entry("p1", workspacePath=str(tmp_path))]
+    )
+    monkeypatch.setattr(app, "project_store", store)
+
+    events: list[dict[str, Any]] = []
+
+    async def capture(event: dict[str, Any], exclude: Any = None) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", capture)
+
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    fn = ws_handlers.lookup("project.star_spawn_history")
+    assert fn is not None
+
+    # Beyond-mirror entry: full store patched, no mirror change -> no broadcast.
+    await fn(session, "m1", "project.star_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p-old", "starred": True,
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert stored[0]["starred"] is True
+    assert events == []
+
+    # Mirror entry: both layers patched + mirror broadcast to peers.
+    await fn(session, "m2", "project.star_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "starred": True,
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert stored[1]["starred"] is True
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert (fresh.ui_spawn_history or [])[0]["starred"] is True
+    assert len(events) == 1
+    assert events[0]["type"] == "project.ui_state_changed"
+
+    # Unstar removes the key from the full store rather than storing False.
+    await fn(session, "m3", "project.star_spawn_history", {
+        "workspace_path": str(tmp_path), "pane_id": "p1", "starred": False,
+    })
+    stored = _stored_entries(app.spawn_history_store, tmp_path)
+    assert "starred" not in stored[1]
+    fresh = ProjectStore().peek(str(tmp_path))
+    assert fresh is not None
+    assert "starred" not in (fresh.ui_spawn_history or [])[0]

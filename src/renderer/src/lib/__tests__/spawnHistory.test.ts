@@ -222,6 +222,26 @@ describe('filterHistoryEntries', () => {
       contentMatchedIds: new Set(),
     })).toEqual(entries)
   })
+
+  it('starredOnly keeps only starred entries and combines with other dimensions', () => {
+    const starrable = [
+      { ...entry({ paneId: 'a', customName: 'Frontend Lead' }), origin: 'manual' as const, starred: true },
+      { ...entry({ paneId: 'b', agentLabel: 'Codex' }), origin: 'manual' as const },
+      { ...entry({ paneId: 'c', agentLabel: 'Claude Code' }), origin: 'pipeline' as const, starred: true, removedAt: '2026-07-20T10:00:00.000Z' },
+    ]
+    expect(filterHistoryEntries(starrable, { query: '', status: 'all', origin: 'all', starredOnly: true })
+      .map((e) => e.paneId)).toEqual(['a', 'c'])
+    // Combined with status: only the starred active entry remains.
+    expect(filterHistoryEntries(starrable, { query: '', status: 'active', origin: 'all', starredOnly: true })
+      .map((e) => e.paneId)).toEqual(['a'])
+    // Combined with a query: starred is a hard gate, not a union with the
+    // text match — an unstarred metadata match stays hidden.
+    expect(filterHistoryEntries(starrable, { query: 'codex', status: 'all', origin: 'all', starredOnly: true }))
+      .toEqual([])
+    // Off (or omitted) leaves everything through.
+    expect(filterHistoryEntries(starrable, { query: '', status: 'all', origin: 'all', starredOnly: false }))
+      .toEqual(starrable)
+  })
 })
 
 describe('groupHistoryByDay', () => {
@@ -429,5 +449,20 @@ describe('history cleanup helpers', () => {
     ]
     expect(countHistoryCleanupEntries(entries, 'removed')).toBe(2)
     expect(countHistoryCleanupEntries(entries, 'older_than', cutoff)).toBe(1)
+  })
+
+  it('starred entries survive both bulk modes (mirrors the backend skip)', () => {
+    const cutoff = historyCleanupCutoffIso(now)
+    const starredOld = {
+      spawnedAt: '2026-07-01T00:00:00Z',
+      removedAt: '2026-07-02T00:00:00Z',
+      starred: true,
+    }
+    expect(historyCleanupMatches(starredOld, 'removed')).toBe(false)
+    expect(historyCleanupMatches(starredOld, 'older_than', cutoff)).toBe(false)
+    expect(countHistoryCleanupEntries([
+      starredOld,
+      { spawnedAt: '2026-07-01T00:00:00Z', removedAt: '2026-07-02T00:00:00Z' },
+    ], 'removed')).toBe(1)
   })
 })

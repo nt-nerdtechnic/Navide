@@ -3134,6 +3134,55 @@ async def project_rename_spawn_history(session: "Session", msg_id: str, msg_type
     )
 
 
+@handler("project.star_spawn_history")
+async def project_star_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Star or unstar a spawn-history entry.
+
+    Same dual-layer patch as project.rename_spawn_history: the full store
+    (spawn-history.json) plus the project.json mirror, then a mirror
+    broadcast so peer windows adopt the flag. Unstarring removes the key
+    (patch_entry deletes on None) instead of storing False. Starred entries
+    are skipped by bulk cleanup (see SpawnHistoryStore.delete_entries).
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    starred = bool(payload.get("starred"))
+    patched = False
+    if pane_id:
+
+        def _patch():
+            project = app.project_store.peek(ws_raw)
+            seed = project.ui_spawn_history if project is not None else None
+            ok = app.spawn_history_store.patch_entry(
+                ws_raw, pane_id, {"starred": True if starred else None}, seed=seed
+            )
+            # Entries past the mirror's 100-entry window aren't there to
+            # patch — star_history_entry() returns None and no broadcast is
+            # needed (peers can't be showing them from the mirror anyway).
+            mirror_project = app.project_store.star_history_entry(
+                ws_raw, pane_id=pane_id, starred=starred
+            )
+            return ok, mirror_project
+
+        patched, project = await asyncio.to_thread(_patch)
+        if project is not None and project.ui_spawn_history is not None:
+            await app.broadcast(
+                make_event(
+                    "project.ui_state_changed",
+                    {
+                        "workspace_path": project.workspace_path,
+                        "spawn_history": project.ui_spawn_history,
+                    },
+                ),
+                exclude=session,
+            )
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "patched": patched})
+    )
+
+
 @handler("project.delete_spawn_history")
 async def project_delete_spawn_history(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Delete spawn-history entries from the full store and the mirror.

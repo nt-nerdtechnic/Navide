@@ -727,6 +727,36 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def star_history_entry(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        starred: bool,
+    ) -> Project | None:
+        """Patch only the ui_spawn_history mirror's starred flag for pane_id.
+
+        The star-side companion of rename_history_entry(): it never creates
+        a pane record. Unstarring removes the key instead of writing False.
+        Returns None when no project exists or the mirror has no matching
+        entry (nothing was saved).
+        """
+        project = self.peek(workspace_path)
+        if project is None:
+            return None
+        changed = False
+        for entry in project.ui_spawn_history or []:
+            if isinstance(entry, dict) and entry.get("paneId") == pane_id:
+                if starred:
+                    entry["starred"] = True
+                else:
+                    entry.pop("starred", None)
+                changed = True
+        if not changed:
+            return None
+        self.save(project)
+        return project
+
     def record_manual_pane_session(
         self,
         workspace_path: str,

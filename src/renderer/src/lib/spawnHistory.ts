@@ -26,6 +26,9 @@ export interface SpawnHistoryEntry extends HistoryTitleEntry {
   sessionHomeId?: string
   runGroupId?: string
   outputLogFile?: string
+  /** User favorite. Persisted across restarts; bulk cleanup skips starred
+   *  entries (explicit single delete still removes them). */
+  starred?: boolean
 }
 
 export interface HistoryTitleIdentity {
@@ -87,26 +90,31 @@ export interface HistoryEntryFilter {
   query: string
   status: HistoryStatusFilter
   origin: HistoryOriginFilter
+  /** Show only starred (favorite) entries. */
+  starredOnly?: boolean
   /** paneIds whose conversation log content matched `query` (from an async
    *  search). Union'd with the metadata match so either one includes the
    *  entry in the results. */
   contentMatchedIds?: Set<string>
 }
 
-/** Combines the text search with a status filter (active = no removedAt)
- *  and an origin filter. 'all' disables the corresponding dimension. An
- *  entry passes the text search if its metadata matches `filter.query`, or
- *  (union) if its paneId is in `filter.contentMatchedIds`. */
+/** Combines the text search with a status filter (active = no removedAt),
+ *  an origin filter, and the starred-only toggle. 'all' (or a false
+ *  starredOnly) disables the corresponding dimension. An entry passes the
+ *  text search if its metadata matches `filter.query`, or (union) if its
+ *  paneId is in `filter.contentMatchedIds`. */
 export function filterHistoryEntries<T extends HistoryTitleEntry & {
   removedAt?: string
   origin?: 'manual' | 'pipeline'
   roleKey?: string
   roleLabel?: string
+  starred?: boolean
 }>(entries: T[], filter: HistoryEntryFilter): T[] {
   return entries.filter((entry) => {
     if (filter.status === 'active' && entry.removedAt) return false
     if (filter.status === 'removed' && !entry.removedAt) return false
     if (filter.origin !== 'all' && entry.origin !== filter.origin) return false
+    if (filter.starredOnly && !entry.starred) return false
     if (matchesHistorySearch(entry, filter.query)) return true
     return !!filter.contentMatchedIds?.has(entry.paneId)
   })
@@ -157,14 +165,15 @@ export function historyCleanupCutoffIso(now: Date, days = HISTORY_CLEANUP_DAYS):
 
 /** True when a cleanup of `mode` would delete this entry. Mirrors the
  *  backend predicate (SpawnHistoryStore.delete_entries): only removed
- *  entries are ever bulk-cleaned; 'older_than' additionally requires a
- *  parseable spawnedAt strictly before the cutoff. */
+ *  entries are ever bulk-cleaned, starred entries always survive bulk
+ *  cleanup; 'older_than' additionally requires a parseable spawnedAt
+ *  strictly before the cutoff. */
 export function historyCleanupMatches(
-  entry: { removedAt?: string; spawnedAt?: string },
+  entry: { removedAt?: string; spawnedAt?: string; starred?: boolean },
   mode: HistoryCleanupMode,
   cutoffIso?: string
 ): boolean {
-  if (!entry.removedAt) return false
+  if (!entry.removedAt || entry.starred) return false
   if (mode === 'removed') return true
   if (!cutoffIso || !entry.spawnedAt) return false
   const spawned = new Date(entry.spawnedAt).getTime()
@@ -173,7 +182,7 @@ export function historyCleanupMatches(
 }
 
 export function countHistoryCleanupEntries(
-  entries: { removedAt?: string; spawnedAt?: string }[],
+  entries: { removedAt?: string; spawnedAt?: string; starred?: boolean }[],
   mode: HistoryCleanupMode,
   cutoffIso?: string
 ): number {

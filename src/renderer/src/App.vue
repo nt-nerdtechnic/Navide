@@ -848,6 +848,25 @@ function onRenameHistoryEntry(entry: SpawnHistoryEntry, rawName: string): void {
   })
 }
 
+/** Stars/unstars a history entry: local update for instant UI, plus an
+ *  explicit backend patch of the full store + mirror (same dual-track model
+ *  as onRenameHistoryEntry — the debounced set_ui_state snapshot alone could
+ *  be lost on quit). Unstarring deletes the key backend-side. */
+function onToggleStarHistoryEntry(entry: SpawnHistoryEntry, starred: boolean): void {
+  const target = spawnHistory.value.find((e) => e.paneId === entry.paneId)
+  if (target) {
+    if (starred) target.starred = true
+    else delete target.starred
+  }
+  const ws = entry.workspacePath || currentWorkspace.value
+  if (!ws) return
+  backend.send('project.star_spawn_history', {
+    workspace_path: ws,
+    pane_id: entry.paneId,
+    starred,
+  })
+}
+
 /** Deletes one history record (never kills a pane — the modal only offers
  *  delete on removed entries). Backend removes it from the full store and
  *  the project.json mirror; locally we drop it and fix the paging counters. */
@@ -7891,6 +7910,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @rename="onRenameHistoryEntry"
       @delete="onDeleteHistoryEntry"
       @cleanup="onCleanupHistory"
+      @toggle-star="onToggleStarHistoryEntry"
     />
     <ReconnectSessionModal
       :show="reconnectPickerOpen"
