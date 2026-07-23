@@ -4,7 +4,15 @@ import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import { parsePlanMeta, writePlanMeta } from '../composables/usePlanFile'
 import { resolvePlanStore } from '../composables/planStore'
-import type { PlanMeta } from '../composables/planModel'
+import { PLAN_STAGES, type PlanMeta } from '../composables/planModel'
+import {
+  PLAN_SORT_MODES,
+  comparePlanRows,
+  loadStoredChoice,
+  planMatchesQuery,
+  saveStoredChoice,
+  type PlanSortMode,
+} from './plansPaneModel'
 import {
   htmlPlanProgress,
   injectPlanMeta,
@@ -40,6 +48,8 @@ interface PlanItem {
   relPath: string
   name: string
   meta: PlanMeta | null
+  /** File mtime (seconds) from fs.read_file; drives the last-updated sort. */
+  mtime?: number
 }
 
 const { t } = useI18n()
@@ -86,7 +96,7 @@ async function loadPlans(): Promise<void> {
 
       const mdItems = await Promise.all(
         entries.map(async (entry): Promise<PlanItem | null> => {
-          const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+          const read = await props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>('fs.read_file', {
             workspace_path: props.workspacePath,
             rel_path: entry.rel_path,
           })
@@ -95,6 +105,7 @@ async function loadPlans(): Promise<void> {
             relPath: entry.rel_path,
             name: entry.name,
             meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
+            mtime: read.payload.mtime,
           }
         })
       )
@@ -127,7 +138,7 @@ async function loadPlans(): Promise<void> {
 
       const htmlItems = await Promise.all(
         htmlEntries.map(async (entry): Promise<PlanItem | null> => {
-          const read = await props.backend.send<{ ok: boolean; content?: string; error?: string }>('fs.read_file', {
+          const read = await props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>('fs.read_file', {
             workspace_path: props.workspacePath,
             rel_path: entry.rel_path,
           })
@@ -136,6 +147,7 @@ async function loadPlans(): Promise<void> {
             relPath: entry.rel_path,
             name: entry.name,
             meta: resolvePlanStore(entry.rel_path).parseMeta(read.payload.content ?? ''),
+            mtime: read.payload.mtime,
           }
         })
       )
@@ -167,15 +179,74 @@ onUnmounted(() => {
 })
 watch(() => props.workspacePath, (next) => {
   collapsedSections.value = loadCollapsed(next)
+  searchQuery.value = ''
+  stageFilter.value = loadStoredChoice(filterStorageKey(next), STAGE_FILTERS, 'all')
+  sortMode.value = loadStoredChoice(sortStorageKey(next), PLAN_SORT_MODES, 'title')
   void loadPlans()
 })
 watch(() => props.backend.status?.value, (status) => {
   if (status === 'connected' && waitingForBackend.value) void loadPlans()
 })
 
+// ── Search / stage filter / sort ──────────────────────────────────────────
+// Search is transient (never persisted); stage filter and sort choice are
+// persisted per workspace with the same fail-safe localStorage contract as
+// the collapse state below.
+const FILTER_KEY_PREFIX = 'navide.plans.filter.'
+const SORT_KEY_PREFIX = 'navide.plans.sort.'
+const STAGE_FILTERS = ['all', ...PLAN_STAGES] as const
+type StageFilter = (typeof STAGE_FILTERS)[number]
+
+function filterStorageKey(workspacePath: string): string {
+  return `${FILTER_KEY_PREFIX}${workspacePath}`
+}
+function sortStorageKey(workspacePath: string): string {
+  return `${SORT_KEY_PREFIX}${workspacePath}`
+}
+
+const searchQuery = ref('')
+const stageFilter = ref<StageFilter>(loadStoredChoice(filterStorageKey(props.workspacePath), STAGE_FILTERS, 'all'))
+const sortMode = ref<PlanSortMode>(loadStoredChoice(sortStorageKey(props.workspacePath), PLAN_SORT_MODES, 'title'))
+
+watch(stageFilter, (next) => saveStoredChoice(filterStorageKey(props.workspacePath), next))
+watch(sortMode, (next) => saveStoredChoice(sortStorageKey(props.workspacePath), next))
+
+const searchActive = computed(() => searchQuery.value.trim().length > 0)
+
+// Plans match on title (meta.name, or filename for docs), filename and
+// overview text; docs have no overview.
+function itemMatchesSearch(p: PlanItem): boolean {
+  return planMatchesQuery(searchQuery.value, {
+    title: p.meta?.name ?? p.name,
+    filename: p.name,
+    overview: p.meta?.overview,
+  })
+}
+
+// Within-group order: title by default (the near-random `_6hex` filename order
+// reads as arbitrary), or the user-selected updated/progress mode.
+function sortRows(rows: PlanStageRow[]): PlanStageRow[] {
+  return rows.sort((a, b) =>
+    comparePlanRows(
+      sortMode.value,
+      { title: a.meta.name, mtime: a.item.mtime, done: a.done, total: a.total },
+      { title: b.meta.name, mtime: b.item.mtime, done: b.done, total: b.total },
+    ),
+  )
+}
+
 // Files without valid plan meta (markdown or HTML) are plain docs — listed
 // under Active with a 'doc' badge, no progress, never stage-grouped.
 const docItems = computed(() => plans.value.filter((p) => !p.meta))
+
+// Docs carry no stage, so a specific stage filter hides the whole doc group;
+// while searching, the group only shows when it has matches.
+const visibleDocItems = computed(() =>
+  stageFilter.value === 'all' ? docItems.value.filter(itemMatchesSearch) : [],
+)
+const showDocsSection = computed(
+  () => stageFilter.value === 'all' && (!searchActive.value || visibleDocItems.value.length > 0),
+)
 
 interface PlanStageRow {
   item: PlanItem
@@ -188,29 +259,36 @@ interface PlanStageRow {
 // (skipped counts toward neither done nor total-done), consistent across
 // markdown and HTML.
 function stageRows(stages: PlanStage[]): PlanStageRow[] {
-  return plans.value
-    .flatMap((p) => {
+  return sortRows(
+    plans.value.flatMap((p) => {
       // Archived plans leave their stage group and live in the Archived group so
       // they never appear in both places at once.
       if (!p.meta || p.meta.archivedAt || !stages.includes(p.meta.stage)) return []
+      if (!itemMatchesSearch(p)) return []
       const progress = htmlPlanProgress(p.meta.todos)
       return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
-    })
-    // Sort by plan title (meta.name) — the near-random `_6hex` filename order
-    // reads as arbitrary; the title is the intuitive within-group order.
-    .sort((a, b) => a.meta.name.localeCompare(b.meta.name))
+    }),
+  )
 }
 
-// Archived plans (any stage) collected into their own collapsed group.
-const archivedRows = computed<PlanStageRow[]>(() =>
-  plans.value
-    .flatMap((p) => {
+// Archived plans (any stage) collected into their own collapsed group. The
+// group is a cross-stage bucket, so a specific stage filter hides it entirely.
+const archivedRows = computed<PlanStageRow[]>(() => {
+  if (stageFilter.value !== 'all') return []
+  return sortRows(
+    plans.value.flatMap((p) => {
       if (!p.meta || !p.meta.archivedAt) return []
+      if (!itemMatchesSearch(p)) return []
       const progress = htmlPlanProgress(p.meta.todos)
       return [{ item: p, meta: p.meta, done: progress.done, total: progress.total }]
-    })
-    .sort((a, b) => a.meta.name.localeCompare(b.meta.name))
-)
+    }),
+  )
+})
+
+// Width of the row progress-bar fill; callers guard total > 0.
+function progressPercent(done: number, total: number): string {
+  return `${Math.round((done / total) * 100)}%`
+}
 
 // "Archive all done": done plans not yet archived. Drives the button state and
 // the batch target.
@@ -229,8 +307,19 @@ const stageGroups = computed(() =>
       { key: 'abandoned', label: t('pane.plans.stage-abandoned'), stages: ['abandoned'], finished: true },
     ] as { key: string; label: string; stages: PlanStage[]; finished: boolean }[]
   )
+    .filter((group) => stageFilter.value === 'all' || group.key === stageFilter.value)
     .map((group) => ({ ...group, rows: stageRows(group.stages) }))
     .filter((group) => group.rows.length > 0)
+)
+
+// "Nothing to show" while a search or stage filter is active — distinct from
+// the workspace having no plans at all.
+const noVisibleResults = computed(
+  () =>
+    (searchActive.value || stageFilter.value !== 'all') &&
+    !visibleDocItems.value.length &&
+    !stageGroups.value.length &&
+    !archivedRows.value.length,
 )
 
 // Batch-deletable = finished stages (done/abandoned), markdown and HTML alike.
@@ -666,7 +755,53 @@ async function ctxUpgradeToPlan(): Promise<void> {
     <template v-else>
       <div v-if="!plans.length" class="plans-empty">{{ t('pane.plans.empty-all') }}</div>
       <template v-else>
-      <section class="plans-section">
+      <div class="plans-toolbar">
+        <div class="plans-search">
+          <input
+            v-model="searchQuery"
+            class="plans-search-input"
+            type="text"
+            :placeholder="t('pane.plans.search-placeholder')"
+            :aria-label="t('pane.plans.search-placeholder')"
+          />
+          <button
+            v-if="searchQuery"
+            class="plans-search-clear"
+            type="button"
+            :title="t('pane.plans.search-clear')"
+            :aria-label="t('pane.plans.search-clear')"
+            @click="searchQuery = ''"
+          >✕</button>
+        </div>
+        <div class="plans-toolbar-row">
+          <select
+            v-model="stageFilter"
+            class="plans-select plans-stage-select"
+            :title="t('pane.plans.filter-stage')"
+            :aria-label="t('pane.plans.filter-stage')"
+          >
+            <option value="all">{{ t('pane.plans.filter-all-stages') }}</option>
+            <option value="draft">{{ t('pane.plans.stage-draft') }}</option>
+            <option value="in-review">{{ t('pane.plans.stage-in-review') }}</option>
+            <option value="approved">{{ t('pane.plans.stage-approved') }}</option>
+            <option value="in-progress">{{ t('pane.plans.stage-in-progress') }}</option>
+            <option value="done">{{ t('pane.plans.stage-done') }}</option>
+            <option value="abandoned">{{ t('pane.plans.stage-abandoned') }}</option>
+          </select>
+          <select
+            v-model="sortMode"
+            class="plans-select plans-sort-select"
+            :title="t('pane.plans.sort-by')"
+            :aria-label="t('pane.plans.sort-by')"
+          >
+            <option value="title">{{ t('pane.plans.sort-title') }}</option>
+            <option value="updated">{{ t('pane.plans.sort-updated') }}</option>
+            <option value="progress">{{ t('pane.plans.sort-progress') }}</option>
+          </select>
+        </div>
+      </div>
+      <div v-if="noVisibleResults" class="plans-empty">{{ t('pane.plans.search-no-results') }}</div>
+      <section v-if="showDocsSection" class="plans-section">
         <div
           class="plans-section-head"
           role="button"
@@ -679,11 +814,11 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span class="plans-section-chevron" :class="{ collapsed: isSectionCollapsed('active') }">▾</span>
             {{ t('pane.plans.section-active') }}
           </span>
-          <span>{{ docItems.length }}</span>
+          <span>{{ visibleDocItems.length }}</span>
         </div>
         <template v-if="!isSectionCollapsed('active')">
           <div
-            v-for="item in docItems"
+            v-for="item in visibleDocItems"
             :key="item.relPath"
             class="plan-row"
             role="button"
@@ -709,7 +844,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
               @keydown.space.stop
             >✕</button>
           </div>
-          <div v-if="!docItems.length" class="plans-empty">{{ t('pane.plans.empty-active') }}</div>
+          <div v-if="!visibleDocItems.length" class="plans-empty">{{ t('pane.plans.empty-active') }}</div>
         </template>
       </section>
 
@@ -745,8 +880,22 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
             <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
             <span class="plan-row-meta">
-              <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
-              <span class="plan-chip" :class="{ 'plan-chip--done': group.finished }">{{ row.meta.stage }}</span>
+              <span class="plan-row-progress">
+                <span
+                  v-if="row.total > 0"
+                  class="plan-progress-bar"
+                  :class="`plan-progress-bar--${row.meta.stage}`"
+                  role="progressbar"
+                  aria-valuemin="0"
+                  :aria-valuenow="row.done"
+                  :aria-valuemax="row.total"
+                  :aria-label="t('pane.plans.progress-done', { done: row.done, total: row.total })"
+                >
+                  <span class="plan-progress-fill" :style="{ width: progressPercent(row.done, row.total) }" />
+                </span>
+                <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+              </span>
+              <span class="plan-chip" :class="`plan-chip--stage-${row.meta.stage}`">{{ row.meta.stage }}</span>
             </span>
             <button
               class="plan-row-delete"
@@ -792,9 +941,23 @@ async function ctxUpgradeToPlan(): Promise<void> {
             <span v-if="row.meta.overview" class="plan-row-overview">{{ row.meta.overview }}</span>
             <span class="plan-row-path" :title="row.item.relPath">{{ row.item.relPath }}</span>
             <span class="plan-row-meta">
-              <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+              <span class="plan-row-progress">
+                <span
+                  v-if="row.total > 0"
+                  class="plan-progress-bar"
+                  :class="`plan-progress-bar--${row.meta.stage}`"
+                  role="progressbar"
+                  aria-valuemin="0"
+                  :aria-valuenow="row.done"
+                  :aria-valuemax="row.total"
+                  :aria-label="t('pane.plans.progress-done', { done: row.done, total: row.total })"
+                >
+                  <span class="plan-progress-fill" :style="{ width: progressPercent(row.done, row.total) }" />
+                </span>
+                <span>{{ t('pane.plans.progress-done', { done: row.done, total: row.total }) }}</span>
+              </span>
               <span class="plan-row-chips">
-                <span class="plan-chip">{{ row.meta.stage }}</span>
+                <span class="plan-chip" :class="`plan-chip--stage-${row.meta.stage}`">{{ row.meta.stage }}</span>
                 <span class="plan-chip plan-chip--archived">{{ t('pane.plans.archived') }}</span>
               </span>
             </span>
@@ -811,7 +974,7 @@ async function ctxUpgradeToPlan(): Promise<void> {
         </template>
       </section>
 
-      <section v-if="archivableDone.length || deletablePlans.length" class="plans-section">
+      <section v-if="!noVisibleResults && (archivableDone.length || deletablePlans.length)" class="plans-section">
         <div class="plans-section-head">
           <span>{{ t('pane.plans.section-completed') }}</span>
           <span class="plans-head-actions">
@@ -903,6 +1066,72 @@ async function ctxUpgradeToPlan(): Promise<void> {
   text-transform: uppercase;
 }
 
+.plans-toolbar {
+  border-bottom: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 6px;
+  padding: 8px 12px;
+}
+
+.plans-search {
+  position: relative;
+}
+
+.plans-search-input {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 4px 24px 4px 8px;
+  width: 100%;
+}
+
+.plans-search-input:focus {
+  border-color: var(--accent-focus);
+  outline: none;
+}
+
+.plans-search-clear {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: 11px;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+}
+
+.plans-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.plans-toolbar-row {
+  display: flex;
+  gap: 6px;
+}
+
+.plans-select {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  flex: 1;
+  font-size: 11px;
+  min-width: 0;
+  padding: 3px 4px;
+}
+
 .plans-icon-btn,
 .plans-link-btn {
   background: transparent;
@@ -982,8 +1211,8 @@ async function ctxUpgradeToPlan(): Promise<void> {
   color: inherit;
   cursor: pointer;
   display: grid;
-  gap: 5px;
-  padding: 8px;
+  gap: 4px;
+  padding: 6px 8px;
   position: relative;
   text-align: left;
   width: 100%;
@@ -1019,15 +1248,17 @@ async function ctxUpgradeToPlan(): Promise<void> {
   width: 20px;
 }
 
-/* The delete button is opacity-hidden until row hover; keep it reachable and
-   visible while keyboard-focused. */
+/* The delete button is opacity-hidden (never display:none — that would drop it
+   from the tab order) until the row is hovered or holds focus; keep it
+   reachable and visible while keyboard-focused. */
 .plan-row-delete:focus-visible {
   opacity: 1;
   outline: 2px solid var(--accent-focus);
   outline-offset: -1px;
 }
 
-.plan-row:hover .plan-row-delete {
+.plan-row:hover .plan-row-delete,
+.plan-row:focus-within .plan-row-delete {
   opacity: 1;
 }
 
@@ -1037,6 +1268,8 @@ async function ctxUpgradeToPlan(): Promise<void> {
 }
 
 .plan-row-name {
+  color: var(--text-primary);
+  font-size: 12.5px;
   font-weight: 650;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1056,8 +1289,8 @@ async function ctxUpgradeToPlan(): Promise<void> {
 .plan-row-path {
   color: var(--text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
-  opacity: 0.85;
+  font-size: 10px;
+  opacity: 0.65;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1082,9 +1315,37 @@ async function ctxUpgradeToPlan(): Promise<void> {
   text-transform: uppercase;
 }
 
-.plan-chip--done {
+/* Stage chip colors mirror PlanReviewToolbar's .prt-stage--{stage} pill
+   palette (same theme variables) — keep the two in sync. An unknown stage
+   modifier matches no rule and falls back to the base .plan-chip look. */
+.plan-chip--stage-draft {
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+
+.plan-chip--stage-in-review {
+  background: var(--attention-subtle);
+  color: var(--attention-bright);
+}
+
+.plan-chip--stage-approved {
+  background: var(--accent-subtle);
+  color: var(--accent-fg);
+}
+
+.plan-chip--stage-in-progress {
+  background: var(--attention-subtle);
+  color: var(--warning-fg);
+}
+
+.plan-chip--stage-done {
   background: var(--success-subtle);
   color: var(--success-fg);
+}
+
+.plan-chip--stage-abandoned {
+  background: var(--danger-subtle);
+  color: var(--danger-fg);
 }
 
 .plan-chip--archived {
@@ -1096,6 +1357,55 @@ async function ctxUpgradeToPlan(): Promise<void> {
   align-items: center;
   display: flex;
   gap: 6px;
+}
+
+.plan-row-progress {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plan-progress-bar {
+  background: var(--bg-muted);
+  border-radius: 999px;
+  flex-shrink: 0;
+  height: 4px;
+  overflow: hidden;
+  width: 64px;
+}
+
+.plan-progress-fill {
+  background: var(--text-secondary);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+}
+
+/* Fill colors mirror PlanReviewToolbar's .prt-stage--{stage} pill palette
+   (same theme variables) — keep the two in sync. */
+.plan-progress-bar--draft > .plan-progress-fill {
+  background: var(--text-secondary);
+}
+
+.plan-progress-bar--in-review > .plan-progress-fill {
+  background: var(--attention-bright);
+}
+
+.plan-progress-bar--approved > .plan-progress-fill {
+  background: var(--accent-fg);
+}
+
+.plan-progress-bar--in-progress > .plan-progress-fill {
+  background: var(--warning-fg);
+}
+
+.plan-progress-bar--done > .plan-progress-fill {
+  background: var(--success-fg);
+}
+
+.plan-progress-bar--abandoned > .plan-progress-fill {
+  background: var(--danger-fg);
 }
 
 .plans-head-actions {

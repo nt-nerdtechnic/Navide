@@ -104,6 +104,16 @@ const HTML_DRAFT_PLAN = htmlPlan({
   reviewNotes: [],
 })
 
+const HTML_EMPTY_PLAN = htmlPlan({
+  schemaVersion: 1,
+  name: 'HTML Empty Plan',
+  overview: 'No todos yet.',
+  stage: 'draft',
+  approvedAt: null,
+  todos: [],
+  reviewNotes: [],
+})
+
 const HTML_DOC = '<!doctype html><html><body>no meta here</body></html>'
 
 const notify = {
@@ -126,6 +136,8 @@ function makeBackend(opts?: {
   htmlFiles?: Record<string, string>
   htmlListError?: string
   readFailures?: string[]
+  /** Per-rel-path mtimes echoed by fs.read_file (for the last-updated sort). */
+  mtimes?: Record<string, number>
 }) {
   // Tracks concurrent .agent-team reads so tests can assert parallel fan-out.
   const htmlReads = { inflight: 0, max: 0 }
@@ -186,13 +198,16 @@ function makeBackend(opts?: {
           await Promise.resolve()
           mdReads.inflight--
         }
+        const mtime = opts?.mtimes?.[rel]
+        const mtimeField = mtime !== undefined ? { mtime } : {}
         if (opts?.htmlFiles && rel in opts.htmlFiles) {
-          return { payload: { ok: true, content: opts.htmlFiles[rel] } }
+          return { payload: { ok: true, content: opts.htmlFiles[rel], ...mtimeField } }
         }
         return {
           payload: {
             ok: true,
             content: rel === '.cursor/plans/done.plan.md' ? DONE_PLAN : ACTIVE_PLAN,
+            ...mtimeField,
           },
         }
       }
@@ -278,6 +293,87 @@ describe('PlansPane', () => {
     expect(doneSection).toBeDefined()
     expect(doneSection).toContain('Done')
     expect(doneSection).toContain('1/1 done')
+  })
+
+  it('renders a stage-colored progressbar on rows with todos and none for zero-todo plans', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+          { name: 'empty_9z8y7x.html', rel_path: '.agent-team/plans/empty_9z8y7x.html', is_dir: false },
+        ],
+        htmlFiles: {
+          '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+          '.agent-team/plans/empty_9z8y7x.html': HTML_EMPTY_PLAN,
+        },
+      })
+    )
+    await flushPromises()
+
+    const rows = wrapper.findAll('.plan-row')
+    const reviewRow = rows.find((r) => r.text().includes('HTML Review Plan'))!
+    const bar = reviewRow.find('[role="progressbar"]')
+    expect(bar.exists()).toBe(true)
+    expect(bar.attributes('aria-valuenow')).toBe('1')
+    expect(bar.attributes('aria-valuemin')).toBe('0')
+    expect(bar.attributes('aria-valuemax')).toBe('2')
+    expect(bar.classes()).toContain('plan-progress-bar--in-review')
+    // The done/total text label stays alongside the bar.
+    expect(reviewRow.text()).toContain('1/2 done')
+
+    // Zero-todo plan keeps its text but renders no fake 0% bar.
+    const emptyRow = rows.find((r) => r.text().includes('HTML Empty Plan'))!
+    expect(emptyRow.find('[role="progressbar"]').exists()).toBe(false)
+  })
+
+  it('colors the row stage chip with a per-stage class', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'review_a1b2c3.html', rel_path: '.agent-team/plans/review_a1b2c3.html', is_dir: false },
+          { name: 'shipped_d4e5f6.html', rel_path: '.agent-team/plans/shipped_d4e5f6.html', is_dir: false },
+        ],
+        htmlFiles: {
+          '.agent-team/plans/review_a1b2c3.html': HTML_REVIEW_PLAN,
+          '.agent-team/plans/shipped_d4e5f6.html': HTML_DONE_PLAN,
+        },
+      })
+    )
+    await flushPromises()
+
+    const rows = wrapper.findAll('.plan-row')
+    const reviewRow = rows.find((r) => r.text().includes('HTML Review Plan'))!
+    expect(reviewRow.find('.plan-chip--stage-in-review').exists()).toBe(true)
+    const doneRow = rows.find((r) => r.text().includes('HTML Done Plan'))!
+    expect(doneRow.find('.plan-chip--stage-done').exists()).toBe(true)
+  })
+
+  it('falls back to the draft chip for an unknown legacy stage value', async () => {
+    const wrapper = mountPane(
+      makeBackend({
+        htmlEntries: [
+          { name: 'legacy_0a0a0a.html', rel_path: '.agent-team/plans/legacy_0a0a0a.html', is_dir: false },
+        ],
+        htmlFiles: {
+          '.agent-team/plans/legacy_0a0a0a.html': htmlPlan({
+            schemaVersion: 1,
+            name: 'Legacy Stage Plan',
+            overview: 'Written by an older tool.',
+            stage: 'someday',
+            approvedAt: null,
+            todos: [{ id: 'phase-a', content: 'First', status: 'pending' }],
+            reviewNotes: [],
+          }),
+        },
+      })
+    )
+    await flushPromises()
+
+    // The parser downgrades unknown stages to draft, so the chip renders the
+    // known draft class — never an unstyled bogus stage class.
+    const row = wrapper.findAll('.plan-row').find((r) => r.text().includes('Legacy Stage Plan'))!
+    const chip = row.find('.plan-chip')
+    expect(chip.classes()).toContain('plan-chip--stage-draft')
   })
 
   it('excludes underscore-prefixed infrastructure files', async () => {
@@ -1375,6 +1471,25 @@ describe('PlansPane – row accessibility', () => {
       rel_path: '.cursor/plans/active.plan.md',
     })
   })
+
+  it('keeps the hover-revealed delete button focusable (hidden via opacity, not display)', async () => {
+    // The ✕ is opacity-hidden until row hover/focus-within; it must stay in
+    // the tab order, so it can never be display:none / visibility:hidden.
+    const wrapper = mount(PlansPane, {
+      props: { workspacePath: '/ws', backend: makeBackend() as never },
+      global: { plugins: [i18n] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const del = wrapper.find('.plan-row-delete')
+    expect(del.exists()).toBe(true)
+    expect(del.attributes('tabindex')).toBeUndefined()
+    expect(del.attributes('disabled')).toBeUndefined()
+    ;(del.element as HTMLButtonElement).focus()
+    expect(document.activeElement).toBe(del.element)
+    wrapper.unmount()
+  })
 })
 
 // ── Context menu dismissal ───────────────────────────────────────────────────
@@ -1424,5 +1539,143 @@ describe('PlansPane – within-group sort by name', () => {
 
     const names = wrapper.findAll('.plan-row-name').map((n) => n.text())
     expect(names.indexOf('Apple Plan')).toBeLessThan(names.indexOf('Zebra Plan'))
+  })
+})
+
+// ── Search / stage filter / sort toolbar ─────────────────────────────────────
+
+describe('PlansPane – search, stage filter, sort', () => {
+  const namedPlan = (
+    name: string,
+    opts?: { stage?: string; overview?: string; todos?: { id: string; content: string; status: string }[] },
+  ) =>
+    htmlPlan({
+      schemaVersion: 1,
+      name,
+      overview: opts?.overview ?? '',
+      stage: opts?.stage ?? 'draft',
+      approvedAt: null,
+      todos: opts?.todos ?? [],
+      reviewNotes: [],
+    })
+
+  function searchBackend() {
+    return makeBackend({
+      htmlEntries: [
+        { name: 'alpha_111111.html', rel_path: '.agent-team/plans/alpha_111111.html', is_dir: false },
+        { name: 'beta_222222.html', rel_path: '.agent-team/plans/beta_222222.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/alpha_111111.html': namedPlan('Alpha Plan', {
+          stage: 'draft',
+          overview: 'terminal search work',
+        }),
+        '.agent-team/plans/beta_222222.html': namedPlan('Beta Plan', { stage: 'done', overview: 'shipping' }),
+      },
+    })
+  }
+
+  it('search filters rows across groups and clearing restores them', async () => {
+    const wrapper = mountPane(searchBackend())
+    await flushPromises()
+
+    await wrapper.find('.plans-search-input').setValue('alpha')
+    expect(wrapper.text()).toContain('Alpha Plan')
+    expect(wrapper.text()).not.toContain('Beta Plan')
+    expect(wrapper.text()).not.toContain('Active Plan')
+
+    await wrapper.find('.plans-search-clear').trigger('click')
+    expect(wrapper.text()).toContain('Alpha Plan')
+    expect(wrapper.text()).toContain('Beta Plan')
+    expect(wrapper.text()).toContain('Active Plan')
+  })
+
+  it('search matches overview text', async () => {
+    const wrapper = mountPane(searchBackend())
+    await flushPromises()
+
+    await wrapper.find('.plans-search-input').setValue('terminal search work')
+    expect(wrapper.text()).toContain('Alpha Plan')
+    expect(wrapper.text()).not.toContain('Beta Plan')
+  })
+
+  it('shows a no-results state when nothing matches the search', async () => {
+    const wrapper = mountPane(searchBackend())
+    await flushPromises()
+
+    await wrapper.find('.plans-search-input').setValue('zzz-no-such-plan')
+    expect(wrapper.text()).toContain('No plans match the current search or filter.')
+    expect(wrapper.findAll('.plan-row')).toHaveLength(0)
+  })
+
+  it('stage filter shows only the selected stage group and persists', async () => {
+    const wrapper = mountPane(searchBackend())
+    await flushPromises()
+
+    await wrapper.find('.plans-stage-select').setValue('done')
+    expect(wrapper.text()).toContain('Beta Plan')
+    expect(wrapper.text()).not.toContain('Alpha Plan')
+    expect(localStorage.getItem('navide.plans.filter./ws')).toBe('done')
+  })
+
+  it('restores the persisted stage filter on mount', async () => {
+    localStorage.setItem('navide.plans.filter./ws', 'draft')
+    const wrapper = mountPane(searchBackend())
+    await flushPromises()
+
+    expect((wrapper.find('.plans-stage-select').element as HTMLSelectElement).value).toBe('draft')
+    expect(wrapper.text()).toContain('Alpha Plan')
+    expect(wrapper.text()).not.toContain('Beta Plan')
+  })
+
+  it('sorts within a group by mtime when Last updated is selected', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'aaa_111111.html', rel_path: '.agent-team/plans/aaa_111111.html', is_dir: false },
+        { name: 'zzz_222222.html', rel_path: '.agent-team/plans/zzz_222222.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/aaa_111111.html': namedPlan('Apple Plan'),
+        '.agent-team/plans/zzz_222222.html': namedPlan('Zebra Plan'),
+      },
+      mtimes: {
+        '.agent-team/plans/aaa_111111.html': 100,
+        '.agent-team/plans/zzz_222222.html': 200,
+      },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    // Default title order lists Apple before Zebra.
+    let names = wrapper.findAll('.plan-row-name').map((n) => n.text())
+    expect(names.indexOf('Apple Plan')).toBeLessThan(names.indexOf('Zebra Plan'))
+
+    await wrapper.find('.plans-sort-select').setValue('updated')
+    names = wrapper.findAll('.plan-row-name').map((n) => n.text())
+    expect(names.indexOf('Zebra Plan')).toBeLessThan(names.indexOf('Apple Plan'))
+    expect(localStorage.getItem('navide.plans.sort./ws')).toBe('updated')
+  })
+
+  it('sorts within a group by done/total ratio when Progress is selected', async () => {
+    const backend = makeBackend({
+      htmlEntries: [
+        { name: 'low_111111.html', rel_path: '.agent-team/plans/low_111111.html', is_dir: false },
+        { name: 'high_222222.html', rel_path: '.agent-team/plans/high_222222.html', is_dir: false },
+      ],
+      htmlFiles: {
+        '.agent-team/plans/low_111111.html': namedPlan('Alpha Low', {
+          todos: [{ id: 'a', content: 'x', status: 'pending' }],
+        }),
+        '.agent-team/plans/high_222222.html': namedPlan('Zeta High', {
+          todos: [{ id: 'a', content: 'x', status: 'done' }],
+        }),
+      },
+    })
+    const wrapper = mountPane(backend)
+    await flushPromises()
+
+    await wrapper.find('.plans-sort-select').setValue('progress')
+    const names = wrapper.findAll('.plan-row-name').map((n) => n.text())
+    expect(names.indexOf('Zeta High')).toBeLessThan(names.indexOf('Alpha Low'))
   })
 })

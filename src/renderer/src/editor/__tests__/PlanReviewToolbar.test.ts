@@ -178,6 +178,19 @@ describe('PlanReviewToolbar – display', () => {
     expect(wrapper.find('.prt-progress').text()).toBe('1/2 done')
   })
 
+  it('renders a stage-colored progressbar, and none when the plan has no todos', async () => {
+    const { wrapper } = await mountToolbar(planDoc(baseMeta()))
+    const bar = wrapper.find('[role="progressbar"]')
+    expect(bar.exists()).toBe(true)
+    expect(bar.attributes('aria-valuenow')).toBe('1')
+    expect(bar.attributes('aria-valuemin')).toBe('0')
+    expect(bar.attributes('aria-valuemax')).toBe('2')
+    expect(bar.classes()).toContain('prt-progress-bar--in-review')
+
+    const { wrapper: emptyWrapper } = await mountToolbar(planDoc(baseMeta({ todos: [] })))
+    expect(emptyWrapper.find('[role="progressbar"]').exists()).toBe(false)
+  })
+
   it('renders nothing for a file without a valid plan-meta block', async () => {
     const { wrapper } = await mountToolbar('<html><body><p>plain page</p></body></html>')
     expect(wrapper.find('.prt').exists()).toBe(false)

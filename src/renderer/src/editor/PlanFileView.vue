@@ -17,10 +17,6 @@ const props = defineProps<{
   readonly?: boolean
 }>()
 
-const emit = defineEmits<{
-  (e: 'dirty', value: boolean): void
-}>()
-
 const { toast } = useNotify()
 const { t } = useI18n()
 
@@ -47,10 +43,10 @@ async function loadContent(): Promise<void> {
     if (resp.payload?.ok && resp.payload.content !== undefined) {
       rawContent.value = resp.payload.content
     } else {
-      loadError.value = resp.payload?.error ?? 'Failed to load file'
+      loadError.value = resp.payload?.error ?? t('pane.plans.file-load-failed')
     }
   } catch (err) {
-    loadError.value = err instanceof Error ? err.message : 'Failed to load file'
+    loadError.value = err instanceof Error ? err.message : t('pane.plans.file-load-failed')
   } finally {
     loading.value = false
   }
@@ -102,9 +98,9 @@ const groups = computed((): PhaseGroup[] => {
   const unclaimed = plan.todos.filter((t) => !claimed.has(t.id))
   if (unclaimed.length > 0) {
     if (sections.length === 0) {
-      result.push({ heading: 'Tasks', todos: unclaimed })
+      result.push({ heading: t('pane.plans.group-tasks'), todos: unclaimed })
     } else {
-      result.push({ heading: 'Other Tasks', todos: unclaimed })
+      result.push({ heading: t('pane.plans.group-other-tasks'), todos: unclaimed })
     }
   }
 
@@ -169,7 +165,7 @@ const MermaidBlock = defineComponent({
     )
     return () => {
       if (error.value) return h('pre', { class: 'pfv-line pfv-line--code' }, props.code)
-      if (!svg.value) return h('div', { class: 'pfv-mermaid pfv-mermaid--loading' }, 'Rendering diagram…')
+      if (!svg.value) return h('div', { class: 'pfv-mermaid pfv-mermaid--loading' }, t('label.rendering-diagram'))
       return h('div', { class: 'pfv-mermaid', innerHTML: svg.value })
     }
   },
@@ -208,14 +204,14 @@ async function saveTodos(updatedTodos: PlanTodo[]): Promise<boolean> {
       content: newRaw,
     })
     if (!resp.payload?.ok) {
-      toast(resp.payload?.error ?? 'Save failed')
+      toast(resp.payload?.error ?? t('pane.plans.save-failed'))
       return false
     }
     rawContent.value = newRaw
-    toast('Saved', { type: 'success' })
+    toast(t('pane.plans.saved'), { type: 'success' })
     return true
   } catch (err) {
-    toast(err instanceof Error ? err.message : 'Save failed')
+    toast(err instanceof Error ? err.message : t('pane.plans.save-failed'))
     return false
   }
 }
@@ -318,7 +314,7 @@ async function writeSectionBody(heading: string, edited: string): Promise<boolea
       { workspace_path: props.workspacePath, rel_path: props.relPath },
     )
     if (!resp.payload?.ok || resp.payload.content === undefined) {
-      toast(resp.payload?.error ?? 'Save failed')
+      toast(resp.payload?.error ?? t('pane.plans.save-failed'))
       return null
     }
     return { content: resp.payload.content, mtime: resp.payload.mtime }
@@ -346,13 +342,13 @@ async function writeSectionBody(heading: string, edited: string): Promise<boolea
       })
     }
     if (!resp.payload?.ok) {
-      toast(resp.payload?.error ?? 'Save failed')
+      toast(resp.payload?.error ?? t('pane.plans.save-failed'))
       return false
     }
-    toast('Saved', { type: 'success' })
+    toast(t('pane.plans.saved'), { type: 'success' })
     return true
   } catch (err) {
-    toast(err instanceof Error ? err.message : 'Save failed')
+    toast(err instanceof Error ? err.message : t('pane.plans.save-failed'))
     return false
   }
 }
@@ -377,7 +373,10 @@ function checkboxGlyph(status: TodoStatus): string {
 
 // Badge config per status.
 function badgeLabel(status: TodoStatus): string {
-  return status === 'in-progress' ? 'in progress' : status
+  if (status === 'in-progress') return t('pane.plans.status-in-progress')
+  if (status === 'done') return t('pane.plans.status-done')
+  if (status === 'skipped') return t('pane.plans.status-skipped')
+  return t('pane.plans.status-pending')
 }
 function badgeClass(status: TodoStatus): string {
   if (status === 'done') return 'pfv-badge pfv-badge--done'
@@ -390,7 +389,7 @@ function badgeClass(status: TodoStatus): string {
 <template>
   <div class="pfv">
     <div v-if="loading" class="pfv-loading">
-      {{ waitingForBackend ? 'Waiting for backend…' : 'Loading…' }}
+      {{ waitingForBackend ? t('pane.plans.waiting-backend') : t('pane.plans.file-loading') }}
     </div>
 
     <div v-else-if="loadError" class="pfv-error">{{ loadError }}</div>
@@ -401,14 +400,14 @@ function badgeClass(status: TodoStatus): string {
         <div class="pfv-title-row">
           <div class="pfv-title">{{ parsed.name }}</div>
           <div v-if="overallProgress.total" class="pfv-total-progress">
-            {{ overallProgress.done }}/{{ overallProgress.total }} done
+            {{ t('pane.plans.progress-done', { done: overallProgress.done, total: overallProgress.total }) }}
           </div>
         </div>
         <div v-if="parsed.overview" class="pfv-overview">{{ parsed.overview }}</div>
       </div>
 
       <div v-if="fileList.length" class="pfv-card pfv-files">
-        <div class="pfv-card-title">Modified Files</div>
+        <div class="pfv-card-title">{{ t('pane.plans.modified-files') }}</div>
         <ul class="pfv-file-list">
           <li v-for="file in fileList" :key="file">
             <code>{{ file }}</code>
@@ -461,18 +460,18 @@ function badgeClass(status: TodoStatus): string {
 
       <!-- To-dos header: count + Cursor-style "+ New" -->
       <div class="pfv-todos-head">
-        <span class="pfv-todos-count">{{ parsed.todos.length }} To-dos</span>
-        <button v-if="!readonly" class="pfv-new-btn" @click="addingTodo = !addingTodo">+ New</button>
+        <span class="pfv-todos-count">{{ t('pane.plans.todos-count', { count: parsed.todos.length }) }}</span>
+        <button v-if="!readonly" class="pfv-new-btn" @click="addingTodo = !addingTodo">{{ t('pane.plans.todo-new') }}</button>
       </div>
       <div v-if="addingTodo" class="pfv-new-row">
         <input
           v-model="newTodoText"
           class="pfv-new-input"
-          placeholder="Describe the to-do…"
+          :placeholder="t('pane.plans.todo-describe-placeholder')"
           @keydown.enter="onAddTodoEnter"
           @keydown.esc="addingTodo = false"
         />
-        <button class="pfv-new-btn" @click="addTodo">Add</button>
+        <button class="pfv-new-btn" @click="addTodo">{{ t('pane.plans.todo-add') }}</button>
       </div>
 
       <!-- Phase groups -->
@@ -485,7 +484,7 @@ function badgeClass(status: TodoStatus): string {
           <span class="pfv-group-dot">●</span>
           <span class="pfv-group-title">{{ group.heading }}</span>
           <span v-if="group.todos.length > 0" class="pfv-group-progress">
-            {{ doneCount(group) }}/{{ group.todos.length }} done
+            {{ t('pane.plans.progress-done', { done: doneCount(group), total: group.todos.length }) }}
           </span>
         </div>
 
@@ -517,7 +516,7 @@ function badgeClass(status: TodoStatus): string {
             <span class="pfv-todo-content">{{ todo.content }}</span>
             <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
             <button class="pfv-todo-edit" :title="t('pane.plans.edit')" @click.stop="startEditTodo(todo)">✎</button>
-            <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+            <button class="pfv-todo-remove" :title="t('pane.plans.todo-remove')" @click.stop="removeTodo(todo.id)">✕</button>
           </template>
         </div>
       </div>
@@ -526,9 +525,9 @@ function badgeClass(status: TodoStatus): string {
       <div v-if="groups.length === 0 && parsed.todos.length > 0" class="pfv-group">
         <div class="pfv-group-header">
           <span class="pfv-group-dot">●</span>
-          <span class="pfv-group-title">Tasks</span>
+          <span class="pfv-group-title">{{ t('pane.plans.group-tasks') }}</span>
           <span class="pfv-group-progress">
-            {{ parsed.todos.filter(t => t.status === 'done').length }}/{{ parsed.todos.length }} done
+            {{ t('pane.plans.progress-done', { done: parsed.todos.filter(td => td.status === 'done').length, total: parsed.todos.length }) }}
           </span>
         </div>
         <div
@@ -559,13 +558,13 @@ function badgeClass(status: TodoStatus): string {
             <span class="pfv-todo-content">{{ todo.content }}</span>
             <span :class="badgeClass(todo.status)">{{ badgeLabel(todo.status) }}</span>
             <button class="pfv-todo-edit" :title="t('pane.plans.edit')" @click.stop="startEditTodo(todo)">✎</button>
-            <button class="pfv-todo-remove" title="Remove to-do" @click.stop="removeTodo(todo.id)">✕</button>
+            <button class="pfv-todo-remove" :title="t('pane.plans.todo-remove')" @click.stop="removeTodo(todo.id)">✕</button>
           </template>
         </div>
       </div>
 
       <div v-if="groups.length === 0 && parsed.todos.length === 0" class="pfv-empty">
-        No tasks defined in this plan.
+        {{ t('pane.plans.no-tasks') }}
       </div>
     </div>
 
@@ -588,7 +587,7 @@ function badgeClass(status: TodoStatus): string {
     <!-- Fallback: empty file -->
     <div v-else class="pfv-invalid">
       <div class="pfv-invalid-msg">
-        Could not parse plan frontmatter. Switch to Raw view to edit.
+        {{ t('pane.plans.frontmatter-error') }}
       </div>
     </div>
   </div>

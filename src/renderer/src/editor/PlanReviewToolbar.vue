@@ -148,6 +148,10 @@ watch(
 )
 
 const progress = computed(() => htmlPlanProgress(meta.value?.todos ?? []))
+// Width of the progress-bar fill; the bar itself only renders when total > 0.
+const progressPercent = computed(() =>
+  progress.value.total > 0 ? `${Math.round((progress.value.done / progress.value.total) * 100)}%` : '0%'
+)
 const unresolvedCount = computed(() => (meta.value?.reviewNotes ?? []).filter((n) => !n.resolved).length)
 // Approve is reachable from draft as well as in-review. The toolbar has no
 // draft→in-review transition, so gating approval on in-review alone left every
@@ -784,6 +788,18 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
       <span class="prt-stage" :class="`prt-stage--${meta.stage}`">{{ t(`pane.plans.stage-${meta.stage}`) }}</span>
       <span v-if="isArchived" class="prt-archived-pill">{{ t('pane.plans.archived') }}</span>
       <span class="prt-progress">{{ t('pane.plans.progress-done', { done: progress.done, total: progress.total }) }}</span>
+      <span
+        v-if="progress.total > 0"
+        class="prt-progress-bar"
+        :class="`prt-progress-bar--${meta.stage}`"
+        role="progressbar"
+        aria-valuemin="0"
+        :aria-valuenow="progress.done"
+        :aria-valuemax="progress.total"
+        :aria-label="t('pane.plans.progress-done', { done: progress.done, total: progress.total })"
+      >
+        <span class="prt-progress-fill" :style="{ width: progressPercent }" />
+      </span>
       <select v-if="outline.length" class="prt-outline" value="" @change="onOutlinePick">
         <option value="" disabled selected>{{ t('pane.plans.outline') }}</option>
         <option v-for="anchor in outline" :key="anchor" :value="anchor">{{ anchor }}</option>
@@ -1097,6 +1113,47 @@ defineExpose({ cycleTodo, toggleSkipTodo, startNoteWithAnchor, closeActiveOverla
 .prt-progress {
   color: var(--text-secondary);
   font-size: 11px;
+}
+
+.prt-progress-bar {
+  background: var(--bg-muted);
+  border-radius: 999px;
+  flex-shrink: 0;
+  height: 4px;
+  overflow: hidden;
+  width: 90px;
+}
+
+.prt-progress-fill {
+  background: var(--text-secondary);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+}
+
+/* Fill colors mirror the .prt-stage--{stage} pill palette above — keep in sync. */
+.prt-progress-bar--draft > .prt-progress-fill {
+  background: var(--text-secondary);
+}
+
+.prt-progress-bar--in-review > .prt-progress-fill {
+  background: var(--attention-bright);
+}
+
+.prt-progress-bar--approved > .prt-progress-fill {
+  background: var(--accent-fg);
+}
+
+.prt-progress-bar--in-progress > .prt-progress-fill {
+  background: var(--warning-fg);
+}
+
+.prt-progress-bar--done > .prt-progress-fill {
+  background: var(--success-fg);
+}
+
+.prt-progress-bar--abandoned > .prt-progress-fill {
+  background: var(--danger-fg);
 }
 
 .prt-outline {
