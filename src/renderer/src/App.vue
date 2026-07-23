@@ -27,6 +27,7 @@ import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
+import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { useSystemNotify } from './composables/useSystemNotify'
 import { usePaneReorderDrag } from './composables/usePaneReorderDrag'
@@ -129,6 +130,7 @@ const rolesApi = useRoles(backend)
 const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
+const { recent: recentWorkspaces, touch: touchRecentWorkspace } = useRecentWorkspaces(backend)
 const themeApi = useTheme()
 const settingsApi = useSettings()
 
@@ -142,6 +144,9 @@ onMounted(() => {
     settingsApi.setLanguage(locale)
     pushQuitConfirmConfig()
   })
+  // Native application menu actions (Settings…, Check for Updates…, Open
+  // Workspace…) routed here from main.
+  window.agentTeam?.onMenuAction?.((action) => { void onMenuAction(action) })
   // Seed main with the current confirm-before-quit config, and react to the
   // user disabling it from the native quit dialog's "don't show again".
   pushQuitConfirmConfig()
@@ -338,6 +343,14 @@ const workspaceSelected = ref<boolean>(
 // them), and ask once whether the previous run exited uncleanly — only the
 // first window to ask gets the list and shows the restore prompt.
 watch(currentWorkspace, (v) => { window.agentTeam?.reportWorkspace?.(v) }, { immediate: true })
+
+// Feed the native File > Open Recent submenu: push a slim list to main whenever
+// the recent-workspaces cache changes.
+watch(recentWorkspaces, (list) => {
+  window.agentTeam?.setRecentWorkspaces?.(
+    (list ?? []).map((r) => ({ path: r.path, name: r.name, exists: r.exists }))
+  )
+}, { immediate: true })
 const notifyRestore = useNotify()
 void window.agentTeam?.restore?.getPending().then((list) => {
   if (!list?.length) return
@@ -2845,10 +2858,56 @@ const pipeline = reactive<PipelineRun>({
 
 const showCompletionModal = ref(false)
 const showSettings = ref(false)
-const settingsInitialTab = ref<'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'appearance' | 'accounts'>('roles')
+const settingsInitialTab = ref<'roles' | 'pipelines' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts'>('roles')
 function openSettingsAccounts(): void {
   settingsInitialTab.value = 'accounts'
   showSettings.value = true
+}
+// Native application menu actions routed from main (menu:action). Existing
+// bridge listeners in this file never unsubscribe — App.vue lives for the
+// window's lifetime, so follow suit.
+async function onMenuAction(action: string): Promise<void> {
+  if (action === 'open-settings') {
+    showSettings.value = true
+    return
+  }
+  if (action === 'show-shortcuts') {
+    showKbPanel.value = true
+    return
+  }
+  if (action === 'check-updates') {
+    settingsInitialTab.value = 'updates'
+    showSettings.value = true
+    // Refresh the tab's status in the background; failures surface in the tab.
+    void window.agentTeam?.updater?.check?.()
+    return
+  }
+  if (action === 'open-workspace') {
+    const picked = await window.agentTeam?.pickWorkspace?.()
+    if (!picked) return
+    // Same folder already open in another window → focus it instead of
+    // duplicating (two windows on one folder means conflicting PTY/git ops).
+    if (await window.agentTeam?.focusWorkspaceWindow?.(picked)) return
+    if (!currentWorkspace.value) {
+      // Welcome is showing — open in place via Welcome's @select handler.
+      onWorkspaceSelected(picked)
+      return
+    }
+    await window.agentTeam?.openMainWindow?.({ workspace_path: picked })
+    return
+  }
+  if (action.startsWith('open-recent:')) {
+    const picked = action.slice('open-recent:'.length)
+    if (!picked) return
+    if (await window.agentTeam?.focusWorkspaceWindow?.(picked)) return
+    void touchRecentWorkspace(picked) // bump to front of recents
+    if (!currentWorkspace.value) {
+      onWorkspaceSelected(picked)
+      return
+    }
+    await window.agentTeam?.openMainWindow?.({ workspace_path: picked })
+    return
+  }
 }
 const showKbPanel = ref(false)
 const kbQueryMain = ref('')

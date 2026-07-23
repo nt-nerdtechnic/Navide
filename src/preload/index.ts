@@ -90,6 +90,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
   onBackendChanged: (cb: (info: BackendInfo) => void): void => {
     ipcRenderer.on('backend:changed', (_event, info: BackendInfo) => cb(info))
   },
+  onMenuAction: (cb: (action: string) => void): void => {
+    ipcRenderer.on('menu:action', (_event, action: string) => cb(action))
+  },
+  setRecentWorkspaces: (list: { path: string; name: string; exists: boolean }[]): void =>
+    ipcRenderer.send('menu:setRecents', list),
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
   newWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:new'),

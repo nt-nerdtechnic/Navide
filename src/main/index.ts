@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync, statSync, existsSync, realpathSync } from
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { startBackend, type BackendHandle } from './backend'
-import { installApplicationMenu } from './menu'
+import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, frontendPluginManager } from './plugins/frontendPluginManager'
 import { registerPluginIpc } from './plugins/pluginIpc'
 import { miniIdePluginEnabled } from './plugins/pluginFlags'
@@ -129,6 +129,28 @@ function broadcastOpenWorkspacesChanged(): void {
     win.webContents.send('workspace:openChanged')
   }
 }
+// Route a native application-menu action to the renderer of the most relevant
+// main window: the focused window when it is a real workspace window (roles /
+// stages / editor / detached child windows never receive these), else the
+// most-recently-focused main window.
+function sendMenuAction(action: string): void {
+  const focused = BrowserWindow.getFocusedWindow()
+  const target =
+    focused && !focused.isDestroyed() && mainWindows.has(focused) && !detachedWindowIds.has(focused.id)
+      ? focused
+      : mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow
+        : null
+  target?.webContents.send('menu:action', action)
+}
+// Application menu is rebuilt whenever the recent-workspaces list changes (each
+// window's renderer pushes the latest list via 'menu:setRecents'). Hooks are
+// assembled once in whenReady and stored so rebuildAppMenu can reuse them.
+let appMenuHooks: AppMenuHooks = {}
+let lastRecents: RecentMenuEntry[] = []
+function rebuildAppMenu(): void {
+  installApplicationMenu(appMenuHooks, lastRecents)
+}
 // Crash-restore: persists open workspace windows so an unexpected exit can be
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
@@ -187,7 +209,7 @@ async function createWindow(
     width: opts?.bounds?.width ?? 1280,
     height: opts?.bounds?.height ?? 800,
     ...(opts?.bounds ? { x: opts.bounds.x, y: opts.bounds.y } : {}),
-    title: 'Agent-Team',
+    title: 'Navide',
     titleBarStyle: 'hidden',
     // Start hidden and show only once the renderer has painted its first frame,
     // so the user never sees the white flash of an unpainted window. The dark
@@ -276,7 +298,7 @@ function openRolesWindow(): void {
   const win = new BrowserWindow({
     width: 900,
     height: 720,
-    title: 'Agent-Team · Role Manager',
+    title: 'Navide · Role Manager',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -460,7 +482,7 @@ function openStagesWindow(): void {
   const win = new BrowserWindow({
     width: 1000,
     height: 700,
-    title: 'Agent-Team · Stage Manager',
+    title: 'Navide · Stage Manager',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -529,6 +551,16 @@ ipcMain.on('window:reportWorkspace', (event, workspacePath: string) => {
   else mainWindowWorkspaces.delete(win)
   windowRegistry.setWorkspace(win.id, ws)
   broadcastOpenWorkspacesChanged()
+})
+
+// Renderers push the latest recent-workspaces list so the native File > Open
+// Recent submenu stays in sync. Every window pushes on each change, so skip the
+// rebuild when the list is unchanged.
+ipcMain.on('menu:setRecents', (_e, recents: RecentMenuEntry[]) => {
+  const next = Array.isArray(recents) ? recents : []
+  if (JSON.stringify(next) === JSON.stringify(lastRecents)) return
+  lastRecents = next
+  rebuildAppMenu()
 })
 
 // Welcome screens badge already-open workspaces and focus the existing window
@@ -748,7 +780,7 @@ function openEditorWindow(params: Record<string, string>): void {
   const win = new BrowserWindow({
     width: 1100,
     height: 760,
-    title: 'Agent-Team · Editor',
+    title: 'Navide · Editor',
     titleBarStyle: 'hidden',
     backgroundColor: '#0d1117',
     webPreferences: {
@@ -832,7 +864,7 @@ function openPlanWindow(workspacePath: string, relPath?: string): void {
   const win = new BrowserWindow({
     width: 1100,
     height: 760,
-    title: 'Agent-Team · Plans',
+    title: 'Navide · Plans',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -887,7 +919,7 @@ function openGitHistoryWindow(workspacePath: string): void {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'Agent-Team · Git History',
+    title: 'Navide · Git History',
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -1560,8 +1592,18 @@ app.whenReady().then(async () => {
   // The plugin-view dev entry is opt-in via AGENT_TEAM_PLUGIN_DEV=1 so the
   // default menu / UI is unchanged for every normal launch (dev or packaged).
   const pluginDevEnabled = process.env['AGENT_TEAM_PLUGIN_DEV'] === '1'
-  installApplicationMenu(
-    pluginDevEnabled
+  appMenuHooks = {
+    onOpenSettings: () => sendMenuAction('open-settings'),
+    onCheckUpdates: () => sendMenuAction('check-updates'),
+    onOpenWorkspace: () => sendMenuAction('open-workspace'),
+    onOpenRecent: (path: string) => sendMenuAction('open-recent:' + path),
+    onNewWindow: () => void createWindow(),
+    onOpenRoles: () => openRolesWindow(),
+    onOpenStages: () => openStagesWindow(),
+    onOpenRepo: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide'),
+    onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),
+    onShowShortcuts: () => sendMenuAction('show-shortcuts'),
+    ...(pluginDevEnabled
       ? {
           onOpenNoopPlugin: () => {
             const host = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -1580,8 +1622,16 @@ app.whenReady().then(async () => {
             }
           }
         }
-      : {}
-  )
+      : {})
+  }
+  rebuildAppMenu()
+  // Fill the native About panel (⌘ About Navide) with Navide branding.
+  app.setAboutPanelOptions({
+    applicationName: 'Navide',
+    applicationVersion: app.getVersion(),
+    copyright: 'Copyright © 2026 NT IT | 恩梯科技股份有限公司',
+    credits: 'Navide Team'
+  })
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
   initUpdater({

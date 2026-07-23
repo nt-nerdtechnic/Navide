@@ -3,20 +3,52 @@ import { app, Menu, type MenuItemConstructorOptions } from 'electron'
 /**
  * Application menu.
  *
- * This mirrors Electron's built-in default menu with ONE deliberate omission:
- * the View submenu's `resetZoom` / `zoomIn` / `zoomOut` roles. Those roles bind
- * ⌘0 / ⌘+ / ⌘- to `webContents` zoom, which scales the ENTIRE window — chrome,
- * layout, every pane — and their native accelerators fire before the renderer's
- * key handlers. Zoom in this app is per-pane content zoom only (xterm font size
- * in useTerminal.ts, Monaco font size in EditorViewMonaco.vue), so the built-in
- * roles must not exist. Installing a menu without them is the only way to drop
- * them: Electron has no API to edit the default menu in place.
+ * The default Electron menu structure (kept so native accelerators like
+ * ⌘C / ⌘V / ⌘Q keep working — `setApplicationMenu(null)` would break
+ * copy/paste and quit) plus Navide-specific entries wired through
+ * AppMenuHooks:
+ *   - App menu (macOS): Settings… (⌘,) and Check for Updates…
+ *   - File: Open Workspace… (⌘O); on non-macOS also Settings… / Check for
+ *     Updates… (platforms without an app menu)
+ *   - Window: Role Manager and Stages
  *
- * Everything else is kept because on macOS accelerators like ⌘C / ⌘V / ⌘Q only
- * work when a menu item declares them — `setApplicationMenu(null)` would break
- * copy/paste and quit.
+ * ONE deliberate omission from the default menu remains: the View submenu's
+ * `resetZoom` / `zoomIn` / `zoomOut` roles. Those roles bind ⌘0 / ⌘+ / ⌘- to
+ * `webContents` zoom, which scales the ENTIRE window — chrome, layout, every
+ * pane — and their native accelerators fire before the renderer's key
+ * handlers. Zoom in this app is per-pane content zoom only (xterm font size
+ * in useTerminal.ts, Monaco font size in EditorViewMonaco.vue), so the
+ * built-in roles must not exist. Installing a menu without them is the only
+ * way to drop them: Electron has no API to edit the default menu in place.
  */
+/** One entry in the File > Open Recent submenu. */
+export interface RecentMenuEntry {
+  path: string
+  name: string
+  exists: boolean
+}
+
 export interface AppMenuHooks {
+  /** App menu (macOS) / File menu (non-macOS): open the settings modal. */
+  onOpenSettings?: () => void
+  /** App menu (macOS) / File menu (non-macOS): check for updates. */
+  onCheckUpdates?: () => void
+  /** File menu: pick a workspace folder and open it. */
+  onOpenWorkspace?: () => void
+  /** File menu: open a recent workspace by absolute path. */
+  onOpenRecent?: (path: string) => void
+  /** File menu: open a fresh window. */
+  onNewWindow?: () => void
+  /** Window menu: open the Role Manager window. */
+  onOpenRoles?: () => void
+  /** Window menu: open the Stages window. */
+  onOpenStages?: () => void
+  /** Help menu: open the Navide GitHub repo. */
+  onOpenRepo?: () => void
+  /** Help menu: open the GitHub issues page. */
+  onReportIssue?: () => void
+  /** Help menu: show the keyboard-shortcuts panel. */
+  onShowShortcuts?: () => void
   // When provided, a dev-only "Developer" submenu with an entry that opens the
   // no-op plugin view is appended. Omit it (the default) and the menu is
   // byte-for-byte the shipping menu. Gated by the caller behind a dev flag.
@@ -27,8 +59,21 @@ export interface AppMenuHooks {
   onOpenMiniIdePlugin?: () => void
 }
 
-export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
+export function installApplicationMenu(
+  hooks: AppMenuHooks = {},
+  recents: RecentMenuEntry[] = []
+): void {
   const isMac = process.platform === 'darwin'
+
+  const settingsItem: MenuItemConstructorOptions = {
+    label: 'Settings…',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => hooks.onOpenSettings?.()
+  }
+  const checkUpdatesItem: MenuItemConstructorOptions = {
+    label: 'Check for Updates…',
+    click: () => hooks.onCheckUpdates?.()
+  }
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac
@@ -37,6 +82,9 @@ export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
             label: app.name,
             submenu: [
               { role: 'about' },
+              { type: 'separator' },
+              settingsItem,
+              checkUpdatesItem,
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
@@ -51,7 +99,34 @@ export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
       : []),
     {
       label: 'File',
-      submenu: [isMac ? { role: 'close' } : { role: 'quit' }]
+      submenu: [
+        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => hooks.onNewWindow?.() },
+        {
+          label: 'Open Workspace…',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => hooks.onOpenWorkspace?.()
+        },
+        {
+          label: 'Open Recent',
+          submenu: recents.length
+            ? recents.map((r) => ({
+                label: r.name || r.path,
+                enabled: r.exists,
+                click: () => hooks.onOpenRecent?.(r.path)
+              }))
+            : [{ label: 'No Recent Workspaces', enabled: false }]
+        },
+        { type: 'separator' },
+        // No app menu off macOS — surface the same entries under File.
+        ...(isMac
+          ? [{ role: 'close' } as MenuItemConstructorOptions]
+          : [
+              settingsItem,
+              checkUpdatesItem,
+              { type: 'separator' } as MenuItemConstructorOptions,
+              { role: 'quit' } as MenuItemConstructorOptions
+            ])
+      ]
     },
     {
       label: 'Edit',
@@ -89,6 +164,9 @@ export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
     {
       label: 'Window',
       submenu: [
+        { label: 'Role Manager', click: () => hooks.onOpenRoles?.() },
+        { label: 'Stages', click: () => hooks.onOpenStages?.() },
+        { type: 'separator' },
         { role: 'minimize' },
         // macOS "zoom" = maximize the window frame. Unrelated to content zoom,
         // has no accelerator, and is part of the standard Window menu.
@@ -100,7 +178,16 @@ export function installApplicationMenu(hooks: AppMenuHooks = {}): void {
             ]
           : [{ role: 'close' } as MenuItemConstructorOptions])
       ]
-    }
+    },
+    {
+      role: 'help',
+      submenu: [
+        { label: 'Navide on GitHub', click: () => hooks.onOpenRepo?.() },
+        { label: 'Report an Issue…', click: () => hooks.onReportIssue?.() },
+        { type: 'separator' },
+        { label: 'Keyboard Shortcuts', click: () => hooks.onShowShortcuts?.() }
+      ]
+    } as MenuItemConstructorOptions
   ]
 
   // Dev-only, flag-gated: a Developer submenu to launch the M1 plugin view.
