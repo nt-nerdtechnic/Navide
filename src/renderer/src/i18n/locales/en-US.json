@@ -10,12 +10,6 @@
     "status-delivering": "Delivering",
     "status-delivered": "Delivered",
     "status-failed": "Failed",
-    "compose-title": "Send message to CLI",
-    "target": "Target",
-    "content-placeholder": "Message…",
-    "include-hint": "Include reply-protocol hint",
-    "send": "Send",
-    "send-to-pane": "Message this CLI…",
     "rename-title": "Messaging name",
     "rename-invalid": "Name invalid or already taken",
     "paused-banner": "Delivery paused — messages queue but are not sent"

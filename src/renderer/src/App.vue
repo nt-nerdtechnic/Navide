@@ -21,7 +21,7 @@ import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
 import { useNotify } from './composables/useNotify'
 import { useAgentMessaging } from './composables/useAgentMessaging'
-import { parseMessages } from './lib/agentMessaging'
+import { parseMessages, renderRosterBriefing } from './lib/agentMessaging'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -999,7 +999,6 @@ const paneLastActiveAt = new Map<string, number>()
 // ── Inter-CLI messaging (name registry + delivery queue wiring) ─────────────
 const messaging = useAgentMessaging()
 const showMessagesPanel = ref(false)
-const messagesPanelTarget = ref<string | null>(null)
 
 // messagingNames survive restart via localStorage (pane records in project.json
 // are backend-owned). Keyed by pane id — project.json stores the live pane id,
@@ -1048,6 +1047,7 @@ function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
   if (pane.agentKey === 'terminal') return
   pane.messagingName = messaging.registerPane(pane.id, pane.agentKey, preferredName || pane.slotLabel || undefined)
   persistMessagingName(pane.id, pane.messagingName)
+  scheduleRosterBriefings()
 }
 
 /** keepPersisted: pane handed off to another window (detach) — it re-registers
@@ -1055,6 +1055,32 @@ function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
 function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean } = {}): void {
   messaging.unregisterPane(paneId)
   if (!opts.keepPersisted) dropPersistedMessagingName(paneId)
+  scheduleRosterBriefings()
+}
+
+// ── Roster briefings: teach every manual agent pane the protocol + peers ────
+// Pipeline panes get MESSAGING_PROTOCOL in their kickoff and stay busy through
+// the stage, so only manual panes are briefed here. Debounced: registry churn
+// during workspace restore collapses into one refresh.
+let _briefingTimer = 0
+function scheduleRosterBriefings(): void {
+  window.clearTimeout(_briefingTimer)
+  _briefingTimer = window.setTimeout(refreshRosterBriefings, 1000)
+}
+
+function refreshRosterBriefings(): void {
+  const named = panes.value.filter((p) => p.messagingName)
+  for (const pane of named) {
+    if (pane.origin === 'pipeline') continue
+    const peers = named
+      .filter((p) => p.id !== pane.id)
+      .map((p) => ({ name: p.messagingName as string, label: p.agentLabel }))
+    if (peers.length === 0) continue
+    messaging.upsertSystemBriefing(
+      pane.messagingName as string,
+      renderRosterBriefing(pane.messagingName as string, peers),
+    )
+  }
 }
 
 /** deliver() dep: inject the envelope via the same primitive as all other pane
@@ -1109,13 +1135,8 @@ function onTurnCompleteForMessaging(paneId: string, text: string, timestamp: str
   messaging.pump()
 }
 
-function openMessagingPanel(target: string | null = null): void {
-  messagesPanelTarget.value = target
+function openMessagingPanel(): void {
   showMessagesPanel.value = true
-}
-
-function onOpenPaneMessaging(paneId: string): void {
-  openMessagingPanel(panes.value.find((p) => p.id === paneId)?.messagingName ?? null)
 }
 
 function onRenameMessaging(paneId: string, rawName: string): void {
@@ -1124,6 +1145,7 @@ function onRenameMessaging(paneId: string, rawName: string): void {
   if (messaging.renamePane(paneId, rawName)) {
     pane.messagingName = messaging.nameOf(paneId) ?? pane.messagingName
     if (pane.messagingName) persistMessagingName(paneId, pane.messagingName)
+    scheduleRosterBriefings()
   } else {
     notifyRestore.toast(i18n.global.t('msg.rename-invalid'), { type: 'error' })
   }
@@ -1138,7 +1160,10 @@ onMounted(() => {
   })
   _msgPumpTimer = window.setInterval(() => messaging.pump(), 1000)
 })
-onUnmounted(() => { window.clearInterval(_msgPumpTimer) })
+onUnmounted(() => {
+  window.clearInterval(_msgPumpTimer)
+  window.clearTimeout(_briefingTimer)
+})
 
 function syncViews(): void {
   paneViews.value = panes.value.map((p) => {
@@ -8540,7 +8565,6 @@ function paneIsCommander(p: ActivePane): boolean {
           :account-options="paneAccountOptions(p)"
           :current-profile-id="p.profileId || ''"
           @switch-account="(id) => switchPaneAccount(p.id, id || null)"
-          @open-messaging="onOpenPaneMessaging(p.id)"
           @rename-messaging="(name) => onRenameMessaging(p.id, name)"
           @set-focus="onSetFocus(p.id)"
           @minimize="minimizePane(p.id)"
@@ -8831,7 +8855,6 @@ function paneIsCommander(p: ActivePane): boolean {
     <NotificationHost />
     <AgentMessagesPanel
       v-if="showMessagesPanel"
-      :initial-target="messagesPanelTarget"
       @close="showMessagesPanel = false"
     />
     <!-- Status bar -->

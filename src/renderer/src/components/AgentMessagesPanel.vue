@@ -1,32 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useAgentMessaging, USER_SENDER } from '../composables/useAgentMessaging'
+import { computed, ref } from 'vue'
+import { useAgentMessaging } from '../composables/useAgentMessaging'
 
-const props = defineProps<{ initialTarget?: string | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const messaging = useAgentMessaging()
 
-const target = ref(props.initialTarget ?? '')
-const content = ref('')
-const includeHint = ref(true)
 const expandedId = ref<number | null>(null)
 
-const targets = computed(() => messaging.allNames())
 // Newest first for the log list.
 const rows = computed(() => [...messaging.messages.value].reverse())
-
-onMounted(() => {
-  if (!target.value && targets.value.length) target.value = targets.value[0]
-})
-
-function send(): void {
-  const text = content.value.trim()
-  if (!text || !target.value) return
-  messaging.sendMessage(USER_SENDER, target.value, text, { includeReplyHint: includeHint.value })
-  messaging.pump()
-  content.value = ''
-}
 
 function toggleExpand(id: number): void {
   expandedId.value = expandedId.value === id ? null : id
@@ -54,30 +37,6 @@ function fmtTime(ts: number): string {
         </div>
 
         <div v-if="messaging.paused.value" class="msg-paused">{{ $t('msg.paused-banner') }}</div>
-
-        <div class="msg-compose">
-          <div class="msg-compose-row">
-            <label>{{ $t('msg.target') }}</label>
-            <select v-model="target">
-              <option v-for="name in targets" :key="name" :value="name">{{ name }}</option>
-            </select>
-            <label class="msg-hint-toggle">
-              <input v-model="includeHint" type="checkbox" />
-              {{ $t('msg.include-hint') }}
-            </label>
-          </div>
-          <div class="msg-compose-row">
-            <textarea
-              v-model="content"
-              rows="2"
-              :placeholder="$t('msg.content-placeholder')"
-              @keydown.meta.enter="send"
-            />
-            <button class="msg-btn msg-send" :disabled="!content.trim() || !target" @click="send">
-              {{ $t('msg.send') }}
-            </button>
-          </div>
-        </div>
 
         <div class="msg-list">
           <div v-if="rows.length === 0" class="msg-empty">{{ $t('msg.empty') }}</div>
@@ -169,54 +128,6 @@ function fmtTime(ts: number): string {
   color: #e8a54b;
   border-bottom: 1px solid rgba(230, 160, 60, 0.25);
 }
-
-.msg-compose {
-  padding: 10px 16px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.msg-compose-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.msg-compose-row select {
-  background: rgba(128, 128, 128, 0.1);
-  color: var(--text-primary);
-  border: 1px solid rgba(128, 128, 128, 0.25);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 13px;
-}
-
-.msg-hint-toggle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.msg-compose-row textarea {
-  flex: 1;
-  resize: vertical;
-  background: rgba(128, 128, 128, 0.08);
-  color: var(--text-primary);
-  border: 1px solid rgba(128, 128, 128, 0.25);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 13px;
-  font-family: inherit;
-}
-
-.msg-send { align-self: flex-end; }
 
 .msg-list {
   flex: 1;

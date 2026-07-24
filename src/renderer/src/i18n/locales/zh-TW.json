@@ -10,12 +10,6 @@
     "status-delivering": "投遞中",
     "status-delivered": "已投遞",
     "status-failed": "失敗",
-    "compose-title": "傳訊給 CLI",
-    "target": "目標",
-    "content-placeholder": "訊息內容…",
-    "include-hint": "附上回覆協議說明",
-    "send": "傳送",
-    "send-to-pane": "傳訊給此 CLI…",
     "rename-title": "訊息名稱",
     "rename-invalid": "名稱無效或已被使用",
     "paused-banner": "投遞已暫停 — 訊息會排入佇列但不會送出"

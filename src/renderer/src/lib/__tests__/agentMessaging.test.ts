@@ -6,6 +6,7 @@ import {
   parseMessages,
   sanitizeMessageContent,
   renderEnvelope,
+  renderRosterBriefing,
   defaultMessagingName,
   normalizeMessagingName,
 } from '../agentMessaging'
@@ -120,6 +121,20 @@ describe('renderEnvelope', () => {
   it('omits the reply hint when disabled', () => {
     const env = renderEnvelope('claude-1', 'hello', { includeReplyHint: false })
     expect(env).toBe(`${MSG_ENVELOPE_PREFIX} claude-1\nhello`)
+  })
+})
+
+describe('renderRosterBriefing', () => {
+  it('names the pane itself, teaches the block format, and lists peers', () => {
+    const text = renderRosterBriefing('claude-1', [
+      { name: 'codex-1', label: 'Codex' },
+      { name: 'kimi-1', label: 'Kimi Code' },
+    ])
+    expect(text).toContain('claude-1')
+    expect(text).toContain(MSG_START)
+    expect(text).toContain(MSG_END)
+    expect(text).toContain('codex-1（Codex）')
+    expect(text).toContain('kimi-1（Kimi Code）')
   })
 })
 

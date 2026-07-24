@@ -4,7 +4,7 @@ import {
   _resetMessagingForTest,
   RATE_LIMIT_MAX,
   QUEUE_CAP,
-  USER_SENDER,
+  SYSTEM_SENDER,
   type MessagingDeps,
 } from '../useAgentMessaging'
 import { MSG_ENVELOPE_PREFIX } from '../../lib/agentMessaging'
@@ -82,17 +82,14 @@ describe('useAgentMessaging', () => {
       expect(msg.reason).toContain('same pane')
     })
 
-    it('rate-limits a sender→target pair, but never the user', () => {
+    it('rate-limits a sender→target pair independently', () => {
       idlePanes.clear() // keep everything queued
       for (let i = 0; i < RATE_LIMIT_MAX; i++) {
         expect(m.sendMessage('claude-1', 'codex-1', `n${i}`).status).toBe('queued')
       }
       expect(m.sendMessage('claude-1', 'codex-1', 'over').status).toBe('failed')
-      // other pair unaffected; user sender bypasses the pair rate limit
+      // other pair unaffected
       expect(m.sendMessage('codex-1', 'claude-1', 'x').status).toBe('queued')
-      for (let i = 0; i < RATE_LIMIT_MAX + 2; i++) {
-        expect(m.sendMessage(USER_SENDER, 'claude-1', `u${i}`).status).toBe('queued')
-      }
     })
 
     it('rate limit window slides with time', () => {
@@ -104,10 +101,16 @@ describe('useAgentMessaging', () => {
 
     it('caps the per-target queue', () => {
       idlePanes.clear()
-      for (let i = 0; i < QUEUE_CAP; i++) {
-        expect(m.sendMessage(USER_SENDER, 'codex-1', `n${i}`).status).toBe('queued')
+      m.registerPane('p3', 'grok') // grok-1
+      m.registerPane('p4', 'kimi') // kimi-1
+      // Fill the target queue from multiple senders (each within its own
+      // pair rate limit: QUEUE_CAP = 2 × RATE_LIMIT_MAX).
+      for (const sender of ['claude-1', 'grok-1']) {
+        for (let i = 0; i < RATE_LIMIT_MAX; i++) {
+          expect(m.sendMessage(sender, 'codex-1', `${sender}-${i}`).status).toBe('queued')
+        }
       }
-      const over = m.sendMessage(USER_SENDER, 'codex-1', 'over')
+      const over = m.sendMessage('kimi-1', 'codex-1', 'over')
       expect(over.status).toBe('failed')
       expect(over.reason).toContain('queue full')
     })
@@ -173,6 +176,30 @@ describe('useAgentMessaging', () => {
       m.resumeMessaging()
       await flush()
       expect(msg.status).toBe('delivered')
+    })
+
+    it('delivers system briefings raw (no envelope) and upserts while queued', async () => {
+      idlePanes.clear()
+      m.upsertSystemBriefing('codex-1', 'briefing v1')
+      const queued = m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)
+      expect(queued).toHaveLength(1)
+      expect(queued[0].status).toBe('queued')
+      // Upsert replaces the queued briefing instead of stacking a second one.
+      m.upsertSystemBriefing('codex-1', 'briefing v2')
+      expect(m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)).toHaveLength(1)
+      idlePanes.add('p2')
+      m.pump()
+      await flush()
+      expect(delivered).toHaveLength(1)
+      expect(delivered[0].text).toBe('briefing v2')
+      // Once delivered, the next upsert enqueues a fresh briefing.
+      m.upsertSystemBriefing('codex-1', 'briefing v3')
+      expect(m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)).toHaveLength(2)
+    })
+
+    it('system briefing to an unknown target is a silent no-op', () => {
+      m.upsertSystemBriefing('ghost', 'hello')
+      expect(m.messages.value).toHaveLength(0)
     })
 
     it('unregisterPane fails its queued messages', () => {

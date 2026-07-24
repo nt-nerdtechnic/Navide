@@ -70,9 +70,6 @@ const emit = defineEmits<{
   /** Waiting badge clicked — App.vue injects the resume prompt immediately
    *  instead of waiting for the scheduled quota reset. */
   (e: 'loop-resume-now'): void
-  /** Envelope button clicked — App.vue opens the messaging panel targeting
-   *  this pane's messagingName. */
-  (e: 'open-messaging'): void
   /** Messaging-name badge edited — App.vue renames the pane in the registry. */
   (e: 'rename-messaging', name: string): void
   /** Account picker changed — App.vue confirms + restarts the CLI under the
@@ -380,13 +377,6 @@ onMounted(() => {
           :title="$t('msg.rename-title')"
           @dblclick.stop="startMsgNameEdit"
         >@{{ messagingName }}</span>
-        <button
-          v-if="messagingName"
-          class="msg-open-btn"
-          @click.stop="emit('open-messaging')"
-          :title="$t('msg.send-to-pane')"
-          :aria-label="$t('msg.send-to-pane')"
-        >✉</button>
         <select
           v-if="accountOptions && accountOptions.length"
           class="account-inline"
@@ -621,23 +611,6 @@ onMounted(() => {
   font-size: 10px;
   font-weight: 400;
   max-width: 110px;
-}
-.msg-open-btn {
-  font-size: 9px;
-  line-height: 1.4;
-  background: transparent;
-  border: 1px solid var(--border-muted);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  padding: 1px 6px;
-  cursor: pointer;
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-.msg-open-btn:hover {
-  opacity: 1;
-  color: var(--accent-bright);
-  border-color: var(--accent-emphasis);
 }
 .loop-btn {
   font-size: 9px;
