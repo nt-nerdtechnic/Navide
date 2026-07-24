@@ -234,7 +234,7 @@ class TestFailureIsolation:
             raise ValueError("bad migration")
 
         # A registered migration that blows up must be swallowed per-file.
-        monkeypatch.setitem(sm._MIGRATIONS, 1, boom)
-        monkeypatch.setattr(sm, "STORE_SCHEMA_VERSION", 2)
+        monkeypatch.setitem(sm._MIGRATIONS, PIPELINES_FILE, {1: boom})
+        monkeypatch.setitem(sm._TARGET_VERSION, PIPELINES_FILE, 2)
 
         sm.run_startup_migrations(tmp_path, "1.0.1")  # no raise

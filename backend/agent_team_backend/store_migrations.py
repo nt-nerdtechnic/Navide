@@ -28,7 +28,12 @@ from . import __version__
 from .applog import app_data_dir
 from .roles_store import ROLES_FILE
 from .stages_store import PIPELINES_FILE, SCHEMA_VERSION as STORE_SCHEMA_VERSION
-from .tokens_store import TOKENS_FILE
+from .tokens_store import (
+    TOKENS_FILE,
+    TOKENS_SCHEMA_VERSION,
+    WORKSPACES_SUBDIR,
+    migrate_tokens_v1_to_v2,
+)
 
 log = logging.getLogger("agent_team_backend.store_migrations")
 
@@ -44,11 +49,21 @@ KEEP_BACKUPS = 2
 # per-workspace project.json are intentionally excluded — they self-heal.
 STORE_FILENAMES: tuple[str, ...] = (PIPELINES_FILE, ROLES_FILE, TOKENS_FILE)
 
-# Forward-migration registry: maps a store's current schemaVersion N to a
-# function that upgrades a parsed doc from N to N+1. Empty at schema v1.
-# To add a migration when STORE_SCHEMA_VERSION is bumped:
-#     _MIGRATIONS[1] = _migrate_v1_to_v2
-_MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+# Each store carries its own schemaVersion and target. Roles is a bare list
+# (no version) and never migrates; pipelines tracks STORE_SCHEMA_VERSION.
+_TARGET_VERSION: dict[str, int] = {
+    PIPELINES_FILE: STORE_SCHEMA_VERSION,
+    ROLES_FILE: STORE_SCHEMA_VERSION,
+    TOKENS_FILE: TOKENS_SCHEMA_VERSION,
+}
+
+# Forward-migration registry, per store filename: maps a doc's current
+# schemaVersion N to a function upgrading it from N to N+1. Each function must
+# return a NEW dict when it changes anything (so the writer knows to persist)
+# and the same object once no upgrade applies (idempotent, gated on version).
+_MIGRATIONS: dict[str, dict[int, Callable[[Any], Any]]] = {
+    TOKENS_FILE: {1: migrate_tokens_v1_to_v2},
+}
 
 
 def run_startup_migrations(
@@ -137,17 +152,21 @@ def _prune_backups(backup_root: Path) -> None:
 # ────────────────────────── migration ──────────────────────────
 
 
-def apply_migrations(doc: Any) -> Any:
-    """Forward-migrate a parsed store doc to STORE_SCHEMA_VERSION.
+def apply_migrations(doc: Any, name: str | None = None) -> Any:
+    """Forward-migrate a parsed store doc to its store's target schemaVersion.
 
-    Identity at schema v1 (empty registry). Bare-list stores (roles.json) carry
-    no schemaVersion and pass through unchanged.
+    `name` selects the store's target version + migration chain; when omitted
+    the pipelines/roles default (STORE_SCHEMA_VERSION, empty chain) applies.
+    Bare-list stores (roles.json) carry no schemaVersion and pass through
+    unchanged.
     """
     if not isinstance(doc, dict):
         return doc
+    target = _TARGET_VERSION.get(name, STORE_SCHEMA_VERSION)
+    migrations = _MIGRATIONS.get(name, {})
     version = _coerce_version(doc.get("schemaVersion", 1))
-    while version < STORE_SCHEMA_VERSION and version in _MIGRATIONS:
-        doc = _MIGRATIONS[version](doc)
+    while version < target and version in migrations:
+        doc = migrations[version](doc)
         version += 1
     return doc
 
@@ -162,29 +181,42 @@ def _coerce_version(value: Any) -> int:
 def _run_migrations(base: Path) -> None:
     """Apply forward migrations to each versioned store file in place.
 
-    At schema v1 the registry is empty so this reads and re-serializes nothing
-    (docs come back unchanged → no write). Newer files (schemaVersion higher
-    than we support) are left untouched.
+    Covers the top-level canonical stores AND every per-workspace tokens.json
+    under ``<base>/workspaces/<sha>/`` (tokens' per-profile dimension lives in
+    both). Docs that come back unchanged are not rewritten; files newer than we
+    understand are left untouched.
     """
     for name in STORE_FILENAMES:
         path = base / name
         if not path.exists():
             continue
         try:
-            _migrate_file(path)
+            _migrate_file(path, name)
         except Exception as err:  # noqa: BLE001
             log.warning("migration of %s failed (non-fatal): %s", path, err)
 
+    ws_root = base / WORKSPACES_SUBDIR
+    if ws_root.is_dir():
+        for ws_dir in ws_root.iterdir():
+            ws_tokens = ws_dir / TOKENS_FILE
+            if not ws_tokens.exists():
+                continue
+            try:
+                _migrate_file(ws_tokens, TOKENS_FILE)
+            except Exception as err:  # noqa: BLE001
+                log.warning("migration of %s failed (non-fatal): %s", ws_tokens, err)
 
-def _migrate_file(path: Path) -> None:
+
+def _migrate_file(path: Path, name: str) -> None:
     doc = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
         return  # bare-list store; nothing to migrate
+    target = _TARGET_VERSION.get(name, STORE_SCHEMA_VERSION)
     version = _coerce_version(doc.get("schemaVersion", 1))
-    if version > STORE_SCHEMA_VERSION:
+    if version > target:
         # Newer than we understand — do not touch it.
         return
-    migrated = apply_migrations(doc)
+    migrated = apply_migrations(doc, name)
     if migrated is not doc:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(
