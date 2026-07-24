@@ -3,6 +3,17 @@ from __future__ import annotations
 import pytest
 
 from agent_team_backend import app
+from agent_team_backend.log_readers.profile_registry import clear_profile_homes
+
+
+@pytest.fixture(autouse=True)
+def _reset_profile_registry():
+    """The CLI-profile home registry is process-global (readers consult it); a
+    spawn-path test that registers a profile home would otherwise leak into
+    later tests that assert default reader scan roots."""
+    clear_profile_homes()
+    yield
+    clear_profile_homes()
 
 
 @pytest.fixture(autouse=True)
