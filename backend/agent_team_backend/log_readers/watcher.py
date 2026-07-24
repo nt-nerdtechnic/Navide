@@ -84,8 +84,15 @@ class LogWatcher:
         workspace_provider: Callable[[], list[str]] | None = None,
         checkpoint_provider: CheckpointProvider | None = None,
         checkpoint_sink: CheckpointSink | None = None,
+        progress_sink: Callable[[str, int], None] | None = None,
     ) -> None:
         self._sink = sink
+        # Called on the loop with (workspace_path, remaining_backfill_files) each
+        # time a workspace's historic-log backfill starts or advances; 0 = done.
+        # Lets the UI show a small "tidying token history" status instead of the
+        # backfill silently competing for CPU during startup.
+        self._progress_sink = progress_sink
+        self._backfill_remaining: dict[str, int] = {}
         # Returns the workspaces the user has actually opened. Periodic/startup
         # backfill is scoped to these so we never re-stat the entire multi-GB
         # CLI history every cycle. None → legacy full scan.
@@ -228,6 +235,33 @@ class LogWatcher:
                 await self._process_path(path, replay_workspace)
             except Exception as err:  # noqa: BLE001
                 log.warning("processing %s failed: %s", path, err)
+            finally:
+                # Decrement here (not inside _process_path) so EVERY dequeued
+                # backfill file counts down exactly once — even when processing
+                # early-returns (zero-token event, missing file, parse error).
+                # Otherwise the remaining count never hits 0 and the "tidying"
+                # indicator sticks on forever.
+                if replay_workspace:
+                    self._emit_backfill(replay_workspace, -1)
+
+    def _emit_backfill(self, workspace_path: str, delta: int) -> None:
+        """Adjust a workspace's remaining backfill count and notify the UI.
+
+        Must run on the loop thread: force_rescan schedules it via
+        call_soon_threadsafe (it runs in an executor); _process_path calls it
+        directly. Clamped at 0 so out-of-order deltas never go negative.
+        """
+        if not workspace_path or self._progress_sink is None:
+            return
+        remaining = max(0, self._backfill_remaining.get(workspace_path, 0) + delta)
+        if remaining:
+            self._backfill_remaining[workspace_path] = remaining
+        else:
+            self._backfill_remaining.pop(workspace_path, None)
+        try:
+            self._progress_sink(workspace_path, remaining)
+        except Exception as err:  # noqa: BLE001
+            log.warning("backfill progress sink raised: %s", err)
 
     def force_rescan(self, workspace_path: str | None = None) -> None:
         """Re-enqueue session files using a workspace-specific checkpoint.
@@ -258,6 +292,16 @@ class LogWatcher:
                 else None
             )
             files.extend(scoped if scoped is not None else reader.session_files())
+        # Announce the backfill size first (runs on the loop, before any per-file
+        # decrement) so the UI can show progress. Only workspace-scoped replays
+        # count — legacy full rescans (no workspace) don't drive the indicator.
+        if workspace_path and files:
+            try:
+                self._loop.call_soon_threadsafe(
+                    self._emit_backfill, workspace_path, len(files)
+                )
+            except RuntimeError:
+                return
         for p in files:
             try:
                 self._loop.call_soon_threadsafe(
@@ -378,6 +422,10 @@ class LogWatcher:
 
         if replay_workspace:
             self._checkpoint_sink(key, parsed.checkpoint, replay_workspace)
+            # Yield so a big history backfill doesn't starve startup spawns /
+            # live events queued behind it on the loop. (The remaining-count
+            # decrement happens in _drain_loop's finally, once per dequeued file.)
+            await asyncio.sleep(0)
         else:
             self._checkpoint_sink(key, parsed.checkpoint, None)
             for workspace_path in handled_workspaces:

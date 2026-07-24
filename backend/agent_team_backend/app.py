@@ -662,6 +662,37 @@ def _schedule_tokens_broadcast(workspace_path: str) -> None:
     asyncio.create_task(_fire())
 
 
+# Historic-log backfill can enqueue hundreds of files; coalesce the per-file
+# progress into at most one broadcast per workspace per window (same lesson as
+# the token burst above) so the indicator updates smoothly without flooding.
+_BACKFILL_BROADCAST_DEBOUNCE_SEC = 0.3
+_pending_backfill_broadcast: set[str] = set()
+_backfill_remaining: dict[str, int] = {}
+
+
+def _on_backfill_progress(workspace_path: str, remaining: int) -> None:
+    """LogWatcher progress_sink (runs on the loop): remember the latest count and
+    debounce-broadcast `backfill.changed` so the UI can show a small status."""
+    _backfill_remaining[workspace_path] = remaining
+    if workspace_path in _pending_backfill_broadcast:
+        return
+    _pending_backfill_broadcast.add(workspace_path)
+
+    async def _fire() -> None:
+        try:
+            await asyncio.sleep(_BACKFILL_BROADCAST_DEBOUNCE_SEC)
+        finally:
+            _pending_backfill_broadcast.discard(workspace_path)
+        count = _backfill_remaining.get(workspace_path, 0)
+        await broadcast(make_event("backfill.changed", {
+            "workspace_path": workspace_path,
+            "active": count > 0,
+            "count": count,
+        }))
+
+    asyncio.create_task(_fire())
+
+
 async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
     """Sink for token events from CLI log files.
 
@@ -810,6 +841,7 @@ async def _start_log_watcher() -> None:
         workspace_provider=attribution.known_workspaces,
         checkpoint_provider=tokens_store.get_ingestion_checkpoint,
         checkpoint_sink=tokens_store.advance_ingestion_checkpoint,
+        progress_sink=_on_backfill_progress,
     )
     for r in _readers:
         _log_watcher.add_reader(r)

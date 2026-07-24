@@ -1105,6 +1105,10 @@
     "resume-prompt-confirm": "Resume",
     "resume-prompt-cancel": "Start fresh"
   },
+  "backfill": {
+    "title": "Backfilling historical token usage in the background",
+    "tidying": "tidying token history… {count} file(s)"
+  },
   "orphans": {
     "title": "Leftover CLI processes",
     "leftover": "leftover",

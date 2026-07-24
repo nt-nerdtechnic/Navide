@@ -4455,6 +4455,9 @@ async function sendQuiet<T = unknown>(
 // the count in the status bar so it's visible BEFORE it degrades the machine;
 // click to clean up. Main window only — child windows share the same backend.
 const orphanCount = ref(0)
+// Background historic-log backfill status for the status bar (so a big token
+// history being tidied reads as "working", not "frozen at startup").
+const backfill = reactive({ active: false, count: 0 })
 
 async function refreshOrphanCount(): Promise<void> {
   if (isDetachedWindow) return
@@ -5601,6 +5604,14 @@ function judgeTurnText(paneId: string, text: string, timestamp: string): void {
 // session files: Codex announces the resume id from its per-pane CODEX_HOME
 // path, while Antigravity relies on marker matching (it has no identity path
 // at launch). Marker matching remains a fallback for older sessions.
+backend.on('backfill.changed', (raw) => {
+  const ev = raw as { workspace_path?: string; active?: boolean; count?: number }
+  // Only reflect this window's own workspace (the broadcast fans out to all).
+  if ((ev?.workspace_path || '') !== (currentWorkspace.value || '')) return
+  backfill.active = !!ev?.active
+  backfill.count = ev?.count ?? 0
+})
+
 backend.on('session.detected', (raw) => {
   const ev = raw as { pane_id?: string; session_id?: string }
   if (!ev?.pane_id || !ev.session_id) return
@@ -8874,6 +8885,11 @@ function paneIsCommander(p: ActivePane): boolean {
           {{ panes.length }} agent{{ panes.length !== 1 ? 's' : '' }}
         </span>
         <span
+          v-if="backfill.active"
+          class="sb-item sb-backfill"
+          :title="$t('backfill.title')"
+        >↻ {{ $t('backfill.tidying', { count: backfill.count }) }}</span>
+        <span
           v-if="orphanCount > 0"
           class="sb-item sb-orphans"
           :title="$t('orphans.title')"
@@ -9232,6 +9248,7 @@ function paneIsCommander(p: ActivePane): boolean {
 .sb-pipeline.sb-completed { color: var(--success-fg); }
 .sb-pipeline.sb-aborted { color: var(--danger-fg); }
 .sb-agents { color: var(--text-secondary); }
+.sb-backfill { color: var(--text-secondary); opacity: 0.85; }
 .sb-update-available .sb-dot { background: var(--accent-fg); }
 .sb-update-downloading .sb-dot { background: var(--attention-fg); }
 .sb-update-downloaded .sb-dot { background: var(--success-fg); }

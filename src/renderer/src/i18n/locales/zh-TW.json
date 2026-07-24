@@ -1105,6 +1105,10 @@
     "resume-prompt-confirm": "恢復對話",
     "resume-prompt-cancel": "全新開始"
   },
+  "backfill": {
+    "title": "背景整理歷史 token 用量",
+    "tidying": "整理 token 歷史… 剩 {count} 檔"
+  },
   "orphans": {
     "title": "殘留 CLI 程序",
     "leftover": "殘留",
