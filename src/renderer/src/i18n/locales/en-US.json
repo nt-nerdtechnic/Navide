@@ -612,7 +612,24 @@
       "token": "Token",
       "token-hint": "Paste a Personal Access Token. It is encrypted with safeStorage and stored locally — never in plain text.",
       "token-keep": "Leave blank to keep the current token",
-      "delete-confirm": "Delete this account?"
+      "delete-confirm": "Delete this account?",
+      "cli": {
+        "title": "CLI Accounts",
+        "hint": "Create separate login profiles for each CLI agent, each with its own isolated home directory. Pick an account when opening a pane, or switch it while a pane is running.",
+        "new-account": "+ New account",
+        "name-placeholder": "Account name",
+        "default-hint": "Your real home directory",
+        "is-default": "Default",
+        "set-default": "Set as default",
+        "rename": "Rename",
+        "delete": "Delete",
+        "save": "Save",
+        "cancel": "Cancel",
+        "delete-confirm": "Delete this account? Its login data directory is kept on disk and will not be removed.",
+        "unsupported": "This agent does not support multiple accounts.",
+        "usage-title": "All-time tokens: ↑ input · ↓ output",
+        "in-use-error": "This account is in use by a running pane and cannot be deleted. Switch that pane to another account first."
+      }
     },
     "color": {
       "bg-base": "Background",
@@ -1110,6 +1127,14 @@
     "not-resumable": "Not resumable",
     "confirm": "Reconnect",
     "failed": "Could not reconnect that conversation — its transcript may no longer exist"
+  },
+  "cli-account": {
+    "default": "Default",
+    "pane-tooltip": "CLI account — switching restarts this pane's CLI",
+    "switch-title": "Switch CLI account",
+    "switch-confirm": "Switch this pane to \"{account}\"? The CLI restarts and the current conversation is interrupted.",
+    "switch-confirm-action": "Switch & restart",
+    "archived": "(archived account)"
   },
   "cliDrop": {
     "source-closed": "CLI pane is no longer open",

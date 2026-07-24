@@ -35,6 +35,8 @@ import { useUpdater } from '../composables/useUpdater'
 import type { UpdateChannel } from '../../../shared/updater'
 import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
+import CliAccountsPane from './CliAccountsPane.vue'
+import type { useCliProfiles } from '../composables/useCliProfiles'
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import { useMiniIdePluginEnabled } from '../composables/useMiniIdePluginEnabled'
@@ -42,6 +44,7 @@ import { useMiniIdePluginEnabled } from '../composables/useMiniIdePluginEnabled'
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   rolesApi: ReturnType<typeof useRoles>
+  cliProfilesApi: ReturnType<typeof useCliProfiles>
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
   pipelinesApi?: ReturnType<typeof usePipelines>
@@ -298,6 +301,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     group: 'Accounts',
     summary: 'Add, edit, and remove encrypted Git host credentials and tokens.',
     keywords: 'git account accounts credential credentials token github safeStorage 帳號 憑證 金鑰 加密',
+  },
+  {
+    id: 'cli-accounts',
+    tab: 'accounts',
+    section: 'cli-accounts',
+    title: 'CLI Accounts / CLI 帳號',
+    group: 'Accounts',
+    summary: 'Manage per-agent CLI login profiles (claude, codex, kimi, grok).',
+    keywords: 'cli account accounts profile profiles login claude codex kimi grok agent 帳號 登入 切換帳號 profile',
   },
   {
     id: 'shortcuts',
@@ -2348,6 +2360,9 @@ async function plDelete(id: string, name: string) {
             <span class="settings-path">{{ pathForTab('accounts') }}</span>
           </div>
           <GitAccountsPane :api="accountsApi" />
+          <div data-settings-section="cli-accounts" style="margin: 4px 22px 22px; padding-top: 22px; border-top: 1px solid var(--border-default);">
+            <CliAccountsPane :api="cliProfilesApi" />
+          </div>
         </div>
 
         <!-- ── KEYBOARD SHORTCUTS TAB ────────────────────────────────────── -->

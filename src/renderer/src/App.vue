@@ -27,6 +27,7 @@ import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
 import { useSettings } from './composables/useSettings'
 import { useRoles } from './composables/useRoles'
+import { useCliProfiles } from './composables/useCliProfiles'
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
@@ -134,6 +135,7 @@ const backend = useBackend()
 // connected, and applies ui.settings_changed broadcasts from other windows.
 initSettingsBackend(backend)
 const rolesApi = useRoles(backend)
+const cliProfilesApi = useCliProfiles(backend)
 const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
@@ -623,6 +625,12 @@ interface ActivePane {
   messagingName?: string
   roleKey: RoleKey
   stageId: StageId
+  /** CLI account profile id this pane's CLI runs under; null/absent = built-in
+   *  Default (real home). Runtime-only front-end state — preserved across
+   *  in-session respawn/reattach. project.json does not persist it; on a full
+   *  app reload it is restored from the live PTY's metadata, which the backend
+   *  backfills into each pane record (ProjectPane.profile_id). */
+  profileId?: string | null
   /** Human-readable slot label, e.g. "Architecture" or "UI/UX".
    *  Empty string for single-agent stages or manually-spawned panes. */
   slotLabel: string
@@ -2285,6 +2293,9 @@ interface SpawnInternal {
    *  cold-start rebuild reuses the SAME id instead of minting a new ghost id
    *  on every restart. Ignored when isResume or for other agents. */
   freshSessionId?: string
+  /** CLI account profile id to run this pane's CLI under; null/absent = built-in
+   *  Default. Carried forward on rebuild/switch so the account survives respawn. */
+  profileId?: string | null
   /** Instructs spawnPane to atomically replace an existing pane's position in the UI array. */
   replacePaneId?: string
   /** Persisted messaging name carried through a restore so inter-CLI messaging
@@ -2384,6 +2395,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     autoName: opts.autoName,
     roleKey: opts.roleKey,
     stageId: opts.stageId,
+    profileId: opts.profileId ?? null,
     slotLabel: opts.slotLabel ?? '',
     command,
     workspacePath: opts.workspacePath,
@@ -2486,6 +2498,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       command: [userShell, userShell.endsWith('zsh') ? '-ilc' : '-lc', command],
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
+      profileId: opts.profileId ?? null,
       metadata: {
         roleKey: opts.roleKey,
         stageId: opts.stageId,
@@ -2552,6 +2565,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<void> {
     roleKey: payload.roleKey,
     stageId: payload.stageId,
     customName: payload.customName,
+    profileId: payload.profileId ?? null,
     commandOverride: '',
     workspacePath: payload.workspacePath,
     origin: 'manual',
@@ -2964,6 +2978,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       origin: pane.origin,
       runGroupId: pane.runGroupId,
       sessionHomeId: pane.sessionHomeId,
+      profileId: pane.profileId ?? null,
     }
     try { localStorage.removeItem(`terminal-scroll:${sessionId}`) } catch {}
     // Preserve layout order: keep the old pane as a dummy to avoid layout
@@ -2980,6 +2995,7 @@ async function rebuildPaneViaResume(paneId: string): Promise<void> {
       workspacePath: snap.workspacePath,
       origin: snap.origin,
       runGroupId: snap.runGroupId || undefined,
+      profileId: snap.profileId,
       isResume: true,
       skipRoleInjection: true,
       restoreMode: 'fresh',
@@ -3052,7 +3068,10 @@ async function rebuildPanesViaResume(scope: 'tab' | 'all'): Promise<void> {
   }
 }
 
-async function rebuildPaneClean(paneId: string): Promise<void> {
+async function rebuildPaneClean(
+  paneId: string,
+  profileIdOverride?: string | null,
+): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
   // Same session-aware lock as rebuildPaneViaResume: mid-resume the
@@ -3073,6 +3092,8 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     workspacePath: pane.workspacePath,
     origin: pane.origin,
     runGroupId: pane.runGroupId,
+    // Account switch overrides the profile; a plain rebuild keeps the current one.
+    profileId: profileIdOverride !== undefined ? profileIdOverride : (pane.profileId ?? null),
   }
   for (const key of lockKeys) rebuildingPanes.add(key)
   try {
@@ -3088,6 +3109,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       workspacePath: snap.workspacePath,
       origin: snap.origin,
       runGroupId: snap.runGroupId || undefined,
+      profileId: snap.profileId,
       isResume: false,
       replacePaneId: paneId, // Atomic swap to prevent layout shift
     })
@@ -3132,6 +3154,50 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
   }
 }
 
+// Switch the CLI account a running pane uses. Restarts the pane's CLI under the
+// new profile (a clean relaunch — the current conversation is interrupted, since
+// the account's home directory changes). Reuses rebuildPaneClean's kill+respawn
+// path with a profile override.
+async function switchPaneAccount(paneId: string, profileId: string | null): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) return
+  const current = pane.profileId ?? null
+  if (current === (profileId ?? null)) return
+  const target = cliProfilesApi.findProfile(profileId)
+  const accountName = target?.name ?? i18n.global.t('cli-account.default')
+  const ok = await notifyRestore.confirm(
+    i18n.global.t('cli-account.switch-confirm', { account: accountName }),
+    {
+      title: i18n.global.t('cli-account.switch-title'),
+      confirmText: i18n.global.t('cli-account.switch-confirm-action'),
+      cancelText: i18n.global.t('restore.dismiss'),
+    },
+  )
+  if (!ok) return
+  await rebuildPaneClean(paneId, profileId ?? null)
+}
+
+// Account picker options for a pane's header. Empty array = the agent has no
+// extra accounts, so TerminalPane hides the account control entirely. The
+// leading '' option is the built-in Default (real home).
+function paneAccountOptions(pane: ActivePane): Array<{ id: string; name: string }> {
+  if (pane.agentKey === 'terminal') return []
+  const profiles = cliProfilesApi.profilesForAgent(pane.agentKey)
+  // A profile deleted in another window leaves this pane still running under an
+  // archived account. Surface it as an explicit option so the select reflects
+  // reality instead of silently snapping to Default while a different account
+  // is actually live; the user can still switch away to another account.
+  const archived = !!pane.profileId && !profiles.some((p) => p.id === pane.profileId)
+  if (!profiles.length && !archived) return []
+  const options = [
+    { id: '', name: i18n.global.t('cli-account.default') },
+    ...profiles.map((p) => ({ id: p.id, name: p.name })),
+  ]
+  if (archived) {
+    options.push({ id: pane.profileId as string, name: i18n.global.t('cli-account.archived') })
+  }
+  return options
+}
 
 async function onInterrupt(paneId: string): Promise<void> {
   const ref = paneRefs[paneId]
@@ -3606,6 +3672,10 @@ interface ProjectPane {
   auto_name?: string
   is_minimized?: boolean
   output_log_file?: string
+  /** CLI account profile the pane's still-running PTY was spawned under. Not
+   *  persisted to project.json — the backend backfills it from live terminal
+   *  metadata so a reload restores the pane's account (absent = built-in Default). */
+  profile_id?: string
 }
 
 interface ProjectPayload {
@@ -4136,6 +4206,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       slotLabel: saved.slot_label,
       customName: saved.custom_name || undefined,
       autoName: saved.auto_name || undefined,
+      // Restore the CLI account the pane's live PTY runs under (backend
+      // backfills profile_id from terminal metadata); absent = built-in Default.
+      profileId: saved.profile_id || null,
       commandOverride,
       workspacePath,
       origin: saved.origin,
@@ -8188,6 +8261,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @switch-workspace="onSwitchWorkspace"
       @workspace-browse="onWorkspaceBrowse"
       :issue-handoffs="issueHandoffView"
+      :cli-profiles-api="cliProfilesApi"
       @dispatch-issue="onDispatchIssue"
       @spawn-for-issue="onHandleIssue"
       @rename-pane="setPaneCustomName"
@@ -8247,6 +8321,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :stages-api="stagesApi"
       :analyzer-api="analyzerApi"
       :pipelines-api="pipelinesApi"
+      :cli-profiles-api="cliProfilesApi"
       :initial-tab="settingsInitialTab"
       v-model:confirm-before-close="confirmBeforeClose"
       @close="showSettings = false; settingsInitialTab = 'roles'"
@@ -8447,6 +8522,9 @@ function paneIsCommander(p: ActivePane): boolean {
           :loop-wait-until="p.loopWaitUntil"
           :loop-estimate-reset-at="p.loopEstimateResetAt"
           :messaging-name="p.messagingName"
+          :account-options="paneAccountOptions(p)"
+          :current-profile-id="p.profileId || ''"
+          @switch-account="(id) => switchPaneAccount(p.id, id || null)"
           @open-messaging="onOpenPaneMessaging(p.id)"
           @rename-messaging="(name) => onRenameMessaging(p.id, name)"
           @set-focus="onSetFocus(p.id)"
