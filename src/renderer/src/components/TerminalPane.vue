@@ -239,12 +239,15 @@ let draggingSelf = false
 function onHeaderDragEnd(e: DragEvent): void {
   draggingSelf = false
   isReorderDragOver.value = false
-  // Cross-window handoff: a drag released over ANOTHER window produces no drop
-  // event there (HTML5 DnD is per-BrowserWindow), but dragend still fires here
-  // with the release point in screen coords. dropEffect === 'none' means no
-  // in-window drop consumed the drag (an in-window pane reorder sets 'move'),
-  // so only then ask main to route the pane to the window under the pointer.
-  console.warn('[cli-dragend]', { dropEffect: e.dataTransfer?.dropEffect, screenX: e.screenX, screenY: e.screenY })
+  // Cross-window handoff. Chromium DOES deliver same-app cross-window drops
+  // to another window's drop targets (verified 2026-07-24) — a consumed drop,
+  // local or cross-window, reports dropEffect 'move' here and needs no
+  // follow-up. A release over a NON-accepting area consumes nothing, so
+  // dropEffect stays 'none' — only then ask main to route the pane to the
+  // window under the pointer. (Esc-cancel also reports 'none' —
+  // indistinguishable in Chromium, which suppresses keyboard events during a
+  // drag; main drops the release when it lands inside this window's own
+  // bounds, which covers the common cancel-in-place case.)
   if (e.dataTransfer?.dropEffect !== 'none') return
   window.agentTeam?.cliPaneDragEnd?.(props.paneId, e.screenX, e.screenY)
 }

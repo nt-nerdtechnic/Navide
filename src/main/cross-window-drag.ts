@@ -1,10 +1,12 @@
-// Cross-window CLI-pane drop handoff. HTML5 drag-and-drop events do NOT cross
-// BrowserWindow boundaries: a drag started in the main window never produces a
-// dragover/drop in the editor window. So the drag SOURCE reports where the
-// pointer was released (screen coords, from its own dragend, which does fire),
-// and the main process hands the drop off to whichever window contains that
-// point. Pure + electron-free so the hit-test is unit-testable (same pattern as
-// cli-buffer-relay.ts).
+// Cross-window CLI-pane drop handoff (fallback path). Chromium DOES deliver
+// same-app HTML5 drops across BrowserWindow boundaries when they land on an
+// accepting drop target (verified 2026-07-24) — those are handled by the
+// receiving window like a local drop. This module covers the remaining case:
+// a release that no drop target consumed. The drag SOURCE sees dropEffect
+// 'none' in its dragend, reports where the pointer was released (screen
+// coords), and the main process hands the drop off to whichever window
+// contains that point. Pure + electron-free so the hit-test is unit-testable
+// (same pattern as cli-buffer-relay.ts).
 
 /** Renderer → main: the pointer was released outside the source window. */
 export const PANE_DRAG_END_CHANNEL = 'cli:pane-drag-end'

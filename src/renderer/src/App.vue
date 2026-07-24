@@ -175,10 +175,11 @@ onMounted(() => {
         : null
     )
   })
-  // Cross-window pane drop: a pane dragged from ANOTHER window (another
-  // workspace, or a detached group window) never produces a drop event here —
-  // main routed the dragend release point to this window instead. Inject the
-  // source pane's context only when that point lands on a terminal area.
+  // Cross-window pane drop fallback: a drag from another window that lands on
+  // an accepting drop target arrives as a normal drop event (Chromium delivers
+  // same-app cross-window drops) and is handled by that target directly. This
+  // IPC covers the remaining case — a release main's hit-test routed here —
+  // and injects only when the point lands on a terminal area.
   window.agentTeam?.onExternalPaneDrop?.(({ paneId, screenX, screenY }) => {
     if (!paneId) return
     const { x, y } = screenToClientPoint(
@@ -1359,8 +1360,16 @@ function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines
 async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
   const sourcePane = panes.value.find((p) => p.id === sourcePaneId)
   const sourceRef = paneRefs[sourcePaneId]
-  // Source pane closed mid-drag → nothing to do.
-  if (!sourcePane || !sourceRef) return
+  if (!sourcePane || !sourceRef) {
+    // Source pane is not in this window: Chromium DOES deliver same-app
+    // cross-window drops directly to this window's drop targets, so a drag
+    // from another workspace window lands here with a pane id this window
+    // does not own. Fetch its context through the pane-buffer relay instead.
+    // (Also covers source-closed-mid-drag: the relay answers not-found and
+    // the user gets a toast rather than silence.)
+    await injectExternalPaneContext(sourcePaneId, targetPaneId)
+    return
+  }
 
   const text = buildPaneContextPaste({
     paneId: sourcePane.id,
@@ -1399,6 +1408,9 @@ async function pastePaneContext(targetPaneId: string, text: string): Promise<voi
 async function injectExternalPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
   const getBuf = window.agentTeam?.getCliPaneBuffer
   if (!getBuf || !paneRefs[targetPaneId]) return
+  // Parity with the in-window terminal drop: a dead pane is not a drop target.
+  const targetStatus = paneRefs[targetPaneId]?.displayStatus as string | undefined
+  if (targetStatus === 'exited' || targetStatus === 'error') return
   let reply: Parameters<typeof buildExternalPaneContextPaste>[1]
   try {
     reply = await getBuf(sourcePaneId)

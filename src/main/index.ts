@@ -88,6 +88,10 @@ let windowFocusCounter = 0
 app.on('browser-window-focus', (_event, win) => {
   windowFocusSeq.set(win.id, ++windowFocusCounter)
 })
+app.on('browser-window-created', (_event, win) => {
+  const id = win.id
+  win.on('closed', () => windowFocusSeq.delete(id))
+})
 // Maps each main window to its workspace_path so we can focus an existing window
 // instead of creating a duplicate when the same folder is opened again.
 const mainWindowWorkspaces = new Map<BrowserWindow, string>()
@@ -1012,21 +1016,35 @@ ipcMain.handle('cli:get-pane-buffer', (_event, paneId: string): Promise<CliPaneB
   return cliBufferRelay.request(targets, String(paneId ?? ''))
 })
 
-// Cross-window pane drop: a drag started in one window never reaches another
-// (HTML5 DnD does not cross BrowserWindow boundaries), so the source reports
-// the release point from its dragend — already filtered to drags that were NOT
-// dropped in-window — and we hand it to the window under it. Candidates: the
-// editor window plus every main window (other workspaces and detached group
-// windows), excluding the drag source itself.
+// Cross-window pane drop fallback. Same-app cross-window drops that land on
+// an accepting drop target are delivered directly by Chromium and handled
+// there; this path covers a release that NO drop target consumed (the source
+// sees dropEffect 'none' in its dragend and reports the release point), and
+// we hand it to the window under that point. Valid targets: the editor window
+// plus every main window (other workspaces and detached group windows). Every
+// OTHER app window still participates in the hit-test as an occluder, so a
+// release on e.g. the Plans window never falls through to a main window
+// covered underneath it.
 ipcMain.on(
   PANE_DRAG_END_CHANNEL,
   (event, args: { paneId?: string; screenX?: number; screenY?: number }) => {
     const paneId = String(args?.paneId ?? '')
     if (!paneId) return
     const point = { x: Number(args?.screenX ?? 0), y: Number(args?.screenY ?? 0) }
+    const sender = BrowserWindow.fromWebContents(event.sender)
+    // A release inside the source window's own bounds means the user let go
+    // over their own window (a non-drop area, or an Esc cancel) — the drag
+    // keeps that window foreground, so never route to whatever sits beneath.
+    if (sender && !sender.isDestroyed()) {
+      const b = sender.getBounds()
+      if (point.x >= b.x && point.x < b.x + b.width && point.y >= b.y && point.y < b.y + b.height) {
+        return
+      }
+    }
+    const validTargets = new Set<BrowserWindow>(mainWindows)
+    if (editorWindow && !editorWindow.isDestroyed()) validTargets.add(editorWindow)
     const windows: CandidateWindow<BrowserWindow>[] = []
-    const editor = editorWindow && !editorWindow.isDestroyed() ? [editorWindow] : []
-    for (const win of [...editor, ...mainWindows]) {
+    for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue
       windows.push({
         id: win.id,
@@ -1036,14 +1054,14 @@ ipcMain.on(
         window: win
       })
     }
-    const sender = BrowserWindow.fromWebContents(event.sender)
     const candidates = selectDropCandidates(
       windows,
       sender?.id ?? null,
       (id) => windowFocusSeq.get(id) ?? 0
     )
     const win = hitTestWindows(point, candidates)
-    win?.webContents.send(EXTERNAL_PANE_DROP_CHANNEL, {
+    if (!win || !validTargets.has(win)) return
+    win.webContents.send(EXTERNAL_PANE_DROP_CHANNEL, {
       paneId,
       screenX: point.x,
       screenY: point.y
