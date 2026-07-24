@@ -4499,6 +4499,11 @@ const orphanCount = ref(0)
 // Background historic-log backfill status for the status bar (so a big token
 // history being tidied reads as "working", not "frozen at startup").
 const backfill = reactive({ active: false, count: 0 })
+// Clear the indicator when the workspace changes/closes: backfill.changed is
+// filtered by currentWorkspace, so the old workspace's remaining progress/done
+// events would otherwise never arrive and the pill would stick on. Switching
+// back to a still-backfilling workspace re-lights it on the next broadcast.
+watch(currentWorkspace, () => { backfill.active = false; backfill.count = 0 })
 
 async function refreshOrphanCount(): Promise<void> {
   if (isDetachedWindow) return
