@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildCliPaneBufferReply,
   buildExternalPaneContextPaste,
+  endsWithMentionTrigger,
   parseCliContextPayload,
   resolveCliDropPayload,
   writeCliPaneDragPayload,
@@ -450,5 +451,23 @@ describe('chunkForPty', () => {
   it('preserves the original text when re-joined', () => {
     const text = '🚀 done — 完成\nnext'
     expect(chunkForPty(text, 4).join('')).toBe(text)
+  })
+})
+
+describe('endsWithMentionTrigger', () => {
+  it('matches when the cursor sits immediately after an "@"', () => {
+    expect(endsWithMentionTrigger('傳給 @')).toBe(true)
+    expect(endsWithMentionTrigger('│ > tell @')).toBe(true)
+    expect(endsWithMentionTrigger('@')).toBe(true)
+  })
+
+  it('does not match without a trailing "@"', () => {
+    expect(endsWithMentionTrigger('')).toBe(false)
+    expect(endsWithMentionTrigger('tell someone')).toBe(false)
+    expect(endsWithMentionTrigger('a@b')).toBe(false)
+  })
+
+  it('opts back out when a space follows the "@"', () => {
+    expect(endsWithMentionTrigger('傳給 @ ')).toBe(false)
   })
 })

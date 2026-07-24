@@ -23,6 +23,14 @@ export const CLI_PASTE_BUFFER_CAP = 8000
 export const CLI_PASTE_LINE_CAP = 300
 export const CLI_CHIP_LINE_CAP = 1000
 
+/** True when the text left of the cursor ends with a bare "@" — the user is
+ *  asking the pane drop to insert just the pane's messaging name (mention
+ *  mode) instead of the full scrollback excerpt. Strict: the "@" must sit
+ *  immediately before the cursor, so "@ " (space typed after) opts back out. */
+export function endsWithMentionTrigger(lineBeforeCursor: string): boolean {
+  return lineBeforeCursor.endsWith('@')
+}
+
 /** Drag payload carried under CLI_CONTEXT_MIME (set in TerminalPane.vue). */
 export interface CliContextPayload {
   paneId: string

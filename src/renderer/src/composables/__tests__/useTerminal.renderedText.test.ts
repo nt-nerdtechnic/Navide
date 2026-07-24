@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
 import type { Terminal } from '@xterm/xterm'
-import { serializeRenderedBuffer } from '../useTerminal'
+import { readBufferLineBeforeCursor, serializeRenderedBuffer } from '../useTerminal'
 
 // Minimal stand-in for the xterm buffer surface serializeRenderedBuffer reads.
 // Fixture texts are pre-trimmed (translateToString(true) right-trims). The
@@ -57,5 +57,32 @@ describe('serializeRenderedBuffer', () => {
       buffer: { active: { baseY: 2, cursorY: 0, getLine: () => undefined } },
     } as unknown as Terminal
     expect(serializeRenderedBuffer(term, 100)).toBe('')
+  })
+})
+describe('readBufferLineBeforeCursor', () => {
+  function mockCursorTerm(rows: string[], cursorX: number): Terminal {
+    return {
+      buffer: {
+        active: {
+          baseY: rows.length - 1,
+          cursorY: 0,
+          cursorX,
+          getLine: (r: number) =>
+            rows[r] === undefined ? undefined : { translateToString: () => rows[r] },
+        },
+      },
+    } as unknown as Terminal
+  }
+
+  it('returns the cursor row text up to the cursor column', () => {
+    expect(readBufferLineBeforeCursor(mockCursorTerm(['history', '│ > tell @'], 10))).toBe('│ > tell @')
+    expect(readBufferLineBeforeCursor(mockCursorTerm(['│ > tell @more'], 10))).toBe('│ > tell @')
+  })
+
+  it('returns empty for a missing line', () => {
+    const term = {
+      buffer: { active: { baseY: 5, cursorY: 0, cursorX: 3, getLine: () => undefined } },
+    } as unknown as Terminal
+    expect(readBufferLineBeforeCursor(term)).toBe('')
   })
 })

@@ -301,6 +301,14 @@ const BOX_ONLY_LINE_RE = /^[\s─-╿]*[─-╿][\s─-╿]*$/
  *  Walks backwards from the cursor row, drops the trailing blank / box-only
  *  frame lines, takes at most `maxLines` rows and returns them oldest→newest.
  *  READ-ONLY: never mutates the terminal. */
+/** Text of the cursor's row up to the cursor column. Module-level (like
+ *  serializeRenderedBuffer) so tests can drive it with a buffer fixture. */
+export function readBufferLineBeforeCursor(term: import('@xterm/xterm').Terminal): string {
+  const buf = term.buffer.active
+  const line = buf.getLine(buf.baseY + buf.cursorY)?.translateToString(true) ?? ''
+  return line.slice(0, buf.cursorX)
+}
+
 export function serializeRenderedBuffer(term: import('@xterm/xterm').Terminal, maxLines: number): string {
   const buffer = term.buffer.active
   const lines: string[] = []
@@ -681,6 +689,13 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
    *  cleanBuffer's tail is dominated by TUI status-footer repaints. */
   function readRenderedText(maxLines: number): string {
     return serializeRenderedBuffer(term, maxLines)
+  }
+
+  /** Cursor-row text up to the cursor column. Used by the pane-drop handler
+   *  to detect an "@" typed right before the drop (mention mode: insert just
+   *  the source pane's messaging name, not its scrollback). */
+  function readLineBeforeCursor(): string {
+    return readBufferLineBeforeCursor(term)
   }
 
   let inputDisposer: { dispose(): void } | null = null
@@ -1849,6 +1864,7 @@ export function useTerminal(paneId: string, backend: ReturnType<typeof useBacken
     markBufferPosition,
     recleanBuffer,
     readRenderedText,
+    readLineBeforeCursor,
     updateXtermTheme,
     isAltBuffer,
     setDisableStdin: (disabled: boolean) => { term.options.disableStdin = disabled },

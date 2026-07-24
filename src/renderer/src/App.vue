@@ -61,6 +61,7 @@ import {
   buildExternalPaneContextPaste,
   buildPaneContextPaste,
   chunkForPty,
+  endsWithMentionTrigger,
   screenToClientPoint,
   CLI_CHIP_LINE_CAP,
   CLI_PASTE_LINE_CAP
@@ -1397,6 +1398,17 @@ function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines
 async function injectPaneContext(sourcePaneId: string, targetPaneId: string): Promise<void> {
   const sourcePane = panes.value.find((p) => p.id === sourcePaneId)
   const sourceRef = paneRefs[sourcePaneId]
+
+  // Mention mode: an "@" typed immediately before the drop means "insert just
+  // this pane's messaging name", completing e.g. "傳給 @" + drop → "傳給 @codex-1 ".
+  // Falls through to the full context share when the source has no name
+  // (plain terminal, cross-window source).
+  const lineBeforeCursor = paneRefs[targetPaneId]?.readLineBeforeCursor?.()
+  if (lineBeforeCursor !== undefined && endsWithMentionTrigger(lineBeforeCursor) && sourcePane?.messagingName) {
+    await pastePaneContext(targetPaneId, sourcePane.messagingName + ' ')
+    return
+  }
+
   if (!sourcePane || !sourceRef) {
     // Source pane is not in this window: Chromium DOES deliver same-app
     // cross-window drops directly to this window's drop targets, so a drag
