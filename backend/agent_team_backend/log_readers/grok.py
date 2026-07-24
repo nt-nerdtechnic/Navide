@@ -30,6 +30,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .base import IncrementalParseResult, LogReader, TokenUsage
+from .profile_registry import profile_homes
 
 log = logging.getLogger("agent_team_backend.log_readers.grok")
 
@@ -71,13 +72,25 @@ class GrokLogReader(LogReader):
     def _db_path(self) -> Path:
         return Path.home() / ".grok" / _DB_NAME
 
+    def _grok_dirs(self) -> list[Path]:
+        """The ``.grok`` dir(s) holding a grok.db: the default ~/.grok plus each
+        active profile's shim ``<home>/home/.grok`` (Phase B). A grok profile
+        pane runs with HOME pointed at the shim, so its ENTIRELY separate db
+        lives inside the shim — the default ~/.grok never sees those sessions.
+        With no profile pane this session the list is exactly [~/.grok]."""
+        dirs: list[Path] = [Path.home() / ".grok"]
+        for home in profile_homes("grok"):
+            dirs.append(home / "home" / ".grok")
+        return dirs
+
+    def _db_paths(self) -> list[Path]:
+        return [d / _DB_NAME for d in self._grok_dirs()]
+
     def project_dirs(self) -> list[Path]:
-        root = Path.home() / ".grok"
-        return [root] if root.is_dir() else []
+        return [d for d in self._grok_dirs() if d.is_dir()]
 
     def session_files(self) -> list[Path]:
-        db = self._db_path()
-        return [db] if db.is_file() else []
+        return [db for db in self._db_paths() if db.is_file()]
 
     def _query(self, path: Path, sql: str) -> list[tuple] | None:
         """Short-lived read-only query. None = db unreadable this cycle
@@ -189,16 +202,18 @@ class GrokLogReader(LogReader):
         wanted = [m for m in markers if m]
         if not wanted:
             return {}
-        db = self._db_path()
-        if not db.is_file():
-            return {}
-        rows = self._query(db, _MARKER_SQL)
-        if rows is None:
-            return {}
+        # A profile pane's session lives in its own shim db, so scan the default
+        # db AND every active profile db; first match across them wins.
         found: dict[str, tuple[str, str]] = {}
-        for session_id, message_json, ws_root in rows:
-            text = str(message_json or "")
-            for marker in wanted:
-                if marker not in found and marker in text:
-                    found[marker] = (str(session_id or ""), str(ws_root or ""))
+        for db in self._db_paths():
+            if not db.is_file():
+                continue
+            rows = self._query(db, _MARKER_SQL)
+            if rows is None:
+                continue
+            for session_id, message_json, ws_root in rows:
+                text = str(message_json or "")
+                for marker in wanted:
+                    if marker not in found and marker in text:
+                        found[marker] = (str(session_id or ""), str(ws_root or ""))
         return found

@@ -29,6 +29,7 @@ from .base import (
     join_text_blocks,
     read_jsonl_tail,
 )
+from .profile_registry import profile_homes
 
 log = logging.getLogger("agent_team_backend.log_readers.claude")
 
@@ -106,8 +107,8 @@ def _int(v) -> int:  # noqa: ANN001
 class ClaudeLogReader(LogReader):
     vendor: str = "claude"
 
-    def project_dirs(self) -> list[Path]:
-        """First-hit-wins: return only the first existing root.
+    def _default_root(self) -> Path | None:
+        """First-hit-wins default projects root (backend-process view).
 
         $CLAUDE_CONFIG_DIR overrides; the fallbacks are tried in CodexBar order.
         Returning a single root (not all of them) avoids double-counting if a
@@ -121,8 +122,27 @@ class ClaudeLogReader(LogReader):
         candidates.append(Path.home() / ".claude" / "projects")
         for p in candidates:
             if p.is_dir():
-                return [p]
-        return []
+                return p
+        return None
+
+    def project_dirs(self) -> list[Path]:
+        """The default root plus every active profile's ``<home>/projects``.
+
+        Profile panes run with CLAUDE_CONFIG_DIR pointed at a per-account home
+        (Phase B), so their sessions live outside the default root. Each active
+        profile home (profile_registry) contributes its own projects dir. With
+        no profile pane this session the list is exactly [default_root] — byte
+        for byte the pre-profile behavior.
+        """
+        roots: list[Path] = []
+        default = self._default_root()
+        if default is not None:
+            roots.append(default)
+        for home in profile_homes("claude"):
+            p = home / "projects"
+            if p.is_dir() and p not in roots:
+                roots.append(p)
+        return roots
 
     def session_files(self) -> list[Path]:
         out: list[Path] = []

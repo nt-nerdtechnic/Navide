@@ -218,6 +218,7 @@ class TerminalService:
         cols: int = 100,
         rows: int = 30,
         env: dict[str, str] | None = None,
+        env_remove: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
     ) -> TerminalSession:
@@ -238,6 +239,8 @@ class TerminalService:
         final_env["LINES"] = str(rows)
         if env:
             final_env.update(env)
+        for key in env_remove or ():
+            final_env.pop(key, None)
 
         started_monotonic = time.monotonic()
         try:
@@ -299,6 +302,20 @@ class TerminalService:
             argv,
         )
         return session
+
+    def live_pane_profiles(self) -> dict[str, str]:
+        """Map pane_id -> CLI account profile_id for every still-running PTY that
+        was spawned under a profile. Lets a reloaded renderer restore each pane's
+        account: project.json does not persist profile_id, but the PTY (and its
+        metadata) survives the WS disconnect, so it is the source of truth."""
+        result: dict[str, str] = {}
+        for session in self._sessions.values():
+            if session.closed:
+                continue
+            profile_id = str((session.metadata or {}).get("profile_id") or "")
+            if profile_id:
+                result[session.pane_id] = profile_id
+        return result
 
     def write(self, session_id: str, data: str) -> None:
         session = self._require(session_id)
