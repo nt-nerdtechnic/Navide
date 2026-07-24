@@ -11,6 +11,13 @@ import { useTheme } from '../composables/useTheme'
 import { useSettings } from '../composables/useSettings'
 import { settingsGet, settingsSet } from '../lib/settings'
 import {
+  USAGE_ENABLED_KEY,
+  USAGE_REFRESH_OPTIONS,
+  setUsageEnabled,
+  setUsageRefreshSec,
+  usageRefreshSec,
+} from '../composables/useUsage'
+import {
   RESUME_BEHAVIOR_SETTING_KEY,
   normalizeResumeBehavior,
   type ResumeBehavior,
@@ -294,6 +301,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'resume restore start fresh ask workspace open session conversation 恢復 還原 開新對話 詢問 開啟 工作區 對話 續接',
   },
   {
+    id: 'general-usage-badge',
+    tab: 'general',
+    section: 'general-usage-badge',
+    title: 'CLI Quota Badge / CLI 額度徽章',
+    group: 'General',
+    summary: 'Show remaining CLI quota in pane headers (claude/codex/kimi/grok) and pick the refresh interval.',
+    keywords: 'usage quota badge remaining limit rate window reset 額度 剩餘 用量 徽章 刷新 間隔 claude codex kimi grok',
+  },
+  {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
@@ -439,6 +455,20 @@ function onLoopPromptChange(): void {
 const loopResumeText = ref(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME))
 function onLoopResumeChange(): void {
   settingsSet(LOOP_RESUME_SETTING_KEY, loopResumeText.value)
+}
+
+// Per-CLI quota badge (pane headers): on/off + backend poll interval.
+const usageEnabledModel = ref(settingsGet<boolean>(USAGE_ENABLED_KEY, true) !== false)
+function onUsageEnabledChange(): void {
+  setUsageEnabled(usageEnabledModel.value)
+}
+const usageRefreshModel = ref(usageRefreshSec())
+function onUsageRefreshChange(raw: string): void {
+  const n = Number(raw)
+  if ((USAGE_REFRESH_OPTIONS as readonly number[]).includes(n)) {
+    usageRefreshModel.value = n
+    setUsageRefreshSec(n)
+  }
 }
 
 // Whether opening a workspace resumes its previous CLI panes, starts them
@@ -2166,6 +2196,26 @@ async function plDelete(id: string, name: string) {
                 :value="resumeConcurrencyModel"
                 @change="onResumeConcurrencyChange(($event.target as HTMLInputElement).value)"
               />
+            </div>
+          </section>
+
+          <section class="ap-section" data-settings-section="general-usage-badge">
+            <h3 class="ap-title">{{ $t('usage.settings-title') }}</h3>
+            <p class="ap-hint">{{ $t('usage.settings-hint') }}</p>
+            <label class="check-row">
+              <input type="checkbox" v-model="usageEnabledModel" @change="onUsageEnabledChange" />
+              <span>{{ $t('usage.settings-enabled') }}</span>
+            </label>
+            <div class="field ap-timeout-field">
+              <label class="lbl">{{ $t('usage.settings-refresh') }}</label>
+              <select
+                :value="usageRefreshModel"
+                @change="onUsageRefreshChange(($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="sec in USAGE_REFRESH_OPTIONS" :key="sec" :value="sec">
+                  {{ `${sec / 60} min` }}
+                </option>
+              </select>
             </div>
           </section>
 

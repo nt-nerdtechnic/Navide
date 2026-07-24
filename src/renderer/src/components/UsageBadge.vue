@@ -1,0 +1,242 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref } from 'vue'
+import {
+  formatRemaining,
+  formatResetAbsolute,
+  formatResetCountdown,
+  remainingPercent,
+  remainingTier,
+  usageFor,
+  type UsageWindow
+} from '../composables/useUsage'
+
+// Compact remaining-quota badge for a CLI pane header. Renders nothing when
+// the agent has no usage provider or nothing was fetched yet; shows ⚠ when
+// the CLI's stored credentials are expired. Hover opens a fixed-position
+// detail popover (teleported to body so the pane header can't clip it).
+
+const props = defineProps<{ agentKey: string }>()
+
+const snap = computed(() => usageFor(props.agentKey))
+const remaining = computed(() => remainingPercent(snap.value))
+const tier = computed(() => (remaining.value === null ? 'ok' : remainingTier(remaining.value)))
+const expired = computed(() => snap.value?.status === 'expired')
+const visible = computed(() => remaining.value !== null || expired.value)
+
+const open = ref(false)
+const popStyle = ref<{ top: string; left: string }>({ top: '0px', left: '0px' })
+const badgeRef = ref<HTMLElement | null>(null)
+let openTimer: ReturnType<typeof setTimeout> | null = null
+let closeTimer: ReturnType<typeof setTimeout> | null = null
+
+const POP_WIDTH = 260
+
+function onEnter(): void {
+  if (closeTimer) {
+    clearTimeout(closeTimer)
+    closeTimer = null
+  }
+  if (open.value || openTimer) return
+  openTimer = setTimeout(() => {
+    openTimer = null
+    const rect = badgeRef.value?.getBoundingClientRect()
+    if (rect) {
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - POP_WIDTH - 8))
+      popStyle.value = { top: `${rect.bottom + 6}px`, left: `${left}px` }
+    }
+    open.value = true
+  }, 150)
+}
+
+function onLeave(): void {
+  if (openTimer) {
+    clearTimeout(openTimer)
+    openTimer = null
+  }
+  // Short grace so the cursor can travel from badge into the popover.
+  closeTimer = setTimeout(() => {
+    closeTimer = null
+    open.value = false
+  }, 120)
+}
+
+onBeforeUnmount(() => {
+  if (openTimer) clearTimeout(openTimer)
+  if (closeTimer) clearTimeout(closeTimer)
+})
+
+function rowRemaining(w: UsageWindow): string {
+  return formatRemaining(Math.max(0, Math.min(100, 100 - w.usedPercent)))
+}
+
+function rowBarWidth(w: UsageWindow): string {
+  return `${Math.max(0, Math.min(100, 100 - w.usedPercent))}%`
+}
+
+function rowTier(w: UsageWindow): 'ok' | 'warn' | 'crit' {
+  return remainingTier(Math.max(0, Math.min(100, 100 - w.usedPercent)))
+}
+
+function rowReset(w: UsageWindow): string {
+  const countdown = formatResetCountdown(w.resetsAt)
+  if (!countdown) return ''
+  return `${countdown} · ${formatResetAbsolute(w.resetsAt)}`
+}
+</script>
+
+<template>
+  <span
+    v-if="visible"
+    ref="badgeRef"
+    class="usage-badge"
+    :class="tier"
+    :title="open ? '' : $t(expired ? 'usage.expired-tooltip' : 'usage.badge-tooltip')"
+    @mouseenter="onEnter"
+    @mouseleave="onLeave"
+    @click.stop
+  >
+    <template v-if="remaining !== null">{{ formatRemaining(remaining) }}</template>
+    <template v-else>⚠</template>
+  </span>
+  <Teleport to="body">
+    <div
+      v-if="open && snap"
+      class="usage-pop"
+      :style="popStyle"
+      @mouseenter="onEnter"
+      @mouseleave="onLeave"
+    >
+      <div class="usage-pop-head">
+        <span class="usage-pop-provider">{{ agentKey }}</span>
+        <span v-if="snap.planType" class="usage-pop-plan">{{ snap.planType }}</span>
+      </div>
+      <div v-if="expired" class="usage-pop-expired">{{ $t('usage.expired-tooltip') }}</div>
+      <div v-for="w in snap.windows" :key="w.kind + w.label" class="usage-row">
+        <div class="usage-row-top">
+          <span class="usage-row-label">{{ w.label }}</span>
+          <span class="usage-row-left" :class="rowTier(w)">
+            {{ $t('usage.remaining', { pct: rowRemaining(w) }) }}
+          </span>
+        </div>
+        <div class="usage-bar">
+          <div class="usage-bar-fill" :class="rowTier(w)" :style="{ width: rowBarWidth(w) }" />
+        </div>
+        <div v-if="rowReset(w)" class="usage-row-reset">
+          {{ $t('usage.resets-in', { time: rowReset(w) }) }}
+        </div>
+      </div>
+      <div class="usage-pop-updated">
+        {{ $t('usage.updated', { time: formatResetAbsolute(snap.fetchedAt) }) }}
+      </div>
+    </div>
+  </Teleport>
+</template>
+
+<style scoped>
+.usage-badge {
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 6px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: default;
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+}
+.usage-badge.warn {
+  color: var(--attention-fg);
+  background: var(--attention-subtle);
+  border-color: var(--attention-muted);
+}
+.usage-badge.crit {
+  color: var(--danger-fg);
+  background: var(--danger-deep);
+  border-color: var(--danger-fg);
+}
+.usage-pop {
+  position: fixed;
+  z-index: 300;
+  width: 260px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.usage-pop-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.usage-pop-provider {
+  font-weight: 700;
+  text-transform: capitalize;
+  color: var(--text-bright);
+}
+.usage-pop-plan {
+  font-size: 10px;
+  text-transform: capitalize;
+  color: var(--text-secondary);
+}
+.usage-pop-expired {
+  color: var(--danger-fg);
+  margin-bottom: 6px;
+}
+.usage-row {
+  margin-bottom: 8px;
+}
+.usage-row-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.usage-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-row-left {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.usage-row-left.warn {
+  color: var(--attention-fg);
+}
+.usage-row-left.crit {
+  color: var(--danger-fg);
+}
+.usage-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success-fg);
+}
+.usage-bar-fill.warn {
+  background: var(--attention-fg);
+}
+.usage-bar-fill.crit {
+  background: var(--danger-fg);
+}
+.usage-row-reset {
+  margin-top: 2px;
+  font-size: 10px;
+  opacity: 0.8;
+}
+.usage-pop-updated {
+  margin-top: 4px;
+  font-size: 9.5px;
+  opacity: 0.6;
+}
+</style>

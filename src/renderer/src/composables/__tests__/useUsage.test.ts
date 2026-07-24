@@ -1,0 +1,114 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ref } from 'vue'
+import {
+  __resetUsageForTest,
+  formatRemaining,
+  formatResetCountdown,
+  initUsage,
+  remainingPercent,
+  remainingTier,
+  usageFor,
+  type UsageSnapshot
+} from '../useUsage'
+import { __resetSettingsForTest } from '../../lib/settings'
+
+function snap(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
+  return {
+    provider: 'claude',
+    status: 'ok',
+    planType: null,
+    windows: [{ kind: 'session', label: 'Session (5h)', usedPercent: 42, resetsAt: null }],
+    fetchedAt: '2026-07-24T00:00:00Z',
+    error: null,
+    ...overrides
+  }
+}
+
+type Handler = (raw: unknown) => void
+
+function fakeBackend(): {
+  backend: {
+    status: ReturnType<typeof ref<string>>
+    send: ReturnType<typeof vi.fn>
+    on: ReturnType<typeof vi.fn>
+  }
+  emit: (type: string, payload: unknown) => void
+} {
+  const handlers = new Map<string, Handler>()
+  const backend = {
+    status: ref('connected'),
+    send: vi.fn(async () => ({ ok: true, payload: {} })),
+    on: vi.fn((type: string, cb: Handler) => {
+      handlers.set(type, cb)
+      return () => handlers.delete(type)
+    })
+  }
+  return { backend, emit: (type, payload) => handlers.get(type)?.(payload) }
+}
+
+describe('useUsage store', () => {
+  beforeEach(() => {
+    __resetUsageForTest()
+    __resetSettingsForTest()
+  })
+  afterEach(() => {
+    __resetUsageForTest()
+    __resetSettingsForTest()
+  })
+
+  it('sends usage.configure on connect and applies usage.changed broadcasts', async () => {
+    const { backend, emit } = fakeBackend()
+    initUsage(backend as never)
+    await Promise.resolve()
+    expect(backend.send).toHaveBeenCalledWith(
+      'usage.configure',
+      expect.objectContaining({ enabled: true, intervalSec: 300 })
+    )
+    emit('usage.changed', { providers: { claude: snap() } })
+    expect(usageFor('claude')?.windows[0].usedPercent).toBe(42)
+  })
+
+  it('usageFor maps only supported agent keys', () => {
+    const { backend, emit } = fakeBackend()
+    initUsage(backend as never)
+    emit('usage.changed', { providers: { claude: snap(), grok: snap({ provider: 'grok' }) } })
+    expect(usageFor('claude')).toBeDefined()
+    expect(usageFor('grok')).toBeDefined()
+    expect(usageFor('antigravity')).toBeUndefined()
+    expect(usageFor('terminal')).toBeUndefined()
+    expect(usageFor(undefined)).toBeUndefined()
+  })
+
+  it('remainingPercent inverts the first window and gates on status', () => {
+    expect(remainingPercent(snap())).toBe(58)
+    expect(remainingPercent(snap({ status: 'expired' }))).toBeNull()
+    expect(remainingPercent(snap({ windows: [] }))).toBeNull()
+    expect(remainingPercent(undefined)).toBeNull()
+  })
+
+  it('remainingTier thresholds: >40 ok, 15-40 warn, <15 crit', () => {
+    expect(remainingTier(58)).toBe('ok')
+    expect(remainingTier(41)).toBe('ok')
+    expect(remainingTier(40)).toBe('warn')
+    expect(remainingTier(15)).toBe('warn')
+    expect(remainingTier(14.9)).toBe('crit')
+    expect(remainingTier(0)).toBe('crit')
+  })
+
+  it('formatRemaining rounds and keeps the <1% special case', () => {
+    expect(formatRemaining(58.4)).toBe('58%')
+    expect(formatRemaining(0.5)).toBe('<1%')
+    expect(formatRemaining(0)).toBe('0%')
+  })
+
+  it('formatResetCountdown renders d/h/m tiers and empty for the past', () => {
+    const now = Date.parse('2026-07-24T00:00:00Z')
+    expect(formatResetCountdown('2026-07-24T03:15:00Z', now)).toBe('3h 15m')
+    expect(formatResetCountdown('2026-07-26T02:00:00Z', now)).toBe('2d 2h')
+    expect(formatResetCountdown('2026-07-24T00:12:00Z', now)).toBe('12m')
+    expect(formatResetCountdown('2026-07-23T00:00:00Z', now)).toBe('')
+    expect(formatResetCountdown(null, now)).toBe('')
+    expect(formatResetCountdown('not-a-date', now)).toBe('')
+  })
+})

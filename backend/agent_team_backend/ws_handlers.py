@@ -3954,3 +3954,30 @@ async def ai_chat_test_connection(session: "Session", msg_id: str, msg_type: str
     except Exception as _e:
         _tc_err = str(_e)
     await session.send_json(make_response(msg_id, msg_type, {"ok": _tc_ok, "error": _tc_err}))
+
+
+# ── CLI usage/quota badges (usage.*) ────────────────────────────────────────
+@handler("usage.get")
+async def usage_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .usage_service import service
+
+    await session.send_json(make_response(msg_id, msg_type, service.payload()))
+
+
+@handler("usage.refresh")
+async def usage_refresh(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .usage_service import service
+
+    service.request_refresh()
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
+@handler("usage.configure")
+async def usage_configure(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .usage_service import service
+
+    service.configure(
+        enabled=bool(payload.get("enabled", True)),
+        interval_sec=payload.get("intervalSec"),
+    )
+    await session.send_json(make_response(msg_id, msg_type, service.payload()))

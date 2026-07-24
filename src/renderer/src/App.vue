@@ -106,6 +106,7 @@ import {
   type RestoreDecision,
 } from './lib/resumeBehavior'
 import { initSettingsBackend, settingsGet, settingsSet } from './lib/settings'
+import { initUsage } from './composables/useUsage'
 import {
   LOOP_PROMPT_SETTING_KEY,
   DEFAULT_LOOP_PROMPT,
@@ -134,6 +135,9 @@ const backend = useBackend()
 // Hook the settings cache to the ws: reconciles + flushes queued writes once
 // connected, and applies ui.settings_changed broadcasts from other windows.
 initSettingsBackend(backend)
+// Per-CLI quota badges: configure the backend poller and mirror its
+// usage.changed broadcasts (read by TerminalPane's UsageBadge).
+initUsage(backend)
 const rolesApi = useRoles(backend)
 const cliProfilesApi = useCliProfiles(backend)
 const pipelinesApi = usePipelines(backend)

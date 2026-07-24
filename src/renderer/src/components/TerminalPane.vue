@@ -7,6 +7,7 @@ import { extractDropPaths, shellEscape } from '../lib/drop'
 import { CLI_CONTEXT_MIME, PANE_ID_MIME, resolveCliDropSource, writeCliPaneDragPayload } from '../lib/cliContext'
 import { formatLoopTime } from '../lib/loopPrompt'
 import RebuildIcon from './RebuildIcon.vue'
+import UsageBadge from './UsageBadge.vue'
 
 interface Props {
   paneId: string
@@ -417,6 +418,7 @@ onMounted(() => {
           :data-status="displayStatus"
           :title="displayStatus === 'idle' ? $t('pane.terminal.idle-status-tooltip') : ''"
         >{{ displayStatus }}</span>
+        <UsageBadge v-if="agentKey" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
     </header>

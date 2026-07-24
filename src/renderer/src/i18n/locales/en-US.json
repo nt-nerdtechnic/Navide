@@ -1192,6 +1192,17 @@
     "still-detected": "The issue is still detected. Check the paths above and try again.",
     "close": "Close and don't remind me"
   },
+  "usage": {
+    "badge-tooltip": "Remaining quota — hover for details",
+    "expired-tooltip": "Credentials expired — re-login in that CLI",
+    "remaining": "{pct} left",
+    "resets-in": "resets in {time}",
+    "updated": "updated {time}",
+    "settings-title": "CLI quota badge",
+    "settings-enabled": "Show remaining quota in CLI pane headers",
+    "settings-refresh": "Refresh interval",
+    "settings-hint": "Reads local CLI credentials to query each provider's usage API (claude / codex / kimi / grok). Read-only — credentials are never written."
+  },
   "onboard": {
     "step": {
       "environment": "Environment",

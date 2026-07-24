@@ -1192,6 +1192,17 @@
     "still-detected": "仍偵測到問題，請確認上方路徑後再試一次。",
     "close": "關閉且不再提醒"
   },
+  "usage": {
+    "badge-tooltip": "剩餘額度 — 滑鼠停留看詳細",
+    "expired-tooltip": "憑證已過期 — 請在該 CLI 重新登入",
+    "remaining": "剩餘 {pct}",
+    "resets-in": "{time} 後重置",
+    "updated": "更新於 {time}",
+    "settings-title": "CLI 額度徽章",
+    "settings-enabled": "在 CLI pane 標題列顯示剩餘額度",
+    "settings-refresh": "刷新間隔",
+    "settings-hint": "讀取本機 CLI 憑證查詢官方用量 API（claude / codex / kimi / grok），僅讀取、不寫入憑證。"
+  },
   "onboard": {
     "step": {
       "environment": "開發環境",
