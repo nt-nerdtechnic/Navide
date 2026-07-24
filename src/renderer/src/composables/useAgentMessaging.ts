@@ -45,9 +45,6 @@ export const RATE_LIMIT_WINDOW_MS = 60_000
 export const QUEUE_CAP = 10
 const LOG_CAP = 500
 
-/** Sender name for system-generated roster briefings (never rate-limited). */
-export const SYSTEM_SENDER = 'system'
-
 // ── Module-level singleton state ──────────────────────────────────────────
 let deps: MessagingDeps | null = null
 let seq = 0
@@ -192,42 +189,6 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
 }
 
 /**
- * Enqueue (or refresh) the system roster briefing for a pane. At most one
- * queued briefing per target: while still queued its text is replaced in
- * place; once delivered, the next roster change enqueues a fresh one.
- * Bypasses rate limit and queue cap (one slot per pane, system-originated).
- * Unknown targets are a silent no-op — no failed-entry noise.
- */
-function upsertSystemBriefing(to: string, text: string): void {
-  if (!deps) throw new Error('messaging not configured')
-  const targetPane = paneIdOf(to)
-  if (!targetPane) return
-  const queued = messages.value.find(
-    (m) => m.from === SYSTEM_SENDER && m.to === to && m.status === 'queued',
-  )
-  if (queued) {
-    queued.content = text
-    envelopes.set(queued.id, text)
-    return
-  }
-  const msg: AgentMessage = {
-    id: ++seq,
-    from: SYSTEM_SENDER,
-    to,
-    content: text,
-    status: 'queued',
-    createdAt: deps.now(),
-  }
-  pushLog(msg)
-  // Briefings are injected raw — no [Navide MSG] envelope, the text is
-  // already a self-contained protocol note.
-  envelopes.set(msg.id, text)
-  const q = queues.get(targetPane) ?? []
-  q.push(msg.id)
-  queues.set(targetPane, q)
-}
-
-/**
  * Try to deliver queue heads. Safe to call often (interval + turn events);
  * per-pane in-flight guard makes it re-entrant.
  */
@@ -308,7 +269,6 @@ export function useAgentMessaging() {
     nameOf,
     paneIdOf,
     sendMessage,
-    upsertSystemBriefing,
     pump,
     pauseMessaging,
     resumeMessaging,

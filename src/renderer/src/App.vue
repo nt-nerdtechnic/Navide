@@ -21,7 +21,7 @@ import NotificationHost from './components/NotificationHost.vue'
 import Welcome from './components/Welcome.vue'
 import { useNotify } from './composables/useNotify'
 import { useAgentMessaging } from './composables/useAgentMessaging'
-import { parseMessages, renderRosterBriefing } from './lib/agentMessaging'
+import { parseMessages } from './lib/agentMessaging'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
 import { useBackend } from './composables/useBackend'
 import { useTheme } from './composables/useTheme'
@@ -1048,7 +1048,6 @@ function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
   if (pane.agentKey === 'terminal') return
   pane.messagingName = messaging.registerPane(pane.id, pane.agentKey, preferredName || pane.slotLabel || undefined)
   persistMessagingName(pane.id, pane.messagingName)
-  scheduleRosterBriefings()
 }
 
 /** keepPersisted: pane handed off to another window (detach) — it re-registers
@@ -1056,32 +1055,6 @@ function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
 function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean } = {}): void {
   messaging.unregisterPane(paneId)
   if (!opts.keepPersisted) dropPersistedMessagingName(paneId)
-  scheduleRosterBriefings()
-}
-
-// ── Roster briefings: teach every manual agent pane the protocol + peers ────
-// Pipeline panes get MESSAGING_PROTOCOL in their kickoff and stay busy through
-// the stage, so only manual panes are briefed here. Debounced: registry churn
-// during workspace restore collapses into one refresh.
-let _briefingTimer = 0
-function scheduleRosterBriefings(): void {
-  window.clearTimeout(_briefingTimer)
-  _briefingTimer = window.setTimeout(refreshRosterBriefings, 1000)
-}
-
-function refreshRosterBriefings(): void {
-  const named = panes.value.filter((p) => p.messagingName)
-  for (const pane of named) {
-    if (pane.origin === 'pipeline') continue
-    const peers = named
-      .filter((p) => p.id !== pane.id)
-      .map((p) => ({ name: p.messagingName as string, label: p.agentLabel }))
-    if (peers.length === 0) continue
-    messaging.upsertSystemBriefing(
-      pane.messagingName as string,
-      renderRosterBriefing(pane.messagingName as string, peers),
-    )
-  }
 }
 
 /** deliver() dep: inject the envelope via the same primitive as all other pane
@@ -1146,7 +1119,6 @@ function onRenameMessaging(paneId: string, rawName: string): void {
   if (messaging.renamePane(paneId, rawName)) {
     pane.messagingName = messaging.nameOf(paneId) ?? pane.messagingName
     if (pane.messagingName) persistMessagingName(paneId, pane.messagingName)
-    scheduleRosterBriefings()
   } else {
     notifyRestore.toast(i18n.global.t('msg.rename-invalid'), { type: 'error' })
   }
@@ -1163,7 +1135,6 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.clearInterval(_msgPumpTimer)
-  window.clearTimeout(_briefingTimer)
 })
 
 function syncViews(): void {

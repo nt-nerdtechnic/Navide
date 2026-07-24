@@ -101,28 +101,6 @@ export function renderEnvelope(
   return lines.join('\n')
 }
 
-/**
- * One-shot system briefing injected into a pane so its CLI knows the messaging
- * protocol and who it can reach. Re-sent (upserted) whenever the roster
- * changes. Peers come from the pane name registry — the same data the sidebar
- * CLI pane list shows.
- */
-export function renderRosterBriefing(
-  selfName: string,
-  peers: { name: string; label: string }[],
-): string {
-  const roster = peers.map((p) => `${p.name}（${p.label}）`).join('、')
-  return [
-    `[Inter-CLI Messaging] 你是「${selfName}」。你可以直接傳訊息給其他 CLI pane：輸出裸行區塊`,
-    `${MSG_START} to: <目標名稱>`,
-    '<訊息內容，可多行>',
-    MSG_END,
-    '（marker 必須獨立整行、不可放在 markdown code block 內；沒有溝通需求時不要輸出）',
-    `目前可傳訊的對象：${roster}`,
-    '收到此訊息不需回覆，繼續原本的工作即可。',
-  ].join('\n')
-}
-
 /** Smallest free `<agentKey>-<n>` name not present in `taken`. */
 export function defaultMessagingName(agentKey: string, taken: Iterable<string>): string {
   const used = new Set(taken)

@@ -4,7 +4,6 @@ import {
   _resetMessagingForTest,
   RATE_LIMIT_MAX,
   QUEUE_CAP,
-  SYSTEM_SENDER,
   type MessagingDeps,
 } from '../useAgentMessaging'
 import { MSG_ENVELOPE_PREFIX } from '../../lib/agentMessaging'
@@ -176,30 +175,6 @@ describe('useAgentMessaging', () => {
       m.resumeMessaging()
       await flush()
       expect(msg.status).toBe('delivered')
-    })
-
-    it('delivers system briefings raw (no envelope) and upserts while queued', async () => {
-      idlePanes.clear()
-      m.upsertSystemBriefing('codex-1', 'briefing v1')
-      const queued = m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)
-      expect(queued).toHaveLength(1)
-      expect(queued[0].status).toBe('queued')
-      // Upsert replaces the queued briefing instead of stacking a second one.
-      m.upsertSystemBriefing('codex-1', 'briefing v2')
-      expect(m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)).toHaveLength(1)
-      idlePanes.add('p2')
-      m.pump()
-      await flush()
-      expect(delivered).toHaveLength(1)
-      expect(delivered[0].text).toBe('briefing v2')
-      // Once delivered, the next upsert enqueues a fresh briefing.
-      m.upsertSystemBriefing('codex-1', 'briefing v3')
-      expect(m.messages.value.filter((msg) => msg.from === SYSTEM_SENDER)).toHaveLength(2)
-    })
-
-    it('system briefing to an unknown target is a silent no-op', () => {
-      m.upsertSystemBriefing('ghost', 'hello')
-      expect(m.messages.value).toHaveLength(0)
     })
 
     it('unregisterPane fails its queued messages', () => {
