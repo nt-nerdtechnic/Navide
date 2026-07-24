@@ -1204,7 +1204,11 @@ async function injectText(
   sessionId: string,
   text: string,
   logLabel?: string,
-  preserveNewlines = false
+  preserveNewlines = false,
+  // Loop callers pass a generation check so a manual cancel / restart aborts an
+  // already-running injection mid-flight instead of letting a stray prompt land
+  // in the CLI. Returns false on abort (treated as a failed inject).
+  shouldAbort?: () => boolean
 ): Promise<boolean> {
   // Log the full injection text to the session's output log file BEFORE
   // chunking so the log file shows one readable block per send.
@@ -1261,6 +1265,7 @@ async function injectText(
   const readyTimeout = Math.min(8_000, Math.max(2_500, Math.floor(text.length / 6)))
   let ready = false
   for (let send = 1; send <= MAX_CONTENT_SENDS && !ready; send++) {
+    if (shouldAbort?.()) return false
     const preLen = cleanLen()
     if (!(await sendChunks())) return false
     if (paneId === undefined || preLen < 0) {
@@ -1272,6 +1277,7 @@ async function injectText(
     const deadline = Date.now() + readyTimeout
     while (Date.now() < deadline) {
       await sleep(200)
+      if (shouldAbort?.()) return false
       const buf = cleanBuf()
       if (normalizeForMatch(buf).includes(tail) || buf.length - preLen >= READY_GROWTH_MIN) {
         ready = true
@@ -1298,6 +1304,7 @@ async function injectText(
   const before = cleanLen()
   const MAX_SUBMITS = 3
   for (let attempt = 1; attempt <= MAX_SUBMITS; attempt++) {
+    if (shouldAbort?.()) return false
     try {
       await backend.send('terminal.input', { terminal_session_id: sessionId, data: '\r' })
     } catch (err) {
@@ -1321,10 +1328,16 @@ async function injectText(
   return false
 }
 
-async function injectPane(paneId: string, text: string, logLabel?: string, preserveNewlines = false): Promise<boolean> {
+async function injectPane(
+  paneId: string,
+  text: string,
+  logLabel?: string,
+  preserveNewlines = false,
+  shouldAbort?: () => boolean
+): Promise<boolean> {
   const ref = paneRefs[paneId]
   if (!ref?.sessionId) return false
-  return injectText(ref.sessionId, text, logLabel, preserveNewlines)
+  return injectText(ref.sessionId, text, logLabel, preserveNewlines, shouldAbort)
 }
 
 // Text of a pane worth SHARING with another pane / the AI Chat: the rendered
@@ -1410,6 +1423,18 @@ async function injectExternalPaneContext(sourcePaneId: string, targetPaneId: str
 // Loop launch button: first click injects the configurable loop prompt and
 // lights the LOOP badge; second click only clears the badge (the app cannot
 // stop the CLI-internal loop) and cancels any pending auto-resume.
+// Monotonic per-pane loop generation. Bumped on every start AND every cancel,
+// so an already-running/queued loop injection can tell whether the loop it
+// belongs to is still the current one. Without it a stale injection keys off the
+// boolean loopActive, which a re-click flips back to true — letting a cancelled
+// loop's in-flight inject land a stray prompt and corrupt the fresh loop's state.
+const loopGen = new Map<string, number>()
+function bumpLoopGen(paneId: string): number {
+  const next = (loopGen.get(paneId) ?? 0) + 1
+  loopGen.set(paneId, next)
+  return next
+}
+
 async function togglePaneLoop(paneId: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
@@ -1417,6 +1442,9 @@ async function togglePaneLoop(paneId: string): Promise<void> {
     pane.loopActive = false
     pane.loopWaitUntil = null
     pane.loopEstimateResetAt = null
+    // Invalidate any in-flight/queued injection so it aborts instead of landing
+    // a stray prompt (and never re-arms a loop the user just turned off).
+    bumpLoopGen(paneId)
     stopLoopLimitWatcher(paneId)
     return
   }
@@ -1424,21 +1452,28 @@ async function togglePaneLoop(paneId: string): Promise<void> {
   // start injection doesn't land (e.g. pane still 'starting', no session yet).
   pane.loopActive = true
   pane.loopEstimateResetAt = Date.now() + LOOP_ESTIMATE_WINDOW_MS
+  const gen = bumpLoopGen(paneId)
   startLoopLimitWatcher(paneId)
   // Global injection semaphore: synchronized multi-pane loop starts must not
   // flood the WS (same failure mode the role-injection path guards against).
   await acquireInjectionSlot()
-  let ok: boolean
+  let ok = false
   try {
+    // Superseded while queued on the semaphore (cancel / re-toggle)? Abort — the
+    // newer toggle owns the loop state now.
+    if (loopGen.get(paneId) !== gen) return
     ok = await injectPane(
       paneId,
       withLoopDoneInstruction(settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT)),
       'loop-start',
-      true
+      true,
+      () => loopGen.get(paneId) !== gen
     )
   } finally {
     releaseInjectionSlot()
   }
+  // A newer toggle superseded this start while it injected — don't touch state.
+  if (loopGen.get(paneId) !== gen) return
   if (!ok) {
     console.warn(`[loop] pane ${paneId}: loop-start injection failed — loop disarmed`)
     pane.loopActive = false
@@ -1461,6 +1496,7 @@ async function togglePaneLoop(paneId: string): Promise<void> {
 async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane || !pane.loopActive || pane.loopWaitUntil == null) return
+  const gen = loopGen.get(paneId)
   pane.loopWaitUntil = null
   // Consume everything the pane emitted during the wait — TUI repaints keep
   // the old limit banner in the buffer, and re-matching it right after the
@@ -1470,18 +1506,21 @@ async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   // Same global injection semaphore as loop-start: synchronized multi-pane
   // resumes (shared quota window) must not flood the WS.
   await acquireInjectionSlot()
-  let ok: boolean
+  let ok = false
   try {
+    if (loopGen.get(paneId) !== gen || !pane.loopActive) return
     ok = await injectPane(
       paneId,
       withLoopDoneInstruction(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME)),
       logLabel,
-      true
+      true,
+      () => loopGen.get(paneId) !== gen
     )
   } finally {
     releaseInjectionSlot()
   }
-  if (!pane.loopActive) return // loop turned off while the injection was in flight
+  // Loop turned off / restarted while the injection was in flight — don't touch state.
+  if (loopGen.get(paneId) !== gen || !pane.loopActive) return
   if (!ok) {
     console.warn(`[loop] pane ${paneId}: resume injection failed — retrying in 60s`)
     pane.loopWaitUntil = Date.now() + 60_000
@@ -1503,21 +1542,27 @@ async function fireLoopContinue(paneId: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   const watcher = loopLimitWatchers.get(paneId)
   if (!pane || !pane.loopActive || !watcher || watcher.continuing) return
+  const gen = loopGen.get(paneId)
   watcher.continuing = true
   await acquireInjectionSlot()
-  let ok: boolean
+  let ok = false
   try {
+    // Cancelled / restarted while queued on the semaphore? Abort before the
+    // inject so no stray "繼續" lands in a CLI whose loop was just turned off.
+    if (loopGen.get(paneId) !== gen || !pane.loopActive) return
     ok = await injectPane(
       paneId,
       withLoopDoneInstruction(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME)),
       'loop-continue',
-      true
+      true,
+      () => loopGen.get(paneId) !== gen
     )
   } finally {
     releaseInjectionSlot()
     watcher.continuing = false
   }
-  if (!pane.loopActive) return // loop turned off while the injection was in flight
+  // Loop turned off / restarted while the injection was in flight — don't arm.
+  if (loopGen.get(paneId) !== gen || !pane.loopActive) return
   if (!ok) {
     console.warn(`[loop] pane ${paneId}: continue injection failed — will retry next turn`)
     return
@@ -1536,6 +1581,8 @@ function stopLoopComplete(paneId: string): void {
   pane.loopActive = false
   pane.loopWaitUntil = null
   pane.loopEstimateResetAt = null
+  // Invalidate any in-flight/queued continue so it can't re-arm after done.
+  bumpLoopGen(paneId)
   stopLoopLimitWatcher(paneId)
   sysNotify.notifyPaneState(
     paneId,
