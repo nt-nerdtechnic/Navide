@@ -158,6 +158,47 @@ def test_pane_attribution_within_run(claude_attr: tuple[Attribution, Path]) -> N
     assert result.stage_id == "01"
 
 
+def test_register_pane_scopes_baseline_to_workspace_folder(tmp_path: Path) -> None:
+    """register_pane must enumerate only the pane's workspace folder, not the
+    whole session tree. On a large ~/.claude the whole-tree scan stat'd ~1500
+    files on every spawn; the baseline only needs files that could belong to
+    this pane's cwd, so a reader that can scope by workspace must be used."""
+    root = tmp_path / "claude_projects"
+    (root / "ws_a").mkdir(parents=True)
+    (root / "ws_b").mkdir(parents=True)
+    (root / "ws_a" / "a.jsonl").write_text("{}")
+    (root / "ws_b" / "b.jsonl").write_text("{}")
+    calls = {"full": 0, "scoped": 0}
+
+    class ScopingReader(FakeReader):
+        def session_files(self) -> list[Path]:
+            calls["full"] += 1
+            return super().session_files()
+
+        def session_files_for_workspace(self, workspace_path: str) -> list[Path]:
+            calls["scoped"] += 1
+            return [self.root / "ws_a" / "a.jsonl"] if workspace_path == "/ws/a" else []
+
+    attr = Attribution([ScopingReader("claude", root)], workspaces_path=tmp_path / "ws.json")
+    attr.register_pane("p", vendor="claude", cwd="/ws/a", workspace_path="/ws/a")
+
+    reg = attr._panes["p"]
+    assert (root / "ws_a" / "a.jsonl") in reg.baseline_files   # own folder scanned
+    assert (root / "ws_b" / "b.jsonl") not in reg.baseline_files  # other workspace scoped out
+    assert calls["scoped"] == 1
+    assert calls["full"] == 0  # whole-tree enumeration avoided
+
+
+def test_register_pane_falls_back_to_full_tree_when_unscopable(claude_attr: tuple[Attribution, Path]) -> None:
+    """A reader that can't scope by workspace (session_files_for_workspace → None,
+    e.g. Grok's shared DB) must still register — fall back to the full list."""
+    attr, root = claude_attr  # FakeReader does not override the scoped method
+    proj = root / "-x"; proj.mkdir()
+    f = proj / "s.jsonl"; f.write_text("")
+    attr.register_pane("p", vendor="claude", cwd="/x", workspace_path="/x")
+    assert f in attr._panes["p"].baseline_files
+
+
 def test_two_unclaimed_panes_same_workspace_claim_nothing(claude_attr: tuple[Attribution, Path]) -> None:
     """Several unclaimed same-cwd panes = ambiguous provenance. Pre-fix the
     oldest registration claimed the session (a guess that could route one

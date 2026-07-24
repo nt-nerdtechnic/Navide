@@ -253,7 +253,14 @@ class Attribution:
 
         reader = self._readers[vendor]
         try:
-            baseline = set(reader.session_files())
+            # Scope the baseline to THIS pane's workspace folder when the reader
+            # can (Claude/Kimi/Antigravity/Codex map a workspace to one dir). A
+            # pane only ever claims sessions under its own cwd, so the whole-tree
+            # enumeration was pure waste — on a large ~/.claude it stat'd ~1500
+            # files per spawn. Grok (shared DB) / missing ws → None → full tree.
+            scoped = reader.session_files_for_workspace(ws) if ws else None
+            files = scoped if scoped is not None else reader.session_files()
+            baseline = set(files)
         except Exception as err:  # noqa: BLE001
             log.warning("baseline scan failed for vendor=%s: %s", vendor, err)
             baseline = set()
