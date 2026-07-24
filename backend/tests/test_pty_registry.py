@@ -133,6 +133,163 @@ def test_reap_kills_orphan_behind_shell_exec() -> None:
     assert _registry() == {}
 
 
+def test_update_descendants_attaches_to_existing_entry_only() -> None:
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "30"])
+        pty_registry.update_descendants(
+            {proc.pid: {900: "L900"}, 555555: {901: "L901"}}
+        )
+        entries = _registry()
+        assert entries[str(proc.pid)]["descendants"] == {"900": "L900"}
+        assert "555555" not in entries  # unknown root must not create an entry
+    finally:
+        proc.kill()
+        proc.wait()
+        pty_registry.unregister(proc.pid)
+
+
+def test_update_descendants_skips_write_when_unchanged(monkeypatch) -> None:
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        pty_registry.register(proc.pid, ["sleep", "30"])
+        pty_registry.update_descendants({proc.pid: {900: "L900"}})
+        saves = []
+        monkeypatch.setattr(pty_registry, "_save", lambda e: saves.append(e))
+        pty_registry.update_descendants({proc.pid: {900: "L900"}})
+        assert saves == []  # unchanged snapshot must not rewrite the file
+    finally:
+        proc.kill()
+        proc.wait()
+        pty_registry.unregister(proc.pid)
+
+
+def _dead_pid() -> int:
+    p = subprocess.Popen(["sleep", "0.01"])
+    p.wait()
+    return p.pid
+
+
+def test_reap_kills_matching_descendant_of_gone_root() -> None:
+    # The root CLI died on its own while its backend was down (no EOF reap
+    # ran); its detached grandchild survives. reap_stale must identity-check
+    # the recorded descendant and take it down even though the root is gone.
+    orphan = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        lstart = pty_registry._ps(orphan.pid, "lstart=")
+        assert lstart
+        root_pid = _dead_pid()
+        pty_registry._save({
+            str(root_pid): {
+                "argv0": "x",
+                "lstart": "Thu Jan  1 00:00:00 1970",
+                "owner": 1,
+                "descendants": {str(orphan.pid): lstart},
+            }
+        })
+
+        # scan_orphans must surface the same set reap_stale would kill —
+        # the UI gates manual cleanup on this count.
+        assert pty_registry.scan_orphans() == [orphan.pid]
+
+        reaped = pty_registry.reap_stale(grace=0.2)
+
+        assert reaped == [orphan.pid]
+        orphan.wait(timeout=5)
+        assert _registry() == {}
+    finally:
+        try:
+            orphan.kill()
+        except ProcessLookupError:
+            pass
+        orphan.wait()
+
+
+def test_reap_never_kills_descendants_under_an_unverifiable_live_root() -> None:
+    # register()'s lstart probe can fail at spawn time (stored as "") — the
+    # root then classifies unverifiable even while ALIVE. Its recorded
+    # descendants are its live MCP servers; killing them under a running CLI
+    # is the one unacceptable outcome. Root pid present in the table ⇒ never
+    # sweep; the entry is dropped without signalling anything.
+    root = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    server = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        lstart = pty_registry._ps(server.pid, "lstart=")
+        assert lstart
+        pty_registry._save({
+            str(root.pid): {
+                "argv0": "x",
+                "lstart": "",  # register-time probe failed
+                "owner": 1,
+                "descendants": {str(server.pid): lstart},
+            }
+        })
+
+        assert pty_registry.scan_orphans() == []
+        assert pty_registry.reap_stale(grace=0.0) == []
+        assert root.poll() is None  # root untouched
+        assert server.poll() is None  # its live server untouched
+        assert _registry() == {}  # unverifiable entry dropped
+    finally:
+        for p in (root, server):
+            try:
+                p.kill()
+            except ProcessLookupError:
+                pass
+            p.wait()
+
+
+def test_reap_spares_descendant_with_wrong_lstart() -> None:
+    # A recycled descendant pid (recorded lstart no longer matches) must not
+    # be signalled; the dead root's entry is still dropped.
+    bystander = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        root_pid = _dead_pid()
+        pty_registry._save({
+            str(root_pid): {
+                "argv0": "x",
+                "lstart": "Thu Jan  1 00:00:00 1970",
+                "owner": 1,
+                "descendants": {str(bystander.pid): "Thu Jan  1 00:00:00 1970"},
+            }
+        })
+
+        assert pty_registry.reap_stale(grace=0.0) == []
+        assert bystander.poll() is None  # not signalled
+        assert _registry() == {}
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_reap_kills_root_group_and_detached_descendant_together() -> None:
+    # The backend-SIGKILL scenario: root CLI still alive (killpg reaps it) AND
+    # its MCP-style grandchild detached into its own session — killpg misses
+    # it, the recorded descendant snapshot must not.
+    root = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    detached = subprocess.Popen(["sleep", "300"], start_new_session=True)
+    try:
+        pty_registry.register(root.pid, ["sleep", "300"])
+        _set_owner(root.pid, 1)
+        lstart = pty_registry._ps(detached.pid, "lstart=")
+        assert lstart
+        pty_registry.update_descendants({root.pid: {detached.pid: lstart}})
+
+        reaped = pty_registry.reap_stale(grace=0.2)
+
+        assert sorted(reaped) == sorted([root.pid, detached.pid])
+        root.wait(timeout=5)
+        detached.wait(timeout=5)
+        assert _registry() == {}
+    finally:
+        for p in (root, detached):
+            try:
+                p.kill()
+            except ProcessLookupError:
+                pass
+            p.wait()
+
+
 def test_reap_never_signals_a_recycled_pid() -> None:
     # Entry whose pid now belongs to a different process (us) with a different
     # start time: must be dropped without being signalled.

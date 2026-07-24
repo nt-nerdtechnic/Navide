@@ -24,8 +24,8 @@ from agent_team_backend.terminals import _descendant_pids, _kill_breakaway
 # ---- _descendant_pids: tree parsing (pure, mocked ps) ----
 
 def test_descendant_pids_collects_whole_subtree(monkeypatch, fake_ps):
-    # tree: 100 → 200 → 300, 100 → 201, and unrelated 999 → 998
-    table = "100 1\n200 100\n300 200\n201 100\n999 1\n998 999\n"
+    # columns: pid ppid pgid — tree: 100 → 200 → 300, 100 → 201, and 999 → 998
+    table = "100 1 100\n200 100 100\n300 200 300\n201 100 100\n999 1 999\n998 999 999\n"
     monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
     assert sorted(_descendant_pids(100)) == [200, 201, 300]
     # unrelated root only sees its own branch
@@ -36,7 +36,7 @@ def test_descendant_pids_collects_whole_subtree(monkeypatch, fake_ps):
 
 def test_descendant_pids_survives_cycle_and_garbage(monkeypatch, fake_ps):
     # a recycled-pid cycle (100→200→100) must not loop forever; junk lines skipped
-    table = "100 1\n200 100\n100 200\nBAD LINE\n\n201 100\n"
+    table = "100 1 100\n200 100 100\n100 200 100\nBAD LINE\n\n201 100 100\n"
     monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
     out = sorted(_descendant_pids(100))
     assert out == [200, 201]
