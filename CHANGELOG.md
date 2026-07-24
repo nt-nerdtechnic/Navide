@@ -4,6 +4,23 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.56] — 2026-07-24 — signed release
+
+### Added
+
+- CLI account profiles: run a CLI under an isolated account "profile" (its own home directory), switch the account per pane or when spawning, and manage accounts in a dedicated Settings tab. Token usage is tracked per account (`by_profile`, with a forward-migration that folds historical usage into the default account). No credentials are ever stored — only isolated home directories are registered.
+- Move the update indicator into the bottom status bar.
+
+### Fixed
+
+- Cross-window pane drop now relies on Chromium's native same-app cross-window delivery, routing through the main process only as a fallback when no in-window target consumes the drop.
+- Keep a cancelled loop from dropping a stray prompt into the pane or breaking the next loop start (per-pane generation guard).
+- Stop a manual_pane.session retry flood that could time out terminal.create.
+
+### Distribution note
+
+- Signed with a Developer ID and notarized by Apple; published as a stable release eligible for the in-app updater.
+
 ## [0.1.55] — 2026-07-23 — signed release
 
 ### Added
