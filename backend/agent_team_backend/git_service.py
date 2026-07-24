@@ -1326,13 +1326,32 @@ async def show_file(workspace_path: str, filepath: str, rev: str = "HEAD") -> di
     return {"ok": True, "content": out, "error": ""}
 
 
-async def diff_file(workspace_path: str, filepath: str, staged: bool = False) -> dict[str, Any]:
-    """Return the diff for a single file (staged or working-tree).
+async def diff_file(
+    workspace_path: str, filepath: str, staged: bool = False, commit: str = ""
+) -> dict[str, Any]:
+    """Return the diff for a single file (staged, working-tree, or one commit).
 
     Untracked files are invisible to plain ``git diff``, so for the working-tree
     view we diff them against /dev/null to render the whole file as additions
     (matching how VS Code's "Open Changes" presents a new file).
+
+    With *commit*, returns the raw diff that commit introduced for the file
+    (same ``git show`` pathspec handling as ``commit_file_diff``); *staged* is
+    ignored. Merge commits produce an empty diff here.
     """
+    if commit:
+        if err := _validate_commit_hash(commit):
+            return {"ok": False, "diff": "", "error": err}
+        fp = filepath.strip()
+        if not fp or fp.startswith("-"):
+            return {"ok": False, "diff": "", "error": "invalid filepath"}
+        rc, out, stderr = await _run(
+            ["git", "-c", "core.quotePath=false", "show", "--format=", commit.strip(), "--", f":(top,literal){fp}"],
+            workspace_path,
+        )
+        if rc != 0:
+            return {"ok": False, "diff": "", "error": stderr.strip()}
+        return {"ok": True, "diff": out}
     if not staged:
         tracked_rc, _, _ = await _run(
             ["git", "ls-files", "--error-unmatch", "--", filepath], workspace_path

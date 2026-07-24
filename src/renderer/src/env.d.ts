@@ -80,6 +80,7 @@ declare global {
         filepath: string
         staged: boolean
         name?: string
+        commit?: string
       }) => Promise<{ ok: boolean }>
       openEditorWindow: (args: {
         workspace_path: string

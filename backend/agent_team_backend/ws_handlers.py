@@ -686,7 +686,8 @@ async def git_diff_file(session: "Session", msg_id: str, msg_type: str, payload:
     ws_path = payload.get("workspace_path") or ""
     filepath = payload.get("filepath") or ""
     staged = bool(payload.get("staged", False))
-    result = await app.git_service.diff_file(ws_path, filepath, staged=staged)
+    commit = payload.get("commit") or ""
+    result = await app.git_service.diff_file(ws_path, filepath, staged=staged, commit=commit)
     await session.send_json(make_response(msg_id, msg_type, result))
 
 

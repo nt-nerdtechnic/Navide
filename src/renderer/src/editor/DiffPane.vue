@@ -11,6 +11,9 @@ const props = defineProps<{
   staged: boolean
   name: string
   backend: ReturnType<typeof useBackend>
+  // When set, shows the diff this commit introduced (read-only: no stage/
+  // unstage/discard actions) instead of the working-tree/staged diff.
+  commit?: string
 }>()
 
 const emit = defineEmits<{ 'open-file': [{ filepath: string; name: string }] }>()
@@ -64,7 +67,8 @@ const isImage = computed(() => {
 const imageDataUrl = ref('')
 async function loadImage(): Promise<void> {
   imageDataUrl.value = ''
-  if (!isImage.value || !props.filepath) return
+  // Commit mode: the working-tree version may not match the commit — skip.
+  if (props.commit || !isImage.value || !props.filepath) return
   imageDataUrl.value = await loadImageDataUrl(props.backend, props.workspacePath, props.filepath)
 }
 
@@ -78,6 +82,7 @@ async function loadDiff(): Promise<void> {
       workspace_path: props.workspacePath,
       filepath: props.filepath,
       staged: props.staged,
+      commit: props.commit ?? '',
     })
     if (seq !== _loadSeq) return
     if (resp.ok && resp.payload?.ok) {
@@ -100,7 +105,7 @@ watch(
   { immediate: true },
 )
 
-watch([() => props.filepath, () => props.staged], () => {
+watch([() => props.filepath, () => props.staged, () => props.commit], () => {
   rawDiff.value = null
   void loadDiff()
   void loadImage()
@@ -157,7 +162,8 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
 <template>
   <div class="diff-pane">
     <div class="dp-toolbar">
-      <span class="dp-badge" :class="staged ? 'staged' : 'unstaged'">{{ staged ? 'STAGED' : 'WORKING TREE' }}</span>
+      <span v-if="commit" class="dp-badge commit">{{ commit.slice(0, 7) }}</span>
+      <span v-else class="dp-badge" :class="staged ? 'staged' : 'unstaged'">{{ staged ? 'STAGED' : 'WORKING TREE' }}</span>
       <span class="dp-filepath" :title="filepath">{{ filepath }}</span>
       <div class="dp-toolbar-actions">
         <!-- Open file in editor -->
@@ -196,7 +202,7 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
         <div v-for="(hunk, hi) in parsed.hunks" :key="hi" class="dp-hunk" :class="{ active: hi === currentHunkIdx }">
           <div class="dp-hunk-head">
             <span class="dp-range">{{ hunk.header }}</span>
-            <span class="dp-actions">
+            <span v-if="!commit" class="dp-actions">
               <template v-if="staged">
                 <button class="hk-btn" @click="unstageHunk(hunk)">{{ $t('action.unstage-hunk') }}</button>
               </template>
@@ -211,14 +217,14 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
             <template v-for="(row, ri) in toSideBySide(hunk)" :key="ri">
               <div class="dp-side left" :class="cellClass(row.left)">
                 <span class="dp-no">{{ row.left ? row.left.lineNo : '' }}</span>
-                <input v-if="!staged && row.left && row.left.kind === '-'" class="dp-check" type="checkbox" :checked="isSelected(hi, row.left.idx)" @change="toggleLine(hi, row.left.idx)" />
+                <input v-if="!commit && !staged && row.left && row.left.kind === '-'" class="dp-check" type="checkbox" :checked="isSelected(hi, row.left.idx)" @change="toggleLine(hi, row.left.idx)" />
                 <span v-else class="dp-check-sp" />
                 <span class="dp-sign">{{ row.left ? row.left.kind : '' }}</span>
                 <span class="dp-code">{{ row.left ? row.left.text : '' }}</span>
               </div>
               <div class="dp-side right" :class="cellClass(row.right)">
                 <span class="dp-no">{{ row.right ? row.right.lineNo : '' }}</span>
-                <input v-if="!staged && row.right && row.right.kind === '+'" class="dp-check" type="checkbox" :checked="isSelected(hi, row.right.idx)" @change="toggleLine(hi, row.right.idx)" />
+                <input v-if="!commit && !staged && row.right && row.right.kind === '+'" class="dp-check" type="checkbox" :checked="isSelected(hi, row.right.idx)" @change="toggleLine(hi, row.right.idx)" />
                 <span v-else class="dp-check-sp" />
                 <span class="dp-sign">{{ row.right ? row.right.kind : '' }}</span>
                 <span class="dp-code">{{ row.right ? row.right.text : '' }}</span>
@@ -257,6 +263,7 @@ function cellClass(cell: { kind: ' ' | '+' | '-' } | null): string {
 }
 .dp-badge.staged { background: var(--success-subtle); color: var(--success-fg); }
 .dp-badge.unstaged { background: var(--attention-subtle); color: var(--attention-fg); }
+.dp-badge.commit { background: var(--accent-subtle); color: var(--accent-fg); font-family: ui-monospace, Menlo, monospace; }
 .dp-filepath {
   flex: 1;
   color: var(--text-muted);

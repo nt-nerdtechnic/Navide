@@ -574,6 +574,20 @@ class TestDiffFile:
         assert "brand new line" in result["diff"]
         assert "+brand new line" in result["diff"]
 
+    @pytest.mark.asyncio
+    async def test_diff_commit_returns_raw_diff(self, tmp_path):
+        init_repo(tmp_path)
+        h = _add_commit(tmp_path, "b.txt", "line1\nline2\n", "add b")
+        result = await git_service.diff_file(str(tmp_path), "b.txt", commit=h)
+        assert result["ok"] is True
+        assert "+line1" in result["diff"]
+
+    @pytest.mark.asyncio
+    async def test_diff_commit_rejects_bad_hash(self, tmp_path):
+        init_repo(tmp_path)
+        result = await git_service.diff_file(str(tmp_path), "b.txt", commit="-flag")
+        assert result["ok"] is False
+
 
 # ── merge_branch ───────────────────────────────────────────────────────────────
 

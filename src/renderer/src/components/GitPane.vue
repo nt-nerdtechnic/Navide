@@ -35,7 +35,7 @@ const emit = defineEmits<{
   (e: 'open-workspace', path: string): void
   (e: 'open-file', payload: { filepath: string; name: string }): void
   (e: 'open-conflict', payload: { filepath: string; name: string }): void
-  (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string }): void
+  (e: 'open-diff', payload: { filepath: string; staged: boolean; name: string; commit?: string }): void
   (e: 'open-branch-diff', payload: { base: string; compare: string }): void
   (e: 'dispatch-issue', payload: { paneId: string; issue: IssueDetail }): void
   (e: 'focus-pane', paneId: string): void
@@ -1405,6 +1405,21 @@ async function toggleCommitFileDiff(hash: string, file: string): Promise<void> {
     commitDiffLoading.value = false
   }
 }
+// Open a commit's file diff in the mini-IDE, mirroring how the stage/changes
+// rows open working-tree diffs (embedded → diff tab, standalone → diff window).
+function openCommitFileDiffInIDE(hash: string, file: string): void {
+  if (props.embedded) {
+    emit('open-diff', { filepath: file, staged: false, name: fileName(file), commit: hash })
+  } else {
+    void window.agentTeam?.openDiffWindow({
+      workspace_path: props.workspacePath,
+      filepath: file,
+      staged: false,
+      name: fileName(file),
+      commit: hash,
+    })
+  }
+}
 
 // ── history ───────────────────────────────────────────────────────────────────
 // The main panel shows only the latest page (read-only expand). Search, scope
@@ -2216,8 +2231,11 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <div v-if="commitDetailData.files.length">
                   <div class="cd-key">Files ({{ commitDetailData.files.length }})</div>
                   <template v-for="f in commitDetailData.files" :key="f">
-                    <div class="cd-file cd-file-clickable" :title="f" @click="toggleCommitFileDiff(c.hash, f)">
-                      <span class="expand-caret">{{ commitDiffFile === f ? '▾' : '▸' }}</span> {{ f }}
+                    <div class="cd-file cd-file-clickable cd-file-row" :title="f" @click="toggleCommitFileDiff(c.hash, f)">
+                      <span class="cd-file-label"><span class="expand-caret">{{ commitDiffFile === f ? '▾' : '▸' }}</span> {{ f }}</span>
+                      <button class="row-btn cd-open-btn" title="Open diff in editor" @click.stop="openCommitFileDiffInIDE(c.hash, f)">
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5H3.75zm6.75.56v2.19c0 .138.112.25.25.25h2.19L10.5 2.06z"/></svg>
+                      </button>
                     </div>
                     <div v-if="commitDiffFile === f" class="subpanel green-border diffblame-inline">
                       <div v-if="commitDiffLoading" class="loading-text">Loading…</div>
@@ -3225,6 +3243,10 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
 .cd-file { color: var(--text-primary); font-family: monospace; font-size: 10px; padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cd-file-clickable { cursor: pointer; }
 .cd-file-clickable:hover { color: var(--accent, #4a9eff); }
+.cd-file-row { display: flex; align-items: center; }
+.cd-file-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.cd-open-btn { display: none; min-width: 16px; height: 16px; }
+.cd-file-row:hover .cd-open-btn { display: flex; }
 
 /* ── Generic rows (stashes, remotes, tags) ──────────────────────────────────── */
 .generic-row {

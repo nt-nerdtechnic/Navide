@@ -148,12 +148,14 @@ contextBridge.exposeInMainWorld('agentTeam', {
     filepath: string
     staged: boolean
     name?: string
+    commit?: string
   }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:openDiff', {
       workspace_path: args.workspace_path,
       filepath: args.filepath,
       staged: String(args.staged),
       name: args.name ?? args.filepath,
+      commit: args.commit ?? '',
     }),
   openEditorWindow: (args: {
     workspace_path: string

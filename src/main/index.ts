@@ -527,6 +527,7 @@ function openDiffWindow(params: Record<string, string>): void {
     diff_filepath: params.filepath,
     diff_staged: params.staged,
     diff_name: params.name ?? params.filepath,
+    diff_commit: params.commit ?? '',
     sidebar: 'git',
   })
 }

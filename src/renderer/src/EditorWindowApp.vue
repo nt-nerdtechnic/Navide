@@ -37,6 +37,7 @@ const initialLine = Number(params.get('line')) || 0
 const initialDiffFile = params.get('diff_filepath') ?? ''
 const initialDiffStaged = params.get('diff_staged') === 'true'
 const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
+const initialDiffCommit = params.get('diff_commit') ?? ''
 // branch-diff pre-load: when opened via openBranchDiffWindow with no existing editor window
 const initialBranchDiffBase = params.get('branch_diff_base') ?? ''
 const initialBranchDiffCompare = params.get('branch_diff_compare') ?? ''
@@ -177,10 +178,10 @@ function askSelectionWithAi(file: OpenFile, payload: unknown): void {
 
 // ── Open files (VS Code-style tabs); each EditorPane stays mounted (v-show) so
 //    edits/undo survive tab switches. ──────────────────────────────────────────
-// kind='diff': relPath is a synthetic key (\x00diff:<staged>:<filepath>), filepath/staged hold the real values.
+// kind='diff': relPath is a synthetic key (\x00diff:<staged-or-commit>:<filepath>), filepath/staged/commit hold the real values.
 // kind='conflict': relPath is a synthetic key (\x00conflict:<filepath>), filepath holds the real path.
 // kind='branch-diff': relPath is a synthetic key (\x00branch-diff:<base>), base holds the base branch.
-interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; id: number; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; base?: string; compare?: string }
+interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; id: number; relPath: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; commit?: string; base?: string; compare?: string }
 // Stable tab identity for template keys: relPath is mutable (tabs follow
 // explorer renames/moves), and keying panes by it would remount EditorPane on
 // rename — losing the Monaco undo stack and any unsaved buffer.
@@ -431,11 +432,11 @@ function openFile(p: { filepath: string; name?: string; line?: number }): void {
   activeRel.value = relPath
 }
 
-function openDiff(p: { filepath: string; staged: boolean; name?: string }): void {
-  const tabKey = `\x00diff:${p.staged ? '1' : '0'}:${p.filepath}`
+function openDiff(p: { filepath: string; staged: boolean; name?: string; commit?: string }): void {
+  const tabKey = `\x00diff:${p.commit || (p.staged ? '1' : '0')}:${p.filepath}`
   const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
   if (!openFiles.value.find((f) => f.relPath === tabKey)) {
-    openFiles.value.push({ kind: 'diff', id: nextTabId(), relPath: tabKey, filepath: p.filepath, staged: p.staged, name, line: 0, dirty: false, revealSeq: 0 })
+    openFiles.value.push({ kind: 'diff', id: nextTabId(), relPath: tabKey, filepath: p.filepath, staged: p.staged, commit: p.commit || undefined, name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeRel.value = tabKey
 }
@@ -1682,6 +1683,7 @@ onMounted(() => {
       filepath: params.filepath ?? '',
       staged: params.staged === 'true',
       name: params.name,
+      commit: params.commit || undefined,
     })
   })
   api?.onOpenEditorBranchDiff?.((params) => {
@@ -1717,7 +1719,7 @@ watch(
 )
 
 if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialName, line: initialLine })
-if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, staged: initialDiffStaged, name: initialDiffName })
+if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, staged: initialDiffStaged, name: initialDiffName, commit: initialDiffCommit || undefined })
 </script>
 
 <template>
@@ -1824,7 +1826,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             @click="activeRel = f.relPath"
             @contextmenu.prevent="openTabCtxMenu($event, f.relPath)"
           >
-            <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.staged ? 'staged' : 'unstaged'">{{ f.staged ? 'S' : 'U' }}</span>
+            <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.commit ? 'commit' : f.staged ? 'staged' : 'unstaged'">{{ f.commit ? 'C' : f.staged ? 'S' : 'U' }}</span>
             <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
             <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
             <span class="ide-tab-name">{{ f.name }}</span>
@@ -1919,6 +1921,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :workspace-path="workspacePath"
             :filepath="f.filepath!"
             :staged="f.staged!"
+            :commit="f.commit"
             :name="f.name"
             :backend="backend"
             @open-file="openFile"
@@ -2470,6 +2473,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-tab-diff-badge.staged { background: color-mix(in srgb, var(--success-fg) 18%, transparent); color: var(--success-bright); }
 .ide-tab-diff-badge.unstaged { background: color-mix(in srgb, var(--attention-fg) 18%, transparent); color: var(--attention-bright); }
 .ide-tab-diff-badge.conflict-badge { background: color-mix(in srgb, var(--danger-fg) 18%, transparent); color: var(--danger-fg); }
+.ide-tab-diff-badge.commit { background: var(--accent-subtle); color: var(--accent-fg); }
 .ide-tab-diff-badge.branch-diff-badge { background: var(--accent-subtle); color: var(--accent-fg); }
 .ide-tab-close {
   border: none;
