@@ -6,12 +6,13 @@ grandchild that calls setsid() starts its OWN session/group and escapes that
 killpg — it outlives the pane and accumulates as an orphan (observed: dozens of
 leftover `claude` processes exhausting RAM). _descendant_pids snapshots the
 tree before close; _kill_breakaway SIGKILLs whatever the group kill missed.
+
+The setsid-grandchild harness and ps stubs are shared with
+test_terminals_exit_orphan_reap.py via conftest fixtures.
 """
 
 import os
 import signal
-import subprocess
-import sys
 import time
 
 import pytest
@@ -22,17 +23,10 @@ from agent_team_backend.terminals import _descendant_pids, _kill_breakaway
 
 # ---- _descendant_pids: tree parsing (pure, mocked ps) ----
 
-def _fake_ps(table: str):
-    """Return a stub for subprocess.run that yields `table` as ps stdout."""
-    def run(cmd, **kwargs):
-        return subprocess.CompletedProcess(cmd, 0, stdout=table, stderr="")
-    return run
-
-
-def test_descendant_pids_collects_whole_subtree(monkeypatch):
+def test_descendant_pids_collects_whole_subtree(monkeypatch, fake_ps):
     # tree: 100 → 200 → 300, 100 → 201, and unrelated 999 → 998
     table = "100 1\n200 100\n300 200\n201 100\n999 1\n998 999\n"
-    monkeypatch.setattr(terminals.subprocess, "run", _fake_ps(table))
+    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
     assert sorted(_descendant_pids(100)) == [200, 201, 300]
     # unrelated root only sees its own branch
     assert sorted(_descendant_pids(999)) == [998]
@@ -40,10 +34,10 @@ def test_descendant_pids_collects_whole_subtree(monkeypatch):
     assert _descendant_pids(300) == []
 
 
-def test_descendant_pids_survives_cycle_and_garbage(monkeypatch):
+def test_descendant_pids_survives_cycle_and_garbage(monkeypatch, fake_ps):
     # a recycled-pid cycle (100→200→100) must not loop forever; junk lines skipped
     table = "100 1\n200 100\n100 200\nBAD LINE\n\n201 100\n"
-    monkeypatch.setattr(terminals.subprocess, "run", _fake_ps(table))
+    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
     out = sorted(_descendant_pids(100))
     assert out == [200, 201]
 
@@ -77,64 +71,22 @@ def test_kill_breakaway_ignores_already_dead(monkeypatch):
 
 # ---- integration: a real setsid grandchild ----
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 @pytest.mark.skipif(not hasattr(os, "setsid"), reason="needs POSIX setsid")
-def test_breakaway_grandchild_is_reaped_end_to_end():
-    # Parent sh backgrounds a python grandchild that setsid()s away from sh's
-    # process group, then sleeps. killpg(sh) misses it; _kill_breakaway must not.
-    grand_script = "import os, time; os.setsid(); print('ready', flush=True); time.sleep(30)"
-    parent = subprocess.Popen(
-        ["sh", "-c", f'{sys.executable} -c "{grand_script}" & echo $!; wait'],
-        stdout=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    grand_pid = None
-    try:
-        grand_pid = int(parent.stdout.readline().strip())
-        # Wait until the grandchild has actually broken away into its own group.
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            try:
-                if os.getpgid(grand_pid) == grand_pid != os.getpgid(parent.pid):
-                    break
-            except ProcessLookupError:
-                pass
-            time.sleep(0.02)
-        assert os.getpgid(grand_pid) == grand_pid, "grandchild never broke away"
+def test_breakaway_grandchild_is_reaped_end_to_end(
+    setsid_grandchild, pid_alive, wait_pid_dead
+):
+    parent, grand_pid = setsid_grandchild
 
-        # Snapshot from the still-alive parent — ancestry intact.
-        descendants = _descendant_pids(parent.pid)
-        assert grand_pid in descendants
+    # Snapshot from the still-alive parent — ancestry intact.
+    descendants = _descendant_pids(parent.pid)
+    assert grand_pid in descendants
 
-        # The group kill takes the parent but NOT the breakaway grandchild.
-        os.killpg(os.getpgid(parent.pid), signal.SIGKILL)
-        parent.wait(timeout=2)
-        time.sleep(0.1)
-        assert _alive(grand_pid), "grandchild should survive the group kill (that's the bug)"
+    # The group kill takes the parent but NOT the breakaway grandchild.
+    os.killpg(os.getpgid(parent.pid), signal.SIGKILL)
+    parent.wait(timeout=2)
+    time.sleep(0.1)
+    assert pid_alive(grand_pid), "grandchild should survive the group kill (that's the bug)"
 
-        # The breakaway reaper closes the gap.
-        _kill_breakaway(descendants)
-        deadline = time.time() + 2
-        while _alive(grand_pid) and time.time() < deadline:
-            time.sleep(0.02)
-        assert not _alive(grand_pid), "grandchild must be reaped by _kill_breakaway"
-    finally:
-        for pid in filter(None, [grand_pid, parent.pid]):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        try:
-            parent.wait(timeout=2)
-        except Exception:
-            pass
+    # The breakaway reaper closes the gap.
+    _kill_breakaway(descendants)
+    assert wait_pid_dead(grand_pid), "grandchild must be reaped by _kill_breakaway"

@@ -110,6 +110,15 @@ class TerminalSession:
     # Per-session vendor-parser state — used by vendor_parsers.parse_chunk to
     # compute deltas against the last seen cumulative token totals.
     vendor_parser_state: dict[str, Any] = field(default_factory=dict)
+    # Rolling snapshot of the child's descendant pids (pid -> ps lstart at
+    # capture time), refreshed by the service's snapshot loop while the child
+    # is alive. When the child dies on its own (EOF path) its ancestry is
+    # already gone from the ps table, so this is the only record of
+    # grandchildren in their own process group (e.g. MCP servers a CLI spawns
+    # detached) that leak as orphans. lstart is the identity check that keeps
+    # a stale entry from ever matching a recycled pid (same pattern as
+    # pty_registry).
+    descendants: dict[int, str] = field(default_factory=dict)
 
 
 # Batch PTY output chunks for up to this many milliseconds before sending a
@@ -131,32 +140,40 @@ _FAST_PATH_WINDOW_S = 0.1
 _FAST_PATH_MAX_CHUNKS = 5
 
 
-def _descendant_pids(root_pid: int) -> list[int]:
-    """Every PID descended from root_pid (child, grandchild, ...) from one ps
-    snapshot. killpg on the PTY child's process group misses any grandchild
-    that called setsid to start its own session/group (some CLIs do) — those
-    outlive the group kill and become orphans. Snapshot the tree while root is
-    still alive; once it dies the grandchildren reparent to launchd (ppid 1)
-    and the ancestry is gone."""
+def _ps_snapshot() -> dict[int, tuple[int, str]]:
+    """pid -> (ppid, lstart) for every process, from one ps snapshot. lstart
+    (process start time) is the identity that defeats pid recycling — same
+    pattern as pty_registry. Empty on failure."""
     try:
         out = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid="],
+            ["ps", "-Ao", "pid=,ppid=,lstart="],
             capture_output=True,
             text=True,
             timeout=5,
         ).stdout
     except (OSError, subprocess.TimeoutExpired):
-        return []
-    children: dict[int, list[int]] = {}
+        return {}
+    snap: dict[int, tuple[int, str]] = {}
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) != 2:
+        if len(parts) < 2:
             continue
         try:
             pid, ppid = int(parts[0]), int(parts[1])
         except ValueError:
             continue
+        snap[pid] = (ppid, " ".join(parts[2:]))
+    return snap
+
+
+def _children_map(snap: dict[int, tuple[int, str]]) -> dict[int, list[int]]:
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _lstart) in snap.items():
         children.setdefault(ppid, []).append(pid)
+    return children
+
+
+def _walk_descendants(children: dict[int, list[int]], root_pid: int) -> list[int]:
     found: list[int] = []
     seen: set[int] = {root_pid}  # never re-list root itself if a cycle points back
     stack = list(children.get(root_pid, []))
@@ -168,6 +185,33 @@ def _descendant_pids(root_pid: int) -> list[int]:
         found.append(pid)
         stack.extend(children.get(pid, []))
     return found
+
+
+def _descendant_pids(root_pid: int) -> list[int]:
+    """Every PID descended from root_pid (child, grandchild, ...) from one ps
+    snapshot. killpg on the PTY child's process group misses any grandchild
+    that called setsid to start its own session/group (some CLIs do) — those
+    outlive the group kill and become orphans. Snapshot the tree while root is
+    still alive; once it dies the grandchildren reparent to launchd (ppid 1)
+    and the ancestry is gone."""
+    return _walk_descendants(_children_map(_ps_snapshot()), root_pid)
+
+
+# Steady-state cadence of the descendant-snapshot loop. MCP servers and other
+# grandchildren appear within seconds of the CLI starting and the set is
+# stable afterwards, so a coarse interval is enough once sessions are mature.
+_DESCENDANT_SNAPSHOT_INTERVAL_S = 30.0
+
+# Fast cadence while any session is younger than the normal interval: a CLI's
+# grandchildren spawn a few seconds after it, and crash-on-startup is the most
+# common ungraceful death — without the fast ticks every young session would
+# be blind for up to a full interval.
+_DESCENDANT_SNAPSHOT_FAST_S = 5.0
+
+# After an EOF (child died on its own), wait this long before sweeping its
+# snapshot: a gracefully exiting CLI shuts its own servers down within this
+# window, leaving nothing to kill.
+_EXIT_ORPHAN_GRACE_S = 1.0
 
 
 def _kill_breakaway(pids: "list[int] | tuple[int, ...]") -> None:
@@ -207,6 +251,13 @@ class TerminalService:
         # Per-session arrival times of recent PTY chunks (monotonic loop time),
         # used to pick the interactive fast path vs. batched flush delay.
         self._chunk_times: dict[str, deque[float]] = {}
+        # Background task keeping each live session's descendant snapshot
+        # fresh, so the EOF path can reap orphans (see _reap_exit_orphans).
+        # The wakeup event lets create() pull the next refresh forward; reap
+        # tasks are tracked so kill_all can let in-flight sweeps finish.
+        self._snapshot_task: "asyncio.Task[None] | None" = None
+        self._snapshot_wakeup = asyncio.Event()
+        self._reap_tasks: "set[asyncio.Task[None]]" = set()
 
     def create(
         self,
@@ -294,6 +345,19 @@ class TerminalService:
         )
         self._sessions[session.id] = session
         self._loop.add_reader(master, self._on_readable, session)
+        if self._snapshot_task is None or self._snapshot_task.done():
+            try:
+                self._snapshot_task = asyncio.get_running_loop().create_task(
+                    self._snapshot_loop()
+                )
+            except RuntimeError:
+                # No running loop (non-async caller, e.g. sync tests) — rolling
+                # snapshots stay empty; kill() still sweeps via its own snapshot.
+                pass
+        else:
+            # Pull the next refresh forward so this session isn't blind for a
+            # full interval (the loop then ticks fast while it is young).
+            self._snapshot_wakeup.set()
         log.info(
             "terminal session created id=%s pane=%s pid=%s cmd=%s",
             session.id,
@@ -524,11 +588,95 @@ class TerminalService:
         if session.proc.poll() is not None:
             await asyncio.to_thread(pty_registry.unregister, session.proc.pid)
 
+    async def _snapshot_loop(self) -> None:
+        """Keep every live session's descendant snapshot fresh. kill()
+        snapshots on demand because the child is still alive then; the EOF
+        path cannot — by the time the PTY master reports EIO the child is
+        dead and its grandchildren have reparented, so the tree must have
+        been captured beforehand. Self-terminating: returns when no live
+        session remains (create() restarts it). Ticks fast while any session
+        is young, at the normal interval otherwise; create() can also pull
+        the next tick forward via the wakeup event."""
+        while True:
+            live = [s for s in self._sessions.values() if not s.closed]
+            if not live:
+                return
+            try:
+                snap = await asyncio.to_thread(_ps_snapshot)
+                self._refresh_descendants(snap)
+            except Exception as err:  # noqa: BLE001 — the loop must survive
+                log.warning("descendant snapshot failed: %s", err)
+            youngest = min(time.monotonic() - s.started_monotonic for s in live)
+            interval = (
+                _DESCENDANT_SNAPSHOT_FAST_S
+                if youngest < _DESCENDANT_SNAPSHOT_INTERVAL_S
+                else _DESCENDANT_SNAPSHOT_INTERVAL_S
+            )
+            self._snapshot_wakeup.clear()
+            try:
+                await asyncio.wait_for(self._snapshot_wakeup.wait(), timeout=interval)
+            except TimeoutError:
+                pass
+
+    def _refresh_descendants(self, snap: dict[int, tuple[int, str]]) -> None:
+        if not snap:
+            return  # ps failed — keep the last good snapshots
+        children = _children_map(snap)
+        for session in self._sessions.values():
+            if session.closed:
+                continue
+            if session.proc.pid not in snap:
+                # Child already gone from the table (its death racing the EOF
+                # callback) — keep the last snapshot; _close still needs it.
+                continue
+            session.descendants = {
+                pid: snap[pid][1]
+                for pid in _walk_descendants(children, session.proc.pid)
+            }
+
+    async def _reap_exit_orphans(
+        self,
+        descendants: dict[int, str],
+        grace: float = _EXIT_ORPHAN_GRACE_S,
+    ) -> None:
+        """After a PTY child died on its own (EOF/error path — no kill() ran),
+        sweep its last descendant snapshot. A pid is killed only when it is
+        (a) now orphaned — reparented to launchd (ppid 1) or to this backend
+        (observed macOS behavior) — and (b) still the same process, verified
+        by comparing its ps lstart against the one recorded at snapshot time
+        (defeats pid recycling; empty lstart on either side skips the check).
+        A verified orphan's current subtree is killed with it (a leaked `npm
+        exec` wrapper still parents its own node child at sweep time)."""
+        await asyncio.sleep(grace)
+        snap = await asyncio.to_thread(_ps_snapshot)
+        if not snap:
+            return  # ps failed — cannot verify identities, do not kill blind
+        children = _children_map(snap)
+        me = os.getpid()
+        targets: list[int] = []
+        for pid, recorded_lstart in descendants.items():
+            entry = snap.get(pid)
+            if entry is None:
+                continue
+            ppid, lstart = entry
+            if ppid not in (1, me):
+                continue  # still parented by a live process — not our orphan
+            if recorded_lstart and lstart and lstart != recorded_lstart:
+                continue  # pid recycled since the snapshot — different process
+            targets.append(pid)
+            targets.extend(_walk_descendants(children, pid))
+        if targets:
+            log.info("reaping %d orphaned descendant(s): %s", len(targets), targets)
+            _kill_breakaway(targets)
+
     async def kill_all(self, grace: float = 1.0) -> None:
         """Terminate every live PTY child. Children run with
         start_new_session=True (own process group), so killing the backend
         never propagates to them — without this explicit sweep on shutdown
         they outlive the app as orphans."""
+        if self._snapshot_task is not None:
+            self._snapshot_task.cancel()
+            self._snapshot_task = None
         targets: list[tuple[TerminalSession, int]] = []
         breakaway: list[int] = []
         for session in list(self._sessions.values()):
@@ -567,6 +715,11 @@ class TerminalService:
                 except subprocess.TimeoutExpired:
                     pass
             self._close(session, reason="shutdown")
+        # Let in-flight exit-orphan sweeps finish: a CLI that EOF'd moments
+        # before shutdown would otherwise leak its orphans when the loop
+        # closes mid-grace.
+        if self._reap_tasks:
+            await asyncio.gather(*list(self._reap_tasks), return_exceptions=True)
         # Reap breakaway grandchildren that escaped every process group.
         _kill_breakaway(breakaway)
 
@@ -797,6 +950,20 @@ class TerminalService:
         )
         self._loop.create_task(self._emit(event))
         self._sessions.pop(session.id, None)
+        # Child died on its own (no kill() ran, so no on-demand descendant
+        # sweep happened) — reap grandchildren it may have orphaned. The poll
+        # gate skips the error path's still-alive child: its descendants are
+        # not orphans, and killing under a live CLI would be wrong.
+        if (
+            reason in ("exit", "error")
+            and session.descendants
+            and session.proc.poll() is not None
+        ):
+            task = self._loop.create_task(
+                self._reap_exit_orphans(session.descendants)
+            )
+            self._reap_tasks.add(task)
+            task.add_done_callback(self._reap_tasks.discard)
         # Drop the crash-recovery record only once the child is confirmed
         # dead: a still-live child (e.g. a TERM-trapping CLI) must stay
         # visible to the next start's reap_stale. kill()'s escalation task
