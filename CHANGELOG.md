@@ -4,6 +4,29 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.1.57] — 2026-07-24 — signed release
+
+### Added
+
+- Per-CLI quota badges in pane headers.
+- View a commit's per-file diff in the editor as a read-only tab.
+- Status-bar indicator for background historic-log backfill.
+- "@"-mention pane drop: dropping a pane when the cursor already sits after a bare `@` inserts that pane's messaging name instead of its full scrollback context.
+
+### Changed
+
+- Inter-CLI messaging: drop the manual compose UI; panes exchange messages through the `---MSG---` protocol.
+
+### Fixed
+
+- Reap detached grandchildren (e.g. MCP servers a CLI spawned) that are orphaned when a CLI or the backend dies, via persisted per-session descendant snapshots.
+- Scope the pane attribution baseline scan to the pane's workspace folder instead of stat'ing the whole `~/.claude` tree on every spawn.
+- Clear the backfill status pill when the workspace changes so it can't stick on.
+
+### Distribution note
+
+- Signed with a Developer ID and notarized by Apple; published as a stable release eligible for the in-app updater.
+
 ## [0.1.56] — 2026-07-24 — signed release
 
 ### Added
