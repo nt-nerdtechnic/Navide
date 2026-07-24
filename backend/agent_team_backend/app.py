@@ -62,10 +62,12 @@ from .log_readers import (
 )
 from .log_readers.attribution import Attribution
 from .log_readers.claude import encode_claude_cwd
+from .log_readers.profile_registry import register_profile_home
 from .doc_injector import fetch_stage_docs
 from .mcp_manager import MCPManager
 from .mcp_settings import MCPServersDocument, MCPSettingsStore
 from .plan_provisioning import ensure_plan_assets, plan_spec_exists
+from .profiles_store import CliProfilesStore
 from .chat_store import ChatStore
 from .projects import ProjectStore
 from .spawn_history import SpawnHistoryStore
@@ -102,6 +104,7 @@ stages_store = StagesStore()
 tokens_store = TokensStore()
 history_store = HistoryStore()
 codex_home_manager = CodexHomeManager()
+cli_profiles_store = CliProfilesStore()
 mcp_manager = MCPManager()
 mcp_settings_store = MCPSettingsStore()
 analyzer_settings_store = AnalyzerSettingsStore()
@@ -689,6 +692,9 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
             source="cli",
             vendor=usage.vendor,
             agent_key=usage.vendor,
+            # CLI account of the owning pane (None → default account). Ephemeral,
+            # like pane attribution — events with no bound pane record as default.
+            profile_id=attributed.profile_id,
             # Prefer stable slot_key as the by_pane bucket so data survives
             # frontend restarts; fall back to ephemeral pane_id for manual panes.
             pane_id=attributed.slot_key or attributed.pane_id,
@@ -755,6 +761,25 @@ def _register_workspace_and_backfill(workspace_path: str) -> None:
         except RuntimeError:
             # No running loop (non-async caller) — fall back to inline.
             watcher.force_rescan(workspace_path)
+
+
+def _register_profile_home(agent_key: str, profile_id: str, profile_home: Path) -> None:
+    """Make the log readers + watcher aware of a profile pane's config home.
+
+    Phase B moves a profile pane's sessions under ~/.navide/cli-profiles/<agent>/
+    <id>; without this the singleton readers only look at the default roots and
+    silently miss the pane (tokens/RUNNING/resume all break). Codex is excluded:
+    its sessions still land in ~/.codex-panes regardless of the symlink source,
+    which the codex reader already watches. Idempotent."""
+    if agent_key not in ("claude", "kimi", "grok"):
+        return
+    register_profile_home(agent_key, profile_id, profile_home)
+    # Recursive watch on the home dir (which always exists post ensure_home)
+    # covers claude's projects/, kimi's sessions/ and grok's home/.grok in one
+    # subscription. No-op before the watcher has started (startup rescan will
+    # still pick the sessions up from the reader's now-extended scan roots).
+    if _log_watcher is not None:
+        _log_watcher.watch_dir(profile_home)
 
 
 @app.on_event("startup")
@@ -1055,8 +1080,18 @@ def _project_payload(project) -> dict[str, Any]:
     # run_dir is the relative path from .agent-team/ to the run folder, e.g.
     # "runs/20260528-020041-task". Empty string for projects with no active run.
     run_dir = log_file_name.rsplit("/", 1)[0] if "/" in log_file_name else ""
+    project_dict = asdict(project)
+    # Backfill each pane's live CLI account profile from the running PTY's
+    # metadata. profile_id is not persisted to project.json, so without this a
+    # full renderer reload would show every pane back on the built-in Default.
+    live_profiles = get_terminals().live_pane_profiles()
+    if live_profiles:
+        for pane in project_dict.get("panes", []) or []:
+            profile_id = live_profiles.get(pane.get("pane_id"))
+            if profile_id:
+                pane["profile_id"] = profile_id
     return {
-        "project": asdict(project),
+        "project": project_dict,
         "paths": {
             "dir": str(project_store.project_dir(project.workspace_path)),
             "project_file": str(project_store.project_file(project.workspace_path)),

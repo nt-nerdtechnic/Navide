@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Awaitable, Callable
 
 from .ipc import make_error, make_event, make_response
 from .log_readers.claude import ClaudeLogReader, first_user_prompts
+from .profiles_store import SUPPORTED_AGENT_KEYS as PROFILE_AGENT_KEYS
+from .profiles_store import build_spawn_plan
 from .spawn_history import canonical_workspace_path, filter_foreign_entries
 
 if TYPE_CHECKING:
@@ -1248,6 +1250,169 @@ async def codex_home_cleanup(session: "Session", msg_id: str, msg_type: str, pay
     cleaned = app.codex_home_manager.cleanup(str(payload.get("session_home_id") or ""))
     await session.send_json(
         make_response(msg_id, msg_type, {"ok": True, "cleaned": cleaned})
+    )
+
+
+# ── CLI account profiles (cli_profiles.*) ───────────────────────────────────
+def _profile_error(err: Exception) -> str:
+    return str(err.args[0]) if err.args else str(err)
+
+
+@handler("cli_profiles.list")
+async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    doc = app.cli_profiles_store.list()
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "profiles": doc["profiles"],
+                "defaults": doc["defaults"],
+                "supported_agents": list(PROFILE_AGENT_KEYS),
+            },
+        )
+    )
+
+
+@handler("cli_profiles.create")
+async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    try:
+        profile = app.cli_profiles_store.create(
+            agent_key=str(payload.get("agent_key") or ""),
+            name=str(payload.get("name") or ""),
+        )
+    except ValueError as err:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
+        )
+        return
+    doc = app.cli_profiles_store.list()
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {"profile": profile, "profiles": doc["profiles"], "defaults": doc["defaults"]},
+        )
+    )
+    await app.broadcast(
+        make_event(
+            "cli_profiles.changed",
+            {"profiles": doc["profiles"], "defaults": doc["defaults"], "reason": "create"},
+        )
+    )
+
+
+@handler("cli_profiles.rename")
+async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    try:
+        profile = app.cli_profiles_store.rename(
+            str(payload.get("id") or ""), str(payload.get("name") or "")
+        )
+    except (KeyError, ValueError) as err:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
+        )
+        return
+    doc = app.cli_profiles_store.list()
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {"profile": profile, "profiles": doc["profiles"], "defaults": doc["defaults"]},
+        )
+    )
+    await app.broadcast(
+        make_event(
+            "cli_profiles.changed",
+            {"profiles": doc["profiles"], "defaults": doc["defaults"], "reason": "rename"},
+        )
+    )
+
+
+@handler("cli_profiles.delete")
+async def cli_profiles_delete(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    profile_id = str(payload.get("id") or "")
+    # Refuse to delete an account a running PTY is still spawned under: deleting
+    # archives the home away, so the live CLI's config would point at a vanished
+    # path and its token counting would stop.
+    if profile_id in set(session.terminals.live_pane_profiles().values()):
+        await session.send_json(
+            make_error(
+                msg_id,
+                msg_type,
+                "PROFILE_IN_USE",
+                "This account is in use by a running terminal and cannot be deleted.",
+            )
+        )
+        return
+    try:
+        doc = app.cli_profiles_store.delete(profile_id)
+    except KeyError as err:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
+        )
+        return
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {"profiles": doc["profiles"], "defaults": doc["defaults"]},
+        )
+    )
+    await app.broadcast(
+        make_event(
+            "cli_profiles.changed",
+            {"profiles": doc["profiles"], "defaults": doc["defaults"], "reason": "delete"},
+        )
+    )
+
+
+@handler("cli_profiles.set_default")
+async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    profile_id = payload.get("profile_id")
+    try:
+        defaults = app.cli_profiles_store.set_default(
+            str(payload.get("agent_key") or ""),
+            str(profile_id) if profile_id else None,
+        )
+    except (KeyError, ValueError) as err:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
+        )
+        return
+    doc = app.cli_profiles_store.list()
+    await session.send_json(
+        make_response(msg_id, msg_type, {"defaults": defaults})
+    )
+    await app.broadcast(
+        make_event(
+            "cli_profiles.changed",
+            {"profiles": doc["profiles"], "defaults": doc["defaults"], "reason": "set_default"},
+        )
+    )
+
+
+@handler("cli_profiles.usage")
+async def cli_profiles_usage(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """All-time cli token usage grouped per CLI account, for the Settings view.
+
+    Response: {usage: [{agent_key, profile_id|null, totals: {input, output, calls}}]}
+    (profile_id null = the built-in/default account).
+    """
+    from . import app
+
+    await session.send_json(
+        make_response(msg_id, msg_type, {"usage": app.tokens_store.profile_usage()})
     )
 
 
@@ -2602,6 +2767,34 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
     )
     if startup_probe:
         metadata["startup_probe"] = startup_probe
+    # CLI account profile: an explicit payload/metadata profile_id wins,
+    # otherwise the agent's stored default applies. No profile (or the
+    # built-in default, i.e. defaults[agent]=null) leaves the spawn env
+    # exactly as before.
+    profile = None
+    profile_plan = None
+    if agent_key in PROFILE_AGENT_KEYS:
+        requested_profile = str(
+            payload.get("profile_id") or metadata.get("profile_id") or ""
+        )
+        if requested_profile:
+            profile = app.cli_profiles_store.get(requested_profile)
+            if profile is None or profile.get("agentKey") != agent_key:
+                await session.send_json(make_error(
+                    msg_id, msg_type, "PROFILE_NOT_FOUND",
+                    f"unknown {agent_key} profile: {requested_profile}",
+                ))
+                return
+        else:
+            profile = app.cli_profiles_store.get_default_profile(agent_key)
+    if profile is not None:
+        profile_home = app.cli_profiles_store.ensure_home(profile)
+        profile_plan = build_spawn_plan(agent_key, profile_home)
+        env.update(profile_plan.env_set)
+        metadata["profile_id"] = profile["id"]
+        # Make the log readers + watcher aware of this profile's config home so
+        # the pane's session logs are read, attributed and resumed (Phase D).
+        app._register_profile_home(agent_key, profile["id"], profile_home)
     if agent_key == "codex":
         # Compatibility: `codex resume <id>` only works inside the home
         # that recorded the session. Resume in whichever home owns it;
@@ -2612,7 +2805,12 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
         )
         if session_home is None:
             home_id = str(metadata.get("session_home_id") or payload["pane_id"])
-            codex_home = app.codex_home_manager.prepare(home_id)
+            if profile_plan is not None and profile_plan.codex_source_home is not None:
+                codex_home = app.codex_home_manager.prepare(
+                    home_id, source_home=profile_plan.codex_source_home
+                )
+            else:
+                codex_home = app.codex_home_manager.prepare(home_id)
             env["CODEX_HOME"] = str(codex_home)
             metadata["session_home_id"] = home_id
         elif session_home != app.codex_home_manager.real_home:
@@ -2628,6 +2826,7 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
         cols=int(payload.get("cols", 100)),
         rows=int(payload.get("rows", 30)),
         env=env or None,
+        env_remove=(profile_plan.env_remove if profile_plan else None) or None,
         metadata=metadata,
         output_log_file=payload.get("output_log_file") or "",
     )
@@ -2674,6 +2873,7 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
                 workspace_path=ws_for_pane,
                 stage_id=metadata.get("stage_id") or metadata.get("stageId"),
                 slot_key=app._stable_pane_key(metadata, ""),
+                profile_id=str(metadata.get("profile_id") or ""),
                 explicit_session_id=explicit_session_id,
                 session_marker=str(metadata.get("session_marker") or ""),
                 session_home_id=str(metadata.get("session_home_id") or ""),
