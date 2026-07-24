@@ -3,6 +3,7 @@ import {
   renderEnvelope,
   defaultMessagingName,
   normalizeMessagingName,
+  uniqueMessagingName,
 } from '../lib/agentMessaging'
 
 /**
@@ -71,10 +72,30 @@ function configureMessaging(d: MessagingDeps): void {
 function registerPane(paneId: string, agentKey: string, preferredName?: string): string {
   const existing = nameByPane.get(paneId)
   if (existing) return existing
-  let name = preferredName ? normalizeMessagingName(preferredName) : null
-  if (!name || paneByName.has(name)) {
-    name = defaultMessagingName(agentKey, paneByName.keys())
-  }
+  // A requested handle (persisted name / pane title) keeps its base and only
+  // gains a -N suffix on collision; with no valid request, use <agent>-N.
+  const base = preferredName ? normalizeMessagingName(preferredName) : null
+  const name = base
+    ? uniqueMessagingName(base, paneByName.keys())
+    : defaultMessagingName(agentKey, paneByName.keys())
+  nameByPane.set(paneId, name)
+  paneByName.set(name, paneId)
+  return name
+}
+
+/** Re-derive a pane's handle from a new base (its title). Collision-suffixed;
+ *  an empty/invalid base falls back to the `<agent>-N` default. Returns the new
+ *  handle, or null when the pane is not in the registry (plain terminal). */
+function setDerivedName(paneId: string, base: string | null, agentKey: string): string | null {
+  const current = nameByPane.get(paneId)
+  if (current === undefined) return null
+  // Free the current name first so the base can reclaim it (or take a suffix
+  // relative to OTHER panes only).
+  paneByName.delete(current)
+  const norm = base ? normalizeMessagingName(base) : null
+  const name = norm
+    ? uniqueMessagingName(norm, paneByName.keys())
+    : defaultMessagingName(agentKey, paneByName.keys())
   nameByPane.set(paneId, name)
   paneByName.set(name, paneId)
   return name
@@ -265,6 +286,7 @@ export function useAgentMessaging() {
     configureMessaging,
     registerPane,
     renamePane,
+    setDerivedName,
     unregisterPane,
     nameOf,
     paneIdOf,

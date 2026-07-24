@@ -48,7 +48,8 @@ describe('useAgentMessaging', () => {
     it('is idempotent per pane and honors a free preferred name', () => {
       expect(m.registerPane('p1', 'claude', 'Backend A')).toBe('Backend A')
       expect(m.registerPane('p1', 'claude')).toBe('Backend A')
-      expect(m.registerPane('p2', 'claude', 'Backend A')).toBe('claude-1')
+      // A taken preferred name keeps its base and gains a -N suffix.
+      expect(m.registerPane('p2', 'claude', 'Backend A')).toBe('Backend A-2')
     })
 
     it('rename enforces validity and uniqueness', () => {
@@ -60,6 +61,23 @@ describe('useAgentMessaging', () => {
       expect(m.paneIdOf('claude-1')).toBeNull()
       expect(m.renamePane('p2', '前端組')).toBe(false)
       expect(m.renamePane('p2', '   ')).toBe(false)
+    })
+
+    it('setDerivedName syncs the handle to a new title, suffixing collisions', () => {
+      m.registerPane('p1', 'claude') // claude-1
+      m.registerPane('p2', 'codex') // codex-1
+      // Title given → handle becomes the title.
+      expect(m.setDerivedName('p1', '後端', 'claude')).toBe('後端')
+      expect(m.paneIdOf('後端')).toBe('p1')
+      expect(m.paneIdOf('claude-1')).toBeNull()
+      // Second pane titled the same → suffixed, not stolen.
+      expect(m.setDerivedName('p2', '後端', 'codex')).toBe('後端-2')
+      // Re-deriving the same title is idempotent (reclaims its own name).
+      expect(m.setDerivedName('p1', '後端', 'claude')).toBe('後端')
+      // Cleared title → back to the <agent>-N default.
+      expect(m.setDerivedName('p1', null, 'claude')).toBe('claude-1')
+      // Not a messaging pane (plain terminal) → null.
+      expect(m.setDerivedName('ghost', '後端', 'claude')).toBeNull()
     })
   })
 

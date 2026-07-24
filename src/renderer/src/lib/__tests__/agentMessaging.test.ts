@@ -8,6 +8,7 @@ import {
   renderEnvelope,
   defaultMessagingName,
   normalizeMessagingName,
+  uniqueMessagingName,
 } from '../agentMessaging'
 
 describe('parseMessages', () => {
@@ -142,5 +143,17 @@ describe('normalizeMessagingName', () => {
   it('rejects empty or multiline names', () => {
     expect(normalizeMessagingName('   ')).toBeNull()
     expect(normalizeMessagingName('a\nb')).toBeNull()
+  })
+})
+
+describe('uniqueMessagingName', () => {
+  it('returns the base when free', () => {
+    expect(uniqueMessagingName('後端', [])).toBe('後端')
+    expect(uniqueMessagingName('後端', ['前端'])).toBe('後端')
+  })
+  it('suffixes from -2 on collision, filling to the first free slot', () => {
+    expect(uniqueMessagingName('後端', ['後端'])).toBe('後端-2')
+    expect(uniqueMessagingName('後端', ['後端', '後端-2'])).toBe('後端-3')
+    expect(uniqueMessagingName('後端', ['後端', '後端-3'])).toBe('後端-2')
   })
 })

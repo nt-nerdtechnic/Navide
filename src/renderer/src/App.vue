@@ -1046,7 +1046,12 @@ function dropPersistedMessagingName(paneId: string): void {
  *  pipeline slot label, then to the `<agentKey>-<n>` default. */
 function registerPaneMessaging(pane: ActivePane, preferredName?: string): void {
   if (pane.agentKey === 'terminal') return
-  pane.messagingName = messaging.registerPane(pane.id, pane.agentKey, preferredName || pane.slotLabel || undefined)
+  // Handle preference: persisted name (restore) → the pane's own title
+  // (customName) → pipeline slot label → the `<agent>-N` default. So the name
+  // you gave the pane IS its messaging address; the auto handle only appears
+  // for panes you never named.
+  const preferred = preferredName || pane.customName || pane.slotLabel || undefined
+  pane.messagingName = messaging.registerPane(pane.id, pane.agentKey, preferred)
   persistMessagingName(pane.id, pane.messagingName)
 }
 
@@ -7590,6 +7595,15 @@ function setPaneCustomName(paneId: string, rawName: string): void {
   const name = rawName.trim()
   // Empty name resets to the default label.
   pane.customName = name && name !== pane.agentLabel ? name : undefined
+  // Keep the messaging handle in sync with the title — the name you see IS the
+  // address CLIs use. Clearing the title reverts the handle to `<agent>-N`.
+  if (pane.agentKey !== 'terminal') {
+    const derived = messaging.setDerivedName(pane.id, pane.customName ?? null, pane.agentKey)
+    if (derived) {
+      pane.messagingName = derived
+      persistMessagingName(pane.id, derived)
+    }
+  }
   updateHistoryCustomName(spawnHistory.value, {
     paneId,
     agentKey: pane.agentKey,
