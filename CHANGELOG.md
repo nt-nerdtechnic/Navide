@@ -4,8 +4,37 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Changed
+
+- Document that Plans legacy recovery is authorized only by the Host-minted
+  pre-dispatch `legacy-safe-before-dispatch` disposition; post-dispatch errors,
+  stopping, Grant revocation, and policy denial do not retry legacy.
+
 ### Added
 
+- Add a dedicated Settings → Execution Policy editor for the Host default,
+  global user modes, explicit workspace source selection, untrusted repository
+  recommendations, confirmed corrupt-state rebuild, and fail-closed recovery
+  guidance. Extensions now shows Manifest Permissions, exact package-version
+  Grant state, and the selected agent Execution Policy as separate concepts.
+- Add the global agent Execution Policy v1 contract and Host-owned durable
+  default/user policy store with strict fail-closed parsing, owner-only atomic
+  persistence, lowercase shell-name canonicalization, case-insensitive agent
+  executable policy matching, and a durable monotonic revision high-water mark.
+  The setting remains separate from Manifest
+  permissions and package-version Plugin Grants.
+- Enforce Host-owned `user` and MCP-routed `agent` initiators across public
+  capabilities and package-local Backend Wire calls, including policy revision
+  rechecks before queued dispatch, complete shell-chain executable checks, and
+  exact package-version Grant revocation that drains calls, subscriptions,
+  events, views, and child backends without rolling back completed effects.
+- Add the Host-only repository Execution Policy source service for strict,
+  untrusted `.navide/execution-policy.json` recommendations, explicit
+  per-repository source selection bound to inspected canonical-content
+  fingerprints, durable owner-only selection state, monotonic revision floors,
+  bounded recovery, typed fail-closed source results, strict user pins,
+  revision-aware snapshot identities, and stale recommendations without source
+  merging.
 - Add the public Plugin Platform v2 contracts, SDK CLI, unified Vue UI package,
   and an external-workspace frontend package smoke workflow with fail-closed
   capability-denial coverage.
@@ -39,7 +68,24 @@ All notable released changes to Navide will be documented in this file. The form
 - Add an internal Electron-main Backend Wire v1 supervisor seam with real
   child-process health/unary conformance coverage, explicit child environment
   isolation, bounded cancellation tombstones, and subscription lifecycle
-  conformance; production catalog activation remains deferred.
+  conformance; general third-party backend catalog activation remains deferred.
+- Add test-only integration evidence for the bounded Issue 21 Plans
+  packaged-child round trip: the real `PlanWindowApp` mounted call site, public
+  SDK backend client, sender-authenticated Host router, self-contained Python
+  fixture child, and `plans.resolve_root` / `plans.changed` call-event path.
+  CI and release gates build and run the fixture explicitly; it is not a
+  production artifact, and the full third-party backend lifecycle and remaining
+  Plans operations stay on their owning migration issues.
+- Add the Host-private Plans core-service bridge, package-owned watcher, bounded
+  child drain/restart lifecycle, and Python/Go packaged fixture parity. The
+  combined production Plans package now consumes those seams with an explicit
+  agent method allowlist and a retained legacy fallback.
+- Activate the combined `navide.plans` Manifest v2 package with a self-contained
+  Backend Wire executable, Host-private filesystem bridge, workspace-bound
+  headless agent routing, Host-minted agent Initiators, workspace storage
+  preference migration, package-owned change events, and fail-closed legacy
+  recovery. Manual operations remain user-initiated and outside agent policy
+  filtering; no public `plans` permission is added.
 - Require a verified Registry signature from a signer authorized by the
   App-pinned Registry root before a Manifest v2 marketplace package can be
   installed, including packages whose signed listing metadata has been
@@ -78,6 +124,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Changed
 
+- Explicitly declare and document the supported Node.js runtime as Node.js 22.12+ within the 22.x release line (with pnpm 10).
 - Accept a `---MSG-START---` marker standing on its own line with `to:` on the line below it. Both forms now open a message block. The injected hint still teaches the same-line form and that is still the one to write, but "the marker must be a whole line" reads just as easily as "the marker gets a line to itself" — and until now a block written that way was discarded as ordinary prose, so a reply an agent believed it had sent left no trace anywhere. The cost is booked explicitly: an unfenced bare marker quoted inside a message body now truncates the message it sits in, the same hazard the same-line form has always had.
 - Deliver a message into a `claude` pane while its turn is still running. The two turn-boundary holds exist to wait for a boundary, and Claude Code supplies that boundary itself — text written to its PTY mid-turn lands in its own queue, the same path a person typing mid-turn uses. Waiting for the pane to fall idle is what made a reply from a busy pane take 78s where the other direction took 2s. Declared per vendor and measured, not assumed: `claude` alone today, and `qwen` deliberately stays held because it merges several queued messages into one submission. The typing hold still applies, the pane still reports itself busy to `cli_wait_idle` / `cli_list_targets`, and push channels are unaffected.
 - Say plainly that a reply's `to:` belongs on the `---MSG-START---` line itself. The instruction Navide injects with every message and every spawned task said the marker "must be on its own line", which reads as an invitation to put `to:` on the next one — and a block written that way opens nothing: it is read as ordinary prose, so no message is queued, no delivery fails, and neither side sees a trace of it. The parser is unchanged; the wording, the in-app protocol reference and the three-language docs now state the rule and no longer imply the opposite.
@@ -89,6 +136,17 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
+- Restore the retained Plans toolbar and Review Notes inside the packaged
+  Plans contribution, including overflow clicks, note editing focus,
+  application confirmation, anchored comments, and plan-switch isolation.
+  Opt-in development provenance and emitted-frontend integration checks now
+  distinguish the selected installed package from the current worktree build.
+- Prevent unintended editor opens from Plans navigation: standalone initial
+  `rel_path` document loading and plan row clicks now only inspect and render
+  the plan in the standalone view without invoking `ui.openInEditor`. Left-sidebar
+  plan row selection invokes `ui.openPlansWindow` and never overwrites the
+  active editor, leaving `ui.openInEditor` strictly for explicit "Open in editor"
+  user actions.
 - Fill the complete Host slot with the isolated Git v2 left contribution,
   without exposing the browser's default white canvas or outer page margin.
 

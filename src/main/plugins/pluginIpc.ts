@@ -53,6 +53,10 @@ import {
 import { currentPluginHostTarget } from './pluginTarget'
 import type { FrontendPluginManager } from './frontendPluginManager'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+import type {
+  ManifestPermissionsSummary,
+  PackageVersionGrantSummary,
+} from '../../shared/executionPolicy'
 
 /** Development-only endpoint. It is intentionally not the official Registry
  * identity: a local Registry must establish trust through root approval. */
@@ -104,6 +108,9 @@ interface InstalledSummary {
   id: string
   requires: string[]
   sensitive: string[]
+  packageVersion?: string
+  manifestPermissions?: ManifestPermissionsSummary
+  packageVersionGrant?: PackageVersionGrantSummary | null
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
 }
@@ -149,6 +156,36 @@ function assertPluginRemovalTarget(pluginsRoot: string, value: unknown): string 
   const target = resolve(root, value)
   if (dirname(target) !== root) throw new Error('invalid plugin id')
   return value
+}
+
+function installedPackageVersion(
+  manager: FrontendPluginManager,
+  pluginsRoot: string,
+  pluginId: string,
+): string | null {
+  const descriptorVersion = manager.getDescriptor(pluginId)?.packageVersion
+  if (typeof descriptorVersion === 'string' && descriptorVersion.length > 0) {
+    return descriptorVersion
+  }
+  try {
+    const activation = loadPluginDir(join(pluginsRoot, pluginId)).activation
+    return activation?.packageVersion ?? null
+  } catch {
+    return null
+  }
+}
+
+async function revokeInstalledPackageRuntime(
+  manager: FrontendPluginManager,
+  pluginsRoot: string,
+  pluginId: string,
+): Promise<void> {
+  const packageVersion = installedPackageVersion(manager, pluginsRoot, pluginId)
+  if (packageVersion) {
+    await manager.revokePackageVersion(pluginId, packageVersion)
+  } else {
+    manager.preparePluginRemoval(pluginId)
+  }
 }
 
 function cleanupFailedPluginInstall(
@@ -210,18 +247,62 @@ export function registerPluginIpc(
       {
         id: string
         requires: string[]
+        packageVersion?: string
+        manifestPermissions?: ManifestPermissionsSummary
         provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
         warning?: string
       }
     >()
     for (const descriptor of manager.listDescriptors()) {
-      summaries.set(descriptor.id, { id: descriptor.id, requires: descriptor.requires })
+      const manifestPermissions = descriptor.capabilityPolicy?.kind === 'manifest-v2'
+        ? {
+            system: [...descriptor.capabilityPolicy.system],
+            ...(descriptor.capabilityPolicy.shell
+              ? { shell: descriptor.capabilityPolicy.shell }
+              : {}),
+          }
+        : undefined
+      summaries.set(descriptor.id, {
+        id: descriptor.id,
+        requires: [...descriptor.requires],
+        ...(descriptor.packageVersion ? { packageVersion: descriptor.packageVersion } : {}),
+        ...(manifestPermissions ? { manifestPermissions } : {}),
+      })
     }
     for (const pkg of manager.listInstalledPackages()) summaries.set(pkg.id, pkg)
     return [...summaries.values()].map((summary) => ({
       id: summary.id,
       requires: summary.requires,
       sensitive: sensitiveCapabilities(summary.requires),
+      ...(summary.packageVersion ? { packageVersion: summary.packageVersion } : {}),
+      ...(summary.manifestPermissions
+        ? {
+            manifestPermissions: {
+              system: [...summary.manifestPermissions.system],
+              ...(summary.manifestPermissions.shell
+                ? { shell: summary.manifestPermissions.shell }
+                : {}),
+            },
+          }
+        : {}),
+      ...(summary.packageVersion
+        ? {
+            packageVersionGrant: (() => {
+              const grant = capabilityGrants.get(summary.id, summary.packageVersion)
+              return grant
+                ? {
+                    packageVersion: grant.packageVersion,
+                    system: [...grant.system],
+                    ...(grant.shell ? { shell: grant.shell } : {}),
+                    ...(grant.highRiskShellConfirmed !== undefined
+                      ? { highRiskShellConfirmed: grant.highRiskShellConfirmed }
+                      : {}),
+                    ...(grant.storage !== undefined ? { storage: grant.storage } : {}),
+                  }
+                : null
+            })(),
+          }
+        : {}),
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),
     }))
@@ -323,7 +404,7 @@ export function registerPluginIpc(
 
   ipcMain.handle(
     'plugins:commitInstall',
-    (
+    async (
       event,
       args: { id: string; publisherConfirmed?: boolean; riskConfirmed?: boolean }
     ) => {
@@ -370,9 +451,13 @@ export function registerPluginIpc(
             }
           })()
         : undefined
+      const previousPackageVersion = installedPackageVersion(manager, pluginsRoot, pkg.id)
       let transaction: ReturnType<typeof commitInstallTransaction> | undefined
       let publisherConsentPersisted = false
       try {
+        if (previousPackageVersion) {
+          await manager.revokePackageVersion(pkg.id, previousPackageVersion)
+        }
         transaction = commitInstallTransaction(pkg, pluginsRoot)
         const descriptor = transaction.descriptor
         let verifiedArtifactDigest: string | undefined
@@ -492,7 +577,7 @@ export function registerPluginIpc(
     // Stop live instances before storage cleanup. The storage adapter drains
     // operations already admitted for this plugin; this phase also prevents
     // new renderer calls from being admitted while cleanup is in progress.
-    manager.preparePluginRemoval(id)
+    await revokeInstalledPackageRuntime(manager, pluginsRoot, id)
     // Storage cleanup is an explicit uninstall operation. If it fails, keep
     // the package and prepared state intact so the caller can retry. The
     // manager deliberately remains registered but stopped until this succeeds.
