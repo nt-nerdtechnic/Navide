@@ -238,5 +238,7 @@ describe('navide.plans production package boundary', () => {
     } finally {
       rmSync(tempDistPlans, { recursive: true, force: true })
     }
-  })
+    // Runs a real Vite build, which takes well past the 5s default on a cold
+    // CI runner.
+  }, 120_000)
 })

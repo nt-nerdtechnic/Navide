@@ -93,6 +93,28 @@ const electronMock = vi.hoisted(() => {
   class FakeHostWindow {
     readonly id = nextWindowId++
     readonly children: unknown[] = []
+    private readonly hostContentsListeners = new Map<string, Array<(...args: unknown[]) => void>>()
+    /** The window document's own contents. The manager watches
+     *  `did-start-navigation` here so a host reload reads as a deliberate
+     *  teardown of the guests the window carries. Deliberately not a
+     *  `FakeWebContents`, which would consume a guest webContents id. */
+    readonly webContents = {
+      on: (event: string, listener: (...args: unknown[]) => void): void => {
+        const list = this.hostContentsListeners.get(event) ?? []
+        list.push(listener)
+        this.hostContentsListeners.set(event, list)
+      },
+      removeListener: (event: string, listener: (...args: unknown[]) => void): void => {
+        this.hostContentsListeners.set(
+          event,
+          (this.hostContentsListeners.get(event) ?? []).filter((entry) => entry !== listener)
+        )
+      },
+      emit: (event: string, ...args: unknown[]): void => {
+        for (const listener of [...(this.hostContentsListeners.get(event) ?? [])]) listener(...args)
+      },
+      send: (): void => {},
+    }
     readonly contentView = {
       addChildView: (view: unknown): void => {
         this.children.push(view)
