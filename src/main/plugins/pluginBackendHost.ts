@@ -377,6 +377,16 @@ export class PluginBackendHost {
           : {}),
         onFailure: (error: BackendPluginError): void => {
           if (this.views.get(view.runtime.instanceId ?? '') !== view) return
+          // Name the failure here, before any observer can drop it. Every
+          // downstream diagnostic is gated on error.cause, and a startup
+          // failure without one used to leave no trace at all - which is how
+          // Plans kept falling into legacy recovery for days with nothing to
+          // read. Code only; the sanitized detail still follows when present.
+          console.warn(
+            `[plugin-backend] ${view.runtime.pluginId} child failed: ${error.code}${
+              error.cause ? '' : ' (no cause reported)'
+            }`,
+          )
           try {
             this.onBackendFailure?.(view.runtime, error)
           } catch {
