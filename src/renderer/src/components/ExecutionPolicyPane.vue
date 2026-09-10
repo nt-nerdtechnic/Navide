@@ -176,6 +176,28 @@ function listOrNone(values: readonly string[]): string {
   return values.length > 0 ? values.join(', ') : t('settings.executionPolicy.none')
 }
 
+/** `full` and `denylist` are both high risk but for opposite reasons — one says
+ * "everything", the other grants by default — so they must not share one
+ * sentence. The acknowledgement text especially: it is what the user attests
+ * to. */
+function highRiskWarningKey(mode: ExecutionPolicyMode | undefined): string {
+  return mode === 'denylist'
+    ? 'settings.executionPolicy.denylistWarning'
+    : 'settings.executionPolicy.fullWarning'
+}
+
+function highRiskConfirmationKey(mode: ExecutionPolicyMode | undefined): string {
+  return mode === 'denylist'
+    ? 'settings.executionPolicy.denylistConfirmation'
+    : 'settings.executionPolicy.fullConfirmation'
+}
+
+/** The commands a denylist can still reach. Read from the Host default policy
+ * in the snapshot, which the Host builds from HOST_SHELL_EXECUTABLE_ALLOWLIST —
+ * the same list the denylist enforcement point intersects against. Never spell
+ * the names here: a literal would rot the moment the Host list changes. */
+const hostSupportedShellList = computed(() => listOrNone(snapshot.value?.defaultPolicy.shell ?? []))
+
 function setMode(mode: ExecutionPolicyMode): void {
   if (!draft.value) return
   draft.value.mode = mode
@@ -463,10 +485,10 @@ watch(() => props.workspacePath, () => { void load({ replaceDraft: !draftDirty.v
       </div>
 
       <div v-if="draftIsHighRisk" class="ep-full-warning" role="alert">
-        {{ $t('settings.executionPolicy.fullWarning') }}
+        {{ $t(highRiskWarningKey(draft.mode)) }}
         <label class="ep-confirm-label">
           <input v-model="fullConfirmed" type="checkbox" class="ep-full-confirmation" />
-          {{ $t('settings.executionPolicy.fullConfirmation') }}
+          {{ $t(highRiskConfirmationKey(draft.mode)) }}
         </label>
       </div>
 
@@ -489,6 +511,9 @@ watch(() => props.workspacePath, () => { void load({ replaceDraft: !draftDirty.v
         <div class="ep-editor-block">
           <h3>{{ $t(`settings.executionPolicy.${draft.mode === 'denylist' ? 'shellDenylistLabel' : 'shellAllowlistLabel'}`) }}</h3>
           <p class="ep-hint">{{ $t(`settings.executionPolicy.${draft.mode === 'denylist' ? 'shellDenylistHint' : 'shellAllowlistHint'}`) }}</p>
+          <p v-if="draft.mode === 'denylist'" class="ep-hint ep-shell-scope">
+            {{ $t('settings.executionPolicy.shellDenylistScope', { executables: hostSupportedShellList }) }}
+          </p>
           <form class="ep-shell-add" @submit.prevent="addShell">
             <input
               v-model="shellInput"
@@ -579,10 +604,10 @@ watch(() => props.workspacePath, () => { void load({ replaceDraft: !draftDirty.v
         <div><strong>{{ $t('settings.executionPolicy.shellLabel') }}</strong>: {{ listOrNone(recommendation.policy.shell) }}</div>
       </div>
       <div v-if="recommendation.state === 'valid' && recommendationIsHighRisk" class="ep-warning">
-        <p>{{ $t('settings.executionPolicy.fullWarning') }}</p>
+        <p>{{ $t(highRiskWarningKey(recommendation.policy?.mode)) }}</p>
         <label>
           <input v-model="repositoryFullConfirmed" type="checkbox" class="ep-repository-full-confirmation" />
-          {{ $t('settings.executionPolicy.fullConfirmation') }}
+          {{ $t(highRiskConfirmationKey(recommendation.policy?.mode)) }}
         </label>
       </div>
       <button

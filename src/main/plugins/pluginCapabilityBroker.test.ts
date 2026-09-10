@@ -25,7 +25,7 @@ import {
 } from './pluginCapabilityBroker'
 import { HOST_SHELL_EXECUTABLE_ALLOWLIST, STORAGE_LIMITS } from './pluginCapabilityCatalog'
 import { manifestV2CapabilityPolicy, type PluginCapabilityPolicy } from './pluginPermissions'
-import type { ExecutionPolicySnapshot } from './executionPolicy'
+import { HOST_DEFAULT_EXECUTION_POLICY, type ExecutionPolicySnapshot } from './executionPolicy'
 import type { WsResponse } from '../../shared/wsClient'
 
 describe('isCapabilityAllowed', () => {
@@ -361,6 +361,11 @@ describe('Issue 03/04 public Host planner', () => {
 
   it('records the approved Host-maintained shell executables', () => {
     expect(HOST_SHELL_EXECUTABLE_ALLOWLIST).toEqual(['git', 'gh', 'glab'])
+    // The Settings copy tells the user which commands a denylist can still
+    // reach, and reads that list out of the snapshot's Host default policy.
+    // That is only truthful while the default policy carries the very list the
+    // denylist enforcement point intersects against.
+    expect(HOST_DEFAULT_EXECUTION_POLICY.shell).toEqual([...HOST_SHELL_EXECUTABLE_ALLOWLIST])
     expect(
       planPublicCapabilityCall(
         call({ ns: 'shell', method: 'run', args: { command: 'git status' } }),
@@ -478,6 +483,51 @@ describe('Issue 03/04 public Host planner', () => {
     expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', command)).toBe(false)
   })
 
+  it.each([
+    ['timeout', 'timeout 5 git push --force'],
+    ['setsid', 'setsid git push --force'],
+    ['stdbuf', 'stdbuf -o0 git push --force'],
+    ['ionice', 'ionice -c3 git push --force'],
+    ['chroot', 'chroot / git push --force'],
+    ['script', 'script -q /dev/null git push --force'],
+    ['watch', 'watch git push --force'],
+    ['busybox', 'busybox sh -c "git push --force"'],
+    ['ksh -c', 'ksh -c "git push --force"'],
+    ['fish -c', 'fish -c "git push --force"'],
+    ['perl -e', 'perl -e "system(q(git push --force))"'],
+    ['python3 -c', 'python3 -c "import os; os.system(\'git push --force\')"'],
+    ['npx', 'npx git-push-force'],
+  ])('denies a command whose real executable the Host cannot resolve: %s', (_case, command) => {
+    // The leading token is not a Host-known executable, so it may itself be a
+    // wrapper for the denied one. "Absent from the denylist" is not a grant.
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', command)).toBe(false)
+  })
+
+  it('leaves no unresolvable-wrapper form allowed under a denylist', () => {
+    const commands = [
+      'timeout 5 git push --force',
+      'setsid git push --force',
+      'stdbuf -o0 git push --force',
+      'busybox sh -c "git push --force"',
+      'ksh -c "git push --force"',
+      'perl -e "system(q(git push --force))"',
+      'npx git-push-force',
+    ]
+    const allowed = commands.filter((command) =>
+      executionPolicyAllows(denylistAgent, gitDenylist, 'shell', command)
+    )
+    expect(allowed).toEqual([])
+    expect(commands.filter((command) =>
+      !executionPolicyAllows(denylistAgent, gitDenylist, 'shell', command)
+    )).toHaveLength(commands.length)
+  })
+
+  it('still allows Host-known executables a denylist does not name', () => {
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'gh pr list')).toBe(true)
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'gh pr list && glab mr list')).toBe(true)
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'git status')).toBe(false)
+  })
+
   it('reports the wrapper and the executable it runs', () => {
     expect(shellTopLevelExecutables('sh -c "git status"')).toEqual(['sh', 'git'])
     expect(shellTopLevelExecutables('env git status')).toEqual(['env', 'git'])
@@ -499,7 +549,12 @@ describe('Issue 03/04 public Host planner', () => {
 
   it('still allows ordinary quoted commands', () => {
     expect(shellTopLevelExecutables('git commit -m "fix(ui): x"')).toEqual(['git'])
-    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'echo ok')).toBe(true)
+    // `echo ok` used to pass this denylist purely because `echo` was absent
+    // from it. It no longer does: a denylist is enforced over the Host's
+    // resolvable vocabulary, since an unknown leading token may be a wrapper
+    // for the denied executable. A Host-known, undenied executable still runs.
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'echo ok')).toBe(false)
+    expect(executionPolicyAllows(denylistAgent, gitDenylist, 'shell', 'gh pr list')).toBe(true)
     expect(
       planPublicCapabilityCall(
         call({ ns: 'shell', method: 'run', args: { command: 'git commit -m "fix(ui): x"' } }),

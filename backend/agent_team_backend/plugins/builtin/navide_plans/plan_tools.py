@@ -352,13 +352,19 @@ def _create_plan_sync(
     else:
         raise FsError("could not allocate a unique plan filename")
 
-    content = content.replace("{{PLAN_NAME}}", html_escape(name))
-    content = content.replace("{{ONE_SENTENCE_OVERVIEW}}", html_escape(overview))
-    content = content.replace("{{PHASE_A_TITLE}}", "Todos")
+    # Fill the supplied placeholders and sweep the remaining {{…}} scaffolding
+    # (Goals/Risks/etc. prose the caller does not supply) in a single pass, with
+    # a function replacement. Sweeping afterwards instead would rewrite a
+    # caller's own "{{…}}" to TBD, leaving the visible markup disagreeing with
+    # plan-meta; re.sub never rescans what a callback returns. The todo rows go
+    # in after the sweep for the same reason.
+    replacements = {
+        "{{PLAN_NAME}}": html_escape(name),
+        "{{ONE_SENTENCE_OVERVIEW}}": html_escape(overview),
+        "{{PHASE_A_TITLE}}": "Todos",
+    }
+    content = _PLACEHOLDER_RE.sub(lambda match: replacements.get(match.group(0), "TBD"), content)
     content = _TEMPLATE_TODO_LI_RE.sub(lambda _m: _todos_markup(normalized), content, count=1)
-    # Sweep every remaining {{…}} placeholder (Goals/Risks/etc. prose the
-    # caller does not supply) so no template scaffolding leaks into the plan.
-    content = _PLACEHOLDER_RE.sub("TBD", content)
     # Stages past the approval gate imply the gate was passed, and the visible
     # badge is written from the meta, so both have to be set here rather than
     # left for a follow-up plan_update_stage call.

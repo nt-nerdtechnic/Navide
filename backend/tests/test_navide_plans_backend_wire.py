@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import select
 import subprocess
 import sys
 import time
+from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 
@@ -978,3 +980,168 @@ def test_packaged_plans_backend_nested_roots_defensive_2000_cap(
     assert roots == ["r0000-within"]
     assert len(requested_modes) == 1  # The root listing exhausts the global candidate budget.
     assert all(m == "discovery" for m in requested_modes)
+
+
+# Regression: plans.create must not treat user todo text as an re.sub
+# replacement template. A backslash in a todo either raised re.error inside the
+# worker thread (killing it, so the Host saw no frame at all and timed out) or
+# silently rewrote the text (`C:\temp` became a literal TAB).
+HOSTILE_TODOS = [
+    r"fix regex s/(a)/\1/",       # group reference -> re.error: invalid group reference 1
+    r"C:\Users\new\test",         # bad escape \U -> re.error
+    r"C:\temp",                   # valid escape -> silently rewritten to a TAB
+    r"match \d+ digits",          # bad escape \d -> re.error
+    r"use \g<0> here",            # group name -> re.error: missing <
+]
+
+
+def _create_plan_over_wire(
+    backend_process: subprocess.Popen[bytes],
+    request_id: str,
+    todos: list[str],
+    name: str = "Backslash plan",
+    overview: str = "Backslashes survive",
+) -> tuple[str, str]:
+    """Drive one plans.create through the real child, returning (rel_path, document)."""
+    stored: dict[str, str] = {
+        ".agent-team/plans/_template.html": (
+            REPOSITORY_ROOT / "backend" / "agent_team_backend" / "plan_assets" / "_template.html"
+        ).read_text(encoding="utf-8")
+    }
+    mtime = 100.0
+
+    def service_until_response(request_id: str) -> dict[str, Any]:
+        nonlocal mtime
+        while True:
+            # A dead worker thread writes no frame at all; _read raises here.
+            frame = _read(backend_process)
+            if frame.get("id") == request_id:
+                return frame
+            assert frame.get("method") == "navide/host/call"
+            params = frame["params"]
+            operation = params["operation"]
+            arguments = params["arguments"]
+            if operation == "read_file":
+                rel_path = arguments["rel_path"]
+                if rel_path in stored:
+                    _reply_bridge(backend_process, frame, {"content": stored[rel_path], "mtime": mtime})
+                else:
+                    _error_bridge(backend_process, frame, "BACKEND_UNAVAILABLE")
+            elif operation == "write_file":
+                stored[arguments["rel_path"]] = arguments["content"]
+                mtime += 1
+                _reply_bridge(backend_process, frame, {"ok": True, "mtime": mtime})
+            else:
+                raise AssertionError(f"unexpected filesystem operation: {operation}")
+
+    _send(
+        backend_process,
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "navide/call",
+            "params": {
+                "_meta": CLIENT_META,
+                "name": "plans.create",
+                "arguments": {"name": name, "overview": overview, "todos": todos},
+                "runtime": RUNTIME,
+            },
+        },
+    )
+    created = service_until_response(request_id)
+    assert "error" not in created, created.get("error")
+    rel_path = created["result"]["value"]["rel_path"]
+    # The plan file really exists, not just "no exception was raised".
+    assert rel_path in stored
+    return rel_path, stored[rel_path]
+
+
+def test_agent_create_preserves_backslashes_in_todo_text(
+    backend_process: subprocess.Popen[bytes],
+) -> None:
+    _, document = _create_plan_over_wire(backend_process, "create-backslash", HOSTILE_TODOS)
+
+    # Visible markup keeps every todo verbatim (HTML-escaped, backslashes intact).
+    for todo in HOSTILE_TODOS:
+        assert f"<span>{html_escape(todo)}</span></li>" in document, todo
+    # And so does the plan-meta island the Plan view reads back.
+    island = re.search(r'<script[^>]*\bid="plan-meta"[^>]*>([\s\S]*?)</script>', document)
+    assert island is not None
+    meta = json.loads(island.group(1))
+    assert [todo["content"] for todo in meta["todos"]] == HOSTILE_TODOS
+    # The replaced template row is gone, and the TAB that `C:\temp` used to
+    # decay into never reaches the rendered rows.
+    assert 'data-todo-id="phase-a"' not in document
+    rows = re.findall(r"<span>([^<]*)</span></li>", document)
+    assert rows == [html_escape(todo) for todo in HOSTILE_TODOS]
+    assert not any("\t" in row for row in rows)
+
+
+def test_agent_create_does_not_silently_rewrite_a_valid_escape(
+    backend_process: subprocess.Popen[bytes],
+) -> None:
+    """The quiet half of the same bug: `C:\temp` is a *valid* re template, so the
+    old code raised nothing and wrote a literal TAB into the plan instead."""
+    _, document = _create_plan_over_wire(backend_process, "create-tab", [r"C:\temp"])
+
+    rows = re.findall(r"<span>([^<]*)</span></li>", document)
+    assert rows == [r"C:\temp"]
+    assert "C:" + "\t" + "emp" not in document
+    island = re.search(r'<script[^>]*\bid="plan-meta"[^>]*>([\s\S]*?)</script>', document)
+    assert island is not None
+    assert [todo["content"] for todo in json.loads(island.group(1))["todos"]] == [r"C:\temp"]
+
+
+def _visible_plan_text(document: str) -> tuple[str, str, list[str]]:
+    """The three user-authored strings as the Plan view actually renders them."""
+    heading = re.search(r"<h1[^>]*>([\s\S]*?)<span", document)
+    overview = re.search(r'\bclass="overview"[^>]*>([\s\S]*?)</', document)
+    assert heading is not None and overview is not None
+    rows = re.findall(r"<span>([^<]*)</span></li>", document)
+    return heading.group(1).strip(), overview.group(1).strip(), rows
+
+
+def _plan_meta_of(document: str) -> dict[str, Any]:
+    island = re.search(r'<script[^>]*\bid="plan-meta"[^>]*>([\s\S]*?)</script>', document)
+    assert island is not None
+    return json.loads(island.group(1))
+
+
+# Regression: the {{…}} sweep must not run over already-substituted user text.
+# It used to, so a name/overview containing "{{…}}" was silently rewritten to
+# TBD in the visible markup while plan-meta kept the real string — the document
+# disagreed with itself.
+@pytest.mark.parametrize("field,name,overview,todos", [
+    ("name", r"Migrate {{legacy}} config", "Plain overview", ["Plain todo"]),
+    ("overview", "Plain name", r"Replace {{TOKEN}} in files", ["Plain todo"]),
+    # Todo text was already safe (it is inserted after the sweep). Pin it so
+    # merging the fill and the sweep into one pass cannot regress it.
+    ("todo", "Plain name", "Plain overview", [r"Replace {{TOKEN}} in files"]),
+    ("all-three", r"Fix {{a}}", r"Sweep {{b}}", [r"Todo {{c}}", r"Todo {{d}} and \1"]),
+])
+def test_agent_create_preserves_double_braces_in_user_text(
+    backend_process: subprocess.Popen[bytes],
+    field: str,
+    name: str,
+    overview: str,
+    todos: list[str],
+) -> None:
+    _, document = _create_plan_over_wire(
+        backend_process, f"create-braces-{field}", todos, name=name, overview=overview
+    )
+
+    # Visible markup keeps all three verbatim (HTML-escaped, braces intact)...
+    assert _visible_plan_text(document) == (
+        html_escape(name),
+        html_escape(overview),
+        [html_escape(todo) for todo in todos],
+    )
+    # ...and plan-meta agrees with it rather than diverging.
+    meta = _plan_meta_of(document)
+    assert meta["name"] == name
+    assert meta["overview"] == overview
+    assert [todo["content"] for todo in meta["todos"]] == todos
+    # The unsupplied template scaffolding is still swept.
+    assert "{{PLAN_NAME}}" not in document
+    assert "{{PHASE_A_TITLE}}" not in document
+    assert "TBD" in document

@@ -70,6 +70,50 @@ describe('the Manager-mode stage has a watchdog', () => {
     expect(scan).toContain("verdict === 'timeout' ? 'cap' : 'idle'")
   })
 
+  it('names the never-spawned commander instead of claiming a pane vanished', () => {
+    // R2: a commander slot whose agentKey is gone from agentSpecs gets no pane,
+    // so router.managerPaneId stays empty and the verdict is the same standing
+    // fact as a dead Manager. The detail string is the only thing the log line
+    // and the dialog show, and "Manager pane is gone" is a claim about a pane
+    // that never existed.
+    expect(scan).toContain('Manager slot never spawned')
+    // Chosen by whether there is an id, not by the verdict — both cases share it.
+    const at = scan.indexOf('const detail =')
+    expect(at, 'the detail string').toBeGreaterThan(-1)
+    expect(scan.slice(at, at + 600)).toContain('router.managerPaneId')
+  })
+
+  it('does not release a slot key that was never a pane id', () => {
+    // With no commander pane there is no pane-keyed slot to release: the spawn
+    // failure path already released `slot:<label>`. Calling it with '' is a
+    // silent no-op today and a wrong-slot release the moment releaseSlot's key
+    // handling changes.
+    const gone = scan.slice(scan.indexOf("if (verdict === 'manager-gone') {"))
+    const rel = gone.indexOf('releaseStageSlot(stageIndex, router.managerPaneId')
+    expect(rel, 'the release call').toBeGreaterThan(-1)
+    expect(gone.slice(0, rel)).toContain('if (router.managerPaneId)')
+  })
+
+  it('arms the router only after every slot spawn has resolved', () => {
+    // The premise the R2 rule rests on (this one already held — it is pinned so
+    // the rule cannot be invalidated from the other side): the poll sets armedAt,
+    // so past the arm an empty managerPaneId is permanent rather than in flight.
+    // And the poll is manager-only, so an empty id can never mean "not a Manager
+    // stage".
+    for (const [from, to] of [
+      ['async function activateStage(', '\nasync function spawnPipelineStage('],
+      ['async function spawnPipelineStage(', '\nasync function onPipelineStart('],
+    ] as const) {
+      const fn = body(from, to)
+      const spawnAll = fn.lastIndexOf('await Promise.all(')
+      const arm = fn.indexOf('startRouterPoll(index)')
+      expect(spawnAll, `${from} spawns its slots`).toBeGreaterThan(-1)
+      expect(arm, `${from} arms the router`).toBeGreaterThan(spawnAll)
+      // …and only for a stage that actually has a commander.
+      expect(fn.slice(0, arm).lastIndexOf('if (managerSlot) {')).toBeGreaterThan(spawnAll)
+    }
+  })
+
   it('raises the stall once per stage rather than every 4s poll', () => {
     // The read in the gate is only half the latch. Without the WRITE the gate
     // is true on every tick and the identical prompt is raised every 4s — and
@@ -172,6 +216,22 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     expect(decide.indexOf('forceAdvanceStall()')).toBeLessThan(decide.indexOf('continueWaitingStall()'))
   })
 
+  it('does not tell the user "all slots finished" about slots that cannot report', () => {
+    // R3: Full auto now force-advances on a Manager CAP too, so the branch that
+    // picks the log line has to cover every Manager verdict. Left keyed on
+    // 'manager-gone' alone, a forced cap advance was logged as "all slots
+    // finished" — the one thing that is structurally impossible for a Manager
+    // stage, and the sentence a later reader would trust.
+    const prompt = body('function promptStageStall(', '\n/** User clicked "繼續等待"')
+    const decide = prompt.slice(
+      prompt.indexOf("if (action === 'force-advance') {"),
+      prompt.indexOf('forceAdvanceStall()')
+    )
+    expect(decide).toContain('all slots finished')
+    expect(decide).toContain('if (p.managerVerdict) {')
+    expect(decide).not.toContain("p.managerVerdict === 'manager-gone'")
+  })
+
   it('tells the user what the two buttons do in Manager mode, where both differ', () => {
     // The dialog is one hard-coded block; the copy said "強制推進 marks this
     // slot done" and "繼續等待 resets the idle timer", and in Manager mode
@@ -188,6 +248,9 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     const gone = hint.slice(0, hint.indexOf('v-else-if'))
     expect(gone).toContain('整個 stage')
     expect(gone).toContain('最後一次提示')
+    // The same verdict now also covers a commander that never spawned, so the
+    // copy cannot assert that a pane disappeared.
+    expect(gone).not.toContain('已消失')
     // The Manager cap branch says the stage-level thing too.
     const capBranch = hint.slice(hint.indexOf('v-else-if'), hint.indexOf('<p v-else '))
     expect(capBranch).toContain('整個 stage')

@@ -235,17 +235,27 @@ export function parseExecutionPolicy(raw: unknown): ExecutionPolicy {
 }
 
 /** True when a policy grants unrestricted authority, whichever mode expresses
- * it. `full` says so directly; a `denylist` that denies nothing on an axis is
- * privilege-identical to `full` on that axis. The two axes are judged
- * independently because the enforcement point evaluates them independently:
- * an empty `shell` denylist permits every executable even when `system` is
- * constrained, and an empty `system` denylist grants every namespace even when
- * `shell` is constrained. An `allowlist` is never unrestricted — it can only
- * name what it permits. */
+ * it.
+ *
+ * The judgement is about what a policy *grants*, never about how many entries
+ * it lists. `full` grants everything and says so. An `allowlist` can only ever
+ * name what it permits, so its grant is bounded by construction and is never
+ * high risk — naming every namespace and every Host executable is still a
+ * bounded grant, which is why the Host default policy needs no confirmation.
+ *
+ * A `denylist` is allow-by-default, and this contract cannot bound what
+ * "everything except these" grants: `shell` entries are drawn from an open
+ * vocabulary (any executable name that is not listed is permitted, including
+ * every name the author never thought of, and entries need not name a binary
+ * that exists), and the set of enforcement points is Host-defined. Listing a
+ * few entries therefore does not demonstrably narrow the grant — a denylist of
+ * `{ system: ['aiCli'], shell: ['zzz-not-a-binary'] }` still hands an agent two
+ * system namespaces and every executable — so every denylist is high risk,
+ * whatever its arrays contain. Counting empty arrays, as this used to, measured
+ * the spelling of the policy instead of its authority. */
 export function isHighRiskExecutionPolicy(policy: ExecutionPolicy): boolean {
   if (policy.mode === 'full') return true
-  if (policy.mode !== 'denylist') return false
-  return policy.system.length === 0 || policy.shell.length === 0
+  return policy.mode === 'denylist'
 }
 
 function safePath(value: unknown, label: string): string {

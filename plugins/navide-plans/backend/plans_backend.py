@@ -902,16 +902,31 @@ def _create_plan(origin: dict[str, Any], arguments: dict[str, Any]) -> dict[str,
         "{{ONE_SENTENCE_OVERVIEW}}": html_escape(overview.strip()),
         "{{PHASE_A_TITLE}}": "Todos",
     }
-    for source, replacement in replacements.items():
-        content = content.replace(source, replacement)
-    content = re.sub(r"\{\{[^{}]*\}\}", "TBD", content)
+    # One pass, function replacement: fill the known placeholders and sweep the
+    # rest to TBD together. A second sweep over already-substituted content
+    # would rewrite a user's own "{{...}}" to TBD, leaving the visible markup
+    # disagreeing with plan-meta. re.sub never rescans what a callback returns.
+    content = re.sub(
+        r"\{\{[^{}]*\}\}",
+        lambda match: replacements.get(match.group(0), "TBD"),
+        content,
+    )
     if "data-todo-id=" in content:
         rows = "\n".join(
             f'<li data-status="{todo["status"]}" data-todo-id="{html_escape(todo["id"])}">'
             f'<span class="st">{todo["status"]}</span> <span>{html_escape(todo["content"])}</span></li>'
             for todo in todos
         )
-        content = re.sub(r"<li\b[^>]*data-todo-id=[\"']phase-a[\"'][^>]*>[\s\S]*?</li>", rows, content, count=1)
+        # A function replacement, never a template string: user todo text is
+        # HTML-escaped but still carries raw backslashes, and re.sub would read
+        # those as group references (\1) or escapes (\t, \U) — raising
+        # re.error, or silently rewriting the text.
+        content = re.sub(
+            r"<li\b[^>]*data-todo-id=[\"']phase-a[\"'][^>]*>[\s\S]*?</li>",
+            lambda _match: rows,
+            content,
+            count=1,
+        )
     meta = {
         "schemaVersion": 1,
         "name": name.strip(),

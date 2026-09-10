@@ -663,9 +663,22 @@ export function executionPolicyAllows(
     // Policy entries are persisted in lowercase; normalize command tokens at
     // the enforcement boundary so case-insensitive filesystems cannot bypass policy.
     const canonicalExecutables = executables.map((executable) => executable.toLowerCase())
-    return policy.mode === 'allowlist'
-      ? canonicalExecutables.every((executable) => policy.shell.includes(executable))
-      : canonicalExecutables.every((executable) => !policy.shell.includes(executable))
+    if (policy.mode === 'allowlist') {
+      return canonicalExecutables.every((executable) => policy.shell.includes(executable))
+    }
+    // A denylist is allow-by-default over an open vocabulary of executable
+    // names, while the Host resolves a command purely lexically. Any leading
+    // token the Host does not know may itself be a wrapper that runs the denied
+    // executable — `timeout 5 git push --force`, `setsid`, `busybox sh -c`,
+    // `ksh -c`, `perl -e`, `python3 -c`, `npx` — and enumerating wrapper names
+    // can only ever chase the ones already thought of. So absence from the
+    // denylist is not a grant: a denylist is enforced over the Host's closed
+    // vocabulary of resolvable executables, and every resolved token must be
+    // one the Host knows *and* one the policy does not deny.
+    return canonicalExecutables.every(
+      (executable) =>
+        HOST_SHELL_EXECUTABLE_ALLOWLIST.includes(executable) && !policy.shell.includes(executable),
+    )
   }
   return policy.mode === 'allowlist'
     ? policy.system.includes(namespace)
