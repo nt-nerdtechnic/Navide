@@ -1075,7 +1075,13 @@ export class PluginBackendSupervisor {
     this.spawnProcess = options.spawnProcess ?? defaultSpawnProcess
     this.clientCapabilities = options.clientCapabilities ?? {}
     this.clientInfo = options.clientInfo
-    this.healthTimeoutMs = options.healthTimeoutMs ?? 5_000
+    // A packaged one-file backend pays PyInstaller self-extraction, CPython
+    // boot and imports before it can answer. Measured on this project's own
+    // 8.5 MB Plans bundle: 1.4s cold at load 36, 0.4s warm at load 14 - so the
+    // former 5s budget held only about 3.5x headroom, and a loaded machine ate
+    // it, dropping Plans into legacy recovery three days running. The cost of a
+    // longer budget falls only on a child that is genuinely dead.
+    this.healthTimeoutMs = options.healthTimeoutMs ?? 30_000
     this.callTimeoutMs = options.callTimeoutMs ?? 30_000
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? 250
     this.drainTimeoutMs = options.drainTimeoutMs ?? this.shutdownTimeoutMs
@@ -1640,7 +1646,12 @@ export class PluginBackendSupervisor {
           this.currentGeneration,
           error.code === 'PROTOCOL_ERROR' ? 'PROTOCOL_ERROR' : 'BACKEND_UNAVAILABLE',
           true,
-          error.cause,
+          // A BackendPluginError raised in here - a health-request TIMEOUT, most
+          // of all - carries no cause of its own, and the Host's diagnostic
+          // emitter returns early without one. That made every startup failure
+          // on this path invisible: three of them left no line at all. Hand the
+          // originating error over so the reason reaches the log.
+          error.cause ?? error,
         )
       }
       throw error
