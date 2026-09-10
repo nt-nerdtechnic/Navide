@@ -2140,15 +2140,15 @@ registerCommand('git.focusAgent', () => {
   gap: 14px;
   height: 54px;
   padding: 0 18px 0 84px; /* clear the hidden-titlebar traffic lights */
-/* No traffic lights to clear when the system draws the frame itself (every
-   platform but macOS), so the reserved space on the left is just a gap. */
-.toolbar.no-traffic-lights {
-  padding-left: 18px;
-}
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   -webkit-app-region: drag;
   flex-shrink: 0;
+}
+/* No traffic lights to clear when the system draws the frame itself (every
+   platform but macOS), so the reserved space on the left is just a gap. */
+.toolbar.no-traffic-lights {
+  padding-left: 18px;
 }
 .wm {
   font-weight: 800;
