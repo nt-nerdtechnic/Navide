@@ -31,7 +31,7 @@ def test_quick_status_spawns_no_subprocess(monkeypatch):
     status = od.quick_status()
 
     assert status["quick"] is True
-    assert [d["id"] for d in status["deps"]] == [d.id for d in od.DEPS]
+    assert [d["id"] for d in status["deps"]] == [d.id for d in od.applicable_deps()]
     # Presence is exact: a dep whose binary is nowhere on PATH reads missing.
     by_id = {d["id"]: d for d in status["deps"]}
     for entry in by_id.values():

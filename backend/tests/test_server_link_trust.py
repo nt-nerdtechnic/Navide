@@ -2253,7 +2253,7 @@ async def test_the_status_the_panel_polls_carries_the_reason() -> None:
         server_link._link = None
 
 
-async def test_a_credential_read_that_waits_on_a_person_says_so() -> None:
+async def test_a_credential_read_that_waits_on_a_person_says_so(monkeypatch) -> None:
     """The twelve-minute "connecting" that never dialled.
 
     On macOS the Keychain prompts the first time a newly signed build reads an
@@ -2261,6 +2261,8 @@ async def test_a_credential_read_that_waits_on_a_person_says_so() -> None:
     reported "connecting" the whole time — no error, no attempt on the server —
     while the answer was a dialog behind the window.
     """
+    # The sentence names the Keychain dialog only where one exists.
+    monkeypatch.setattr(server_link.osplat, "platform_id", "darwin")
     link = _trust_link()
     link.config_read_started = time.time() - 5
 
@@ -2282,9 +2284,10 @@ async def test_a_quick_credential_read_is_still_just_connecting() -> None:
     assert link.state() == server_link.STATE_CONNECTING
 
 
-async def test_the_keychain_wait_outranks_a_stale_socket_error() -> None:
+async def test_the_keychain_wait_outranks_a_stale_socket_error(monkeypatch) -> None:
     """A leftover error from a previous attempt would send somebody looking at
     the network instead of at the dialog in front of them."""
+    monkeypatch.setattr(server_link.osplat, "platform_id", "darwin")
     link = _trust_link()
     link.last_error = "connection refused"
     link.last_error_at = time.time() - 60

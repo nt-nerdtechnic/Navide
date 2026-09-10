@@ -135,10 +135,13 @@ def test_reap_kills_recorded_orphan() -> None:
 
 
 def test_reap_kills_orphan_behind_shell_exec() -> None:
-    # The real app spawns `zsh -lc <cmd>`; zsh execs the final command, so ps
-    # shows `sleep 300`, not the shell. Identity must still match via lstart.
-    proc = subprocess.Popen(["/bin/zsh", "-lc", "sleep 300"], start_new_session=True)
-    pty_registry.register(proc.pid, ["/bin/zsh", "-lc", "sleep 300"])
+    # The real app spawns `<shell> -lc <cmd>`; the shell execs the final
+    # command, so ps shows `sleep 300`, not the shell. Identity must still
+    # match via lstart. The exec is spelled out so the test does not depend on
+    # which /bin/sh (bash, dash, zsh) applies that optimisation on its own.
+    argv = ["/bin/sh", "-c", "exec sleep 300"]
+    proc = subprocess.Popen(argv, start_new_session=True)
+    pty_registry.register(proc.pid, argv)
     _set_owner(proc.pid, 1)
 
     reaped = pty_registry.reap_stale(grace=0.2)

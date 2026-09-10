@@ -138,6 +138,8 @@ def _must_not_run(*_args, **_kwargs):
 
 def _force_fallback(monkeypatch) -> None:
     """Pretend the syscall cannot be resolved, so the subprocess path runs."""
+    # `footprint(1)` only exists on Darwin; off it the sweep answers {} first.
+    monkeypatch.setattr(process_memory.sys, "platform", "darwin")
     monkeypatch.setattr(process_memory.osplat.resource_probe, "available", lambda: False)
     monkeypatch.setattr(process_memory.osplat.resource_probe, "sample", lambda pids: {})
 
