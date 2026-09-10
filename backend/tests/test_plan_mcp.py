@@ -858,3 +858,53 @@ async def test_mounted_endpoint_serves_mcp(workspace: Path) -> None:
         await plan_mcp.shutdown()
         app.router.routes[:] = routes_before
         host.unload("navide.plans")
+
+
+# Regression for the legacy local adapter (the route this file's autouse
+# recovery fixture forces): the {{…}} sweep used to run *after* the caller's
+# name/overview/todo text was inserted, so a caller's own "{{…}}" was silently
+# rewritten to TBD in the visible markup while plan-meta kept the real string.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,name,overview,todos", [
+    ("name", r"Migrate {{legacy}} config", "Plain overview.", ["Plain todo"]),
+    ("overview", "Plain name", r"Replace {{TOKEN}} in files.", ["Plain todo"]),
+    ("todo", "Plain name", "Plain overview.", [r"Replace {{TOKEN}} in files"]),
+    ("all-three", r"Fix {{a}}", r"Sweep {{b}}.", [r"Todo {{c}}"]),
+])
+async def test_plan_create_preserves_double_braces_in_caller_text(
+    workspace: Path, field: str, name: str, overview: str, todos: list[str]
+) -> None:
+    plans = _plans_dir(workspace)
+    # Use the real bundled template, not the fixture's stub.
+    (plans / "_template.html").unlink()
+    result = await _call(
+        "plan_create",
+        {
+            "workspace_path": str(workspace),
+            "name": name,
+            "overview": overview,
+            "todos": todos,
+        },
+    )
+    assert not result.isError, result.content
+    html = (workspace / result.structuredContent["rel_path"]).read_text(encoding="utf-8")
+
+    # plan-meta keeps the caller's text (it always did) ...
+    meta = parse_plan_meta(html)
+    assert meta["name"] == name
+    assert meta["overview"] == overview
+    assert [todo["content"] for todo in meta["todos"]] == todos
+
+    # ... and the visible markup must now agree with it instead of showing TBD.
+    heading = re.search(r"<h1[^>]*>([\s\S]*?)<span", html)
+    overview_text = re.search(r'\bclass="overview"[^>]*>([\s\S]*?)</', html)
+    assert heading is not None and overview_text is not None
+    assert heading.group(1).strip() == name
+    assert overview_text.group(1).strip() == overview
+    rows = [row.strip() for row in re.findall(r"<span>([^<]*)</span>\s*</li>", html)]
+    assert rows == todos
+
+    # The scaffolding the caller did not supply is still swept.
+    assert "{{PLAN_NAME}}" not in html
+    assert "{{PHASE_A_TITLE}}" not in html
+    assert "TBD" in html
