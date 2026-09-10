@@ -59,6 +59,7 @@ import { createPlansStorageMigrationGate, type PlansStorageAvailability } from '
 import { repairPlansStorageRecord, type PlansStorageRepairResult } from './plugins/plansStorageRepair'
 import { retainedPlansLegacyAdapter, type PlansLegacyRecoveryBootstrap } from './plugins/plansLegacyAdapter'
 import type { LegacyPlansPreferenceProjection } from '../shared/plansPreferences'
+import { decidePlansV2Retry } from '../shared/plansRecovery'
 import {
   projectBackendPluginActivationCatalog,
   writeBackendPluginActivationCatalog,
@@ -210,6 +211,10 @@ let plansRecoveryEnabled = plansRecoveryForced
 /** The Host-selected v2 package being recovered by the retained legacy route.
  * Never derive this from the legacy descriptor after fallback. */
 let plansRecoveryPackageVersion: string | null = null
+/** Why this session dropped to legacy. Kept because it is the only thing the
+ * recovery panel can honestly tell the user, and because the storage repair
+ * applies to exactly one of these reasons. */
+let plansRecoveryReason: string | null = plansRecoveryForced ? 'forced' : null
 // Focus recency per window id — approximates z-order for the cross-window pane
 // drop hit-test (Electron has no cross-platform z-order query).
 const windowFocusSeq = new Map<number, number>()
@@ -250,13 +255,14 @@ function enterPlansRecovery(reason: string): void {
   frontendPluginManager.markPlansBackendUnavailable(reason)
   if (plansRecoveryEnabled) return
   plansRecoveryEnabled = true
+  plansRecoveryReason = reason
   for (const [key, hostWindow] of contributionWindows) {
     if (key.startsWith('navide.plans.') && !hostWindow.isDestroyed()) hostWindow.close()
   }
   for (const hostWindow of mainWindows) {
     if (hostWindow.isDestroyed() || detachedWindowIds.has(hostWindow.id)) continue
     hostWindow.webContents.send('plugins:contributionsChanged')
-    hostWindow.webContents.send('plans:recoveryChanged', { legacy: true })
+    hostWindow.webContents.send('plans:recoveryChanged', { legacy: true, reason })
   }
 }
 
@@ -509,6 +515,11 @@ async function createWindow(
   const mainBootParams: Record<string, string> = {
     ...(gitRecoveryEnabled ? { legacy_git_recovery: '1' } : {}),
     ...(plansRecoveryEnabled ? { legacy_plans_recovery: '1' } : {}),
+    // A window opened after the downgrade never sees the IPC event, so the
+    // reason has to travel with it or its recovery panel has nothing to say.
+    ...(plansRecoveryEnabled && plansRecoveryReason
+      ? { plans_recovery_reason: plansRecoveryReason }
+      : {}),
   }
   loadWindow(win, { window: 'main', ...params, ...mainBootParams })
   return win
@@ -1113,6 +1124,7 @@ const plansHasCompleteV2Package = Boolean(
 )
 if (!plansHasCompleteV2Package) {
   plansRecoveryEnabled = true
+  plansRecoveryReason ??= 'package-incomplete'
 }
 if (
   bundledPlansDescriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
@@ -1135,6 +1147,7 @@ if (
     })
   } catch (error) {
     plansRecoveryEnabled = true
+    plansRecoveryReason ??= 'grant-persist-failure'
     warnMain(
       `[main] navide.plans capability grant could not be persisted; using legacy recovery: ${
         error instanceof Error ? error.message : String(error)
@@ -1151,6 +1164,42 @@ if (
   }
 }
 logPlansDevProvenance('startup')
+
+// Plans used to stay in recovery for the rest of the session with no way back
+// but a restart: nothing ever sent `legacy: false`. Opening the Plans tab is
+// the user's natural retry, and the panel offers it explicitly, so spend a
+// small budget of v2 attempts before the session settles on the legacy pane.
+const PLANS_V2_RECOVERY_RETRIES = 2
+let plansV2RetriesLeft = PLANS_V2_RECOVERY_RETRIES
+function retryPlansV2AfterRecovery(): { ok: boolean; reason?: string } {
+  const decision = decidePlansV2Retry({
+    recoveryEnabled: plansRecoveryEnabled,
+    forced: plansRecoveryForced,
+    hasCompleteV2Package: plansHasCompleteV2Package,
+    retriesLeft: plansV2RetriesLeft,
+  })
+  if (decision.outcome === 'not-in-recovery') return { ok: true }
+  if (decision.outcome === 'refused') return { ok: false, reason: decision.reason }
+  // Unlike Git there is nothing to re-activate here: the package stayed
+  // registered, only its availability bit was withdrawn. Re-arming it lets the
+  // next Plans open spawn the child again — which is also why the attempt
+  // costs budget up front, since success is not knowable at this point.
+  frontendPluginManager.clearPlansBackendUnavailable()
+  plansV2RetriesLeft -= 1
+  plansRecoveryEnabled = false
+  plansRecoveryReason = null
+  for (const hostWindow of mainWindows) {
+    if (hostWindow.isDestroyed() || detachedWindowIds.has(hostWindow.id)) continue
+    hostWindow.webContents.send('plugins:contributionsChanged')
+    hostWindow.webContents.send('plans:recoveryChanged', { legacy: false })
+  }
+  warnMain(`[main] navide.plans v2 re-armed after legacy recovery; ${plansV2RetriesLeft} retry left`)
+  return { ok: true }
+}
+ipcMain.handle('plans:retryV2', (event) => {
+  if (!isTrustedPluginManagementSender(event, mainWindows)) return { ok: false, reason: 'untrusted sender' }
+  return retryPlansV2AfterRecovery()
+})
 
 ipcMain.handle('backend:info', () => backendInfoPayload())
 

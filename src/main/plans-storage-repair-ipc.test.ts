@@ -90,4 +90,18 @@ describe('Plans storage record repair IPC', () => {
     expect(readFileSync(lifecyclePath, 'utf8')).toBe('{broken')
     expect(gateCalls).toEqual([])
   })
+
+  it('refuses an untrusted sender on the Plans v2 retry', async () => {
+    // Leaving recovery re-arms a package the Host withdrew, so it carries the
+    // same trust check as the repair beside it.
+    await import('./index')
+
+    const retry = handlers.get('plans:retryV2')
+    expect(retry, 'the Plans v2 retry has no operator entry point').toBeTypeOf('function')
+
+    expect(await retry!({ sender: {}, senderFrame: { parent: null } })).toEqual({
+      ok: false,
+      reason: 'untrusted sender',
+    })
+  })
 })

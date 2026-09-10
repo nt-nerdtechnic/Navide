@@ -1560,6 +1560,18 @@ export class FrontendPluginManager {
     this.refreshHostSessionRegistration()
   }
 
+  /** Re-arm the withdrawn v2 availability bit for an explicit user retry.
+   *  Only the bit is restored: the child is spawned by the next Plans open, so
+   *  a still-broken package simply withdraws it again through the same path.
+   *  Returns whether there was an unavailable mark to clear. */
+  clearPlansBackendUnavailable(): boolean {
+    if (this.plansBackendHealth !== 'unavailable') return false
+    this.plansBackendHealth = 'unknown'
+    this.plansBackendHealthIdentity = null
+    this.refreshHostSessionRegistration()
+    return true
+  }
+
   private markPlansBackendReady(packageVersion: string, packageDir: string): void {
     this.plansBackendHealth = 'ready'
     this.plansBackendHealthIdentity = { packageVersion, packageDir }

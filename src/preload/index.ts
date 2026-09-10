@@ -75,6 +75,8 @@ function isGitRecoveryChanged(payload: unknown): payload is GitRecoveryChanged {
 
 export interface PlansRecoveryChanged {
   legacy: boolean
+  /** Host-side reason for the downgrade. Absent when leaving recovery. */
+  reason?: string
 }
 
 function isPlansRecoveryChanged(payload: unknown): payload is PlansRecoveryChanged {
@@ -83,7 +85,8 @@ function isPlansRecoveryChanged(payload: unknown): payload is PlansRecoveryChang
     payload !== null &&
     !Array.isArray(payload) &&
     'legacy' in payload &&
-    typeof payload.legacy === 'boolean'
+    typeof payload.legacy === 'boolean' &&
+    (!('reason' in payload) || typeof payload.reason === 'string')
   )
 }
 
@@ -173,6 +176,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
   // package. Called when the user opens the Git tab, which is the natural
   // retry for a downgrade caused by a transient activation failure.
   retryGitV2: (): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('git:retryV2'),
+  // Ask the Host to re-arm the withdrawn Plans v2 package. Same shape as the
+  // Git retry, but re-arming is not proof of recovery here: the backend child
+  // is spawned by the next Plans open, so a still-broken package downgrades
+  // the session again through the usual path.
+  retryPlansV2: (): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('plans:retryV2'),
   // Ask the Host to discard a Plans lifecycle record it cannot read. Offered as
   // an explicit action in the Plans recovery panel: the Host never clears such
   // a record on its own, because a discarded record reads as a first install
