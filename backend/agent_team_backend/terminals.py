@@ -291,6 +291,10 @@ _COALESCE_MS = 2
 _ECHO_LAG_WARN_MS = 250
 _ECHO_LAG_MAX_MS = 5000
 _READER_SUSPEND_WARN_MS = 100
+# Grace between a kill's SIGTERM and the SIGKILL escalation. Named so a test
+# can widen it: the CLI's SIGTERM handler is what flushes the transcript, and
+# on a loaded runner that flush can outlast a hard-coded window.
+_KILL_ESCALATION_GRACE_S = 1.0
 # Only a keystroke-sized write arms the echo timer.  Role injection and pastes
 # are bulk writes whose echo is legitimately slower and would only add noise.
 _ECHO_PROBE_MAX_INPUT_CHARS = 16
@@ -939,7 +943,9 @@ class TerminalService:
         # from _sessions, escape the shutdown sweep — escalate to SIGKILL
         # after a grace period and only then drop its crash-recovery record.
         self._loop.create_task(
-            self._escalate_kill(session, pgid, descendants=descendants)
+            self._escalate_kill(
+                session, pgid, _KILL_ESCALATION_GRACE_S, descendants=descendants
+            )
         )
 
     async def _put_down_error_survivor(self, session: TerminalSession) -> None:

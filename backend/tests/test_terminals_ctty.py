@@ -22,6 +22,7 @@ import os
 import signal
 import sys
 
+from agent_team_backend import terminals
 from agent_team_backend.terminals import TerminalService
 
 
@@ -176,7 +177,7 @@ else:
 """
 
 
-async def test_kill_reaches_the_cli_in_its_own_foreground_group(tmp_path):
+async def test_kill_reaches_the_cli_in_its_own_foreground_group(tmp_path, monkeypatch):
     """A graceful kill must signal the tty's foreground group, not just the
     shell's.
 
@@ -185,6 +186,13 @@ async def test_kill_reaches_the_cli_in_its_own_foreground_group(tmp_path):
     only the shell's group is signalled, the CLI learns of the shutdown as the
     SIGHUP from the closing master and gets no such chance.
     """
+    # The window below is bounded by the SIGKILL escalation, and a loaded CI
+    # runner can take longer than the production 1s to run the handler. Widen
+    # the grace so the assertion is about "did SIGTERM arrive", not "did it
+    # arrive within a hard-coded race against SIGKILL". Only SIGTERM can write
+    # the marker (the probe ignores SIGHUP and SIGKILL is untrappable), so a
+    # wider window cannot weaken the check.
+    monkeypatch.setattr(terminals, "_KILL_ESCALATION_GRACE_S", 10.0)
     marker = tmp_path / "sigterm-landed"
     received: list[str] = []
     svc = TerminalService(_collect(received))
@@ -204,9 +212,9 @@ async def test_kill_reaches_the_cli_in_its_own_foreground_group(tmp_path):
 
     await svc.kill(session.id)
 
-    # Check inside the escalation grace: _kill_breakaway SIGKILLs the whole
-    # snapshotted tree after ~1s, which would hide a missing SIGTERM.
-    for _ in range(30):
+    # Still bounded by the (widened) escalation grace, so this stays a check
+    # that SIGTERM landed before the SIGKILL that would have hidden its absence.
+    for _ in range(500):
         await asyncio.sleep(0.01)
         if marker.exists():
             break
