@@ -123,8 +123,22 @@
       "icon": "resources/icon.png"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "resources/icon.png"
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Development",
+      "maintainer": "Navide Team <nt.fitproject@gmail.com>",
+      "synopsis": "AI-native engineering environment for directing multiple coding agents",
+      "description": "Navide is a desktop engineering environment for one engineer directing multiple coding agent CLIs.",
+      "desktop": {
+        "entry": {
+          "Name": "Navide",
+          "Categories": "Development;IDE;",
+          "StartupWMClass": "Navide"
+        }
+      }
     }
   },
   "devDependencies": {
