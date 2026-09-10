@@ -28,7 +28,39 @@ export interface SlotSignal {
    *  Optional, and opted into per call site: a caller with no pane in reach
    *  (a test, a path that only has ids) is unaffected by leaving it out. */
   quotaBlocked?: boolean
+  /** Wall-clock ms at which this slot's quota block was DETECTED (0 / absent =
+   *  never blocked). Deliberately the detection moment, not the moment the
+   *  block lifted — see `quotaTurnIsFresh`. */
+  quotaSeenAt?: number
+  /** The latest turn_complete's OWN timestamp for this slot's pane, as opposed
+   *  to when it was received (0 = none, or a vendor whose stamp does not
+   *  parse). */
+  turnSourceAt?: number
 }
+
+// SUPERSEDED NOTE, kept because it is the reason the rule below has the shape
+// it has. Two earlier attempts at this were withdrawn:
+//
+// `quotaBlocked` only says "blocked right now". The turn that FAILED on the
+// quota keeps its turn_complete, newer than `armedAt`, so once the block lifts
+// that stale signal reads as the slot finishing work it never resumed.
+//
+// Two attempts at closing it here were withdrawn, both for the same reason:
+// `turnCompleteAt` is the RECEIPT time, not when the turn ended (see
+// recordTurnComplete — it stamps `now` on purpose, so every consumer's
+// wall-clock comparison keeps working). Receipt time cannot tell a delayed
+// poisoned event from a fresh one:
+//
+//   • comparing it against the moment the block lifted accepts a failed turn
+//     whose event arrived just after the lift, AND permanently rejects a real
+//     retry that finished just before it;
+//   • comparing an ACTIVITY clock instead is worse — `paneLastActiveAt` is
+//     stamped for injected records and hook notifications, so a mere incoming
+//     message ends the episode.
+//
+// Both failed the same way: receipt time cannot tell a delayed poisoned event
+// from a fresh one. `quotaTurnIsFresh` below uses the event's OWN clock and a
+// different anchor, which is what makes it work.
 
 /** True when this slot has produced a reliable finish signal for the current
  *  stage. turn_complete only counts if it landed after the watcher armed, and
@@ -40,7 +72,52 @@ export function slotFinished(s: SlotSignal): boolean {
   // for the quota to poison.
   if (s.sentinelSeen) return true
   if (s.quotaBlocked === true) return false
+  if (!quotaTurnIsFresh(s.quotaSeenAt, s.turnSourceAt)) return false
   return s.turnCompleteAt > 0 && s.turnCompleteAt > s.armedAt
+}
+
+/** Whether a turn_complete belongs to a turn that ran AFTER the quota block was
+ *  detected, rather than to the turn that died on it.
+ *
+ *  Two choices make this work where two earlier rules did not:
+ *
+ *  • It reads the event's OWN timestamp, never the receipt time. Receipt time
+ *    cannot distinguish a delayed poisoned event from a fresh one.
+ *  • It anchors on when the block was DETECTED, not on when it lifted. The
+ *    lift is a second, later moment, and a retry that finished before it would
+ *    be rejected forever — a rule that hangs a stage that really did finish.
+ *
+ *  WHAT THIS DOES NOT GUARANTEE. Two premises an earlier version of this
+ *  comment claimed, both of which are false — independent review found them and
+ *  they are checkable in this repo:
+ *
+ *  • It is NOT proven that the source stamp is close to the receipt time.
+ *    `isReplayedTurnComplete` is one-sided: it refuses events that are too OLD
+ *    and lets any FUTURE stamp through. Nothing bounds the other side.
+ *  • The source stamp is NOT always when the turn ended. cursor has no
+ *    per-message timestamp at all (see cli_vendors/cursor.py `_store_epoch`):
+ *    it falls back to meta.json's updatedAtMs and then to the SCAN clock, then
+ *    nudges each event 1ms past the last. Such a stamp can land after the block
+ *    was detected, and this rule then lets the failed turn through.
+ *
+ *  So the rule filters the poisoned turn only for vendors whose turn_complete
+ *  carries a real turn-end time. It is a narrowing, not a closure — and it is
+ *  one-directional: where the premise fails it fails OPEN (the old
+ *  false-completion), never closed.
+ *
+ *  One residual in the other direction is known: detection is a 5s poll on an
+ *  unconsumed tail, so a limit message can be read AFTER a successful retry has
+ *  already finished. The anchor then post-dates that retry and rejects it until
+ *  another turn arrives. Narrower than the ordering that killed the previous
+ *  two attempts (there, every retry finishing before the lift was rejected),
+ *  but real. Both edges have tests that assert the LIMIT, not a wish. */
+export function quotaTurnIsFresh(
+  quotaSeenAt: number | undefined,
+  turnSourceAt: number | undefined
+): boolean {
+  if (!quotaSeenAt) return true
+  if (!turnSourceAt) return true
+  return turnSourceAt > quotaSeenAt
 }
 
 /** True when every slot in the stage has finished. Empty input is never "done"
@@ -57,6 +134,9 @@ export interface TurnCompleteState {
    *  `loopContinueReady`) and leaving it out keeps a consumer exactly as it
    *  was. */
   quotaBlocked?: boolean
+  /** See SlotSignal.quotaSeenAt / .turnSourceAt — same pair, same rule. */
+  quotaSeenAt?: number
+  turnSourceAt?: number
   /** Wall-clock ms of the latest turn_complete for this pane (0 = none). */
   turnCompleteAt: number
   /** Wall-clock ms of the latest agent_active for this pane (0 = none). */
@@ -80,6 +160,7 @@ export interface TurnCompleteState {
  *     to ask a QUESTION is caught as a question first, never as completion). */
 export function turnCompleteDone(s: TurnCompleteState): boolean {
   if (s.quotaBlocked === true) return false
+  if (!quotaTurnIsFresh(s.quotaSeenAt, s.turnSourceAt)) return false
   return (
     s.turnCompleteAt > s.armedAt &&
     s.turnCompleteAt >= s.lastActiveAt &&
@@ -455,9 +536,23 @@ export function recordTurnComplete(
   timestamp: string,
   now: number,
   toleranceMs: number,
+  sourceMap?: Map<string, number>,
 ): boolean {
   if (isReplayedTurnComplete(timestamp, now, toleranceMs)) return false
   map.set(paneId, now)
+  // `sourceMap` keeps the event's OWN clock alongside the receipt clock above,
+  // written in the same breath so the two can never disagree about whether a
+  // turn was recorded. Only the quota gate reads it; every existing consumer
+  // keeps reading `map` and its `now` semantics unchanged.
+  //
+  // 0 for an event whose timestamp does not parse. The gate reads that as "no
+  // evidence" and fails OPEN, which is the same direction
+  // isReplayedTurnComplete already takes for an unparseable stamp — a vendor
+  // with no usable clock must not lose the ability to finish a stage.
+  if (sourceMap) {
+    const eventMs = parseEventMs(timestamp)
+    sourceMap.set(paneId, Number.isNaN(eventMs) ? 0 : eventMs)
+  }
   return true
 }
 

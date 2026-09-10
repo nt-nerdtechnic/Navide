@@ -1286,6 +1286,13 @@ interface ActivePane {
    *  restart re-detects from live output. */
   usageLimitAt?: number | null
   usageLimitUntil?: number | null
+  /** Wall-clock ms at which a quota block was last DETECTED on this pane.
+   *
+   *  Deliberately never cleared — it is a historical high-water mark, not a
+   *  state. The quota gate needs "was there a block, and when" long after the
+   *  block itself is gone, and every genuinely later turn carries a newer
+   *  source stamp, so leaving it set rejects nothing that should pass. */
+  usageLimitSeenAt?: number | null
   /** Runtime-only continue affordance — lit when this pane was brought back with
    *  `--resume`. The CLI reloads its transcript but parks at the prompt, so an
    *  interrupted task is never picked up on its own and nothing in the restore
@@ -1821,6 +1828,11 @@ const paneViews = ref<ActivePaneView[]>([])
 // watcher armed (see slotFinished), so a stale signal from a prior stage/turn
 // is never reused — no explicit reset needed.
 const paneTurnCompleteAt = new Map<string, number>()
+// The same turn ends, stamped with the EVENT's own clock instead of the receipt
+// clock above. Written by the same recordTurnComplete call so the two cannot
+// disagree, and read only by the quota gate — see quotaTurnIsFresh for why
+// receipt time cannot answer its question.
+const paneTurnCompleteSourceAt = new Map<string, number>()
 
 // Per-pane wall-clock of the latest `agent_active` (CLI is producing output or
 // running a tool). Compared against turnCompleteAt to tell whether the CLI's
@@ -4095,6 +4107,15 @@ function checkPaneUsageLimit(
   watcher.limitBaseline = bytes
   pane.usageLimitAt = now
   pane.usageLimitUntil = hit.resumeAt
+  // The anchor the quota gate compares turn timestamps against. Stamped on
+  // DETECTION rather than on the lift: the lift is a later moment, and
+  // anchoring there rejected any retry that finished before it.
+  //
+  // Not a proof of ordering, though — detection is a 5s poll on an unconsumed
+  // tail, so a limit message can be read after a successful retry has already
+  // finished, and the anchor then post-dates that retry. See quotaTurnIsFresh
+  // for that residual and for the two premises that do NOT hold.
+  pane.usageLimitSeenAt = now
   // The badge's figure is up to CLAUDE_CLI_READ_INTERVAL old, so it would go on
   // advertising quota that is gone. One refresh per hit, never per poll: the
   // read boots a whole Claude Code.
@@ -4120,6 +4141,29 @@ function checkPaneUsageLimit(
         time: formatLoopTime(hit.resumeAt)
       })
   )
+}
+
+/** Account switch: the quota flag belongs to the account that hit the limit,
+ *  not to the pane, so every pane of the switched agent lets go of it here —
+ *  badge, stage quota gate and loop wait alike. This is the ONLY switch-time
+ *  clear: claude is a hot-swap agent, so its switches are never `forced` and
+ *  its panes are never rebuilt; without this the flag outlives the account
+ *  and the badge counts down quota nobody is waiting for any more. The
+ *  watcher's consumed baseline advances so the old limit text still on screen
+ *  cannot re-light the flag on the next poll. A loop parked on this very
+ *  limit resumes the way the badge click does — switching IS the quota
+ *  coming back. */
+function clearPaneUsageLimits(agentKey: string): void {
+  for (const pane of panes.value) {
+    if (pane.agentKey !== agentKey || pane.usageLimitAt == null) continue
+    const waitingOnThisLimit =
+      pane.loopActive && pane.loopWaitUntil != null && pane.loopWaitUntil === pane.usageLimitUntil
+    pane.usageLimitAt = null
+    pane.usageLimitUntil = null
+    const w = paneHealthWatchers.get(pane.id)
+    if (w) w.limitBaseline = paneCleanBytes(pane.id)
+    if (waitingOnThisLimit) void fireLoopResume(pane.id, 'account-switch')
+  }
 }
 
 /** Always-on per-pane output watch: the CLI's expired-login message (for the
@@ -4472,17 +4516,16 @@ function paneAlive(paneId: string): boolean {
   return panes.value.some((p) => p.id === paneId)
 }
 
-/** True while this pane's CLI has announced it is out of quota and the window
- *  has not come back yet (see lib/cliUsageLimit).
+/** True while this pane's CLI has announced it is out of quota and the block
+ *  has not been lifted yet (see lib/cliUsageLimit).
  *
- *  Paired with `usageLimitDue` rather than reading the flag alone: only the
- *  pane health watcher's 5-second poll clears it, so a bare
- *  `usageLimitAt != null` can be up to one poll stale — long enough for a stage
- *  to be held on a window that already reset. */
+ *  Reads the flag ALONE, on purpose. Asking `usageLimitDue` here as well made
+ *  the deadline a second, earlier way for the block to end, so one fact lived
+ *  on two clocks that move at different moments. The health poll is the single
+ *  place the block ends. Being at most one poll (5s) late is the price, and it
+ *  is the cheaper one. */
 function paneUsageLimited(paneId: string): boolean {
-  const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane || pane.usageLimitAt == null) return false
-  return !usageLimitDue(pane.usageLimitAt, pane.usageLimitUntil ?? null, Date.now())
+  return panes.value.find((p) => p.id === paneId)?.usageLimitAt != null
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -10658,7 +10701,10 @@ backend.on('agent.activity', (raw) => {
     // pipeline stage at once. A live event is still stamped with `now`, so no
     // consumer of this map changes.
     if (!ev.superseded) {
-      recordTurnComplete(paneTurnCompleteAt, ev.pane_id, ev.timestamp ?? '', Date.now(), TURN_TEXT_REPLAY_TOLERANCE_MS)
+      recordTurnComplete(
+        paneTurnCompleteAt, ev.pane_id, ev.timestamp ?? '', Date.now(),
+        TURN_TEXT_REPLAY_TOLERANCE_MS, paneTurnCompleteSourceAt
+      )
     }
     // Badge: authoritative turn end → drop the RUNNING hysteresis latch now.
     paneRefs[ev.pane_id]?.markTurnComplete?.()
@@ -11135,6 +11181,9 @@ backend.on('cli_profiles.changed', (raw) => {
   // agent — including the initiating window, whose switch handler no longer
   // restarts directly (so nothing runs twice). A quiet (non-forced) switch
   // never touches panes.
+  // Any account switch, quiet or forced, moves this agent's panes onto
+  // quota that is not the exhausted one (see clearPaneUsageLimits).
+  if (ev?.reason === 'set_default' && ev.agent_key) clearPaneUsageLimits(ev.agent_key)
   const restartKey = forcedRestartAgentKey(ev)
   if (restartKey) {
     void restartAgentPanes(restartKey)
@@ -11255,8 +11304,11 @@ function computeStageSlotSignals(stageIndex: number): SlotSignal[] {
       // No recorded arm time → treat turn_complete as unusable (stay cautious).
       armedAt: paneArmedAt.get(p.id) ?? Number.MAX_SAFE_INTEGER,
       // A turn that ended because the CLI ran out of quota is not this slot
-      // finishing its work — see SlotSignal.quotaBlocked.
-      quotaBlocked: paneUsageLimited(p.id)
+      // finishing its work — see SlotSignal.quotaBlocked. The pair below keeps
+      // that true after the block lifts, which quotaBlocked alone cannot.
+      quotaBlocked: paneUsageLimited(p.id),
+      quotaSeenAt: p.usageLimitSeenAt ?? 0,
+      turnSourceAt: paneTurnCompleteSourceAt.get(p.id) ?? 0
     }
   })
 }
@@ -11704,8 +11756,20 @@ function continueWaitingStall(): void {
   stageStallPrompt.value = null
   if (p.stageIndex !== pipeline.stageIndex) return  // stage already moved on
   pipelineLog(`Stage ${p.stageId} ⏯ continue waiting on "${p.slotLabel || p.paneId.slice(0, 8)}"`)
-  // Restart the watcher: armedAt = now resets BOTH idle and cap counters
-  startStageWatcher(p.stageIndex, p.paneId)
+  // A quota stall leaves its watcher running, so there may already be one. Give
+  // it fresh timers instead of building a new one: startStageWatcher anchors
+  // its scan at the CURRENT buffer tail, which would step over a done-marker
+  // the agent has already printed — the very sentinel this stall exists to stop
+  // losing. Only when there is no live watcher is a fresh one right.
+  const live = watchers.get(p.paneId)
+  if (live && !live.cancelled) {
+    live.armedAt = Date.now()
+    paneArmedAt.set(p.paneId, live.armedAt)
+    pipelineLog(`Stage ${p.stageId} ⏯ existing watcher kept — timers reset, scan cursor preserved`)
+  } else {
+    // Restart the watcher: armedAt = now resets BOTH idle and cap counters
+    startStageWatcher(p.stageIndex, p.paneId)
+  }
   // Manager mode has no per-pane watcher to restart — its clock and its
   // one-shot watchdog latch live on the router, so reset those instead.
   const router = stageRouters.get(p.stageIndex)
@@ -11787,7 +11851,10 @@ function cancelAllWatchers(): void {
     panes.value.filter((p) => p.origin === 'pipeline').map((p) => p.id)
   )
   const livePaneIds = new Set(panes.value.map((p) => p.id))
-  for (const map of [paneArmedAt, paneTurnCompleteAt, paneLastActiveAt, paneLastWorkingAt]) {
+  for (const map of [
+    paneArmedAt, paneTurnCompleteAt, paneTurnCompleteSourceAt,
+    paneLastActiveAt, paneLastWorkingAt
+  ]) {
     for (const key of paneSignalResetKeys(map.keys(), pipelinePaneIds, livePaneIds)) {
       map.delete(key)
     }
@@ -12160,6 +12227,20 @@ function onStageSlotCompleted(
   const counted = completeSlot(stageCompletions, stageIndex, paneId)
   if (counted.kind !== 'counted') return
   const remaining = counted.remaining
+  // A quota prompt for THIS slot is now stale: the slot finished, and leaving
+  // the dialog up offers to force-advance something already counted (and its
+  // Full auto timer would fire into the same). Only ours — another slot's
+  // prompt is still that slot's business. Kept next to the count so it cannot
+  // drift from it.
+  const stallShowing = stageStallPrompt.value
+  if (
+    stallShowing?.reason === 'quota' &&
+    stallShowing.paneId === paneId &&
+    stallShowing.stageIndex === stageIndex
+  ) {
+    clearStageStallAutoTimer()
+    stageStallPrompt.value = null
+  }
   const stage = stagesApi.stages.value[stageIndex]
   const completedPane = panes.value.find((p) => p.id === paneId)
   const slotName = completedPane?.slotLabel || paneId.slice(0, 8)
@@ -12589,10 +12670,30 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
       //     before running out is already counted and never reaches here.
       const quotaBlocked = paneUsageLimited(paneId)
       if (quotaBlocked) {
-        cancelWatcher(paneId)
-        const detail = 'CLI is out of quota'
-        pipelineLog(`Stage ${stage.id} ⛔ ${detail}`)
-        promptStageStall(stageIndex, paneId, 'quota', detail)
+        // The watcher is deliberately NOT cancelled here, unlike the cap path.
+        // Two reasons, and the second is why cancelling was wrong even when the
+        // prompt did go up:
+        //
+        //  • Two panes on ONE account run out together — the common case, not
+        //    the rare one — so the second prompt is suppressed. A cancelled
+        //    watcher plus no prompt strands that slot: nothing to re-raise it,
+        //    no hard cap left, and its sentinel dropped for want of a watcher.
+        //  • A transcript sentinel that arrives after the cancel and before a
+        //    restart is discarded outright (judgeTurnText needs the watcher,
+        //    and claude/codex have no buffer-sentinel fallback). The slot did
+        //    print its done-marker and nobody heard it.
+        //
+        // Keeping it costs one poll of no-op work per blocked pane, and the
+        // quotaBlocked verdict below is what stops the stage advancing.
+        //
+        // Raised only while nothing else is on screen: with the watcher alive
+        // this branch runs every poll, and promptStageStall's own "suppressed"
+        // log would then repeat for as long as the block lasts.
+        if (stageStallPrompt.value == null) {
+          const detail = 'CLI is out of quota'
+          pipelineLog(`Stage ${stage.id} ⛔ ${detail}`)
+          promptStageStall(stageIndex, paneId, 'quota', detail)
+        }
         return
       }
       if (
@@ -12606,7 +12707,11 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
           // Belt and braces: promptStageStall above returns early when another
           // prompt is already showing, and without this the poll would fall
           // straight through to the false completion it just refused to raise.
-          quotaBlocked
+          quotaBlocked,
+          // And once the block lifts, only the turn's own clock can tell the
+          // failed turn from a real retry.
+          quotaSeenAt: panes.value.find((p) => p.id === paneId)?.usageLimitSeenAt ?? 0,
+          turnSourceAt: paneTurnCompleteSourceAt.get(paneId) ?? 0
         })
       ) {
         cancelWatcher(paneId)
@@ -12662,6 +12767,12 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
           if (primaryTrigger && !stage.allowQuestions && quickClassify(slice) === 'completion') {
             watcher.analyzerBusy = false
             if (watcher.cancelled) return
+            // Same gate as the analyzer branch below: this reads the buffer the
+            // limit message is sitting on, so a quota block has to stop it too.
+            if (paneUsageLimited(paneId)) {
+              pipelineLog(`Stage ${stage.id} ⛔ regex completion ignored — CLI is out of quota`)
+              return
+            }
             pipelineLog(`Stage ${stage.id} ⚡ regex detected completion (skipped LLM)`)
             cancelWatcher(paneId)
             onStageSlotCompleted(stageIndex, paneId, 'analyzer')
@@ -12720,6 +12831,15 @@ function handleAnalyzerResult(
   //     turn_complete didn't land (e.g. mis-attributed to a sibling pane) —
   //     without it the stage stalls and the analyzer just spins (Stage 01/02).
   if (result.intent === 'completion') {
+    // The analyzer answer is awaited, so the quota can have been hit while it
+    // was in flight — after the poll that would have gated it already ran. The
+    // `cancelled` check above does not cover this: nothing cancels the watcher
+    // for a quota block that could not raise its prompt. Re-check where the
+    // answer is consumed, which is the only place that still can.
+    if (paneUsageLimited(paneId)) {
+      pipelineLog(`Stage ${stage.id} ⛔ analyzer completion ignored — CLI is out of quota`)
+      return
+    }
     const slotCount = stagesApi.stages.value[stageIndex]?.slots.length ?? 1
     if (slotCount > 1) {
       // Multi-slot FALLBACK: trust analyzer completion ONLY once the buffer has
@@ -16434,6 +16554,8 @@ function paneIsCommander(p: ActivePane): boolean {
           :loop-wait-until="p.loopWaitUntil"
           :loop-estimate-reset-at="p.loopEstimateResetAt"
           :login-expired="p.loginExpired"
+          :usage-limit-until="p.usageLimitUntil"
+          :usage-limit-hit="p.usageLimitAt != null"
           :continue-available="p.resumeContinueAvailable"
           :restoring="p.restoring"
           @set-focus="(ev) => onSetFocus(p.id, ev, stageSurfaceOrderedIds)"

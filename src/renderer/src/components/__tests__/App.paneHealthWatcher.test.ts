@@ -129,3 +129,58 @@ describe('the flag-expiry rule lives where it can be tested', () => {
     expect(appSource).not.toContain('USAGE_LIMIT_UNKNOWN_TTL_MS')
   })
 })
+
+describe('an account switch lets go of the quota flag', () => {
+  // The flag belongs to the account that hit the limit, not to the pane.
+  // claude is a hot-swap agent: its switches are never `forced`, so the
+  // rebuild path never runs for it and the pane object survives the switch
+  // with the flag — and the "back HH:MM" badge — intact until the window
+  // expires. This is the only switch-time clear, so it is asserted directly.
+  function switchHandlerBody(): string {
+    const start = appSource.indexOf("backend.on('cli_profiles.changed'")
+    expect(start).toBeGreaterThan(-1)
+    const end = appSource.indexOf('\n})', start)
+    expect(end).toBeGreaterThan(start)
+    return appSource.slice(start, end)
+  }
+
+  it('clears every pane of the switched agent on set_default, quiet or forced', () => {
+    const body = switchHandlerBody()
+    const clear = body.indexOf("if (ev?.reason === 'set_default' && ev.agent_key) clearPaneUsageLimits(ev.agent_key)")
+    const forced = body.indexOf('forcedRestartAgentKey(ev)')
+    expect(clear).toBeGreaterThan(-1)
+    // Before the forced-restart early return, or a forced switch skips it.
+    expect(forced).toBeGreaterThan(clear)
+  })
+
+  it('drops both halves of the flag and consumes the old limit text', () => {
+    const start = appSource.indexOf('function clearPaneUsageLimits(')
+    expect(start).toBeGreaterThan(-1)
+    const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
+    expect(body).toContain('pane.usageLimitAt = null')
+    expect(body).toContain('pane.usageLimitUntil = null')
+    // Without this the limit banner still in the buffer re-matches on the
+    // next poll and re-lights the flag one interval after the switch.
+    expect(body).toContain('w.limitBaseline = paneCleanBytes(pane.id)')
+    // A loop parked on this limit resumes the way the badge click does.
+    expect(body).toContain("fireLoopResume(pane.id, 'account-switch')")
+  })
+
+  it('keeps the pane badge wired to the flag', () => {
+    // Removed once by a sweep commit (9285f925) with no mention of it; the
+    // clear above is invisible without the badge that shows the flag.
+    expect(appSource).toContain(':usage-limit-hit="p.usageLimitAt != null"')
+    expect(appSource).toContain(':usage-limit-until="p.usageLimitUntil"')
+    const pane = readFileSync(resolve(process.cwd(), 'src/renderer/src/components/TerminalPane.vue'), 'utf8')
+    expect(pane).toContain('v-if="usageLimitHit"')
+    expect(pane).toContain("$t('pane.terminal.usage-limit-badge', { time: formatLoopTime(usageLimitUntil) })")
+    for (const lang of ['en-US', 'zh-TW']) {
+      const locale = JSON.parse(
+        readFileSync(resolve(process.cwd(), `packages/plugin-ui/src/foundation/i18n/locales/${lang}.json`), 'utf8')
+      )
+      for (const key of ['usage-limit-badge', 'usage-limit-badge-unknown', 'usage-limit-tooltip', 'usage-limit-tooltip-unknown']) {
+        expect(locale.pane.terminal[key], `${lang} pane.terminal.${key}`).toBeTypeOf('string')
+      }
+    }
+  })
+})

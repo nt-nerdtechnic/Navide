@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activityMeansWorking, applyLoopWait, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
+import { activityMeansWorking, applyLoopWait, detailMeansToolUse, quotaTurnIsFresh, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
 
 // Fixed reference time for the watcher arming. turn_complete only counts when
 // its timestamp is strictly AFTER this.
@@ -882,5 +882,185 @@ describe('quota-blocked slots and turns', () => {
     }
     expect(loopContinueReady(woken)).toBe(true)
     expect(loopContinueReady({ ...woken, quotaBlocked: true })).toBe(false)
+  })
+})
+
+// The gap this does NOT close, written down as a test so the boundary is
+// explicit rather than assumed: a turn that died on the quota keeps its
+// turn_complete, so once the block lifts that stale signal is accepted again.
+//
+// Two rules were tried here and both withdrawn — see the KNOWN GAP note in
+// completion.ts. `turnCompleteAt` is the receipt time, not when the turn ended,
+// and no comparison against it can tell a delayed poisoned event from a fresh
+// one without hanging stages that really did finish.
+describe('a turn that died on the quota is told apart by its OWN clock', () => {
+  const ARMED = 1_000
+  const SEEN = 100_000   // when the block was DETECTED
+
+  // Gap A, closed. The two withdrawn attempts and why they failed are in the
+  // note above quotaTurnIsFresh; the two lettered cases below are the
+  // event-interleaving scenarios the independent review named as the real
+  // acceptance criteria — each one killed one of those attempts.
+
+  it('records the event clock beside the receipt clock, in one write', () => {
+    const receipt = new Map<string, number>()
+    const source = new Map<string, number>()
+    const now = 1_700_000_000_000
+    expect(recordTurnComplete(receipt, 'p', new Date(now - 500).toISOString(), now, 60_000, source))
+      .toBe(true)
+    expect(receipt.get('p')).toBe(now)          // receipt stays `now`
+    expect(source.get('p')).toBe(now - 500)     // …and the event keeps its own
+  })
+
+  it('stores 0 for a vendor whose stamp does not parse', () => {
+    const receipt = new Map<string, number>()
+    const source = new Map<string, number>()
+    const now = 1_700_000_000_000
+    expect(recordTurnComplete(receipt, 'p', 'not-a-date', now, 60_000, source)).toBe(true)
+    expect(source.get('p')).toBe(0)
+  })
+
+  it('writes neither map for a replayed event', () => {
+    const receipt = new Map<string, number>()
+    const source = new Map<string, number>()
+    const now = 1_700_000_000_000
+    expect(recordTurnComplete(receipt, 'p', new Date(now - 120_000).toISOString(), now, 60_000, source))
+      .toBe(false)
+    expect(receipt.size).toBe(0)
+    expect(source.size).toBe(0)
+  })
+
+  it('A · refuses the failed turn even when its event arrives after the lift', () => {
+    // The case that killed attempt #2: the turn died BEFORE the block was
+    // detected, but its event was received afterwards and inside the replay
+    // tolerance, so the receipt clock made it look new. Its own clock does not.
+    expect(slotFinished({
+      sentinelSeen: false,
+      turnCompleteAt: SEEN + 30_000,   // received well after the lift
+      armedAt: ARMED,
+      quotaBlocked: false,             // block already lifted
+      quotaSeenAt: SEEN,
+      turnSourceAt: SEEN - 1_000       // …but it ENDED before the block was seen
+    })).toBe(false)
+  })
+
+  it('B · accepts a retry that finished before the flag was even cleared', () => {
+    // The case that killed both attempts in the other direction: a real retry
+    // ran right after the deadline and finished before the 5s health poll
+    // cleared the flag. Anchoring on the LIFT rejected it forever; anchoring on
+    // DETECTION accepts it, which is correct — it ran after the block was seen.
+    expect(slotFinished({
+      sentinelSeen: false,
+      turnCompleteAt: SEEN + 6_000,
+      armedAt: ARMED,
+      quotaBlocked: false,
+      quotaSeenAt: SEEN,
+      turnSourceAt: SEEN + 1_000
+    })).toBe(true)
+  })
+
+  it('fails open for a vendor with no usable clock', () => {
+    // Same direction isReplayedTurnComplete already takes. A vendor whose
+    // stamps do not parse must not lose the ability to finish a stage.
+    expect(slotFinished({
+      sentinelSeen: false, turnCompleteAt: SEEN + 6_000, armedAt: ARMED,
+      quotaSeenAt: SEEN, turnSourceAt: 0
+    })).toBe(true)
+  })
+
+  it('leaves a pane that never hit the quota untouched', () => {
+    expect(slotFinished({
+      sentinelSeen: false, turnCompleteAt: 2_000, armedAt: ARMED,
+      quotaSeenAt: 0, turnSourceAt: 0
+    })).toBe(true)
+  })
+
+  it('refuses it outright while the block still stands', () => {
+    expect(slotFinished({
+      sentinelSeen: false, turnCompleteAt: 2_000, armedAt: ARMED, quotaBlocked: true
+    })).toBe(false)
+  })
+
+  it('still lets the sentinel through', () => {
+    expect(slotFinished({
+      sentinelSeen: true, turnCompleteAt: SEEN + 30_000, armedAt: ARMED,
+      quotaSeenAt: SEEN, turnSourceAt: SEEN - 1_000
+    })).toBe(true)
+  })
+
+  it('applies the same pair in turnCompleteDone, where base rules all pass', () => {
+    // Discriminating on purpose: with lastActiveAt before the turn end every
+    // base condition holds, so only the freshness rule can refuse it. An
+    // earlier version of this test picked a case the base rules already
+    // rejected and could not see the new rule at all.
+    const base = {
+      turnCompleteAt: SEEN + 30_000, lastActiveAt: SEEN + 20_000, armedAt: ARMED,
+      now: SEEN + 60_000, settleMs: 1_000
+    }
+    expect(turnCompleteDone(base)).toBe(true)
+    expect(turnCompleteDone({ ...base, quotaSeenAt: SEEN, turnSourceAt: SEEN - 1_000 })).toBe(false)
+    expect(turnCompleteDone({ ...base, quotaSeenAt: SEEN, turnSourceAt: SEEN + 1_000 })).toBe(true)
+  })
+
+  it('quotaTurnIsFresh: the anchor instant itself is not "after"', () => {
+    expect(quotaTurnIsFresh(undefined, 5)).toBe(true)
+    expect(quotaTurnIsFresh(0, 0)).toBe(true)
+    expect(quotaTurnIsFresh(SEEN, 0)).toBe(true)          // no clock → open
+    expect(quotaTurnIsFresh(SEEN, SEEN - 1)).toBe(false)
+    expect(quotaTurnIsFresh(SEEN, SEEN)).toBe(false)
+    expect(quotaTurnIsFresh(SEEN, SEEN + 1)).toBe(true)
+  })
+})
+
+// The LIMITS of quotaTurnIsFresh, asserted rather than assumed. All three came
+// from independent review, and each one is a case where an earlier version of
+// the comment above the rule claimed a guarantee the repo does not give.
+describe('quotaTurnIsFresh · what it does NOT do', () => {
+  const ARMED = 1_000
+  const SEEN = 100_000
+
+  it('lets a FUTURE source stamp through — the replay filter is one-sided', () => {
+    // isReplayedTurnComplete only refuses events that are too OLD
+    // (now - eventMs > tolerance), so nothing bounds a stamp from the future.
+    const now = 1_700_000_000_000
+    const receipt = new Map<string, number>()
+    const source = new Map<string, number>()
+    const future = new Date(now + 10 * 60_000).toISOString()
+    expect(recordTurnComplete(receipt, 'p', future, now, 60_000, source)).toBe(true)
+    expect(source.get('p')).toBeGreaterThan(now)
+    // …and such a stamp satisfies the freshness rule whatever it means.
+    expect(quotaTurnIsFresh(now, source.get('p'))).toBe(true)
+  })
+
+  it('is defeated by a vendor that stamps with its SCAN clock', () => {
+    // cursor has no per-message timestamp at all: cli_vendors/cursor.py's
+    // _store_epoch falls back to meta.json updatedAtMs and then to time.time(),
+    // nudging each event 1ms past the last. Such a stamp can post-date the
+    // detection of the block, and the failed turn then passes.
+    const scanStampedAfterDetection = SEEN + 2_000
+    expect(quotaTurnIsFresh(SEEN, scanStampedAfterDetection)).toBe(true)
+    expect(slotFinished({
+      sentinelSeen: false, turnCompleteAt: SEEN + 3_000, armedAt: ARMED,
+      quotaBlocked: false, quotaSeenAt: SEEN, turnSourceAt: scanStampedAfterDetection
+    })).toBe(true)   // ← the gap, still open for this vendor shape
+  })
+
+  it('rejects a real retry when the block was detected only afterwards', () => {
+    // Detection is a 5s poll on an unconsumed tail, so a limit message can be
+    // read AFTER a successful retry has already finished (account switched,
+    // short turn). The anchor then post-dates that retry.
+    //
+    // Asserting the LIMIT: narrower than the ordering that killed the previous
+    // two attempts, where EVERY retry finishing before the lift was rejected.
+    expect(slotFinished({
+      sentinelSeen: false, turnCompleteAt: SEEN + 1_000, armedAt: ARMED,
+      quotaBlocked: false, quotaSeenAt: SEEN, turnSourceAt: SEEN - 500
+    })).toBe(false)
+    // The escape hatch that keeps it from being permanent: the sentinel, and
+    // any later turn.
+    expect(slotFinished({
+      sentinelSeen: true, turnCompleteAt: SEEN + 1_000, armedAt: ARMED,
+      quotaSeenAt: SEEN, turnSourceAt: SEEN - 500
+    })).toBe(true)
   })
 })
