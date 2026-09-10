@@ -1373,6 +1373,32 @@ describe('PluginBackendSupervisor', () => {
     }))
   })
 
+  it('hands the Host a cause when the health request times out, so the failure is not silent', async () => {
+    // The Host's diagnostic emitter returns early without a cause, so a
+    // health-request TIMEOUT used to reach the log as nothing at all. The
+    // supervisor must pass the originating error on in its place.
+    const onFailure = vi.fn()
+    const supervisor = makeSupervisor({
+      onFailure,
+      healthTimeoutMs: 60,
+      // A child that starts but never answers - the slow-boot shape, not a
+      // crash. A crashing child would carry its own cause and log already.
+      spawnProcess: () =>
+        spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }) as ChildProcessWithoutNullStreams,
+    })
+    supervisors.push(supervisor)
+
+    await expect(supervisor.start()).rejects.toMatchObject({ code: 'TIMEOUT' })
+
+    expect(onFailure).toHaveBeenCalledOnce()
+    const reported = onFailure.mock.calls[0][0] as { code: string; cause?: unknown }
+    expect(reported.code).toBe('BACKEND_UNAVAILABLE')
+    expect(reported.cause).toBeDefined()
+    expect((reported.cause as { code?: string }).code).toBe('TIMEOUT')
+  })
+
   it('routes stderr away from the protocol stream', async () => {
     const stderr = vi.fn()
     const supervisor = makeSupervisor({ onStderr: stderr })
