@@ -26,6 +26,17 @@ describe('legacy recovery label layout', () => {
     expect(rule![1]).toContain(':not(.legacy-recovery-label)')
   })
 
+  it('keeps the recovery chrome rows out of it too', () => {
+    // Same trap, second victim: `.plans-repair-row` declares `flex: none` and
+    // the blanket rule outranks it three classes to one, so the one-line
+    // button row was stretched to an equal share of the column and the button
+    // floated in the middle of it. Exclusion by name is what makes its own
+    // `flex: none` mean anything.
+    const rule = css.match(/\.pane-split \.part-top > \*([^{]*)\{[^}]*flex: 1/)
+    expect(rule![1]).toContain(':not(.plans-repair-row)')
+    expect(rule![1]).toContain(':not(.plans-repair-message)')
+  })
+
   it('still declares flex: none on the badge itself', () => {
     const block = css.match(/\.legacy-recovery-label \{[^}]*\}/)
     expect(block, '.legacy-recovery-label should be styled').not.toBeNull()

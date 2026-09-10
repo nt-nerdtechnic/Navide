@@ -8,7 +8,7 @@ import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
-import { rollupTabStatus, runGroupStateLabelKey } from '../lib/tabStatus'
+import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
   ALL_RAIL_ID,
   assignToRail,
@@ -35,6 +35,7 @@ import ExplorerPane from './ExplorerPane.vue'
 import GitPluginHostSlot from './GitPluginHostSlot.vue'
 import PluginRegionHost, { type PluginRegionContribution } from './PluginRegionHost.vue'
 import { readLegacyPlansPreferenceProjection } from '../editor/plansPreferences'
+import { PLANS_STORAGE_RECOVERY_REASON } from '../../../shared/plansRecovery'
 import type { BackendStatus, useBackend } from '../composables/useBackend'
 import type { DisplayStatus } from '@navide/terminal'
 import type { Role, RoleKey } from '../data/roles'
@@ -334,6 +335,8 @@ interface Props {
   legacyGitRecovery?: boolean
   /** Main-process-only legacy Plans recovery mode. */
   legacyPlansRecovery?: boolean
+  /** Host-side reason for that downgrade, '' when it is not known. */
+  legacyPlansRecoveryReason?: string
   /** Change count published by the legacy Git recovery contribution. */
   gitChangesCount?: number
   /** Left slot collapsed — swaps the panel body for a narrow icon rail.
@@ -831,6 +834,13 @@ function countBadgeAttrs(state: PaneStatusValue | undefined): Record<string, unk
   }
 }
 
+/** The user's colour for the status a group key stands in for, when they have
+ *  customized it — the tab dot's dotStyle by another name, for the same value. */
+function groupKeyStyle(state: TabRunState): Record<string, string> | undefined {
+  const paneStatus = tabRunStatePaneStatus(state)
+  return paneStatus ? statusBadgeStyle(paneStatus) : undefined
+}
+
 /** Does this workspace have anything its ↻ could rebuild?
  *
  *  The button sits on every workspace heading but read one window-wide flag,
@@ -1206,6 +1216,12 @@ const CORE_SIDEBAR_TABS = ['agents', 'pipeline', 'explorer'] as const
 type CoreSidebarTab = (typeof CORE_SIDEBAR_TABS)[number]
 const legacyGitRecovery = computed(() => props.legacyGitRecovery === true)
 const legacyPlansRecovery = computed(() => props.legacyPlansRecovery === true)
+/** The storage repair rebuilds an unreadable lifecycle record — it is the
+ *  answer to exactly one downgrade. Offering it for a failed backend child
+ *  reports a healthy record and points the user at the wrong subsystem. */
+const plansRecoveryIsStorage = computed(
+  () => props.legacyPlansRecoveryReason === PLANS_STORAGE_RECOVERY_REASON
+)
 const pluginTabId = (key: string): `plugin:${string}` => `plugin:${key}`
 const isPluginTab = (tab: SidebarTab): tab is `plugin:${string}` => tab.startsWith('plugin:')
 const pluginTabs = computed(() =>
@@ -1307,6 +1323,36 @@ async function repairPlansStorageRecord(): Promise<void> {
     })
   } finally {
     plansRepairInFlight.value = false
+  }
+}
+
+// The Plans counterpart of requestGitV2Retry. Git retries on its tab opening;
+// the Plans recovery panel is what the user is already looking at, so the
+// retry is a button there as well as a tab-switch attempt.
+const plansRetryInFlight = ref(false)
+const plansRetryMessage = ref('')
+async function requestPlansV2Retry(explicit = false): Promise<void> {
+  const retry = window.agentTeam?.retryPlansV2
+  if (!retry || plansRetryInFlight.value) return
+  plansRetryInFlight.value = true
+  if (explicit) plansRetryMessage.value = ''
+  try {
+    const result = await retry()
+    // Only an explicit press reports back: the tab-switch attempt is a quiet
+    // best effort and must not drop a failure message into the panel.
+    if (explicit && !result?.ok) {
+      plansRetryMessage.value = i18n.global.t('label.plans-retry-failed', {
+        reason: result?.reason ?? '',
+      })
+    }
+  } catch (error) {
+    if (explicit) {
+      plansRetryMessage.value = i18n.global.t('label.plans-retry-failed', {
+        reason: error instanceof Error ? error.message : String(error),
+      })
+    }
+  } finally {
+    plansRetryInFlight.value = false
   }
 }
 
@@ -1431,6 +1477,7 @@ function selectSidebarTab(tab: SidebarTab): void {
   if (!target) return
   showSidebarTab(target)
   if (tab === 'git' && legacyGitRecovery.value) requestGitV2Retry()
+  if (tab === 'plans' && legacyPlansRecovery.value) void requestPlansV2Retry()
   // Surfacing a tab while the slot is collapsed has to reopen it, or Cmd+1..5
   // and the programmatic entry points would only move a highlight on the rail.
   // Collapsing is the parent's state, so ask rather than set — the same one-way
@@ -2494,13 +2541,30 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <div class="plans-repair-row">
             <button
               class="ghost"
+              data-plans-retry-v2
+              :disabled="plansRetryInFlight"
+              @click="requestPlansV2Retry(true)"
+            >
+              {{ $t(plansRetryInFlight ? 'label.plans-retry-running' : 'label.plans-retry-v2') }}
+            </button>
+            <button
+              v-if="plansRecoveryIsStorage"
+              class="ghost"
               data-plans-repair-record
               :disabled="plansRepairInFlight"
               @click="repairPlansStorageRecord()"
             >
               {{ $t(plansRepairInFlight ? 'label.plans-repair-running' : 'label.plans-repair-record') }}
             </button>
+            <span v-if="plansRetryMessage" class="plans-repair-message">{{ plansRetryMessage }}</span>
             <span v-if="plansRepairMessage" class="plans-repair-message">{{ plansRepairMessage }}</span>
+          </div>
+          <div
+            v-if="legacyPlansRecoveryReason"
+            class="plans-repair-message"
+            data-plans-recovery-reason
+          >
+            {{ $t('label.plans-recovery-reason', { reason: legacyPlansRecoveryReason }) }}
           </div>
           <PlanPane
             class="plans-split"
@@ -2889,7 +2953,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               : $t('action.collapse-subtree')"
             @click.stop="toggleGroup(ws?.path ?? '', g.id)"
           >{{ isGroupCollapsed(ws?.path ?? '', g.id) ? '›' : '⌄' }}</button>
-          <span class="ws-grp-key" :title="$t(runGroupStateLabelKey(g.state))"></span>
+          <span
+            class="ws-grp-key"
+            :style="groupKeyStyle(g.state)"
+            :title="$t(runGroupStateLabelKey(g.state))"
+          ></span>
           <span class="ws-grp-name" :title="g.name || $t('label.manual-spawn')">{{ g.name || $t('label.manual-spawn') }}</span>
           <!-- Neutral, unlike the workspace heading's: this row already carries
                its run state in the key beside the name, and a second colour
@@ -5097,9 +5165,12 @@ button.icon-btn.muted:hover {
   border-radius: 2px;
   background: var(--border-default);
 }
-.ws-grp[data-state='awaiting'] .ws-grp-key { background: var(--warning-fg); }
-.ws-grp[data-state='active'] .ws-grp-key { background: var(--success-fg); }
-.ws-grp[data-state='idle'] .ws-grp-key { background: var(--status-idle-emphasis); }
+/* Defaults, with the user's Settings override in front of each — this key and
+   StageTabBar's tab dot are two views of one value, so they follow a recoloured
+   status together or they disagree on screen. */
+.ws-grp[data-state='awaiting'] .ws-grp-key { background: var(--status-badge-fg, var(--warning-fg)); }
+.ws-grp[data-state='active'] .ws-grp-key { background: var(--status-badge-fg, var(--success-fg)); }
+.ws-grp[data-state='idle'] .ws-grp-key { background: var(--status-badge-fg, var(--status-idle-emphasis)); }
 .ws-grp-name {
   min-width: 0;
   overflow: hidden;
@@ -5802,10 +5873,13 @@ button.icon-btn.muted:hover {
   min-height: 0;
   margin: 0 -14px -14px;
 }
-/* ExplorerPane fills its part-top container. The recovery badge is excluded so
-   its own `flex: none` survives — otherwise it is stretched down the whole
-   column and steals the height the panel below it needs. */
-.pane-split .part-top > *:not(.legacy-recovery-label) {
+/* ExplorerPane fills its part-top container. Everything that is chrome around
+   a panel rather than the panel itself has to be excluded by name: this rule
+   outranks a child's own `flex: none` on specificity (three classes to one),
+   so an unexcluded one-line row is silently stretched to an equal share of
+   the column — which is how the recovery panel came to show a button floating
+   in the middle of two hundred blank pixels. */
+.pane-split .part-top > *:not(.legacy-recovery-label):not(.plans-repair-row):not(.plans-repair-message) {
   flex: 1;
   min-height: 0;
 }

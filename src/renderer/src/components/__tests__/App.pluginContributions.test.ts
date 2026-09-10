@@ -82,7 +82,18 @@ describe('generic plugin placement boot wiring', () => {
     expect(appSource).toContain('legacyPlansRecovery')
     expect(appSource).toContain('onPlansRecoveryChanged')
     expect(appSource).toContain(':legacy-plans-recovery="legacyPlansRecovery"')
-    expect(mainSource).toContain("hostWindow.webContents.send('plans:recoveryChanged', { legacy: true })")
+    // The reason travels with the event: without it the recovery panel can
+    // only show a bare label, and it is what decides whether the storage
+    // repair applies at all.
+    expect(mainSource).toContain(
+      "hostWindow.webContents.send('plans:recoveryChanged', { legacy: true, reason })"
+    )
+    expect(appSource).toContain(':legacy-plans-recovery-reason="legacyPlansRecoveryReason"')
+    // Leaving recovery has to reach the open window as well; before
+    // plans:retryV2 nothing ever sent legacy: false.
+    expect(mainSource).toContain(
+      "hostWindow.webContents.send('plans:recoveryChanged', { legacy: false })"
+    )
   })
 
   it('tracks the recovery notification in both directions', () => {

@@ -125,7 +125,36 @@ describe('every pane status is styled on every surface that paints one', () => {
     }
   })
 
+  it('lets a recoloured status reach the rolled-up dots too', () => {
+    // The tab dot and the sidebar group key paint a pane status under a
+    // coarser name, but they shipped with the hue hardcoded — so recolouring
+    // 'awaiting' in Settings moved every badge on screen except those two, and
+    // the one place a blocked run is most visible kept the old colour. The
+    // override hook is what makes them follow; without it there is nothing for
+    // statusBadgeStyle's inline variables to land in.
+    const surfaces: [string, string[]][] = [
+      [
+        'src/renderer/src/components/StageTabBar.vue',
+        ["awaiting", "active", "idle"].map((s) => `.tab-dot[data-state='${s}']`),
+      ],
+      [
+        'src/renderer/src/components/ControlPane.vue',
+        ["awaiting", "active", "idle"].map((s) => `.ws-grp[data-state='${s}'] .ws-grp-key`),
+      ],
+    ]
+    for (const [file, selectors] of surfaces) {
+      const css = read(file)
+      for (const selector of selectors) {
+        const rule = css.slice(css.indexOf(selector))
+        expect(rule.slice(0, 120), `${selector} ignores the user's colour`).toContain(
+          'var(--status-badge-fg,'
+        )
+      }
+    }
+  })
+
   it('leaves no rule selecting the retired question status', () => {
+
     // Merged into 'awaiting'. A leftover selector is dead weight that reads as
     // a live state to the next person, and --question-fg went with it.
     for (const surface of SURFACES) {

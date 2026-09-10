@@ -40,7 +40,14 @@ function mountPane(
       ...(pluginContributions === undefined ? {} : { pluginContributions }),
       ...overrides,
     } as never,
-    global: { mocks: { $t: (key: string) => key } },
+    // Params are echoed so a test can assert the value reached the template;
+    // keys without params still render as the bare key.
+    global: {
+      mocks: {
+        $t: (key: string, params?: Record<string, unknown>) =>
+          params ? `${key} ${Object.values(params).join(' ')}` : key,
+      },
+    },
   })
 }
 
@@ -235,6 +242,7 @@ describe('ControlPane manifest-driven plugin placement', () => {
       backend: { status: { value: 'connected' } },
       workspace: '/workspace',
       legacyPlansRecovery: true,
+      legacyPlansRecoveryReason: 'storage-migration-failure',
     })
 
     // Opening the panel must not repair anything: discarding the record gives
@@ -248,6 +256,80 @@ describe('ControlPane manifest-driven plugin placement', () => {
     expect(wrapper.get('.plans-repair-message').text()).not.toBe('')
 
     Reflect.deleteProperty(window, 'agentTeam')
+    wrapper.unmount()
+  })
+
+  it('hides the storage repair when the downgrade was not about storage', async () => {
+    // The repair reads the lifecycle record, finds it healthy and answers
+    // "nothing to repair" — a false all-clear for a failed backend child.
+    const repairPlansStorageRecord = vi.fn().mockResolvedValue({ ok: true, repaired: false })
+    Object.assign(window, { agentTeam: { repairPlansStorageRecord, retryPlansV2: vi.fn() } })
+    sessionStorage.setItem('agentTeam.sidebarTab', 'plans')
+    const wrapper = mountPane([], {
+      backend: { status: { value: 'connected' } },
+      workspace: '/workspace',
+      legacyPlansRecovery: true,
+      legacyPlansRecoveryReason: 'backend-unavailable',
+    })
+
+    expect(wrapper.find('[data-plans-repair-record]').exists()).toBe(false)
+    // The reason takes its place, so the panel still says something true.
+    expect(wrapper.get('[data-plans-recovery-reason]').text()).toContain('backend-unavailable')
+
+    Reflect.deleteProperty(window, 'agentTeam')
+    wrapper.unmount()
+  })
+
+  it('asks the Host to re-arm Plans v2 from the recovery panel', async () => {
+    const retryPlansV2 = vi.fn().mockResolvedValue({ ok: true })
+    Object.assign(window, { agentTeam: { retryPlansV2 } })
+    sessionStorage.setItem('agentTeam.sidebarTab', 'plans')
+    const wrapper = mountPane([], {
+      backend: { status: { value: 'connected' } },
+      workspace: '/workspace',
+      legacyPlansRecovery: true,
+      legacyPlansRecoveryReason: 'backend-unavailable',
+    })
+
+    // Mounting the panel is not a retry; only the press is.
+    expect(retryPlansV2).not.toHaveBeenCalled()
+    await wrapper.get('[data-plans-retry-v2]').trigger('click')
+    await flushPromises()
+    expect(retryPlansV2).toHaveBeenCalledTimes(1)
+
+    Reflect.deleteProperty(window, 'agentTeam')
+    wrapper.unmount()
+  })
+
+  it('swaps the legacy Plans pane for the v2 contribution when recovery ends', async () => {
+    // Plans v2 and the legacy pane share the 'plans' tab, so leaving recovery
+    // has to change the surface in place — there is no tab to move to. Before
+    // plans:retryV2 existed nothing ever sent legacy:false, so this transition
+    // could only happen by restarting the app.
+    sessionStorage.setItem('agentTeam.sidebarTab', 'plans')
+    const wrapper = mountPane(
+      [
+        contribution({
+          pluginId: 'navide.plans',
+          contributionKey: 'navide.plans.left',
+          title: 'Plans',
+        }),
+      ],
+      {
+        backend: { status: { value: 'connected' } },
+        workspace: '/workspace',
+        legacyPlansRecovery: true,
+        legacyPlansRecoveryReason: 'backend-unavailable',
+      },
+    )
+    expect(wrapper.find('[data-plans-legacy-recovery-label]').exists()).toBe(true)
+
+    await wrapper.setProps({ legacyPlansRecovery: false, legacyPlansRecoveryReason: '' } as never)
+
+    expect(wrapper.find('[data-plans-legacy-recovery-label]').exists()).toBe(false)
+    expect(wrapper.find('[data-plans-recovery-reason]').exists()).toBe(false)
+    // Still the same tab: the swap must not bounce the user back to Agents.
+    expect(sessionStorage.getItem('agentTeam.sidebarTab')).toBe('plans')
     wrapper.unmount()
   })
 

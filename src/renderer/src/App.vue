@@ -588,6 +588,11 @@ const _bootWorkspace = new URLSearchParams(window.location.search).get('workspac
 const _bootIsDuplicate = new URLSearchParams(window.location.search).get('duplicate') === '1'
 const legacyGitRecovery = ref(new URLSearchParams(window.location.search).get('legacy_git_recovery') === '1')
 const legacyPlansRecovery = ref(new URLSearchParams(window.location.search).get('legacy_plans_recovery') === '1')
+// Why the Host downgraded. Only the Host knows it, and the recovery panel
+// has nothing honest to show without it.
+const legacyPlansRecoveryReason = ref(
+  new URLSearchParams(window.location.search).get('plans_recovery_reason') ?? ''
+)
 // Set by main when this window is reopened from the saved session snapshot
 // (index.ts passes restore: '1'). Distinguishes "the app restored this
 // workspace for you" from "the user deliberately opened it" — an empty
@@ -4015,6 +4020,12 @@ function startLoopLimitWatcher(paneId: string): void {
         armedAt: watcher.armedAt,
         now: Date.now(),
         settleMs: TURN_COMPLETE_SETTLE_MS,
+        // The quota branch above schedules a timed resume only when a reset
+        // time was resolvable; when it was not it deliberately fails open and
+        // leaves loopWaitUntil null. Without this the very next poll falls
+        // through to here and resends "continue" into a CLI that cannot run —
+        // which is the one thing that branch says it does not do.
+        quotaBlocked: pane.usageLimitAt != null,
       })
     ) {
       void fireLoopContinue(paneId)
@@ -4392,6 +4403,7 @@ onMounted(() => {
   }) ?? null
   stopPlansRecoveryChanged = window.agentTeam?.onPlansRecoveryChanged?.((change) => {
     legacyPlansRecovery.value = change.legacy
+    legacyPlansRecoveryReason.value = change.legacy ? change.reason ?? '' : ''
   }) ?? null
   void refreshPluginContributions()
   stopPluginContributionChanges = window.agentTeam?.plugins?.onContributionsChanged?.(() => {
@@ -4458,6 +4470,19 @@ const TRUST_DIALOG_PATTERNS: RegExp[] = [
 
 function paneAlive(paneId: string): boolean {
   return panes.value.some((p) => p.id === paneId)
+}
+
+/** True while this pane's CLI has announced it is out of quota and the window
+ *  has not come back yet (see lib/cliUsageLimit).
+ *
+ *  Paired with `usageLimitDue` rather than reading the flag alone: only the
+ *  pane health watcher's 5-second poll clears it, so a bare
+ *  `usageLimitAt != null` can be up to one poll stale — long enough for a stage
+ *  to be held on a window that already reset. */
+function paneUsageLimited(paneId: string): boolean {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || pane.usageLimitAt == null) return false
+  return !usageLimitDue(pane.usageLimitAt, pane.usageLimitUntil ?? null, Date.now())
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -11228,7 +11253,10 @@ function computeStageSlotSignals(stageIndex: number): SlotSignal[] {
       sentinelSeen: false,
       turnCompleteAt: paneTurnCompleteAt.get(p.id) ?? 0,
       // No recorded arm time → treat turn_complete as unusable (stay cautious).
-      armedAt: paneArmedAt.get(p.id) ?? Number.MAX_SAFE_INTEGER
+      armedAt: paneArmedAt.get(p.id) ?? Number.MAX_SAFE_INTEGER,
+      // A turn that ended because the CLI ran out of quota is not this slot
+      // finishing its work — see SlotSignal.quotaBlocked.
+      quotaBlocked: paneUsageLimited(p.id)
     }
   })
 }
@@ -11424,7 +11452,7 @@ interface StageStallPrompt {
   stageId: string
   stageTitle: string
   slotLabel: string
-  reason: 'idle' | 'cap'
+  reason: 'idle' | 'cap' | 'quota'
   detail: string                 // e.g. "no output for 92s"
   autoAdvanceAt: number | null   // wall-clock ms when Full auto will fire (null = manual only)
   /** Set only by the Manager-mode router watchdog, and it is what makes this
@@ -11597,7 +11625,7 @@ function clearStageStallAutoTimer(): void {
 function promptStageStall(
   stageIndex: number,
   paneId: string,
-  reason: 'idle' | 'cap',
+  reason: 'idle' | 'cap' | 'quota',
   detail: string,
   managerVerdict?: ManagerStageVerdict
 ): void {
@@ -11638,6 +11666,10 @@ function promptStageStall(
       // signal can ever arrive. See fullAutoStallAction for why.
       const action = fullAutoStallAction({
         managerVerdict: p.managerVerdict,
+        // The single-slot branch force-advances blind, so the stage-level quota
+        // arm has to be its own answer — the multi-slot gate below already
+        // reads it through SlotSignal.quotaBlocked.
+        quotaBlocked: p.reason === 'quota' || paneUsageLimited(p.paneId),
         multiSlot,
         slotsFinished: () => allSlotsFinished(computeStageSlotSignals(p.stageIndex)),
       })
@@ -11868,6 +11900,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
       armedAt: router.armedAt,
       now: Date.now(),
       maxDurationMs: STAGE_MAX_DURATION_MS,
+      // Manager mode arms no per-pane watcher, so nothing else would notice the
+      // Manager running out of quota until the cap fired an hour later.
+      managerQuotaBlocked: paneUsageLimited(router.managerPaneId),
     })
     if (verdict !== 'ok') {
       router.watchdogFired = true
@@ -11876,7 +11911,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
       // means the commander slot never produced a pane at all (its agentKey is
       // gone from agentSpecs), so saying a pane vanished would be a claim about
       // something that never existed.
-      const detail = verdict === 'timeout'
+      const detail = verdict === 'quota'
+        ? 'Manager CLI is out of quota — nothing can print ---STAGE-DONE---'
+        : verdict === 'timeout'
         ? `hit ${Math.round(STAGE_MAX_DURATION_MS / 60_000)}min cap (Manager mode)`
         : router.managerPaneId
           ? 'Manager pane is gone — nothing can print ---STAGE-DONE---'
@@ -11898,7 +11935,8 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
       // The verdict rides along: it is what tells the two stall buttons that
       // this is a STAGE stall (no per-pane watcher exists to restart, and no
       // slot count can end the stage) rather than one slot going quiet.
-      promptStageStall(stageIndex, router.managerPaneId, verdict === 'timeout' ? 'cap' : 'idle', detail, verdict)
+      const stallReason = verdict === 'quota' ? 'quota' : verdict === 'timeout' ? 'cap' : 'idle'
+      promptStageStall(stageIndex, router.managerPaneId, stallReason, detail, verdict)
       return
     }
   }
@@ -12541,6 +12579,22 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
       //    requires: post-arm, the LATEST signal (no agent_active after = not
       //    revived by an injected handoff/answer), and settled SETTLE_MS so the
       //    buffer's question text can catch up before we advance.
+      // 2a. Out of quota. A quota-exhausted turn ENDS — the CLI prints its
+      //     limit message and returns to the prompt — so the verdict below
+      //     would read it as this slot finishing its work: N/N, advance, and
+      //     the limit message handed to the next stage as if it were output.
+      //     Raised as a stall rather than left to the hour-long cap, because
+      //     the cap says nothing about WHY the stage went quiet. The sentinel
+      //     check above runs first, so a slot that did print its done-marker
+      //     before running out is already counted and never reaches here.
+      const quotaBlocked = paneUsageLimited(paneId)
+      if (quotaBlocked) {
+        cancelWatcher(paneId)
+        const detail = 'CLI is out of quota'
+        pipelineLog(`Stage ${stage.id} ⛔ ${detail}`)
+        promptStageStall(stageIndex, paneId, 'quota', detail)
+        return
+      }
       if (
         !stage.allowQuestions &&
         turnCompleteDone({
@@ -12548,7 +12602,11 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
           lastActiveAt: paneLastActiveAt.get(paneId) ?? 0,
           armedAt: watcher.armedAt,
           now: Date.now(),
-          settleMs: TURN_COMPLETE_SETTLE_MS
+          settleMs: TURN_COMPLETE_SETTLE_MS,
+          // Belt and braces: promptStageStall above returns early when another
+          // prompt is already showing, and without this the poll would fall
+          // straight through to the false completion it just refused to raise.
+          quotaBlocked
         })
       ) {
         cancelWatcher(paneId)
@@ -15951,6 +16009,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :plugin-contributions="pluginContributions"
       :legacy-git-recovery="legacyGitRecovery"
       :legacy-plans-recovery="legacyPlansRecovery"
+      :legacy-plans-recovery-reason="legacyPlansRecoveryReason"
       :git-changes-count="gitChangesCount"
       v-model:yolo-enabled="yoloEnabled"
       v-model:analyzer-model="analyzerModel"
@@ -16031,7 +16090,11 @@ function paneIsCommander(p: ActivePane): boolean {
           <div class="stall-body">
             <div class="stall-title">{{ stageStallPrompt.stageTitle }}</div>
             <div class="stall-reason">
-              {{ stageStallPrompt.reason === 'idle' ? '⏸ 偵測到無輸出' : '⏱ 已達時間上限' }}
+              {{ stageStallPrompt.reason === 'idle'
+                ? '⏸ 偵測到無輸出'
+                : stageStallPrompt.reason === 'quota'
+                  ? '⛔ 額度已用完'
+                  : '⏱ 已達時間上限' }}
               — {{ stageStallPrompt.detail }}
             </div>
             <!-- Manager mode changes what both buttons do, so it changes what
@@ -16039,7 +16102,13 @@ function paneIsCommander(p: ActivePane): boolean {
                  count can end it — the workers have no watcher), and after a
                  gone Manager "keep waiting" resets nothing and is the last
                  prompt this stage will raise. -->
-            <p v-if="stageStallPrompt.managerVerdict === 'manager-gone'" class="stall-hint">
+            <p v-if="stageStallPrompt.reason === 'quota'" class="stall-hint">
+              這個 CLI 的額度已用完，現在送任何東西進去都會被擋下。
+              額度視窗會自己重置，但<strong>重置後不會自動接續</strong>——
+              選擇<strong>繼續等待</strong>會重置此階段的計時器（Full auto 也只會等，不會強制推進）；
+              <strong>強制推進</strong>會把它標為完成並前進，下一階段很可能是同一個帳號、同樣被擋。
+            </p>
+            <p v-else-if="stageStallPrompt.managerVerdict === 'manager-gone'" class="stall-hint">
               Manager 模式：沒有活著的 Manager pane（已結束，或這個 slot 從未啟動成功），
               沒有東西能再印出 ---STAGE-DONE---。
               選擇<strong>繼續等待</strong>不會重置任何計時器，而且這是本階段最後一次提示——
@@ -16365,8 +16434,6 @@ function paneIsCommander(p: ActivePane): boolean {
           :loop-wait-until="p.loopWaitUntil"
           :loop-estimate-reset-at="p.loopEstimateResetAt"
           :login-expired="p.loginExpired"
-          :usage-limit-until="p.usageLimitUntil"
-          :usage-limit-hit="p.usageLimitAt != null"
           :continue-available="p.resumeContinueAvailable"
           :restoring="p.restoring"
           @set-focus="(ev) => onSetFocus(p.id, ev, stageSurfaceOrderedIds)"
