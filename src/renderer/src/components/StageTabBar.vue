@@ -2,7 +2,8 @@
 import { ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RebuildIcon from './RebuildIcon.vue'
-import type { TabRunState } from '../lib/tabStatus'
+import { tabRunStatePaneStatus, type TabRunState } from '../lib/tabStatus'
+import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 
 export interface TabItem {
   key: string
@@ -44,6 +45,14 @@ const { t } = useI18n()
  *  it does not shadow the ✕ button's own title. */
 function statusTitle(status: TabRunState): string {
   return t(`stageTab.status-${status}`)
+}
+
+/** The user's colour for the status this dot stands in for, when they have
+ *  customized it. Undefined otherwise, which leaves the CSS default in place —
+ *  the same contract statusBadgeStyle has everywhere else. */
+function dotStyle(status: TabRunState): Record<string, string> | undefined {
+  const paneStatus = tabRunStatePaneStatus(status)
+  return paneStatus ? statusBadgeStyle(paneStatus) : undefined
 }
 
 const actionMenu = ref<{ show: boolean; key: string; x: number; y: number }>({ show: false, key: '', x: 0, y: 0 })
@@ -157,6 +166,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
         <span
           class="tab-dot"
           :data-state="tab.status"
+          :style="dotStyle(tab.status)"
           :title="statusTitle(tab.status)"
           :aria-label="statusTitle(tab.status)"
         />
@@ -282,9 +292,12 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   border-radius: 2px;
   background: var(--border-default);
 }
-.tab-dot[data-state='awaiting'] { background: var(--warning-fg); }
-.tab-dot[data-state='active'] { background: var(--success-fg); }
-.tab-dot[data-state='idle'] { background: var(--status-idle-emphasis); }
+/* Defaults, with the user's Settings override in front of each: this dot
+   stands in for a pane status, so recolouring that status has to move it too
+   — the same `var(--status-badge-fg, <default>)` shape every other dot uses. */
+.tab-dot[data-state='awaiting'] { background: var(--status-badge-fg, var(--warning-fg)); }
+.tab-dot[data-state='active'] { background: var(--status-badge-fg, var(--success-fg)); }
+.tab-dot[data-state='idle'] { background: var(--status-badge-fg, var(--status-idle-emphasis)); }
 
 .tab-close {
   display: inline-flex;

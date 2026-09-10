@@ -14,6 +14,8 @@
  *  'starting' counts as active: it means the CLI is booting and about to move,
  *  so the seconds right after a spawn should not read as "nothing happening".
  */
+import type { PaneStatusValue } from './paneStatusLabel'
+
 export type TabRunState = 'awaiting' | 'active' | 'idle' | 'empty'
 
 /** A pane that has stopped and will not move until someone answers it. Ranked
@@ -42,6 +44,23 @@ export function rollupTabStatus(statuses: readonly string[]): TabRunState {
   }
   if (active) return 'active'
   return realized ? 'idle' : 'empty'
+}
+
+/** The pane status a rolled-up tab state is painted as.
+ *
+ *  The dot's own vocabulary is coarser than a pane status (see TabRunState),
+ *  but its colours have always been the pane colours for the statuses it
+ *  stands in for — so when the user recolours a status in Settings, the dot
+ *  has to move with it rather than keeping the shipped hue. 'empty' maps to
+ *  nothing: it is the absence of a signal, not a status.
+ */
+export function tabRunStatePaneStatus(state: TabRunState): PaneStatusValue | null {
+  if (state === 'awaiting') return 'awaiting'
+  // 'starting' also rolls up to active, but 'running' is what the dot has
+  // always been painted as, and it is the one a user recolours to mean "busy".
+  if (state === 'active') return 'running'
+  if (state === 'idle') return 'idle'
+  return null
 }
 
 /** i18n key for what a group's rolled-up dot is saying. Kept as a key, like

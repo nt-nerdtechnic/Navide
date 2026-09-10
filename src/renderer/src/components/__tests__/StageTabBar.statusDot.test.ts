@@ -10,6 +10,11 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { i18n } from '@navide/plugin-ui/foundation'
 import StageTabBar, { type TabItem } from '../StageTabBar.vue'
+import {
+  setStatusBadgePref,
+  __reloadStatusBadgePrefsForTest,
+} from '../../composables/useStatusBadgePrefs'
+import { STATUS_COLOR_PALETTE } from '../../lib/statusBadgePalette'
 
 const tabs: TabItem[] = [
   { key: 'rg-1', label: 'Main', count: 12, type: 'stage', status: 'active' },
@@ -35,6 +40,29 @@ describe('StageTabBar – status dot', () => {
       'empty',
       'awaiting'
     ])
+  })
+
+  it("follows the user's colour for the status it stands in for", () => {
+    // The dot's own vocabulary is coarser than a pane status, so it has to map
+    // back before it can honour the override: recolouring 'awaiting' in
+    // Settings moves every other badge, and this dot used to keep its shipped
+    // hue — on the one tab where being blocked matters most.
+    setStatusBadgePref('awaiting', { color: 'pink' })
+    try {
+      const blocked = mountBar().findAll('.tab-dot')[3]
+      expect(blocked.attributes('data-state')).toBe('awaiting')
+      expect(blocked.attributes('style')).toContain(STATUS_COLOR_PALETTE.pink.fg)
+    } finally {
+      setStatusBadgePref('awaiting', { color: undefined })
+      __reloadStatusBadgePrefsForTest()
+    }
+  })
+
+  it('leaves an uncustomized status to the stylesheet', () => {
+    // No override, no inline variables: the CSS default is the look, and
+    // emitting variables always would make the palette reproduce every theme.
+    const active = mountBar().findAll('.tab-dot')[0]
+    expect(active.attributes('style')).toBeUndefined()
   })
 
   it('gives the dot hover and accessible text', () => {
@@ -85,13 +113,19 @@ describe('StageTabBar – the shape of the status dot', () => {
     const bar = readFileSync(resolve(__dirname, '../StageTabBar.vue'), 'utf8')
     const pane = readFileSync(resolve(__dirname, '../ControlPane.vue'), 'utf8')
 
-    expect(bar).toContain(".tab-dot[data-state='awaiting'] { background: var(--warning-fg); }")
-    expect(bar).toContain(".tab-dot[data-state='active'] { background: var(--success-fg); }")
-    expect(pane).toContain(
-      ".ws-grp[data-state='awaiting'] .ws-grp-key { background: var(--warning-fg); }"
+    // Each default now sits behind the user's override variable, on both
+    // surfaces alike — the tokens are still the same two, in the same order.
+    expect(bar).toContain(
+      ".tab-dot[data-state='awaiting'] { background: var(--status-badge-fg, var(--warning-fg)); }"
+    )
+    expect(bar).toContain(
+      ".tab-dot[data-state='active'] { background: var(--status-badge-fg, var(--success-fg)); }"
     )
     expect(pane).toContain(
-      ".ws-grp[data-state='active'] .ws-grp-key { background: var(--success-fg); }"
+      ".ws-grp[data-state='awaiting'] .ws-grp-key { background: var(--status-badge-fg, var(--warning-fg)); }"
+    )
+    expect(pane).toContain(
+      ".ws-grp[data-state='active'] .ws-grp-key { background: var(--status-badge-fg, var(--success-fg)); }"
     )
   })
 })
