@@ -205,8 +205,10 @@ async def test_kill_reaches_the_cli_in_its_own_foreground_group(tmp_path):
     await svc.kill(session.id)
 
     # Check inside the escalation grace: _kill_breakaway SIGKILLs the whole
-    # snapshotted tree after ~1s, which would hide a missing SIGTERM.
-    for _ in range(30):
+    # snapshotted tree after ~1s, which would hide a missing SIGTERM. Wait
+    # most of that second: 300ms was not enough for the handler to run and
+    # write the marker on a loaded CI runner.
+    for _ in range(80):
         await asyncio.sleep(0.01)
         if marker.exists():
             break
