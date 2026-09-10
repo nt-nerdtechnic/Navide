@@ -165,7 +165,15 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     // The discriminator: if a per-pane watcher stall ever carried a verdict,
     // force-advance would skip that whole stage instead of counting the slot.
     const scan = body('async function managerRouterScan(', '\nfunction queueOrRouteWorkerMsg(')
-    expect(scan).toContain("verdict === 'timeout' ? 'cap' : 'idle', detail, verdict)")
+    // The mapping moved into a named variable when 'quota' became a third
+    // verdict — a two-branch ternary would have labelled a quota stall
+    // "no output detected".
+    expect(scan).toContain(
+      "const stallReason = verdict === 'quota' ? 'quota' : verdict === 'timeout' ? 'cap' : 'idle'"
+    )
+    expect(scan).toContain(
+      'promptStageStall(stageIndex, router.managerPaneId, stallReason, detail, verdict)'
+    )
     const watcher = body('function startStageWatcher(', '\nfunction handleAnalyzerResult(')
     // The watcher's cap stall keeps the four-argument form — no verdict.
     expect(watcher).toContain("promptStageStall(stageIndex, paneId, 'cap', detail)")
@@ -204,10 +212,16 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     expect(appSource).toContain('fullAutoStallAction')
     const call = prompt.slice(prompt.indexOf('fullAutoStallAction({'))
     expect(prompt).toContain('fullAutoStallAction({')
-    expect(call.slice(0, 300)).toContain('managerVerdict: p.managerVerdict')
-    expect(call.slice(0, 300)).toContain('multiSlot')
+    // Window widened when the probe grew a quota arm (with its comment); the
+    // point is still that this ONE call hands over every field, not that they
+    // fit in 300 characters.
+    expect(call.slice(0, 900)).toContain('managerVerdict: p.managerVerdict')
+    expect(call.slice(0, 900)).toContain('multiSlot')
+    // The single-slot branch force-advances blind, so the stage-level quota
+    // answer has to reach the probe here or that branch cascades.
+    expect(call.slice(0, 900)).toContain('quotaBlocked:')
     // Passed as a thunk, so the branch that must not consult it can decline to.
-    expect(call.slice(0, 300)).toContain('slotsFinished: () =>')
+    expect(call.slice(0, 900)).toContain('slotsFinished: () =>')
     // The old inline branch must be gone, or the verdict is bypassed.
     expect(prompt).not.toContain('if (allSlotsFinished(computeStageSlotSignals(p.stageIndex))) {')
     // …and force-advance must be what a 'force-advance' answer does.
@@ -237,22 +251,32 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     // slot done" and "繼續等待 resets the idle timer", and in Manager mode
     // neither is true — it ends the whole stage, and after a gone Manager the
     // wait resets nothing and is the last prompt the stage raises.
+    // The quota branch was prepended to the chain, so the head of it is no
+    // longer the Manager one — pin the new order explicitly rather than let the
+    // slice quietly become empty.
     const hint = appSource.slice(
-      appSource.indexOf('<p v-if="stageStallPrompt.managerVerdict'),
+      appSource.indexOf('<p v-if="stageStallPrompt.reason === \'quota\'"'),
       appSource.indexOf('class="stall-auto"')
     )
-    expect(hint).toContain("stageStallPrompt.managerVerdict === 'manager-gone'")
+    expect(hint).not.toBe('')
+    expect(hint).toContain("v-else-if=\"stageStallPrompt.managerVerdict === 'manager-gone'\"")
     expect(hint).toContain('v-else-if="stageStallPrompt.managerVerdict"')
     expect(hint).toContain('<p v-else class="stall-hint">')
     // The gone-Manager branch has to say both things that changed.
-    const gone = hint.slice(0, hint.indexOf('v-else-if'))
+    const gone = hint.slice(
+      hint.indexOf("v-else-if=\"stageStallPrompt.managerVerdict === 'manager-gone'\""),
+      hint.indexOf('v-else-if="stageStallPrompt.managerVerdict"')
+    )
     expect(gone).toContain('整個 stage')
     expect(gone).toContain('最後一次提示')
     // The same verdict now also covers a commander that never spawned, so the
     // copy cannot assert that a pane disappeared.
     expect(gone).not.toContain('已消失')
     // The Manager cap branch says the stage-level thing too.
-    const capBranch = hint.slice(hint.indexOf('v-else-if'), hint.indexOf('<p v-else '))
+    const capBranch = hint.slice(
+      hint.indexOf('v-else-if="stageStallPrompt.managerVerdict"'),
+      hint.indexOf('<p v-else ')
+    )
     expect(capBranch).toContain('整個 stage')
     expect(capBranch).not.toContain('標為完成')
     // …and only the ordinary watcher stall keeps the slot-level wording.

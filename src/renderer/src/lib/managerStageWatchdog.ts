@@ -16,7 +16,7 @@
  *  App.vue's <script setup> closure.
  */
 
-export type ManagerStageVerdict = 'ok' | 'manager-gone' | 'timeout'
+export type ManagerStageVerdict = 'ok' | 'manager-gone' | 'timeout' | 'quota'
 
 export interface ManagerStageProbe {
   /** Empty until the Manager pane has been spawned — and permanently empty when
@@ -30,6 +30,15 @@ export interface ManagerStageProbe {
   now: number
   /** Stage hard cap; <= 0 disables the timeout arm. */
   maxDurationMs: number
+  /** The Manager pane's CLI has announced it is out of quota (see
+   *  lib/cliUsageLimit). Its own arm of the verdict, rather than being folded
+   *  into the cap, because the cap says nothing about WHY the silence started
+   *  and takes an hour to say even that.
+   *
+   *  Optional so the eleven existing call sites in the tests keep compiling
+   *  untouched — the arm below is skipped when it is absent, which is exactly
+   *  the behaviour they were written against. */
+  managerQuotaBlocked?: boolean
 }
 
 /** What Full auto does when the stall prompt's grace period expires.
@@ -62,6 +71,15 @@ export interface ManagerStageProbe {
 export interface FullAutoStallProbe {
   /** Set only when the Manager-mode watchdog raised this stall. */
   managerVerdict?: ManagerStageVerdict
+  /** Any pane of this stage has announced it is out of quota.
+   *
+   *  Needed on its own arm because the single-slot branch below force-advances
+   *  blind: without this, a one-slot stage whose CLI ran out of quota is pushed
+   *  straight into the next stage, which is the cascade this whole change
+   *  exists to stop. The multi-slot branch is already covered — `slotsFinished`
+   *  reads SlotSignal.quotaBlocked — but this arm answers before that thunk is
+   *  consulted, which is cheaper (reading it walks every pane's buffer). */
+  quotaBlocked?: boolean
   /** The stage has more than one slot. */
   multiSlot: boolean
   /** Whether every slot has a reliable finish signal. Called at most once, and
@@ -73,8 +91,19 @@ export interface FullAutoStallProbe {
 export function fullAutoStallAction(
   probe: FullAutoStallProbe
 ): 'force-advance' | 'keep-waiting' {
-  // Any Manager verdict: the gate below is structurally unanswerable for such a
-  // stage (see the note above), so asking it can only hang the run.
+  // A quota block is the one Manager verdict that is a wait something can end:
+  // the window resets on its own, which is exactly the property the rule above
+  // demands. Force-advancing here is not a decision but a cascade — the next
+  // stage's panes are very likely the same exhausted account, and the Manager's
+  // limit message would be handed on as if it were the stage's output.
+  //
+  // Known residual: waiting restarts the stage clock, and nothing re-drives the
+  // Manager once its quota returns, so the stage still needs a person (or a
+  // later stall prompt) to move. That is a worse wait than a working handoff
+  // and a better outcome than a false completion.
+  if (probe.managerVerdict === 'quota' || probe.quotaBlocked === true) return 'keep-waiting'
+  // Any other Manager verdict: the gate below is structurally unanswerable for
+  // such a stage (see the note above), so asking it can only hang the run.
   if (probe.managerVerdict) return 'force-advance'
   // Single-slot stages keep the original blind force-advance.
   if (!probe.multiSlot) return 'force-advance'
@@ -93,6 +122,11 @@ export function evaluateManagerStage(probe: ManagerStageProbe): ManagerStageVerd
   // a dead Manager is: it is the actionable cause, and it is true an hour before
   // the cap would notice the silence.
   if (!probe.managerPaneId || !probe.managerPaneAlive) return 'manager-gone'
+  // Before the cap, and after manager-gone. Before, because the Manager going
+  // quiet on an exhausted quota is the actionable cause and it is true an hour
+  // before the cap would report the symptom. After, because a dead Manager is
+  // not coming back whether or not it had quota left.
+  if (probe.managerQuotaBlocked === true) return 'quota'
   if (probe.maxDurationMs > 0 && probe.now - probe.armedAt > probe.maxDurationMs) {
     return 'timeout'
   }

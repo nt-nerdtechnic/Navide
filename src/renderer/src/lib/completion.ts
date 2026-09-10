@@ -17,12 +17,30 @@ export interface SlotSignal {
   turnCompleteAt: number
   /** Wall-clock ms when this slot's watcher armed (start of the current stage). */
   armedAt: number
+  /** This slot's CLI has announced it is out of quota (see lib/cliUsageLimit).
+   *
+   *  A quota-exhausted turn still ENDS: the CLI prints its limit message and
+   *  returns to the prompt, so turn_complete arrives and every timing condition
+   *  below holds. Read without this, the stage takes that for the slot finishing
+   *  its work — N/N, advance, and the limit message gets handed to the next
+   *  stage as if it were output.
+   *
+   *  Optional, and opted into per call site: a caller with no pane in reach
+   *  (a test, a path that only has ids) is unaffected by leaving it out. */
+  quotaBlocked?: boolean
 }
 
 /** True when this slot has produced a reliable finish signal for the current
- *  stage. turn_complete only counts if it landed after the watcher armed. */
+ *  stage. turn_complete only counts if it landed after the watcher armed, and
+ *  not at all while the slot is out of quota. */
 export function slotFinished(s: SlotSignal): boolean {
-  return s.sentinelSeen || (s.turnCompleteAt > 0 && s.turnCompleteAt > s.armedAt)
+  // The sentinel outranks the quota block: printing the done-marker is a
+  // positive statement that the work is finished, and running out of quota
+  // afterwards does not un-finish it. Only turn_complete is ambiguous enough
+  // for the quota to poison.
+  if (s.sentinelSeen) return true
+  if (s.quotaBlocked === true) return false
+  return s.turnCompleteAt > 0 && s.turnCompleteAt > s.armedAt
 }
 
 /** True when every slot in the stage has finished. Empty input is never "done"
@@ -32,6 +50,13 @@ export function allSlotsFinished(signals: SlotSignal[]): boolean {
 }
 
 export interface TurnCompleteState {
+  /** The pane's CLI has announced it is out of quota — see SlotSignal's field
+   *  of the same name for why a quota-exhausted turn satisfies every timing
+   *  condition here. Optional and opted into per call site; `turnCompleteDone`
+   *  has three consumers (the stage watcher, the done notification and
+   *  `loopContinueReady`) and leaving it out keeps a consumer exactly as it
+   *  was. */
+  quotaBlocked?: boolean
   /** Wall-clock ms of the latest turn_complete for this pane (0 = none). */
   turnCompleteAt: number
   /** Wall-clock ms of the latest agent_active for this pane (0 = none). */
@@ -54,6 +79,7 @@ export interface TurnCompleteState {
  *   • it has been the latest signal for at least settleMs (so a turn that ended
  *     to ask a QUESTION is caught as a question first, never as completion). */
 export function turnCompleteDone(s: TurnCompleteState): boolean {
+  if (s.quotaBlocked === true) return false
   return (
     s.turnCompleteAt > s.armedAt &&
     s.turnCompleteAt >= s.lastActiveAt &&

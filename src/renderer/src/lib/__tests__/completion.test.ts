@@ -791,3 +791,96 @@ describe('paneSignalResetKeys', () => {
     expect(keys).toEqual(['pipe-1', 'gone-1', 'pipe-2'])
   })
 })
+
+// A quota-exhausted turn ENDS — the CLI prints its limit message and returns to
+// the prompt — so every timing condition in these predicates holds and the
+// stage used to read it as the slot finishing its work.
+describe('quota-blocked slots and turns', () => {
+  const ARMED = 1_000
+
+  it('slotFinished refuses a turn_complete produced by running out of quota', () => {
+    expect(
+      slotFinished({ sentinelSeen: false, turnCompleteAt: 2_000, armedAt: ARMED })
+    ).toBe(true)
+    expect(
+      slotFinished({
+        sentinelSeen: false,
+        turnCompleteAt: 2_000,
+        armedAt: ARMED,
+        quotaBlocked: true
+      })
+    ).toBe(false)
+  })
+
+  it('lets the sentinel outrank the quota block', () => {
+    // Printing the done-marker is a positive statement that the work finished;
+    // running out of quota afterwards does not un-finish it.
+    expect(
+      slotFinished({
+        sentinelSeen: true,
+        turnCompleteAt: 2_000,
+        armedAt: ARMED,
+        quotaBlocked: true
+      })
+    ).toBe(true)
+  })
+
+  it('keeps a stage un-finished while any one slot is out of quota', () => {
+    // This is the assertion that stops the false N/N: the other slots really
+    // did finish, and before this the stage advanced on their signals alone.
+    const done: SlotSignal = { sentinelSeen: true, turnCompleteAt: 0, armedAt: ARMED }
+    const spent: SlotSignal = {
+      sentinelSeen: false,
+      turnCompleteAt: 2_000,
+      armedAt: ARMED,
+      quotaBlocked: true
+    }
+    expect(allSlotsFinished([done, spent])).toBe(false)
+    expect(allSlotsFinished([done, { ...spent, quotaBlocked: false }])).toBe(true)
+  })
+
+  it('turnCompleteDone refuses a quota-blocked pane', () => {
+    const settled = {
+      turnCompleteAt: 2_000,
+      lastActiveAt: 1_500,
+      armedAt: ARMED,
+      now: 2_000 + 10_000,
+      settleMs: 1_000
+    }
+    expect(turnCompleteDone(settled)).toBe(true)
+    expect(turnCompleteDone({ ...settled, quotaBlocked: true })).toBe(false)
+  })
+
+  it('leaves a caller that does not opt in exactly as it was', () => {
+    // The field is optional on purpose — turnCompleteDone has three consumers
+    // (stage watcher, done notification, loopContinueReady) and only the ones
+    // that pass it change behaviour.
+    const settled = {
+      turnCompleteAt: 2_000,
+      lastActiveAt: 1_500,
+      armedAt: ARMED,
+      now: 2_000 + 10_000,
+      settleMs: 1_000
+    }
+    expect(turnCompleteDone({ ...settled, quotaBlocked: undefined })).toBe(true)
+    expect(turnCompleteDone({ ...settled, quotaBlocked: false })).toBe(true)
+    expect(
+      slotFinished({ sentinelSeen: false, turnCompleteAt: 2_000, armedAt: ARMED, quotaBlocked: false })
+    ).toBe(true)
+  })
+
+  it('carries the block through loopContinueReady, closing the resend hole', () => {
+    // The loop's own fail-open path: when a limit message carries no readable
+    // reset time the loop notifies and leaves loopWaitUntil null, so the next
+    // poll falls through to auto-continue and resends into the exhausted CLI.
+    const woken = {
+      turnCompleteAt: 2_000,
+      lastActiveAt: 1_500,
+      armedAt: 1_000,
+      now: 2_000 + 10_000,
+      settleMs: 1_000
+    }
+    expect(loopContinueReady(woken)).toBe(true)
+    expect(loopContinueReady({ ...woken, quotaBlocked: true })).toBe(false)
+  })
+})

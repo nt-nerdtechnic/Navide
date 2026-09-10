@@ -180,3 +180,118 @@ describe('fullAutoStallAction', () => {
     expect(asked).toBe(1)
   })
 })
+
+// Manager mode skips the per-pane watchers, so a Manager that ran out of quota
+// prints no sentinel and nothing notices until the hour-long cap fires.
+describe('a Manager that ran out of quota', () => {
+  it('reports quota instead of burning the whole cap in silence', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: 'mgr', managerPaneAlive: true,
+      armedAt: 1_000, now: 1_000 + 60_000, maxDurationMs: HOUR,
+      managerQuotaBlocked: true,
+    })).toBe('quota')
+  })
+
+  it('prefers quota over timeout — the cause, not the symptom', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: 'mgr', managerPaneAlive: true,
+      armedAt: 1_000, now: 1_000 + 2 * HOUR, maxDurationMs: HOUR,
+      managerQuotaBlocked: true,
+    })).toBe('quota')
+  })
+
+  it('still prefers manager-gone — a dead Manager is not coming back either way', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: 'mgr', managerPaneAlive: false,
+      armedAt: 1_000, now: 2_000, maxDurationMs: HOUR,
+      managerQuotaBlocked: true,
+    })).toBe('manager-gone')
+  })
+
+  it('is still ok before the router poll armed', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: '', managerPaneAlive: false,
+      armedAt: 0, now: 10 * HOUR, maxDurationMs: HOUR,
+      managerQuotaBlocked: true,
+    })).toBe('ok')
+  })
+
+  it('leaves the verdict alone when the caller does not opt in', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: 'mgr', managerPaneAlive: true,
+      armedAt: 1_000, now: 1_000 + 60_000, maxDurationMs: HOUR,
+    })).toBe('ok')
+    expect(evaluateManagerStage({
+      managerPaneId: 'mgr', managerPaneAlive: true,
+      armedAt: 1_000, now: 1_000 + 60_000, maxDurationMs: HOUR,
+      managerQuotaBlocked: false,
+    })).toBe('ok')
+  })
+
+  it('waits instead of force-advancing under Full auto', () => {
+    // The only Manager verdict that is a wait something can end: the quota
+    // window resets on its own. Force-advancing here is a cascade, not a
+    // decision — the next stage's panes are very likely the same account.
+    expect(fullAutoStallAction({
+      managerVerdict: 'quota',
+      multiSlot: true,
+      slotsFinished: () => false,
+    })).toBe('keep-waiting')
+  })
+
+  it('does not consult the slot gate for a quota verdict', () => {
+    // Reading it walks every pane's buffer, and for a Manager stage the answer
+    // is structurally false anyway.
+    let asked = false
+    fullAutoStallAction({
+      managerVerdict: 'quota',
+      multiSlot: true,
+      slotsFinished: () => { asked = true; return false },
+    })
+    expect(asked).toBe(false)
+  })
+
+  it('keeps force-advancing the other Manager verdicts', () => {
+    for (const verdict of ['manager-gone', 'timeout'] as const) {
+      expect(fullAutoStallAction({
+        managerVerdict: verdict,
+        multiSlot: true,
+        slotsFinished: () => false,
+      })).toBe('force-advance')
+    }
+  })
+})
+
+// A single-slot stage force-advances blind — that branch is why the stage-level
+// quota arm has to exist separately from the Manager verdict.
+describe('a non-Manager stage whose pane ran out of quota', () => {
+  it('waits instead of force-advancing a single-slot stage', () => {
+    expect(fullAutoStallAction({
+      multiSlot: false,
+      slotsFinished: () => false,
+    })).toBe('force-advance')
+    expect(fullAutoStallAction({
+      quotaBlocked: true,
+      multiSlot: false,
+      slotsFinished: () => false,
+    })).toBe('keep-waiting')
+  })
+
+  it('answers before the slot thunk is consulted', () => {
+    let asked = false
+    fullAutoStallAction({
+      quotaBlocked: true,
+      multiSlot: true,
+      slotsFinished: () => { asked = true; return true },
+    })
+    expect(asked).toBe(false)
+  })
+
+  it('leaves a caller that does not opt in exactly as it was', () => {
+    expect(fullAutoStallAction({
+      quotaBlocked: false,
+      multiSlot: false,
+      slotsFinished: () => false,
+    })).toBe('force-advance')
+  })
+})
