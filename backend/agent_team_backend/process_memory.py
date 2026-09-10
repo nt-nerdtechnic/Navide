@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 
-from . import proc_rusage
+from . import osplat
 
 log = logging.getLogger(__name__)
 
@@ -45,12 +45,17 @@ _MAX_PIDS = 4000
 
 
 def available() -> bool:
-    """Whether footprint can be expected to work at all.
+    """Whether a memory figure can be produced at all on this platform.
 
-    Darwin-only; every other platform gets the panel's "not available" state
-    rather than a wrong number from a fallback that measures something else.
+    Darwin has both the syscall and the `footprint(1)` fallback below. Linux
+    answers through `/proc` PSS when the kernel exposes `smaps_rollup` (see
+    `osplat._linux`), which charges shared pages the same proportional way
+    `phys_footprint` does — so the column stays comparable across platforms.
+
+    Anywhere else the panel gets its "not available" state rather than a wrong
+    number from a fallback that measures something else.
     """
-    return sys.platform == "darwin"
+    return sys.platform == "darwin" or osplat.resource_probe.available()
 
 
 def footprints(pids: list[int]) -> dict[int, int]:
@@ -66,13 +71,14 @@ def footprints(pids: list[int]) -> dict[int, int]:
         if unique:
             log.info("footprint sweep skipped: %d pids over the cap", len(unique))
         return {}
-    sampled = proc_rusage.sample(unique)
+    sampled = osplat.resource_probe.sample(unique)
     if sampled:
         return {pid: bytes_ for pid, (bytes_, _cpu) in sampled.items()}
-    # Either the syscall is unavailable on this build, or every target died
+    # Either the probe is unavailable on this build, or every target died
     # between the caller listing them and the sweep. The subprocess path
-    # answers both the same way it always did.
-    if proc_rusage.available():
+    # answers both the same way it always did — but only on Darwin, which is
+    # the only platform that has `footprint(1)` to fall back to.
+    if osplat.resource_probe.available() or sys.platform != "darwin":
         return {}
     try:
         proc = subprocess.run(

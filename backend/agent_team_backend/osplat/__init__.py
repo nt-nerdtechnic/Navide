@@ -1,0 +1,56 @@
+"""The one place in the backend that asks which operating system this is.
+
+Every other module imports a capability from here and uses it unconditionally.
+That is the rule this package exists to make enforceable: `test_osplat.py`
+asserts that no feature module outside `osplat/` branches on `sys.platform`,
+so a new platform branch has to be written as an implementation rather than as
+an `if` in the middle of a feature.
+
+Selection happens once, at import. The alternative — resolving per call — buys
+nothing (the answer cannot change while the process runs) and costs a branch
+on paths that sample on a timer.
+"""
+
+from __future__ import annotations
+
+import sys
+
+from . import spec
+
+if sys.platform == "darwin":
+    from . import _darwin as _impl
+elif sys.platform.startswith("linux"):
+    from . import _linux as _impl
+elif sys.platform == "win32":
+    from . import _windows as _impl
+else:  # pragma: no cover - BSDs and friends
+    # Not "raise": an unknown POSIX is much closer to Linux than to nothing,
+    # and every seam degrades to unavailable on its own if the guess is wrong.
+    from . import _linux as _impl
+
+#: Which implementation module was selected. Exposed for diagnostics and for
+#: the tests that assert the selection, not for callers to branch on.
+impl_name: str = _impl.__name__.rsplit(".", 1)[-1]
+
+#: This machine's platform, normalised to the three the code has arms for.
+#:
+#: For the callers that legitimately need the *identity* rather than a
+#: capability. Two shapes qualify: a lookup keyed by platform (the onboarding
+#: registry declaring which entries exist where), and a user-facing string that
+#: names something platform-specific ("a macOS permission dialog"). Reading
+#: `sys.platform` for either would work but puts the branch back in the feature
+#: module, which is what the ratchet in `test_osplat.py` exists to stop.
+#:
+#: What does *not* qualify is a difference in behaviour: two ways of opening a
+#: PTY, of storing a secret, of measuring memory. Those want an implementation
+#: in `_darwin`/`_linux`/`_windows` behind a Protocol, not an `if` here.
+platform_id: str = (
+    "darwin" if sys.platform == "darwin"
+    else "win32" if sys.platform == "win32"
+    else "linux"
+)
+
+paths: spec.Paths = _impl.paths
+resource_probe: spec.ResourceProbe = _impl.resource_probe
+
+__all__ = ["impl_name", "paths", "resource_probe", "spec"]

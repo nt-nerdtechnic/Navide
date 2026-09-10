@@ -62,6 +62,7 @@ from . import (
     device_pairing,
     device_signing,
     device_trust,
+    osplat,
     pane_policy,
     remote_roster,
     trust_store,
@@ -783,9 +784,19 @@ class ServerLink:
         if self.state() != STATE_WAITING_KEYCHAIN:
             return ""
         waited = max(0, int(time.time() - self.config_read_started))
+        # The state is worth surfacing on every platform — a credential read
+        # that has not returned in seconds is stuck on something — but only
+        # macOS has a Keychain dialog to go and click. Told to a Linux user
+        # whose home is on a slow disk, that sentence sends them looking for a
+        # window that does not exist.
+        if osplat.platform_id == "darwin":
+            return (
+                "waiting for Keychain access — a macOS permission dialog may be "
+                f"open ({waited}s so far); the link has not dialled yet"
+            )
         return (
-            "waiting for Keychain access — a macOS permission dialog may be "
-            f"open ({waited}s so far); the link has not dialled yet"
+            f"the stored credential is taking unusually long to read ({waited}s "
+            "so far); the link has not dialled yet"
         )
 
     async def _read_config(self) -> Any:

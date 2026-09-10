@@ -122,8 +122,6 @@ CLAUDE_CLI_READ_INTERVAL = 900.0
 # null limits on dollar-based plans, and Bearer against usage-summary itself
 # returns 401 (measured 2026-08-05).
 CURSOR_KEYCHAIN_SERVICE = "cursor-access-token"
-CURSOR_IDE_STATE_DB_REL = ("Library", "Application Support", "Cursor",
-                           "User", "globalStorage", "state.vscdb")
 CURSOR_IDE_TOKEN_KEY = "cursorAuth/accessToken"
 CURSOR_USAGE_SUMMARY_URL = "https://cursor.com/api/usage-summary"
 RESET_BOUNDARY_GRACE = 30.0
@@ -252,8 +250,9 @@ from .cli_vendors.copilot import (  # noqa: E402,F401
     read_copilot_hosts_token,
 )
 from .cli_vendors.cursor import (  # noqa: E402,F401
-    CURSOR_IDE_STATE_DB_REL,
+    CURSOR_IDE_STATE_DB_SUFFIX,
     CURSOR_IDE_TOKEN_KEY,
+    cursor_ide_state_db_path,
     CURSOR_KEYCHAIN_SERVICE,
     CURSOR_USAGE_SUMMARY_URL,
     cursor_token_expired,

@@ -79,7 +79,16 @@ from ..log_readers.base import (
     join_text_blocks,
     user_prompt_text,
 )
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import (
+    Dep,
+    McpServerConfig,
+    McpValue,
+    McpWiring,
+    SkillsWiring,
+    VendorSpec,
+    command_text,
+    platform_paths,
+)
 from ..usage_common import (
     HTTP_TIMEOUT,
     _KEYCHAIN_COOLDOWN_S,
@@ -544,8 +553,13 @@ CursorLogReader.pane_cwd_match = _pane_cwd_match
 # ---- usage quota -----------------------------------------------------------
 
 CURSOR_KEYCHAIN_SERVICE = "cursor-access-token"
-CURSOR_IDE_STATE_DB_REL = ("Library", "Application Support", "Cursor",
-                           "User", "globalStorage", "state.vscdb")
+#: Where Cursor keeps `state.vscdb` *below* its own application-support
+#: directory. The part above it differs per platform — `~/Library/Application
+#: Support` on macOS, `~/.config` on Linux, `%APPDATA%` on Windows — so it is
+#: resolved through the platform seam rather than spelled out here. Written as
+#: a macOS-shaped tuple, this reader could only ever find the database on
+#: macOS, even though Cursor ships on all three.
+CURSOR_IDE_STATE_DB_SUFFIX = ("User", "globalStorage", "state.vscdb")
 CURSOR_IDE_TOKEN_KEY = "cursorAuth/accessToken"
 CURSOR_USAGE_SUMMARY_URL = "https://cursor.com/api/usage-summary"
 
@@ -587,10 +601,22 @@ def cursor_token_expired(token: str, now: float | None = None) -> bool:
     return now >= exp
 
 
+def cursor_ide_state_db_path(home: Path) -> Path:
+    """`state.vscdb` for this platform, below `home`.
+
+    `home` is passed rather than assumed because the credential vault runs
+    CLIs under per-pane home directories; resolving against the real user
+    directory would read the wrong account's database.
+    """
+    return platform_paths.app_support_dir("Cursor", home=home).joinpath(
+        *CURSOR_IDE_STATE_DB_SUFFIX
+    )
+
+
 def read_cursor_ide_token(home: Path) -> str | None:
     """The Cursor IDE fallback: the ``cursorAuth/accessToken`` ItemTable row of
     ``state.vscdb`` (sqlite, opened read-only) holds the raw session JWT."""
-    path = home.joinpath(*CURSOR_IDE_STATE_DB_REL)
+    path = cursor_ide_state_db_path(home)
     if not path.is_file():
         return None
     try:

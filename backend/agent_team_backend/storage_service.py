@@ -39,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import osplat
 from .applog import app_data_dir
 from .credential_vault import LOGIN_HOME_DIRNAME
 from .db import DB_FILENAME, MIGRATED_SUFFIX
@@ -156,7 +157,7 @@ def updater_cache_paths() -> list[Path]:
     update) — so reporting their bytes under a cleanable item would promise
     space that no cleanup can ever free.
     """
-    caches = Path.home() / "Library" / "Caches"
+    caches = osplat.paths.cache_dir()
     # Both spellings, because main matches `<appName>-updater` for the package
     # name *and* the (renamed) product name.
     found = [caches / f"{name}-updater" for name in ("agent-team", "Navide")]
@@ -510,7 +511,7 @@ def _appdata_and_electron_groups(
             "updaterCache",
             risk="safe",
             cleanable=True,
-            root=Path.home() / "Library" / "Caches",
+            root=osplat.paths.cache_dir(),
             paths=updater_cache_paths(),
             handled_by="electron",
             note="Downloaded update payloads; refetched if an update is needed.",

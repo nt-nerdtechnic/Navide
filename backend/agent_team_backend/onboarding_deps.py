@@ -6,7 +6,10 @@ only renders backend-computed status — it never hardcodes commands. Install is
 driven by `dep_id` against this whitelist, mirroring the git-config allowlist
 security model.
 
-macOS-only by design (matches the project's platform assumption).
+Platform-aware: a dep declares which platforms it exists for and how each one
+installs it (`Dep.platforms` / `Dep.install_cmds`). A platform with no install
+command gets the docs link rather than a command naming a package manager that
+is not there — which is what every entry used to do off macOS.
 """
 
 from __future__ import annotations
@@ -27,8 +30,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from . import osplat
 from .applog import app_data_dir
-from .cli_vendors.base import Dep
+from .cli_vendors.base import Dep, PlatformInstall
 from .cli_vendors.registry import VENDORS
 from .db import DB_FILENAME, Database
 from .profiles_store import default_profiles_root
@@ -59,31 +63,62 @@ def _agent_cli_deps() -> list[Dep]:
 
 DEPS: list[Dep] = [
     # Step 1 — Foundation
+    # macOS-only by definition. Listed at all on Linux it would read as
+    # "your machine is missing something", when what is missing is a package
+    # manager for a different operating system.
     Dep("homebrew", "Homebrew", "macOS package manager", "foundation",
         ["brew", "--version"], r"Homebrew (\d+\.\d+\.\d+)",
-        install_cmd='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-        needs_terminal=True, requires_binaries=("curl",), docs_url="https://brew.sh"),
+        needs_terminal=True, requires_binaries=("curl",), docs_url="https://brew.sh",
+        platforms=("darwin",),
+        install_cmds={
+            "darwin": PlatformInstall(
+                '/bin/bash -c "$(curl -fsSL '
+                'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+                ("curl",),
+                needs_terminal=True,
+            ),
+        }),
     # Unversioned formula on purpose: node@22 is keg-only, so `node` would
     # stay off PATH after a successful install and detection would never pass.
+    #
+    # No Linux entry: Node ships no official install script, and every
+    # distribution's own package is a different command with a different
+    # version policy. Guessing one would be worse than the docs link.
     Dep("node", "Node.js", "JavaScript runtime (≥ 22)", "foundation",
         ["node", "--version"], r"v?(\d+\.\d+\.\d+)", min_version="22.0.0",
-        install_cmd="brew install node", requires_binaries=("brew",),
-        docs_url="https://nodejs.org"),
+        docs_url="https://nodejs.org",
+        install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))}),
     Dep("pnpm", "pnpm", "Package manager", "foundation",
         ["pnpm", "--version"], r"(\d+\.\d+\.\d+)",
-        install_cmd="brew install pnpm", requires_binaries=("brew",),
-        docs_url="https://pnpm.io"),
+        docs_url="https://pnpm.io",
+        install_cmds={
+            "darwin": PlatformInstall("brew install pnpm", ("brew",)),
+            # pnpm's own installer, from pnpm.io. Writes under the user's home
+            # and needs no elevation, so it can run inline like the brew one.
+            "linux": PlatformInstall(
+                "curl -fsSL https://get.pnpm.io/install.sh | sh -", ("curl",)
+            ),
+        }),
     # Unversioned formula on purpose: versioned kegs (python@3.12) only link
     # `python3.12`, never `python3`, so detection (`python3 --version`) would
     # keep failing after a successful install.
+    #
+    # No Linux entry: python3 is present on every distribution we would ship
+    # to, and replacing a distribution's Python is a good way to break it.
     Dep("python", "Python", "Python 3.12+", "foundation",
         ["python3", "--version"], r"Python (\d+\.\d+\.\d+)", min_version="3.12.0",
-        install_cmd="brew install python3", requires_binaries=("brew",),
-        docs_url="https://python.org"),
+        docs_url="https://python.org",
+        install_cmds={"darwin": PlatformInstall("brew install python3", ("brew",))}),
     Dep("uv", "uv", "Python package and environment manager", "foundation",
         ["uv", "--version"], r"uv (\d+\.\d+\.\d+)",
-        install_cmd="brew install uv", requires_binaries=("brew",),
-        docs_url="https://docs.astral.sh/uv"),
+        docs_url="https://docs.astral.sh/uv",
+        install_cmds={
+            "darwin": PlatformInstall("brew install uv", ("brew",)),
+            # Astral's own installer. Unpacks into ~/.local/bin, no elevation.
+            "linux": PlatformInstall(
+                "curl -LsSf https://astral.sh/uv/install.sh | sh", ("curl",)
+            ),
+        }),
 
     # Step 2 — Agent CLIs (≥ 1 required) + Analyzer.
     # Each vendor declares its own entry (cli_vendors/<key>.py, spec.install_dep);
@@ -91,11 +126,31 @@ DEPS: list[Dep] = [
     *_agent_cli_deps(),
     Dep("ollama", "Ollama", "Local LLM runtime (required for Analyzer)", "analyzer",
         ["ollama", "--version"], r"(\d+\.\d+\.\d+)",
-        install_cmd="brew install ollama", requires_binaries=("brew",),
-        docs_url="https://ollama.com"),
+        docs_url="https://ollama.com",
+        install_cmds={
+            "darwin": PlatformInstall("brew install ollama", ("brew",)),
+            # Ollama's official Linux installer calls sudo to place the binary
+            # and register a systemd unit, so unlike the other two it has to be
+            # handed to a real terminal where the password prompt is visible.
+            "linux": PlatformInstall(
+                "curl -fsSL https://ollama.com/install.sh | sh",
+                ("curl",),
+                needs_terminal=True,
+            ),
+        }),
 ]
 
 DEPS_BY_ID: dict[str, Dep] = {d.id: d for d in DEPS}
+
+
+def applicable_deps() -> list[Dep]:
+    """The deps worth showing on this machine.
+
+    Only the wizard's listing is filtered; `DEPS_BY_ID` keeps every entry so an
+    install request naming a dep this platform hides is still recognised and
+    refused with a reason, rather than looking like an unknown id.
+    """
+    return [dep for dep in DEPS if dep.applies_to(osplat.platform_id)]
 
 # A model whose presence satisfies the analyzer requirement is any installed
 # Ollama model; we surface the list so the UI can offer a pull if empty.
@@ -299,6 +354,10 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
             duration_ms = max(0, round((time.monotonic() - started) * 1000))
             status = "missing"
             version = ""
+    # Resolved once: `can_install`, `needs_terminal` and `install_cmd` below
+    # all have to describe the same install, or the dialog shows one command
+    # and runs another.
+    _install = dep.install_for(osplat.platform_id)
     return {
         "id": dep.id,
         "label": dep.label,
@@ -308,11 +367,11 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         "version": version,
         "min_version": dep.min_version,
         "optional": dep.optional,
-        "needs_terminal": dep.needs_terminal,
-        "can_install": bool(dep.install_cmd),
+        "needs_terminal": _install.needs_terminal,
+        "can_install": bool(_install.command),
         # Surfaced so the install dialog can show exactly what will run before
         # the user agrees to it — the renderer still never composes a command.
-        "install_cmd": dep.install_cmd,
+        "install_cmd": _install.command,
         # Prerequisites with their CURRENT state, so the guided install can show
         # "Homebrew is missing" during its check step instead of only after the
         # install command has already failed.
@@ -701,7 +760,7 @@ def quick_status() -> dict[str, Any]:
     paint so a missing CLI reads "not installed" immediately instead of after
     the full batch's slowest --version probe; a get_status pass follows and
     replaces it (real versions, ollama, cli_health)."""
-    deps = [detect_dep(dep, quick=True) for dep in DEPS]
+    deps = [detect_dep(dep, quick=True) for dep in applicable_deps()]
     return {
         "deps": deps,
         "models": [],
@@ -729,7 +788,7 @@ def get_status(fresh: bool = False) -> dict[str, Any]:
         max_workers=min(len(DEPS) + 1, 8), thread_name_prefix="dep-probe"
     ) as pool:
         models_future = pool.submit(detect_ollama_status)
-        deps = list(pool.map(detect_dep, DEPS))
+        deps = list(pool.map(detect_dep, applicable_deps()))
         ollama = models_future.result()
     models = list(ollama["models"])
     return {
@@ -762,7 +821,7 @@ def maintenance_command(dep_id: str, action: str) -> dict[str, Any]:
     command = {
         "update": dep.update_cmd,
         "doctor": dep.doctor_cmd,
-        "install": dep.install_cmd,
+        "install": dep.install_for(osplat.platform_id).command,
     }[action]
     if not command:
         return {
@@ -780,8 +839,13 @@ INSTALL_TIMEOUT_S = 900
 
 
 def missing_requirements(dep: Dep) -> list[str]:
-    """Bootstrap binaries `dep.install_cmd` needs that are not on PATH."""
-    return [name for name in dep.requires_binaries if shutil.which(name) is None]
+    """Bootstrap binaries this platform's install needs that are not on PATH.
+
+    Resolved per platform because the requirement differs with the command:
+    the macOS install of `uv` needs Homebrew, the Linux one needs curl.
+    """
+    install = dep.install_for(osplat.platform_id)
+    return [name for name in install.requires_binaries if shutil.which(name) is None]
 
 
 def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
@@ -817,7 +881,14 @@ def install_dep(dep_id: str) -> dict[str, Any]:
         log.warning("install rejected: unknown dependency %r", dep_id)
         return {"ok": False, "error": f"unknown dependency: {dep_id!r}"}
     context = {"dep_id": dep.id, "label": dep.label, "docs_url": dep.docs_url}
-    if not dep.install_cmd:
+    if not dep.applies_to(osplat.platform_id):
+        return {
+            **context,
+            "ok": False,
+            "error": f"{dep.label} does not apply to this platform",
+        }
+    install = dep.install_for(osplat.platform_id)
+    if not install.command:
         return {**context, "ok": False, "error": "no install command for this dependency"}
     # Bootstrap gate: `brew install …` on a Mac without Homebrew only ever
     # produced a bare exit 127. Name the real blocker instead.
@@ -832,17 +903,17 @@ def install_dep(dep_id: str) -> dict[str, Any]:
                 f"Install {missing[0]} first, then retry."
             ),
             "missing_requirements": missing,
-            "command": dep.install_cmd,
+            "command": install.command,
         }
-    if dep.needs_terminal:
+    if install.needs_terminal:
         # Caller (frontend → main process) opens Terminal.app with this command.
         log.info("install for %s handed to an external terminal", dep.id)
-        return {**context, "ok": True, "needs_terminal": True, "command": dep.install_cmd}
+        return {**context, "ok": True, "needs_terminal": True, "command": install.command}
     # start_new_session puts the shell and its children in their own process
     # group so a timeout can reap the whole tree (see _terminate_process_group).
     try:
         proc = subprocess.Popen(
-            dep.install_cmd,
+            install.command,
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -851,7 +922,7 @@ def install_dep(dep_id: str) -> dict[str, Any]:
         )
     except OSError as exc:
         log.warning("install for %s could not start: %s", dep.id, exc)
-        return {**context, "ok": False, "error": str(exc), "command": dep.install_cmd}
+        return {**context, "ok": False, "error": str(exc), "command": install.command}
     try:
         stdout, stderr = proc.communicate(timeout=INSTALL_TIMEOUT_S)
     except subprocess.TimeoutExpired:
@@ -861,12 +932,12 @@ def install_dep(dep_id: str) -> dict[str, Any]:
             **context,
             "ok": False,
             "error": f"install timed out after {INSTALL_TIMEOUT_S}s",
-            "command": dep.install_cmd,
+            "command": install.command,
         }
     output = (stdout or "") + (stderr or "")
     if proc.returncode == 0:
         log.info("install for %s succeeded", dep.id)
-        return {**context, "ok": True, "output": output, "command": dep.install_cmd}
+        return {**context, "ok": True, "output": output, "command": install.command}
     # The frontend reports `error`; returning only `output` here is what made
     # every failed install read as "unknown".
     # Logged too: the wizard's in-memory log dies with the modal, so a failed
@@ -880,7 +951,7 @@ def install_dep(dep_id: str) -> dict[str, Any]:
         "ok": False,
         "error": output.strip() or f"exit code {proc.returncode}",
         "output": output,
-        "command": dep.install_cmd,
+        "command": install.command,
     }
 
 

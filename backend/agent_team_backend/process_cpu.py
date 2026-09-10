@@ -28,7 +28,7 @@ import subprocess
 import sys
 import time
 
-from . import proc_rusage
+from . import osplat
 
 log = logging.getLogger(__name__)
 
@@ -102,13 +102,13 @@ def cpu_times(pids: list[int]) -> tuple[dict[int, float], float]:
         if unique:
             log.info("cpu sweep skipped: %d pids over the cap", len(unique))
         return {}, taken_at
-    sampled = proc_rusage.sample(unique)
+    sampled = osplat.resource_probe.sample(unique)
     if sampled:
         return {pid: cpu for pid, (_bytes, cpu) in sampled.items()}, time.time()
-    # Either the syscall is unavailable on this platform, or every target died
+    # Either the probe is unavailable on this platform, or every target died
     # between the caller listing them and the sweep. `ps` answers both the same
     # way it always did.
-    if proc_rusage.available():
+    if osplat.resource_probe.available():
         return {}, time.time()
     try:
         proc = subprocess.run(
