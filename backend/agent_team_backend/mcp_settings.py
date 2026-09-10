@@ -342,3 +342,11 @@ class MCPSettingsStore:
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
+        # The revision is the file's mtime, which Linux advances per kernel tick
+        # (milliseconds), so a rewrite inside the tick that stamped
+        # `actual_revision` would leave it unchanged and a stale writer could
+        # not be told apart from a fresh one. Nudge it past every value a
+        # reader may already hold.
+        if self.revision <= actual_revision:
+            bumped = actual_revision + 1
+            os.utime(self._path, ns=(bumped, bumped))
