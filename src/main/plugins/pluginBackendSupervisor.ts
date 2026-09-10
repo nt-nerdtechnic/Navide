@@ -1323,7 +1323,12 @@ export class PluginBackendSupervisor {
     if (state.settledOnce || this.state !== 'ready') return
     const generation = this.currentGeneration
     if (!generation) {
-      this.failProcess(undefined, 'BACKEND_UNAVAILABLE')
+      this.failProcess(
+        undefined,
+        'BACKEND_UNAVAILABLE',
+        false,
+        new Error('subscription issued while no child generation is live'),
+      )
       return
     }
     const requestId = this.nextRequestId()
@@ -1357,8 +1362,8 @@ export class PluginBackendSupervisor {
           },
         }),
       )
-    } catch {
-      this.failProcess(generation, 'BACKEND_UNAVAILABLE')
+    } catch (error) {
+      this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, error)
     }
   }
 
@@ -2451,11 +2456,13 @@ export class PluginBackendSupervisor {
       }
       try {
         if (generation.exited || generation.child.stdin.destroyed || generation.child.stdin.writableEnded) {
-          throw new Error('closed')
+          throw new Error(
+            `child stdin not writable (exited=${generation.exited}, destroyed=${generation.child.stdin.destroyed}, ended=${generation.child.stdin.writableEnded})`,
+          )
         }
         this.writeFrame(generation, encodeFrame(frame))
-      } catch {
-        this.failProcess(generation, 'BACKEND_UNAVAILABLE')
+      } catch (error) {
+        this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, error)
       }
     })
   }
@@ -2639,8 +2646,9 @@ export class PluginBackendSupervisor {
       generation.child.stdin.writableEnded
     ) throw new Error('closed')
     if (generation.outputQueueBytes + frame.length > MAX_BACKEND_BRIDGE_QUEUE_BYTES) {
-      this.failProcess(generation, 'BACKEND_UNAVAILABLE')
-      throw new Error('output queue limit reached')
+      const overflow = new Error('output queue limit reached')
+      this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, overflow)
+      throw overflow
     }
     generation.outputQueue.push(frame)
     generation.outputQueueBytes += frame.length
@@ -2661,14 +2669,18 @@ export class PluginBackendSupervisor {
       generation.child.stdin.write(frame, (error?: Error | null) => {
         generation.outputWriting = false
         if (error) {
-          this.failProcess(generation, 'BACKEND_UNAVAILABLE')
+          // Keep the write error as the cause. Dropping it here left every
+          // stdin failure - EPIPE, a child that never came up, a spawn that
+          // failed after the first write - reported as a bare
+          // BACKEND_UNAVAILABLE with nothing to read.
+          this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, error)
           return
         }
         this.flushOutput(generation)
       })
-    } catch {
+    } catch (error) {
       generation.outputWriting = false
-      this.failProcess(generation, 'BACKEND_UNAVAILABLE')
+      this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, error)
     }
   }
 
