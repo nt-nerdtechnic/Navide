@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  isHighRiskExecutionPolicy,
   parseExecutionPolicy,
   parseExecutionPolicyJson,
   V2_SYSTEM_NAMESPACES,
@@ -194,6 +195,74 @@ describe('Execution Policy public contract', () => {
     expect(executionPolicyV1Schema.properties.system.items.enum).toEqual([...V2_SYSTEM_NAMESPACES])
     expect(executionPolicyV1Schema.properties.shell.items.pattern)
       .toBe('^[a-z0-9][a-z0-9._+-]*$')
+  })
+})
+
+describe('Execution Policy high-risk classification', () => {
+  /** Denylist shapes that genuinely hand an agent an unbounded grant,
+   * including the exact 2026-09-10 review bypass: one junk entry per axis,
+   * which denies nothing real yet used to read as a constrained policy. */
+  const denylistPolicies: ExecutionPolicy[] = [
+    { schemaVersion: 1, mode: 'denylist', system: [], shell: [] },
+    { schemaVersion: 1, mode: 'denylist', system: ['aiCli'], shell: [] },
+    { schemaVersion: 1, mode: 'denylist', system: [], shell: ['zzz-not-a-binary'] },
+    { schemaVersion: 1, mode: 'denylist', system: ['aiCli'], shell: ['zzz-not-a-binary'] },
+    { schemaVersion: 1, mode: 'denylist', system: ['aiCli'], shell: ['sudo'] },
+  ]
+
+  it('classifies every denylist as high risk, whatever its arrays contain', () => {
+    // Counted, not sampled: nothing may escape the gate, and the escape set is
+    // reported by value so a regression names the shape that slipped through.
+    const escaped = denylistPolicies.filter((policy) => !isHighRiskExecutionPolicy(policy))
+    expect(escaped).toEqual([])
+    expect(denylistPolicies.filter((policy) => isHighRiskExecutionPolicy(policy)))
+      .toHaveLength(denylistPolicies.length)
+    // Each policy above must survive validation, or the test would be proving
+    // the gate on inputs the Host can never store.
+    for (const policy of denylistPolicies) expect(parseExecutionPolicy(policy)).toEqual(policy)
+  })
+
+  it('CHARACTERIZATION (known over-warning): flags a deny-everything denylist that actually grants nothing', () => {
+    // This pins current behavior, NOT correct semantics. A denylist naming
+    // every namespace and every Host-supported executable grants nothing at
+    // all — after the 2026-09-10 shell fix its effective grant is empty on
+    // both axes, so it is the strictest policy expressible — yet it is
+    // classified high risk and the user is asked to confirm it.
+    //
+    // Why it is like this: `system` is drawn from the closed V2 namespace set
+    // and could be measured here, but `shell` is an open vocabulary at the
+    // contract layer, and this package must not reach into the Host's
+    // HOST_SHELL_EXECUTABLE_ALLOWLIST (that would invert the dependency
+    // between the public contract and one Host's enforcement).
+    //
+    // The error is fail-safe: it asks for a confirmation that is not needed,
+    // which is the opposite direction from the bypass being fixed. That is why
+    // it ships as-is.
+    //
+    // When to revisit: if per-axis judgement lands (an optional Host-supplied
+    // shell vocabulary passed into isHighRiskExecutionPolicy), this expectation
+    // must flip to `false` and this test should be deleted rather than updated.
+    const denyEverything: ExecutionPolicy = {
+      schemaVersion: 1,
+      mode: 'denylist',
+      system: [...V2_SYSTEM_NAMESPACES],
+      shell: [...HOST_DEFAULT_EXECUTION_POLICY.shell],
+    }
+    expect(parseExecutionPolicy(denyEverything)).toEqual(denyEverything)
+    expect(isHighRiskExecutionPolicy(denyEverything)).toBe(true)
+  })
+
+  it('keeps full high risk and leaves every allowlist low risk', () => {
+    expect(isHighRiskExecutionPolicy(FULL_POLICY)).toBe(true)
+    const allowlistPolicies: ExecutionPolicy[] = [
+      { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      { schemaVersion: 1, mode: 'allowlist', system: ['fs'], shell: ['git'] },
+      // Naming every namespace and every Host executable is still bounded by
+      // what it names, so the Host default policy must not need confirmation.
+      { schemaVersion: 1, mode: 'allowlist', system: ['fs', 'ui', 'aiCli'], shell: ['git', 'gh', 'glab'] },
+    ]
+    expect(allowlistPolicies.filter((policy) => isHighRiskExecutionPolicy(policy))).toEqual([])
+    expect(isHighRiskExecutionPolicy(HOST_DEFAULT_EXECUTION_POLICY)).toBe(false)
   })
 })
 

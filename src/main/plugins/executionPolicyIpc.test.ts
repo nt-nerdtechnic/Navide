@@ -54,6 +54,16 @@ const UNRESTRICTED_SYSTEM_DENYLIST_POLICY: ExecutionPolicy = {
   shell: ['sudo'],
 }
 
+/** One entry per axis and neither denies anything the agent would have used:
+ * `aiCli` leaves `fs` and `ui` granted, and a name no binary answers to leaves
+ * every executable granted. Spelling, not authority. */
+const JUNK_ENTRY_DENYLIST_POLICY: ExecutionPolicy = {
+  schemaVersion: 1,
+  mode: 'denylist',
+  system: ['aiCli'],
+  shell: ['zzz-not-a-binary'],
+}
+
 function temporaryUserData(): string {
   return mkdtempSync(join(tmpdir(), 'navide-execution-policy-ipc-'))
 }
@@ -206,14 +216,50 @@ describe('execution policy IPC', () => {
     }
   })
 
-  it('still selects a constrained denylist recommendation without confirmation', async () => {
+  it('requires confirmation for a repository denylist that only looks constrained', async () => {
+    // One junk entry per axis denies nothing real: the denylist still hands the
+    // agent two system namespaces and every executable. It used to be selectable
+    // with no confirmation at all, which is how a repository file could raise an
+    // agent's authority silently.
+    for (const shell of [['zzz-not-a-binary'], ['sudo']]) {
+      const userData = temporaryUserData()
+      try {
+        const workspacePath = join(userData, 'workspace')
+        mkdirSync(join(workspacePath, '.navide'), { recursive: true })
+        writeFileSync(
+          join(workspacePath, '.navide/execution-policy.json'),
+          JSON.stringify({ schemaVersion: 1, mode: 'denylist', system: ['aiCli'], shell }),
+        )
+        const store = new ExecutionPolicySourceStore(userData)
+        handlers.clear()
+        registerPolicyIpc(store, workspacePath)
+        const before = store.getEffectivePolicy(workspacePath)
+        const request = { source: 'repository', expectedFingerprint: before.recommendation.fingerprint }
+
+        const denied = await call('execution-policy:select-source', { workspacePath, request })
+        expect(denied).toMatchObject({ ok: false, error: { code: 'high-risk-confirmation-required' } })
+        expect(store.getEffectivePolicy(workspacePath)).toEqual(before)
+
+        const accepted = await call('execution-policy:select-source', {
+          workspacePath,
+          request,
+          highRiskConfirmed: true,
+        })
+        expect(accepted).toMatchObject({ ok: true, changed: true })
+      } finally {
+        rmSync(userData, { recursive: true, force: true })
+      }
+    }
+  })
+
+  it('still selects a constrained allowlist recommendation without confirmation', async () => {
     const userData = temporaryUserData()
     try {
       const workspacePath = join(userData, 'workspace')
       mkdirSync(join(workspacePath, '.navide'), { recursive: true })
       writeFileSync(
         join(workspacePath, '.navide/execution-policy.json'),
-        JSON.stringify({ schemaVersion: 1, mode: 'denylist', system: ['aiCli'], shell: ['sudo'] }),
+        JSON.stringify({ schemaVersion: 1, mode: 'allowlist', system: ['aiCli'], shell: ['git'] }),
       )
       const store = new ExecutionPolicySourceStore(userData)
       handlers.clear()
@@ -241,6 +287,7 @@ describe('execution policy IPC', () => {
         UNRESTRICTED_DENYLIST_POLICY,
         UNRESTRICTED_SHELL_DENYLIST_POLICY,
         UNRESTRICTED_SYSTEM_DENYLIST_POLICY,
+        JUNK_ENTRY_DENYLIST_POLICY,
       ]) {
         const denied = await call<{ ok: boolean; error?: { code: string } }>(
           'execution-policy:set-user',

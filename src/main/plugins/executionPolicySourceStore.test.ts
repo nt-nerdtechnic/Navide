@@ -115,6 +115,69 @@ function expectSourceSnapshot(
 }
 
 describe('ExecutionPolicySourceStore', () => {
+  it('keeps an already-stored denylist working after the high-risk rule tightened', () => {
+    // Upgrade regression guard. Since 2026-09-10 every denylist counts as high
+    // risk, and the confirmation flag is a per-call IPC argument that is never
+    // persisted (the state file holds only { schemaVersion, revision,
+    // userPolicy } and parseExecutionPolicy rejects unknown policy fields). So
+    // the gate must sit on writes only: a policy an existing user already
+    // stored has to keep resolving on load, with no confirmation available to
+    // replay. Losing it would be a regression, not a fix.
+    const userData = temporaryRoot('navide-policy-migration-')
+    const workspace = temporaryRoot('navide-policy-migration-ws-')
+    try {
+      const denylist: ExecutionPolicy = {
+        schemaVersion: 1,
+        mode: 'denylist',
+        system: ['aiCli'],
+        shell: ['sudo'],
+      }
+      writeRecommendation(workspace, denylist)
+      const before = new ExecutionPolicySourceStore(userData)
+      before.setUserPolicy(denylist, workspace)
+      // Accept the repository denylist the way a pre-upgrade user would have:
+      // in this Host build that now needs confirmation, which is exactly why
+      // the reload below must not ask for it again.
+      const accepted = before.selectSource(
+        workspace,
+        repositorySelectionRequest(before, workspace),
+        { highRiskConfirmed: true },
+      )
+      expect(accepted.ok).toBe(true)
+
+      // A fresh instance over the same on-disk state is what an upgrade looks
+      // like: nothing in memory, nothing that remembers a confirmation.
+      const after = new ExecutionPolicySourceStore(userData)
+      expectSourceSnapshot(after.getEffectivePolicy(workspace), {
+        policy: denylist,
+        selectedSource: 'repository',
+        activeSource: 'repository',
+        status: 'active',
+      })
+      expect(after.getGlobalEffectivePolicy()).toMatchObject({
+        policy: denylist,
+        state: 'user',
+      })
+      // Nothing resembling a persisted confirmation exists to be trusted.
+      const persisted = readFileSync(sourceStateFile(userData), 'utf8')
+        + readFileSync(policyFile(userData, EXECUTION_POLICY_FILE), 'utf8')
+      expect(persisted).not.toMatch(/highRisk|confirmed/iu)
+
+      // And the tightened gate is still live for the next write: an existing
+      // user editing the policy is asked once, not silently waved through.
+      const reselect = after.selectSource(
+        workspace,
+        repositorySelectionRequest(after, workspace),
+        {},
+      )
+      expect(reselect.ok).toBe(false)
+      if (!reselect.ok) expect(reselect.error.code).toBe('high-risk-confirmation-required')
+    } finally {
+      rmSync(userData, { recursive: true, force: true })
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('inspects a repository recommendation without activating or mutating it', () => {
     const userData = temporaryRoot('navide-policy-source-user-')
     const workspacePath = temporaryRoot('navide-policy-source-workspace-')

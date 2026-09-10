@@ -89,11 +89,47 @@ describe('ExecutionPolicyPane', () => {
     expect(wrapper.get('.ep-recommendation-policy').text()).toContain('Denylist')
     expect(api.selectSource).not.toHaveBeenCalled()
 
+    // The recommendation is a denylist, and every denylist is high risk since
+    // 2026-09-10: accepting it needs the acknowledgement first, and the button
+    // stays inert until then.
+    expect((wrapper.get('.ep-accept-recommendation').element as HTMLButtonElement).disabled).toBe(true)
+    await wrapper.get('.ep-repository-full-confirmation').setValue(true)
     await wrapper.get('.ep-accept-recommendation').trigger('click')
     await flushPromises()
     expect(api.selectSource).toHaveBeenCalledWith({
       workspacePath: '/workspace',
       request: { source: 'repository', expectedFingerprint: 'a'.repeat(64) },
+      highRiskConfirmed: true,
+    })
+  })
+
+  it('always offers a working acknowledgement for a high-risk repository recommendation', async () => {
+    // There must be no dead end: whenever the repository source is gated, the
+    // control that lifts the gate is present, enabled, and actually lifts it.
+    const api = mockExecutionPolicy()
+    wrapper = mount(ExecutionPolicyPane, {
+      props: { workspacePath: '/workspace' },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    const acknowledgement = wrapper.find('.ep-repository-full-confirmation')
+    expect(acknowledgement.exists()).toBe(true)
+    expect((acknowledgement.element as HTMLInputElement).disabled).toBe(false)
+    expect((acknowledgement.element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.get('input[value="repository"]').element as HTMLInputElement).disabled).toBe(true)
+    expect((wrapper.get('.ep-accept-recommendation').element as HTMLButtonElement).disabled).toBe(true)
+
+    await acknowledgement.setValue(true)
+    expect((wrapper.get('input[value="repository"]').element as HTMLInputElement).disabled).toBe(false)
+    expect((wrapper.get('.ep-accept-recommendation').element as HTMLButtonElement).disabled).toBe(false)
+
+    await wrapper.get('.ep-accept-recommendation').trigger('click')
+    await flushPromises()
+    expect(api.selectSource).toHaveBeenCalledWith({
+      workspacePath: '/workspace',
+      request: { source: 'repository', expectedFingerprint: 'a'.repeat(64) },
+      highRiskConfirmed: true,
     })
   })
 
@@ -196,7 +232,9 @@ describe('ExecutionPolicyPane', () => {
     }
     await flushPromises()
 
-    expect(wrapper.get('.ep-full-warning').text()).toContain('arbitrary executables')
+    // A denylist gets the denylist wording, not Full mode's.
+    expect(wrapper.get('.ep-full-warning').text()).toContain('Denylist mode grants by default')
+    expect(wrapper.get('.ep-full-warning').text()).not.toContain('Full mode')
     expect(wrapper.get('.ep-save').attributes('disabled')).toBeDefined()
     await wrapper.get('.ep-full-confirmation').setValue(true)
     expect(wrapper.get('.ep-save').attributes('disabled')).toBeUndefined()
@@ -338,6 +376,9 @@ describe('ExecutionPolicyPane', () => {
     })
     await flushPromises()
 
+    // A denylist recommendation is high risk, so the radio is gated until the
+    // acknowledgement is given.
+    await wrapper.get('.ep-repository-full-confirmation').setValue(true)
     await wrapper.get('input[value="repository"]').setValue(true)
     await flushPromises()
 
@@ -356,12 +397,78 @@ describe('ExecutionPolicyPane', () => {
     })
     await flushPromises()
 
+    await wrapper.get('.ep-repository-full-confirmation').setValue(true)
     await wrapper.get('input[value="repository"]').setValue(true)
     await flushPromises()
 
     expect((wrapper.get('input[value="default"]').element as HTMLInputElement).checked).toBe(false)
     expect((wrapper.get('input[value="repository"]').element as HTMLInputElement).checked).toBe(false)
     expect(wrapper.get('.ep-error').text()).toContain('Execution Policy is unavailable')
+  })
+
+  it('states what a denylist actually grants instead of implying everything else runs', async () => {
+    // The Host intersects a denylist with its own supported-command list, so the
+    // editor must say so. The list is read from the snapshot's Host default
+    // policy — the same constant the enforcement point uses — never spelled out
+    // in the copy, so an extra Host command shows up here without a copy edit.
+    const initial = snapshot()
+    initial.defaultPolicy = {
+      ...initial.defaultPolicy,
+      shell: ['git', 'gh', 'glab', 'host-added-tool'],
+    }
+    mockExecutionPolicy(initial)
+    wrapper = mount(ExecutionPolicyPane, {
+      props: { workspacePath: '/workspace' },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.ep-shell-scope').exists()).toBe(false)
+    await wrapper.get('[data-mode="denylist"] input').setValue(true)
+
+    const scope = wrapper.get('.ep-shell-scope').text()
+    expect(scope).toContain('only the commands this Host supports')
+    // Sourced, not hard-coded: a name the fixture invented has to appear.
+    expect(scope).toContain('host-added-tool')
+    expect(scope).toContain('git, gh, glab, host-added-tool')
+    // And it must not leave the old "everything except these" reading standing.
+    expect(scope).toMatch(/has no effect/u)
+
+    // Back to allowlist mode the scope note is gone: it describes denylist only.
+    await wrapper.get('[data-mode="allowlist"] input').setValue(true)
+    expect(wrapper.find('.ep-shell-scope').exists()).toBe(false)
+  })
+
+  it('never calls a denylist "Full mode" in the high-risk warning or acknowledgement', async () => {
+    // Both the draft editor and the repository recommendation gate a denylist
+    // behind the same acknowledgement control, and the words the user attests to
+    // must describe the mode they actually chose.
+    mockExecutionPolicy()
+    wrapper = mount(ExecutionPolicyPane, {
+      props: { workspacePath: '/workspace' },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    // Repository recommendation: a denylist (see RECOMMENDED_POLICY).
+    const recommendationWarning = wrapper.get('[data-section="repository-recommendation"] .ep-warning').text()
+    expect(recommendationWarning).not.toContain('Full mode')
+    expect(recommendationWarning).not.toContain('arbitrary executables')
+    expect(recommendationWarning).toContain('Denylist mode grants by default')
+    expect(recommendationWarning).toContain('is not narrowed by the names I list')
+
+    // Draft editor: switching to denylist raises the same gate.
+    await wrapper.get('[data-mode="denylist"] input').setValue(true)
+    const draftWarning = wrapper.get('.ep-full-warning').text()
+    expect(draftWarning).not.toContain('Full mode')
+    expect(draftWarning).not.toContain('arbitrary executables')
+    expect(draftWarning).toContain('Denylist mode grants by default')
+
+    // Full mode keeps its own wording — the branch must not swallow it.
+    await wrapper.get('[data-mode="full"] input').setValue(true)
+    const fullWarning = wrapper.get('.ep-full-warning').text()
+    expect(fullWarning).toContain('Full mode allows arbitrary executables')
+    expect(fullWarning).not.toContain('Denylist mode grants by default')
   })
 
   it('uses mode-specific allow and deny language in the editors', async () => {
@@ -402,6 +509,7 @@ describe('ExecutionPolicyPane', () => {
     })
     await flushPromises()
 
+    await wrapper.get('.ep-repository-full-confirmation').setValue(true)
     await wrapper.get('input[value="repository"]').setValue(true)
     await flushPromises()
 
