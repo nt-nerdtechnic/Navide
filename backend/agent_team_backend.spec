@@ -24,21 +24,34 @@ a = Analysis(
         # Builtin backend plugins: the host discovers plugin dirs on disk
         # (plugin.json + backend.py) and imports backend.py by file path, so
         # both must exist as real files next to the extracted package.
+        # A plugin dir left out here is simply not discovered in a packaged
+        # build -- no error, the plugin is just gone. Every dir under
+        # plugins/builtin/ needs its own pair; test_pyinstaller_spec.py fails
+        # when a new one is added without them.
         ('agent_team_backend/plugins/builtin/navide_plans/plugin.json',
          'agent_team_backend/plugins/builtin/navide_plans'),
         ('agent_team_backend/plugins/builtin/navide_plans/backend.py',
          'agent_team_backend/plugins/builtin/navide_plans'),
+        ('agent_team_backend/plugins/builtin/navide_skills/plugin.json',
+         'agent_team_backend/plugins/builtin/navide_skills'),
+        ('agent_team_backend/plugins/builtin/navide_skills/backend.py',
+         'agent_team_backend/plugins/builtin/navide_skills'),
     ],
     hiddenimports=[
         # The top-level app object (imported by name in __main__.py, but listed
         # here as belt-and-suspenders for PyInstaller's graph walk).
         'agent_team_backend.app',
-        # Builtin navide.plans plugin modules: its backend.py is loaded by
-        # file path at runtime (never a static import), so PyInstaller's graph
-        # walk cannot see these — list them (their own imports, e.g.
+        # Builtin plugin modules: each backend.py is loaded by file path at
+        # runtime (never a static import), so PyInstaller's graph walk cannot
+        # see what it imports — list those here (their own imports, e.g.
         # plan_meta and the MCP server modules, are then traced normally).
-        'agent_team_backend.plugins.builtin.navide_plans.plan_mcp',
-        'agent_team_backend.plugins.builtin.navide_plans.plan_mcp_wiring',
+        # A stale name here fails silently: PyInstaller only warns, the plugin
+        # package then never reaches the PYZ, and the datas copy below is left
+        # as a namespace package whose submodules cannot be imported at all
+        # ("cannot import name 'plan_tools' ... (unknown location)").
+        # test_pyinstaller_spec.py holds these names to what exists on disk.
+        'agent_team_backend.plugins.builtin.navide_plans.plan_tools',
+        'agent_team_backend.plugins.builtin.navide_skills.skills_wiring',
         # uvicorn internals that are resolved at runtime, not import-time.
         'uvicorn.main',
         'uvicorn.lifespan.on',
