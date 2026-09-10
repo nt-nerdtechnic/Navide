@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend import onboarding_deps as ob
-from agent_team_backend.onboarding_deps import Dep
+from agent_team_backend.onboarding_deps import Dep, PlatformInstall
 
 
 # ── detect_dep: ok / outdated / missing ──────────────────────────────────────
@@ -75,6 +75,19 @@ def test_install_method_unknown_is_not_guessed(monkeypatch: pytest.MonkeyPatch, 
     _home(monkeypatch, tmp_path)
     assert ob._install_method("/usr/bin/claude") == "unknown"
     assert ob._install_method("") == ""
+
+
+def test_detect_dep_requirements_come_from_the_resolved_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The platform port moved the foundation deps' Homebrew requirement into
+    # install_cmds. `requirements` must follow it, or the wizard stops pulling
+    # Homebrew in ahead of node on a Mac that does not have it yet.
+    dep = Dep("node", "Node", "", "foundation", ["node", "--version"], r"v?(\d+\.\d+\.\d+)",
+              min_version="22.0.0",
+              install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))})
+    monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
+    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    r = ob.detect_dep(dep)
+    assert r["requirements"] == [{"name": "brew", "ok": False}]
 
 
 def test_detect_dep_exposes_official_maintenance_commands(monkeypatch: pytest.MonkeyPatch) -> None:

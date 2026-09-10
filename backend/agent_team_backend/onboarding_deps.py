@@ -377,7 +377,11 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         # install command has already failed.
         "requirements": [
             {"name": name, "ok": shutil.which(name) is not None}
-            for name in dep.requires_binaries
+            # Read the resolved install, not the Dep: the platform port moved
+            # the foundation deps' brew requirement into install_cmds, which
+            # left this list empty on macOS and the wizard no longer pulled
+            # Homebrew in ahead of node/pnpm/python/uv/ollama.
+            for name in _install.requires_binaries
         ],
         "docs_url": dep.docs_url,
         "binary_path": binary_path,
