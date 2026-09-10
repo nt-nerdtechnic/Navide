@@ -874,6 +874,35 @@ def test_store_replacement_resets_the_watermark(fake_copilot_root: Path) -> None
     assert [(e.input_tokens, e.output_tokens) for e in p2.events] == [(55, 6)]
 
 
+def test_store_replacement_on_a_reused_inode_resets_the_watermark(
+    fake_copilot_root: Path,
+) -> None:
+    """Linux hands a freed inode number to the next file created in its place,
+    so the replacement can carry the very identity the checkpoint recorded."""
+    reader = CopilotLogReader()
+    db = _store(fake_copilot_root)
+    _add_session(db)
+    _add_usage(db, input_tokens=100, output_tokens=10)
+    p1 = reader.parse_incremental(db, {})
+    assert len(p1.events) == 1
+
+    replacement = fake_copilot_root / "replacement.db"
+    con = sqlite3.connect(replacement)
+    con.executescript(_STORE_SCHEMA)
+    con.commit()
+    con.close()
+    _add_session(replacement, sid="sid-fresh", cwd=_CWD)
+    _add_usage(replacement, sid="sid-fresh", input_tokens=55, output_tokens=6)
+    os.replace(replacement, db)
+    stat = db.stat()
+    same_inode = {**p1.checkpoint, "identity": f"{stat.st_dev}:{stat.st_ino}"}
+
+    p2 = reader.parse_incremental(db, same_inode)
+    assert [(e.input_tokens, e.output_tokens) for e in p2.events] == [(55, 6)]
+    # The new store is now the tracked one: nothing is credited twice.
+    assert reader.parse_incremental(db, p2.checkpoint).events == []
+
+
 # ─────────────────────────── store activity ──────────────────────────────────
 
 def test_store_turn_row_emits_user_active_then_turn_complete(

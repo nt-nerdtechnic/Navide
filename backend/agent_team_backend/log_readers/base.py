@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -9,7 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 log = logging.getLogger("agent_team_backend.log_readers")
 
@@ -117,6 +118,23 @@ class TokenSinkResult:
     workspace_path: str = ""
 
 
+_ANCHOR_BYTES = 512
+
+
+def tail_anchor(fh: BinaryIO, end: int) -> str:
+    """Fingerprint of the bytes ending at `end` (up to `_ANCHOR_BYTES` of them).
+
+    Stored next to a byte-offset watermark so the next read can check the
+    file still holds what was consumed up to it. dev:ino alone cannot: Linux
+    hands a freed inode number to the next file created in its place, so a
+    replacement no shorter than the offset passes the identity and shrink
+    checks and gets read from the middle of a line.
+    """
+    start = max(0, end - _ANCHOR_BYTES)
+    fh.seek(start)
+    return hashlib.blake2b(fh.read(end - start), digest_size=8).hexdigest()
+
+
 def read_jsonl_tail(
     path: Path,
     checkpoint: dict[str, Any],
@@ -124,20 +142,26 @@ def read_jsonl_tail(
     """Read complete JSONL records after a byte offset.
 
     Returns ``(records, next_checkpoint, rotated)``. A partial trailing line is
-    intentionally left unread so a later append can complete it. File identity
-    and shrink checks prevent seeking into a replaced/truncated generation.
+    intentionally left unread so a later append can complete it. File identity,
+    shrink and tail-anchor checks prevent seeking into a replaced/truncated
+    generation.
     """
     stat = path.stat()
     identity = f"{stat.st_dev}:{stat.st_ino}"
     prior_identity = str(checkpoint.get("identity") or "")
+    prior_anchor = str(checkpoint.get("anchor") or "")
     offset = max(0, int(checkpoint.get("offset") or 0))
     rotated = bool(offset and (prior_identity != identity or stat.st_size < offset))
-    if rotated:
-        offset = 0
 
     records: list[tuple[int, dict[str, Any] | None]] = []
-    committed = offset
     with path.open("rb") as fh:
+        # Checkpoints persisted before the anchor existed carry none and are
+        # trusted on identity and size alone, as before.
+        if offset and not rotated and prior_anchor and tail_anchor(fh, offset) != prior_anchor:
+            rotated = True
+        if rotated:
+            offset = 0
+        committed = offset
         fh.seek(offset)
         while True:
             raw = fh.readline()
@@ -152,9 +176,12 @@ def read_jsonl_tail(
                 records.append((end, value if isinstance(value, dict) else None))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 records.append((end, None))
+        anchor = tail_anchor(fh, committed) if committed else ""
 
     next_checkpoint = dict(checkpoint)
-    next_checkpoint.update({"kind": "jsonl", "offset": committed, "identity": identity})
+    next_checkpoint.update(
+        {"kind": "jsonl", "offset": committed, "identity": identity, "anchor": anchor}
+    )
     return records, next_checkpoint, rotated
 
 

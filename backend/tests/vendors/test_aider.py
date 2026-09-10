@@ -163,6 +163,27 @@ def test_parse_incremental_truncation_restarts_from_zero(tmp_path: Path) -> None
     assert result.checkpoint["section"] == _sid(p, "20260727-100000")
 
 
+def test_parse_incremental_replacement_on_a_reused_inode_restarts_from_zero(
+    tmp_path: Path,
+) -> None:
+    reader = AiderLogReader()
+    p = _history(tmp_path / "ws", _SECTION_1)
+    checkpoint = reader.parse_incremental(p, {}).checkpoint
+
+    # Replaced by a LONGER generation on the same dev:ino (Linux hands a freed
+    # inode number to the next file created in its place): identity and size
+    # both pass, so only the bytes before the offset give it away.
+    p.write_text(_SECTION_2.lstrip("\n") + _SECTION_1, encoding="utf-8")
+    stat = p.stat()
+    same_inode = {**checkpoint, "identity": f"{stat.st_dev}:{stat.st_ino}"}
+    result = reader.parse_incremental(p, same_inode)
+    assert [(e.session_id, e.input_tokens) for e in result.events] == [
+        (_sid(p, "20260728-213045"), 12000),
+        (_sid(p, "20260727-100000"), 1234),
+    ]
+    assert reader.parse_incremental(p, result.checkpoint).events == []
+
+
 def test_parse_session_file_dedups_via_seen_keys(tmp_path: Path) -> None:
     reader = AiderLogReader()
     p = _history(tmp_path / "ws", _SECTION_1)
