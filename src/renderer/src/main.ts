@@ -31,6 +31,16 @@ if (typeof bootstrapLocaleRaw === 'string') {
 // Theme token layers — order matters: primitives → semantic roles → theme overrides.
 import '@navide/plugin-ui/styles.css'
 
+// Publish the platform for CSS that has to reserve different space in the
+// title bar: macOS keeps 80px on the left for the traffic lights it draws
+// itself, while the platforms where we draw our own controls need that room
+// on the right instead. Set here, before any root mounts, so the first paint
+// already has the right geometry.
+import { needsDrawnWindowControls } from '../../shared/osplat'
+if (needsDrawnWindowControls()) {
+  document.documentElement.dataset.windowControls = 'drawn'
+}
+
 // Window-type dispatcher: Electron main appends `?window=editor`,
 // `?window=plans`, etc. for secondary windows. Default is the main shell.
 const params = new URLSearchParams(window.location.search)

@@ -25,7 +25,11 @@ import {
   type AiCliSessionController,
   type SafeAiCliPanelHandle,
 } from '@navide/plugin-ui'
-import { useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
+import { isMacPlatform, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
+// macOS paints its traffic lights over this bar; every other platform gives
+// the window a system frame instead, leaving the reserved space empty.
+const reserveTrafficLights = isMacPlatform()
+
 import {
   useGit,
   type BlameEntry,
@@ -1362,7 +1366,7 @@ registerCommand('git.focusAgent', () => {
   <div class="git-window">
     <SettingsReadinessNotice />
     <!-- ── Toolbar ────────────────────────────────────────────────────── -->
-    <header class="toolbar">
+    <header class="toolbar" :class="{ 'no-traffic-lights': !reserveTrafficLights }">
       <span class="wm">Navide Git</span>
       <span class="crumb">
         {{ repoName }}<template v-if="gitStatus.branch">
@@ -2136,6 +2140,11 @@ registerCommand('git.focusAgent', () => {
   gap: 14px;
   height: 54px;
   padding: 0 18px 0 84px; /* clear the hidden-titlebar traffic lights */
+/* No traffic lights to clear when the system draws the frame itself (every
+   platform but macOS), so the reserved space on the left is just a gap. */
+.toolbar.no-traffic-lights {
+  padding-left: 18px;
+}
   background: var(--bg-subtle);
   border-bottom: 1px solid var(--border-muted);
   -webkit-app-region: drag;

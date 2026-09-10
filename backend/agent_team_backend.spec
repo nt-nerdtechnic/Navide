@@ -3,8 +3,12 @@
 # Build from the backend/ directory:
 #   cd backend && uv run pyinstaller agent_team_backend.spec
 #
-# Output: backend/dist/agent_team_backend  (single executable)
+# Output: backend/dist/agent_team_backend  (single executable, plus the
+# platform's executable suffix -- .exe on Windows)
 # Electron copies it to resources/bin/ via package.json extraResources.
+#
+# PyInstaller cannot cross-compile, so this spec runs once per target platform
+# on that platform's own CI runner.
 
 a = Analysis(
     ['run.py'],
@@ -68,9 +72,22 @@ a = Analysis(
         'websockets.legacy.server',
         'httptools',
         'watchfiles',
-        # watchdog: macOS FSEvents backend + polling fallback.
-        'watchdog.observers.fsevents',
-        'watchdog.observers.polling',
+        # watchdog picks its observer at import time from a platform-specific
+        # module that static analysis cannot see, so every platform's is named.
+        # Listed as literals rather than selected per platform on purpose:
+        # tests/test_pyinstaller_spec.py reads this list with ast.literal_eval,
+        # which cannot evaluate a starred expression. PyInstaller only warns
+        # about a hidden import that does not exist on the build machine (the
+        # macOS build has always warned about nothing — fsevents is simply
+        # absent on Linux and the Linux build had never been run), so naming
+        # all of them costs a warning line per platform and nothing else.
+        'watchdog.observers.fsevents',              # macOS
+        'watchdog.observers.inotify',               # Linux
+        'watchdog.observers.inotify_buffer',
+        'watchdog.observers.inotify_c',
+        'watchdog.observers.read_directory_changes',  # Windows
+        'watchdog.observers.winapi',
+        'watchdog.observers.polling',               # fallback, every platform
         # anthropic SDK uses lazy internal imports.
         'anthropic',
         'anthropic._streaming',

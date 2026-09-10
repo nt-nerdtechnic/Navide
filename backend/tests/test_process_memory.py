@@ -8,7 +8,7 @@ class TestSyscallSweep:
 
     def test_reads_the_kernel_counter_without_spawning_anything(self, monkeypatch):
         monkeypatch.setattr(
-            process_memory.proc_rusage, "sample", lambda pids: {1: (500, 2.5), 2: (700, 1.0)}
+            process_memory.osplat.resource_probe, "sample", lambda pids: {1: (500, 2.5), 2: (700, 1.0)}
         )
         monkeypatch.setattr(process_memory.subprocess, "run", _must_not_run)
         assert process_memory.footprints([1, 2]) == {1: 500, 2: 700}
@@ -16,13 +16,13 @@ class TestSyscallSweep:
     # Every target died between the caller listing them and the sweep. That is
     # a real empty answer, not a reason to pay for the subprocess as well.
     def test_reports_nothing_when_the_syscall_answers_for_no_pid(self, monkeypatch):
-        monkeypatch.setattr(process_memory.proc_rusage, "sample", lambda pids: {})
-        monkeypatch.setattr(process_memory.proc_rusage, "available", lambda: True)
+        monkeypatch.setattr(process_memory.osplat.resource_probe, "sample", lambda pids: {})
+        monkeypatch.setattr(process_memory.osplat.resource_probe, "available", lambda: True)
         monkeypatch.setattr(process_memory.subprocess, "run", _must_not_run)
         assert process_memory.footprints([1, 2]) == {}
 
     def test_still_applies_the_pid_cap(self, monkeypatch):
-        monkeypatch.setattr(process_memory.proc_rusage, "sample", _must_not_run)
+        monkeypatch.setattr(process_memory.osplat.resource_probe, "sample", _must_not_run)
         assert process_memory.footprints(list(range(1, process_memory._MAX_PIDS + 50))) == {}
 
 
@@ -75,10 +75,33 @@ class TestFootprintParsing:
         monkeypatch.setattr(process_memory.subprocess, "run", boom)
         assert process_memory.footprints([1]) == {}
 
-    def test_measures_nothing_off_darwin(self, monkeypatch):
-        monkeypatch.setattr(process_memory.sys, "platform", "linux")
+    # Off Darwin there is no `footprint(1)`, so the only question is whether
+    # the platform seam has a probe. Windows has none yet; Linux reads /proc.
+    def test_measures_nothing_without_a_platform_probe(self, monkeypatch):
+        monkeypatch.setattr(process_memory.sys, "platform", "win32")
+        monkeypatch.setattr(
+            process_memory.osplat.resource_probe, "available", lambda: False
+        )
+        monkeypatch.setattr(
+            process_memory.osplat.resource_probe, "sample", lambda pids: {}
+        )
+        monkeypatch.setattr(process_memory.subprocess, "run", _must_not_run)
         assert process_memory.available() is False
         assert process_memory.footprints([1]) == {}
+
+    def test_measures_through_the_platform_probe_off_darwin(self, monkeypatch):
+        monkeypatch.setattr(process_memory.sys, "platform", "linux")
+        monkeypatch.setattr(
+            process_memory.osplat.resource_probe, "available", lambda: True
+        )
+        monkeypatch.setattr(
+            process_memory.osplat.resource_probe,
+            "sample",
+            lambda pids: {1: (4096, 0.5)},
+        )
+        monkeypatch.setattr(process_memory.subprocess, "run", _must_not_run)
+        assert process_memory.available() is True
+        assert process_memory.footprints([1]) == {1: 4096}
 
     # The argv would be unwieldy and the panel is a summary, not an audit.
     def test_skips_a_sweep_beyond_the_pid_cap(self, monkeypatch):
@@ -115,8 +138,8 @@ def _must_not_run(*_args, **_kwargs):
 
 def _force_fallback(monkeypatch) -> None:
     """Pretend the syscall cannot be resolved, so the subprocess path runs."""
-    monkeypatch.setattr(process_memory.proc_rusage, "available", lambda: False)
-    monkeypatch.setattr(process_memory.proc_rusage, "sample", lambda pids: {})
+    monkeypatch.setattr(process_memory.osplat.resource_probe, "available", lambda: False)
+    monkeypatch.setattr(process_memory.osplat.resource_probe, "sample", lambda pids: {})
 
 
 def _fake_run(monkeypatch, stdout: str, returncode: int = 0, capture_argv=None):

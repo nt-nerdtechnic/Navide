@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
   createPlansWindowRouter,
   getContributionWindowConfig,
@@ -416,6 +417,8 @@ describe('Plans window production routing unit tests', () => {
   })
 
   describe('getContributionWindowConfig', () => {
+    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
     it('uses legacy-compatible 1100x760 size and native titlebar for navide.plans.window', () => {
       const config = getContributionWindowConfig('navide.plans.window', 'Plans')
       expect(config).toEqual({
@@ -439,7 +442,8 @@ describe('Plans window production routing unit tests', () => {
       expect(config.title).toBe('Plans')
     })
 
-    it('preserves 1280x820 and hidden titleBarStyle for other contribution windows', () => {
+    it('keeps the hidden titleBarStyle on macOS, where the system still paints the traffic lights', () => {
+      setPlatformId('darwin')
       const gitConfig = getContributionWindowConfig('navide.git.window', 'Git')
       expect(gitConfig).toEqual({
         width: 1280,
@@ -458,6 +462,34 @@ describe('Plans window production routing unit tests', () => {
       expect(customConfig.width).toBe(1280)
       expect(customConfig.height).toBe(820)
       expect(customConfig.titleBarStyle).toBe('hidden')
+    })
+
+    // A frameless window on Windows or Linux has no controls at all, and this
+    // one's content is a plugin bundle that cannot draw its own — reaching
+    // across that boundary for the Host's component is what
+    // gitComposition.test.ts forbids. So off macOS it takes the system frame,
+    // which is how the Plans contribution window is created everywhere.
+    it.each(['win32', 'linux'] as const)(
+      'uses the system frame on %s so the window can be closed at all',
+      (platform) => {
+        setPlatformId(platform)
+        const gitConfig = getContributionWindowConfig('navide.git.window', 'Git')
+        expect(gitConfig.titleBarStyle).toBeUndefined()
+        // Everything else about the window is unchanged.
+        expect(gitConfig.width).toBe(1280)
+        expect(gitConfig.height).toBe(820)
+        expect(gitConfig.backgroundColor).toBe('#0d1117')
+        expect(gitConfig.show).toBe(false)
+      },
+    )
+
+    it('leaves the Plans window on the system frame on every platform', () => {
+      for (const platform of ['darwin', 'win32', 'linux'] as const) {
+        setPlatformId(platform)
+        expect(
+          getContributionWindowConfig('navide.plans.window', 'Plans').titleBarStyle,
+        ).toBeUndefined()
+      }
     })
   })
 

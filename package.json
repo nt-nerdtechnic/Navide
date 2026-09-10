@@ -4,6 +4,7 @@
   "private": true,
   "author": "Navide Team",
   "description": "Navide: the AI-native engineering environment for one engineer directing multiple coding agents",
+  "desktopName": "navide.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/nt-nerdtechnic/Navide.git"
@@ -50,6 +51,9 @@
     "productName": "Navide",
     "directories": {
       "output": "dist-release"
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
     },
     "files": [
       "out/**/*",
@@ -123,8 +127,16 @@
       "icon": "resources/icon.png"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "resources/icon.png"
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Development",
+      "maintainer": "Navide Team <nt.fitproject@gmail.com>",
+      "synopsis": "AI-native engineering environment for directing multiple coding agents",
+      "description": "Navide is a desktop engineering environment for one engineer directing multiple coding agent CLIs.",
+      "syncDesktopName": true
     }
   },
   "devDependencies": {
@@ -134,7 +146,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/test-utils": "^2.5.0",
     "electron": "^44.2.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.16.1",
     "electron-vite": "^3.1.0",
     "happy-dom": "^20.14.0",
     "typescript": "^5.7.2",

@@ -5,6 +5,13 @@ import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { app } from 'electron'
+import {
+  defaultShell,
+  isWindows,
+  loginPathFallbacks,
+  loginShellFlags,
+  needsLoginShellPath,
+} from '../shared/osplat'
 import { registerPendingBackend, releasePendingBackend } from './backend-pending'
 import { killProcessTree } from './process-tree'
 import {
@@ -95,12 +102,12 @@ function findFreePort(): Promise<number> {
  *  Returns { shell, path }. Path is null if the shell doesn't respond. */
 function getLoginShellEnv(): Promise<{ shell: string; path: string | null }> {
   return new Promise((resolve) => {
-    const shell = process.env.SHELL ?? '/bin/zsh'
-    // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
-    // ~/.local/bin) only in INTERACTIVE mode — a plain login shell (-l)
-    // misses it. Marker-wrap the output so shell-config chatter on stdout
-    // can't pollute the parsed PATH.
-    const flags = shell.endsWith('zsh') ? ['-il', '-c'] : ['-l', '-c']
+    const shell = defaultShell(process.env)
+    // Installers add PATH entries to the interactive rc file (~/.zshrc,
+    // ~/.bashrc), which a plain login shell (-l) skips — see loginShellFlags
+    // for which shells get -i. Marker-wrap the output so shell-config
+    // chatter on stdout can't pollute the parsed PATH.
+    const flags = loginShellFlags(shell)
     const args = [...flags, 'printf "__NAVIDE_PATH__%s\\n" "$PATH"']
     // Generous timeout: a heavy ~/.zshrc (nvm etc.) on a busy machine has been
     // measured at 13s+; timing out silently drops every zshrc PATH entry, which
@@ -187,8 +194,15 @@ export async function startBackend(
     )
   const env = bindBackendPluginActivationCatalog(process.env, catalog)
   env.NAVIDE_BACKEND_HOST_TOKEN = hostSessionToken
-  let userShell = process.env.SHELL ?? '/bin/zsh'
-  if (process.platform === 'darwin') {
+  // The login-shell dance below runs on every platform that launches the app
+  // with a session PATH rather than the shell's — macOS from Finder, Linux
+  // from the .desktop entry. It used to be macOS-only, which left a Linux
+  // launcher start unable to find the very tools the onboarding wizard had
+  // just installed into ~/.local/bin. The initial value used to be a
+  // hard-coded `/bin/zsh`, a path that does not exist on Windows and is not
+  // the default on most Linux installs.
+  let userShell = defaultShell(process.env)
+  if (needsLoginShellPath()) {
     const { shell, path: loginPath } = await getLoginShellEnv()
     userShell = shell
     if (loginPath) {
@@ -198,14 +212,10 @@ export async function startBackend(
       const merged = [...new Set([...loginPath.split(':'), ...existing])]
       env.PATH = merged.join(':')
     } else {
-      // Fallback: add common macOS tool locations the system PATH omits.
-      // ~/.local/bin is where Claude Code's official installer puts `claude`.
-      const common = [
-        join(homedir(), '.local/bin'),
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-        '/opt/homebrew/sbin'
-      ]
+      // Fallback: the platform's own conventional tool locations, which the
+      // session PATH omits. ~/.local/bin is where Claude Code's installer
+      // puts `claude` on both platforms, and where uv lands on Linux.
+      const common = loginPathFallbacks(homedir())
       const existing = (env.PATH ?? '').split(':').filter(Boolean)
       env.PATH = [...new Set([...common, ...existing])].join(':')
     }
@@ -218,7 +228,14 @@ export async function startBackend(
 
   let proc: ChildProcess
   if (app.isPackaged) {
-    const binaryPath = join(process.resourcesPath, 'bin', 'agent_team_backend')
+    // PyInstaller names the frozen backend after the spec, plus the platform's
+    // executable suffix. Without `.exe` the packaged Windows app looks for a
+    // file that is not there and never starts its backend at all.
+    const binaryPath = join(
+      process.resourcesPath,
+      'bin',
+      isWindows() ? 'agent_team_backend.exe' : 'agent_team_backend'
+    )
     proc = spawn(binaryPath, ['--port', String(port), '--log-level', 'info'], {
       env,
       // stdin is open only to hand over the trust-confirmation key, and is

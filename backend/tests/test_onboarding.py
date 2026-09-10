@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -150,13 +151,13 @@ def test_python_install_uses_unversioned_formula() -> None:
     # Versioned kegs (python@3.12) only link `python3.12`, never `python3`,
     # so detection (`python3 --version`) would stay missing after a successful
     # install. The unversioned alias links `python3` into the brew prefix.
-    assert ob.DEPS_BY_ID["python"].install_cmd == "brew install python3"
+    assert ob.DEPS_BY_ID["python"].install_for("darwin").command == "brew install python3"
 
 
 def test_node_install_uses_unversioned_formula() -> None:
     # node@22 is keg-only: it never links `node` into the brew prefix, so
     # detection (`node --version`) would stay missing after a successful install.
-    assert ob.DEPS_BY_ID["node"].install_cmd == "brew install node"
+    assert ob.DEPS_BY_ID["node"].install_for("darwin").command == "brew install node"
 
 
 def test_maintenance_command_returns_the_vendor_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -911,3 +912,87 @@ def test_cli_health_entries_carry_registry_commands(
     # one (dynamic pick: see _dep_without_update_cmd).
     if no_update is not None:
         assert entries[no_update.id]["update_command"] == ""
+
+
+# ── platform-aware install (Linux port) ───────────────────────────────────────
+
+def test_homebrew_is_not_offered_off_macos() -> None:
+    # "Install the macOS package manager" is not a degraded suggestion on
+    # Linux, it is a wrong one, so the row should not be listed at all.
+    assert ob.DEPS_BY_ID["homebrew"].applies_to("darwin") is True
+    assert ob.DEPS_BY_ID["homebrew"].applies_to("linux") is False
+
+
+def test_linux_uses_each_tool_s_own_installer_not_brew() -> None:
+    for dep_id, expected in (
+        ("pnpm", "get.pnpm.io"),
+        ("uv", "astral.sh"),
+        ("ollama", "ollama.com"),
+    ):
+        command = ob.DEPS_BY_ID[dep_id].install_for("linux").command
+        assert expected in command, f"{dep_id}: {command!r}"
+        assert "brew" not in command, f"{dep_id} still names brew: {command!r}"
+
+
+def test_linux_requirements_follow_the_linux_command() -> None:
+    # The macOS install of uv needs Homebrew; the Linux one needs curl.
+    # Reporting "install brew first" on Linux was the bug this prevents.
+    assert ob.DEPS_BY_ID["uv"].install_for("darwin").requires_binaries == ("brew",)
+    assert ob.DEPS_BY_ID["uv"].install_for("linux").requires_binaries == ("curl",)
+
+
+def test_ollama_linux_installer_needs_a_terminal_for_its_sudo_prompt() -> None:
+    # Ollama's Linux script calls sudo; run inline the password prompt would
+    # be invisible and the install would hang until it timed out.
+    assert ob.DEPS_BY_ID["ollama"].install_for("linux").needs_terminal is True
+    assert ob.DEPS_BY_ID["ollama"].install_for("darwin").needs_terminal is False
+
+
+def test_a_platform_with_no_installer_offers_docs_instead_of_a_wrong_command() -> None:
+    # Node ships no official Linux script and every distribution's package is
+    # a different command, so the honest answer is the docs link.
+    node = ob.DEPS_BY_ID["node"]
+    assert node.install_for("linux").command == ""
+    assert node.docs_url
+
+
+def test_install_refuses_a_dep_that_does_not_apply_here(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ob.osplat, "platform_id", "linux")
+    result = ob.install_dep("homebrew")
+    assert result["ok"] is False
+    assert "platform" in result["error"]
+
+
+def test_applicable_deps_hides_only_the_platform_specific_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ob.osplat, "platform_id", "linux")
+    ids = {dep.id for dep in ob.applicable_deps()}
+    assert "homebrew" not in ids
+    assert {"node", "pnpm", "uv", "ollama"} <= ids
+
+
+def test_the_stuck_credential_message_does_not_name_a_macos_dialog_on_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A credential read stuck for seconds is worth surfacing everywhere, but
+    # only macOS has a Keychain dialog to click. On Linux the old wording sent
+    # the user looking for a window that does not exist.
+    from agent_team_backend import server_link
+
+    link = server_link.ServerLink.__new__(server_link.ServerLink)
+    link.terminated_reason = None
+    link._authenticated = False
+    link.config_read_started = time.time() - 10
+    link.last_error = None
+
+    monkeypatch.setattr(server_link.osplat, "platform_id", "linux")
+    reason = link.keychain_wait_reason()
+    assert reason, "a stuck read must still report something"
+    assert "Keychain" not in reason
+    assert "macOS" not in reason
+
+    monkeypatch.setattr(server_link.osplat, "platform_id", "darwin")
+    assert "Keychain" in link.keychain_wait_reason()

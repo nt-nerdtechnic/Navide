@@ -460,7 +460,9 @@ def _cursor_jwt(claims: dict) -> str:
 def _write_cursor_state_db(home: Path, value) -> None:
     import sqlite3
 
-    path = home.joinpath(*us.CURSOR_IDE_STATE_DB_REL)
+    # Resolved through the same platform seam the reader uses, so this fixture
+    # lands where the reader will actually look on whatever OS runs the suite.
+    path = us.cursor_ide_state_db_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute(
@@ -503,7 +505,7 @@ def test_cursor_ide_token_from_state_db(tmp_path):
 
 def test_cursor_ide_token_missing_and_malformed(tmp_path):
     assert us.read_cursor_ide_token(tmp_path) is None  # no db
-    path = tmp_path.joinpath(*us.CURSOR_IDE_STATE_DB_REL)
+    path = us.cursor_ide_state_db_path(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_text("not a sqlite db", encoding="utf-8")
     assert us.read_cursor_ide_token(tmp_path) is None

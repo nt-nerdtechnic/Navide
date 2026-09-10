@@ -141,6 +141,45 @@ jobs:
       - name: Backend tests
         run: uv --project backend run --locked pytest backend/tests
 
+  backend-linux:
+    name: Backend checks (Linux)
+    # The macOS job above is the release platform; this one is what stops the
+    # Linux port from rotting between releases. Ubuntu 22.04 rather than
+    # latest, because PyInstaller links against the build machine's glibc and
+    # the oldest runner we support sets the floor for everyone.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          cache-suffix: backend-linux
+
+      - name: Install dependencies
+        run: uv --project backend sync --locked
+
+      - name: Lint backend (event-loop guardrail)
+        run: uv --project backend run --locked ruff check backend
+
+      - name: Backend tests
+        run: uv --project backend run --locked pytest backend/tests
+
+      # The suite runs without a terminal, so it never proves the app can open
+      # one. This does: a real PTY, a real /proc read, and a real /health.
+      - name: Linux runtime smoke test
+        run: uv --project backend run --locked python backend/linux_smoke.py
+
   plans:
     name: Packaged Plans checks
     runs-on: macos-14
@@ -227,7 +266,7 @@ jobs:
     # Preserve the existing required-check name for branch protection.
     name: Lint and test
     if: ${{ always() }}
-    needs: [frontend, backend, plans, registry, dependency-audit]
+    needs: [frontend, backend, backend-linux, plans, registry, dependency-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -235,12 +274,14 @@ jobs:
         env:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
+          BACKEND_LINUX_RESULT: ${{ needs['backend-linux'].result }}
           PLANS_RESULT: ${{ needs.plans.result }}
           REGISTRY_RESULT: ${{ needs.registry.result }}
           AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
         run: |
           test "$FRONTEND_RESULT" = success
           test "$BACKEND_RESULT" = success
+          test "$BACKEND_LINUX_RESULT" = success
           test "$PLANS_RESULT" = success
           test "$REGISTRY_RESULT" = success
           test "$AUDIT_RESULT" = success

@@ -22,10 +22,16 @@ modules — those import the registry, and a back-edge would be a cycle.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
+
+# Vendor modules may import `base` but not the application, so the platform
+# seam is re-exported here: a vendor that needs to find another product's
+# state directory asks for the convention rather than spelling out one
+# platform's layout (which is how the Cursor reader ended up macOS-only).
+from ..osplat import paths as platform_paths  # noqa: F401
 
 
 def command_text(command: Any) -> str:
@@ -38,6 +44,23 @@ def command_text(command: Any) -> str:
     if isinstance(command, list):
         return str(command[-1]) if command else ""
     return str(command or "")
+
+
+@dataclass(frozen=True)
+class PlatformInstall:
+    """How one platform installs a dep, when the default command does not apply.
+
+    A separate record rather than a bare string because the three things that
+    vary travel together: `brew install uv` needs Homebrew and runs silently,
+    while the same tool on Linux is an official curl installer that needs
+    `curl`, and Ollama's Linux installer additionally calls sudo and therefore
+    has to be handed to a real terminal. Splitting them into parallel dicts
+    would let a command and its requirements drift apart.
+    """
+
+    command: str
+    requires_binaries: tuple[str, ...] = ()
+    needs_terminal: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,6 +101,30 @@ class Dep:
     config_home_env: str = ""        # env var overriding the config home, e.g. 'CLAUDE_CONFIG_DIR'
     config_home_default: str = ""    # default config home relative to $HOME, e.g. '.claude'
     autoupdate_env: str = ""         # vendor's own opt-out env var, e.g. 'DISABLE_AUTOUPDATER'
+    # Which platforms this dep exists for at all. Empty = every platform.
+    # Homebrew is the reason this field exists: offering "install the macOS
+    # package manager" on Linux is not a degraded suggestion, it is a wrong
+    # one, and the wizard should not list the row at all.
+    platforms: tuple[str, ...] = ()
+    # Per-platform install, for tools whose command is not the same everywhere.
+    # An entry here wins over `install_cmd`; `install_cmd` itself is for the
+    # genuinely cross-platform cases (npm, a vendor's own curl installer).
+    # A platform with neither gets no install button and the docs link instead,
+    # which is honest — better than naming a package manager that is not there.
+    install_cmds: dict[str, PlatformInstall] = field(default_factory=dict)
+
+    def applies_to(self, platform: str) -> bool:
+        """Whether this dep is worth showing on `platform` at all."""
+        return not self.platforms or platform in self.platforms
+
+    def install_for(self, platform: str) -> PlatformInstall:
+        """The install this platform should run. `.command` is '' when none."""
+        override = self.install_cmds.get(platform)
+        if override is not None:
+            return override
+        return PlatformInstall(
+            self.install_cmd, self.requires_binaries, self.needs_terminal
+        )
 
 
 class McpValue(Enum):

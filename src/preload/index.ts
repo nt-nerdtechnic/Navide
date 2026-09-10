@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { normalizePlatformId } from '../shared/osplat'
 import type {
   UpdateActionResult,
   UpdateSettingsResult,
@@ -166,6 +167,29 @@ ipcRenderer.on('editor:openFile', (_event, params: Record<string, string>) => {
 contextBridge.exposeInMainWorld('agentTeam', {
   appName: 'Agent-Team',
   version: __APP_VERSION__,
+  // The renderer has no `process` under contextIsolation, so the platform it
+  // is drawing for has to cross the bridge. `shared/osplat` reads this and is
+  // the only thing that should: components ask it for a capability
+  // (`needsDrawnWindowControls`) rather than comparing this string.
+  platform: normalizePlatformId(process.platform),
+  // Minimise / maximise / close, for the platforms where the system does not
+  // draw them over our frameless window. Present on every platform because
+  // the main-side handlers are; macOS simply never draws buttons that call it.
+  windowControls: {
+    minimize: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: (): Promise<{ ok: boolean; maximized: boolean }> =>
+      ipcRenderer.invoke('window:toggleMaximize'),
+    close: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('window:close'),
+    isMaximized: (): Promise<{ maximized: boolean }> =>
+      ipcRenderer.invoke('window:isMaximized'),
+    onMaximizeChanged: (cb: (maximized: boolean) => void): (() => void) => {
+      const handler = (_event: unknown, maximized: boolean): void => cb(maximized)
+      ipcRenderer.on('window:maximize-changed', handler)
+      // Returns its own disposer: the bridge has both shapes today, and a
+      // component that mounts per window needs to be able to let go.
+      return () => ipcRenderer.removeListener('window:maximize-changed', handler)
+    },
+  },
   getBackendInfo: (): Promise<BackendInfo> => ipcRenderer.invoke('backend:info'),
   restartBackend: (): Promise<BackendInfo> => ipcRenderer.invoke('backend:restart'),
   stopBackend: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('backend:stop'),

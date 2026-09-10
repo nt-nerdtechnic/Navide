@@ -32,7 +32,7 @@ class TestSyscallSweep:
 
     def test_reads_the_kernel_counter_without_spawning_anything(self, monkeypatch):
         monkeypatch.setattr(
-            process_cpu.proc_rusage, "sample", lambda pids: {1: (500, 62.34), 2: (700, 600.0)}
+            process_cpu.osplat.resource_probe, "sample", lambda pids: {1: (500, 62.34), 2: (700, 600.0)}
         )
         monkeypatch.setattr(process_cpu.subprocess, "run", _must_not_run)
         measured, taken_at = process_cpu.cpu_times([1, 2])
@@ -40,8 +40,8 @@ class TestSyscallSweep:
         assert taken_at > 0
 
     def test_reports_nothing_when_the_syscall_answers_for_no_pid(self, monkeypatch):
-        monkeypatch.setattr(process_cpu.proc_rusage, "sample", lambda pids: {})
-        monkeypatch.setattr(process_cpu.proc_rusage, "available", lambda: True)
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "sample", lambda pids: {})
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: True)
         monkeypatch.setattr(process_cpu.subprocess, "run", _must_not_run)
         assert process_cpu.cpu_times([1, 2])[0] == {}
 
@@ -56,11 +56,11 @@ class TestSyscallSweep:
             clock["t"] = 105.0
             return {1: (0, 1.0)}
 
-        monkeypatch.setattr(process_cpu.proc_rusage, "sample", slow)
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "sample", slow)
         assert process_cpu.cpu_times([1])[1] == 105.0
 
     def test_still_applies_the_pid_cap(self, monkeypatch):
-        monkeypatch.setattr(process_cpu.proc_rusage, "sample", _must_not_run)
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "sample", _must_not_run)
         assert process_cpu.cpu_times(list(range(1, process_cpu._MAX_PIDS + 50)))[0] == {}
 
 
@@ -149,8 +149,8 @@ def _must_not_run(*_args, **_kwargs):
 
 def _force_fallback(monkeypatch) -> None:
     """Pretend the syscall cannot be resolved, so the subprocess path runs."""
-    monkeypatch.setattr(process_cpu.proc_rusage, "available", lambda: False)
-    monkeypatch.setattr(process_cpu.proc_rusage, "sample", lambda pids: {})
+    monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: False)
+    monkeypatch.setattr(process_cpu.osplat.resource_probe, "sample", lambda pids: {})
 
 
 def _fake_run(monkeypatch, stdout: str, returncode: int = 0, capture_argv=None):

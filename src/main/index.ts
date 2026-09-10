@@ -124,6 +124,9 @@ import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './u
 import { PlanWindowRegistry } from './plan-windows'
 import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
+import { installWindowControls } from './window-controls'
+import { openInExternalTerminal } from './external-terminal'
+import { isLinux, isMac } from '../shared/osplat'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -333,6 +336,9 @@ let lastRecents: RecentMenuEntry[] = []
 function rebuildAppMenu(): void {
   installApplicationMenu(appMenuHooks, lastRecents)
 }
+// Registered once for the process: `ipcMain.handle` throws on a second
+// registration, and rebuildAppMenu above runs again on every recents change.
+installWindowControls()
 // Crash-restore: persists open workspace windows so an unexpected exit can be
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
@@ -412,6 +418,13 @@ async function createWindow(
     ...(opts?.bounds ? { x: opts.bounds.x, y: opts.bounds.y } : {}),
     title: 'Navide',
     titleBarStyle: 'hidden',
+    // `titleBarStyle: 'hidden'` means something different on each platform:
+    // macOS still paints its traffic lights, Windows paints nothing unless
+    // asked through `titleBarOverlay`, and Linux paints nothing at all. The
+    // renderer draws its own controls where the system will not (see
+    // `needsDrawnWindowControls`), so here we only have to stop the native
+    // menu bar from stacking a second bar on top of the drawn one.
+    autoHideMenuBar: !isMac(),
     // Start hidden and show only once the renderer has painted its first frame,
     // so the user never sees the white flash of an unpainted window. The dark
     // backgroundColor matches the default theme as a safety net for the instant
@@ -3255,15 +3268,10 @@ app.whenReady().then(() => void pruneDroppedFiles(droppedFilesDir()))
 ipcMain.handle('shell:openTerminal', async (event, command: string) => {
   if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
   if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
-  // Open Terminal.app and run the install command interactively (sudo / OAuth
-  // prompts need a real TTY). The command is AppleScript-escaped.
-  const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-  const script = `tell application "Terminal" to do script "${escaped}"\ntell application "Terminal" to activate`
-  return await new Promise<{ ok: boolean; error?: string }>((resolve) => {
-    const proc = spawn('osascript', ['-e', script])
-    proc.on('error', (err) => resolve({ ok: false, error: String(err) }))
-    proc.on('close', (code) => resolve(code === 0 ? { ok: true } : { ok: false, error: `osascript exited ${code}` }))
-  })
+  // Run the install command in a visible terminal (sudo / OAuth prompts need
+  // a real TTY). Which terminal is the platform's business — see
+  // external-terminal.ts; this used to be AppleScript only.
+  return await openInExternalTerminal(command)
 })
 
 // macOS TCC permissions (onboarding wizard). Requests are user-initiated only —
@@ -3957,7 +3965,14 @@ app.whenReady().then(async () => {
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
   initUpdater({
-    enabled: app.isPackaged && process.platform === 'darwin',
+    // macOS updates through Squirrel.Mac, Linux through electron-updater's
+    // AppImage path — which only works when the app is actually running as an
+    // AppImage, because that is the only shape it can rewrite in place.
+    // A .deb install updates through the distribution's package manager, so
+    // offering in-app updates there would fight the system that owns the file.
+    // Windows (NSIS) is deliberately still off: it has no signed build to
+    // update to yet, and an unsigned installer download is worse than none.
+    enabled: app.isPackaged && (isMac() || (isLinux() && Boolean(process.env.APPIMAGE))),
     currentVersion: app.getVersion(),
     // Installing quits the app by design, and the user already agreed to that
     // when they asked for the install. Without this they get a second "Quit?"

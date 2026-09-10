@@ -1,11 +1,13 @@
-name: Release macOS
+name: Release
 
 on:
   push:
     tags:
       - 'v*.*.*'
-  # Manual trigger to dry-run the signing & notarization chain without
-  # publishing a release (build + sign + notarize + verify only).
+  # Manual trigger to dry-run the whole chain without publishing a release:
+  # macOS builds, signs, notarizes and verifies; Linux builds and validates.
+  # Both attach their installers as workflow artifacts so a dry run still
+  # yields something to download and try.
   workflow_dispatch:
 
 permissions:
@@ -192,6 +194,160 @@ jobs:
           test "${#assets[@]}" -ge 4
           # Idempotent publish: if the release already exists (e.g. published
           # manually or by a rerun), upload/replace assets instead of failing.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+          fi
+
+  release-linux-x64:
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    name: Package and release Linux x64
+    # After macOS, not beside it: both jobs publish into the same GitHub
+    # Release with an idempotent view-then-upload-or-create, and two jobs
+    # racing to `gh release create` the same tag would lose one of them. The
+    # macOS job creates the release; this one joins its assets to it.
+    needs: release-macos-arm64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: release-linux
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Verify tag and version sources
+        if: github.event_name == 'push'
+        run: pnpm release:check "${GITHUB_REF_NAME}"
+
+      - name: Run Linux release gates
+        # The frontend gates (typecheck, vitest, packaged-plans) are platform
+        # independent and the macOS job this depends on has already passed
+        # them. What is worth repeating here is everything that touches the
+        # OS: the backend suite on this kernel, and the smoke test that opens
+        # a real PTY, reads /proc, and serves /health — the things the suite
+        # structurally cannot prove and that the port lives or dies by.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+          uv --project backend run python backend/linux_smoke.py
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
+          else
+            echo "Antigravity secrets not set; provider disabled in this build"
+          fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile; this is the only place a Linux
+        # backend binary is ever produced.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Build application
+        shell: bash
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # No signing on Linux: neither AppImage nor deb has a Gatekeeper or
+          # SmartScreen equivalent, so there is no certificate to provision and
+          # nothing to notarize. `--publish never` still writes latest-linux.yml,
+          # which the AppImage updater reads.
+          pnpm exec electron-builder --linux --x64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          test -f dist-release/latest-linux.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.deb' | wc -l | tr -d ' ')" -eq 1
+          # The packaged backend must be the Linux one this job just built,
+          # not a stale macOS binary that happened to be lying around.
+          appimage="$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' -print -quit)"
+          chmod +x "${appimage}"
+          work="$(mktemp -d)"
+          (cd "${work}" && "${appimage}" --appimage-extract >/dev/null)
+          backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
+          test -n "${backend}"
+          file "${backend}" | grep -q 'ELF 64-bit'
+          # …and the v2 Plans package carries its Linux backend.
+          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          rm -rf "${work}"
+
+      - name: Attach installers to the workflow run
+        # Every run, including a workflow_dispatch dry run: this is how a
+        # Linux build gets tried on a real desktop before a tag publishes it.
+        uses: actions/upload-artifact@v4
+        with:
+          name: navide-linux-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*.AppImage
+            dist-release/Navide-*.deb
+            dist-release/latest-linux.yml
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("${asset}")
+          done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*.AppImage' -o -name 'Navide-*.deb' -o -name 'latest-linux.yml' \) -print0)
+          test "${#assets[@]}" -eq 3
+          # The macOS job normally created the release already; the create
+          # branch only fires on a manual rerun of this job alone.
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
           else

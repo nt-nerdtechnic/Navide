@@ -64,6 +64,16 @@ declare global {
     agentTeam?: {
       appName: string
       version: string
+      /** 'darwin' | 'win32' | 'linux'; read through shared/osplat, not directly. */
+      platform: string
+      /** Present on every platform; only drawn where the system will not. */
+      windowControls: {
+        minimize: () => Promise<{ ok: boolean }>
+        toggleMaximize: () => Promise<{ ok: boolean; maximized: boolean }>
+        close: () => Promise<{ ok: boolean }>
+        isMaximized: () => Promise<{ maximized: boolean }>
+        onMaximizeChanged: (cb: (maximized: boolean) => void) => () => void
+      }
       getBackendInfo: () => Promise<BackendInfo>
       restartBackend: () => Promise<BackendInfo>
       stopBackend: () => Promise<{ ok: boolean }>
