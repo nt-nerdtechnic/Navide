@@ -4,6 +4,8 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-09-10 — signed release
+
 ### Changed
 
 - Document that Plans legacy recovery is authorized only by the Host-minted

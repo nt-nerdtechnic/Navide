@@ -68,6 +68,31 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.1',
+    title: {
+      'zh-TW': '外掛架構升級：打包 Plans 執行期與執行策略（Execution Policy）設定',
+      'en-US': 'Plugin Runtime Upgrade: Packaged Plans & Execution Policy',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Plans 外掛化：計畫文件遷移至獨立打包的 navide.plans 外掛執行期，支援離線執行、沙盒隔離與容錯復原。',
+        'en-US': 'Packaged Plans runtime: Plans migrated to the isolated navide.plans plugin runtime with fallback recovery.',
+      },
+      {
+        'zh-TW': '執行策略（Execution Policy）加固：新增設定介面與黑白名單防護，加強 Agent 執行命令與檔案系統權限控制。',
+        'en-US': 'Execution Policy hardening: New settings pane with allowlist/denylist modes to tightly govern agent authority.',
+      },
+      {
+        'zh-TW': '外部 MCP 控制協議擴充：支援 Pipeline 啟動與重啟、階段與角色定義、工作區與用量資源讀取。',
+        'en-US': 'Expanded MCP control: Pipeline management, stage/role definitions, and workspace/usage resources.',
+      },
+      {
+        'zh-TW': '外掛後端健康監控優化：提高冷啟動逾時時間，避免重載環境下誤入復原模式。',
+        'en-US': 'Plugin backend supervisor: Longer cold boot timeout budget to prevent spurious recovery fallback.',
+      },
+    ],
+  },
+  {
     version: '0.2.0',
     major: true,
     title: {
