@@ -212,6 +212,32 @@ def test_matching_revision_allows_write(tmp_path: Path) -> None:
     assert store.revision != revision
 
 
+def test_revision_advances_when_the_rewrite_lands_in_the_same_mtime_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux stamps mtime per kernel tick, so two writes inside one tick would
+    # carry the same revision and a stale writer could slip through.
+    path = tmp_path / "mcp_servers.json"
+    store = MCPSettingsStore(path)
+    store.list_servers()
+    revision = store.revision
+    real_replace = os.replace
+
+    def replace_in_same_tick(src, dst):
+        real_replace(src, dst)
+        os.utime(dst, ns=(revision, revision))
+
+    monkeypatch.setattr("agent_team_backend.mcp_settings.os.replace", replace_in_same_tick)
+    store.replace_servers(
+        [{"name": "mine", "transport": "stdio", "command": "node"}],
+        expected_revision=revision,
+    )
+
+    assert store.revision > revision
+    with pytest.raises(MCPSettingsConflictError):
+        store.replace_servers([], expected_revision=revision)
+
+
 def test_secret_helpers_cover_env_and_headers_without_mutating_inputs() -> None:
     servers = [
         {

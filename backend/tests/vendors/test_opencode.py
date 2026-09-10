@@ -333,6 +333,30 @@ def test_incremental_parse_reanchors_when_watermark_drops(
     assert [(e.input_tokens, e.output_tokens) for e in third.events] == [(7, 3)]
 
 
+def test_incremental_parse_resets_watermark_when_the_replacement_reuses_the_inode(
+    data_dir: Path,
+) -> None:
+    # Linux hands a freed inode number to the next file created in its place,
+    # so the replacement can carry the very identity the checkpoint recorded.
+    reader = OpencodeLogReader()
+    db = data_dir / "opencode.db"
+    con = _create_db(db)
+    _add_session(con, _SID, "/ws")
+    _add_message(con, "msg_a1", _SID, _assistant_data({"input": 10, "output": 2}))
+    con.close()
+    first = reader.parse_incremental(db, {})
+
+    db.unlink()
+    replacement = _create_db(db)
+    _add_session(replacement, _SID, "/ws")
+    _add_message(replacement, "msg_a2", _SID, _assistant_data({"input": 30, "output": 7}))
+    replacement.close()
+    stat = db.stat()
+    same_inode = {**first.checkpoint, "identity": f"{stat.st_dev}:{stat.st_ino}"}
+    second = reader.parse_incremental(db, same_inode)
+    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
+
+
 def test_incremental_parse_resets_watermark_for_replaced_db(
     data_dir: Path,
 ) -> None:
@@ -351,7 +375,10 @@ def test_incremental_parse_resets_watermark_for_replaced_db(
     replacement.close()
     second = reader.parse_incremental(db, first.checkpoint)
     assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
-    assert second.checkpoint["identity"] != first.checkpoint["identity"]
+    # The checkpoint now describes the replacement. Do not assert the inode
+    # changed: ext4 hands a freed inode number to the next file created.
+    st = db.stat()
+    assert second.checkpoint["identity"] == f"{st.st_dev}:{st.st_ino}"
 
 
 # ── marker detection / session binding ──────────────────────────────────────

@@ -150,6 +150,7 @@ def test_install_unknown_id_rejected() -> None:
 
 def test_install_needs_terminal_returns_command_without_running(monkeypatch: pytest.MonkeyPatch) -> None:
     # homebrew is needs_terminal → must NOT shell out, just hand back the command.
+    monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
     called = {"ran": False}
     def boom(*_a, **_k):
         called["ran"] = True
@@ -241,6 +242,8 @@ def _fake_popen(returncode: int, stdout: str = "", stderr: str = "", *, timeout:
 
 
 def _brew_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A Homebrew install only exists on the darwin roster.
+    monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
     monkeypatch.setattr(ob.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
 
 
@@ -278,6 +281,7 @@ def test_install_blocked_when_bootstrap_binary_missing(
 ) -> None:
     # Fresh Mac without Homebrew: `brew install node` only ever produced a bare
     # exit 127, so the wizard has to name the real blocker instead of running it.
+    monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
     monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
 
     def boom(*_a: object, **_k: object) -> None:

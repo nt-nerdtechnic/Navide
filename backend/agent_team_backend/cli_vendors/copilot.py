@@ -170,6 +170,19 @@ LEFT JOIN sessions s ON s.id = a.session_id
 ORDER BY a.id
 """
 
+# The watermark row's own columns, so a replacement store can be recognised
+# even when it lands on the same dev:ino (Linux reuses a freed inode number
+# for the very next file created).
+_ANCHOR_SQL = """
+SELECT session_id, model, input_tokens, output_tokens, created_at
+FROM assistant_usage_events WHERE id = ?
+"""
+
+
+def _anchor(values: tuple) -> str:
+    """Fingerprint of one usage row, columns in `_ANCHOR_SQL` order."""
+    return "|".join(str(v) for v in values)
+
 _TURNS_SQL = """
 SELECT t.id, t.session_id, t.user_message, t.assistant_response, t.timestamp,
        COALESCE(s.cwd, '')
@@ -498,6 +511,17 @@ class CopilotLogReader(LogReader):
             checkpoint.get("identity") and checkpoint.get("identity") != identity
         )
         last_row_id = 0 if replaced else max(0, int(checkpoint.get("row_id") or 0))
+        anchor = "" if replaced else str(checkpoint.get("anchor") or "")
+        if last_row_id and anchor:
+            # Same dev:ino is not proof of the same store. A row standing
+            # under the watermark id that is not the row the mark was taken
+            # from was never credited: re-anchor just below it, never rescan,
+            # as for a dropped watermark. A missing row is left to the drop
+            # check below; a checkpoint without an anchor is trusted as before.
+            current = self._query(path, _ANCHOR_SQL, (last_row_id,))
+            if current and _anchor(current[0]) != anchor:
+                last_row_id -= 1
+                anchor = ""
         rows = self._query(path, _USAGE_SQL.replace(
             "ORDER BY a.id", f"WHERE a.id > {last_row_id} ORDER BY a.id"))
         if rows is None:
@@ -513,17 +537,23 @@ class CopilotLogReader(LogReader):
                     # the new max was already credited under the old numbering,
                     # so rescanning would credit the whole history twice.
                     last_row_id = max_row_id
+                    current = self._query(path, _ANCHOR_SQL, (last_row_id,))
+                    anchor = _anchor(current[0]) if current else ""
 
         out: list[TokenUsage] = []
         next_row_id = last_row_id
         for row in rows:
             next_row_id = max(next_row_id, int(row[0]))
-            cursor = {"kind": "sqlite", "row_id": next_row_id, "identity": identity}
+            anchor = _anchor(row[1:6])
+            cursor = {
+                "kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor,
+            }
             event = self._usage_from_row(path, row, cursor)
             if event is not None:
                 out.append(event)
         return IncrementalParseResult(
-            out, {"kind": "sqlite", "row_id": next_row_id, "identity": identity},
+            out,
+            {"kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor},
         )
 
     def _parse_db_activity(

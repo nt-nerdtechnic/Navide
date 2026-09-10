@@ -57,6 +57,7 @@ from ..log_readers.base import (
     TokenUsage,
     activity_high_water,
     set_activity_high_water,
+    tail_anchor,
     user_prompt_text,
 )
 
@@ -199,14 +200,20 @@ def _read_text_tail(
     stat = path.stat()
     identity = f"{stat.st_dev}:{stat.st_ino}"
     prior_identity = str(checkpoint.get("identity") or "")
+    prior_anchor = str(checkpoint.get("anchor") or "")
     offset = max(0, int(checkpoint.get("offset") or 0))
     rotated = bool(offset and (prior_identity != identity or stat.st_size < offset))
-    if rotated:
-        offset = 0
 
     lines: list[tuple[int, str]] = []
-    committed = offset
     with path.open("rb") as fh:
+        # Same dev:ino and no shrink is not proof of the same file (see
+        # base.tail_anchor); a checkpoint from before the anchor existed
+        # carries none and is trusted as before.
+        if offset and not rotated and prior_anchor and tail_anchor(fh, offset) != prior_anchor:
+            rotated = True
+        if rotated:
+            offset = 0
+        committed = offset
         fh.seek(offset)
         while True:
             raw = fh.readline()
@@ -219,10 +226,11 @@ def _read_text_tail(
             lines.append(
                 (end, raw.decode("utf-8", errors="ignore").rstrip("\r\n"))
             )
+        anchor = tail_anchor(fh, committed) if committed else ""
 
     next_checkpoint = dict(checkpoint)
     next_checkpoint.update(
-        {"kind": "aider-md", "offset": committed, "identity": identity}
+        {"kind": "aider-md", "offset": committed, "identity": identity, "anchor": anchor}
     )
     return lines, next_checkpoint, rotated
 

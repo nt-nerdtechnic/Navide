@@ -83,6 +83,17 @@ JOIN session s ON s.id = m.session_id
 ORDER BY m.rowid
 """
 
+# The watermark row's immutable columns (`data` is rewritten while an
+# assistant message streams), so a replacement db can be recognised even
+# when it lands on the same dev:ino (Linux reuses a freed inode number for
+# the very next file created).
+_ANCHOR_SQL = "SELECT id, session_id FROM message WHERE rowid = ?"
+
+
+def _anchor(values: tuple) -> str:
+    """Fingerprint of one message row, columns in `_ANCHOR_SQL` order."""
+    return "|".join(str(v) for v in values)
+
 # Markers are typed by the user, so they live in text parts of user messages.
 # parent_id IS NULL keeps subagent child sessions out — a marker forwarded
 # into a subagent prompt must not bind the child id (it can't be resumed as
@@ -295,11 +306,25 @@ class OpencodeLogReader(LogReader):
         identity = f"{stat.st_dev}:{stat.st_ino}"
         replaced = bool(checkpoint.get("identity") and checkpoint.get("identity") != identity)
         last_row_id = 0 if replaced else max(0, int(checkpoint.get("row_id") or 0))
+        anchor = "" if replaced else str(checkpoint.get("anchor") or "")
         pending: set[int] = (
             set()
             if replaced
             else {int(r) for r in (checkpoint.get("pending") or []) if int(r) > 0}
         )
+        if last_row_id and anchor:
+            # Same dev:ino is not proof of the same db. A row standing under
+            # the watermark rowid that is not the message the mark was taken
+            # from was never credited — the db was replaced, or the newest
+            # rows were deleted and the rowid handed out again. Re-anchor just
+            # below it; anything further down is left alone, as for a drop,
+            # so a stale mark can never re-credit history. A missing row is
+            # left to the drop check below.
+            current = self._query(path, _ANCHOR_SQL, (last_row_id,))
+            if current and _anchor(current[0]) != anchor:
+                last_row_id -= 1
+                anchor = ""
+                pending = set()
 
         def _where(watermark: int, pend: set[int]) -> str:
             clause = f"WHERE m.rowid > {watermark}"
@@ -322,6 +347,8 @@ class OpencodeLogReader(LogReader):
                 # strictly preferable to re-crediting the whole history.
                 last_row_id = max_row_id
                 pending = set()
+                current = self._query(path, _ANCHOR_SQL, (last_row_id,))
+                anchor = _anchor(current[0]) if current else ""
 
         out: list[TokenUsage] = []
         next_row_id = last_row_id
@@ -333,11 +360,14 @@ class OpencodeLogReader(LogReader):
                 "row_id": next_row_id,
                 "pending": trimmed,
                 "identity": identity,
+                "anchor": anchor,
             }
 
         for row in rows:
             row_id = int(row[0])
-            next_row_id = max(next_row_id, row_id)
+            if row_id > next_row_id:
+                next_row_id = row_id
+                anchor = _anchor(row[1:3])
             event, done = self._event_from_row(path, row)
             if not done:
                 pending.add(row_id)  # streaming assistant row — recheck later
