@@ -304,7 +304,10 @@ def test_incremental_parse_resets_row_watermark_for_replaced_db(
     replacement.close()
     second = reader.parse_incremental(db, first.checkpoint)
     assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
-    assert second.checkpoint["identity"] != first.checkpoint["identity"]
+    # The checkpoint now describes the replacement. Do not assert the inode
+    # changed: ext4 hands a freed inode number to the next file created.
+    st = db.stat()
+    assert second.checkpoint["identity"] == f"{st.st_dev}:{st.st_ino}"
 
 
 # ── marker detection / session binding ──────────────────────────────────────
