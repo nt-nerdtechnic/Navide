@@ -65,6 +65,19 @@ LEFT JOIN workspaces w ON w.id = s.workspace_id
 ORDER BY u.id
 """
 
+# The watermark row's own columns, so a replacement db can be recognised even
+# when it lands on the same dev:ino (Linux reuses a freed inode number for
+# the very next file created).
+_ANCHOR_SQL = """
+SELECT session_id, model, input_tokens, output_tokens, created_at
+FROM usage_events WHERE id = ?
+"""
+
+
+def _anchor(values: tuple) -> str:
+    """Fingerprint of one usage row, columns in `_ANCHOR_SQL` order."""
+    return "|".join(str(v) for v in values)
+
 _MARKER_SQL = """
 SELECT m.session_id, m.message_json, COALESCE(w.scope_key, '')
 FROM messages m
@@ -407,6 +420,17 @@ class GrokLogReader(LogReader):
         identity = f"{stat.st_dev}:{stat.st_ino}"
         replaced = bool(checkpoint.get("identity") and checkpoint.get("identity") != identity)
         last_row_id = 0 if replaced else max(0, int(checkpoint.get("row_id") or 0))
+        anchor = "" if replaced else str(checkpoint.get("anchor") or "")
+        if last_row_id and anchor:
+            # Same dev:ino is not proof of the same db. A row standing under
+            # the watermark id that is not the row the mark was taken from
+            # means the numbering restarted: rescan from zero, as for a new
+            # inode. A missing row is left to the shrink check below.
+            current = self._query(path, _ANCHOR_SQL, (last_row_id,))
+            if current and _anchor(current[0]) != anchor:
+                replaced = True
+                last_row_id = 0
+                anchor = ""
         rows = self._query(
             path,
             _USAGE_SQL.replace("ORDER BY u.id", f"WHERE u.id > {last_row_id} ORDER BY u.id"),
@@ -425,7 +449,10 @@ class GrokLogReader(LogReader):
         next_row_id = last_row_id
         for row_id, session_id, model, inp, outp, created_at, ws_root in rows:
             next_row_id = max(next_row_id, int(row_id))
-            cursor = {"kind": "sqlite", "row_id": next_row_id, "identity": identity}
+            anchor = _anchor((session_id, model, inp, outp, created_at))
+            cursor = {
+                "kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor,
+            }
             input_tokens = _int(inp)
             output_tokens = _int(outp)
             if input_tokens == 0 and output_tokens == 0:
@@ -444,7 +471,7 @@ class GrokLogReader(LogReader):
             ))
         return IncrementalParseResult(
             out,
-            {"kind": "sqlite", "row_id": next_row_id, "identity": identity},
+            {"kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor},
         )
 
     def find_sessions_by_marker(

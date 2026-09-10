@@ -256,6 +256,33 @@ def test_incremental_parse_uses_row_id_watermark(tmp_path: Path, monkeypatch) ->
     assert second.checkpoint["row_id"] == 2
 
 
+def test_incremental_parse_resets_row_watermark_when_the_replacement_reuses_the_inode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Linux hands a freed inode number to the next file created in its place,
+    # so the replacement can carry the very identity the checkpoint recorded.
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    ws = tmp_path / "proj"
+    db = tmp_path / ".grok" / "grok.db"
+    con = _create_db(db)
+    _add_workspace(con, "w" * 16, str(ws))
+    _add_session(con, "abc123def456", "w" * 16, str(ws))
+    _add_usage(con, "abc123def456", 10, 2)
+    con.close()
+    first = reader.parse_incremental(db, {})
+
+    db.unlink()
+    replacement = _create_db(db)
+    _add_workspace(replacement, "w" * 16, str(ws))
+    _add_session(replacement, "abc123def456", "w" * 16, str(ws))
+    _add_usage(replacement, "abc123def456", 30, 7)
+    replacement.close()
+    stat = db.stat()
+    same_inode = {**first.checkpoint, "identity": f"{stat.st_dev}:{stat.st_ino}"}
+    second = reader.parse_incremental(db, same_inode)
+    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
+
+
 def test_incremental_parse_resets_row_watermark_for_replaced_db(
     tmp_path: Path, monkeypatch
 ) -> None:
