@@ -300,6 +300,12 @@ def _assert_config_file_safe(config_path: Path) -> None:
         for raw_key, raw_value in parser.items(raw_section):
             key = raw_key.lower()
             value = "" if raw_value is None else raw_value.strip()
+            # Newer configparser releases (3.12.14+, 3.14) keep a `name value`
+            # line without "=" as one valueless key instead of splitting on the
+            # space delimiter, so the name would never reach the lookups below.
+            # Git has no such syntax either: reject rather than interpret.
+            if any(ch.isspace() for ch in key):
+                raise ValueError("command is not permitted by the public shell policy")
             if section == "core" and key in {
                 "fsmonitor",
                 "hookspath",
