@@ -306,14 +306,35 @@ watch(() => stagesApi.stages.value, (ss) => {
  *  The open draft still holds the deep copy taken before it, so saving would
  *  write the vanished key back — exactly the dangling `role_key` the rename
  *  exists to prevent. Take the repointed keys and nothing else, so the fields
- *  the user is editing survive. Slot counts only differ when a slot edit
- *  failed to save, and index-matching would be guesswork then, so skip it. */
+ *  the user is editing survive.
+ *
+ *  A slot's identity here is its LABEL, never its position. The broadcast
+ *  carries no old/new key pair, and the two arrays stop lining up as soon as a
+ *  slot auto-save is refused (stages.upsert answers PIPELINE_RUNNING while a run
+ *  uses this pipeline; the draft keeps the edit regardless). Equal lengths do
+ *  not mean equal positions — delete one slot and add another and every index
+ *  names a different slot, so index-matching handed each draft slot its
+ *  neighbour's role key. Labels are what the rest of the stage machinery already
+ *  treats as a slot's identity (`slot:<label>` in releaseStageSlot, `to: <slot
+ *  label>` in the Manager protocol). A label without exactly one counterpart on
+ *  each side cannot be matched, so that slot is left as the user has it. */
 function sAdoptRepointedRoleKeys(stages: Stage[]): void {
   const draft = sDraft.value
   if (!draft || sIsNew.value || !draft.slots) return
   const fresh = stages.find((s) => s.id === draft.id)
-  if (!fresh || fresh.slots.length !== draft.slots.length) return
-  draft.slots.forEach((slot, i) => { slot.roleKey = fresh.slots[i].roleKey })
+  if (!fresh) return
+  const byUniqueLabel = (slots: StageSlot[]): Map<string, StageSlot> => {
+    const seen = new Map<string, StageSlot | null>()
+    for (const slot of slots) seen.set(slot.label, seen.has(slot.label) ? null : slot)
+    const unique = new Map<string, StageSlot>()
+    for (const [label, slot] of seen) if (slot) unique.set(label, slot)
+    return unique
+  }
+  const repointed = byUniqueLabel(fresh.slots)
+  for (const [label, slot] of byUniqueLabel(draft.slots)) {
+    const counterpart = repointed.get(label)
+    if (counterpart) slot.roleKey = counterpart.roleKey
+  }
 }
 
 function sSelectStage(id: string | null): void {

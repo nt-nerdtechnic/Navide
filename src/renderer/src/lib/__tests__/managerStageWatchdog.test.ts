@@ -11,7 +11,11 @@ describe('evaluateManagerStage', () => {
     })).toBe('ok')
   })
 
-  it('is ok before the Manager pane has been spawned', () => {
+  // The only "not spawned yet" the watchdog accepts: the router exists (a worker
+  // slot wired it) but its poll has not armed, so activateStage is still working
+  // through the slots. Past the arm the same shape means the commander never
+  // spawned — see the R2 cases below.
+  it('is ok before the router poll has armed', () => {
     expect(evaluateManagerStage({
       managerPaneId: '', managerPaneAlive: false,
       armedAt: 0, now: 10 * HOUR, maxDurationMs: HOUR,
@@ -57,6 +61,33 @@ describe('evaluateManagerStage', () => {
     })).toBe('ok')
   })
 
+  // R2: the commander slot's agentKey is no longer in agentSpecs, so spawnPane
+  // returned null and router.managerPaneId was never assigned. startRouterPoll
+  // runs only after Promise.all over every slot spawn has resolved, so past the
+  // arm an empty id is a permanent fact, not a slot still on its way.
+  it('does not call a stage healthy when the commander never spawned', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: '', managerPaneAlive: false,
+      armedAt: 1_000, now: 5_000, maxDurationMs: HOUR,
+    })).not.toBe('ok')
+  })
+
+  it('reports a never-spawned commander the same way as a dead one', () => {
+    // Same standing fact — nothing can print ---STAGE-DONE--- — so it takes the
+    // existing stall path rather than a verdict nothing is wired to handle.
+    expect(evaluateManagerStage({
+      managerPaneId: '', managerPaneAlive: false,
+      armedAt: 1_000, now: 5_000, maxDurationMs: HOUR,
+    })).toBe('manager-gone')
+  })
+
+  it('says so even when the cap is disabled, which is the only other backstop', () => {
+    expect(evaluateManagerStage({
+      managerPaneId: '', managerPaneAlive: false,
+      armedAt: 1_000, now: 10 * HOUR, maxDurationMs: 0,
+    })).toBe('manager-gone')
+  })
+
   it('treats a non-positive cap as disabled', () => {
     expect(evaluateManagerStage({
       managerPaneId: 'mgr', managerPaneAlive: true,
@@ -92,15 +123,38 @@ describe('fullAutoStallAction', () => {
     expect(asked).toBe(0)
   })
 
-  it('still gates a Manager-mode cap on the slot signals', () => {
-    // 'timeout' means the Manager is alive and can still print STAGE-DONE, so
-    // the ordinary gate applies and the cap re-raises later.
+  it('does not gate a Manager-mode cap on the slot signals either', () => {
+    // This used to answer 'keep-waiting' on a false gate, on the theory that the
+    // cap would simply re-raise later. It does not: continueWaitingStall restarts
+    // armedAt and clears the latch, so "later" is another full cap away and the
+    // answer is the same false gate again — an unbounded loop with no prompt on
+    // screen. The gate cannot be true for a Manager stage, so it is not asked.
+    expect(fullAutoStallAction({
+      managerVerdict: 'timeout', multiSlot: true, slotsFinished: never,
+    })).toBe('force-advance')
+  })
+
+  // R3: the slot gate is structurally unanswerable for a Manager stage, so asking
+  // it on a cap returned 'keep-waiting' forever — and continueWaitingStall
+  // restarts armedAt and clears the watchdog latch, so the next cap was another
+  // full hour away, with no prompt on screen and nobody watching.
+  it('force-advances a Manager-mode cap instead of asking an unanswerable question', () => {
     expect(fullAutoStallAction({
       managerVerdict: 'timeout', multiSlot: true, slotsFinished: () => false,
-    })).toBe('keep-waiting')
-    expect(fullAutoStallAction({
-      managerVerdict: 'timeout', multiSlot: true, slotsFinished: () => true,
     })).toBe('force-advance')
+  })
+
+  it('never consults the slot gate for ANY Manager verdict', () => {
+    for (const verdict of ['manager-gone', 'timeout'] as const) {
+      let asked = 0
+      const action = fullAutoStallAction({
+        managerVerdict: verdict,
+        multiSlot: true,
+        slotsFinished: () => { asked++; return false },
+      })
+      expect(asked, verdict).toBe(0)
+      expect(action, verdict).toBe('force-advance')
+    }
   })
 
   it('keeps single-slot behaviour exactly as it was: blind force-advance', () => {

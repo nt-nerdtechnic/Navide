@@ -11642,8 +11642,14 @@ function promptStageStall(
         slotsFinished: () => allSlotsFinished(computeStageSlotSignals(p.stageIndex)),
       })
       if (action === 'force-advance') {
-        if (p.managerVerdict === 'manager-gone') {
-          pipelineLog(`Stage ${p.stageId} 🤖 Full auto force-advanced — Manager pane is gone, nothing can end the stage`)
+        if (p.managerVerdict) {
+          // Every Manager verdict lands here, the cap included: a Manager stage
+          // arms no per-pane watcher, so no slot can ever read as finished and
+          // "all slots finished" below would be a lie about why this advanced.
+          const why = p.managerVerdict === 'timeout'
+            ? 'the stage hit its cap and only the Manager can end it'
+            : 'there is no live Manager, so nothing can end the stage'
+          pipelineLog(`Stage ${p.stageId} 🤖 Full auto force-advanced — ${why}`)
         } else if (!multiSlot) {
           pipelineLog(`Stage ${p.stageId} 🤖 Full auto force-advanced after ${FULL_AUTO_GRACE_MS / 1000}s`)
         } else {
@@ -11673,12 +11679,14 @@ function continueWaitingStall(): void {
   const router = stageRouters.get(p.stageIndex)
   if (router) {
     router.armedAt = Date.now()
+    // Only a person reaches this with a Manager verdict now — Full auto never
+    // keeps waiting on one, because the slot gate it would consult is
+    // structurally false for a Manager stage (see fullAutoStallAction).
     // Clearing the latch re-arms the watchdog, which is right for a cap: the
-    // fresh armedAt above means the next stall is another full cap away. It is
-    // wrong for 'manager-gone', whose verdict is a standing fact — the very
-    // next 4s poll re-reads it, re-raises the same prompt, and Full auto's
-    // "keep waiting" branch turns that into an endless loop of prompts. Choosing
-    // to keep waiting has to mean the question is settled, so the latch stands.
+    // fresh armedAt above means the next prompt is another full cap away. It is
+    // wrong for 'manager-gone', whose verdict is a standing fact — the very next
+    // 4s poll re-reads it and re-raises the identical prompt. Choosing to keep
+    // waiting has to mean the question is settled, so the latch stands.
     if (p.managerVerdict !== 'manager-gone') router.watchdogFired = false
     else pipelineLog(`Stage ${p.stageId} ⏯ Manager is gone — waiting until you abort or force-advance`)
   }
@@ -11863,18 +11871,29 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
     })
     if (verdict !== 'ok') {
       router.watchdogFired = true
-      const detail = verdict === 'manager-gone'
-        ? 'Manager pane is gone — nothing can print ---STAGE-DONE---'
-        : `hit ${Math.round(STAGE_MAX_DURATION_MS / 60_000)}min cap (Manager mode)`
+      // 'manager-gone' covers two shapes of the same standing fact, and the
+      // detail string is the only thing the log and the dialog show: an empty id
+      // means the commander slot never produced a pane at all (its agentKey is
+      // gone from agentSpecs), so saying a pane vanished would be a claim about
+      // something that never existed.
+      const detail = verdict === 'timeout'
+        ? `hit ${Math.round(STAGE_MAX_DURATION_MS / 60_000)}min cap (Manager mode)`
+        : router.managerPaneId
+          ? 'Manager pane is gone — nothing can print ---STAGE-DONE---'
+          : 'Manager slot never spawned — nothing can print ---STAGE-DONE---'
       pipelineLog(`Stage ${stage.id} ⚠ ${detail}`)
       if (verdict === 'manager-gone') {
         // The Manager slot can no longer report. Releasing it is what lets a
         // Manager-only stage end instead of sitting at state='running' — and it
-        // is a no-op when onKill already released the same slot.
-        releaseStageSlot(stageIndex, router.managerPaneId, 'Manager pane is gone')
-        // The release may have ended the run on its own (nothing left to run).
-        // It is already logged; a stall prompt on top would be noise.
-        if (pipeline.state !== 'running') return
+        // is a no-op when onKill already released the same slot. With no pane id
+        // there is nothing pane-keyed to release: the spawn-failure path already
+        // released this slot under `slot:<label>`.
+        if (router.managerPaneId) {
+          releaseStageSlot(stageIndex, router.managerPaneId, 'Manager pane is gone')
+          // The release may have ended the run on its own (nothing left to run).
+          // It is already logged; a stall prompt on top would be noise.
+          if (pipeline.state !== 'running') return
+        }
       }
       // The verdict rides along: it is what tells the two stall buttons that
       // this is a STAGE stall (no per-pane watcher exists to restart, and no
@@ -16021,7 +16040,8 @@ function paneIsCommander(p: ActivePane): boolean {
                  gone Manager "keep waiting" resets nothing and is the last
                  prompt this stage will raise. -->
             <p v-if="stageStallPrompt.managerVerdict === 'manager-gone'" class="stall-hint">
-              Manager 模式：Manager pane 已消失，沒有東西能再印出 ---STAGE-DONE---。
+              Manager 模式：沒有活著的 Manager pane（已結束，或這個 slot 從未啟動成功），
+              沒有東西能再印出 ---STAGE-DONE---。
               選擇<strong>繼續等待</strong>不會重置任何計時器，而且這是本階段最後一次提示——
               之後的出口只剩中止整個 pipeline；<strong>強制推進</strong>會結束<strong>整個 stage</strong>並前進到下一階段。
             </p>

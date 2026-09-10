@@ -330,6 +330,169 @@ describe('PipelineManagerModal — role key rename', () => {
     expect((sent?.payload.stage as { title: string }).title).toBe('Specification v2')
   })
 
+  // ── Adoption identity: the slot LABEL, never the array index ──────────────
+  // Slot edits auto-save (sRemoveSlot / sConfirmAddSlot both call sSave), so the
+  // draft and the persisted stage diverge exactly when that save is REFUSED —
+  // stages.upsert answers PIPELINE_RUNNING while a run uses this pipeline, and
+  // the draft keeps the edit either way. Equal LENGTHS then say nothing about
+  // equal positions: delete one slot and add another and every index means a
+  // different slot, so index-matching hands each draft slot its neighbour's role
+  // key on the next rename — silently, on save.
+  const stageWithSlots = (slots: { label: string; roleKey: string }[]) => ({
+    id: '01',
+    title: 'Specification',
+    short_title: 'Spec',
+    question: '',
+    description: '',
+    recommended_roles: [],
+    sentinel: '',
+    allow_questions: false,
+    doc_query: '',
+    slots: slots.map((s) => ({
+      agent_key: 'claude', role_key: s.roleKey, label: s.label,
+      kickoff_body: '', is_commander: false,
+    })),
+  })
+
+  const backendRole: Role = { key: 'backend', label: 'Backend Dev', one_line: 'b', system_prompt: '# B' }
+  const frontendRole: Role = { key: 'frontend', label: 'Frontend Dev', one_line: 'f', system_prompt: '# F' }
+  const PERSISTED = [{ label: 'Lead', roleKey: 'backend' }, { label: 'Second', roleKey: 'frontend' }]
+  const REPOINTED = [{ label: 'Lead', roleKey: 'backend2' }, { label: 'Second', roleKey: 'frontend' }]
+
+  /** Mount with a persisted two-slot stage, open its draft, and make every slot
+   *  auto-save fail — so the draft diverges from the persisted stage the way a
+   *  refused edit leaves it. */
+  async function openDivergingStageDraft() {
+    const mock = createMockBackend('connected')
+    mock.setResponse('roles.list', {
+      roles: [backendRole, frontendRole, qa], path: '/data/roles.json',
+    })
+    mock.setResponse('pipelines.list', {
+      pipelines, active_pipeline_id: 'default', path: '/data/pipelines.json',
+    })
+    mock.setResponse('stages.list', {
+      stages: [stageWithSlots(PERSISTED)], pipeline_id: 'default', path: '/data/stages.json',
+    })
+    mock.setResponse('stages.upsert', null, {
+      ok: false, error: { code: 'PIPELINE_RUNNING', message: 'Cannot edit stages while the active pipeline is running' },
+    })
+
+    scope = effectScope()
+    let rolesApi!: ReturnType<typeof useRoles>
+    let pipelinesApi!: ReturnType<typeof usePipelines>
+    scope.run(() => {
+      rolesApi = useRoles(mock.backend)
+      pipelinesApi = usePipelines(mock.backend)
+    })
+    await flushPromises()
+    const w = mount(PipelineManagerModal, {
+      props: {
+        backend: mock.backend, terminalPort: createTerminalDockStub(),
+        rolesApi, pipelinesApi, workspacePath: '/tmp/ws', open: true,
+      },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    })
+    await flushPromises()
+    wrapper = w
+    await w.findAll('.tabs button')[0].trigger('click')
+    await flushPromises()
+    await w.findAll('.tab-body')[0].find('.pl-list .pl-item').trigger('click')
+    await flushPromises()
+    return { mock, w }
+  }
+
+  // Every query has to be fresh: the slot section re-renders on each edit, and a
+  // held wrapper reports the pre-render disabled state instead.
+  const slotsSection = (w: VueWrapper): DOMWrapper<Element> =>
+    w.findAll('.tab-body')[0].find('.slots-section')
+
+  async function deleteSlot(w: VueWrapper, index: number): Promise<void> {
+    const items = slotsSection(w).findAll('.slot-item')
+    expect(items.length, 'slot rows').toBeGreaterThan(index)
+    await items[index].find('.icon-btn.danger-icon').trigger('click')
+    await flushPromises()
+  }
+
+  async function addSlot(w: VueWrapper, label: string, roleKey: string): Promise<void> {
+    await slotsSection(w).find('button.ghost.small').trigger('click')
+    await flushPromises()
+    await (slotsSection(w).findAll('.slot-form input[type="text"]')[0] as DOMWrapper<HTMLInputElement>)
+      .setValue(label)
+    await (slotsSection(w).findAll('.slot-form select')[1] as DOMWrapper<HTMLSelectElement>)
+      .setValue(roleKey)
+    await flushPromises()
+    const add = slotsSection(w).findAll('.slot-form .primary')[0]
+    expect(add.attributes('disabled'), 'Add is enabled once the label is typed').toBeUndefined()
+    await add.trigger('click')
+    await flushPromises()
+  }
+
+  /** `label:role_key` of every slot in the last stages.upsert the modal sent. */
+  const savedSlots = (mock: ReturnType<typeof createMockBackend>): string[] => {
+    const sent = mock.sent.filter((s) => s.type === 'stages.upsert').at(-1)
+    const stage = sent?.payload.stage as { slots: { role_key: string; label: string }[] } | undefined
+    expect(stage, 'a stages.upsert was sent').toBeDefined()
+    return stage!.slots.map((s) => `${s.label}:${s.role_key}`)
+  }
+
+  /** Let the next save through, then click Save. */
+  async function saveStageForReal(
+    mock: ReturnType<typeof createMockBackend>, w: VueWrapper
+  ): Promise<void> {
+    mock.setResponse('stages.upsert', { stage: stageWithSlots(PERSISTED) })
+    await saveStage(w)
+  }
+
+  it('does not swap roles between slots when a delete+add kept the length equal', async () => {
+    const { mock, w } = await openDivergingStageDraft()
+    // Draft becomes [Second(frontend), Third(qa)] — still two slots, but index 0
+    // is a different slot than the persisted index 0.
+    await deleteSlot(w, 0)
+    await addSlot(w, 'Third', 'qa')
+
+    mock.emit('stages.changed', {
+      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
+    })
+    await flushPromises()
+    await saveStageForReal(mock, w)
+
+    // Index adoption wrote Second:backend2 / Third:frontend here — both of the
+    // user's role choices replaced by their neighbour's, with no error shown.
+    expect(savedSlots(mock)).toEqual(['Second:frontend', 'Third:qa'])
+  })
+
+  it('still adopts the repointed key when the draft has one slot more', async () => {
+    // The length check used to skip adoption outright here, so the draft wrote
+    // the vanished `backend` key back — the dangling role_key the rename exists
+    // to prevent. Labels match one-to-one, so nothing has to be guessed.
+    const { mock, w } = await openDivergingStageDraft()
+    await addSlot(w, 'Third', 'qa')
+
+    mock.emit('stages.changed', {
+      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
+    })
+    await flushPromises()
+    await saveStageForReal(mock, w)
+
+    expect(savedSlots(mock)).toEqual(['Lead:backend2', 'Second:frontend', 'Third:qa'])
+  })
+
+  it('leaves a duplicated label alone rather than guessing which slot it is', async () => {
+    // Two draft slots named "Second": no unique counterpart on the draft side, so
+    // adopting into either is a coin flip and neither moves.
+    const { mock, w } = await openDivergingStageDraft()
+    await deleteSlot(w, 0)
+    await addSlot(w, 'Second', 'qa')
+
+    mock.emit('stages.changed', {
+      stages: [stageWithSlots(REPOINTED)], pipeline_id: 'default', reason: 'role_rename',
+    })
+    await flushPromises()
+    await saveStageForReal(mock, w)
+
+    expect(savedSlots(mock)).toEqual(['Second:frontend', 'Second:qa'])
+  })
+
   it('leaves the draft alone for a stage change that is not a rename', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('roles.list', { roles: [pm, qa], path: '/data/roles.json' })
