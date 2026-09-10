@@ -4,6 +4,7 @@
   "private": true,
   "author": "Navide Team",
   "description": "Navide: the AI-native engineering environment for one engineer directing multiple coding agents",
+  "desktopName": "navide.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/nt-nerdtechnic/Navide.git"
@@ -132,13 +133,7 @@
       "maintainer": "Navide Team <nt.fitproject@gmail.com>",
       "synopsis": "AI-native engineering environment for directing multiple coding agents",
       "description": "Navide is a desktop engineering environment for one engineer directing multiple coding agent CLIs.",
-      "desktop": {
-        "entry": {
-          "Name": "Navide",
-          "Categories": "Development;IDE;",
-          "StartupWMClass": "Navide"
-        }
-      }
+      "syncDesktopName": true
     }
   },
   "devDependencies": {
