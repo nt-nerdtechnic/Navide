@@ -6,6 +6,7 @@ import { createHostGitSettingsPort, createHostGitSurfacePorts, createHostKeybind
 import { revealPath } from './composables/hostShell'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import ExplorerPane from './components/ExplorerPane.vue'
+import WindowControls from './components/WindowControls.vue'
 import SearchPane from './components/SearchPane.vue'
 import GitPane from './components/GitPane.vue'
 import EditorPane from './editor/EditorPane.vue'
@@ -1944,6 +1945,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   <div class="ide">
     <!-- Titlebar -->
     <div v-show="!zenMode" class="ide-titlebar">
+      <WindowControls />
       <span class="ide-titlebar-name">{{ workspaceBaseName }}</span>
     </div>
     <div class="ide-body">

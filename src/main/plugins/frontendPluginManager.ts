@@ -10,6 +10,7 @@
 import { BrowserWindow, WebContentsView, ipcMain, type WebContents } from 'electron'
 import { warnMain } from '../main-log'
 import { validateSupportedLocale } from '../hostLocale'
+import { systemFrameUnlessMac } from '../window-controls'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -7314,7 +7315,9 @@ function ensureMiniIdeWindow(): BrowserWindow {
     width: 1100,
     height: 760,
     title: 'Mini-IDE',
-    titleBarStyle: 'hidden',
+    // See systemFrameUnlessMac: this window hosts plugin content that draws no
+    // window controls, so off macOS it needs the system's own frame.
+    ...systemFrameUnlessMac(),
     backgroundColor: '#0d1117',
   })
   miniIdeWindow = win
@@ -7647,7 +7650,9 @@ function ensurePlansWindow(): BrowserWindow {
     width: 1100,
     height: 760,
     title: 'Plans',
-    titleBarStyle: 'hidden',
+    // See systemFrameUnlessMac: this window hosts plugin content that draws no
+    // window controls, so off macOS it needs the system's own frame.
+    ...systemFrameUnlessMac(),
     backgroundColor: '#0d1117',
   })
   plansWindow = win
@@ -7841,7 +7846,9 @@ function ensureGitWindow(): BrowserWindow {
     width: 1280,
     height: 820,
     title: 'Git',
-    titleBarStyle: 'hidden',
+    // See systemFrameUnlessMac: this window hosts plugin content that draws no
+    // window controls, so off macOS it needs the system's own frame.
+    ...systemFrameUnlessMac(),
     backgroundColor: '#0d1117',
   })
   gitWindow = win

@@ -4,6 +4,7 @@ import {
   PLANS_PLUGIN_ID,
 } from './plugins/frontendPluginManager'
 import type { PlansStorageAvailability } from './plugins/plansStorageMigrationGate'
+import { systemFrameUnlessMac } from './window-controls'
 
 export interface PlansWindowRouterOptions {
   frontendPluginManager: FrontendPluginManager
@@ -75,7 +76,11 @@ export function getContributionWindowConfig(
     width: 1280,
     height: 820,
     title,
-    titleBarStyle: 'hidden',
+    // Hidden on macOS, where the system still paints the traffic lights over
+    // it; a system frame elsewhere, because this window's content is a plugin
+    // bundle that draws no controls of its own. Without this the window has no
+    // way to be closed at all on Windows and Linux.
+    ...systemFrameUnlessMac(),
     backgroundColor: '#0d1117',
     show: false,
     webPreferences: {

@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, reactive, ref, watch, type Ref } from 'vue'
 import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
+import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import { buildWorkspaceGroups, workspaceParentPath } from './lib/workspaceGroups'
 import { buildPaneLineage } from './lib/paneLineage'
@@ -15784,6 +15785,10 @@ function paneIsCommander(p: ActivePane): boolean {
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftTrackWidth, '--up-height': upTrackHeight, '--down-height': downTrackHeight, '--rail-size': RAIL_SIZE + 'px', '--chrome-bottom': shellLayout.chrome.statusbar ? '24px' : '0px' }" :class="{ 'is-resizing-shell': isShellDragging, 'is-resizing-grid': isGridDragging }">
     <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
     <div class="titlebar">
+      <!-- Absolutely positioned, so DOM order here does not affect the bar's
+           own layout. Renders nothing on macOS, where the system draws the
+           traffic lights over this window itself. -->
+      <WindowControls />
       <!-- The path and the workspace switcher both used to live here; the
            sidebar's Workspace section carries them now (the path under each
            project name, ＋ to open another one). Reveal-in-Finder went with
