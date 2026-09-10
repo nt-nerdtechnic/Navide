@@ -11,6 +11,10 @@ import { describe, expect, it } from 'vitest'
 // in this suite.
 const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
+// See App.sessionMarkerTurn.test.ts: the call is matched as a pattern so a
+// line wrap in the argument list is not read as a missing timestamp.
+const RECORD_TURN_COMPLETE = /recordTurnComplete\(\s*paneTurnCompleteAt,\s*ev\.pane_id\b/
+
 function handler(eventName: string): string {
   const start = appSource.indexOf(`backend.on('${eventName}'`)
   expect(start).toBeGreaterThan(-1)
@@ -66,7 +70,7 @@ describe('agent.activity — a turn end the Stop hook superseded', () => {
     // that the idle timestamp is the thing skipped when the turn was
     // superseded, not how that timestamp is recorded.
     const guarded = body.slice(body.indexOf('if (!ev.superseded) {'), body.indexOf('markTurnComplete'))
-    expect(guarded).toContain('recordTurnComplete(paneTurnCompleteAt, ev.pane_id')
+    expect(guarded).toMatch(RECORD_TURN_COMPLETE)
     expect(body).toContain('if (!markerReply && !ev.superseded) scheduleDoneNotify')
   })
 

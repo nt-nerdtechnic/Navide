@@ -10,6 +10,11 @@ import { describe, expect, it } from 'vitest'
 // the bootstrap and that every side effect it is supposed to drop consults it.
 const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
+// Matched as a pattern, not a literal line: the call's arguments have been
+// wrapped across lines before, and reflowing them is not a behaviour change.
+// What is owned here is that the idle timestamp is recorded for THIS pane.
+const RECORD_TURN_COMPLETE = /recordTurnComplete\(\s*paneTurnCompleteAt,\s*ev\.pane_id\b/
+
 function fnBody(header: string): string {
   const start = appSource.indexOf(header)
   expect(start).toBeGreaterThan(-1)
@@ -55,7 +60,7 @@ describe('session-marker gate wiring', () => {
     const body = activityHandler()
     // The pane genuinely went idle, so the badge and the turn timestamp must
     // stay truthful — only the user-facing effects are dropped.
-    expect(body).toContain('recordTurnComplete(paneTurnCompleteAt, ev.pane_id')
+    expect(body).toMatch(RECORD_TURN_COMPLETE)
     expect(body).toContain('markTurnComplete?.()')
     // Not "appears somewhere in a 360-line handler": the enclosing conditions
     // are what this owns. Everything between the turn_complete branch and the
@@ -63,7 +68,7 @@ describe('session-marker gate wiring', () => {
     // spelled `if (!markerReply && !ev.superseded)` satisfied every loose form
     // of this assertion while doing the exact thing it forbids.
     const turnComplete = body.slice(body.indexOf("if (ev.event_type === 'turn_complete') {"))
-    const upToRecord = turnComplete.slice(0, turnComplete.indexOf('recordTurnComplete(paneTurnCompleteAt'))
+    const upToRecord = turnComplete.slice(0, turnComplete.search(RECORD_TURN_COMPLETE))
     expect(upToRecord, 'a marker guard on the turn timestamp').not.toContain('markerReply')
     expect(upToRecord.trimEnd().endsWith('if (!ev.superseded) {')).toBe(true)
     // The badge reset is unguarded entirely — the pane really did go idle.
