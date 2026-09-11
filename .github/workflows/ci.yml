@@ -283,11 +283,12 @@ jobs:
     # Same suite as the macOS and Linux jobs, where os.name is "nt". Import
     # first: until the POSIX-only modules sit behind osplat the app does not
     # even load here, and that is a clearer signal than a wall of collection
-    # errors. pytest-timeout is the guard against a test that waits on a
-    # POSIX-only thing forever; the runner has no SIGALRM, so the thread
-    # method, which ends the whole run at the first timeout.
+    # errors. The suite does not run as a plain step: with pytest attached to
+    # the step's console and pipe the step never ended and the job timeout
+    # discarded the log (verified again after the suite was green detached),
+    # so backend/ci_windows_tests.py runs it detached under a Job Object.
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Check out source
@@ -314,8 +315,50 @@ jobs:
       - name: Backend imports on Windows
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
+      - name: Start the backend tests
+        # --detach starts a copy of the script with a log file as its only
+        # inherited handle and returns at once; the copy joins a kill-on-close
+        # Job Object, runs pytest, reports every minute and writes the exit
+        # code to ci-windows-tests.done.
+        shell: pwsh
+        run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py --detach
+
       - name: Backend tests
-        run: uv --project backend run --locked pytest backend/tests --timeout=90 --timeout-method=thread -o faulthandler_timeout=120
+        # pwsh, not bash: Start-Sleep is in-process, so this step has no
+        # children at all and ends when the marker appears or at the cap.
+        shell: pwsh
+        timeout-minutes: 25
+        run: |
+          $deadline = (Get-Date).AddMinutes(24)
+          $seen = 0
+          while (-not (Test-Path ci-windows-tests.done) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 30
+            if (Test-Path ci-windows-tests.log) {
+              $lines = @(Get-Content ci-windows-tests.log)
+              if ($lines.Count -gt $seen) { $lines[$seen..($lines.Count - 1)] | ForEach-Object { Write-Host $_ }; $seen = $lines.Count }
+            }
+          }
+          Write-Host "--- full runner log:"
+          if (Test-Path ci-windows-tests.log) { Get-Content ci-windows-tests.log } else { Write-Host "(no ci-windows-tests.log)" }
+          if (-not (Test-Path ci-windows-tests.done)) { Write-Host "--- runner still going at the cap"; exit 1 }
+          exit [int](Get-Content ci-windows-tests.done)
+
+      - name: Report the backend test log
+        # The job's log blob is uploaded when the job ends, so a hang in any
+        # step loses every step's output. This step must not hang either:
+        # pwsh, no children.
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- processes still around:"
+          Get-Process | Where-Object { $_.ProcessName -match 'python|node|winpty|conhost|OpenConsole|git|uv|pytest|cmd|powershell|pwsh|claude|codex' } | ForEach-Object { Write-Host ("{0} ({1})" -f $_.ProcessName, $_.Id) }
+          if (Test-Path pytest.log) {
+            $lines = @(Get-Content pytest.log)
+            Write-Host ("--- results so far: {0}" -f @($lines | Where-Object { $_ -match ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' }).Count)
+            Write-Host "--- last 200 lines of pytest.log:"
+            $lines | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }
+            $lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 100 | ForEach-Object { Write-Host $_ }
+          } else { Write-Host "(no pytest.log)" }
 
   plans:
     name: Packaged Plans checks (macOS)

@@ -66,7 +66,9 @@ describe('plansDirectories', () => {
       isAllowedPlanDocumentPath('link-0000/.agent-team/plans/p.html', tempWorkspace),
     ).toBe(false)
     expect(vi.mocked(statSync).mock.calls.length).toBeLessThanOrEqual(MAX_NESTED_CANDIDATES)
-  })
+    // Creating 3000 directory symlinks takes several seconds on the Windows
+    // runner; what is measured here is the probe count, not the setup.
+  }, 30_000)
 
   it('reuses the discovered allowset instead of re-running the traversal', () => {
     for (let i = 0; i < 300; i++) {
