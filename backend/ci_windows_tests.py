@@ -43,7 +43,16 @@ CAP_SECONDS = 20 * 60
 REPORT_EVERY = 60
 RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
 
+JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x0008
+JOB_OBJECT_LIMIT_JOB_MEMORY = 0x0200
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+# Round 16: a pwsh loop with no children stayed "in progress" past its own
+# deadline and its step timeout, so the runner agent itself had stopped
+# responding — the shape of a process storm or a memory bomb, not a pipe.
+# Fence the suite in: a spawn or allocation past these fails inside the job,
+# with a traceback that names the test, while the runner stays alive.
+MAX_PROCESSES = 48
+MAX_JOB_MEMORY = 4 * 1024 ** 3
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -117,7 +126,9 @@ def _join_job():
         print(f"--- job object: CreateJobObjectW failed ({ctypes.get_last_error()})")
         return None
     info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_JOB_MEMORY
+    info.BasicLimitInformation.ActiveProcessLimit = MAX_PROCESSES
+    info.JobMemoryLimit = MAX_JOB_MEMORY
     if not k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)):
         print(f"--- job object: SetInformationJobObject failed ({ctypes.get_last_error()})")
         return None
@@ -125,7 +136,7 @@ def _join_job():
         # Nested jobs need Windows 8+; the runner has that, but say so if not.
         print(f"--- job object: AssignProcessToJobObject failed ({ctypes.get_last_error()}); running unjailed")
         return None
-    print("--- job object: joined, kill-on-close")
+    print(f"--- job object: joined, kill-on-close, max {MAX_PROCESSES} processes, {MAX_JOB_MEMORY >> 30} GiB")
     return k32, job
 
 
@@ -205,7 +216,8 @@ def main() -> int:
         time.sleep(REPORT_EVERY)
         elapsed = int(time.monotonic() - started)
         peers = _describe(_job_pids(job)) if job else "(no job)"
-        print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}", flush=True)
+        vm = psutil.virtual_memory()
+        print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}\n    vm: {vm.percent}% of {vm.total >> 20} MiB used, cpu {psutil.cpu_percent()}%, {len(psutil.pids())} processes", flush=True)
 
     survivors = [pid for pid in (_job_pids(job) if job else []) if pid != os.getpid()]
     print(f"--- pytest exit: {rc if rc is not None else 'still running at cap'}")
