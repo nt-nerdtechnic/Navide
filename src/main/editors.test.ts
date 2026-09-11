@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { delimiter, join, sep } from 'node:path'
 import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
@@ -184,6 +184,12 @@ const usrBin = join(sep, 'usr', 'bin')
 const searchPath = [optBin, usrBin].join(delimiter)
 
 describe('whichIn', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH); pinned so the
+  // Windows runner checks the same contract, and the `on Windows` block below
+  // opts into the suffixed lookup explicitly.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   const exists = (paths: string[]) => (p: string): boolean => paths.includes(p)
   const always = (): boolean => true
 
@@ -256,6 +262,11 @@ describe('whichIn', () => {
 })
 
 describe('resolveEditorCommand', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH, an .app-bundled
+  // CLI); pinned so the Windows runner checks the same contract.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   const vscode = BUILT_IN_EDITORS.find((e) => e.id === 'vscode')!
   const always = (): boolean => true
 
@@ -279,6 +290,11 @@ describe('resolveEditorCommand', () => {
 })
 
 describe('detectEditors', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH); pinned so the
+  // Windows runner checks the same contract.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('reports availability per editor', () => {
     const cursor = join(usrBin, 'cursor')
     const found = detectEditors(usrBin, (p) => p === cursor, () => true)

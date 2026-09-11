@@ -195,6 +195,12 @@ function fakeDeps(bytes: Uint8Array, digestHeader: string | null = 'from-header'
 }
 
 describe('prepareInstall', () => {
+  // The archive fixtures are the POSIX package shape (a bare `backend/entry`
+  // carrying an exec bit); pinned so the Windows runner checks the same
+  // contract, and the `on Windows` block opts into the .exe rule explicitly.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('rejects an install request without explicit provenance', async () => {
     const { bytes, digest } = pkg()
     const { deps } = fakeDeps(bytes, digest)
@@ -631,6 +637,12 @@ describe('prepareInstall', () => {
 })
 
 describe('commitInstall', () => {
+  // The archive fixtures are the POSIX package shape (a bare `backend/entry`
+  // carrying an exec bit); pinned so the Windows runner checks the same
+  // contract.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('writes a backend-only package without creating a frontend descriptor', async () => {
     const { bytes, digest } = v2Pkg([
       {
