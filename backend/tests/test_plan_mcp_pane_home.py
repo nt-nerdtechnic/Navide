@@ -473,3 +473,14 @@ def test_wire_command_leaves_a_preset_shim_var_alone(home: Path) -> None:
     plan_mcp_wiring.wire_command("kimi", "kimi", 4567, "p1", env)
     assert env == {"KIMI_CODE_HOME": "/somewhere/else"}
     assert not (home / ".navide-panes").exists()
+
+
+def test_no_symlinks_means_no_shim_and_no_files(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows without Developer Mode cannot create links: the pane spawns
+    unwired after one warning instead of failing entry by entry."""
+    from agent_team_backend import osplat
+
+    (home / ".claude").mkdir()
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
+    assert pane_home.prepare("claude", "p1", URL, SERVER) is None
+    assert not (home / pane_home.PANES_DIR_NAME).exists()

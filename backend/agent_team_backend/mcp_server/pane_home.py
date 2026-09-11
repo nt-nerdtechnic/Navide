@@ -43,6 +43,7 @@ from typing import Any
 
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document
+from agent_team_backend import osplat
 from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.pane_home")
@@ -372,6 +373,11 @@ def prepare(
     spec = SHIM_SPECS.get(agent_key)
     root = shim_root(agent_key, pane_id)
     if spec is None or root is None:
+        return None
+    if not osplat.paths.symlinks_available():
+        # A shim is a tree of links. Without the privilege (Windows before
+        # Developer Mode) every entry would fail one by one; one line, unwired.
+        log.warning("symbolic links unavailable: %s pane %s spawns unwired", agent_key, pane_id)
         return None
     home = real_home()
     if PANES_DIR_NAME in home.parts:
