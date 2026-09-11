@@ -108,6 +108,24 @@ server = FastMCP(
         "last few hundred sends, gone on restart, so an unknown key means "
         "\"no longer tracked\", not \"never sent\".\n"
         "\n"
+        "Other machines: when this machine is linked to a Navide-Server, the "
+        "user's other machines are in reach too. cli_list_targets returns "
+        "their panes as a separate `remote_targets` list, addressed by the "
+        "three-part `<device>/<workspace>/<pane>` form that cli_send, "
+        "cli_send_and_wait, cli_get_status and cli_wait_idle all accept. "
+        "Reaching one travels through the server, so it fails in ways a local "
+        "send cannot — the far machine may be offline or refuse on policy "
+        "grounds — and there is no reading its log, interrupting it or "
+        "closing it from here. `remote_targets` is absent whenever there is "
+        "nothing to reach, which covers an unlinked machine and a linked one "
+        "whose other machines simply have no pane open; cli_whoami's `cloud` "
+        "key is what tells those two apart, so read it before telling the "
+        "user anything about why. Linking itself — signing in, pairing a "
+        "device, trusting or blocking one — moves trust state and is on no "
+        "tool by design: it is the user's to do in Navide's account window, "
+        "and saying so is the answer, not hunting for a tool that would do "
+        "it for them.\n"
+        "\n"
         "When you need the answer and not just the send, use cli_send_and_wait "
         "instead: it sends and then waits for that pane to finish the turn, "
         "handling the race a hand-written cli_send + cli_wait_idle loses (the "
@@ -433,6 +451,25 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     reachable) and `status` (the server's own word for the pane). `offline` is
     true when either half says the message would not land right now. Prefer a
     local target when one would do.
+
+    Four tools take that three-part address: cli_send, cli_send_and_wait,
+    cli_get_status and cli_wait_idle. So a remote pane can be told something,
+    asked something and watched — but never read, stopped or closed, because
+    those three need the pane's own machine. Two of them say so: cli_interrupt
+    refuses a remote address with "interrupt-local-only" and cli_close_agent
+    with "close-local-only". cli_read_log does not — it has no remote branch,
+    so the address falls through to the local lookup and comes back
+    "unknown-target", which reads like a typo and is not one. `pane_id` is no
+    way around any of it: remote targets carry none, so the three-part name is
+    the only handle there is.
+
+    That key being absent covers two situations that are not the same: this
+    machine has no server link at all, or it has one and no other machine has a
+    pane open. cli_whoami's `cloud` key tells them apart, and only the first is
+    something the user can go do anything about. Linking itself — signing in,
+    pairing a device, trusting or blocking one — moves trust state and is on no
+    tool by design: it is the user's to do in Navide's account window, so say
+    that rather than looking for a tool that would do it for them.
     """
     from agent_team_backend import agent_messaging, remote_roster
 
@@ -503,10 +540,23 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     backend restart forgets every wait, so absence is "nobody is parked on me
     that this backend knows of", not proof that nobody wants your answer.
 
+    `cloud` says whether this machine is linked to a Navide-Server, which is
+    what decides whether panes on the user's OTHER machines can be addressed at
+    all. `state` is "connected" when they can, and "connecting", "unreachable",
+    "unauthorized" or "waiting-for-keychain" when the link exists but is not
+    carrying anything right now — each one a different thing to tell the user.
+    `device_id` is this machine's own id once the server has issued one. The
+    key is ABSENT when no link is configured. Read it when cli_list_targets
+    came back with no `remote_targets`: that absence means "no server" and "a
+    server, but no pane open on any other machine" alike, and this is what
+    tells the two apart. Nothing here is a control: signing in, pairing a
+    device, trusting or blocking one all move trust state, so they are the
+    user's to do in Navide's account window and are deliberately on no tool.
+
     A caller with no pane identity (host / external credential) is not a pane
     and has none of these: it gets {ok, caller} only.
     Returns {ok, caller, name, address, pane_id, workspace_path, agent_key,
-    busy, offline, hold_reason?, spawned_by?, waiting_on_me?} or
+    busy, offline, hold_reason?, spawned_by?, waiting_on_me?, cloud?} or
     {ok: false, error}.
     """
     from agent_team_backend import agent_messaging
@@ -550,6 +600,22 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     waiting = _waiting_on_me(me.pane_id)
     if waiting:
         result["waiting_on_me"] = waiting
+    # Absent on an unlinked machine, for the same reason every optional key
+    # here is: it must read byte-for-byte as it did before cross-device
+    # addressing existed. Present the moment there is a link, because that is
+    # the one question cli_list_targets cannot answer — a missing
+    # `remote_targets` means "no server" and "a server, but nobody else has a
+    # pane open" alike, and only the first of those is worth telling the user
+    # to go fix.
+    from agent_team_backend import server_link
+
+    state = server_link.link_state()
+    if state != server_link.STATE_UNCONFIGURED:
+        cloud: dict[str, Any] = {"state": state}
+        device_id = server_link.local_device_id()
+        if device_id:
+            cloud["device_id"] = device_id
+        result["cloud"] = cloud
     return result
 
 

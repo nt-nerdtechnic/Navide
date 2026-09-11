@@ -3220,6 +3220,17 @@ def own_member_id() -> str:
     return _link._own_member if _link is not None else ""
 
 
+def link_state() -> str:
+    """This machine's link state, without paying for ``status()``.
+
+    ``status()`` answers the Settings UI, so it reaches the Keychain for the
+    account email and the fingerprint. A caller that only has to know whether
+    cross-device addressing works right now needs none of that, and one of
+    those callers is an MCP tool answering on every invocation.
+    """
+    return _link.state() if _link is not None else STATE_UNCONFIGURED
+
+
 def local_device_id() -> str:
     """This machine's device id, or "" before a link has one."""
     return _link._device_id if _link is not None else ""

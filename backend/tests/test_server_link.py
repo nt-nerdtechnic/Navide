@@ -1857,6 +1857,50 @@ async def test_module_helpers_do_nothing_without_a_link():
     assert server_link.note_delivery_result("k", True, "") is False
     await server_link.stop()
 
+
+async def test_link_state_is_unconfigured_without_a_link():
+    """Same regression line as the helpers above, for the cheap state read: a
+    machine with no server configured answers the word that means "no link",
+    not an empty string a caller would have to guess at."""
+    assert server_link._link is None
+    assert server_link.link_state() == server_link.STATE_UNCONFIGURED
+
+
+def test_link_state_reports_the_installed_links_own_state(monkeypatch):
+    """It delegates rather than deciding: whatever the link says right now is
+    the answer, including the states that are not "connected"."""
+
+    class StubLink:
+        def state(self) -> str:
+            return server_link.STATE_UNREACHABLE
+
+    monkeypatch.setattr(server_link, "_link", StubLink())
+    assert server_link.link_state() == server_link.STATE_UNREACHABLE
+
+
+def test_link_state_answers_without_the_keychain_reads_status_pays_for(monkeypatch):
+    """Why it exists at all: status() reaches the Keychain for the account
+    email and the fingerprint, and an MCP tool that answers on every invocation
+    cannot pay that. Both are booby-trapped here, so a link_state() that grew a
+    status() call would fail rather than merely get slower."""
+
+    def explode() -> str:  # pragma: no cover - must not be reached
+        raise AssertionError("link_state must not read the Keychain")
+
+    monkeypatch.setattr(server_link, "account_email", explode)
+    monkeypatch.setattr(server_link, "self_fingerprint", explode)
+    monkeypatch.setattr(server_link, "load_config", explode)
+
+    assert server_link.link_state() == server_link.STATE_UNCONFIGURED
+
+    class StubLink:
+        def state(self) -> str:
+            return server_link.STATE_CONNECTED
+
+    monkeypatch.setattr(server_link, "_link", StubLink())
+    assert server_link.link_state() == server_link.STATE_CONNECTED
+
+
 # ---- reconfiguring without a backend restart --------------------------------
 
 
@@ -1988,6 +2032,21 @@ async def test_status_never_carries_the_access_token(module_link):
         assert "token" not in status
     finally:
         await server_link.stop()
+
+
+async def test_link_state_agrees_with_status_on_a_live_link(module_link):
+    """The stub above pins that the link's word is passed through; this pins
+    that it is the same word status() reports, against a real connected link."""
+    state, server = module_link
+    state["config"] = CONFIG
+    await server_link.start()
+    try:
+        await _until(lambda: bool(server.opened and server.opened[0].syncs))
+        assert server_link.link_state() == server_link.STATE_CONNECTED
+        assert (await server_link.status())["state"] == server_link.STATE_CONNECTED
+    finally:
+        await server_link.stop()
+    assert server_link.link_state() == server_link.STATE_UNCONFIGURED
 
 
 async def test_state_is_unreachable_after_a_failed_dial():
