@@ -12,13 +12,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import shutil
-import signal
 from pathlib import Path
 from typing import Any
 
-from . import onboarding_deps
+from . import onboarding_deps, osplat
 
 log = logging.getLogger("agent_team_backend.ai_chat_cli_engine")
 
@@ -67,10 +65,10 @@ async def _terminate_proc_tree(proc: Any, grace: float = _KILL_GRACE_S) -> None:
     """
     pgid: int | None = None
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        pgid = os.getpgid(proc.pid)
+        pgid = osplat.process_tree.group_of(proc.pid)
     if pgid is not None:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(pgid, signal.SIGTERM)
+            osplat.process_tree.kill_group(pgid, force=False)
     else:
         with contextlib.suppress(ProcessLookupError):
             proc.terminate()
@@ -81,7 +79,7 @@ async def _terminate_proc_tree(proc: Any, grace: float = _KILL_GRACE_S) -> None:
         pass
     if pgid is not None:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(pgid, signal.SIGKILL)
+            osplat.process_tree.kill_group(pgid, force=True)
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
     with contextlib.suppress(Exception):

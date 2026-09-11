@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import (
     _ECHO_LAG_MAX_MS,
     _ECHO_LAG_WARN_MS,
@@ -37,7 +38,7 @@ async def _emit(_event):
 def _make_session(session_id: str, master_fd: int) -> SimpleNamespace:
     return SimpleNamespace(
         id=session_id,
-        master_fd=master_fd,
+        handle=PosixTerminalHandle(master_fd),
         closed=False,
         pane_id="pane-1",
         sequence=0,

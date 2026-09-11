@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_team_backend import terminals as terminals_mod
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
 
 
@@ -50,7 +51,7 @@ async def test_one_callback_drains_a_whole_repaint(monkeypatch):
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(r)
-    session = SimpleNamespace(id="t-drain", master_fd=r, closed=False)
+    session = SimpleNamespace(id="t-drain", handle=PosixTerminalHandle(r), closed=False)
     svc._sessions["t-drain"] = session
     try:
         payload = b"x" * 20480  # 20 KB — one full-screen TUI repaint
@@ -74,7 +75,7 @@ async def test_drain_is_bounded_so_a_flood_yields_to_the_loop(monkeypatch):
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(r)
-    session = SimpleNamespace(id="t-flood", master_fd=r, closed=False)
+    session = SimpleNamespace(id="t-flood", handle=PosixTerminalHandle(r), closed=False)
     svc._sessions["t-flood"] = session
     try:
         monkeypatch.setattr(terminals_mod, "_READ_DRAIN_MAX_BYTES", 4096)
@@ -97,7 +98,7 @@ async def test_bytes_read_before_eof_are_not_lost(monkeypatch):
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(r)
-    session = SimpleNamespace(id="t-eof", master_fd=r, closed=False)
+    session = SimpleNamespace(id="t-eof", handle=PosixTerminalHandle(r), closed=False)
     svc._sessions["t-eof"] = session
     closed: list[str] = []
     monkeypatch.setattr(svc, "_close", lambda s, *, reason: closed.append(reason))
@@ -120,7 +121,7 @@ async def test_buffered_size_counter_tracks_the_buffer():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(r)
-    session = SimpleNamespace(id="t-count", master_fd=r, closed=False)
+    session = SimpleNamespace(id="t-count", handle=PosixTerminalHandle(r), closed=False)
     svc._sessions["t-count"] = session
     try:
         for _ in range(3):
@@ -144,7 +145,7 @@ async def test_flush_resets_the_size_counter():
     r, w = os.pipe()
     _nonblocking(r)
     session = SimpleNamespace(
-        id="t-reset", master_fd=r, closed=False, output_log_fp=None
+        id="t-reset", handle=PosixTerminalHandle(r), closed=False, output_log_fp=None
     )
     svc._sessions["t-reset"] = session
     try:

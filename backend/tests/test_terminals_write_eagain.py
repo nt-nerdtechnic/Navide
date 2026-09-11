@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
 
 
@@ -33,7 +34,7 @@ async def test_small_write_completes_immediately():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(w)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=False, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=False, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         svc.write("t1", "hello")
@@ -50,7 +51,7 @@ async def test_write_survives_eagain_without_data_loss():
     r, w = os.pipe()
     _nonblocking(w)
     _nonblocking(r)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=False, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=False, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         payload = b"A" * 500_000  # far exceeds the pipe buffer → guaranteed EAGAIN
@@ -82,7 +83,7 @@ async def test_closed_session_write_is_noop():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(w)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=True, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=True, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         svc.write("t1", "ignored")

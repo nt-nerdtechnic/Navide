@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import logging
 import os
+import resource
 from pathlib import Path
+
+from ._posix import process_tree, terminal_backend
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +167,49 @@ class LinuxResourceProbe:
     def memory_kind(self) -> str:
         return "pss"
 
+    def peak_rss_bytes(self) -> int | None:
+        # Linux reports ru_maxrss in kilobytes.
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+
 
 paths = LinuxPaths()
 resource_probe = LinuxResourceProbe()
+# PTY and process-group handling are plain POSIX; see `_posix`.
+__all__ = ["paths", "process_tree", "resource_probe", "terminal_backend"]
+
+
+# ---- appended: the Paths members added for the Windows port -----------------
+#
+# A subclass rather than edits to `LinuxPaths` above, so this lands as a pure
+# append; `paths` is rebound below to the complete implementation.
+
+from . import _posix_paths, _posix_secrets  # noqa: E402
+
+
+class LinuxLayout(LinuxPaths):
+    def state_dir(self, app_name: str) -> Path:
+        # `$XDG_DATA_HOME`, not `$XDG_CONFIG_HOME`: this is where `applog` has
+        # always put the backend's state on Linux, and an install's sessions
+        # and settings must stay findable across the move behind this seam.
+        configured = os.environ.get("XDG_DATA_HOME")
+        base = Path(configured) if configured else Path.home() / ".local" / "share"
+        return base / app_name
+
+    def config_home(self, home: Path) -> Path:
+        return home / ".config"
+
+    def roaming_app_data(self) -> Path | None:
+        return _posix_paths.roaming_app_data()
+
+    def home_env_var(self) -> str:
+        return _posix_paths.home_env_var()
+
+    def isolated_home_env(self, home_dir: Path) -> dict[str, str]:
+        return _posix_paths.isolated_home_env(home_dir)
+
+    def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
+        return _posix_paths.askpass_launcher(helper_py, python_exe)
+
+
+paths = LinuxLayout()
+secret_files = _posix_secrets.secret_files

@@ -9,7 +9,9 @@ container smoke test covers.
 
 from __future__ import annotations
 
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 
@@ -179,6 +181,111 @@ class TestPaths:
         assert _linux.paths.app_support_dir("X") == Path.home() / ".config" / "X"
         assert _linux.paths.cache_dir() == Path.home() / ".cache"
 
+    # The backend's own state dir: `applog` used to decide this itself. Linux
+    # is `$XDG_DATA_HOME`, not `~/.config`, because that is where existing
+    # installs already keep their sessions.
+    def test_state_dir_keeps_each_platforms_existing_location(self, tmp_path, monkeypatch):
+        from agent_team_backend.osplat import _darwin, _linux, _windows
+
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.delenv("APPDATA", raising=False)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        assert _darwin.paths.state_dir("Agent-Team") == (
+            tmp_path / "Library" / "Application Support" / "Agent-Team"
+        )
+        assert _linux.paths.state_dir("Agent-Team") == (
+            tmp_path / ".local" / "share" / "Agent-Team"
+        )
+        assert _windows.paths.state_dir("Agent-Team") == (
+            tmp_path / "AppData" / "Roaming" / "Agent-Team"
+        )
+        monkeypatch.setenv("XDG_DATA_HOME", "/xdg/data")
+        monkeypatch.setenv("APPDATA", "C:/Users/x/AppData/Roaming")
+        assert _linux.paths.state_dir("Agent-Team") == Path("/xdg/data/Agent-Team")
+        assert _windows.paths.state_dir("Agent-Team") == Path("C:/Users/x/AppData/Roaming/Agent-Team")
+
+    # `os.UserConfigDir()` as Go CLIs see it — what `host_shell` used to branch on.
+    def test_config_home_per_platform(self, tmp_path, monkeypatch):
+        from agent_team_backend.osplat import _darwin, _linux, _windows
+
+        assert _darwin.paths.config_home(tmp_path) == tmp_path / "Library" / "Application Support"
+        assert _linux.paths.config_home(tmp_path) == tmp_path / ".config"
+        monkeypatch.delenv("APPDATA", raising=False)
+        assert _windows.paths.config_home(tmp_path) == tmp_path / "AppData" / "Roaming"
+        assert _windows.paths.roaming_app_data() is None
+        monkeypatch.setenv("APPDATA", "C:/roaming")
+        assert _windows.paths.config_home(tmp_path) == Path("C:/roaming")
+        assert _windows.paths.roaming_app_data() == Path("C:/roaming")
+        assert _darwin.paths.roaming_app_data() is None
+        assert _linux.paths.roaming_app_data() is None
+
+    # The isolated environment a public CLI run gets: POSIX children read HOME
+    # and TMPDIR, Windows children USERPROFILE plus TEMP/TMP (and HOME, which
+    # several Node CLIs consult first).
+    def test_isolated_home_env_names_each_platforms_variables(self, tmp_path):
+        from agent_team_backend.osplat import _darwin, _linux, _windows
+
+        home = str(tmp_path)
+        assert _darwin.paths.isolated_home_env(tmp_path) == {"HOME": home, "TMPDIR": home}
+        assert _linux.paths.isolated_home_env(tmp_path) == {"HOME": home, "TMPDIR": home}
+        assert _windows.paths.isolated_home_env(tmp_path) == {
+            "USERPROFILE": home, "HOME": home, "TEMP": home, "TMP": home,
+        }
+        assert _darwin.paths.home_env_var() == "HOME"
+        assert _linux.paths.home_env_var() == "HOME"
+        assert _windows.paths.home_env_var() == "USERPROFILE"
+
+
+class TestAskpassLauncher:
+    """`GIT_ASKPASS` is exec'd by git with no shell: POSIX runs the script's
+    shebang, Windows cannot exec a `.py` and needs a launcher around an
+    interpreter."""
+
+    def test_posix_returns_the_script_made_executable(self, tmp_path):
+        from agent_team_backend.osplat import _darwin, _linux
+
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+        helper.chmod(0o644)
+        assert _darwin.paths.askpass_launcher(helper, "/usr/bin/python3") == helper
+        assert os.stat(helper).st_mode & stat.S_IXUSR
+        helper.chmod(0o644)
+        assert _linux.paths.askpass_launcher(helper, None) == helper
+        assert os.stat(helper).st_mode & stat.S_IXUSR
+
+    def test_windows_writes_a_cmd_wrapper_beside_the_script(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("", encoding="utf-8")
+        launcher = _windows.paths.askpass_launcher(helper, r"C:\Python\python.exe")
+        assert launcher == tmp_path / "git_askpass_helper.cmd"
+        assert launcher.read_bytes() == (
+            b'@"C:\\Python\\python.exe" "' + str(helper).encode() + b'" %*\r\n'
+        )
+
+    # A frozen build carries no interpreter of its own: the launcher falls
+    # back to `python` on PATH, the same dependency the POSIX shebang has.
+    def test_windows_frozen_build_uses_python_from_path(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("", encoding="utf-8")
+        launcher = _windows.paths.askpass_launcher(helper, None)
+        assert launcher.read_text(encoding="utf-8").startswith('@"python" "')
+
+    def test_windows_leaves_an_up_to_date_launcher_untouched(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("", encoding="utf-8")
+        launcher = _windows.paths.askpass_launcher(helper, "py")
+        before = launcher.stat().st_mtime_ns
+        os.utime(launcher, ns=(before - 10**9, before - 10**9))
+        stamped = launcher.stat().st_mtime_ns
+        assert _windows.paths.askpass_launcher(helper, "py") == launcher
+        assert launcher.stat().st_mtime_ns == stamped
+
 
 #: Files that still decide platform behaviour for themselves. This list may
 #: shrink and must never grow: a new entry means a feature module started
@@ -188,14 +295,11 @@ class TestPaths:
 #: reached only through the Darwin implementation, so its branch is a guard on
 #: an unreachable path rather than a live decision.
 PLATFORM_BRANCH_ALLOWLIST = {
-    "applog.py",
     "cli_vendors/antigravity.py",
     "cli_vendors/claude.py",
     "cli_vendors/cursor.py",
     "credential_vault.py",
     "executions_service.py",
-    "host_shell.py",
-    "mem_probe.py",
     "proc_rusage.py",
     "process_cpu.py",
     "process_memory.py",
@@ -229,3 +333,85 @@ class TestNoScatteredPlatformBranches:
             if not _BRANCH_RE.search((root / name).read_text(encoding="utf-8"))
         }
         assert not stale, f"already clean, drop from the allowlist: {sorted(stale)}"
+
+
+#: Modules whose secret files go through `osplat.secret_files`. Listed rather
+#: than banning `chmod` everywhere: `fs_service` copying a user file's mode is
+#: legitimate, and `credential_vault` still preserves the mode of the user's
+#: own `.claude.json`. What these must not do is set a *literal* owner-only
+#: mode themselves — on NTFS that call protects nothing, which is the whole
+#: reason the seam exists.
+SECRET_FILE_MODULES = {
+    "ai_chat_settings.py",
+    "credential_vault.py",
+    "device_crypto.py",
+    "device_signing.py",
+    "executions_service.py",
+    "hook_auth.py",
+    "host_shell.py",
+    "mcp_server/auth.py",
+    "mcp_server/pane_home.py",
+    "mcp_server/wiring.py",
+    "push_delivery.py",
+    "store_migrations.py",
+    "usage_service.py",
+    "ws_auth.py",
+}
+
+_OWNER_ONLY_MODE_RE = re.compile(
+    r"chmod\([^)]*0o[67]00\)"          # os.chmod(p, 0o600) / path.chmod(0o700)
+    r"|mkdir\([^)]*mode=0o700"          # path.mkdir(mode=0o700, ...)
+    r"|S_IRUSR \| stat\.S_IWUSR"       # the spelled-out 0o600
+)
+
+
+class TestSecretFilesGoThroughTheSeam:
+    def test_migrated_modules_no_longer_set_owner_only_modes_themselves(self):
+        root = Path(__file__).resolve().parents[1] / "agent_team_backend"
+        offenders = {
+            name
+            for name in SECRET_FILE_MODULES
+            if _OWNER_ONLY_MODE_RE.search((root / name).read_text(encoding="utf-8"))
+        }
+        assert not offenders, (
+            "these modules set an owner-only mode inline again; use "
+            f"osplat.secret_files instead: {sorted(offenders)}"
+        )
+
+
+#: Modules the Windows port moved off the POSIX process and PTY APIs. Every
+#: platform-specific call they used to make now goes through
+#: `osplat.process_tree` / `osplat.terminal_backend` / `osplat.resource_probe`,
+#: and this keeps it that way: a `fcntl` import or an `os.killpg` call creeping
+#: back in would make the backend unimportable (or unkillable) on Windows.
+POSIX_FREE_MODULES = (
+    "ai_chat_cli_engine.py",
+    "mem_probe.py",
+    "pty_registry.py",
+    "terminals.py",
+)
+
+_POSIX_IMPORT_RE = re.compile(
+    r"^\s*(?:import|from)\s+(?:fcntl|pty|termios|resource)\b", re.MULTILINE
+)
+_POSIX_CALL_RE = re.compile(
+    r"\bos\.(?:killpg|getpgid|tcgetpgrp|setsid|openpty|kill)\s*\("
+    r"|\bpty\.openpty\b|\bsignal\.SIG(?:KILL|TERM)\b|\bTIOCS(?:WINSZ|CTTY)\b"
+)
+
+
+class TestPortedModulesStayPosixFree:
+    @pytest.mark.parametrize("name", POSIX_FREE_MODULES)
+    def test_no_posix_only_import_or_call(self, name):
+        root = Path(__file__).resolve().parents[1] / "agent_team_backend"
+        source = (root / name).read_text(encoding="utf-8")
+        assert not _POSIX_IMPORT_RE.search(source), f"{name} imports a POSIX-only module"
+        hit = _POSIX_CALL_RE.search(source)
+        assert hit is None, f"{name} calls the POSIX process API directly: {hit.group(0)!r}"
+
+    def test_the_seam_itself_still_makes_those_calls(self):
+        # The ratchet would be vacuous if the calls had simply vanished.
+        posix = Path(__file__).resolve().parents[1] / "agent_team_backend" / "osplat" / "_posix.py"
+        source = posix.read_text(encoding="utf-8")
+        assert _POSIX_IMPORT_RE.search(source)
+        assert _POSIX_CALL_RE.search(source)

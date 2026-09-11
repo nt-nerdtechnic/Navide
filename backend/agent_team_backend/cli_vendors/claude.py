@@ -26,13 +26,13 @@ import base64
 import hashlib
 import os
 import re
-import signal
 import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .. import osplat
 from .base import (
     Dep,
     McpServerConfig,
@@ -695,9 +695,11 @@ def _panel_probe_env() -> dict[str, str]:
 async def _kill_group(pid: int) -> None:
     # Async on purpose: this runs on the backend's only event loop, and a
     # blocking sleep here freezes every WebSocket session for its duration.
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for force in (False, True):
         try:
-            os.killpg(os.getpgid(pid), sig)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(pid), force=force
+            )
         except (ProcessLookupError, PermissionError, OSError):
             return
         await asyncio.sleep(0.2)

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService, TerminalSession
 
 
@@ -34,7 +35,7 @@ async def test_terminal_exit_includes_lifetime_signal_and_probe(
         agent_key="claude",
         command=["/bin/zsh", "-lc", "claude"],
         cwd="/tmp",
-        master_fd=master,
+        handle=PosixTerminalHandle(master),
         proc=proc,  # type: ignore[arg-type]
         started_monotonic=time.monotonic() - 0.042,
         metadata={"startup_probe": {"binary_path": "/opt/bin/claude"}},

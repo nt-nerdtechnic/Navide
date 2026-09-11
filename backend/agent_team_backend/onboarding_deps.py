@@ -859,9 +859,11 @@ def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
     leaves them running AND keeps the inherited pipes open — the reaping call
     would then block far past the timeout it was supposed to enforce.
     """
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for force in (False, True):
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(proc.pid), force=force
+            )
         except (ProcessLookupError, PermissionError, OSError):
             proc.kill()
         try:

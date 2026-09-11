@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
 
 
@@ -37,7 +38,7 @@ async def test_raw_bytes_are_buffered_unmodified_across_a_split_char():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(r)
-    session = SimpleNamespace(id="t-utf8", master_fd=r, closed=False)
+    session = SimpleNamespace(id="t-utf8", handle=PosixTerminalHandle(r), closed=False)
     svc._sessions["t-utf8"] = session
     try:
         payload = "中文字".encode("utf-8")  # 9 bytes, 3 bytes per char

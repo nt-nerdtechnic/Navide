@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import (
     _COALESCE_MS,
     _FAST_PATH_MAX_BYTES,
@@ -37,7 +38,7 @@ async def _emit(_event):  # EventSink stub for tests that never flush
 def _make_session(session_id: str, master_fd: int) -> SimpleNamespace:
     return SimpleNamespace(
         id=session_id,
-        master_fd=master_fd,
+        handle=PosixTerminalHandle(master_fd),
         closed=False,
         pane_id="pane-1",
         sequence=0,

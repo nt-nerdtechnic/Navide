@@ -18,6 +18,15 @@ dependencies = [
     # been migrated to.
     "mcp>=1.28.1,<2",
     "openpyxl>=3.1.5",
+    # Process-tree walking and per-process counters for the Windows
+    # implementation of osplat.process_tree / resource_probe (psutil has
+    # binary wheels for every platform the backend ships on, so it costs the
+    # POSIX builds nothing to carry). osplat/_windows.py is its only importer.
+    "psutil>=7",
+    # ConPTY bindings for osplat/_windows.py's terminal backend. Windows-only
+    # wheels, so the marker keeps macOS/Linux resolution and PyInstaller
+    # builds from ever looking for it.
+    "pywinpty>=3.0; sys_platform == 'win32'",
     "pyyaml>=6.0",
     "send2trash>=2.1.0",
     "uvicorn[standard]>=0.32",

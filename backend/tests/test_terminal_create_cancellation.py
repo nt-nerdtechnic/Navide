@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from agent_team_backend.osplat import _posix
 from agent_team_backend import app, push_delivery
 from agent_team_backend import terminals as terminals_module
 
@@ -372,7 +373,7 @@ async def test_terminal_service_create_rolls_back_post_popen_setup_failure(
     service = terminals_module.TerminalService(emit)
     process = FakeProcess()
     opened: list[int] = []
-    real_openpty = terminals_module.pty.openpty
+    real_openpty = _posix.pty.openpty
 
     def recording_openpty() -> tuple[int, int]:
         master, slave = real_openpty()
@@ -383,7 +384,7 @@ async def test_terminal_service_create_rolls_back_post_popen_setup_failure(
     unregistered = threading.Event()
     killed: list[tuple[int, int]] = []
 
-    monkeypatch.setattr(terminals_module.pty, "openpty", recording_openpty)
+    monkeypatch.setattr(_posix.pty, "openpty", recording_openpty)
     monkeypatch.setattr(terminals_module.shutil, "which", lambda _cmd: "/bin/bash")
     monkeypatch.setattr(terminals_module.subprocess, "Popen", lambda *_a, **_kw: process)
     monkeypatch.setattr(terminals_module.pty_registry, "register", lambda *_a: registered.set())

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend import app
 from agent_team_backend.terminals import TerminalSession
 
@@ -50,7 +51,7 @@ def _fake_session_entry(session: app.Session, sid: str) -> tuple[int, int]:
         agent_key=None,
         command=["x"],
         cwd="/",
-        master_fd=master,
+        handle=PosixTerminalHandle(master),
         proc=SimpleNamespace(pid=1234, returncode=None),  # type: ignore[arg-type]
     )
     session.terminals._sessions[sid] = entry

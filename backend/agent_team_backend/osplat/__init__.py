@@ -52,5 +52,20 @@ platform_id: str = (
 
 paths: spec.Paths = _impl.paths
 resource_probe: spec.ResourceProbe = _impl.resource_probe
+process_tree: spec.ProcessTree = _impl.process_tree
+terminal_backend: spec.TerminalBackend = _impl.terminal_backend
 
-__all__ = ["impl_name", "paths", "resource_probe", "spec"]
+__all__ = [
+    "impl_name",
+    "paths",
+    "process_tree",
+    "resource_probe",
+    "spec",
+    "terminal_backend",
+]
+
+# ---- appended seams ----------------------------------------------------------
+
+secret_files: spec.SecretFiles = _impl.secret_files
+
+__all__ += ["secret_files"]

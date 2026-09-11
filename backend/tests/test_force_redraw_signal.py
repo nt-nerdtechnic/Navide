@@ -34,8 +34,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend import app
-from agent_team_backend.terminals import TerminalSession, _claim_ctty
+from agent_team_backend.osplat._posix import _claim_ctty
+from agent_team_backend.terminals import TerminalSession
 
 # All tests here are async even where nothing is awaited: app.Session builds the
 # TerminalService lazily and its constructor needs a running event loop, so a
@@ -133,7 +135,7 @@ def _register(session: app.Session, sid: str, master_fd: int, pid: int) -> None:
         agent_key=None,
         command=["x"],
         cwd="/",
-        master_fd=master_fd,
+        handle=PosixTerminalHandle(master_fd),
         proc=SimpleNamespace(pid=pid, returncode=None),  # type: ignore[arg-type]
     )
 
