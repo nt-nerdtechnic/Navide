@@ -12,6 +12,7 @@ way past the credential check.
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from typing import Any
 
@@ -199,7 +200,7 @@ def test_no_temp_file_survives_a_failed_write(monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(plan_mcp_auth.os, "replace", boom)
+    monkeypatch.setattr(os, "replace", boom)
     with pytest.raises(OSError):
         plan_mcp_auth.set_external_enabled(True)
     assert not tmp.exists()

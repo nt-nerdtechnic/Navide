@@ -26,6 +26,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from .osplat import secret_files
+
 
 class ExecutionsError(Exception):
     """An execution-management operation failed for an operational reason.
@@ -273,7 +275,7 @@ async def _write_crontab(lines: list[str], expect: list[str]) -> None:
     )
     tmp_path = handle.name
     try:
-        os.chmod(tmp_path, 0o600)
+        secret_files.harden_file(Path(tmp_path))
         handle.write(body)
         handle.close()
         code, _out, err = await _run(["crontab", tmp_path])

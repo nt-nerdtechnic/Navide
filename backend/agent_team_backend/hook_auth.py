@@ -21,12 +21,12 @@ Not a boundary against this user's own processes; nothing on this machine is.
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 import threading
 from pathlib import Path
 
 from .applog import app_data_dir
+from .osplat import secret_files
 
 log = logging.getLogger(__name__)
 
@@ -59,26 +59,17 @@ def _read(path: Path) -> str:
     value = line[len(prefix):].strip()
     if value:
         try:
-            if path.stat().st_mode & 0o077:
-                path.chmod(0o600)
+            secret_files.harden_file(path)
         except OSError:
             pass
     return value
 
 
 def _write(path: Path, value: str) -> None:
-    """Never group/world readable, not even between create and chmod."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(f"{HEADER}: {value}\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    """Never group/world readable, not even between create and chmod.
+
+    Plain content: curl reads it back at hook fire time (`-H @file`)."""
+    secret_files.write_private_plain(path, f"{HEADER}: {value}\n".encode("utf-8"))
 
 
 def token() -> str:

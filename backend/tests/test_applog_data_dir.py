@@ -30,3 +30,26 @@ def test_app_data_dir_default_without_override(
     """No override → the platform default, whose leaf is always 'Agent-Team'."""
     monkeypatch.delenv("AGENT_TEAM_DATA_DIR", raising=False)
     assert app_data_dir().name == "Agent-Team"
+
+
+def test_app_data_dir_default_comes_from_the_platform_seam(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each platform's default is the seam's `state_dir`, so the results the
+    shipped platforms had before the extraction are pinned here exactly."""
+    from agent_team_backend import applog, osplat
+    from agent_team_backend.osplat import _darwin, _linux, _windows
+
+    monkeypatch.delenv("AGENT_TEAM_DATA_DIR", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    expected = {
+        _darwin.paths: tmp_path / "Library" / "Application Support" / "Agent-Team",
+        _linux.paths: tmp_path / ".local" / "share" / "Agent-Team",
+        _windows.paths: tmp_path / "AppData" / "Roaming" / "Agent-Team",
+    }
+    for impl, path in expected.items():
+        monkeypatch.setattr(osplat, "paths", impl)
+        assert applog.default_app_data_dir() == path
+        assert applog.app_data_dir() == path

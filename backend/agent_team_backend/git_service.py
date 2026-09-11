@@ -15,7 +15,6 @@ import queue
 import re
 import secrets
 import shutil
-import stat
 import sys
 import threading
 import time
@@ -30,6 +29,7 @@ from urllib.parse import urlparse
 import httpx
 
 from agent_team_backend.applog import app_data_dir
+from agent_team_backend.osplat import paths
 from agent_team_backend import commit_message_prompt
 from agent_team_backend.git_security import is_remote_helper_form
 from agent_team_backend.host_shell import (
@@ -3051,12 +3051,12 @@ def _resolve_askpass_helper_path() -> str:
             log.warning("git askpass: stable helper copy failed: %s", err)
             helper = source
 
-    # git execs this path directly (no shell), so keep it executable.
-    try:
-        helper.chmod(helper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except OSError:
-        pass
-    return str(helper)
+    # git execs this path directly (no shell). POSIX runs the script through
+    # its shebang; Windows needs a launcher around an interpreter, and a frozen
+    # build carries none of its own (None → the one on PATH, which is what the
+    # shebang's `/usr/bin/env python3` already relies on).
+    interpreter = None if getattr(sys, "frozen", False) else sys.executable
+    return str(paths.askpass_launcher(helper, interpreter))
 
 
 _ASKPASS_HELPER_PATH = _resolve_askpass_helper_path()

@@ -46,8 +46,6 @@ import base64
 import hashlib
 import json
 import logging
-import os
-import stat
 import threading
 from pathlib import Path
 from typing import Any
@@ -60,6 +58,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from agent_team_backend.applog import app_data_dir
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger(__name__)
 
@@ -94,19 +93,7 @@ def _write_private(path: Path, raw: bytes) -> None:
     a reader that opened the file between truncate and write would see an empty
     key and this machine would mint a second identity for itself."""
     payload = json.dumps({"ed25519_private": base64.b64encode(raw).decode("ascii")})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    # 模式在建立時就給，不是寫完再 chmod。兩者之間那一段時間裡，檔案的權限由
-    # umask 決定——私鑰在那個窗裡可能是全體可讀，而它已經有內容了。
-    # ws_auth.issue_token 是同一個做法，理由也一樣。
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-    try:
-        os.write(fd, payload.encode("utf-8"))
-    finally:
-        os.close(fd)
-    # O_CREAT 不會改動既有檔案的權限，所以殘留的 .tmp 仍要收一次。
-    os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
-    tmp.replace(path)
+    secret_files.write_private(path, payload.encode("utf-8"))
 
 
 def _load_private() -> Ed25519PrivateKey:
@@ -121,7 +108,7 @@ def _load_private() -> Ed25519PrivateKey:
     """
     path = keys_path()
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(secret_files.read_private(path).decode("utf-8"))
         material = base64.b64decode(raw["ed25519_private"], validate=True)
         return Ed25519PrivateKey.from_private_bytes(material)
     except FileNotFoundError:

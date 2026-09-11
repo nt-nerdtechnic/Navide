@@ -44,6 +44,7 @@ from typing import Any
 import httpx
 
 from .applog import app_data_dir
+from .osplat import secret_files
 from .cli_vendors import registry
 from .cli_vendors.base import PushChannel
 from .pending_registry import TIMEOUT, PendingRegistry
@@ -271,14 +272,12 @@ def _prepare_input_file(pane_id: str, channel: PushChannel) -> Path:
     from the start. Starting from an empty file makes both agree.
     """
     directory = runtime_dir(KIND_FILE)
-    directory.mkdir(parents=True, exist_ok=True)
     try:
-        os.chmod(directory, 0o700)
+        secret_files.make_private_dir(directory)
     except OSError:
         pass
     path = directory / f"{pane_id}{channel.input_file_suffix}"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.close(fd)
+    secret_files.write_private_plain(path, b"")
     return path
 
 

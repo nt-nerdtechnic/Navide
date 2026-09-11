@@ -43,6 +43,7 @@ from typing import Any
 
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.pane_home")
 
@@ -385,8 +386,7 @@ def prepare(
         # copy of the API key, so no part of the path may be world-readable,
         # even briefly.
         for directory in (panes_root(), root.parent, root):
-            directory.mkdir(parents=True, exist_ok=True)
-            os.chmod(directory, 0o700)
+            secret_files.make_private_dir(directory)
         _seed_link_targets(spec, real_vendor)
         if spec.shims_home:
             # PANES_DIR_NAME is skipped alongside the vendor dir: it lives in

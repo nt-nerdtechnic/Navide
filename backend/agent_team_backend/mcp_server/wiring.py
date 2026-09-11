@@ -61,6 +61,7 @@ from agent_team_backend.applog import app_data_dir, backend_port_file
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document, mcp_entry
 from agent_team_backend.mcp_server import auth, pane_home
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.wiring")
 
@@ -165,8 +166,7 @@ def _harden(path: Path) -> None:
     its old mode forever.
     """
     try:
-        if path.stat().st_mode & 0o077:
-            path.chmod(0o600)
+        secret_files.harden_file(path)
     except OSError:
         pass
 
@@ -190,20 +190,9 @@ def write_claude_config(port: int, path: Path | None = None) -> Path:
             return path
     except OSError:
         pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        # os.open sets the mode at creation, so the token is never readable
-        # between a default-mode create and a chmod; the explicit chmod covers
-        # a umask that widened it. os.replace carries the mode over.
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise
+    # Owner-only from creation (the seam sets the mode before the token is
+    # written), replaced atomically; plain content because claude parses it.
+    secret_files.write_private_plain(path, content.encode("utf-8"))
     return path
 
 

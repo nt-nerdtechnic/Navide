@@ -98,6 +98,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .applog import app_data_dir
+from .osplat import secret_files
 from .cli_vendors.registry import VENDORS as _CLI_VENDORS
 from .cli_vendors.registry import vendor as _cli_vendor
 from .credential_vault import vault_to_thread
@@ -665,20 +666,10 @@ class UsageService:
             "schemaVersion": USAGE_CACHE_SCHEMA_VERSION,
             "accounts": self._last_good,
         }
-        path = self._cache_path
-        tmp = path.with_suffix(path.suffix + ".tmp")
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.unlink(missing_ok=True)
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fp:
-                    json.dump(doc, fp, indent=2, ensure_ascii=False)
-                os.chmod(tmp, 0o600)
-                os.replace(tmp, path)
-            except Exception:
-                tmp.unlink(missing_ok=True)
-                raise
+            secret_files.write_private_plain(
+                self._cache_path, json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
+            )
         except Exception as err:  # noqa: BLE001 — cache failure must not sink polling
             log.warning("usage cache write failed: %s", err)
 

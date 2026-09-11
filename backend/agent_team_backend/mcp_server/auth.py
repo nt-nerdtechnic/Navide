@@ -22,13 +22,13 @@ AGENT_TEAM_DATA_DIR isolation get a clean file per test for free.
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import threading
 from pathlib import Path
 from typing import Any
 
 from agent_team_backend.applog import app_data_dir
+from agent_team_backend.osplat import secret_files
 
 AUTH_FILENAME = "plan_mcp_auth.json"
 
@@ -48,8 +48,7 @@ def _harden(path: Path) -> None:
     writes is already 0600 — this only catches files from before that.
     """
     try:
-        if path.stat().st_mode & 0o077:
-            path.chmod(0o600)
+        secret_files.harden_file(path)
     except OSError:
         pass
 
@@ -57,7 +56,7 @@ def _harden(path: Path) -> None:
 def _read_raw() -> dict[str, Any]:
     path = auth_path()
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(secret_files.read_private(path).decode("utf-8"))
     except (OSError, ValueError):
         return {}
     _harden(path)
@@ -66,20 +65,10 @@ def _read_raw() -> dict[str, Any]:
 
 def _write(config: dict[str, Any]) -> None:
     path = auth_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     # These are bearer tokens: the file must never exist group/world readable,
-    # not even between a default-mode create and a chmod. os.open sets the
-    # mode at creation; the explicit chmod covers a umask that widened it.
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(config, indent=2) + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    # not even between a default-mode create and a chmod — and only this
+    # backend reads it, so the seam may wrap it (DPAPI on Windows).
+    secret_files.write_private(path, (json.dumps(config, indent=2) + "\n").encode("utf-8"))
 
 
 def _config() -> dict[str, Any]:
