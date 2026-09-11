@@ -216,6 +216,18 @@ class _Uploader:
             print(f"--- upload failed: {exc}")
 
 
+def _runner_procs() -> str:
+    """The runner agent and the poll step's shell, by name: round 19 finished
+    the suite and wrote the marker, yet the step never ended, so the report
+    now says each minute whether those processes are still there."""
+    found = []
+    for proc in psutil.process_iter(["name"]):
+        name = proc.info.get("name") or ""
+        if name.lower().startswith(("runner.", "pwsh", "powershell")):
+            found.append(f"{name}({proc.pid})")
+    return ", ".join(sorted(found)) or "(none)"
+
+
 def _describe(pids: list[int]) -> str:
     names = []
     for pid in pids:
@@ -289,7 +301,7 @@ def main() -> int:
         elapsed = int(time.monotonic() - started)
         peers = _describe(_job_pids(job)) if job else "(no job)"
         vm = psutil.virtual_memory()
-        print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}\n    vm: {vm.percent}% of {vm.total >> 20} MiB used, cpu {psutil.cpu_percent()}%, {len(psutil.pids())} processes", flush=True)
+        print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}\n    vm: {vm.percent}% of {vm.total >> 20} MiB used, cpu {psutil.cpu_percent()}%, {len(psutil.pids())} processes\n    runner: {_runner_procs()}", flush=True)
         uploader.push(f"{elapsed}s")
 
     survivors = [pid for pid in (_job_pids(job) if job else []) if pid != os.getpid()]
@@ -314,6 +326,12 @@ def main() -> int:
     uploader.push(f"finished rc={rc}")
     with open(DONE, "w") as marker:
         marker.write(str(rc))
+    # Stay a few minutes past the marker: if the poll step still does not
+    # end, this shows whether its shell and the runner agent are even alive.
+    for i in range(1, 7):
+        time.sleep(30)
+        print(f"--- after marker {i * 30}s: runner: {_runner_procs()}; marker {'consumed' if not os.path.exists(DONE) else 'present'}", flush=True)
+        uploader.push(f"after marker {i * 30}s")
     return rc
 
 
