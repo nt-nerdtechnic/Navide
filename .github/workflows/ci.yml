@@ -314,17 +314,24 @@ jobs:
       - name: Backend imports on Windows
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
+      - name: Collect the suite on Windows
+        # Collection has its own deadline: an import that blocks would
+        # otherwise look like a stalled test run.
+        shell: bash
+        run: timeout -k 10 300 backend/.venv/Scripts/python.exe -m pytest backend/tests --collect-only -q -p no:cacheprovider
+
       - name: Backend tests
         # Diagnostics for a run that stalls: GitHub discards the log of a job
         # that hits its own timeout, so the shell timeout ends the step first
-        # and keeps the output; -v names the last test that started, the
-        # faulthandler dumps every thread's stack after 120s inside a test,
-        # and pytest-timeout (thread method: signals cannot interrupt on
-        # Windows) fails a blocked test with a traceback.
+        # and keeps the output. It must target python itself -- killing `uv
+        # run` leaves the interpreter it spawned alive and the step open. -v
+        # names the last test that started, the faulthandler dumps every
+        # thread's stack after 120s inside a test, and pytest-timeout (thread
+        # method: signals cannot interrupt on Windows) fails a blocked test.
         shell: bash
         run: >-
-          timeout 1500 uv --project backend run --locked pytest backend/tests
-          -v --timeout=90 --timeout-method=thread -o faulthandler_timeout=120
+          timeout -k 10 1200 backend/.venv/Scripts/python.exe -m pytest backend/tests
+          -v -p no:cacheprovider --timeout=90 --timeout-method=thread -o faulthandler_timeout=120
 
   plans:
     name: Packaged Plans checks (macOS)
