@@ -44,7 +44,7 @@ from typing import Any
 import httpx
 
 from .applog import app_data_dir
-from .osplat import secret_files
+from .osplat import secret_files, terminal_backend
 from .cli_vendors import registry
 from .cli_vendors.base import PushChannel
 from .pending_registry import TIMEOUT, PendingRegistry
@@ -176,8 +176,8 @@ def _has_flag(text: str, flag: str) -> bool:
     if not flag:
         return False
     try:
-        tokens = shlex.split(text)
-    except ValueError:
+        tokens = terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         tokens = text.split()
     return any(token == flag or token.startswith(f"{flag}=") for token in tokens)
 

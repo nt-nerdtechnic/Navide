@@ -18,7 +18,7 @@ from typing import Mapping, Sequence
 
 import yaml
 
-from .osplat import paths, secret_files
+from .osplat import paths, secret_files, terminal_backend
 from .git_security import (
     PublicRemoteTarget,
     assert_public_git_config_safe,
@@ -255,8 +255,8 @@ def parse_allowlisted_command(command: str) -> list[str]:
     if not isinstance(command, str) or not command.strip() or _SHELL_SYNTAX.search(command):
         raise ValueError("command must be one allowlisted executable invocation")
     try:
-        args = shlex.split(command, posix=True)
-    except ValueError as exc:
+        args = terminal_backend.parse_command(command)
+    except (ValueError, OSError) as exc:
         raise ValueError("command quoting is invalid") from exc
     return validate_argv(args)
 
@@ -549,8 +549,8 @@ def parse_public_allowlisted_command(
     if not isinstance(command, str) or not command.strip() or _SHELL_SYNTAX.search(command):
         raise _public_policy_error()
     try:
-        args = shlex.split(command, posix=True)
-    except ValueError as exc:
+        args = terminal_backend.parse_command(command)
+    except (ValueError, OSError) as exc:
         raise _public_policy_error() from exc
     return validate_public_argv(args, cwd=cwd, workspace_root=workspace_root)
 

@@ -33,6 +33,7 @@ from . import (
     executions_service,
     native_mcp,
     native_memory,
+    osplat,
     pane_policy,
     remote_roster,
     server_link,
@@ -4797,7 +4798,7 @@ async def shell_run(session: "Session", msg_id: str, msg_type: str, payload: dic
         else:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "/bin/sh", "-c", cmd,
+                    *osplat.paths.shell_command(cmd),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=str(resolved_cwd) if resolved_cwd else None,

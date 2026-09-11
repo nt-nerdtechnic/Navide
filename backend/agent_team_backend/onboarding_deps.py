@@ -87,7 +87,14 @@ DEPS: list[Dep] = [
     Dep("node", "Node.js", "JavaScript runtime (≥ 22)", "foundation",
         ["node", "--version"], r"v?(\d+\.\d+\.\d+)", min_version="22.0.0",
         docs_url="https://nodejs.org",
-        install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))}),
+        install_cmds={
+            "darwin": PlatformInstall("brew install node", ("brew",)),
+            # The LTS MSI installs machine-wide and asks for elevation, so
+            # the UAC prompt needs a terminal the user can see.
+            "win32": PlatformInstall(
+                "winget install --id OpenJS.NodeJS.LTS -e", ("winget",), needs_terminal=True
+            ),
+        }),
     Dep("pnpm", "pnpm", "Package manager", "foundation",
         ["pnpm", "--version"], r"(\d+\.\d+\.\d+)",
         docs_url="https://pnpm.io",
@@ -97,6 +104,14 @@ DEPS: list[Dep] = [
             # and needs no elevation, so it can run inline like the brew one.
             "linux": PlatformInstall(
                 "curl -fsSL https://get.pnpm.io/install.sh | sh -", ("curl",)
+            ),
+            # Per-user standalone exe, no elevation. The agreement flags keep a
+            # first-run winget from stopping at a prompt nobody can answer
+            # when the command runs inline with its output captured.
+            "win32": PlatformInstall(
+                "winget install --id pnpm.pnpm -e "
+                "--accept-source-agreements --accept-package-agreements",
+                ("winget",),
             ),
         }),
     # Unversioned formula on purpose: versioned kegs (python@3.12) only link
@@ -108,7 +123,12 @@ DEPS: list[Dep] = [
     Dep("python", "Python", "Python 3.12+", "foundation",
         ["python3", "--version"], r"Python (\d+\.\d+\.\d+)", min_version="3.12.0",
         docs_url="https://python.org",
-        install_cmds={"darwin": PlatformInstall("brew install python3", ("brew",))}),
+        install_cmds={
+            "darwin": PlatformInstall("brew install python3", ("brew",)),
+            "win32": PlatformInstall(
+                "winget install --id Python.Python.3.12 -e", ("winget",), needs_terminal=True
+            ),
+        }),
     Dep("uv", "uv", "Python package and environment manager", "foundation",
         ["uv", "--version"], r"uv (\d+\.\d+\.\d+)",
         docs_url="https://docs.astral.sh/uv",
@@ -117,6 +137,11 @@ DEPS: list[Dep] = [
             # Astral's own installer. Unpacks into ~/.local/bin, no elevation.
             "linux": PlatformInstall(
                 "curl -LsSf https://astral.sh/uv/install.sh | sh", ("curl",)
+            ),
+            "win32": PlatformInstall(
+                "winget install --id astral-sh.uv -e "
+                "--accept-source-agreements --accept-package-agreements",
+                ("winget",),
             ),
         }),
 
@@ -136,6 +161,10 @@ DEPS: list[Dep] = [
                 "curl -fsSL https://ollama.com/install.sh | sh",
                 ("curl",),
                 needs_terminal=True,
+            ),
+            # OllamaSetup.exe is a GUI installer that also starts the app.
+            "win32": PlatformInstall(
+                "winget install --id Ollama.Ollama -e", ("winget",), needs_terminal=True
             ),
         }),
 ]
@@ -178,19 +207,10 @@ MODEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
-def _path_probe_command() -> list[str]:
-    """The shell invocation used to read the user's real PATH.
-
-    Uses $SHELL, not bash: installers write PATH exports into the user's own
-    shell config. For zsh that file is ~/.zshrc, which zsh only reads in
-    INTERACTIVE mode — a plain login shell (-lc) misses it (real case: grok's
-    installer writes to ~/.zshrc; `zsh -lc` couldn't see it, so both detection
-    and spawn kept failing with command-not-found after install).
-    """
-    shell = os.environ.get("SHELL") or "/bin/bash"
-    if os.path.basename(shell) == "zsh":
-        return [shell, "-ilc", "echo $PATH"]
-    return [shell, "-lc", "echo $PATH"]
+def _path_probe_command() -> list[str] | None:
+    """The shell invocation used to read the user's real PATH, or None where
+    there is no login shell to ask (Windows). See `Paths.login_path_probe`."""
+    return osplat.paths.login_path_probe()
 
 
 # Standard install prefixes merged into PATH even when the login-shell probe
@@ -219,10 +239,14 @@ _path_refreshed_at: float | None = None
 def _refresh_path_from_login_shell(force: bool = False) -> None:
     """Merge PATH from a login shell into os.environ so newly-installed CLIs are visible.
 
-    POSIX-only, best-effort: all failures are swallowed silently.
+    Best-effort: all failures are swallowed silently. A platform with no
+    login shell to probe (Windows) keeps the PATH it already has, homebrew and
+    `~/.local/bin` fallbacks included — they are POSIX layouts and would only
+    ever be missing directories there.
     """
     global _path_refreshed_at
-    if os.name != "posix":
+    probe = _path_probe_command()
+    if probe is None:
         return
     now = time.monotonic()
     if (not force and _path_refreshed_at is not None
@@ -232,7 +256,7 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
     shell_paths: list[str] = []
     try:
         proc = subprocess.run(
-            _path_probe_command(),
+            probe,
             capture_output=True,
             text=True,
             timeout=3,
@@ -241,11 +265,11 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
         # Take the last non-empty line (login shells may emit banner text first)
         lines = [l for l in raw.splitlines() if l.strip()]
         if lines:
-            shell_paths = lines[-1].split(":")
+            shell_paths = lines[-1].split(os.pathsep)
     except Exception:  # noqa: BLE001
         pass
     shell_paths.extend(d for d in _FALLBACK_PATH_DIRS if os.path.isdir(d))
-    current_paths = os.environ.get("PATH", "").split(":")
+    current_paths = os.environ.get("PATH", "").split(os.pathsep)
     current_set = set(current_paths)
     seen: set[str] = set()
     new_paths: list[str] = []
@@ -254,7 +278,7 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
             seen.add(p)
             new_paths.append(p)
     if new_paths:
-        os.environ["PATH"] = ":".join(new_paths + current_paths)
+        os.environ["PATH"] = os.pathsep.join(new_paths + current_paths)
 
 
 def _parse_version(text: str, regex: str) -> str:
@@ -403,19 +427,22 @@ def _distinct_executables(command: str) -> list[dict[str, Any]]:
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not directory:
             continue
-        candidate = Path(directory).expanduser() / command
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            continue
-        try:
-            stat = candidate.stat()
-            identity: tuple[int, int] | tuple[str, str] = (stat.st_dev, stat.st_ino)
-            resolved = str(candidate.resolve())
-        except OSError:
-            identity = ("path", str(candidate))
-            resolved = os.path.realpath(candidate)
-        entry = grouped.setdefault(identity, {"path": str(candidate), "resolved_path": resolved, "aliases": []})
-        if str(candidate) not in entry["aliases"]:
-            entry["aliases"].append(str(candidate))
+        # One name on POSIX; `name.exe`/`.cmd`/... on Windows, where a file
+        # is runnable by extension rather than by a mode bit.
+        for filename in osplat.paths.executable_candidates(command):
+            candidate = Path(directory).expanduser() / filename
+            if not candidate.is_file() or not osplat.paths.is_executable(candidate):
+                continue
+            try:
+                stat = candidate.stat()
+                identity: tuple[int, int] | tuple[str, str] = (stat.st_dev, stat.st_ino)
+                resolved = str(candidate.resolve())
+            except OSError:
+                identity = ("path", str(candidate))
+                resolved = os.path.realpath(candidate)
+            entry = grouped.setdefault(identity, {"path": str(candidate), "resolved_path": resolved, "aliases": []})
+            if str(candidate) not in entry["aliases"]:
+                entry["aliases"].append(str(candidate))
     return list(grouped.values())
 
 
@@ -917,6 +944,8 @@ def install_dep(dep_id: str) -> dict[str, Any]:
         return {**context, "ok": True, "needs_terminal": True, "command": install.command}
     # start_new_session puts the shell and its children in their own process
     # group so a timeout can reap the whole tree (see _terminate_process_group).
+    # Windows ignores the flag; there the tree is reached by walking it from
+    # the shell's pid, which is what osplat.process_tree.kill_group does.
     try:
         proc = subprocess.Popen(
             install.command,

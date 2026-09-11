@@ -11,6 +11,7 @@ import subprocess
 import pytest
 
 # Import the private function directly for unit testing
+from agent_team_backend import osplat
 from agent_team_backend import onboarding_deps
 from agent_team_backend.onboarding_deps import (
     _path_probe_command,
@@ -192,7 +193,8 @@ def test_non_posix_noop(monkeypatch):
     """On non-POSIX platforms the function should be a no-op (no subprocess call)."""
     original = "/usr/bin"
     monkeypatch.setenv("PATH", original)
-    monkeypatch.setattr(os, "name", "nt")
+    # No login shell to ask: what the Windows paths implementation answers.
+    monkeypatch.setattr(osplat.paths, "login_path_probe", lambda: None)
     with patch("subprocess.run") as mock_run:
         _refresh_path_from_login_shell()
     mock_run.assert_not_called()
