@@ -817,6 +817,15 @@ async def _read_stdout_capped(
                 break
         if truncated and process.returncode is None:
             process.kill()
+        if truncated:
+            # Keep reading (and dropping) until the killed child's end of the
+            # pipe closes. `process.wait()` resolves only once every pipe has
+            # disconnected, and a stream that paused its transport on a full
+            # buffer issues no further read, so it never sees EOF unless it
+            # is drained — under the Proactor loop that was a hang until the
+            # caller's timeout, reported as "not truncated".
+            while await process.stdout.read(_CAPPED_READ_CHUNK):
+                pass
         stderr = await stderr_task
     except BaseException:
         stderr_task.cancel()

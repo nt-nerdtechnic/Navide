@@ -188,6 +188,11 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch, tmp_pat
         reaped.append(sorted(descendants))
 
     monkeypatch.setattr(TerminalService, "_reap_exit_orphans", fake_reap)
+    # The rolling snapshot loop ticks as soon as a session exists; a table
+    # that catches the child alive and childless would replace the seeded
+    # snapshot with {} (it did on Windows, where the spawn is slower than
+    # the process walk). An empty table is "ps failed": last snapshot kept.
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
 
     svc = TerminalService(emit=_noop_emit)
     # Natural exit: short-lived child, snapshot pre-seeded.

@@ -60,7 +60,7 @@ from agent_team_backend.applog import app_data_dir, backend_port_file
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document, mcp_entry
 from agent_team_backend.mcp_server import auth, pane_home
-from agent_team_backend.osplat import paths, secret_files
+from agent_team_backend.osplat import paths, secret_files, terminal_backend
 
 log = logging.getLogger("agent_team_backend.mcp_server.wiring")
 
@@ -205,6 +205,25 @@ def _command_text(command: Any) -> str:
     if isinstance(command, list):
         return str(command[-1]) if command else ""
     return str(command or "")
+
+
+def _already_wired(text: str, marker: str) -> bool:
+    """Whether ``marker`` (a flag, or a quoted server name) is in ``text``.
+
+    Checked against the command as typed and against its argv words: the
+    marker is written in the unquoted form (``"navide"`` inside inline JSON),
+    and the platform's quoting can hide it from a substring test — Windows
+    escapes the inner quotes (``\\"navide\\"``), POSIX only wraps the word.
+    Without the second look a wired command reads as unwired and gets the
+    flag appended again on every spawn.
+    """
+    if marker in text:
+        return True
+    try:
+        words = terminal_backend.parse_command(text)
+    except ValueError:
+        return False
+    return any(marker in word for word in words)
 
 
 def _append_to_command(command: Any, suffix: str) -> Any:
@@ -419,7 +438,7 @@ def wire_command(
     if wiring is None:
         return command
     if wiring.flag:
-        if wiring.already_wired.format(flag=wiring.flag, name=SERVER_NAME) in text:
+        if _already_wired(text, wiring.already_wired.format(flag=wiring.flag, name=SERVER_NAME)):
             return command
         if wiring.flag_value:
             value = wiring.flag_value.format(

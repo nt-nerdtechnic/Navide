@@ -1215,9 +1215,11 @@ def cli_binary_override(agent_key: str) -> str:
         return ""
     path = str(overrides.get(agent_key) or "")
     dep = DEPS_BY_ID.get(agent_key)
-    if dep is None or Path(path).name != dep.check_cmd[0]:
+    # The spellings `_distinct_executables` admitted: `claude` on POSIX,
+    # `claude.cmd`/`.exe`/... on Windows.
+    if dep is None or Path(path).name not in osplat.paths.executable_candidates(dep.check_cmd[0]):
         return ""
-    return path if Path(path).is_file() and os.access(path, os.X_OK) else ""
+    return path if Path(path).is_file() and osplat.paths.is_executable(Path(path)) else ""
 
 
 def select_cli_binary(agent_key: str, path: str, fingerprint: str) -> dict[str, Any]:

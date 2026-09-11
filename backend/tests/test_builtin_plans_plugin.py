@@ -9,13 +9,13 @@ do not appear in tools/list.
 
 from __future__ import annotations
 
-import shlex
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.plugins import wiring
 from agent_team_backend.plugins.activation_catalog import (
     ACTIVATION_CATALOG_DIGEST_ENV,
@@ -108,7 +108,7 @@ def test_spawn_wiring_appends_claude_flag(tmp_path: Path) -> None:
     config = plan_mcp_wiring.write_claude_config(4567)
 
     wired = plan_mcp_wiring.wire_command("claude", "claude", plan_mcp_wiring.backend_port())
-    assert wired == f"claude --mcp-config {shlex.quote(str(config))}"
+    assert wired == f"claude --mcp-config {osplat.paths.quote_arg(str(config))}"
 
 
 def test_spawn_wiring_appends_codex_override(tmp_path: Path) -> None:
@@ -116,9 +116,8 @@ def test_spawn_wiring_appends_codex_override(tmp_path: Path) -> None:
 
     wired = plan_mcp_wiring.wire_command("codex", "codex", plan_mcp_wiring.backend_port())
     # No pane id given, so the override URL carries the host credential.
-    assert wired == (
-        f"codex -c 'mcp_servers.navide.url=\"{plan_mcp_wiring.plan_mcp_url(4567)}\"'"
-    )
+    override = f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"'
+    assert wired == f"codex -c {osplat.paths.quote_arg(override)}"
 
 
 def test_spawn_wiring_noop_for_other_agents(host: PluginHost, tmp_path: Path) -> None:
