@@ -61,7 +61,7 @@ jobs:
           fi
 
   frontend:
-    name: Frontend checks and build
+    name: Frontend checks and build (macOS)
     # Keep the desktop checks on the release platform.
     runs-on: macos-14
     timeout-minutes: 30
@@ -111,7 +111,7 @@ jobs:
         run: pnpm build
 
   backend:
-    name: Backend checks
+    name: Backend checks (macOS)
     # Backend tests exercise macOS PTY/zsh behavior.
     runs-on: macos-14
     timeout-minutes: 15
@@ -181,7 +181,7 @@ jobs:
         run: uv --project backend run --locked python backend/linux_smoke.py
 
   plans:
-    name: Packaged Plans checks
+    name: Packaged Plans checks (macOS)
     runs-on: macos-14
     timeout-minutes: 20
 
