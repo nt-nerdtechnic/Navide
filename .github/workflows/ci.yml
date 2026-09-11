@@ -110,6 +110,56 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm build
 
+  frontend-linux:
+    name: Frontend checks and build (Linux)
+    # Same gates as the macOS job, run where process.platform is "linux": the
+    # window controls, external terminal, login-shell PATH and menu code all
+    # branch on the platform, and vitest only exercises the Linux branches
+    # when the host actually is Linux. Ubuntu 22.04 to match backend-linux.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          cache-suffix: frontend-linux
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Frontend tests
+        run: pnpm test:run
+
+      - name: Build application and bundled plugins
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm build
+
   backend:
     name: Backend checks (macOS)
     # Backend tests exercise macOS PTY/zsh behavior.
