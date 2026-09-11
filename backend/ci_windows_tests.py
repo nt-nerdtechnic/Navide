@@ -362,6 +362,9 @@ def main() -> int:
     sys.stdout.flush()
     rc = 1 if rc is None else rc
     uploader.push(f"finished rc={rc}")
+    # The tail above is the human summary; the whole pytest log goes up too
+    # so a failure's traceback can be read without another round.
+    _Uploader(LOG, "-pytest").push(f"finished rc={rc}")
     with open(DONE, "w") as marker:
         marker.write(str(rc))
     # Stay a few minutes past the marker: if the poll step still does not
