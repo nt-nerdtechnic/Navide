@@ -80,11 +80,14 @@ describe('waitForHealth', () => {
 // notice when it moves.
 
 describe('the trust-confirmation key', () => {
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('goes over stdin once and closes the pipe', () => {
     // Not a file and not an environment variable, deliberately: `cat` and
     // `ps -E` are the two things a CLI agent on this machine does without
     // trying, and this key is the only thing telling that agent apart from the
     // window a person is looking at.
+    setPlatformId('darwin')
     const writes: string[] = []
     let ended = false
     const proc = { stdin: { write: (s: string) => writes.push(s), end: () => { ended = true } } }
@@ -93,6 +96,17 @@ describe('the trust-confirmation key', () => {
     expect(writes).toHaveLength(1)
     expect(writes[0]).toMatch(/^[0-9a-f]{64}\n$/)
     expect(ended).toBe(true)
+  })
+
+  it('keeps the pipe open on Windows, where it later carries the shutdown line', () => {
+    setPlatformId('win32')
+    const writes: string[] = []
+    let ended = false
+    const proc = { stdin: { write: (s: string) => writes.push(s), end: () => { ended = true } } }
+    handConfirmKey(proc as unknown as Parameters<typeof handConfirmKey>[0])
+
+    expect(writes).toHaveLength(1)
+    expect(ended).toBe(false)
   })
 
   it('is a different key for every backend', () => {

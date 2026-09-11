@@ -48,7 +48,7 @@ describe('plansDirectories', () => {
     const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith(`${sep}.git`))
     expect(probes.length).toBeGreaterThan(50)
     expect(probes.length).toBeLessThanOrEqual(2000)
-  })
+  }, 30_000) // 2500 directories: slow to create on the Windows runner's disk
 
   it('bounds candidate-collection probes in a directory full of symlinks', () => {
     // The collection phase resolves every symlink entry (an lstat/realpath walk
