@@ -65,10 +65,6 @@
         "to": "resources/"
       },
       {
-        "from": "backend/dist/agent_team_backend",
-        "to": "bin/agent_team_backend"
-      },
-      {
         "from": "dist-plugins/mini-ide",
         "to": "plugins/mini-ide"
       },
@@ -120,11 +116,30 @@
             ]
           }
         ]
-      }
+      },
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend",
+          "to": "bin/agent_team_backend"
+        }
+      ]
     },
     "win": {
       "target": "nsis",
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend.exe",
+          "to": "bin/agent_team_backend.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Navide",
+      "artifactName": "Navide-${version}-win-${arch}.${ext}"
     },
     "linux": {
       "target": [
@@ -136,7 +151,13 @@
       "maintainer": "Navide Team <nt.fitproject@gmail.com>",
       "synopsis": "AI-native engineering environment for directing multiple coding agents",
       "description": "Navide is a desktop engineering environment for one engineer directing multiple coding agent CLIs.",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend",
+          "to": "bin/agent_team_backend"
+        }
+      ]
     }
   },
   "devDependencies": {
