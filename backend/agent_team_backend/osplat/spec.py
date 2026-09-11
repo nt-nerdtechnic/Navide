@@ -109,6 +109,73 @@ class Paths(Protocol):
         """
         ...
 
+    def executable_candidates(self, name: str) -> list[str]:
+        """The file names a command called `name` may have on disk here.
+
+        POSIX: just `name`. Windows: `name` plus each `PATHEXT` suffix
+        (`.exe`, `.cmd`, `.bat`, `.com`) unless `name` already carries one,
+        in the order `shutil.which` would try them.
+        """
+        ...
+
+    def is_executable(self, path: Path) -> bool:
+        """Whether an existing file at `path` can be run.
+
+        POSIX asks the mode bits (`os.access(X_OK)`); Windows has no such
+        bit — a file is runnable because of its extension, which
+        `executable_candidates` already chose — so it answers True.
+        """
+        ...
+
+    def login_path_probe(self) -> list[str] | None:
+        """argv that prints the user's login-shell `PATH`, or None when the
+        platform has no login shell whose `PATH` differs from ours.
+
+        Installers on POSIX write `PATH` exports into shell rc files, which a
+        GUI-launched backend never read; the probe recovers them. Windows
+        keeps `PATH` in the registry and the process already has it, so there
+        is nothing to probe — None tells the caller to keep what it has.
+        """
+        ...
+
+    def backend_entry_on_disk(self, entry: str) -> str:
+        """The file a plugin manifest's bare `backend.entry` names on disk.
+
+        Mirrors `backendEntryOnDisk` in the Electron main process: a bare
+        name (no extension) gains `.exe` on Windows and stays as it is
+        everywhere else; an entry with an explicit extension is never changed.
+        """
+        ...
+
+    def enforces_posix_modes(self) -> bool:
+        """Whether a file's mode bits mean anything on this platform.
+
+        A check that a secret file is `0600` is meaningful on POSIX and
+        vacuous on NTFS, where `st_mode` is synthesised and never restricts
+        anyone — so a caller that would refuse an over-permissive file
+        asks this first.
+        """
+        ...
+
+    def symlinks_available(self) -> bool:
+        """Whether this process may create symbolic links.
+
+        Always on POSIX. On Windows `os.symlink` needs Developer Mode or an
+        elevated token and otherwise fails with `WinError 1314`; the answer is
+        probed once (a link in a temp dir) and cached, so a shim built from
+        hundreds of links learns the answer up front rather than logging one
+        failure per file.
+        """
+        ...
+
+    def shell_command(self, command: str) -> list[str]:
+        """argv that runs `command` through the platform's shell.
+
+        `/bin/sh -c` on POSIX; `cmd.exe /d /s /c` on Windows (`/d` skips
+        AutoRun, `/s` keeps the outer quotes intact).
+        """
+        ...
+
 
 class ResourceProbe(Protocol):
     """Per-process memory and CPU, read from the kernel without a subprocess.
@@ -374,4 +441,42 @@ class SecretFiles(Protocol):
 
     def make_private_dir(self, path: Path) -> None:
         """Create `path` (and parents) and make the leaf owner-only."""
+        ...
+
+
+class SchedulerError(Exception):
+    """A scheduler operation failed for an operational reason.
+
+    Callers surface the message to the user verbatim (it usually carries the
+    failing command's stderr), so keep messages human-readable.
+    """
+
+
+class Scheduler(Protocol):
+    """The machine's registered background jobs, by kind.
+
+    Kinds are the `executions.*` WebSocket contract: `"crontab"` (the user's
+    cron table) and `"launchagent"` (launchd jobs under
+    `~/Library/LaunchAgents` and the two system directories). A kind the
+    platform does not have — launchd off macOS, both on Windows — lists as
+    `{"supported": False, "entries": [], ...}` rather than raising, and its
+    mutations raise `SchedulerError` naming the platform. Nothing here may
+    spawn a helper for a kind it reports unsupported.
+
+    Windows Task Scheduler (`schtasks`) is deliberately not wired: it is a
+    different model (triggers, principals, XML task definitions) and would
+    need its own kind and UI, so the Windows implementation reports both
+    kinds unsupported and stays inert.
+    """
+
+    async def list_jobs(self, kind: str) -> dict:
+        """`{"supported", "entries", "error", ...}` for one kind; never raises."""
+        ...
+
+    async def set_enabled(self, kind: str, target: str, enabled: bool) -> None:
+        """Enable or disable one job; `SchedulerError` on failure."""
+        ...
+
+    async def remove(self, kind: str, target: str) -> None:
+        """Delete one job; `SchedulerError` on failure."""
         ...

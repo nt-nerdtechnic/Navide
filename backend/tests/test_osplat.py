@@ -299,7 +299,6 @@ PLATFORM_BRANCH_ALLOWLIST = {
     "cli_vendors/claude.py",
     "cli_vendors/cursor.py",
     "credential_vault.py",
-    "executions_service.py",
     "proc_rusage.py",
     "process_cpu.py",
     "process_memory.py",

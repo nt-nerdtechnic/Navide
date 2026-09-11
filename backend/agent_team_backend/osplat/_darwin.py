@@ -9,7 +9,6 @@ asked.
 
 from __future__ import annotations
 
-import resource
 from pathlib import Path
 
 from .. import proc_rusage
@@ -39,6 +38,8 @@ class DarwinResourceProbe:
         return "phys_footprint"
 
     def peak_rss_bytes(self) -> int | None:
+        import resource
+
         # Darwin's ru_maxrss is already in bytes.
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
@@ -76,6 +77,32 @@ class DarwinLayout(DarwinPaths):
     def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
         return _posix_paths.askpass_launcher(helper_py, python_exe)
 
+    def executable_candidates(self, name: str) -> list[str]:
+        return _posix_paths.executable_candidates(name)
+
+    def is_executable(self, path: Path) -> bool:
+        return _posix_paths.is_executable(path)
+
+    def login_path_probe(self) -> list[str] | None:
+        return _posix_paths.login_path_probe()
+
+    def backend_entry_on_disk(self, entry: str) -> str:
+        return _posix_paths.backend_entry_on_disk(entry)
+
+    def enforces_posix_modes(self) -> bool:
+        return _posix_paths.enforces_posix_modes()
+
+    def symlinks_available(self) -> bool:
+        return _posix_paths.symlinks_available()
+
+    def shell_command(self, command: str) -> list[str]:
+        return _posix_paths.shell_command(command)
+
 
 paths = DarwinLayout()
 secret_files = _posix_secrets.secret_files
+
+from . import _posix_scheduler  # noqa: E402
+
+# crontab plus launchd: the LaunchAgents directories are a macOS layout.
+scheduler = _posix_scheduler.PosixScheduler(launchd=True)

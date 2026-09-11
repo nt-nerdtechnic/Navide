@@ -868,5 +868,108 @@ class WindowsSecretFiles:
         path.mkdir(parents=True, exist_ok=True)
 
 
-paths = WindowsLayout()
+
+
+# ---- appended: discovery, shell and symlink members of Paths ----------------
+
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD"
+
+
+def _pathext() -> list[str]:
+    raw = os.environ.get("PATHEXT") or _DEFAULT_PATHEXT
+    # Always ";": PATHEXT is a Windows variable even when read on another OS.
+    return [ext.lower() for ext in raw.split(";") if ext.startswith(".")]
+
+
+#: Result of the one-time symlink probe; None until first asked.
+_symlinks_available: bool | None = None
+
+
+def _probe_symlinks() -> bool:
+    """Create one link in a temp dir. `WinError 1314` (privilege not held)
+    is the ordinary answer on a box without Developer Mode."""
+    with tempfile.TemporaryDirectory(prefix="navide-symlink-") as tmp:
+        target = Path(tmp) / "target"
+        target.write_bytes(b"")
+        try:
+            os.symlink(target, Path(tmp) / "link")
+        except OSError as err:
+            log.warning(
+                "symbolic links are not available to this process (%s); "
+                "per-pane CLI homes and managed skills stay unwired — enable "
+                "Windows Developer Mode (Settings > For developers) or run "
+                "Navide elevated",
+                err,
+            )
+            return False
+    return True
+
+
+class WindowsDiscoveryLayout(WindowsLayout):
+    def executable_candidates(self, name: str) -> list[str]:
+        exts = _pathext()
+        if any(name.lower().endswith(ext) for ext in exts):
+            return [name]
+        return [name + ext for ext in exts]
+
+    def is_executable(self, path: Path) -> bool:
+        # No execute bit on NTFS: runnability is the extension, and
+        # `executable_candidates` only ever names runnable ones.
+        return True
+
+    def login_path_probe(self) -> list[str] | None:
+        # No login shell: PATH comes from the registry and the process
+        # already carries it.
+        return None
+
+    def backend_entry_on_disk(self, entry: str) -> str:
+        if Path(entry).suffix:
+            return entry
+        return entry + ".exe"
+
+    def enforces_posix_modes(self) -> bool:
+        return False
+
+    def symlinks_available(self) -> bool:
+        global _symlinks_available
+        if _symlinks_available is None:
+            _symlinks_available = _probe_symlinks()
+        return _symlinks_available
+
+    def shell_command(self, command: str) -> list[str]:
+        return ["cmd.exe", "/d", "/s", "/c", command]
+
+
+class WindowsScheduler:
+    """Inert: neither cron nor launchd exists here, and Task Scheduler is
+    not wired (see `spec.Scheduler`). Lists as unsupported without spawning
+    anything; mutations name the platform."""
+
+    async def list_jobs(self, kind: str) -> dict:
+        if kind == "crontab":
+            return {"supported": False, "entries": [], "unparsed": 0, "error": None}
+        if kind == "launchagent":
+            return {"supported": False, "entries": [], "unreadable": 0, "error": None}
+        raise ValueError(f"unknown execution kind: {kind!r}")
+
+    async def set_enabled(self, kind: str, target: str, enabled: bool) -> None:
+        self._refuse(kind)
+
+    async def remove(self, kind: str, target: str) -> None:
+        self._refuse(kind)
+
+    @staticmethod
+    def _refuse(kind: str) -> None:
+        if kind not in ("crontab", "launchagent"):
+            raise ValueError(f"unknown execution kind: {kind!r}")
+        from .spec import SchedulerError
+
+        raise SchedulerError(
+            f"{kind} jobs cannot be managed on Windows (no cron or launchd; "
+            "Task Scheduler is not integrated)"
+        )
+
+
+paths = WindowsDiscoveryLayout()
 secret_files = WindowsSecretFiles()
+scheduler = WindowsScheduler()

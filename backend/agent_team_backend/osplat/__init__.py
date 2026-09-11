@@ -69,3 +69,7 @@ __all__ = [
 secret_files: spec.SecretFiles = _impl.secret_files
 
 __all__ += ["secret_files"]
+
+scheduler: spec.Scheduler = _impl.scheduler
+
+__all__ += ["scheduler"]

@@ -10,15 +10,22 @@ so the acceptance test for this file is that its behaviour did not change.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import os
-import pty
 import shlex
 import signal
 import struct
 import subprocess
-import termios
 from typing import Callable
+
+# Guarded so the module imports on Windows: the ratchet test and the Windows
+# suite import it for its classes, and only a call into them needs the
+# terminal modules — which no Windows caller ever makes.
+try:
+    import fcntl
+    import pty
+    import termios
+except ImportError:  # pragma: no cover - Windows
+    fcntl = pty = termios = None  # type: ignore[assignment]
 
 from .proctree import children_map, walk_descendants
 from .spec import ChildProcess, ProcInfo

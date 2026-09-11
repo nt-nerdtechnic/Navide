@@ -40,3 +40,47 @@ def askpass_launcher(helper_py: Path, python_exe: str | None) -> Path:
         pass
     return helper_py
 
+
+
+# ---- appended: the members added for the Windows port ------------------------
+
+import os  # noqa: E402
+
+
+def executable_candidates(name: str) -> list[str]:
+    return [name]
+
+
+def is_executable(path: Path) -> bool:
+    return os.access(path, os.X_OK)
+
+
+def login_path_probe() -> list[str]:
+    """The shell invocation used to read the user's real PATH.
+
+    Uses $SHELL, not bash: installers write PATH exports into the user's own
+    shell config. For zsh that file is ~/.zshrc, which zsh only reads in
+    INTERACTIVE mode — a plain login shell (-lc) misses it (real case: grok's
+    installer writes to ~/.zshrc; `zsh -lc` couldn't see it, so both detection
+    and spawn kept failing with command-not-found after install).
+    """
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    if os.path.basename(shell) == "zsh":
+        return [shell, "-ilc", "echo $PATH"]
+    return [shell, "-lc", "echo $PATH"]
+
+
+def backend_entry_on_disk(entry: str) -> str:
+    return entry
+
+
+def enforces_posix_modes() -> bool:
+    return True
+
+
+def symlinks_available() -> bool:
+    return True
+
+
+def shell_command(command: str) -> list[str]:
+    return ["/bin/sh", "-c", command]

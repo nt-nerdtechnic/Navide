@@ -11,7 +11,10 @@ import plistlib
 
 import pytest
 
-from agent_team_backend import executions_service as svc
+from agent_team_backend import executions_service, osplat
+# The crontab/launchd implementation moved behind osplat; these tests exercise
+# it directly, and the façade's wire contract is pinned at the bottom.
+from agent_team_backend.osplat import _posix_scheduler as svc
 
 
 @pytest.fixture(autouse=True)
@@ -287,7 +290,6 @@ def test_start_calendar_list_is_normalized(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("label", ["x$(id)", "../evil", "com.foo bar", "", "a;b"])
 async def test_injection_labels_are_rejected(label, tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     calls = _stub_run(monkeypatch, {"launchctl": (0, "", "")})
     with pytest.raises(svc.ExecutionsError, match="invalid LaunchAgent label"):
@@ -298,7 +300,6 @@ async def test_injection_labels_are_rejected(label, tmp_path, monkeypatch):
 
 
 async def test_bootout_treats_not_loaded_as_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     (tmp_path / "com.foo.plist").write_bytes(plistlib.dumps({"Label": "com.foo"}))
     calls = _stub_run(
@@ -310,7 +311,6 @@ async def test_bootout_treats_not_loaded_as_success(tmp_path, monkeypatch):
 
 
 async def test_bootout_failure_raises_with_stderr(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     (tmp_path / "com.foo.plist").write_bytes(plistlib.dumps({"Label": "com.foo"}))
     _stub_run(
@@ -321,7 +321,6 @@ async def test_bootout_failure_raises_with_stderr(tmp_path, monkeypatch):
 
 
 async def test_remove_keeps_the_plist_when_bootout_fails(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     plist = tmp_path / "com.foo.plist"
     plist.write_bytes(plistlib.dumps({"Label": "com.foo"}))
@@ -332,7 +331,6 @@ async def test_remove_keeps_the_plist_when_bootout_fails(tmp_path, monkeypatch):
 
 
 async def test_remove_deletes_the_plist_after_a_clean_bootout(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     plist = tmp_path / "com.foo.plist"
     plist.write_bytes(plistlib.dumps({"Label": "com.foo"}))
@@ -342,7 +340,6 @@ async def test_remove_deletes_the_plist_after_a_clean_bootout(tmp_path, monkeypa
 
 
 async def test_list_launch_agents_unions_both_sources(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     (tmp_path / "a.plist").write_bytes(
         plistlib.dumps({"Label": "com.syncthing.syncthing", "StartInterval": 3600})
@@ -381,7 +378,6 @@ def _launchctl(listing: str):
 
 
 async def test_scan_covers_all_three_directories_with_scopes(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     user, system_agents, system_daemons = _scoped_dirs(monkeypatch, tmp_path)
     (user / "u.plist").write_bytes(plistlib.dumps({"Label": "local.user.job"}))
     (system_agents / "s.plist").write_bytes(plistlib.dumps({"Label": "com.vendor.agent"}))
@@ -399,7 +395,6 @@ async def test_scan_covers_all_three_directories_with_scopes(tmp_path, monkeypat
 
 async def test_same_label_in_user_and_system_stays_two_rows(tmp_path, monkeypatch):
     """Google's keystone really does install the same label in both places."""
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     user, system_agents, _daemons = _scoped_dirs(monkeypatch, tmp_path)
     label = "com.google.keystone.agent"
     (user / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label}))
@@ -422,7 +417,6 @@ async def test_system_daemon_runtime_is_unknown_not_stopped(tmp_path, monkeypatc
     Reporting those daemons as "not running" would be a confident lie, so every
     runtime field has to come back as None.
     """
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     _user, _agents, system_daemons = _scoped_dirs(monkeypatch, tmp_path)
     (system_daemons / "d.plist").write_bytes(plistlib.dumps({"Label": "com.vendor.daemon"}))
     _stub_run(monkeypatch, _launchctl("PID\tStatus\tLabel\n4182\t0\tcom.other\n"))
@@ -437,7 +431,6 @@ async def test_system_daemon_runtime_is_unknown_not_stopped(tmp_path, monkeypatc
 
 async def test_system_agent_state_is_known_from_launchctl(tmp_path, monkeypatch):
     """/Library/LaunchAgents is bootstrapped into gui/$UID, so it is visible."""
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     _user, system_agents, system_daemons = _scoped_dirs(monkeypatch, tmp_path)
     (system_agents / "s.plist").write_bytes(plistlib.dumps({"Label": "com.vendor.agent"}))
     # A daemon that *is* in the listing is knowable too.
@@ -462,7 +455,6 @@ async def test_system_agent_state_is_known_from_launchctl(tmp_path, monkeypatch)
 
 
 async def test_only_user_entries_are_managed(tmp_path, monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     user, system_agents, system_daemons = _scoped_dirs(monkeypatch, tmp_path)
     (user / "u.plist").write_bytes(plistlib.dumps({"Label": "local.user.job"}))
     (system_agents / "s.plist").write_bytes(plistlib.dumps({"Label": "com.vendor.agent"}))
@@ -480,7 +472,6 @@ async def test_only_user_entries_are_managed(tmp_path, monkeypatch):
 @pytest.mark.parametrize("directory", ["system-agents", "system-daemons"])
 async def test_system_level_jobs_cannot_be_mutated(directory, tmp_path, monkeypatch):
     """The path containment guard must hold before any command is spawned."""
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     dirs = dict(zip(("user", "system-agents", "system-daemons"), _scoped_dirs(monkeypatch, tmp_path)))
     (dirs[directory] / "x.plist").write_bytes(plistlib.dumps({"Label": "com.vendor.system"}))
     calls = _stub_run(monkeypatch, {})
@@ -497,7 +488,6 @@ async def test_system_level_jobs_cannot_be_mutated(directory, tmp_path, monkeypa
 
 async def test_a_user_job_shadowing_a_system_label_is_still_manageable(tmp_path, monkeypatch):
     """The user's own copy is the one a mutation resolves to."""
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     user, system_agents, _daemons = _scoped_dirs(monkeypatch, tmp_path)
     label = "com.google.keystone.agent"
     user_plist = user / f"{label}.plist"
@@ -512,8 +502,9 @@ async def test_a_user_job_shadowing_a_system_label_is_still_manageable(tmp_path,
 
 
 async def test_launch_agents_unsupported_off_darwin(monkeypatch):
-    monkeypatch.setattr(svc.sys, "platform", "linux")
-    result = await svc.list_launch_agents()
+    # Linux selects PosixScheduler(launchd=False): the kind lists as unsupported
+    # without launchctl ever being spawned.
+    result = await svc.PosixScheduler(launchd=False).list_jobs("launchagent")
     assert result["supported"] is False
     assert result["entries"] == []
 
@@ -525,7 +516,6 @@ async def test_list_executions_matches_window_contract(monkeypatch):
     and scanned_at is epoch seconds — a mismatch on either silently empties the
     window, so it gets its own test rather than riding on the scanners'.
     """
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
 
     async def fake_crontab():
         return {"supported": True, "entries": [{"id": "a1"}], "unparsed": 0, "error": None}
@@ -536,10 +526,10 @@ async def test_list_executions_matches_window_contract(monkeypatch):
     monkeypatch.setattr(svc, "list_crontab", fake_crontab)
     monkeypatch.setattr(svc, "list_launch_agents", fake_agents)
 
-    snapshot = await svc.list_executions()
+    snapshot = await executions_service.list_executions()
 
     assert set(snapshot) == {"platform", "scanned_at", "crontab", "launch_agents"}
-    assert snapshot["platform"] == "darwin"
+    assert snapshot["platform"] == osplat.platform_id
     assert isinstance(snapshot["scanned_at"], float)
     assert snapshot["crontab"]["entries"] == [{"id": "a1"}]
     assert snapshot["launch_agents"]["agents"] == [{"label": "com.x"}]
@@ -584,7 +574,6 @@ async def test_symlink_escape_is_refused(tmp_path, monkeypatch):
     outside.write_bytes(plistlib.dumps({"Label": "com.evil"}))
     (agents_dir / "com.evil.plist").symlink_to(outside)
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: agents_dir)
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     calls = _stub_run(monkeypatch, {})
 
     with pytest.raises(svc.ExecutionsError, match="refusing to touch a plist outside"):
@@ -599,7 +588,6 @@ async def test_disable_persists_through_launchd_override(tmp_path, monkeypatch):
     agents_dir.mkdir()
     (agents_dir / "com.demo.job.plist").write_bytes(plistlib.dumps({"Label": "com.demo.job"}))
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: agents_dir)
-    monkeypatch.setattr(svc.sys, "platform", "darwin")
     calls = _stub_run(monkeypatch, {})
 
     await svc.set_launch_agent_enabled("com.demo.job", False)
