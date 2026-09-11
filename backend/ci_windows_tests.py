@@ -26,12 +26,16 @@ code. Whatever hangs, the log is readable.
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import json
 import os
 import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from ctypes import wintypes
 
 import psutil
@@ -39,6 +43,12 @@ import psutil
 LOG = "pytest.log"
 WRAPPER_LOG = "ci-windows-tests.log"
 DONE = "ci-windows-tests.done"
+# Rounds 16-17: even a childless pwsh poll step never ended, so the runner
+# agent itself goes dark and the job's log blob is never uploaded. The only
+# record that survives is one that leaves the machine before that happens:
+# each minute the log so far is committed to this branch of the repo through
+# the REST API (GH_TOKEN and GITHUB_REPOSITORY come from the workflow).
+UPLOAD_BRANCH = "ci-logs"
 CAP_SECONDS = 20 * 60
 REPORT_EVERY = 60
 RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
@@ -147,6 +157,65 @@ def _job_pids(job) -> list[int]:
     return [int(pid) for pid in info.ProcessIdList[: info.NumberOfProcessIdsInList]]
 
 
+class _Uploader:
+    """Commits the wrapper log to UPLOAD_BRANCH after every report."""
+
+    def __init__(self) -> None:
+        self.repo = os.environ.get("GITHUB_REPOSITORY", "")
+        self.token = os.environ.get("GH_TOKEN", "")
+        run = os.environ.get("GITHUB_RUN_ID", "local")
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+        self.path = f"windows/{run}-{attempt}.log"
+        self.sha: str | None = None
+        self.enabled = bool(self.repo and self.token)
+        if self.enabled:
+            self._ensure_branch()
+
+    def _call(self, method: str, url: str, body: dict | None = None) -> dict:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"https://api.github.com{url}", data=data, method=method)
+        req.add_header("Authorization", f"Bearer {self.token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read() or b"{}")
+
+    def _ensure_branch(self) -> None:
+        try:
+            self._call("GET", f"/repos/{self.repo}/git/ref/heads/{UPLOAD_BRANCH}")
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                self.enabled = False
+                print(f"--- upload: branch check failed ({exc.code}); uploads off")
+                return
+        try:
+            self._call("POST", f"/repos/{self.repo}/git/refs", {"ref": f"refs/heads/{UPLOAD_BRANCH}", "sha": os.environ.get("GITHUB_SHA", "")})
+        except (urllib.error.URLError, OSError) as exc:
+            self.enabled = False
+            print(f"--- upload: branch create failed ({exc}); uploads off")
+
+    def push(self, note: str) -> None:
+        if not self.enabled:
+            return
+        sys.stdout.flush()
+        try:
+            with open(WRAPPER_LOG, "rb") as fh:
+                content = base64.b64encode(fh.read()).decode()
+            body = {"message": f"ci-log: {self.path} {note}", "content": content, "branch": UPLOAD_BRANCH}
+            if self.sha:
+                body["sha"] = self.sha
+            elif self.sha is None:
+                try:
+                    body["sha"] = self._call("GET", f"/repos/{self.repo}/contents/{self.path}?ref={UPLOAD_BRANCH}")["sha"]
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404:
+                        raise
+            self.sha = self._call("PUT", f"/repos/{self.repo}/contents/{self.path}", body)["content"]["sha"]
+        except (urllib.error.URLError, OSError, KeyError) as exc:
+            print(f"--- upload failed: {exc}")
+
+
 def _describe(pids: list[int]) -> str:
     names = []
     for pid in pids:
@@ -196,6 +265,8 @@ def main() -> int:
     # stdout is a file: line-buffer it so the poller sees progress as it
     # happens, and never let one non-cp1252 byte from a test crash the report.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    uploader = _Uploader()
+    print(f"--- upload: {'on, ' + uploader.path if uploader.enabled else 'off'}")
     job = _join_job()
     args = [
         sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
@@ -206,6 +277,7 @@ def main() -> int:
         # close_fds restricts the child's handle list to exactly these three.
         child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True)
     print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s", flush=True)
+    uploader.push("started")
 
     started = time.monotonic()
     rc: int | None = None
@@ -218,6 +290,7 @@ def main() -> int:
         peers = _describe(_job_pids(job)) if job else "(no job)"
         vm = psutil.virtual_memory()
         print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}\n    vm: {vm.percent}% of {vm.total >> 20} MiB used, cpu {psutil.cpu_percent()}%, {len(psutil.pids())} processes", flush=True)
+        uploader.push(f"{elapsed}s")
 
     survivors = [pid for pid in (_job_pids(job) if job else []) if pid != os.getpid()]
     print(f"--- pytest exit: {rc if rc is not None else 'still running at cap'}")
@@ -238,6 +311,7 @@ def main() -> int:
             sys.stdout.write(line)
     sys.stdout.flush()
     rc = 1 if rc is None else rc
+    uploader.push(f"finished rc={rc}")
     with open(DONE, "w") as marker:
         marker.write(str(rc))
     return rc

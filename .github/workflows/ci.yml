@@ -288,6 +288,11 @@ jobs:
     # aggregate gate (see frontend-windows).
     runs-on: windows-latest
     timeout-minutes: 40
+    # contents: write only so the detached test runner can commit its log to
+    # the ci-logs branch each minute (see backend/ci_windows_tests.py); the
+    # runner agent goes dark mid-suite and nothing else survives that.
+    permissions:
+      contents: write
 
     steps:
       - name: Check out source
@@ -343,6 +348,8 @@ jobs:
         # spawns can hold a step's stdout pipe: that is what hung rounds 1-15
         # and took the log with it.
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py --detach
 
       - name: Backend tests
