@@ -14,8 +14,8 @@ What Windows cannot offer, stated once here rather than hidden in the calls:
   never gets a shutdown notice to flush its transcript.
 * No foreground process group. `foreground_group()` is the child's pid.
 * No reparenting. A process whose parent died keeps the stale ppid, so a
-  snapshot reports `ppid=0` for it (see `_stale_parent`) and the EOF-path
-  orphan sweep in `terminals` never matches — the job close covers it.
+  snapshot reports `ppid=0` for it (see `_stale_parent`) and that 0 is what
+  `is_orphan_parent` matches for the EOF-path orphan sweep in `terminals`.
 * No selectable fd. A worker thread pumps the ConPTY output pipe into a queue
   and wakes the event loop with `call_soon_threadsafe`; `read` serves the
   queue and raises `BlockingIOError` when it is empty.
@@ -340,6 +340,11 @@ class WindowsProcessTree:
     def is_alive(self, pid: int) -> bool:
         return psutil.pid_exists(pid)
 
+    def is_orphan_parent(self, ppid: int, me: int) -> bool:
+        # No reparenting here: `snapshot` writes 0 for a parent that is gone
+        # (see `_stale_parent`), so 0 is what an orphan looks like.
+        return ppid in (0, me)
+
     def kill(self, pid: int, *, force: bool) -> None:
         # Both `force` values are TerminateProcess: Windows has no SIGTERM.
         try:
@@ -395,7 +400,9 @@ class _WindowsChild:
     """`subprocess.Popen`'s `pid/poll/wait/returncode` over a process handle.
 
     Holds its own `OpenProcess` handle rather than the one pywinpty keeps, so
-    the exit code is still readable after the pseudoconsole has been released.
+    the exit code is still readable after the pseudoconsole has been released
+    — `terminals` polls *after* `TerminalHandle.close()`. The handle is closed
+    by whichever `poll`/`wait` first reads the exit code, exactly once.
     """
 
     def __init__(self, pid: int, handle: int) -> None:
@@ -516,6 +523,14 @@ class WindowsTerminalHandle:
             self._notify()
 
     def pause_reading(self) -> None:
+        # Holds the callback only; the pump keeps draining into `_chunks`.
+        # Holding the pump too would buy nothing: pywinpty's `PTY.read` is a
+        # `recv()` from winpty-rs's own reader thread, which reads the conout
+        # pipe without pause into an unbounded channel (winpty-rs 1.0.6,
+        # pty/base.rs, `reader_out_tx`). The CLI is never throttled either
+        # way — POSIX gets that from the kernel's bounded pty buffer — and a
+        # held pump would only move the growth into that channel, where the
+        # watcher's EOF could overtake output still queued there.
         with self._lock:
             self._paused = True
 
@@ -677,6 +692,13 @@ class WindowsTerminalHandle:
                 pty.cancel_io()
             except Exception:  # noqa: BLE001
                 pass
+        # A child that is already gone gives up its process handle here; one
+        # the job close is still terminating keeps it until the caller's own
+        # poll/wait sees the exit (the exit code must survive this close).
+        # `_closed` is set above, so the watcher stops instead of waiting on
+        # what is now a closed handle.
+        if self._process_handle:
+            self.proc.poll()
 
 
 class WindowsTerminalBackend:
@@ -730,7 +752,7 @@ class WindowsTerminalBackend:
             err = _win_error()
             _kill_orphaned_spawn(pty, pid)
             raise err
-        job: int | None
+        job: int | None = None
         try:
             job = _create_kill_on_close_job()
             _assign_to_job(job, pid)
@@ -738,6 +760,9 @@ class WindowsTerminalBackend:
             # Degraded, not fatal: the pane still works, kill_tree falls
             # back to walking the table, and a backend crash leaks the tree.
             log.warning("job object unavailable for pid %s: %s", pid, exc)
+            if job is not None:
+                # Created but never populated: closing it kills nothing.
+                k.CloseHandle(job)
             job = None
         if job is not None:
             _register_job(pid, job)
@@ -797,6 +822,9 @@ class WindowsLayout(WindowsPaths):
         `.py`. `python_exe` None (a frozen build) falls back to `python` on
         PATH. Rewritten only when its content differs, so a launcher that is
         already right keeps its mtime and no other process sees it flicker.
+        Best effort on the write, like the POSIX chmod: git_service resolves
+        this at import, so an unwritable directory must not stop the backend
+        — git reports the missing launcher itself when a credential is asked.
         """
         launcher = helper_py.with_suffix(".cmd")
         interpreter = python_exe or "python"
@@ -806,7 +834,10 @@ class WindowsLayout(WindowsPaths):
                 return launcher
         except OSError:
             pass
-        launcher.write_bytes(content)
+        try:
+            launcher.write_bytes(content)
+        except OSError as err:
+            log.warning("cannot write git askpass launcher %s: %s", launcher, err)
         return launcher
 
 

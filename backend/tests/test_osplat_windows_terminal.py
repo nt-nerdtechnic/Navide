@@ -236,6 +236,24 @@ class TestSpawn:
         assert _windows._jobs == {}
         assert "job object unavailable" in caplog.text
 
+    # A job that exists but cannot take the child is closed, not leaked: it
+    # holds no process, so KILL_ON_JOB_CLOSE has nothing to kill.
+    def test_job_is_closed_when_the_assign_fails(
+        self, kernel32, winpty, which_cmd_shim, monkeypatch, caplog
+    ):
+        kernel32.AssignProcessToJobObject = lambda job, handle: 0  # type: ignore[method-assign]
+        monkeypatch.setattr(_windows, "_win_error", lambda: OSError("no assign"))
+        handle = _windows.terminal_backend.spawn(
+            ["claude"], cwd="C:\\", env={}, rows=1, cols=1
+        )
+        assert handle.pid == 4242
+        assert _windows._jobs == {}
+        _, job = kernel32.calls[1]
+        _, _, _, assign_handle = kernel32.calls[3]
+        assert kernel32.names()[3:] == ["OpenProcess", "CloseHandle", "CloseHandle"]
+        assert kernel32.calls[4:] == [("CloseHandle", assign_handle), ("CloseHandle", job)]
+        assert "job object unavailable" in caplog.text
+
 
 # ---- kills -------------------------------------------------------------------
 
@@ -338,6 +356,15 @@ class TestIdentity:
         }
         assert sorted(_windows.process_tree.descendants(10)) == [20, 50]
 
+    # The sweep in `terminals` asks the tree what an orphan's ppid looks like:
+    # here it is the 0 that `snapshot` writes for a stale parent, never 1.
+    def test_is_orphan_parent_is_the_normalised_zero_or_this_process(self):
+        tree = _windows.process_tree
+        assert tree.is_orphan_parent(0, 500)
+        assert tree.is_orphan_parent(500, 500)
+        assert not tree.is_orphan_parent(1, 500)
+        assert not tree.is_orphan_parent(4, 500)
+
     def test_command_of_distinguishes_gone_from_unreadable(self, monkeypatch):
         class Proc:
             def __init__(self, pid):
@@ -424,6 +451,37 @@ class TestHandle:
         handle.resume_reading()  # stopped: nothing may arrive any more
         await asyncio.sleep(0.02)
         assert calls == before
+
+    # A pause stops the callback, not the pump: pywinpty's own reader thread
+    # drains the pipe into an unbounded channel regardless, so holding the
+    # pump would only move the queue. What matters is that nothing is lost
+    # and EOF still comes after every chunk that preceded it.
+    async def test_pause_keeps_queueing_and_resume_replays_in_order_before_eof(self):
+        pty = _FakePTY(80, 24)
+        pty.reads = ["a", "b", ""]
+        pty.alive = False
+        handle = _handle(pty)
+        loop = asyncio.get_running_loop()
+        got: list[bytes | None] = []
+
+        def on_readable() -> None:
+            while True:
+                try:
+                    chunk = handle.read(64)
+                except BlockingIOError:
+                    return
+                got.append(chunk)
+                if chunk is None:
+                    return
+
+        handle.start_reading(loop, on_readable)
+        handle.pause_reading()  # before the loop runs the queued wake-up
+        await asyncio.sleep(0.05)
+        assert got == [] and handle._eof
+        assert b"".join(handle._chunks) == b"ab"
+        handle.resume_reading()
+        await asyncio.sleep(0.05)
+        assert got == [b"a", b"b", None]
 
     # ConPTY never closes the conout pipe on the child's behalf: the exit has
     # to be watched and turned into EOF, or the session outlives its process.
@@ -564,13 +622,47 @@ class TestHandle:
         kernel32.calls.clear()
         pty = _FakePTY.last
         handle.close()
-        assert kernel32.calls == [("CloseHandle", job)]  # KILL_ON_JOB_CLOSE does the rest
+        # KILL_ON_JOB_CLOSE does the killing; the process handle stays open
+        # while the child is still going down, so the exit code can be read.
+        assert kernel32.calls == [
+            ("CloseHandle", job),
+            ("WaitForSingleObject", handle._process_handle, 0),
+        ]
         assert _windows._jobs == {}
         assert pty.cancelled
         handle.close()  # idempotent
-        assert kernel32.calls == [("CloseHandle", job)]
+        assert kernel32.names() == ["CloseHandle", "WaitForSingleObject"]
         with pytest.raises(OSError):
             handle.write(b"x")
+        # The caller polls after close: the first look at the exit releases
+        # the handle, and nothing afterwards touches it again.
+        kernel32.wait_result = _windows.WAIT_OBJECT_0
+        kernel32.exit_code = 9
+        assert handle.proc.poll() == 9
+        assert handle.proc.wait(timeout=0.01) == 9
+        assert handle.proc.poll() == 9
+        assert kernel32.calls.count(("CloseHandle", handle._process_handle)) == 1
+
+    def test_close_releases_the_process_handle_of_an_exited_child(
+        self, kernel32, winpty, which_cmd_shim
+    ):
+        handle = _windows.terminal_backend.spawn(
+            ["claude"], cwd="C:\\", env={}, rows=1, cols=1
+        )
+        job = _windows._jobs[4242]
+        kernel32.calls.clear()
+        kernel32.wait_result = _windows.WAIT_OBJECT_0
+        kernel32.exit_code = 3
+        handle.close()
+        assert kernel32.calls == [
+            ("CloseHandle", job),
+            ("WaitForSingleObject", handle._process_handle, 0),
+            ("CloseHandle", handle._process_handle),
+        ]
+        assert handle.proc.returncode == 3
+        assert handle.proc.poll() == 3 and handle.proc.wait() == 3
+        handle.close()
+        assert kernel32.calls.count(("CloseHandle", handle._process_handle)) == 1
 
 
 class TestChild:

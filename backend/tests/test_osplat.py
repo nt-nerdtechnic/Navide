@@ -298,6 +298,51 @@ class TestAskpassLauncher:
         assert _windows.paths.askpass_launcher(helper, "py") == launcher
         assert launcher.stat().st_mtime_ns == stamped
 
+    # git_service resolves the launcher at import: a directory that cannot be
+    # written must degrade the way the POSIX chmod does (log, hand git the
+    # path, let git report the failure) rather than stop the backend.
+    def test_windows_unwritable_directory_logs_and_still_names_the_launcher(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        from agent_team_backend.osplat import _windows
+
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("", encoding="utf-8")
+
+        def denied(self, data):
+            raise PermissionError(13, "Access is denied", str(self))
+
+        monkeypatch.setattr(Path, "write_bytes", denied)
+        launcher = _windows.paths.askpass_launcher(helper, "py")
+        assert launcher == tmp_path / "git_askpass_helper.cmd"
+        assert not launcher.exists()
+        assert "cannot write git askpass launcher" in caplog.text
+
+
+class TestOrphanParent:
+    """What the EOF-path orphan sweep in `terminals` asks the tree: which ppid
+    means the real parent is gone. POSIX reparents to init (or, observed on
+    macOS, to this backend); Windows never reparents, and `snapshot` writes 0
+    for a stale parent instead."""
+
+    def test_posix_is_init_or_this_process(self):
+        from agent_team_backend.osplat import _posix
+
+        tree = _posix.process_tree
+        assert tree.is_orphan_parent(1, 500)
+        assert tree.is_orphan_parent(500, 500)
+        assert not tree.is_orphan_parent(0, 500)
+        assert not tree.is_orphan_parent(42, 500)
+
+    def test_windows_is_the_normalised_zero_or_this_process(self):
+        from agent_team_backend.osplat import _windows
+
+        tree = _windows.process_tree
+        assert tree.is_orphan_parent(0, 500)
+        assert tree.is_orphan_parent(500, 500)
+        assert not tree.is_orphan_parent(1, 500)
+        assert not tree.is_orphan_parent(42, 500)
+
 
 #: Files that still decide platform behaviour for themselves. This list may
 #: shrink and must never grow: a new entry means a feature module started

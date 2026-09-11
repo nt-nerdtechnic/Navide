@@ -1,11 +1,13 @@
 """Run the backend suite on the Windows CI runner and always come back.
 
 A step on the GitHub runner ends only when the runner agent can finalise it,
-and with pytest run as the step's own child that never happened: the step
-outlived python and its own `timeout-minutes`, the job timeout discarded the
-log, and 17 rounds of instrumentation never caught the culprit in the act —
-it only ever failed with the suite attached to the step's console and pipe.
-Detached, it has finished every time. So:
+and with pytest run as the step's own child under `--timeout-method=thread`
+and `faulthandler_timeout` that never happened: the step outlived python and
+its own `timeout-minutes`, the job timeout discarded the log, and 17 rounds
+of instrumentation never caught the culprit in the act. The same suite run
+bare (release.yml's gates, no watchdog flags) finishes as a plain step, so
+the hang is those watchdog threads meeting the step's console, not pytest;
+detached, with the flags, it has finished every time. So:
 
 * `--detach` starts a copy of this script with a log file as its only
   inherited handle (DETACHED_PROCESS, no console, `close_fds`) and returns;

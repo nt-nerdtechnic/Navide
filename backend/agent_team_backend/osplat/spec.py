@@ -291,6 +291,10 @@ class ProcessTree(Protocol):
         """Whether a process with this pid currently exists."""
         ...
 
+    def is_orphan_parent(self, ppid: int, me: int) -> bool:
+        """Whether a `snapshot()` ppid means the real parent is gone (init or `me` on POSIX, 0 on Windows)."""
+        ...
+
     def kill(self, pid: int, *, force: bool) -> None:
         """Signal one process (SIGTERM/SIGKILL; TerminateProcess on Windows)."""
         ...

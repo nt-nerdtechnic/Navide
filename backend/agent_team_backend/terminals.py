@@ -989,7 +989,7 @@ class TerminalService:
             if entry is None:
                 continue
             ppid, _pgid, lstart = entry
-            if ppid not in (1, me):
+            if not osplat.process_tree.is_orphan_parent(ppid, me):
                 continue  # still parented by a live process — not our orphan
             if recorded_lstart and lstart and lstart != recorded_lstart:
                 continue  # pid recycled since the snapshot — different process

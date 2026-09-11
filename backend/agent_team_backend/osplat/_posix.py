@@ -125,6 +125,10 @@ class PosixProcessTree:
             return True
         return True
 
+    def is_orphan_parent(self, ppid: int, me: int) -> bool:
+        # Reparented to init/launchd, or to this backend (observed on macOS).
+        return ppid in (1, me)
+
     def kill(self, pid: int, *, force: bool) -> None:
         os.kill(pid, _signal_for(force))
 

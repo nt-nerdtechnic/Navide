@@ -154,6 +154,28 @@ async def test_reap_kills_orphaned_snapshot_pids_and_their_subtree(monkeypatch):
     assert sorted(killed) == [200, 250, 300]
 
 
+# Which ppid marks an orphan is the tree's call (Windows normalises a stale
+# parent to 0, where a literal `(1, me)` would never match), so the sweep must
+# route through `is_orphan_parent` rather than decide for itself.
+async def test_reap_asks_the_process_tree_which_ppid_is_an_orphan(monkeypatch):
+    svc = TerminalService(emit=_noop_emit)
+    snap = {
+        200: (0, 200, "L200"),  # stale parent, as a Windows snapshot reports it
+        300: (1, 300, "L300"),
+    }
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "is_orphan_parent",
+        lambda ppid, me: ppid in (0, me),
+    )
+    killed: list[int] = []
+    monkeypatch.setattr(
+        terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
+    )
+    await svc._reap_exit_orphans({200: "L200", 300: "L300"})
+    assert killed == [200]
+
+
 async def test_reap_spares_recycled_pid_via_lstart_mismatch(monkeypatch):
     svc = TerminalService(emit=_noop_emit)
     # pid 200 was recycled: same number, launchd-parented, different lstart.
